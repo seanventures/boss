@@ -2,12 +2,12 @@
 
 /**
  * Lines › Plan vs work (org-view spec §4.5): the plan against 30 days of handoffs, whatever the
- * window chip says. Two lists — lines nobody works along, and pairs that work together with no
- * line — and one action, `Plan it`, which places the pair through Lines' own save (so a refusal
+ * window chip says. Two lists, lines nobody works along, and pairs that work together with no
+ * line, and one action, `Plan it`, which places the pair through Lines' own save (so a refusal
  * shows the API's sentence where Lines always shows it).
  *
  * WHO REPORTS TO WHOM is proposed, never imposed (operator decision 2026-10-04): the team's
- * manager in the plan by default, else whoever sends the other more work — and the select
+ * manager in the plan by default, else whoever sends the other more work, and the select
  * changes it before anything is saved.
  */
 import { GatedButton } from "../../components/gated";
@@ -64,7 +64,7 @@ function PairRow({ pair, busy, onPlan, declared }: { pair: OrgUnplannedPair; bus
   const current = declared[child]?.reports_to;
   return (
     <li data-testid={`org-drift-pair-${pair.a}-${pair.b}`}>
-      <span data-user-text>{nameOf(pair.a)}</span> ↔ <span data-user-text>{nameOf(pair.b)}</span>
+      <span data-user-text>{nameOf(pair.a)}</span>Link<span data-user-text>{nameOf(pair.b)}</span>
       <span>×{pair.handoffs}</span>
       <span className="org-drift-sub">not on the plan</span>
       <label className="org-drift-pick" title={pair.parentIs === "manager" && parent === pair.parent

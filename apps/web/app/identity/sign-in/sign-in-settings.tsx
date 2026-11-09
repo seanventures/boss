@@ -253,7 +253,7 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy, publi
       <section className="idn-card" id="policy" aria-labelledby="idn-policy-h">
         <div className="idn-card-h">
           <h2 id="idn-policy-h">Security policy</h2>
-          {locked ? <span className="idn-sub" title={manage.reason}>Read only · {manage.reason}</span> : null}
+          {locked ? <span className="idn-sub" title={manage.reason}>Read only, {manage.reason}</span> : null}
           <span className="idn-spacer" />
           {dirty ? <button type="button" className="idn-btn sm ghost" onClick={() => setPolicy(saved)}>Discard</button> : null}
           <CanButton permission="security_policy:manage" className="idn-btn sm primary" disabled={!dirty || saving} onClick={save} data-testid="save-policy">
@@ -339,7 +339,7 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy, publi
       <section className="idn-card" id="network" aria-labelledby="idn-net-h">
         <div className="idn-card-h">
           <h2 id="idn-net-h"><WifiHigh size={16} aria-hidden /> Network bridge</h2>
-          {policy?.network_mode.active ? <Pill tone="bad">on{policy.network_mode.ends_at ? ` · ends ${shortDate(policy.network_mode.ends_at)}` : ""}</Pill> : <Pill tone="ok">off</Pill>}
+          {policy?.network_mode.active ? <Pill tone="bad">on{policy.network_mode.ends_at ? `, ends ${shortDate(policy.network_mode.ends_at)}` : ""}</Pill> : <Pill tone="ok">off</Pill>}
           <span className="idn-spacer" />
           {policy?.network_mode.active ? (
             <CanButton permission="security_policy:manage" className="idn-btn sm danger" data-testid="require-sign-in" tip="Ends the network bridge now; everyone signs in"

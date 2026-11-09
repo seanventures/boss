@@ -2,7 +2,7 @@
 
 /**
  * Agents › Live (agents-home spec §4.1-§4.7): what needs you, what is moving, what got done,
- * and who is idle — top to bottom, in that order, at every width (the doc's own phone order,
+ * and who is idle, top to bottom, in that order, at every width (the doc's own phone order,
  * used everywhere, so there is one layout).
  *
  *   NEEDS YOU      cards you can act on (AttentionCard)
@@ -40,7 +40,7 @@ const MISSION_RANK: Record<string, number> = {
   waiting_you: 0, stopped: 1, blocked: 2, running: 3, waiting: 3, waiting_person: 3, stalled: 4, done: 5,
 };
 
-/** What NEEDS YOU draws (walk D2, D12). The number is DECISIONS — the same one the pill, the
+/** What NEEDS YOU draws (walk D2, D12). The number is DECISIONS, the same one the pill, the
  *  Command Center and Approvals say. A step that failed is a card too, and is never folded away
  *  under `+n more`: it has stopped a run, so it comes first. Setup gaps are not cards here; they
  *  are one quiet line each, to Setup, which has its own badge. */
@@ -89,7 +89,7 @@ function Skeleton() {
 export function OutcomeChip({ o, now, orgId }: { o: Outcome; now: number | null; orgId?: string | null }) {
   useIdentityVersion();
   const by = o.roleKey ? nameOf(o.roleKey).name : "";
-  const tip = [o.label, by ? `by ${by}` : ""].filter(Boolean).join(" · ");
+  const tip = [o.label, by ? `by ${by}` : ""].filter(Boolean).join(", ");
   const href = o.url ? o.url : o.runId ? linkTo(runPatch(o.runId), orgId) : undefined;
   const external = !!o.url && /^https?:/i.test(o.url);
   return (
@@ -160,7 +160,7 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
   }
   useEffect(() => {
     if (focusId && board) focusCard(focusId);
-  }, [focusId, Boolean(board)]); // eslint-disable-line react-hooks/exhaustive-deps -- once per arrival
+  }, [focusId, Boolean(board)]); // eslint-disable-line react-hooks/exhaustive-deps, once per arrival
 
   if (error && !board) {
     return (
@@ -248,7 +248,7 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
           {decisions.length ? (
             <a className="ag-link" href={linkTo({ area: "decisions", decision_filter: "needs_action", role: null, view: null }, orgId)}
                onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate({ area: "decisions", decision_filter: "needs_action", role: null, view: null }); } }}>
-              All in Approvals ↗
+              All in Approvals 
             </a>
           ) : null}
         </SectionHead>
@@ -286,8 +286,7 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
                   <a className="ag-link" href={linkTo(patch, orgId)} data-testid={`ag-live-setup-${a.id}`}
                      title={a.fix?.label || a.whatToDo || undefined}
                      onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(patch); } }}>
-                    Setup: <span data-user-text>{a.title}</span> ↗
-                  </a>
+                    Setup: <span data-user-text>{a.title}</span></a>
                 </li>
               );
             })}
@@ -312,7 +311,7 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
             <span>Nothing running</span>
             <a className="ag-btn" href={linkTo({ area: "delivery_workflows", tab: "library", view: null, role: null }, orgId)}
                onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate({ area: "delivery_workflows", tab: "library", view: null, role: null }); } }}>
-              Start work ↗
+              Start work 
             </a>
             <GatedButton permission="meeting:convene" type="button" className="ag-link" data-testid="ag-live-plan"
                     onClick={() => openPlan("pm", { from: "roster" })}>Plan it with Juno</GatedButton>
@@ -350,7 +349,7 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
 
       <section className="ag-live-sec" data-sec="done" role="region" aria-labelledby="ag-live-done-h" id="ag-live-done">
         <SectionHead id="ag-live-done-h" label="DONE LATELY">
-          <button type="button" className="ag-link" onClick={onActivity}>Activity ↗</button>
+          <button type="button" className="ag-link" onClick={onActivity}>Activity </button>
         </SectionHead>
         {outcomes.length === 0 ? (
           <div className="ag-live-quiet" data-testid="ag-live-nothing-done"><span>Nothing finished today</span></div>
@@ -361,14 +360,14 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
 
       <section className="ag-live-sec" data-sec="force" role="region" aria-labelledby="ag-live-force-h" id="ag-live-force">
         <SectionHead id="ag-live-force-h" label="AGENT FORCE" count={board.counts.agents || board.agents.length}>
-          <button type="button" className="ag-link" onClick={() => onOpenMap()}>Open map ↗</button>
+          <button type="button" className="ag-link" onClick={() => onOpenMap()}>Open map </button>
         </SectionHead>
         <TeamZones projectId={projectId} board={board} density="compact" search={search}
                    onOpenMap={(team) => onOpenMap(team)} />
       </section>
 
       <div className="ag-live-sec ag-live-phone-only" data-sec="directory">
-        <button type="button" className="ag-link" onClick={onDirectory}>Directory ↗</button>
+        <button type="button" className="ag-link" onClick={onDirectory}>Directory </button>
       </div>
     </div>
   );

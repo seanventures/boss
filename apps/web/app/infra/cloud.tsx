@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * Infra › Cloud (spec §4.8): cloud accounts, resources, capacity, spend and changes — one
+ * Infra › Cloud (spec §4.8): cloud accounts, resources, capacity, spend and changes, one
  * segmented control (`cloud=` in the URL), then one table and one drawer per sub-view.
  *
- *   [Accounts 2 · Resources 3 · Capacity 1 · Spend 2 · Changes 1]  Bring your own key   Audit ↗
+ *   [Accounts 2, Resources 3, Capacity 1, Spend 2, Changes 1]  Bring your own key   Audit 
  *   <sub-view>  table + drawer (`account=` `resource=` `pool=` `changeset=`; on Spend `account=`
  *               is the provider key)
  *

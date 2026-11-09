@@ -11,7 +11,7 @@ import { ChipInput } from "./editor/inspector/chip-input";
 /** Defining a step: name it, choose what it runs, say what it needs.
  *
  *  There is deliberately NO risk field. The tier comes from the skill or MCP tool being bound
- *  and is shown here as a consequence of that choice — a customer who could type their own
+ *  and is shown here as a consequence of that choice, a customer who could type their own
  *  number would have a documented way past every approval gate in the product.
  */
 export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCancel,
@@ -30,7 +30,7 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
   const [label, setLabel] = useState(editing?.label ?? "");
   const [summary, setSummary] = useState(editing?.summary ?? "");
   // One control, not two. "skill:github.create_pr" / "mcp:<server>:<tool>" keeps the choice a
-  // single decision — picking a kind and then a thing is two ways to get it half-made.
+  // single decision, picking a kind and then a thing is two ways to get it half-made.
   const [bindingRef, setBindingRef] = useState(
     editing
       ? (editing.binding_kind === "skill"
@@ -64,7 +64,7 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
       const tool = server?.tools.find((t) => t.name === rest.join(":"));
       return server && tool
         ? { risk: tool.risk_tier, trusted: server.trusted, unclassified: false,
-            what: `${server.name} · ${tool.name}` }
+            what: `${server.name}, ${tool.name}` }
         : null;
     }
     return null;
@@ -74,8 +74,8 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
   // How many things can ACTUALLY be picked, which is not the same as how many servers exist.
   const choices = bindable.skills.filter((s) => s.usable !== false).length
     + bindable.mcp_servers.reduce((n, server) => n + server.tools.length, 0);
-  // TWO GROUPS, NAMED FOR WHAT THEY ARE. "Your skills" used to list project_skills — on a real
-  // install five BOSS system skills and none of the operator's — while the operator's authored
+  // TWO GROUPS, NAMED FOR WHAT THEY ARE. "Your skills" used to list project_skills, on a real
+  // install five BOSS system skills and none of the operator's, while the operator's authored
   // skills and most shipped ones were missing. Both come from the one catalogue now.
   // GROUPED BY ABILITY FIRST (skills-mcp spec §3.3): the Kit's outcomes, each with the skills
   // and MCP tools behind it, said `Not set up` when it is not. Everything else follows as before.
@@ -101,7 +101,7 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
       {skill.label && skill.label !== skill.skill_id
         ? `${skill.label} (${skill.skill_id})` : skill.skill_id}
       {skill.unclassified ? " (unclassified)" : ""}
-      {skill.usable === false ? ` — ${skill.reason ?? "cannot run"}` : ""}
+      {skill.usable === false ? `, ${skill.reason ?? "cannot run"}` : ""}
     </option>
   );
   const unreachable = bindable.mcp_servers.filter((m) => !m.reachable).map((m) => m.name);
@@ -127,7 +127,7 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
         fields.mcp_tool_name = rest.slice(1).join(":");
       }
       // The KEY, when this is an edit. It is what workflow specs bind to, so it travels as an
-      // identifier and is never one of the fields being changed — renaming a step must not
+      // identifier and is never one of the fields being changed, renaming a step must not
       // orphan every workflow that places it.
       if (editing) fields.step_key = editing.step_key;
       const result = await onDefine(fields);
@@ -148,11 +148,11 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
                 onChange={(e) => setBindingRef(e.target.value)}>
           <option value="">Choose a skill or tool</option>
           {abilityGroups.map(({ ability, skills, tools }) => (
-            <optgroup key={ability.key} label={notSetUp(ability) ? `${ability.label} · Not set up` : ability.label}>
+            <optgroup key={ability.key} label={notSetUp(ability) ? `${ability.label}, Not set up` : ability.label}>
               {skills.map(skillOption)}
               {tools.map(({ server, tool }) => (
                 <option key={`${server.id}:${tool.name}`} value={`mcp:${server.id}:${tool.name}`}>
-                  {server.name} · {tool.name}
+                  {server.name}, {tool.name}
                 </option>
               ))}
             </optgroup>
@@ -180,7 +180,7 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
         {chosenAbility && notSetUp(chosenAbility) ? (
           <a className="wf-chip" data-tone="red" href={setUpHref(chosenAbility.key)}
              title="Open this ability in Skills & MCP" data-testid="dw-define-setup">
-            Not set up · Set up ↗
+            Not set up, Set up 
           </a>
         ) : null}
       </label>
@@ -216,8 +216,8 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
           publish time when the workflow is already drawn. A line, with the why in a tip. */}
       {chosen ? (
         <div className="detail dw-define-risk" data-testid="dw-define-risk">
-          Risk {chosen.risk} · {chosen.what}
-          {chosen.risk >= riskFloor ? " · always needs a person" : " · runs on its own"}
+          Risk {chosen.risk}, {chosen.what}
+          {chosen.risk >= riskFloor ? ", always needs a person" : ", runs on its own"}
           {chosen.unclassified ? (
             <>{" "}<HelpTip label="Unclassified"
                             text="Unclassified: nobody has classified this skill, so it counts as the floor." /></>
@@ -227,7 +227,7 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
       {blocked ? (
         <div className="detail dw-define-blocked" data-testid="dw-define-blocked"
              title="A workflow using it won't publish until the binding is reviewed.">
-          Untrusted · won&apos;t publish until reviewed
+          Untrusted, won&apos;t publish until reviewed
         </div>
       ) : null}
       {failure ? <div className="detail dw-define-error" role="alert" data-testid="dw-define-error">{failure}</div> : null}
@@ -241,7 +241,7 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
       </div>
       {choices === 0 ? (
         // Counted in CHOICES, not in servers. A project with three registered MCP servers that
-        // are all unreachable has three empty groups in the dropdown and nothing to pick — and
+        // are all unreachable has three empty groups in the dropdown and nothing to pick, and
         // saying nothing there reads as a broken control rather than an empty one.
         <div className="detail dw-define-empty" data-testid="dw-define-empty">
           Nothing to bind yet{" "}

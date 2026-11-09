@@ -5,15 +5,15 @@
  *
  *   Connectors  ONE CARD PER CONNECTOR (lib/app-connectors.ts dedupes the build attempts: a
  *               connector built twelve times is one card, the eleven older attempts folded). Its
- *               header says what works now and what is missing, and where (Preview · Deploy). A
- *               row per sign-in provider — Google, GitHub, BOSS, the demo login — with its status
+ *               header says what works now and what is missing, and where (Preview, Deploy). A
+ *               row per sign-in provider, Google, GitHub, BOSS, the demo login, with its status
  *               and what to do: the steps, the callback address to register (a warning only when
  *               it cannot work), the client id and secret, and where to use them. A connector
  *               with plain keys (Stripe) lists its keys the same way. The full guide stays folded.
  *   Settings    what BOSS manages (generated, a test double: read-only, demo passwords on Show)
  *               and what a person set (Edit, Remove, Add setting).
  *
- * Opened from the app row's chip ("Set up sign-in · N providers"), its ⋯ › Setup and ⋯ › Sign-in,
+ * Opened from the app row's chip ("Set up sign-in, N providers"), its ⋯ › Setup and ⋯ › Sign-in,
  * and the build page's Settings: one surface for the job.
  *
  * Values are WRITE-ONLY (§2.4): a field clears once stored; nothing ever reads one back. Writes
@@ -261,7 +261,7 @@ function ConnectorCardView({ card, ctx }: { card: ConnectorCard; ctx: Ctx }) {
           <p className="tpl-where" data-testid={`tpl-where-${card.key}`}>
             <span className="tpl-faint">Where:</span>
             {where.map((w) => (
-              <span key={w.env} className="tpl-where-cell" data-tone={w.tone}>{w.env} · {w.word}</span>
+              <span key={w.env} className="tpl-where-cell" data-tone={w.tone}>{w.env}, {w.word}</span>
             ))}
           </p>
         ) : null}
@@ -368,7 +368,7 @@ const stepsFor = (provider: string, cb: string) => (STEPS[provider] ?? ((c: stri
 export function providerHint(row: ProviderRow): string {
   if (row.provider === "boss") {
     return row.status === "cant_work" ? "BOSS needs a public address first."
-      : "BOSS registers the app — nothing to paste.";
+      : "BOSS registers the app, nothing to paste.";
   }
   return row.needsYou ? "Needs a client ID and secret." : "Keys saved.";
 }
@@ -527,8 +527,8 @@ function KeysTable({ card, keys, ctx }: { card: ConnectorCard; keys: DeclaredSec
           <div key={d.name} className="tpl-prov" role="row" data-testid={`tpl-setup-secret-${d.name}`}>
             <span className="tpl-prov-name tpl-mono" role="cell">{d.name}</span>
             <span role="cell" className="tpl-envs">
-              <span className="tpl-chip" data-tone={pv.tone} title={pv.tip} data-testid={`tpl-env-${d.name}-preview`}>Preview · {pv.word}</span>
-              <span className="tpl-chip" data-tone={dp.tone} title={dp.tip} data-testid={`tpl-env-${d.name}-deploy`}>{ctx.deployLabel} · {dp.word}</span>
+              <span className="tpl-chip" data-tone={pv.tone} title={pv.tip} data-testid={`tpl-env-${d.name}-preview`}>Preview, {pv.word}</span>
+              <span className="tpl-chip" data-tone={dp.tone} title={dp.tip} data-testid={`tpl-env-${d.name}-deploy`}>{ctx.deployLabel}, {dp.word}</span>
             </span>
             <div className="tpl-prov-do" role="cell">
               {d.purpose ? <span className="tpl-faint" data-user-text>{d.purpose}</span> : null}
@@ -541,7 +541,7 @@ function KeysTable({ card, keys, ctx }: { card: ConnectorCard; keys: DeclaredSec
   );
 }
 
-/** Set test key (build + preview) · Set live key (deploy, approved before use) · Remove. */
+/** Set test key (build + preview), Set live key (deploy, approved before use), Remove. */
 function SecretActions({ name, ctx, removeWord = "Remove" }: { name: string; ctx: Ctx; removeWord?: string }) {
   const [kind, setKind] = useState<"test" | "live" | null>(null);
   const [value, setValue] = useState("");
@@ -638,7 +638,7 @@ function SettingsView({ ctx, cards }: { ctx: Ctx; cards: ConnectorCard[] }) {
               <li key={r.name} className="tpl-row" data-testid={`tpl-managed-${r.name}`}>
                 <span className="tpl-row-main">
                   <span className="tpl-row-name tpl-mono">{r.name}</span>
-                  <span className="tpl-faint" data-user-text>{r.how} · {envsWord(r)}{r.purpose ? ` · ${r.purpose}` : ""}</span>
+                  <span className="tpl-faint" data-user-text>{r.how}, {envsWord(r)}{r.purpose ? `, ${r.purpose}` : ""}</span>
                 </span>
                 {r.declared ? (
                   <details className="tpl-fold tpl-own">
@@ -661,7 +661,7 @@ function SettingsView({ ctx, cards }: { ctx: Ctx; cards: ConnectorCard[] }) {
               <li key={r.name} className="tpl-row" data-testid={`tpl-deploy-value-${r.name}`}>
                 <span className="tpl-row-main">
                   <span className="tpl-row-name tpl-mono">{r.name}</span>
-                  <span className="tpl-faint">Set by a person · {envsWord(r)}</span>
+                  <span className="tpl-faint">Set by a person, {envsWord(r)}</span>
                 </span>
                 {/* A connector's secret a person replaced: its test/live keys, as on a card. */}
                 {r.declared ? <span className="tpl-row-acts"><SecretActions name={r.name} ctx={ctx} /></span> : (

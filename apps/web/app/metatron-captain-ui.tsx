@@ -92,7 +92,7 @@ export function MetatronCaptain({
           const result = await callAction(sendMetatronCaptainMessageAction, undefined, "assistant:chat")(formData);
           if (result.ok && result.data) {
             // A turn is an Ask BOSS turn (BOSSAPP-759): its reply carries the conversation, not
-            // the captain's goals or watch — those stay as they were loaded.
+            // the captain's goals or watch, those stay as they were loaded.
             const turn = mapMetatronCaptainSession(result.data);
             setState((prev) => ({ ...prev, threadId: turn.threadId, messages: turn.messages }));
             return;
@@ -250,7 +250,7 @@ export function MetatronCaptainView({
     <article className="stack-card" data-testid="metatron-captain">
       <div className="section-head">
         <div>
-          <span className="eyebrow">Metatron</span>
+          <span className="area-name">Metatron</span>
           <h2>Captain</h2>
         </div>
       </div>
@@ -291,7 +291,7 @@ export function MetatronCaptainView({
         {!loading && state.apiReachable && state.messages.length === 0 ? (
           <p className="empty-state" data-testid="metatron-captain-empty-chat">
             No captain messages yet. Send a message to start a persistent
-            thread. Try: remember … · set goal … · watch · overwatch · drive.
+            thread. Try: remember …, set goal …, watch, overwatch, drive.
             Every action is validated before it runs.
           </p>
         ) : null}
@@ -341,7 +341,7 @@ export function MetatronCaptainView({
       <h4>Goals</h4>
       {!loading && state.apiReachable && state.goals.length === 0 ? (
         <p className="empty-state" data-testid="metatron-captain-empty-goals">
-          No goals registered yet. Add a measurable goal — the next watch will
+          No goals registered yet. Add a measurable goal, the next watch will
           score it.
         </p>
       ) : null}
@@ -421,7 +421,7 @@ export function MetatronCaptainView({
           {state.watch.createdAt ? (
             <p className="detail">
               Last tick {formatDateTime(state.watch.createdAt)}
-              {state.watch.receiptId ? ` · receipt ${state.watch.receiptId}` : ""}
+              {state.watch.receiptId ? `, receipt ${state.watch.receiptId}` : ""}
             </p>
           ) : null}
           {state.watch.findings.length === 0 ? (
@@ -465,10 +465,10 @@ export function MetatronCaptainView({
       {state.theater ? (
         <div data-testid="metatron-captain-theater">
           <p className="detail">
-            official {state.theater.fleet.officialInFlight} · queued{" "}
-            {state.theater.fleet.officialQueued} · stalled{" "}
-            {state.theater.fleet.factoryStalled} · captains{" "}
-            {state.theater.fleet.captainAssignments} · playbooks{" "}
+            official {state.theater.fleet.officialInFlight}, queued{" "}
+            {state.theater.fleet.officialQueued}, stalled{" "}
+            {state.theater.fleet.factoryStalled}, captains{" "}
+            {state.theater.fleet.captainAssignments}, playbooks{" "}
             {state.theater.fleet.playbooks}
           </p>
           {state.theater.note ? (

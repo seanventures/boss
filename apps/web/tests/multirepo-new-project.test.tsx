@@ -5,7 +5,7 @@
  *     with no multi-repo routes at all (regression);
  *   - Several repos (offered with ≥2 project repositories) asks for suggestions, draws component →
  *     repository rows with their suggestion lines and build order (#1/#2/#3, "deploy"), the lock
- *     note and the footer "3 repositories · 3 linked PRs · you approve once";
+ *     note and the footer "3 repositories, 3 linked PRs, you approve once";
  *   - Start with Several repos PUTs the app's components first, then starts exactly as today
  *     plus `repo_layout: {mode: "multi", app_name}`; a refused PUT shows its message and starts nothing;
  *   - fewer than two repositories: a one-line hint to the project's Repositories instead;
@@ -108,7 +108,7 @@ describe("Where the code lives", () => {
       .toEqual(["#1", "#2", "#3", "deploy"]);
     expect(tid("np-map-lock")?.textContent).toBe(
       "Agents in this project may touch these 4 repositories only (acme/infra read only). You confirm this before the first build.");
-    expect(tid("np-cost-several")?.textContent).toBe("3 repositories · 3 linked PRs · you approve once");
+    expect(tid("np-cost-several")?.textContent).toBe("3 repositories, 3 linked PRs, you approve once");
     // Adding a row adds an empty component; removing it takes it away again.
     await click(tid("np-map-add"));
     expect($$('[data-testid^="np-map-row-"]')).toHaveLength(5);

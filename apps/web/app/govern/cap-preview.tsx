@@ -2,11 +2,11 @@
 
 /**
  * "Would have stopped 3 days" (spec §4.4.6): the last 30 days of REAL daily money, and the
- * proposed cap as a dashed line — for a daily cap against each day, for a monthly cap against
+ * proposed cap as a dashed line, for a daily cap against each day, for a monthly cap against
  * the month's running total. The count is the server's replay, not the drawing's.
  *
  * The bars are scaled to the DATA (D15): a cap far above every day is a reference, not the
- * scale — drawn at the top edge and named beside the chart, so $3 days are not flat lines
+ * scale, drawn at the top edge and named beside the chart, so $3 days are not flat lines
  * under a $252 cap.
  */
 import React from "react";
@@ -48,7 +48,7 @@ export function DailyBars({ daily, cap, cumulative, testid = "gv-daily", highlig
         const v = series[i];
         return (
           <g key={d.day}>
-            <title>{`${d.day} · ${money(d.money_usd_micros)}${cap ? ` · cap ${money(cap)}` : ""}`}</title>
+            <title>{`${d.day}, ${money(d.money_usd_micros)}${cap ? `, cap ${money(cap)}` : ""}`}</title>
             {!cumulative && included[i] > 0 ? (
               <rect className="gv-chart-included" x={i * bw + 1} width={Math.max(1, bw - 2)}
                     y={y(v + included[i])} height={Math.max(0, y(v) - y(v + included[i]))} />

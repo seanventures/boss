@@ -17,7 +17,7 @@ import { consoleHref } from "./console-href";
  * The journey spine: one outcome's life, on its own card.
  *
  * Research → Spec → Build → Ship. Each node is filled when that phase happened, breathing when
- * it is happening now, hollow when it has not been reached — and a link when there is somewhere
+ * it is happening now, hollow when it has not been reached, and a link when there is somewhere
  * to go. So a card answers "what is this, how far along, and where do I look next" without the
  * reader knowing that BOSS keeps discoveries, meetings and runs in three different places.
  *
@@ -27,7 +27,7 @@ import { consoleHref } from "./console-href";
  * INSIDE the card that already works, so drill-in, preview and relaunch come along by
  * construction rather than by being reimplemented.
  *
- * It reads only what a run already carries — `finalize_ctx.origin` for where the work began,
+ * It reads only what a run already carries, `finalize_ctx.origin` for where the work began,
  * lineage for its siblings, phase and status for where it is. Nothing is invented: a phase with
  * no evidence renders hollow rather than guessed.
  */
@@ -94,7 +94,7 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
   const running = status === "running" || status === "queued";
 
   // Research and Spec are only claimed when the run RECORDS having come from them. A run
-  // started directly has neither, and says so by leaving them hollow — better than implying a
+  // started directly has neither, and says so by leaving them hollow, better than implying a
   // panel that never met.
   const fromMeeting = origin?.kind === "meeting";
   // LINEAGE IS A CHAIN, AND `kind` NAMES ONLY THE NEAREST HOP.
@@ -128,7 +128,7 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
           )
         : undefined,
       title: fromDiscovery
-        ? "Started from a research dossier — open Discovery"
+        ? "Started from a research dossier, open Discovery"
         : "No research phase: this work did not start from a dossier",
     },
     {
@@ -138,7 +138,7 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
       state: fromMeeting ? "done" : "todo",
       href: fromMeeting ? meetingHref : undefined,
       title: fromMeeting
-        ? "Specced by an agent panel — open the meeting and its PRD"
+        ? "Specced by an agent panel, open the meeting and its PRD"
         : "No panel: this task was written directly",
     },
     {
@@ -152,7 +152,7 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
       title: failed
         ? `Stopped during build (${status})`
         : running
-          ? `Building now — ${run.phase ?? "in progress"}`
+          ? `Building now, ${run.phase ?? "in progress"}`
           : "Build finished",
     },
     {
@@ -177,7 +177,7 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
 //
 // These were hand-written SVG paths, justified as saving hydration on 240 components. The
 // measurement did not support it (6.51MB -> 6.49MB, i.e. nothing) and the paths rendered as
-// unreadable fragments at 13px -- an icon nobody can identify is worse than no icon. Phosphor
+// unreadable fragments at 13px, an icon nobody can identify is worse than no icon. Phosphor
 // draws them correctly at any size and is already a dependency.
 const ICONS: Record<string, Icon> = {
   research: MagnifyingGlass,
@@ -206,7 +206,7 @@ function NodeAndLink({
   const inner = (
     <>
       {/* An icon, not a bare dot. Four identical dots differing only in colour made the four
-          phases indistinguishable at a glance -- the reader had to parse the labels to know
+          phases indistinguishable at a glance, the reader had to parse the labels to know
           which stage they were looking at. */}
       <span className="sp-dot"><PhaseIcon phase={node.key} /></span>
       <span className="sp-label">{node.label}</span>

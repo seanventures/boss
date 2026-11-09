@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * ② Models: what BOSS thinks with. One header — what works, what needs you, and a clear
- * "+ Add a model" — then ONE list of sources (capacity-row.tsx): each a single line with its
+ * ② Models: what BOSS thinks with. One header, what works, what needs you, and a clear
+ * "+ Add a model", then ONE list of sources (capacity-row.tsx): each a single line with its
  * name, its pill, one plain sentence and one primary action, the rest behind Details and ⋯.
  *
  * Every way into a model (Add, Connect, Sign in, Replace key, a picked catalogue source) opens
@@ -30,7 +30,7 @@ import { SIGN_IN_PROVIDERS } from "./subscription-sign-in";
 export const signsIn = (entry: ModelEntry) => entry.kind === "subscription" && SIGN_IN_PROVIDERS.has(entry.provider);
 
 /** How the drawer opens: Add (provider only), Replace key (sourceId), Sign in (signIn: a fresh
- *  login), or Connect (connect: prove the CLI's current login — nothing is signed out). */
+ *  login), or Connect (connect: prove the CLI's current login, nothing is signed out). */
 export type Opening = { provider: string; sourceId?: string; signIn?: boolean; connect?: boolean };
 
 export const KIND = {
@@ -124,7 +124,7 @@ function MoreSources({ more, onPick }: { more: MoreSource[]; onPick: (id: string
   );
 }
 
-/** "2 working · 1 needs you": the section in five words; each count's rows in its tooltip. */
+/** "2 working, 1 needs you": the section in five words; each count's rows in its tooltip. */
 function Summary({ models }: { models: ModelEntry[] }) {
   const working = models.filter((m) => m.pill.tone === "green");
   const needs = models.filter((m) => m.pill.tone === "red" || m.pill.tone === "amber");
@@ -148,8 +148,8 @@ function Summary({ models }: { models: ModelEntry[] }) {
 export const ModelsRow = forwardRef<HTMLElement, {
   mode: string; step: number | null; focused: boolean; add: string | null; source: string | null;
   onAddHandled: () => void; children?: React.ReactNode;
-  /** Repo and models' board (BOSSAPP-808): the one Models block — a heading, the summary and
-   *  "+ Add model" over the full list — instead of a numbered row. Same drawer, same list. */
+  /** Repo and models' board (BOSSAPP-808): the one Models block, a heading, the summary and
+   *  "+ Add model" over the full list, instead of a numbered row. Same drawer, same list. */
   block?: boolean;
 }>(function ModelsRow({ mode, step, focused, add, source, onAddHandled, children, block = false }, ref) {
   const { view, projectId, apply } = useBoard();
@@ -266,7 +266,7 @@ export const ModelsRow = forwardRef<HTMLElement, {
 const USED_SHOWN = 3;
 export function usedForLabel(jobs: string[]): string {
   if (!jobs.length) return "—";
-  const shown = jobs.slice(0, USED_SHOWN).join(" · ");
+  const shown = jobs.slice(0, USED_SHOWN).join(", ");
   return jobs.length > USED_SHOWN ? `${shown} +${jobs.length - USED_SHOWN}` : shown;
 }
 export function usedForTip(jobs: string[]): string {

@@ -2,7 +2,7 @@
 /**
  * Govern › Limits tells the truth about each control (spec §4.4.3, §1.4):
  *   - the value shown is what the engine will use, and a stored value that runs as something
- *     else says so (`set 3 · min 6`, `set 0 · reads as 2`);
+ *     else says so (`set 3, min 6`, `set 0, reads as 2`);
  *   - every control names what enforces it; token guides are `Advisory` and look it;
  *   - evidence is a recorded count linked into the Log, or `—` when BOSS records nothing;
  *   - Pace is `Not set` on a fresh install, and claims no model tiers;
@@ -48,10 +48,10 @@ describe("the board shows the engine's numbers", () => {
   it("effective values, with the stored value beside them when they differ", async () => {
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     expect(t("[data-testid=gv-value-code_agent_max_concurrency]")).toBe("6");
-    expect(t("[data-testid=gv-note-code_agent_max_concurrency]")).toBe("set 3 · min 6");
+    expect(t("[data-testid=gv-note-code_agent_max_concurrency]")).toBe("set 3, min 6");
     expect($("[data-testid=gv-note-code_agent_max_concurrency]")!.getAttribute("title")).toBe("Values under 6 behave like 6 today");
     expect(t("[data-testid=gv-value-code_review_inrun_max_rounds]")).toBe("2");
-    expect(t("[data-testid=gv-note-code_review_inrun_max_rounds]")).toBe("set 0 · reads as 2");
+    expect(t("[data-testid=gv-note-code_review_inrun_max_rounds]")).toBe("set 0, reads as 2");
     expect($("[data-testid=gv-note-code_review_inrun_max_rounds]")!.getAttribute("title")).toBe("0 is read as 2 today");
     expect(t("[data-testid=gv-value-captain_leads_projects]")).toBe("Off");
     expect(t("[data-testid=gv-value-daily_cap]")).toBe("$10.00");
@@ -69,7 +69,7 @@ describe("the board shows the engine's numbers", () => {
       expect(t(`[data-testid=${id}] .gv-enforced`)).toBe("Advisory");
       expect($(`[data-testid=${id}] .gv-enforced`)!.getAttribute("title")).toBe("Shapes alerts and tips. Doesn't stop model calls.");
     }
-    expect(t("[data-testid=gv-value-token_default]")).toBe("5M tok/day · $50.00/day · alert 80%");
+    expect(t("[data-testid=gv-value-token_default]")).toBe("5M tok/day, $50.00/day, alert 80%");
   });
 
   it("evidence is a recorded count that opens the Log, or a dash that says why", async () => {
@@ -93,7 +93,7 @@ describe("the board shows the engine's numbers", () => {
     await click($("[data-testid=gv-edit-pace]"));
     await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
     await settle();
-    expect(t("[data-testid=gv-pace-preview]")).toBe("Daily $252 · Monthly $5,040 · Burst $5.25/min · Jobs 11 · Workers 15");
+    expect(t("[data-testid=gv-pace-preview]")).toBe("Daily $252, Monthly $5,040, Burst $5.25/min, Jobs 11, Workers 15");
     // The old slider claimed to choose "which model tiers are allowed"; nothing reads that column.
     expect($("[data-testid=gv-control-pace]")!.textContent).not.toMatch(/tier|low-cost only|strong/i);
   });
@@ -178,7 +178,7 @@ describe("every write outcome says what happened", () => {
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     const now = $("[data-testid=gv-running-now-code_agent_max_concurrency]")!;
     expect(t("[data-testid=gv-control-code_agent_max_concurrency] .gv-value")).toContain("6");
-    expect(now.textContent).toBe("· running 1 now (memory)");
+    expect(now.textContent).toBe(", running 1 now (memory)");
     expect(now.getAttribute("title")!.split(/\s+/).length).toBeLessThanOrEqual(14);
   });
 

@@ -40,7 +40,7 @@ export function CloudSpend(p: CloudViewProps) {
 
   return (
     <section className="cloud-sec" aria-labelledby="inf-cloud-spend">
-      <ZoneHead id="inf-cloud-spend" label="SPEND · 30D" count={rows.length} />
+      <ZoneHead id="inf-cloud-spend" label="SPEND, 30D" count={rows.length} />
       {rows.length === 0 ? <Empty testId="inf-cloud-empty">No cloud spend</Empty> : (
         <figure className="cloud-fig" data-testid="inf-spend-bars" aria-label="Spend by provider, 30 days">
           <div className="inf-table-wrap">
@@ -111,7 +111,7 @@ function ProviderDrawer({ s, onClose }: { s: Spend; onClose: () => void }) {
           <ul className="cloud-list">
             {s.reconciliation.map((r) => (
               <li key={r.id}><StateWord w={r.state} />
-                <span className="inf-num inf-muted">{r.resourcesSeen} resources · {r.costsSeen} costs</span>
+                <span className="inf-num inf-muted">{r.resourcesSeen} resources, {r.costsSeen} costs</span>
                 <span className="inf-faint">{ago(r.at, now)}</span></li>
             ))}
           </ul>

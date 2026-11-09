@@ -213,7 +213,7 @@ describe("a step's output shows what it says, not which keys it has", () => {
   it("renders scalars as key=value", () => {
     // A deploy's result showed as "{health, status, applied}" under a heading reading DETAIL:
     // three facts exist and none of what they say.
-    expect(SOURCE).toContain("scalars.join(\" · \")");
+    expect(SOURCE).toContain("scalars.join(\", \")");
   });
 
   it("keeps the key list only when there is nothing short to say", () => {

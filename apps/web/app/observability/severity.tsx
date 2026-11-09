@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * SEV1–SEV4 and an alert's status, drawn the same way everywhere (BOSSAPP-598 feedback 5, 6).
+ * SEV1, SEV4 and an alert's status, drawn the same way everywhere (BOSSAPP-598 feedback 5, 6).
  *
  *   SevFlag     ⬣ SEV1   ▲ SEV2   ◐ SEV3   ⓘ SEV4      a distinct glyph AND colour token per level;
  *               the tooltip says what it means and how it is routed.
- *   StatusChip  ● Firing (red) · ◔ Acknowledged · Param (amber) · ○ Pending (grey)
- *               ✓ Resolved 12:04 · 6 min (green) · ⊘ Silenced / Maintenance (muted)
+ *   StatusChip  ● Firing (red), ◔ Acknowledged, Param (amber), ○ Pending (grey)
+ *               ✓ Resolved 12:04, 6 min (green), ⊘ Silenced / Maintenance (muted)
  *
  * Colour is never the only signal: each level and each status has its own shape.
  */
@@ -71,7 +71,7 @@ const STATUS_TIPS: Record<Status["key"], string> = {
   maintenance: "Maintenance window: muted while it lasts",
 };
 
-/** The one chip that says whether something is still open. `extra` follows the word (time · duration). */
+/** The one chip that says whether something is still open. `extra` follows the word (time, duration). */
 export function StatusChip({ status, extra, extraTip, testId = "obs-status" }: {
   status: Status; extra?: string | null; extraTip?: string | null; testId?: string;
 }) {

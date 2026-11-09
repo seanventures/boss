@@ -33,22 +33,22 @@ export function EvalHarnessCard({ projectId, actor, run }: { projectId: string; 
         </ActionForm>
       </div>
       <p className="detail">
-        Regression suites — routing fallback, policy audit round-trip, factory fail-closed gate,
+        Regression suites, routing fallback, policy audit round-trip, factory fail-closed gate,
         autonomy-ladder monotonicity. Gates self-improvement rollouts.
       </p>
       {!run ? (
-        <p className="detail">No eval runs yet — click “Run evals”.</p>
+        <p className="detail">No eval runs yet, click “Run evals”.</p>
       ) : (
         <>
           <p className="detail" style={{ marginBottom: 8 }} data-testid="eval-latest">
-            Latest: <b style={{ color: tone(run.status) }}>{run.status.toUpperCase()}</b> — {run.passed} pass · {run.failed} fail
+            Latest: <b style={{ color: tone(run.status) }}>{run.status.toUpperCase()}</b>, {run.passed} pass, {run.failed} fail
           </p>
           <div style={{ display: "grid", gap: 5 }}>
             {run.results.map((r) => (
               <div key={r.eval} style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
                 <span style={{ color: tone(r.status) }}>●</span>{" "}
                 <b style={{ color: "var(--ink)" }}>{r.eval}</b>{" "}
-                <span style={{ color: "var(--muted)" }}>— {r.detail}</span>
+                <span style={{ color: "var(--muted)" }}>,  {r.detail}</span>
               </div>
             ))}
           </div>
@@ -62,10 +62,10 @@ export function EvalHarnessCard({ projectId, actor, run }: { projectId: string; 
 export function AutonomyEvaluateCard({ projectId, actor }: { projectId: string; actor: string }) {
   return (
     <article className="stack-card">
-      <h3 style={{ margin: 0 }}>Autonomy — evidence evaluation</h3>
+      <h3 style={{ margin: 0 }}>Autonomy, evidence evaluation</h3>
       <p className="detail">
         Gather a role’s allowed/denied/scope-violation events since its last review and run a
-        governance review — auto-proposes an upgrade decision or auto-downgrades on a violation.
+        governance review, auto-proposes an upgrade decision or auto-downgrades on a violation.
       </p>
       <ActionForm permission="autonomy:manage" action={evaluateAutonomyAction} className="composer compact">
         <input type="hidden" name="project_id" value={projectId} />
@@ -100,7 +100,7 @@ export function RouterHealthCard({
       {providerHealth ? (
         <p className="detail">
           Provider lanes:{" "}
-          <b style={{ color: providerHealth.total && providerHealth.healthy < providerHealth.total ? "#d29922" : "#3fb950" }}>
+          <b style={{ color: providerHealth.total && providerHealth.healthy < providerHealth.total ? "var(--boss-c-d29922)" : "var(--boss-c-3fb950)" }}>
             {providerHealth.healthy}/{providerHealth.total} healthy
           </b>
         </p>
@@ -133,7 +133,7 @@ export function SkillInvokeCard({
     <article className="stack-card">
       <h3 style={{ margin: 0 }}>Skill invocation (mock)</h3>
       <p className="detail">
-        Run a skill through the runtime — per-skill permission + cost + retry enforcement, with mock
+        Run a skill through the runtime, per-skill permission + cost + retry enforcement, with mock
         mode (full gauntlet, zero side effects). The API drives mock only.
       </p>
       <ActionForm permission="skill:invoke" action={invokeSkillAction} className="composer compact">
@@ -155,9 +155,9 @@ export function SkillInvokeCard({
               <div>
                 <h4 style={{ margin: 0 }}>{inv.skillId}</h4>
                 <p className="detail">
-                  {inv.caller} · {inv.mode} ·{" "}
+                  {inv.caller}, {inv.mode} ·{" "}
                   <span style={{ color: tone(inv.status) }}>{inv.status}</span>
-                  {inv.reason ? ` · ${inv.reason}` : ""}
+                  {inv.reason ? `, ${inv.reason}` : ""}
                 </p>
               </div>
               <span className="pill" style={{ color: tone(inv.permissionDecision) }}>{inv.permissionDecision}</span>

@@ -3,7 +3,7 @@
 /**
  * <AgentAvatar>: the one face (spec §3.1).
  *
- * Give it any name BOSS has for an agent — role key, seat title, callsign — or an identity, or
+ * Give it any name BOSS has for an agent, role key, seat title, callsign, or an identity, or
  * an unsaved spec to preview, or a system variant (Auto, You, A person, BOSS). It resolves
  * through lib/agent-identity.ts and draws through lib/agent-avatar.ts, the same pure function
  * the share card and the README cast use, so a face is identical on every surface.

@@ -47,13 +47,13 @@ describe("one Pulse", () => {
     expect(counts).toContain("1 up");
     expect(counts).toContain("1 slow");
     expect(counts).toContain("1 down");
-    expect(counts).toContain("$3.12 est. · 24h");
+    expect(counts).toContain("$3.12 est., 24h");
   });
 
   it("an app scraped but not health-checked is named, not dropped", async () => {
     await openObs("?view=apps");
     const nw = $("[data-testid='obs-not-watched']")!;
-    expect(text(nw)).toContain("orders · dev");
+    expect(text(nw)).toContain("orders, dev");
     expect(nw.querySelector("a[href='http://grafana.local/d/orders']")).not.toBeNull();
   });
 
@@ -85,7 +85,7 @@ describe("one Pulse", () => {
     await openObs("?view=apps");
     const pin = $("[data-testid='obs-pulse-row'][data-target='t_live'] svg.obs-pins a");
     expect(pin?.getAttribute("href")).toBe("?area=infra&view=deploys&deploy=stack%3Asd_live");
-    expect(pin?.getAttribute("aria-label")).toMatch(/^Deployed a1b2c3d · \d\d:\d\d · Live$/);
+    expect(pin?.getAttribute("aria-label")).toMatch(/^Deployed a1b2c3d, \d\d:\d\d, Live$/);
   });
 
   it("the workflow's watch= link opens that app's drawer", async () => {

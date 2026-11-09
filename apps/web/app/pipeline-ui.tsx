@@ -35,7 +35,7 @@ function CustomProfileForm({ projectId, edition }: { projectId: string; edition:
     <div style={{ marginTop: 26, border: "1px solid var(--border)", borderRadius: 12, padding: 16, background: "var(--surface)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <h3 style={{ margin: 0, color: "var(--ink)", fontSize: 15 }}>Create a custom profile</h3>
-        <span style={{ fontSize: 10.5, color: isEnterprise ? "#3fb950" : "#d29922", border: `1px solid ${isEnterprise ? "#3fb950" : "#d29922"}`, padding: "1px 8px", borderRadius: 999 }}>
+        <span style={{ fontSize: 10.5, color: isEnterprise ? "var(--boss-c-3fb950)" : "var(--boss-c-d29922)", border: `1px solid ${isEnterprise ? "var(--boss-c-3fb950)" : "var(--boss-c-d29922)"}`, padding: "1px 8px", borderRadius: 999 }}>
           {isEnterprise ? "Enterprise" : "Enterprise only"}
         </span>
       </div>
@@ -95,11 +95,11 @@ function toneFor(name: string): string {
 // The cost story, in one line per profile: how many separate AI agents, and the tradeoff.
 function blurbFor(name: string): string {
   if (name === "lean")
-    return "One builder agent (plus a separate tester) on a low-cost model. No independent reviewer — fast and lowest cost, best for prototypes; less independent checking.";
+    return "One builder agent (plus a separate tester) on a low-cost model. No independent reviewer, fast and lowest cost, best for prototypes; less independent checking.";
   if (name === "balanced")
-    return "A separate tester, builder, and a reviewer that tries to break the change — strong model where it matters. Independent checks catch more, at moderate cost. The everyday default.";
+    return "A separate tester, builder, and a reviewer that tries to break the change, strong model where it matters. Independent checks catch more, at moderate cost. The everyday default.";
   if (name === "strict")
-    return "A full panel of specialized agents — tester, builder, reviewer, security — all on the strong model, with extra iterations. Production-grade quality; highest cost.";
+    return "A full panel of specialized agents, tester, builder, reviewer, security, all on the strong model, with extra iterations. Production-grade quality; highest cost.";
   return "Your chosen mix of agents, tiers, and per-step models.";
 }
 
@@ -149,9 +149,7 @@ function ProfileCard({
           )}
         </div>
         {isDefault ? (
-          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#0d1117", background: tone, padding: "3px 11px", borderRadius: 999, letterSpacing: 0.3 }}>
-            DEFAULT
-          </span>
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--boss-c-0d1117)", background: tone, padding: "3px 11px", borderRadius: 999, letterSpacing: 0.3 }}>Default</span>
         ) : (
           <ActionForm permission="pipeline:manage" action={setPipelineDefaultAction}>
             <input type="hidden" name="project_id" value={projectId} />
@@ -183,7 +181,7 @@ function ProfileCard({
         </div>
         <div style={{ color: "var(--muted)" }}>{steps.join(" → ")}</div>
         <div style={{ color: "var(--muted)" }}>
-          Model: <b style={{ color: "var(--ink-soft)" }}>{anyStrong ? "strong where it matters" : "low-cost"}</b> · risk tiers {p.tier_floor}–{p.tier_cap}
+          Model: <b style={{ color: "var(--ink-soft)" }}>{anyStrong ? "strong where it matters" : "low-cost"}</b>, risk tiers {p.tier_floor}, {p.tier_cap}
         </div>
       </div>
 
@@ -204,7 +202,7 @@ function ProfileCard({
 export function PipelineView({ data }: { data: PipelineData }) {
   if (!data.apiReachable) {
     return (
-      <div style={{ padding: 16, color: "#f0a35e" }}>
+      <div style={{ padding: 16, color: "var(--boss-c-f0a35e)" }}>
         The control-plane API is unreachable, so pipeline profiles can&apos;t be loaded.
       </div>
     );
@@ -214,10 +212,10 @@ export function PipelineView({ data }: { data: PipelineData }) {
       <p style={{ color: "var(--muted)", margin: "0 0 18px", maxWidth: 820, fontSize: 13, lineHeight: 1.65 }}>
         Every step of the pipeline runs as a <b style={{ color: "var(--ink)" }}>separate AI agent</b>, and
         that&apos;s what drives the cost. <b style={{ color: "var(--ink)" }}>Lower-cost</b> profiles use{" "}
-        <b style={{ color: "var(--ink)" }}>fewer agents</b> — one agent builds and tests on a low-cost
+        <b style={{ color: "var(--ink)" }}>fewer agents</b>, one agent builds and tests on a low-cost
         model: quick results, less independent checking (good for prototypes).{" "}
         <b style={{ color: "var(--ink)" }}>Higher-rigor</b> profiles run{" "}
-        <b style={{ color: "var(--ink)" }}>more specialized agents</b> — a separate tester, an independent
+        <b style={{ color: "var(--ink)" }}>more specialized agents</b>, a separate tester, an independent
         reviewer, and a security pass that each try to break the others&apos; work, on the strong model and
         with extra iterations: production-grade quality, higher cost. Effort scales with risk
         automatically; sensitive changes (auth, payments, secrets) always run at least standard rigor.
@@ -236,7 +234,7 @@ export function PipelineView({ data }: { data: PipelineData }) {
         }}
       >
         <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--accent-text)", marginBottom: 6 }}>
-          Why it&apos;s built this way — Verification-Amplified Generation (VAG)
+          Why it&apos;s built this way, Verification-Amplified Generation (VAG)
         </div>
         <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.65, color: "var(--ink-soft)" }}>
           BOSS bets that{" "}
@@ -244,16 +242,16 @@ export function PipelineView({ data }: { data: PipelineData }) {
           cheap models do the writing and strong models do the judging: a separate agent{" "}
           <b style={{ color: "var(--ink)" }}>freezes the tests first</b>, a low-cost model implements and
           repairs against them, then an independent{" "}
-          <b style={{ color: "var(--ink)" }}>adversarial refute panel</b> — plus security, consistency,
-          regression and mutation checks — tries to <i>break</i> the change. Only if none can does a{" "}
+          <b style={{ color: "var(--ink)" }}>adversarial refute panel</b>, plus security, consistency,
+          regression and mutation checks, tries to <i>break</i> the change. Only if none can does a{" "}
           <b style={{ color: "var(--ink)" }}>fail-closed gate</b> open the PR. The reviewers never wrote
-          the code, so they can&apos;t rubber-stamp it — and because a weak verifier is the one thing that
+          the code, so they can&apos;t rubber-stamp it, and because a weak verifier is the one thing that
           collapses quality, the judging always runs on the strong model.
         </p>
         <p style={{ margin: "8px 0 0", fontSize: 12.5, lineHeight: 1.65, color: "var(--muted)" }}>
           The refute panel votes, and its{" "}
           <b style={{ color: "var(--ink-soft)" }}>confidence score</b> is the share of independent
-          reviewers that couldn&apos;t break the change — a pass backed by three reviewers is stronger than
+          reviewers that couldn&apos;t break the change, a pass backed by three reviewers is stronger than
           one backed by one. Higher-rigor profiles below simply add more independent verifiers: you&apos;re
           buying verification, not generation.
         </p>
@@ -297,10 +295,10 @@ export function PipelineView({ data }: { data: PipelineData }) {
                   <td style={{ padding: "8px 10px", fontVariantNumeric: "tabular-nums", color: "var(--ink)" }}>{usd(r.cost_usd_micros)}</td>
                   <td style={{ padding: "8px 10px", color: "var(--muted)" }}>
                     {r.stage_costs
-                      ? Object.entries(r.stage_costs).filter(([, v]) => v).map(([k, v]) => `${k.replace("_", " ")} ${usd(v)}`).join(" · ")
+                      ? Object.entries(r.stage_costs).filter(([, v]) => v).map(([k, v]) => `${k.replace("_", " ")} ${usd(v)}`).join(", ")
                       : "—"}
                   </td>
-                  <td style={{ padding: "8px 10px", color: r.status === "completed" ? "#3fb950" : "#f85149" }}>{r.status}</td>
+                  <td style={{ padding: "8px 10px", color: r.status === "completed" ? "var(--boss-c-3fb950)" : "var(--boss-c-f85149)" }}>{r.status}</td>
                 </tr>
               ))}
             </tbody>

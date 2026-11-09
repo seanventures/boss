@@ -27,7 +27,7 @@ describe("the run view says who ran each step, how they were chosen and why", ()
         agent: "video_editor", how: "model", why: "it holds the trim and reframe skills",
         skills_offered: ["video.trim", "video.reframe"], skills_used: ["video.trim"],
         mcp_offered: ["drive"] } }} />);
-    expect(html).toContain("Ran as <strong>video_editor</strong> — chosen by BOSS");
+    expect(html).toContain("Ran as <strong>video_editor</strong>, chosen by BOSS");
     expect(html).toContain("it holds the trim and reframe skills");
     expect(html).toContain("offered video.trim, video.reframe, MCP drive");
     expect(html).toContain("used video.trim");
@@ -36,7 +36,7 @@ describe("the run view says who ran each step, how they were chosen and why", ()
   it("says so when a built-in step ran as whoever started the run", () => {
     const html = renderToStaticMarkup(<RanAs stepId="build" output={{ ran_as: {
       agent: "ceo", how: "run_actor", why: "a built-in step runs BOSS's own tool" } }} />);
-    expect(html).toContain("Ran as <strong>ceo</strong> — ran as whoever started the run");
+    expect(html).toContain("Ran as <strong>ceo</strong>, ran as whoever started the run");
   });
 
   it("draws nothing for a step that has not run", () => {

@@ -121,8 +121,8 @@ describe("a build's page keeps what its old page said", () => {
     await open("brief");
     const brief = text('[data-testid="fx-brief"]');
     for (const fact of ["Each doc shows its last review date", "Stale docs sort first", "npm run build && npm run test:e2e",
-      "acme/sandbox · boss/code/crun_fresh1", "Standard Product Delivery v2", "claude_code · opus", "codex · gpt-6-sol",
-      "cross-model", "lean · risk tier 2", "reviewer yes · tests yes", "API host · 56 turns"]) {
+      "acme/sandbox, boss/code/crun_fresh1", "Standard Product Delivery v2", "claude_code, opus", "codex, gpt-6-sol",
+      "cross-model", "lean, risk tier 2", "reviewer yes, tests yes", "API host, 56 turns"]) {
       expect(brief).toContain(fact);
     }
     expect($('[data-testid="fx-brief"] a[href="https://github.com/acme/sandbox/tree/boss%2Fcode%2Fcrun_fresh1"]')).not.toBeNull();
@@ -140,7 +140,7 @@ describe("a build's page keeps what its old page said", () => {
   it("Tests: how long each command took; Changes: the diff's size", async () => {
     await mount(view());
     await open("tests");
-    expect(text('[data-testid="fx-out-body-tests"]')).toContain("exit 0 · ok · 3m");
+    expect(text('[data-testid="fx-out-body-tests"]')).toContain("exit 0, ok, 3m");
     await open("changes");
     expect(text('[data-testid="fx-diffstat"]')).toBe("6 files +312 −40");
   });
@@ -167,8 +167,8 @@ describe("a build's page keeps what its old page said", () => {
     await mount(view());
     expect(text('[data-testid="fx-attempts"]')).toBe("3 builds ▾");
     await click($('[data-testid="fx-attempts"]'));
-    expect(text('[data-testid="fx-attempt-crun_follow"]')).toMatch(/^Follow-up · PR open · PR #223 · \$1\.20/);
-    expect(text('[data-testid="fx-attempt-crun_fresh1"]')).toMatch(/^Attempt 1 · PR open · PR #219 · \$12 · /);
+    expect(text('[data-testid="fx-attempt-crun_follow"]')).toMatch(/^Follow-up, PR open, PR #223, \$1\.20/);
+    expect(text('[data-testid="fx-attempt-crun_fresh1"]')).toMatch(/^Attempt 1, PR open, PR #219, \$12/);
     await click($('[data-testid="fx-attempt-crun_follow"]'));
     expect(onOpenBuild).toHaveBeenCalledWith("crun_follow");
   });
@@ -186,8 +186,8 @@ describe("a build's page keeps what its old page said", () => {
     expect(log?.getAttribute("href")).toBe("?org=org_acme&area=activity&run=crun_fresh2");
     await click($('[data-testid="fx-menu-ask"]'));
     const starters = JSON.parse(window.sessionStorage.getItem("boss.agent.suggests.crun_fresh2") ?? "[]") as string[];
-    expect(starters).toContain("4 checks failed but shipped as advisory — which should block next time?");
-    expect(starters).toContain("The tests missed an injected bug — where are they weakest?");
+    expect(starters).toContain("4 checks failed but shipped as advisory, which should block next time?");
+    expect(starters).toContain("The tests missed an injected bug, where are they weakest?");
     expect(starters).toContain("Which of the 2 acceptance criteria are not actually covered by a test?");
   });
 
@@ -238,8 +238,8 @@ describe("the preview says where it runs, how far it got, and what a press reall
     expect(text('[data-testid="fx-out-body-preview"]')).toContain("docker");
     await click($('[data-testid="fx-preview-steps"]'));
     const ledger = text('[data-testid="fx-preview-ledger"]');
-    expect(ledger).toContain("Install · 41s");
-    expect(ledger).toContain("Build · vite: not found");
+    expect(ledger).toContain("Install, 41s");
+    expect(ledger).toContain("Build, vite: not found");
   });
 
   it("a running preview whose first ways were passed over reads as running, with Open (tester P1-4)", async () => {
@@ -255,10 +255,10 @@ describe("the preview says where it runs, how far it got, and what a press reall
     expect($('[data-testid="fx-preview-starting"]')).toBeNull();
     expect(body).not.toContain("1 of 3");
     expect(body).not.toContain("Failed");
-    expect(text('[data-testid="fx-preview-steps"]')).toContain("Running · Run as a managed host process");
+    expect(text('[data-testid="fx-preview-steps"]')).toContain("Running, Run as a managed host process");
     await click($('[data-testid="fx-preview-steps"]'));
     const ledger = text('[data-testid="fx-preview-ledger"]');
-    expect(ledger).toContain("Build and run a container · passed over");
+    expect(ledger).toContain("Build and run a container, passed over");
     expect(ledger).not.toContain("✗");
   });
 
@@ -279,7 +279,7 @@ describe("the preview says where it runs, how far it got, and what a press reall
     await open("preview");
     previewReply.value = { note: "Ran 12 tests\nOK" };
     await click($('[data-testid="fx-preview-run"]'));
-    expect(text('[data-testid="fx-preview-note"]')).toContain("Tests passed · no live app");
+    expect(text('[data-testid="fx-preview-note"]')).toContain("Tests passed, no live app");
     previewReply.value = { error: "The API did not answer within 120s. It may still be working." };
     await click($('[data-testid="fx-preview-run"]'));
     expect(text('[data-testid="fx-out-body-preview"]')).not.toContain("Couldn't start");
@@ -311,7 +311,7 @@ describe("an app opens on the build that works", () => {
     const { settle } = await import("./_helpers/live-render");
     await mount(<AppsTab projectId="p1" runs={[]} previews={[]} query="" onOpen={(id) => opened.push(id)} onNew={() => {}} />);
     await settle();
-    expect(text(".fx-app .fx-row-now")).toBe("PR open · last failed");
+    expect(text(".fx-app .fx-row-now")).toBe("PR open, last failed");
     expect(text('[data-testid="fx-app-pr-crun_b3"]')).toBe("#218");
     expect(text(".fx-app-spend")).toBe("$14");
     await click($(".fx-app-row .fx-c-state"));
@@ -328,7 +328,7 @@ describe("an app opens on the build that works", () => {
       builders: [], state: "building", word: "Reviewing", preview: null, deploys: [], attempts: [live, built] }] })));
     await mount(<AppsTab projectId="p1" runs={[]} previews={[]} query="" onOpen={() => {}} onNew={() => {}} />);
     await settle();
-    expect(text(".fx-app .fx-row-now")).toBe("PR open · building");
+    expect(text(".fx-app .fx-row-now")).toBe("PR open, building");
   });
 });
 
@@ -346,7 +346,7 @@ describe("the Factory says what it is a window onto", () => {
                                githubPlane="mission_control_binding" githubFullName="acme/sandbox" />);
     await settle();
     expect(text('[data-testid="fx-window"]')).toBe("Newest 1 of 244");
-    expect(text('[data-testid="fx-github-plane"]')).toBe("GitHub · acme/sandbox");
+    expect(text('[data-testid="fx-github-plane"]')).toBe("GitHub, acme/sandbox");
     expect($('[data-testid="fx-github-plane"]')?.title).toBe("Project GitHub binding for acme/sandbox. Check GitHub access in Connect before starting a build.");
     expect($('[data-testid="fx-preview-list-error"]')?.title).toBe("the previews API answered 502");
   });

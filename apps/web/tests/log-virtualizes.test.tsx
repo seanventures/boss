@@ -68,7 +68,7 @@ describe("repeats fold, runs group", () => {
     await mount(<LogRows items={mixed} labels={{ wfr_1: "Ship it #182" }} byRun selectedId={null} arrived={new Set()}
                          onOpen={() => {}} onHolding={() => {}} onNearEnd={() => {}} footer={null} />);
     const heads = $$(".lx-runhead");
-    expect(heads.map((h) => h.textContent)).toEqual(["Ship it #1822 lines · 1 error", "crun_21 line"]);
+    expect(heads.map((h) => h.textContent)).toEqual(["Ship it #1822 lines, 1 error", "crun_21 line"]);
     expect(heads[0].getAttribute("title")).toBe("Counted on loaded lines");
   });
 });

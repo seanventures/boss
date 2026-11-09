@@ -14,7 +14,7 @@ type Kind = "skill" | "mcp";
 /**
  * What an agent task may use: chips, plus a `+ Skill` / `+ MCP` picker.
  *
- * A STEP SCOPES, IT NEVER GRANTS. The options are what the named agent HOLDS, or — with Auto —
+ * A STEP SCOPES, IT NEVER GRANTS. The options are what the named agent HOLDS, or, with Auto , 
  * what any agent holds, grouped by agent, since BOSS then picks among the holders. A chip the
  * named agent does not hold turns amber rather than disappearing: the save would refuse it, and
  * the operator should see which one before pressing Save.
@@ -61,7 +61,7 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
   const q = query.trim().toLowerCase();
   const labelOf = (item: string) => itemLabel(abilities, kind, item);
   const matches = (item: string) => !q || item.toLowerCase().includes(q) || labelOf(item).toLowerCase().includes(q);
-  // A chip already says `Not set up · Set up ↗`, so the Check's sentence about the same item is
+  // A chip already says `Not set up, Set up `, so the Check's sentence about the same item is
   // not said again under it (K15); any other problem is one line.
   const flagged = selected.some((item) => notSetUp(abilityOf(abilities, kind, item)));
   const label = kind === "skill" ? "Skill" : "MCP";
@@ -80,9 +80,9 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
               <span className="wf-chip" data-amber={amber || undefined} data-tone={unset ? "red" : undefined}
                     data-testid={`wf-scope-chip-${kind}-${item}`}
                     title={[labelOf(item) !== item ? item : null,
-                            unset ? `${ability!.label} · Not set up`
+                            unset ? `${ability!.label}, Not set up`
                               : amber ? (captain ? `Not held by ${whose}` : "Not held by any agent") : null]
-                      .filter(Boolean).join(" · ") || item}>
+                      .filter(Boolean).join(", ") || item}>
                 {labelOf(item)}
                 <button type="button" className="wf-chip-x" aria-label={`Remove ${item}`}
                         onClick={() => toggle(item)}><X size={10} weight="bold" /></button>
@@ -90,7 +90,7 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
               {unset ? (
                 <a className="wf-chip" data-tone="red" href={setUpHref(ability!.key)}
                    title="Open this ability in Skills & MCP" data-testid={`wf-scope-setup-${kind}-${item}`}>
-                  Not set up · Set up ↗
+                  Not set up, Set up 
                 </a>
               ) : null}
             </React.Fragment>
@@ -118,7 +118,7 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
                 const unset = notSetUp(ability);
                 return (
                   <label key={ability.key} className="wf-check" data-testid={`wf-scope-ability-${kind}-${ability.key}`}
-                         title={`${GROUP_WORD[ability.group] ?? ability.group} · ${items.map(labelOf).join(", ")}`}>
+                         title={`${GROUP_WORD[ability.group] ?? ability.group}, ${items.map(labelOf).join(", ")}`}>
                     <input type="checkbox" checked={all}
                            onChange={() => onChange(all ? selected.filter((x) => !items.includes(x))
                                                         : [...new Set([...selected, ...items])])} />
@@ -126,7 +126,7 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
                     {unset ? (
                       <a className="wf-chip" data-tone="red" href={setUpHref(ability.key)}
                          title="Open this ability in Skills & MCP" data-testid={`wf-scope-ability-setup-${ability.key}`}
-                         onClick={(e) => e.stopPropagation()}>Not set up · Set up ↗</a>
+                         onClick={(e) => e.stopPropagation()}>Not set up, Set up </a>
                     ) : null}
                   </label>
                 );

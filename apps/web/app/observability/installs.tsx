@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * Observability › Installs — the collector's dashboard, shown only in Collector mode
+ * Observability › Installs, the collector's dashboard, shown only in Collector mode
  * (docs/product/RUN_SCORECARDS.md, "Collector"). For the product AND for investors:
  *
  *   PROOF       "312 active installs this month, 41% still active after 30 days"     [CSV]
- *   ACTIVE      daily · weekly · monthly · all time
+ *   ACTIVE      daily, weekly, monthly, all time
  *   NEW / WEEK  bars, 12 weeks           RETENTION  weekly cohorts × weeks since first seen
- *   ADOPTION    version · edition · OS · CPU · install method
- *   OPTED IN    usage scale (at least, and the spread) · ship rate and reasons · first-week funnel
- *               · scorecards by harness, model and role · error classes
+ *   ADOPTION    version, edition, OS, CPU, install method
+ *   OPTED IN    usage scale (at least, and the spread), ship rate and reasons, first-week funnel
+ *              , scorecards by harness, model and role, error classes
  *
  * Only what installs sent: heartbeats from everyone who has not opted out, the rest only from
  * installs that turned Improve BOSS on. Nothing here is a guess.
@@ -56,9 +56,9 @@ function Bars({ rows, label, words, testId }: { rows: KeyN[]; label: string; wor
   );
 }
 
-/** "claude_code · 0.82": the group with its mean score, so a bar's length is never the only fact. */
+/** "claude_code, 0.82": the group with its mean score, so a bar's length is never the only fact. */
 function scored(rows: { key: string; name?: string; score: number | null }[]): Record<string, string> {
-  return Object.fromEntries(rows.map((r) => [r.key, `${r.name ?? r.key} · ${r.score === null ? "—" : r.score.toFixed(2)}`]));
+  return Object.fromEntries(rows.map((r) => [r.key, `${r.name ?? r.key}, ${r.score === null ? "—" : r.score.toFixed(2)}`]));
 }
 
 function Panel({ label, tip, children, testId }: { label: string; tip?: string; children: React.ReactNode; testId?: string }) {
@@ -123,8 +123,8 @@ export function InstallsTab({ projectId }: ObsTabProps) {
           ) : <span className="im-muted">None yet</span>}
         </Panel>
         <Panel label="VERSIONS" testId="in-versions"><Bars rows={v.versions} label="Versions" testId="in-versions-bars" /></Panel>
-        <Panel label="EDITION · METHOD"><Bars rows={[...v.editions, ...v.methods]} label="Edition and install method" testId="in-editions" /></Panel>
-        <Panel label="OS · CPU"><Bars rows={[...v.os, ...v.arch]} label="OS and CPU type" testId="in-os" /></Panel>
+        <Panel label="EDITION, METHOD"><Bars rows={[...v.editions, ...v.methods]} label="Edition and install method" testId="in-editions" /></Panel>
+        <Panel label="OS, CPU"><Bars rows={[...v.os, ...v.arch]} label="OS and CPU type" testId="in-os" /></Panel>
         <Panel label="USAGE SCALE" tip="Opted-in installs. Ranges summed from their lower ends: at least this many." testId="in-scale">
           <Bars rows={Object.entries(v.scale).map(([k, s]) => ({ key: k, n: s.at_least }))} words={SCALE_WORDS} label="Usage scale, at least" testId="in-scale-bars" />
         </Panel>
@@ -132,8 +132,8 @@ export function InstallsTab({ projectId }: ObsTabProps) {
           {v.ship.rated ? (
             <>
               <span className="im-tile-v">{v.ship.rate === null ? "—" : `${Math.round(v.ship.rate * 100)}%`}</span>
-              <span className="im-muted" title="Yes · with changes · no, of every build rated">
-                {v.ship.yes} · {v.ship.with_changes} · {v.ship.no} of {v.ship.rated}
+              <span className="im-muted" title="Yes, with changes, no, of every build rated">
+                {v.ship.yes}, {v.ship.with_changes}, {v.ship.no} of {v.ship.rated}
               </span>
               <Bars rows={v.chips} words={CHIP_WORDS} label="Reasons" testId="in-chips" />
             </>

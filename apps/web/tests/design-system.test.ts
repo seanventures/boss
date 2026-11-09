@@ -20,11 +20,17 @@ describe("BOSS mission-control design system", () => {
   const infraCss = readFileSync(resolve(__dirname, "../app/infra/infra.css"), "utf8");
 
   it("defines the approved foundations", () => {
-    expect(css).toContain("--void: #090d17");
-    expect(css).toContain("--teal: #2ec5c5");
-    expect(css).toContain("--green: #34d399");
-    expect(css).toContain("--amber: #f5b544");
-    expect(css).toContain("--red: #f2647a");
+    const tokens = readFileSync(resolve(__dirname, "../app/globals.css"), "utf8");
+    for (const [name, hex] of [
+      ["--void", "090d17"],
+      ["--teal", "2ec5c5"],
+      ["--green", "34d399"],
+      ["--amber", "f5b544"],
+      ["--red", "f2647a"],
+    ] as const) {
+      expect(css).toContain(`${name}: var(--boss-c-${hex})`);
+      expect(tokens.toLowerCase()).toContain(`--boss-c-${hex}: #${hex}`);
+    }
     expect(css).toContain('"Sora"');
     expect(css).toContain('"Manrope"');
     expect(css).toContain('"JetBrains Mono"');
@@ -86,7 +92,7 @@ describe("BOSS mission-control design system", () => {
     const benchmark = codeTasks.slice(codeTasks.indexOf("function BenchmarkLaunch"),
                                      codeTasks.indexOf("function LaunchTask"));
     expect(benchmark).toMatch(/startedId \? \(/);        // becomes a link once launched
-    expect(benchmark).toContain("View run →");
+    expect(benchmark).toContain("View run</button>");
     expect(benchmark).not.toContain("router.refresh()");  // would wipe the state it just set
     // The parent holds the memory for BOTH, keyed differently but the same mechanism.
     expect(codeTasks).toContain("startedId={launched?.[benchmark.id]?.run_id}");
@@ -242,7 +248,8 @@ describe("BOSS mission-control design system", () => {
     expect(css).toMatch(
       /\.bx-content\[data-active="infra"\][\s\S]*animation:\s*none\s*!important;/,
     );
-    expect(css).toContain("width: 100vw;");
+    expect(css).toMatch(/\.provider-drawer\s*\{[^}]*width:\s*100%;/);
+    expect(css).not.toContain("width: 100vw;");
   });
 });
 

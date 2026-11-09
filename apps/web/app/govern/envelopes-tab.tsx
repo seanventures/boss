@@ -3,7 +3,7 @@
 /**
  * Govern › Envelopes (spec §4.4.5): allocations as a tree, the initiative request with its rule
  * as the SERVER states it, and commitments with today's FinOps honesty kept word for word in the
- * tooltips — "not loaded" and "no cost events" are never shown as $0.
+ * tooltips, "not loaded" and "no cost events" are never shown as $0.
  */
 import React, { useState } from "react";
 
@@ -17,9 +17,9 @@ import { plural } from "../../lib/factory-floor";
 import { localWith } from "../../lib/local-time";
 
 const HONESTY: Record<string, { word: string; tip: string }> = {
-  not_loaded: { word: "Not loaded · not $0", tip: "Cloud spend is not loaded. This is not $0.00." },
-  no_events: { word: "No cost events · not $0", tip: "No cost events in this window. Absence is not $0.00 spend." },
-  recorded: { word: "Last 30d · recorded events", tip: "Totals come from recorded cost events only — not implied exact invoices." },
+  not_loaded: { word: "Not loaded, not $0", tip: "Cloud spend is not loaded. This is not $0.00." },
+  no_events: { word: "No cost events, not $0", tip: "No cost events in this window. Absence is not $0.00 spend." },
+  recorded: { word: "Last 30d, recorded events", tip: "Totals come from recorded cost events only, not implied exact invoices." },
 };
 
 const VERDICT: Record<string, string> = {
@@ -48,13 +48,13 @@ function Tree({ items, parent, depth }: { items: Allocation[]; parent: string | 
         return (
           <li key={a.id} data-testid="gv-allocation">
             <span className="gv-alloc-line">
-              <span data-user-text title={a.id}>{a.scope_type.replace(/_/g, " ")} · {a.scope_id}</span>
+              <span data-user-text title={a.id}>{a.scope_type.replace(/_/g, " ")}, {a.scope_id}</span>
               <span className="gv-bar" data-thin role="img" aria-label={`${money(used)} of ${money(a.amount_usd_micros)}`}>
                 <span className="gv-bar-fill" style={{ width: `${(ratio * 100).toFixed(1)}%` }} />
               </span>
               <span>{money(used)} of {money(a.amount_usd_micros)}</span>
               <span className="gv-muted" title="Still available">{money(a.available_usd_micros)} left</span>
-              <span className="gv-muted">{dayWords(a.period_start)} – {dayWords(a.period_end)}</span>
+              <span className="gv-muted">{dayWords(a.period_start)}, {dayWords(a.period_end)}</span>
             </span>
             <Tree items={items} parent={a.id} depth={depth + 1} />
           </li>
@@ -87,7 +87,7 @@ export function EnvelopesTab({ projectId, actor, paused }: { projectId: string; 
     setBusy("");
     if (r.ok) {
       const n = Number((r.data as { reconciled?: number }).reconciled ?? 0);
-      showToast("success", `Reconciled · ${plural(n, "commitment")}`);
+      showToast("success", `Reconciled, ${plural(n, "commitment")}`);
       read.reload();
     } else showToast("error", r.status === 403 ? "You can't change this" : r.error);
   };

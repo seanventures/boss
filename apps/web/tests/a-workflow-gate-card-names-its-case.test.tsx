@@ -87,8 +87,8 @@ describe("a workflow gate's card", () => {
     ]);
     const subtitles = rows.map((r) => r.querySelector('[data-testid="decision-subtitle"]')!
       .textContent);
-    expect(subtitles).toEqual([`AML Alert Investigation · ${THREE}`,
-                               `AML Alert Investigation · ${TWO}`]);
+    expect(subtitles).toEqual([`AML Alert Investigation, ${THREE}`,
+                               `AML Alert Investigation, ${TWO}`]);
     for (const row of rows) {
       expect(row.querySelector(".dq-title")!.textContent).not.toMatch(/\(\d+\)$/);
       expect(row.textContent).not.toMatch(/resume workflow/i);

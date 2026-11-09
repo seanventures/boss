@@ -57,7 +57,7 @@ describe("a turn can be read", () => {
 
   it("opens in a drawer with the body as output, and says when it was clipped", () => {
     expect(DRAWER).toContain('<pre className="lx-text" data-user-text data-testid="lx-body">');
-    expect(DRAWER).toContain("Clipped when stored · ");
+    expect(DRAWER).toContain("Clipped when stored, ");
     expect(DRAWER).toContain('title="A clipped line is not a short one"');
   });
 });

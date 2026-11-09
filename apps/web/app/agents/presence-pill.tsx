@@ -1,20 +1,20 @@
 "use client";
 
 /**
- * The top-bar presence pill, and the crew view behind it — the Human Checkpoint Dock
+ * The top-bar presence pill, and the crew view behind it, the Human Checkpoint Dock
  * (agent-world spec §3.3, agents-home spec §4.10).
  *
- * `4 working · 2 need you` with up to four faces; hidden only when nothing is working and
+ * `4 working, 2 need you` with up to four faces; hidden only when nothing is working and
  * nothing needs you. Pressed, it opens the CREW: what needs you first, one row per item with
- * `Review`, then who is working on what — pressing an agent there opens a 1:1 talk.
+ * `Review`, then who is working on what, pressing an agent there opens a 1:1 talk.
  *
  * NEEDS YOU COUNTS DECISIONS, NOT AGENTS. It is `attention.count` from /v1/agents/live: the
  * same number as the Command Center, Approvals and Agents › Live (command_center's needs_you),
  * so three gates on one agent say 3, and a pull request nobody is attributed to is counted.
  * An API from before that sends no `attention`, and only then does the pill count agents.
  *
- * Each new item is said once to a screen reader (aria-live polite), by item id — a second gate
- * on the same agent is still announced — and the count prefixes the tab title as `(n)`.
+ * Each new item is said once to a screen reader (aria-live polite), by item id, a second gate
+ * on the same agent is still announced, and the count prefixes the tab title as `(n)`.
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
@@ -44,10 +44,10 @@ export function crewOf(live: LiveMap): CrewRow[] {
   return rows.sort((a, b) => order[a.zone] - order[b.zone] || a.name.localeCompare(b.name));
 }
 
-/** `4 working · 2 need you` / `1 needs you`. Either half is left out when it is zero. */
+/** `4 working, 2 need you` / `1 needs you`. Either half is left out when it is zero. */
 export function pillText(working: number, needs: number): string {
   return [working ? `${working} working` : "",
-          needs ? (needs === 1 ? "1 needs you" : `${needs} need you`) : ""].filter(Boolean).join(" · ");
+          needs ? (needs === 1 ? "1 needs you" : `${needs} need you`) : ""].filter(Boolean).join(", ");
 }
 
 /** The older words, from agents alone: for an API that sends no `attention`. */

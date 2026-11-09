@@ -22,7 +22,7 @@ function resolveHref(href: string): string {
  * area would be a third place to look for one delivery.
  *
  * Approving does not deploy. It approves the run's merge decision, which merges, which fires
- * the delivery trigger that already existed — so there stays exactly one path to a deployment.
+ * the delivery trigger that already existed, so there stays exactly one path to a deployment.
  * The gate is fetched BEFORE the button renders so the row can say what approving will do,
  * and refuse when it would do nothing.
  */
@@ -31,7 +31,7 @@ function resolveHref(href: string): string {
  *
  * Exported because it now lives on the app's own detail bar, beside the PR it merges and the
  * preview it was judged from. It used to sit only in a separate "Previews" panel further down
- * the page — a second place to look for an action about the app you already had open.
+ * the page, a second place to look for an action about the app you already had open.
  */
 export function ApprovePreview(
   { preview, compact = false }: { preview: PreviewRec; compact?: boolean },
@@ -43,7 +43,7 @@ export function ApprovePreview(
   //
   // A Server Action re-renders the whole route to reply, so nine preview rows cost nine
   // renders of a page that takes tens of seconds to render. The gate still has to be read
-  // before the button appears — the row says what approving will do — so it is batched rather
+  // before the button appears, the row says what approving will do, so it is batched rather
   // than dropped. Same fix as the app cards; see lib/batch-fetch.ts.
   React.useEffect(() => {
     let live = true;

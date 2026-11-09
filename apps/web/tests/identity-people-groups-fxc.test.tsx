@@ -118,7 +118,7 @@ const groups = () => F.groups(NOW, people());
 
 describe("Groups: create, rename, delete, bind and unbind", () => {
   it("the list counts synced groups only when there are some, and New group creates with a key from the name", async () => {
-    expect(groupsSub(groups())).toBe("4 groups · 2 synced from Okta");
+    expect(groupsSub(groups())).toBe("4 groups, 2 synced from Okta");
     expect(groupsSub(groups().filter((g) => g.source === "manual"))).toBe("2 groups");
     expect(groupKey("Release Captains!")).toBe("release-captains");
     const { el, fetchSpy } = await mount(<GroupsList groups={groups()} />);

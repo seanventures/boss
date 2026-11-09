@@ -70,7 +70,7 @@ const ROWS: Row[] = [
     dom: async () => { await show(); expect(tid("cc-status-text")?.textContent).toBe("1 stopped"); expect(tid("cc-status")?.getAttribute("title")).toBeTruthy(); } },
   { row: 3, before: "Paused chip", now: "Eyebrow chip", status: "Kept", covered: "apps/web/tests/command-center-v2.test.tsx" },
   { row: 4, before: "State change announced (live region), never on load", now: "Same live region in the eyebrow", status: "Kept",
-    dom: async () => { await show(); expect($('.cc-eyebrow [role="status"][aria-live="polite"]')?.textContent).toBe(""); } },
+    dom: async () => { await show(); expect($('.cc-area-name [role="status"][aria-live="polite"]')?.textContent).toBe(""); } },
   { row: 5, before: "`?` help popover (What you can do here)", now: "`?` at the end of the eyebrow", status: "Kept",
     dom: async () => { await show(); await click(tid("cc-help")); expect($(".cc-help-pop")).not.toBeNull(); } },
   { row: 6, before: "KPI RUNNING → #cc2-running", now: "In flight badge (counts.running); id cc2-running kept", status: "Moved",

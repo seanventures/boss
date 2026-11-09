@@ -41,7 +41,7 @@ describe("the screen never claims an empty project", () => {
   });
 
   it("shows the reason it failed", () => {
-    expect(UI).toContain("Could not load workflows — {error}");
+    expect(UI).toContain("Could not load workflows, {error}");
   });
 });
 
@@ -195,7 +195,7 @@ describe("a customer can define their own step", () => {
 
   it("says what the binding costs before the step is created", () => {
     expect(FORM).toContain('data-testid="dw-define-risk"');
-    expect(FORM).toContain('" · always needs a person"');
+    expect(FORM).toContain('", always needs a person"');
   });
 
   it("names an unclassified skill as unclassified rather than as tier 0", () => {

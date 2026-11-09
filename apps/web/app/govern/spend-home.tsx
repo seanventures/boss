@@ -2,12 +2,12 @@
 
 /**
  * Govern › Spend, the Govern landing (BOSSAPP-807): how much has been spent, on which model and
- * which project, and what happens at the cap — in one look. A hero (money of the cap, a badge,
+ * which project, and what happens at the cap, in one look. A hero (money of the cap, a badge,
  * one bar, one line), the days, and two short lists. Everything deeper (by agent, by step,
  * savings, top drivers) stays one click away in "Where the money went".
  *
  * Reads: the Limits view the screen already polls (the caps, the meter, the at-limit choice)
- * and GET /v1/govern/spend for the chosen period — nothing else.
+ * and GET /v1/govern/spend for the chosen period, nothing else.
  */
 import React from "react";
 
@@ -48,9 +48,9 @@ export function daysFor(period: SpendPeriod, daily: DailySpend[], today: string)
 }
 
 const AT_CAP: Record<AtLimit, string> = {
-  pause: "At the cap — new work paused",
-  cheaper: "At the cap — cheaper models",
-  stop: "At the cap — stopped",
+  pause: "At the cap, new work paused",
+  cheaper: "At the cap, cheaper models",
+  stop: "At the cap, stopped",
 };
 
 const BADGE_TIP: Record<string, string> = {
@@ -85,7 +85,7 @@ export function badgeOf(meter: Meter | null | undefined, period: Period | null, 
   const soft = Number(meter?.soft_cap_pct ?? 0.7);
   const counted = (spentOf(period) + heldOf(period)) / period.cap_usd_micros;
   if (counted >= soft || forecast > period.cap_usd_micros) return { tone: "yellow", text: "Near the cap" };
-  return { tone: "green", text: `On track · forecast ${money(forecast)}` };
+  return { tone: "green", text: `On track, forecast ${money(forecast)}` };
 }
 
 function HeroBar({ period, tone }: { period: Period; tone: Badge["tone"] }) {
@@ -122,7 +122,7 @@ function BarRows({ rows: all, testid, empty, mine }: {
     <ul className="gv-hbars" data-testid={testid}>
       {rows.map((r) => (
         <li key={r.id} data-testid={`${testid}-row`} data-mine={r.id === mine || undefined}>
-          <span className="gv-hbar-name" data-user-text title={r.id === "other" ? OTHER_TIP : r.id === mine ? `${r.id} · this project` : r.id}>{r.name}</span>
+          <span className="gv-hbar-name" data-user-text title={r.id === "other" ? OTHER_TIP : r.id === mine ? `${r.id}, this project` : r.id}>{r.name}</span>
           <span className="gv-hbar-track" aria-hidden="true">
             <span className="gv-hbar-fill" data-included={!r.money || undefined}
                   style={{ width: `${Math.max(2, ((r.money || r.included) / peak) * 100).toFixed(1)}%` }} />
@@ -189,7 +189,7 @@ export function SpendHome({ view, viewError, onRetry, projectId, paused, period,
             <div className="gv-hero-line">
               <span className="gv-hero-scope" data-testid="gv-hero-scope" data-user-text
                     title="Caps are per project. By project shows every project you can see.">
-                {projectName ? `This project · ${projectName}` : "This project"}
+                {projectName ? `This project, ${projectName}` : "This project"}
               </span>
               <span className="gv-hero-break" />
               <span className="gv-hero-amount" data-testid="gv-hero-amount">{money(big)}</span>
@@ -212,7 +212,7 @@ export function SpendHome({ view, viewError, onRetry, projectId, paused, period,
               ) : null}
               {included > 0 ? (
                 <span title="Subscription calls are not money and count against no cap">
-                  {included.toLocaleString("en-US")} subscription call{included === 1 ? "" : "s"} — included, $0
+                  {included.toLocaleString("en-US")} subscription call{included === 1 ? "" : "s"}, included, $0
                 </span>
               ) : null}
               {resets ? <span>Resets {resets}</span> : null}
@@ -243,16 +243,16 @@ export function SpendHome({ view, viewError, onRetry, projectId, paused, period,
           </section>
           <div className="gv-pair">
             <section className="gv-card" aria-labelledby="gv-bymodel-h">
-              <h3 id="gv-bymodel-h" className="gv-sec-head">BY MODEL <span className="gv-badge">this project</span></h3>
+              <div className="gv-sec-head"><h3 id="gv-bymodel-h" className="gv-sec-head">BY MODEL</h3><span className="gv-badge">this project</span></div>
               <BarRows testid="gv-home-models" empty="No model calls"
                        rows={models.map((r) => ({ id: r.id, name: modelName(r.id), money: r.money_usd_micros, included: r.included_usd_micros }))} />
             </section>
             <section className="gv-card" aria-labelledby="gv-byproject-h">
-              <h3 id="gv-byproject-h" className="gv-sec-head">BY PROJECT <span className="gv-badge">all you can see</span></h3>
+              <div className="gv-sec-head"><h3 id="gv-byproject-h" className="gv-sec-head">BY PROJECT</h3><span className="gv-badge">all you can see</span></div>
               <BarRows testid="gv-home-projects" empty="No spend yet" mine={projectId}
                        rows={projects.map((r) => ({ id: r.id, name: r.name, money: r.money_usd_micros, included: r.included_usd_micros }))} />
               <button type="button" className="ag-link gv-detail-link" data-testid="gv-where" onClick={onDetail}
-                      title="By agent, by step, savings and top drivers">Where the money went →</button>
+                      title="By agent, by step, savings and top drivers">Where the money went</button>
             </section>
           </div>
         </>

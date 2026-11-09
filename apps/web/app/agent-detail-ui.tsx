@@ -3,16 +3,16 @@
 /**
  * One agent, in full.
  *
- * The roster card was an `<article>` — not a link, not addressable, with no detail view behind
+ * The roster card was an `<article>`, not a link, not addressable, with no detail view behind
  * it. The only interactive thing on it was "Ask", which opens the chat dock. So an agent was a
  * row of numbers on a card and there was nowhere to go from it.
  *
  * Everything here was already recorded and none of it was reachable from the agent it
  * describes:
  *
- *   * the APPS it worked on — the roster shows one `run_id`, the newest process step, for 7 of
+ *   * the APPS it worked on, the roster shows one `run_id`, the newest process step, for 7 of
  *     26 agents. This is the whole history, with per-app calls, spend and stages.
- *   * its SPEC — mission, boundaries, allowed and forbidden skills, output contracts, eval
+ *   * its SPEC, mission, boundaries, allowed and forbidden skills, output contracts, eval
  *     rubric. Twenty-two role YAMLs are installed into `roles.spec` and the console's
  *     `RoleFeedItem` drops the column, so the richest capability model BOSS has was invisible.
  *   * what it is ASSIGNED to, which is a different question from what it has touched. The gap
@@ -64,7 +64,7 @@ type Spec = {
   decision_rights?: string[]; allowed_skills?: string[]; forbidden_skills?: string[];
   output_contracts?: string[]; eval_rubric?: Record<string, unknown>; knowledge?: string;
 };
-/** One row of "what this agent can do" — held, or available to be given. */
+/** One row of "what this agent can do", held, or available to be given. */
 type Skill = {
   skill_id: string; label: string; summary: string; source: string;
   behaviour_kind: string; risk_tier: number; enabled: boolean;
@@ -92,7 +92,7 @@ type NamedOn = {
   how: string; because: string;
   /** Only an OLDER version nothing starts by default: deleting may retire it (agents.py). */
   retirable?: boolean;
-  /** Where it is and what to do about it, written ONCE by the API (agents.REACH_SAID) — the
+  /** Where it is and what to do about it, written ONCE by the API (agents.REACH_SAID), the
    *  same words its 409 uses, so the page and the refusal cannot disagree. */
   where?: string; remedy?: string;
   pointed_by?: Pointer[];
@@ -160,7 +160,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
   projectId: string; roleKey: string;
   /** The Studio catalog, for this agent's Profile. */
   studio?: AgentStudioFeed;
-  /** The signed-in actor every change on this page is made as — never a literal. */
+  /** The signed-in actor every change on this page is made as, never a literal. */
   actor: string;
   onClose: () => void;
   /** Told when the agent is deleted, so the roster can drop it before its next refresh. */
@@ -206,7 +206,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
   }, [!!detail]);
   const pick = (k: SectionKey) => { setTab(k); goToSection(k); };
 
-  // Escape closes it, and the page behind does not scroll. Same rules as the template page —
+  // Escape closes it, and the page behind does not scroll. Same rules as the template page , 
   // a full-screen view you cannot get out of is the bug that one shipped with.
   useEffect(() => {
     // Not while a sheet, drawer or menu is open, nor in the moment after one closed (D4).
@@ -229,7 +229,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
   //
   // `.tpl-page` is `position: fixed; inset: 0`, and reusing the class without the portal put
   // this view back inside `.bx-shell`, which carries `isolation: isolate`. The console renders
-  // more than one shell, so a fixed element inside one cannot escape it — the template page
+  // more than one shell, so a fixed element inside one cannot escape it, the template page
   // was covered by the project strip and this one rendered clipped to 260px with all 38 rows
   // present and invisible. A DOM query said "rendered: true"; the screenshot said otherwise.
   // The class is not the fix; leaving the shell is.
@@ -238,7 +238,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
          aria-label={detail?.name ?? roleKey}>
       <header className="tpl-page-head">
         <button type="button" className="tpl-back" onClick={onClose}>← Back to Agent Studio</button>
-        <span className="tpl-crumb">Agent Studio · {detail?.name ?? roleKey}</span>
+        <span className="tpl-crumb">Agent Studio, {detail?.name ?? roleKey}</span>
         {/* PLAN SOMETHING WITH IT (agents/converse-host.tsx). Talking to it is the Passport's
             own Ask, below: one door for one action. */}
         {detail?.registered ? (
@@ -253,7 +253,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
       <div className="tpl-page-inner">
         {failed ? (
           <p className="detail" data-testid="agent-detail-failed">
-            Could not read this agent — {failed}.
+            Could not read this agent, {failed}.
           </p>
         ) : null}
         {!detail && !failed ? <p className="detail">Reading…</p> : null}
@@ -314,7 +314,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                         <td>{a.app}</td>
                         <td className="detail">{a.stages.join(", ")}</td>
                         <td>{a.calls}{a.calls !== a.ok_calls
-                          ? <span className="ad-bad"> · {a.calls - a.ok_calls} failed</span>
+                          ? <span className="ad-bad">, {a.calls - a.ok_calls} failed</span>
                           : null}</td>
                         <td>{money(a.spend_usd)}</td>
                         {/* The shared UTC helper, not toLocaleDateString: the server renders
@@ -331,7 +331,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                   No model calls attributed to this agent&rsquo;s stages
                   {detail.owns_stages.length
                     ? <> ({detail.owns_stages.join(", ")})</>
-                    : <>, and it owns no pipeline stage — its work is panels and process steps</>}.
+                    : <>, and it owns no pipeline stage, its work is panels and process steps</>}.
                 </p>
               )}
 
@@ -342,7 +342,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                     {detail.panels.map((p) => (
                       <li key={p.id}>
                         {p.subject}
-                        <span className="detail"> · {p.status}{p.phase ? ` · ${p.phase}` : ""}</span>
+                        <span className="detail">, {p.status}{p.phase ? `, ${p.phase}` : ""}</span>
                       </li>
                     ))}
                   </ul>
@@ -358,10 +358,10 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                   {detail.assigned_to.map((a) => (
                     <li key={a.app_name}>
                       {a.app_name}
-                      <span className="detail"> · {a.source === "default"
+                      <span className="detail">, {a.source === "default"
                         ? "seeded by default" : "assigned by a person"}</span>
                       {!worked.has(a.app_name)
-                        ? <span className="detail"> · no work recorded yet</span> : null}
+                        ? <span className="detail">, no work recorded yet</span> : null}
                     </li>
                   ))}
                 </ul>
@@ -389,7 +389,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
               {spec.mission ? <p className="ad-mission">{spec.mission}</p> : (
                 <p className="detail" data-testid="agent-no-spec">
                   This agent has no spec. A spec is what states its mission, its boundaries and
-                  the skills it may use — without one, nothing constrains what it will attempt.
+                  the skills it may use, without one, nothing constrains what it will attempt.
                 </p>
               )}
               {spec.primary_outcomes?.length ? (
@@ -429,7 +429,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
                   {usedIn(detail.named_on_steps).map((u) => (
                     <li key={`${u.workflow_key}:${u.step_id}`}>
                       <a href={u.href} data-testid={`agent-used-in-${u.workflow_key}-${u.step_id}`}>
-                        {u.workflow} · {u.step}
+                        {u.workflow}, {u.step}
                       </a>
                     </li>
                   ))}
@@ -463,7 +463,7 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
 /**
  * Edit what the agent is: its name, mission, boundaries and who it reports to.
  *
- * There was no edit path for an agent in the console beyond its skills — mission, display name
+ * There was no edit path for an agent in the console beyond its skills, mission, display name
  * and boundaries could only be changed through the API, and POST /v1/roles used as an update
  * reset its autonomy and reporting line. Only the fields changed here are sent, and the API
  * changes only those. An edited bundled agent stays edited across upgrades.
@@ -481,7 +481,7 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
   const [failed, setFailed] = useState("");
   const [saved, setSaved] = useState("");
   // WHO IT CAN REPORT TO, as a list to pick from. This was a free-text box expecting an agent
-  // key, while quick create offered a picker — so the same field took a key on one screen and
+  // key, while quick create offered a picker, so the same field took a key on one screen and
   // a name on the other, and a typo was only caught by the API's refusal.
   const [agents, setAgents] = useState<AgentSummary[] | null>(null);
   const [agentsFailed, setAgentsFailed] = useState("");
@@ -549,7 +549,7 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
           <label>Reports to
             <select value={current} data-testid="agent-edit-reports-to"
                     onChange={(e) => setReportsTo(e.target.value)}>
-              <option value="">Nobody — a root of the team</option>
+              <option value="">Nobody, a root of the team</option>
               {/* The current manager stays selectable while the list loads, or if it failed. */}
               {current && !managers.some((a) => a.role_key === current) ? (
                 <option value={current}>{current}</option>
@@ -559,7 +559,7 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
               ))}
             </select>
             {agentsFailed ? (
-              <small className="ad-bad">Could not list this project's agents — {agentsFailed}.
+              <small className="ad-bad">Could not list this project's agents, {agentsFailed}.
                 The current manager is kept unless you choose Nobody.</small>
             ) : null}
           </label>
@@ -579,7 +579,7 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
 
 
 /**
- * Delete the agent — or be told, before pressing, why it cannot be deleted yet.
+ * Delete the agent, or be told, before pressing, why it cannot be deleted yet.
  *
  * Refused by the API while a workflow step names it, because deleting the agent under a step
  * turns a working workflow into one that fails at that step minutes into a run. The steps are
@@ -587,7 +587,7 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
  *
  * A step in an OLDER version (published, startable by id, but not what anything starts by
  * default) does not block: the page says those versions are retired with the agent, and the
- * delete asks for exactly that. Review of milestone/agents, round 2 — the guard used to read
+ * delete asks for exactly that. Review of milestone/agents, round 2, the guard used to read
  * only the newest version, so the version that actually ran was not protected; reading every
  * startable version without this way through would make an agent once named in v1 of a
  * workflow now at v5 impossible to delete.
@@ -644,13 +644,13 @@ export function AgentDelete({ projectId, actor, detail, onDeleted, onChanged }: 
         <>
           <p className="detail" data-testid="agent-delete-blocked">
             It cannot be deleted while {blocking.length} workflow step{blocking.length === 1 ? " names" : "s name"} it.
-            To delete it: {remediesFor(blocking).join("; ")} — then come back.
+            To delete it: {remediesFor(blocking).join("; ")}, then come back.
           </p>
           <ul className="ad-list" data-testid="agent-named-on">
             {blocking.map((n) => (
               <li key={`${n.workflow_key}:${n.version}:${n.step_id}`}>
-                {n.workflow} · <code>{n.step}</code>
-                <span className="detail"> · {n.how} · {whereNamed(n)}</span>
+                {n.workflow}, <code>{n.step}</code>
+                <span className="detail">, {n.how}, {whereNamed(n)}</span>
               </li>
             ))}
           </ul>
@@ -675,7 +675,7 @@ export function AgentDelete({ projectId, actor, detail, onDeleted, onChanged }: 
           it back.
           {older.length ? (
             <span data-testid="agent-delete-retires">
-              {" "}Only older workflow versions still name it — nothing starts them by default —
+              {" "}Only older workflow versions still name it, nothing starts them by default , 
               so deleting also retires {older.length === 1 ? "that version" : "those versions"}{" "}
               ({Array.from(new Set(older.map((n) => `${n.workflow} v${n.version}`))).join(", ")}):
               their history is kept, but no run can start from them.

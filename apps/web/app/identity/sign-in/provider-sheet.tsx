@@ -32,7 +32,7 @@ export function CopyRow({ label, value, tip }: { label: string; value: string; t
         <code data-copy="data" data-raw-ok>{value}</code>
         <button type="button" className="idn-btn sm" onClick={async () => {
           try { await navigator.clipboard.writeText(value); setCopied(true); showToast("success", "Copied"); }
-          catch { showToast("error", "Copy blocked · select it"); }
+          catch { showToast("error", "Copy blocked, select it"); }
         }}>
           {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />} {copied ? "Copied" : "Copy"}
         </button>
@@ -172,7 +172,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
             <Field id="pv-sso" label="Sign-in URL" tip="Your IdP's SAML single sign-on URL (https)">
               <input id="pv-sso" className="idn-input" value={form.saml_sso_url} placeholder="https://" onChange={(e) => set({ saml_sso_url: e.target.value })} />
             </Field>
-            <Field id="pv-cert" label={editing ? "New signing certificate" : "Signing certificate"} tip={editing ? `${initial!.saml_certificate_count} stored · paste one to replace` : "The IdP's X.509 certificate (PEM)"}>
+            <Field id="pv-cert" label={editing ? "New signing certificate" : "Signing certificate"} tip={editing ? `${initial!.saml_certificate_count} stored, paste one to replace` : "The IdP's X.509 certificate (PEM)"}>
               <textarea id="pv-cert" className="idn-input idn-mono" rows={4} value={form.saml_certificate} placeholder="-----BEGIN CERTIFICATE-----"
                 onChange={(e) => set({ saml_certificate: e.target.value })} />
             </Field>
@@ -185,7 +185,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
             {form.client_auth === "client_secret" ? (
               <Field id="pv-secret" label="Client secret" tip="Stored encrypted; never shown again">
                 <input id="pv-secret" className="idn-input" type="password" autoComplete="new-password" value={form.client_secret}
-                  placeholder={initial?.has_client_secret ? "Stored · type to replace" : ""} onChange={(e) => set({ client_secret: e.target.value })} />
+                  placeholder={initial?.has_client_secret ? "Stored, type to replace" : ""} onChange={(e) => set({ client_secret: e.target.value })} />
               </Field>
             ) : null}
           </>

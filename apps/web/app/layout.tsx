@@ -2,7 +2,7 @@ import "./globals.css";
 import "./design-system.css";
 // The page widths and the root type size for every screen (tokens; see the file).
 import "./layout-scale.css";
-// Command Center, area loading, approval guidance and action results — kept out of globals.css
+// Command Center, area loading, approval guidance and action results, kept out of globals.css
 // so these screens do not churn the stylesheet every console change touches.
 import "./command-center.css";
 // The Command Center bridge (page layout) and its graphics (Floor, Today, day strip, week).

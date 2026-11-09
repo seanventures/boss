@@ -1,17 +1,17 @@
 "use client";
 
 /**
- * Observability › Models (spec §4.10): every model call BOSS made — tokens, time, errors,
- * retries and metered spend — by model, stage, agent or runner, over the window.
+ * Observability › Models (spec §4.10): every model call BOSS made, tokens, time, errors,
+ * retries and metered spend, by model, stage, agent or runner, over the window.
  *
- *   Calls 1,284 ╱╲_  Tokens 4.1M in · 610k out ╱‾╲  Spend $3.12 est. _╱╲  p95 18 s ‾╲_  Errors 2.1% · 27 _╱
+ *   Calls 1,284 ╱╲_  Tokens 4.1M in, 610k out ╱‾╲  Spend $3.12 est. _╱╲  p95 18 s ‾╲_  Errors 2.1%, 27 _╱
  *   [Tokens|Calls|Spend|Latency]                                          by [Model|Stage|Agent|Runner]
  *   <the token stream: top 5 + Other>
- *   MODELS 6   Name · Calls · In · Out · Spend · Avg · p95 · Errors · Retries · trend
- *   FAILED CALLS · ROUTING
+ *   MODELS 6   Name, Calls, In, Out, Spend, Avg, p95, Errors, Retries, trend
+ *   FAILED CALLS, ROUTING
  *
  * The group and the metric live in the URL (`group=`, `metric=`); a band or a row selects
- * `model=<group>:<key>` and opens its drawer. Spend is metered spend only: never `$0` — work
+ * `model=<group>:<key>` and opens its drawer. Spend is metered spend only: never `$0`, work
  * that ran on a subscription reads `Included in plan` / `Included`. There is no provider column
  * because llm_calls has none; Runner is the engine.
  */
@@ -51,15 +51,15 @@ export function StatStrip({ m }: { m: Models }) {
     ? <span title={t.estimated ? "Some prices were estimated, not billed" : "Metered spend"}>{usd(t.spendMicros)}{t.estimated ? <span className="obs-est"> est.</span> : null}</span>
     : t.calls > 0
       ? <span title="Ran on a subscription. No metered spend." data-testid="obs-included">Included in plan</span>
-      : <span className="inf-faint">—</span>;
+      : <span className="inf-faint">{"—"}</span>;
   return (
     <div className="obs-stats" data-testid="obs-stats">
       <Stat id="calls" testId="obs-stat-calls" label="Calls" value={t.calls.toLocaleString("en-US")} spark={m.spark.calls} />
-      <Stat id="tokens" testId="obs-stat-tokens" label="Tokens" value={<>{compact(t.tokensIn)} in · {compact(t.tokensOut)} out</>} spark={m.spark.tokens} />
+      <Stat id="tokens" testId="obs-stat-tokens" label="Tokens" value={<>{compact(t.tokensIn)} in, {compact(t.tokensOut)} out</>} spark={m.spark.tokens} />
       <Stat id="spend" testId="obs-stat-spend" label="Spend" value={spend} spark={m.spark.spend} />
       <Stat id="p95" testId="obs-stat-p95" label="p95" value={ms(t.p95Ms)} spark={m.spark.p95} />
       <Stat id="errors" testId="obs-stat-errors" label="Errors" tip="Calls that failed after retries, of all calls"
-            value={t.calls ? <>{pct(t.failed / t.calls)} · {t.failed.toLocaleString("en-US")}</> : "—"} spark={m.spark.errors} />
+            value={t.calls ? <>{pct(t.failed / t.calls)}, {t.failed.toLocaleString("en-US")}</> : "—"} spark={m.spark.errors} />
     </div>
   );
 }
@@ -156,7 +156,7 @@ function GroupTable({ m, group, selected, onSelect, slots }: {
 function FailedCalls({ m, since }: { m: Models; since: string | null }) {
   const lt = useLocalTime();
   // THE COUNT SAYS WHAT IS LISTED. The head said "6" over five rows (the list is the newest few):
-  // when fewer are shown than failed, it says "5 of 6 · All ↗" and the link is the way to the rest.
+  // when fewer are shown than failed, it says "5 of 6, All " and the link is the way to the rest.
   const shown = m.failed.length;
   const total = Math.max(m.totals.failed, shown);
   const some = shown > 0 && shown < total;
@@ -166,7 +166,7 @@ function FailedCalls({ m, since }: { m: Models; since: string | null }) {
         <a className="inf-link" href={logsHref("llm_call", null, since)} data-testid="obs-failed-logs"
            title={some ? `The newest ${shown} of ${total} failed calls are listed; the log has every one` : undefined}
            onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(logsHref("llm_call", null, since)); } }}>
-          {some ? `${shown} of ${total} · All ↗` : "Logs ↗"}
+          {some ? `${shown} of ${total}, All ` : "Logs "}
         </a>
       </ZoneHead>
       {m.failed.length === 0 ? <Empty>No failed calls</Empty> : (

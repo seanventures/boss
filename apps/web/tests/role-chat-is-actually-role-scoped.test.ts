@@ -109,7 +109,7 @@ describe("the starters are about the role", () => {
   it("the panel stops calling a named role 'BOSS Agent'", () => {
     // Two identities in one column — the header naming the Engineering Captain and the body
     // introducing the general assistant — reads as a template nobody adapted.
-    expect(UI).toContain('<span className="eyebrow">{roleName ?? "BOSS Agent"}</span>');
+    expect(UI).toContain('<span className="area-name">{roleName ?? "BOSS Agent"}</span>');
     expect(UI).toContain("`Ask ${roleName}`");
   });
 });

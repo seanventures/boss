@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * LINKED PULL REQUESTS (multi-repo screen 6): a change's PRs side by side — each with its CI,
- * gates and the reviewers' findings — then the cross-repo check ("do the changes fit
+ * LINKED PULL REQUESTS (multi-repo screen 6): a change's PRs side by side, each with its CI,
+ * gates and the reviewers' findings, then the cross-repo check ("do the changes fit
  * together?") and the set's status. One blocking finding in any PR, or a failed cross-repo
  * check, holds the whole set: nothing asks for approval until it is fixed.
  *
@@ -30,7 +30,7 @@ function StateChip({ label, state, tip }: { label: string; state?: string | null
   const ok = ["success", "passed", "pass", "green", "approved", "clean", "ok"].includes(s);
   const bad = ["failure", "failed", "fail", "red", "changes_requested", "blocked", "error"].includes(s);
   return (
-    <span className="mr-ui-check" data-ok={ok ? "yes" : bad ? "no" : undefined} title={`${tip}${state ? ` · ${state.replace(/_/g, " ")}` : " · not yet"}`}>
+    <span className="mr-ui-check" data-ok={ok ? "yes" : bad ? "no" : undefined} title={`${tip}${state ? `, ${state.replace(/_/g, " ")}` : ", not yet"}`}>
       {ok ? "✓" : bad ? "✗" : "…"} {label}
     </span>
   );
@@ -76,7 +76,7 @@ function PrCard({ lane, others, title }: { lane: Lane; others: number; title: st
         </div>
         <div className="mr-pr-t">
           <GitPullRequest size={15} aria-hidden style={{ flex: "none", marginTop: 2 }} />
-          <span data-user-text>{lane.pr_number ? `#${lane.pr_number} · ` : ""}{prTitle}</span>
+          <span data-user-text>{lane.pr_number ? `#${lane.pr_number}, ` : ""}{prTitle}</span>
         </div>
         <div className="mr-ui-row wrap" style={{ gap: 6 }}>
           <span className="mr-ui-sub">{diffWords(lane) || "No diff yet"}</span>
@@ -86,7 +86,7 @@ function PrCard({ lane, others, title }: { lane: Lane; others: number; title: st
         </div>
         <span className="mr-ui-sub" data-testid={`mr-pr-links-${lane.order}`}>
           <LinkSimple size={11} aria-hidden /> Links the other {others}
-          {lane.base_branch || lane.branch ? <> · base <span data-user-text>{lane.base_branch ?? "main"}</span> ← <span data-user-text>{lane.branch ?? "—"}</span></> : null}
+          {lane.base_branch || lane.branch ? <>, base <span data-user-text>{lane.base_branch ?? "main"}</span> ← <span data-user-text>{lane.branch ?? "—"}</span></> : null}
         </span>
       </div>
       <div className="mr-pr-b">
@@ -133,7 +133,7 @@ export function LinkedPrs({ cs, projectId, onChanged }: {
   if (blocked) {
     status = (
       <span className="mr-ui-pill" data-tone="bad" data-testid="mr-set-status" title={cs.blocked_reason || undefined}>
-        Set blocked{issues ? ` · ${issues} ${issues === 1 ? "issue" : "issues"}` : ""}
+        Set blocked{issues ? `, ${issues} ${issues === 1 ? "issue" : "issues"}` : ""}
       </span>
     );
   } else if (cs.state === "in_review") {

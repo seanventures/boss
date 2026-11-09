@@ -47,8 +47,8 @@ describe("AgentContractView", () => {
     expect(decision.getAttribute("data-required")).toBe("true");
     expect(decision.textContent).toContain("ContextAssembled");
     expect(cg.querySelector('[data-testid="node-write-coveragegap"]')!.getAttribute("data-required")).toBeNull();
-    expect(host!.textContent).toContain("Knowledge Graph · read only");
-    expect(host!.textContent).toContain("Context Graph · read and write");
+    expect(host!.textContent).toContain("Knowledge Graph, read only");
+    expect(host!.textContent).toContain("Context Graph, read and write");
   });
 
   it("P0 draws reads, writes and MCP calls as their own kind of line", () => {
@@ -114,10 +114,10 @@ describe("AgentContractView", () => {
     mount("historical_pattern", { trace });
     click(by("show-last-run"));
     const listed = by("node-call-service-desk-list_incidents")!;
-    expect(listed.textContent).toContain("list incidents · called 1");
+    expect(listed.textContent).toContain("list incidents, called 1");
     expect(listed.getAttribute("data-made")).toBe("true");
     const got = by("node-call-service-desk-get_incident")!;
-    expect(got.textContent).toContain("get incident · declared, not done");
+    expect(got.textContent).toContain("get incident, declared, not done");
     expect(got.getAttribute("data-overlay")).toBe("missing");
     expect(got.textContent).not.toContain("not recorded");
   });

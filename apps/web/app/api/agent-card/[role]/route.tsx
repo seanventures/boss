@@ -1,10 +1,10 @@
 /**
- * An agent's share card: a 1200×630 PNG (spec §3.12), made by next/og — no new dependency.
+ * An agent's share card: a 1200×630 PNG (spec §3.12), made by next/og, no new dependency.
  *
  * Behind the console's auth (middleware covers /api/*): it is for Download and Copy image, not
  * for unfurling, because a private install has no public URL to unfurl. It shows only what the
- * agent is — face, name, role, tagline, two lines about itself, when it was born, three skills
- * and a decorative machine-readable strip — and NEVER repos, MCP servers, costs (unless stats are
+ * agent is, face, name, role, tagline, two lines about itself, when it was born, three skills
+ * and a decorative machine-readable strip, and NEVER repos, MCP servers, costs (unless stats are
  * asked for) or any internal id beyond its agt_ id.
  */
 // React by name: the suite renders this route with the classic JSX runtime.
@@ -96,7 +96,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ role: string }>
             </div>
             {stats ? (
               <div style={{ display: "flex", marginTop: 10, fontSize: 20, color: C.green }}>
-                {`Trust ${v.trust} · ${v.runs} runs · ${Math.round(v.cleanRate * (v.cleanRate <= 1 ? 100 : 1))}% clean`}
+                {`Trust ${v.trust}, ${v.runs} runs, ${Math.round(v.cleanRate * (v.cleanRate <= 1 ? 100 : 1))}% clean`}
               </div>
             ) : null}
           </div>
@@ -107,8 +107,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ role: string }>
           <span style={{ display: "flex" }}>{m2}</span>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, color: C.muted, marginTop: 10 }}>
-          <span style={{ display: "flex" }}>AI agent · not a real person</span>
-          <span style={{ display: "flex" }}>Built with BOSS · open source</span>
+          <span style={{ display: "flex" }}>AI agent, not a real person</span>
+          <span style={{ display: "flex" }}>Built with BOSS, open source</span>
         </div>
       </div>
     ),

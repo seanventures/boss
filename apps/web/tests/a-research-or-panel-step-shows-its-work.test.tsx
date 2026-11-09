@@ -157,7 +157,7 @@ describe("the step panel", () => {
     expect(q('[data-testid="dossier-compact-verdict"]')!.textContent).toBe("Promising");
     expect(dossier!.textContent).toContain("Lead triage inbox");
     expect(dossier!.textContent).toContain("Best bet: A narrow batch-triage prototype");
-    expect(dossier!.textContent).toContain("10 sources · 1 outcome · critic 25%");
+    expect(dossier!.textContent).toContain("10 sources, 1 outcome, critic 25%");
     expect([...dossier!.querySelectorAll(".rp-chk")].map((c) => c.textContent))
       .toEqual(["✓ Has an outcome", "✕ Strong confidence"]);
     const full = dossier!.querySelector<HTMLAnchorElement>('[data-testid="dossier-compact-open"]')!;

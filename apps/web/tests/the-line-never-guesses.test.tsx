@@ -46,7 +46,7 @@ describe("who stands at a station", () => {
     expect(review.getAttribute("data-face")).toBe("hollow");
     const face = review.querySelector(".fx-hollow .ag-avatar")!;
     expect(face.getAttribute("data-state")).toBe("idle");
-    expect(review.querySelector(".fx-hollow")?.getAttribute("title")).toMatch(/^Next: .+ · Review$/);
+    expect(review.querySelector(".fx-hollow")?.getAttribute("title")).toMatch(/^Next: .+, Review$/);
     expect(review.hasAttribute("data-active")).toBe(false);
   });
 

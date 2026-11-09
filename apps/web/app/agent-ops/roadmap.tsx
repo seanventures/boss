@@ -3,12 +3,12 @@
 /**
  * THE RECOMMENDED ROADMAP (design §14; BOSSAPP-911). What the agents learned while working,
  * turned into ranked cards, each a small diagram (the API's strip: sources → detector →
- * recommendation): its kind, its rank, value / effort / risk as three dots each — and three
+ * recommendation): its kind, its rank, value / effort / risk as three dots each, and three
  * buttons: Accept (as a ticket, epic or PRD panel), Not now (7 / 14 / 30 days), Reject (a reason
  * and a category are required; they teach the detector). The why, the evidence chips and the
  * squad are one tap away (ⓘ, read from GET /v1/ambient/roadmap/{id}), never on the card.
  *
- * Routes: GET /v1/ambient/roadmap · POST /v1/ambient/roadmap/{id}/accept|reject|snooze.
+ * Routes: GET /v1/ambient/roadmap, POST /v1/ambient/roadmap/{id}/accept|reject|snooze.
  */
 import React, { useEffect, useState } from "react";
 
@@ -84,7 +84,7 @@ function RecCard({ rec, projectId, orgId, onDone }: { rec: Recommendation; proje
       <header className="aa-rec-h">
         <span className="aa-badge" data-tone="type" title={`Found by ${rec.detectorTitle}`}>{rec.kindLabel}</span>
         <span className="aa-rec-score" data-testid="aa-rec-rank"
-              title={`Rank ${rec.rank ?? "—"} · score ${rec.score.toFixed(2)} · ${rec.evidence} evidence from ${rec.sources} source${rec.sources === 1 ? "" : "s"}`}>
+              title={`Rank ${rec.rank ?? "—"}, score ${rec.score.toFixed(2)}, ${rec.evidence} evidence from ${rec.sources} source${rec.sources === 1 ? "" : "s"}`}>
           #{rec.rank ?? "—"}
         </span>
         {rec.resurfaced ? <span className="aa-badge" data-tone="amber" title="Rejected before; the evidence grew">Back</span> : null}
@@ -119,7 +119,7 @@ function RecCard({ rec, projectId, orgId, onDone }: { rec: Recommendation; proje
         </div>
       ) : mode === "reject" ? (
         <form className="aa-rec-actions aa-rec-reject" data-testid="aa-rec-reject-form"
-              onSubmit={(e) => { e.preventDefault(); if (canReject) void act(() => rejectRec(projectId, rec.id, reason.trim(), category!), "Rejected — BOSS learns from it"); }}>
+              onSubmit={(e) => { e.preventDefault(); if (canReject) void act(() => rejectRec(projectId, rec.id, reason.trim(), category!), "Rejected, BOSS learns from it"); }}>
           <span className="aa-rec-cats" role="radiogroup" aria-label="Why not">
             {REJECT_CATEGORIES.map((c) => (
               <button key={c} type="button" role="radio" aria-checked={category === c} className="aa-ev-chip aa-cat"
@@ -138,7 +138,7 @@ function RecCard({ rec, projectId, orgId, onDone }: { rec: Recommendation; proje
           <GatedButton permission="work_item:manage" projectId={projectId} className="ag-btn" data-testid="aa-rec-snooze"
                        title="Hide for a while" onClick={() => setMode("snooze")}>Not now</GatedButton>
           <GatedButton permission="work_item:manage" projectId={projectId} className="ag-btn" data-testid="aa-rec-reject"
-                       title="Not useful — say why" onClick={() => setMode("reject")}>Reject</GatedButton>
+                       title="Not useful, say why" onClick={() => setMode("reject")}>Reject</GatedButton>
         </div>
       )}
     </article>

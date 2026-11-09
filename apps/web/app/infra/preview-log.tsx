@@ -100,7 +100,7 @@ export function PreviewLogDrawer({ previewId, row, onClose }: { previewId: strin
   const text = live ? stream.text : once.text ?? "";
   const head = (
     <span className="inf-dd-head">
-      <strong className="inf-trunc" data-copy="data">{row ? `${row.app}${row.branch ? ` · ${row.branch}` : ""}` : "Preview"}</strong>
+      <strong className="inf-trunc" data-copy="data">{row ? `${row.app}${row.branch ? `, ${row.branch}` : ""}` : "Preview"}</strong>
       {row ? <StateWord w={{ word: row.word, tone: row.tone }} /> : null}
     </span>
   );

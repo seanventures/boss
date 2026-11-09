@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The Logs drawer (factory spec §4.5.8): the only place raw text appears. Tabs Build · Preview ·
+ * The Logs drawer (factory spec §4.5.8): the only place raw text appears. Tabs Build, Preview ·
  * Deploy. Build is this run's activity log, oldest first, filterable by agent; Preview is the
  * existing startup stream (same-origin SSE); Deploy is the deployment's live step list.
  */
@@ -107,7 +107,7 @@ export function LogsDrawer({ projectId, runId, previewId, previewStatus, deployI
           previewId
             ? <pre className="fx-log" data-user-text data-state={preview.state} data-testid="preview-log">
                 {preview.text || (preview.state === "failed" ? "Lost the stream" : preview.state === "ended" ? "No output"
-                  : previewStatus === "running" ? "Live · no output yet" : "Waiting")}
+                  : previewStatus === "running" ? "Live, no output yet" : "Waiting")}
               </pre>
             : <span className="fx-muted">Not running</span>
         ) : null}

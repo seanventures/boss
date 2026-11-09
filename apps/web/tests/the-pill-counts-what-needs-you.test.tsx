@@ -31,7 +31,7 @@ describe("the pill counts what needs you", () => {
     const live = parseLive([{ role_key: "media_publisher", state: "needs_you", line: "Waiting on you: Publish" },
                             { role_key: "software_engineer", state: "working", line: "Build" }]);
     await mount(<PresencePill projectId="p1" live={live} attention={gates(3)} />);
-    expect(pillWordsShown()).toBe("1 working · 3 need you");
+    expect(pillWordsShown()).toBe("1 working, 3 need you");
     // The title's `(n)` is the shell's now (tests/the-tab-title-has-one-owner.test.tsx).
   });
 
@@ -93,11 +93,11 @@ describe("the pill counts what needs you", () => {
     })));
     await mount(<PresencePill projectId="p1" />);
     await settle();
-    expect(pillWordsShown()).toBe("1 working · 2 need you");
+    expect(pillWordsShown()).toBe("1 working, 2 need you");
   });
 
   it("words: either half left out at zero, 1 needs you, n need you", () => {
-    expect(pillText(4, 2)).toBe("4 working · 2 need you");
+    expect(pillText(4, 2)).toBe("4 working, 2 need you");
     expect(pillText(0, 1)).toBe("1 needs you");
     expect(pillText(3, 0)).toBe("3 working");
   });

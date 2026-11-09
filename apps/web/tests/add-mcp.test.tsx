@@ -2,7 +2,7 @@
 /**
  * + Add MCP (skills-mcp spec §5.5, J4): a keyless catalogue server is one press; one that needs a
  * token asks for it first; a custom server is tested with what was typed and registered only
- * after the test passed. The token goes up once and the drawer shows only `Set · …a1f3`.
+ * after the test passed. The token goes up once and the drawer shows only `Set, …a1f3`.
  */
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -61,7 +61,7 @@ describe("adding an MCP server", () => {
     installKitApi();
     await render(<McpDrawer projectId="p1" actor="ceo" server={SERVERS[1] as never} crew={[]} onClose={() => {}}
                             onChanged={() => {}} onRemoved={() => {}} />);
-    expect($('[data-testid="kit-mcp-secret-set"]')!.textContent).toContain("Set · …a1f3");
+    expect($('[data-testid="kit-mcp-secret-set"]')!.textContent).toContain("Set, …a1f3");
     expect($('[data-testid="kit-mcp-secret"]')).toBeNull();
   });
 });

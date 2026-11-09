@@ -3,8 +3,8 @@
 /**
  * A build's cockpit (factory spec §4.5): one page, not twelve stacked blocks.
  *
- *   header      ← Floor · app · state word · k of n · elapsed · cost · Steer · Stop · ⋯
- *               title · attempt n ▾ · from <origin> ↗ · faces · Credits
+ *   header      ← Floor, app, state word, k of n, elapsed, cost, Steer, Stop, ⋯
+ *               title, attempt n ▾, from <origin> , faces, Credits
  *   needs you   the Floor's own AttentionCards for this build (absent when nothing waits)
  *   the Line    stations staffed by faces; a bay filters the Story, a face opens its Act card
  *   Story       what each agent did, oldest first          │ Outputs: 8 rows, one open at a time
@@ -88,12 +88,12 @@ export function askSuggestions(c: Pick<CockpitData, "app" | "brief" | "lineage" 
   const b = c.brief;
   const out: string[] = [];
   if (b.deferredFindings) out.push(`Fix the ${b.deferredFindings} deferred review finding${b.deferredFindings === 1 ? "" : "s"} on ${c.app}`);
-  if (b.notRun.length) out.push(`No ${b.notRun.join(", ")} ran on this build — what would they most likely find?`);
-  else if (b.advisoryFailing) out.push(`${b.advisoryFailing} checks failed but shipped as advisory — which should block next time?`);
-  if (b.mutationCaught === false) out.push("The tests missed an injected bug — where are they weakest?");
+  if (b.notRun.length) out.push(`No ${b.notRun.join(", ")} ran on this build, what would they most likely find?`);
+  else if (b.advisoryFailing) out.push(`${b.advisoryFailing} checks failed but shipped as advisory, which should block next time?`);
+  if (b.mutationCaught === false) out.push("The tests missed an injected bug, where are they weakest?");
   if (b.criteria.length) out.push(`Which of the ${b.criteria.length} acceptance criteria are not actually covered by a test?`);
   const broken = c.lineage.find((l) => l.state === "failed");
-  if (b.error || broken) out.push(`Why did ${broken && broken.runId !== c.run.id ? `attempt ${broken.attempt}` : "this build"} fail${b.error ? ` — ${b.error.slice(0, 60)}` : ""}?`);
+  if (b.error || broken) out.push(`Why did ${broken && broken.runId !== c.run.id ? `attempt ${broken.attempt}` : "this build"} fail${b.error ? `, ${b.error.slice(0, 60)}` : ""}?`);
   out.push(`Given the brief and review notes for ${c.app}, what should we build next, and why?`);
   return out.slice(0, 5);
 }
@@ -161,7 +161,7 @@ function CockpitSkeleton({ runId, onClose }: { runId: string; onClose: () => voi
       <div className="fx-body">
         <div className="fx-story" aria-hidden>{Array.from({ length: 4 }, (_, i) => <span key={i} className="fx-skel-bar" />)}</div>
         <ul className="fx-outputs fx-out-list">
-          {labels.map((l) => <li key={l} className="fx-out"><span className="fx-out-head"><span className="fx-out-label">{l}</span><span className="fx-out-value">—</span></span></li>)}
+          {labels.map((l) => <li key={l} className="fx-out"><span className="fx-out-head"><span className="fx-out-label">{l}</span><span className="fx-out-value">{"—"}</span></span></li>)}
         </ul>
       </div>
     </section>
@@ -253,7 +253,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
     setStopped(true);
     showToast("success", "Build stopped");
     const r = await stopBuild(runId, actor);
-    // 409: it had already ended — nothing to undo; the next read says how.
+    // 409: it had already ended, nothing to undo; the next read says how.
     if (!r.ok && r.status !== 409) { setStopped(false); setErr(r.error ?? ""); }
     notifyChanged("code-tasks");
     refresh();
@@ -341,7 +341,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   // Builds of this app beyond this lineage (a follow-up, a change on its branch): the menu
   // lists them all, so it names itself by count.
   const sameApp = c.lineage.some((l) => !l.sameLineage);
-  // CREDITS ARE THIS BUILD'S ACTS (its own chain, /v1/code-tasks/{id}/acts) — not the workflow
+  // CREDITS ARE THIS BUILD'S ACTS (its own chain, /v1/code-tasks/{id}/acts), not the workflow
   // run that started it, which credited one agent and $0.00 while Outputs said five.
   const { chain } = useRunChain(projectId, c.run.id, c.live);
   const latestDeploy = (c.outputs.deploy.items[0]?.id as string | undefined) ?? null;
@@ -376,7 +376,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
             {c.metered && c.costUsd > 0 ? <span className="fx-cost" title="Metered model spend so far" data-testid="fx-cost">{money(c.costUsd)}</span> : null}
             {s.preview === "running" && c.outputs.preview ? (
               <a className="fx-flag" href={previewWebHref(c.outputs.preview.id)}
-                 target="_blank" rel="noreferrer" data-testid="fx-preview-flag">Preview live ↗</a>
+                 target="_blank" rel="noreferrer" data-testid="fx-preview-flag">Preview live</a>
             ) : null}
             {paused ? <span className="fx-flag" title="Live updates are paused. Press Live in the top bar.">Paused</span> : null}
           </span>
@@ -411,7 +411,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                     try { window.sessionStorage.setItem(`boss.agent.suggests.${c.run.id}`, JSON.stringify(askSuggestions(c))); } catch { /* private mode */ }
                     openDockAbout({ subject: { kind: "code_task", id: c.run.id }, question: "", role: null, history: "push" });
                   }}>Ask BOSS</button>
-                  <a role="menuitem" href={logHref({ run: c.run.id })}>Activity log ↗</a>
+                  <a role="menuitem" href={logHref({ run: c.run.id })}>Activity log </a>
                   <button type="button" role="menuitem" onClick={copyLink}>Copy link</button>
                   <GatedButton permission="telemetry:share" type="button" role="menuitem" data-testid="fx-menu-diagnostics"
                                onClick={() => { setMenu(false); setDiagnostics(true); }}>Download diagnostics</GatedButton>
@@ -444,10 +444,10 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                     <button key={l.runId} type="button" role="menuitem" aria-current={l.runId === c.run.id || undefined}
                             data-testid={`fx-attempt-${l.runId}`} title={l.title || undefined}
                             onClick={() => { setAttempts(false); if (l.runId !== c.run.id) onOpenBuild(l.runId); }}>
-                      {l.sameLineage || !l.kind ? `Attempt ${l.attempt}` : l.kind} · {l.word}
-                      {l.prNumber ? ` · PR #${l.prNumber}` : ""}
-                      {c.metered && l.costUsd > 0 ? ` · ${money(l.costUsd)}` : ""}
-                      {l.at ? ` · ${secondsWord(Math.max(0, Math.round(((now ?? Date.parse(l.at)) - Date.parse(l.at)) / 1000)))}` : ""}
+                      {l.sameLineage || !l.kind ? `Attempt ${l.attempt}` : l.kind}, {l.word}
+                      {l.prNumber ? `, PR #${l.prNumber}` : ""}
+                      {c.metered && l.costUsd > 0 ? `, ${money(l.costUsd)}` : ""}
+                      {l.at ? `, ${secondsWord(Math.max(0, Math.round(((now ?? Date.parse(l.at)) - Date.parse(l.at)) / 1000)))}` : ""}
                     </button>
                   ))}
                 </span>
@@ -456,8 +456,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           ) : null}
           {c.origin ? (
             <a className="ag-link" href={originHref(c.origin.kind, c.origin.id)} data-testid="fx-origin">
-              from <span data-user-text>{c.origin.label}</span> ↗
-            </a>
+              from <span data-user-text>{c.origin.label}</span></a>
           ) : null}
           {!stoppable ? <RateIt projectId={projectId} actor={actor} subject="build" id={c.run.id} testId="fx-rate" /> : null}
           <span className="fx-spacer" />

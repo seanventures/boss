@@ -153,7 +153,7 @@ export function KgIndexing({ repos, onIndex, busy }: { repos: KgRepository[]; on
 }
 
 /** A read failed: a route not on this install is a designed card that says when it arrives
- *  (tester round 1 P0-3, never "Not Found · Retry"); anything else is the server's words + Retry. */
+ *  (tester round 1 P0-3, never "Not Found, Retry"); anything else is the server's words + Retry. */
 export function KgReadError({ error, onRetry, testId, what }: {
   error: { status: number; text: string; unavailable?: boolean }; onRetry: () => void; testId: string; what: string;
 }) {
@@ -194,7 +194,7 @@ export function ago(at: string | null | undefined, now = Date.now()): string {
   return `${Math.round(h / 24)} days ago`;
 }
 
-/** "Built 4 min ago · Rebuild", or the stale badge when the rollup is behind the code. */
+/** "Built 4 min ago, Rebuild", or the stale badge when the rollup is behind the code. */
 export function KgBuilt({ builtAt, stale, onRebuild, busy, indexing }: {
   builtAt: string | null; stale: boolean; onRebuild: () => void; busy?: boolean; indexing?: boolean;
 }) {
@@ -212,7 +212,7 @@ export function KgBuilt({ builtAt, stale, onRebuild, busy, indexing }: {
   );
 }
 
-/** Empty layer: only the Rules (or Learning) chip on and nothing of it — in the whole repo, or
+/** Empty layer: only the Rules (or Learning) chip on and nothing of it, in the whole repo, or
  *  around the node in Focus (tester round 1 P1-6). Says what is true and offers the next step. */
 export function KgEmptyLayer({ layer, onScan, scope = "repo", children }: {
   layer: "rules" | "learning" | "domain" | "context"; onScan?: () => void; scope?: "repo" | "here"; children?: React.ReactNode;
@@ -252,12 +252,12 @@ export function KgTruncation({ shown, hidden, level, onMore, maxed, max = 200, c
   const noun = counts?.noun ?? (level === "class" ? "classes" : level === "package" ? "packages" : level === "method" ? "symbols" : "nodes");
   if (counts) { shown = counts.shown; hidden = counts.total - counts.shown; maxed = counts.maxed; }
   const total = (shown + hidden).toLocaleString("en-US");
-  // Short, so the bar stays one line beside Built · Rebuild; the whole sentence is its tooltip.
+  // Short, so the bar stays one line beside Built, Rebuild; the whole sentence is its tooltip.
   const full = `Showing the ${shown.toLocaleString("en-US")} most connected of ${total} connected ${noun}${maxed ? `. ${max} is the most one view reads: narrow it with layers or hops.` : "."}`;
   return (
     <p className="kg-trunc" data-testid="kg-truncated" role="status" title={full}>
-      {!maxed && onMore ? <><button type="button" className="inf-link" data-testid="kg-show-more" onClick={onMore}>Show {max}</button> · </> : null}
-      Showing {shown.toLocaleString("en-US")} of {total} connected {noun}{maxed ? ` · ${max} is the most one view reads` : ""}
+      {!maxed && onMore ? <><button type="button" className="inf-link" data-testid="kg-show-more" onClick={onMore}>Show {max}</button>, </> : null}
+      Showing {shown.toLocaleString("en-US")} of {total} connected {noun}{maxed ? `, ${max} is the most one view reads` : ""}
     </p>
   );
 }

@@ -8,7 +8,7 @@ import { fact } from "../app/infra/host-drawer";
 
 describe("a host fact", () => {
   it("says a label set as words, never [object Object]", () => {
-    expect(fact({ role: "ci", region: "fsn1" })).toBe("role ci · region fsn1");
+    expect(fact({ role: "ci", region: "fsn1" })).toBe("role ci, region fsn1");
     expect(fact({ gpu: true })).toBe("gpu");
     expect(fact({})).toBe("—");
     expect(fact({ a: null })).toBe("—");

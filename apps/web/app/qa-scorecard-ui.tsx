@@ -8,7 +8,7 @@ export function QaScorecardIsland({ feed }: { feed: QaScorecardFeed }) {
           and on a customer's Evidence screen they read as unrelated projects that had
           appeared in their factory (console walk, 2026-10-02). */}
       <p className="detail">
-        BOSS&apos;s own benchmark apps — the fixed test apps BOSS is measured on, not your
+        BOSS&apos;s own benchmark apps, the fixed test apps BOSS is measured on, not your
         projects. A UI or UX score that was not measured stays &ldquo;not scored&rdquo;; nothing
         here is ever marked passed without evidence.
       </p>
@@ -33,20 +33,20 @@ export function QaScorecardIsland({ feed }: { feed: QaScorecardFeed }) {
                 </p>
                 <p className="detail">
                   Scored: {app.scored.length ? app.scored.map(readable).join(", ") : "nothing yet"}
-                  {" · "}
+                  {", "}
                   UI: {readable(app.ui ?? "not_scored")}
-                  {" · "}
+                  {", "}
                   UX: {readable(app.ux ?? "not_scored")}
                 </p>
                 {app.invented.length > 0 ? (
-                  <p className="detail">invented scores present — do not trust this card</p>
+                  <p className="detail">invented scores present, do not trust this card</p>
                 ) : (
                   <p className="detail">No invented scores</p>
                 )}
                 {app.builtRunId ? (
                   <p className="detail">
                     run <code className="mono">{app.builtRunId}</code>
-                    {app.runStatus ? ` · ${app.runStatus}` : ""}
+                    {app.runStatus ? `, ${app.runStatus}` : ""}
                   </p>
                 ) : null}
               </div>

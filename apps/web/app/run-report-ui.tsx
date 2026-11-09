@@ -11,7 +11,7 @@ import { askConsent, consentFromBody } from "../lib/identity/consent";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 
 /**
- * What the whole run cost, who did it, and what went wrong — read at the end, in one place.
+ * What the whole run cost, who did it, and what went wrong, read at the end, in one place.
  *
  * WHY THIS EXISTS. The console could show $2.29 for a build while the research and the panel
  * that produced its spec, $1.74 between them, were recorded in two other tables and shown
@@ -130,7 +130,7 @@ function duration(seconds: number | null | undefined): string {
 /** The run's own "Build on this research" verdict, as the server sent it with the run. */
 type ResearchAction = { key: string; enabled: boolean } | null | undefined;
 
-/** A run has a report once one of its steps has finished — the rule the panel is shown by. */
+/** A run has a report once one of its steps has finished, the rule the panel is shown by. */
 export function runHasReport(steps: Array<{ status: string }>): boolean {
   return steps.some((s) => s.status === "succeeded" || s.status === "skipped");
 }
@@ -200,7 +200,7 @@ export function OpenRunReportButton(
   return (
     <>
       <button type="button" className={className ?? "rr-open"} data-testid={testId ?? "run-open-report"}
-              title="The whole report — what was built, tests, cost, who did it — every section open"
+              title="The whole report, what was built, tests, cost, who did it, every section open"
               onClick={() => setOpen(true)}>
         <ArrowsOut size={13} weight="bold" aria-hidden /> Open report
       </button>
@@ -215,7 +215,7 @@ export function OpenRunReportButton(
 export function RunReportPanel(
   { runId, projectId, researchAction, expanded = false }:
     { runId: string; projectId: string; researchAction?: ResearchAction;
-      /** Every section open and no outer disclosure — the dialog's mode. */
+      /** Every section open and no outer disclosure, the dialog's mode. */
       expanded?: boolean },
 ) {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -278,16 +278,16 @@ export function RunReportPanel(
   }, [runId, projectId]);
 
 
-  // BUILD FROM THIS — turn the findings into the next run, rather than into a note somebody
+  // BUILD FROM THIS, turn the findings into the next run, rather than into a note somebody
   // retypes. The directive is composed from the ranked items, so what gets built is exactly
   // what this report said was wrong.
   //
   // `from_run` carries the finished research forward: the server resolves it and adopts the
   // dossier, so the fix-up run argues from evidence already paid for instead of commissioning
-  // it again. It deliberately does NOT adopt the panel — a new panel argues the fix.
+  // it again. It deliberately does NOT adopt the panel, a new panel argues the fix.
   //
-  // ONLY WHEN THE SERVER OFFERS IT. This sent `from_run` whenever the report had next steps —
-  // a second "Build on this research" deciding for itself — and the server refused it on every
+  // ONLY WHEN THE SERVER OFFERS IT. This sent `from_run` whenever the report had next steps , 
+  // a second "Build on this research" deciding for itself, and the server refused it on every
   // run still going ("this run is still going…") and on every run with no completed research
   // ("this run did not research anything"), which is every fix-up run this button starts
   // (review of 0fd6c45). The research is carried exactly when the run's own
@@ -307,7 +307,7 @@ export function RunReportPanel(
         .map((n) => `- [${n.priority}] ${n.item}`)
         .join("\n");
       // A P1 means something is unproven or unsafe, not merely untidy, so it gets the fuller
-      // path — panel, spec review, preview and a UX review — rather than the quick one.
+      // path, panel, spec review, preview and a UX review, rather than the quick one.
       const workflowKey = items.some((n) => n.priority === "P1")
         ? "major_feature" : "minor_feature";
       const send = () => apiWrite("/api/delivery-workflows", {
@@ -324,7 +324,7 @@ export function RunReportPanel(
             directive:
               `Fix what the last run's report found in ${name}.\n\n${lines}\n\n`
               + "Close each item above. Where an item says something was never verified, "
-              + "verify it — do not restate the claim. Do not add features.",
+              + "verify it, do not restate the claim. Do not add features.",
           },
           ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
         }),
@@ -378,7 +378,7 @@ export function RunReportPanel(
   const ran = (build.commands_run ?? []).map((c) => c.command);
 
   // WORKING, WAITING AND WHAT IT COST, SAID APART. A run that waited three hours at its approval
-  // read "192.2min · $0.00" for three minutes of work and four model calls on a subscription.
+  // read "192.2min, $0.00" for three minutes of work and four model calls on a subscription.
   const waited = report.waiting_minutes ?? 0;
   const listed = report.list_usd ?? 0;
   const billed = report.total_usd ?? 0;
@@ -386,23 +386,23 @@ export function RunReportPanel(
   const Root = expanded ? "div" : "details";
   const Summary = expanded ? "div" : "summary";
   const open = expanded ? true : undefined;
-  const money = `${done}/${steps.length} · ${report.working_minutes}min working`
-    + (waited >= 1 ? ` · waited ${humanDuration(waited * 60)} for a person` : "")
-    + ` · ${usd(billed)}${listed > billed ? ` (${usd(listed)} at list price, on the subscription)` : ""}`;
+  const money = `${done}/${steps.length}, ${report.working_minutes}min working`
+    + (waited >= 1 ? `, waited ${humanDuration(waited * 60)} for a person` : "")
+    + `, ${usd(billed)}${listed > billed ? ` (${usd(listed)} at list price, on the subscription)` : ""}`;
 
   return (
     /* THE WHOLE REPORT IS COLLAPSED, and the summary line has to earn the click on its own:
        the app's name, the headline numbers, and whether anything is urgent. Feedback on
-       the first version was that it is a lot of text — and it is, which is the point of a
+       the first version was that it is a lot of text, and it is, which is the point of a
        report and the reason none of it should be open until somebody asks for it. */
     <Root className={expanded ? "rr rr-expanded" : "rr rr-root"}
           data-testid={expanded ? "run-report-expanded" : "run-report"}>
       <Summary className="rr-root-summary">
-        {/* A HEADING, INSIDE THE SUMMARY. Valid — <summary> takes flow content — and it is
+        {/* A HEADING, INSIDE THE SUMMARY. Valid, <summary> takes flow content, and it is
             what keeps the panel findable as a landmark once the whole report is collapsed.
             Dropping to a <span> for the type would trade that away for nothing. The type is
-            the eyebrow, the same choice Setup makes for "Already on this install". */}
-        <h3 className="eyebrow rr-title">Run report</h3>
+            the area-name, the same choice Setup makes for "Already on this install". */}
+        <h3 className="area-name rr-title">Run report</h3>
         <span className="rr-root-name">{product.name ?? report.workflow}</span>
         <span className="rr-count">{money}</span>
         {urgent.length ? (
@@ -441,7 +441,7 @@ export function RunReportPanel(
       {product.preview_url ? (
         <p className="rr-try">
           <a href={product.preview_url} data-testid="run-report-preview">Try it</a>
-          <span className="detail"> · preview {product.preview_status ?? "unknown"}</span>
+          <span className="detail">, preview {product.preview_status ?? "unknown"}</span>
         </p>
       ) : null}
 
@@ -455,7 +455,7 @@ export function RunReportPanel(
       {urgent.length ? (
         <div className="rr-urgent" data-testid="run-report-urgent">
           {urgent.map((n, i) => (
-            <p key={i}><Warning size={13} weight="bold" aria-hidden /> <b>P1</b> — {n.item}</p>
+            <p key={i}><Warning size={13} weight="bold" aria-hidden /> <b>P1</b>, {n.item}</p>
           ))}
         </div>
       ) : null}
@@ -466,9 +466,9 @@ export function RunReportPanel(
         </span></summary>
         <p className="rr-facts">
           {build.files_changed ? `${build.files_changed} files changed` : null}
-          {build.test_files?.length ? ` · ${build.test_files.length} test files` : null}
+          {build.test_files?.length ? `, ${build.test_files.length} test files` : null}
           {build.pull_request_url ? (
-            <> · <a href={build.pull_request_url}>pull request</a></>
+            <>, <a href={build.pull_request_url}>pull request</a></>
           ) : null}
         </p>
         {build.summary ? (
@@ -481,7 +481,7 @@ export function RunReportPanel(
           <summary>How to use it<span className="rr-count">{product.screens.length} screens</span></summary>
           <ol className="rr-screens">
             {product.screens.map((screen) => (
-              <li key={screen.name}><b>{screen.name}</b> — {screen.does}</li>
+              <li key={screen.name}><b>{screen.name}</b>, {screen.does}</li>
             ))}
           </ol>
         </details>
@@ -515,13 +515,13 @@ export function RunReportPanel(
           <summary>Acceptance criteria<span className="rr-count">{product.acceptance.length}</span></summary>
           <ul className="rr-acs">
             {product.acceptance.map((ac) => (
-              <li key={ac.id}><b>{ac.id}</b> — {ac.text}</li>
+              <li key={ac.id}><b>{ac.id}</b>, {ac.text}</li>
             ))}
           </ul>
           {/* Never ticked without evidence: a tick beside a criterion nobody checked is the
               exact claim a reader repeats to somebody else. */}
           <p className="rr-note rr-caveat">
-            Not verified against the build — nothing in this run tested them.
+            Not verified against the build, nothing in this run tested them.
           </p>
         </details>
       ) : null}
@@ -531,7 +531,7 @@ export function RunReportPanel(
           <summary>What to do next<span className="rr-count">{nextSteps.length}</span></summary>
           {builtRunId ? (
             <p className="rr-built" data-testid="run-report-built">
-              Started — run <code>{builtRunId}</code> is fixing these.
+              Started, run <code>{builtRunId}</code> is fixing these.
             </p>
           ) : (
             <GatedButton permission="workflow:publish" type="button" className="rr-build" onClick={() => void buildFromThis()}
@@ -555,7 +555,7 @@ export function RunReportPanel(
         <summary>
           Run facts
           <span className="rr-count">
-            {done}/{steps.length} · {report.working_minutes}min · {usd(report.total_usd ?? 0)}
+            {done}/{steps.length}, {report.working_minutes}min, {usd(report.total_usd ?? 0)}
           </span>
         </summary>
         {lost > 0 ? (
@@ -564,7 +564,7 @@ export function RunReportPanel(
           </p>
         ) : null}
         {serious.map((f, i) => (
-          <p key={i} className="rr-note"><b>{f.area}</b> — {f.finding}</p>
+          <p key={i} className="rr-note"><b>{f.area}</b>, {f.finding}</p>
         ))}
         <table className="rr-table">
           <thead><tr><th>Agent</th><th>Turns</th><th>Cost</th></tr></thead>

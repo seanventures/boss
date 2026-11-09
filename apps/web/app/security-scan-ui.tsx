@@ -33,23 +33,23 @@ function FindingRow({ f }: { f: SecurityFinding }) {
         gap: 8,
         fontSize: 12.5,
         padding: "6px 0",
-        borderBottom: "1px solid var(--border, #30363d)",
+        borderBottom: "1px solid var(--border, var(--boss-c-30363d))",
       }}
     >
-      <span style={{ color: sevTone(f.severity), fontWeight: 700, textTransform: "uppercase" }}>
+      <span style={{ color: sevTone(f.severity), fontWeight: 700, textTransform: "none" }}>
         {f.severity}
       </span>
       <div>
         <div style={{ color: "var(--ink)" }}>
           <b>{f.rule_id}</b>{" "}
           <span style={{ color: "var(--muted)" }}>· {f.scanner}</span>
-          {f.cve ? <span style={{ color: "var(--muted)" }}> · {f.cve}</span> : null}
+          {f.cve ? <span style={{ color: "var(--muted)" }}>, {f.cve}</span> : null}
         </div>
         <div style={{ color: "var(--ink-soft)" }}>{f.message}</div>
         <div style={{ color: "var(--muted)", fontSize: 11.5 }}>
           {f.path}
           {f.line != null ? `:${f.line}` : ""}
-          {f.fix ? ` — fix: ${f.fix}` : ""}
+          {f.fix ? `, fix: ${f.fix}` : ""}
         </div>
       </div>
     </div>
@@ -139,7 +139,7 @@ export function SecurityScanCard({
       ) : null}
 
       {error ? (
-        <p className="detail" style={{ color: "#f85149" }}>
+        <p className="detail" style={{ color: "var(--boss-c-f85149)" }}>
           {error}
         </p>
       ) : null}
@@ -151,17 +151,17 @@ export function SecurityScanCard({
           <p className="detail" style={{ marginBottom: 8 }}>
             Latest:{" "}
             <b style={{ color: statusTone(run.status) }}>{run.status.toUpperCase()}</b>
-            {" · "}
+            {", "}
             gate{" "}
             <b style={{ color: statusTone(run.gate?.decision ?? "") }}>
               {(run.gate?.decision ?? "—").toUpperCase()}
             </b>
-            {" · "}
+            {", "}
             {run.summary?.total ?? 0} findings
             {run.summary?.critical ? ` (${run.summary.critical} critical)` : ""}
-            {run.simulated ? " · simulated" : ""}
+            {run.simulated ? ", simulated" : ""}
             {run.receipt_id ? (
-              <span style={{ color: "var(--muted)" }}> · receipt {run.receipt_id}</span>
+              <span style={{ color: "var(--muted)" }}>, receipt {run.receipt_id}</span>
             ) : null}
           </p>
           <div style={{ maxHeight: 280, overflow: "auto" }}>

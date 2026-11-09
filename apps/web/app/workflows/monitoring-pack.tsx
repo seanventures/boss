@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * SET UP MONITORING — the SRE agent's monitoring pack (engine services/monitoring_pack.py),
+ * SET UP MONITORING, the SRE agent's monitoring pack (engine services/monitoring_pack.py),
  * on its own step and on the release's approval card, in the incident card's "who did what"
  * voice:
  *
- *   (face) Beacon · Site Reliability Engineer        Set up monitoring
+ *   (face) Beacon, Site Reliability Engineer        Set up monitoring
  *          Watches order failures and payment errors on the Order API
  *          ⬣ SEV1  AppHealthCheckFailing   3 failed probes in 10 min   ✓ quiet last hour   Runbook: …
  *          ▲ SEV2  OrderPaymentFailures    > 2% of payments fail …     ✓ quiet last hour   Runbook: …
- *          4 rules · 4 runbooks · 2 panels in boss.deploy.yaml on boss/code/… · Rules ↗ · Dashboard ↗
+ *          4 rules, 4 runbooks, 2 panels in boss.deploy.yaml on boss/code/…, Rules , Dashboard 
  *
  * Every rule's PromQL is one click away. Pure render from the parsed card.
  */
@@ -75,7 +75,7 @@ export function monitoringPackOf(raw: unknown): MonitoringPack | null {
   };
 }
 
-/** The pack a run step shows: its own (Set up monitoring), or — on the release it precedes —
+/** The pack a run step shows: its own (Set up monitoring), or, on the release it precedes , 
  *  the pack that release carries. `nextOf` reads the workflow's wiring. */
 export function packForStep(steps: Array<{ step_id: string; capability: string | null; status: string; output: Record<string, unknown> | null }>,
                             current: { step_id: string; capability: string | null; status: string; output: Record<string, unknown> | null },
@@ -155,7 +155,7 @@ export function MonitoringPackCard({ pack, onCard = false }: { pack: MonitoringP
       <span className="obs-line mp-foot" data-testid="mp-foot">
         <span>
           {plural(added, pack.adding ? "new rule" : "rule")}{pack.adding ? ` (${plural(pack.rules.length - added, "kept")})` : ""}
-          {" · "}{plural(pack.runbooks.length, "runbook")} · {plural(pack.panels.length, "dashboard panel")}
+          {", "}{plural(pack.runbooks.length, "runbook")}, {plural(pack.panels.length, "dashboard panel")}
           {" in "}<code className="inf-mono">{pack.manifestPath}</code>{pack.branch ? <> on <code className="inf-mono">{pack.branch}</code></> : null}
         </span>
         {pack.rulesHref ? <a className="inf-link" href={pack.rulesHref} data-testid="mp-rules-link" title="The app's Alerts tab: these rules, repo-managed">Rules ↗</a> : null}

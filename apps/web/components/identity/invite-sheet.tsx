@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * INVITE PEOPLE (IDENTITY.md §9.2): emails, access roles (only ones you hold all of — the API
+ * INVITE PEOPLE (IDENTITY.md §9.2): emails, access roles (only ones you hold all of, the API
  * enforces the subset rule, the sheet shows which are out of reach) and groups. Each invitation
- * says what happened to its email: sent, failed with the server's reason, or not configured — and
+ * says what happened to its email: sent, failed with the server's reason, or not configured, and
  * whenever it was not emailed, the single-use link to hand over. Resend issues a new link.
  */
 import React, { useState } from "react";
@@ -97,7 +97,7 @@ export function InviteSheet({ roles, groups = [], onClose, onInvited }: {
         const r = await idPost<InviteAnswer>(`/v1/identity/invitations/${encodeURIComponent(row.id ?? "")}/resend`, {});
         setLinks((all) => (all ?? []).map((x) => (x.id === row.id ? asSent(x.email, r) : x)));
         if (r.delivery?.status === "sent") showToast("success", "Sent again");
-        else showToast("error", `Not sent · ${r.delivery?.reason ?? "no reason given"}`);
+        else showToast("error", `Not sent, ${r.delivery?.reason ?? "no reason given"}`);
       });
     } catch (e) {
       showToast("error", e instanceof IdentityError ? e.message : "Not resent");

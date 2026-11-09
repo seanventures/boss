@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * A PASSPORT (IDENTITY.md §7.1, §9.6): the most anyone may delegate to this agent (its ceiling —
+ * A PASSPORT (IDENTITY.md §7.1, §9.6): the most anyone may delegate to this agent (its ceiling , 
  * delegable permissions only; the rest are shown locked, "never delegable"), its external ceiling
  * on GitHub, spawn rules and depth, whether it may act on its own, its lineage, the grants that
  * name it, and Suspend / Resume / Revoke. A ceiling change is a diff the person saves with
@@ -189,7 +189,7 @@ export function PassportScreen({ initial, grants, people = [] }: { initial: Pass
         <section className="idn-mx" aria-labelledby="idn-ceiling-h">
           <div className="idn-mx-top">
             <h2 id="idn-ceiling-h" className="idn-h3" title="Nobody can delegate more than this to the agent">Access limit</h2>
-            <span className="idn-sub idn-dim">{ceiling.size} allowed{agent.ceiling_preset ? ` · from ${presetName(agent.ceiling_preset)}` : ""}</span>
+            <span className="idn-sub idn-dim">{ceiling.size} allowed{agent.ceiling_preset ? `, from ${presetName(agent.ceiling_preset)}` : ""}</span>
             <span className="idn-spacer" />
             <button type="button" className="idn-fchip" aria-pressed={onlyOn} onClick={() => setOnlyOn((v) => !v)}>Only what it has</button>
             {!editing ? (
@@ -290,7 +290,7 @@ export function PassportScreen({ initial, grants, people = [] }: { initial: Pass
               <a key={g.id} className="idn-dg" href={`/identity/agents/delegations/${g.id}`}>
                 <span className="idn-top">
                   <Face name={g.user.name} tone={g.user.hue} size={26} />
-                  <span><b>{g.user.name} · {g.label}</b><small>{g.kind === "task" ? "this build only" : g.expires_at ? `until ${shortDate(g.expires_at)}` : "until revoked"}</small></span>
+                  <span><b>{g.user.name}, {g.label}</b><small>{g.kind === "task" ? "this build only" : g.expires_at ? `until ${shortDate(g.expires_at)}` : "until revoked"}</small></span>
                   <span className="idn-spacer" />
                   <Pill tone={g.status === "active" ? "ok" : "mute"}>{g.status}</Pill>
                   <ArrowRight size={13} className="idn-dim" aria-hidden />

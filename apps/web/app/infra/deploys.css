@@ -1,3 +1,4 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* ── Infra › Deploys and Previews (infra-observability spec §4.6, §4.7, §5.2, §5.3) ──
    inf-dep-, inf-dd-, inf-pv- classes; design-system tokens only (no hex). The rail row is the
    Factory row (fx-row): a 56px bordered card in a list, dot + word first, the action last.
@@ -17,7 +18,7 @@
 /* The rail: day groups of 56px rows. */
 .inf-rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .inf-rail-day { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.inf-rail-day-head { margin: 0; padding: 0 2px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; color: var(--faint); }
+.inf-rail-day-head { margin: 0; padding: 0 2px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0; color: var(--faint); }
 .inf-dep-rows, .inf-pv-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .inf-dep-row {
   display: grid; align-items: center; gap: 10px; min-height: 56px; padding: 6px 12px; min-width: 0;
@@ -53,8 +54,8 @@
 .inf-step[data-s="done"] { color: var(--green); }
 .inf-step[data-s="running"] { color: var(--accent-text); animation: inf-dep-sweep 1.6s linear infinite; }
 .inf-step[data-s="failed"] { color: var(--red); font-weight: 700; }
-@keyframes inf-dep-sweep { to { transform: rotate(360deg); } }
-@keyframes inf-dep-fill { from { transform: scale(0.4); } to { transform: none; } }
+@keyframes inf-dep-sweep { to { transform: rotate(360deg);} }
+@keyframes inf-dep-fill { from { transform: scale(0.4);} to { transform: none;} }
 
 /* The deploy drawer. */
 .inf-dd-head { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
@@ -95,7 +96,7 @@
 .inf-promo-dot[data-s="running"] { background: var(--accent-text); box-shadow: none; }
 .inf-promo-dot[data-s="failed"] { background: var(--red); box-shadow: none; }
 .inf-dd-actions { padding-top: 4px; border-top: 1px solid var(--border); }
-.inf-caption { caption-side: top; text-align: left; padding: 4px 2px 6px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+.inf-caption { caption-side: top; text-align: left; padding: 4px 2px 6px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--faint); }
 
 /* CI config vendor cards. */
 .inf-ci-vendors { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.94737rem, 1fr)); gap: 8px; }
@@ -122,7 +123,7 @@
 .inf-ttl { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .inf-ttl-bar { display: block; width: 64px; height: 4px; flex: none; }
 .inf-ttl-track { fill: var(--surface-2); stroke: var(--border); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
-.inf-ttl-fill { fill: var(--green); transition: width 300ms ease-out; }
+.inf-ttl-fill { fill: var(--green); transition: none; }
 .inf-ttl[data-tone="amber"] .inf-ttl-fill { fill: var(--amber); }
 .inf-ttl[data-tone="amber"] .inf-ttl-label { color: var(--amber); font-weight: 650; }
 .inf-ttl-label { font-size: 0.78rem; color: var(--muted); white-space: nowrap; }

@@ -3,7 +3,7 @@
 /**
  * Factory › Floor (factory spec §4.2): the same sections as Agents › Live, for builds.
  *
- *   NEEDS YOU   cards you can act on (AttentionCard — plan approvals, failed checks, PRs, budget)
+ *   NEEDS YOU   cards you can act on (AttentionCard, plan approvals, failed checks, PRs, budget)
  *   BUILDING    one row per build, drawn as its line of stations (BuildRow)
  *   SHIPPED     outcome chips: PR opened / merged, preview live, deployed
  *   STOPPED     failed or stopped builds with nothing newer, each with Retry
@@ -93,7 +93,7 @@ function OutcomeChip({ o, now, onOpen }: { o: FloorOutcome; now: number | null; 
   const external = !!o.url && /^https?:/i.test(o.url);
   return (
     <li className="ag-out">
-      <a className="ag-out-chip" href={external ? o.url : undefined} title={`${o.app} · by ${by}`} data-testid="fx-outcome"
+      <a className="ag-out-chip" href={external ? o.url : undefined} title={`${o.app}, by ${by}`} data-testid="fx-outcome"
          data-kind={o.kind} {...(external ? { target: "_blank", rel: "noreferrer" } : { role: "button", tabIndex: 0 })}
          onClick={(e) => { if (!external) { e.preventDefault(); onOpen(o.runId); } }}
          onKeyDown={(e) => { if (!external && e.key === "Enter") onOpen(o.runId); }}>
@@ -150,13 +150,13 @@ function StoppedLine({ s, projectId, actor, onOpen, onRetried }: {
       </span>
       <span className="fx-row-now">
         <span className={`fx-word fx-word-${s.state}`} title={s.tip}>{s.word}</span>
-        {error ? <span className="ag-att-error" role="alert" data-user-text title={error}> · {error.slice(0, 40)}</span> : null}
+        {error ? <span className="ag-att-error" role="alert" data-user-text title={error}>, {error.slice(0, 40)}</span> : null}
       </span>
       <GatedButton permission="code_task:retry" type="button" className="ag-btn fx-retry" disabled={!s.retryable || busy} data-testid={`fx-retry-${s.runId}`}
               title={!s.retryable ? s.retryReason : "A new attempt on the same branch"} aria-busy={busy || undefined}
               onClick={() => void retry()}>Retry</GatedButton>
       <button type="button" className="ag-icon-btn fx-row-go" aria-label={`Open ${s.app}`} title="Open the build"
-              onClick={(e) => onOpen(s.runId, e.currentTarget.closest("li"))}>↗</button>
+              onClick={(e) => onOpen(s.runId, e.currentTarget.closest("li"))}>Open</button>
     </li>
   );
 }
@@ -213,7 +213,7 @@ export function FloorView({ projectId, actor, floor, error, loading, refresh, pa
   const attention = useMemo(() => (floor?.attention ?? []).filter((a) => !gone.has(a.id)
     && matches(query, a.build?.app, a.title, a.run?.subject, a.detail)), [floor, gone, query]);
   const box = useRef<HTMLDivElement>(null);
-  // J / K move between cards and rows from anywhere on the Floor — no click first (walk D17).
+  // J / K move between cards and rows from anywhere on the Floor, no click first (walk D17).
   useAreaKeydown((e: KeyboardEvent) => {
     const key = e.key.toLowerCase();
     if ((key !== "j" && key !== "k") || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;

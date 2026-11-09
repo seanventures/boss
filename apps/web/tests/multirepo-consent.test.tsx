@@ -75,7 +75,7 @@ describe("consent with multirepo", () => {
     expect(request.multirepo?.repos).toHaveLength(4);
     expect(tid("consent-mr-eyebrow")?.textContent).toBe("Before the build starts");
     expect(document.querySelector("h2")?.textContent).toContain("Which repositories may the agents touch?");
-    expect(tid("consent-mr-subtitle")?.textContent).toBe("Run R-1482 · Storefront · exactly the app's repositories");
+    expect(tid("consent-mr-subtitle")?.textContent).toBe("Run R-1482, Storefront, exactly the app's repositories");
     expect($$('[data-testid^="consent-mr-repo-"]').map((e) => e.dataset.testid)).toEqual([
       "consent-mr-repo-acme/contracts", "consent-mr-repo-acme/api", "consent-mr-repo-acme/web", "consent-mr-repo-acme/infra"]);
     expect(tid("consent-mr-repo-acme/api")?.textContent).toContain("Read · Write on boss/r1482-* · Pull requests");

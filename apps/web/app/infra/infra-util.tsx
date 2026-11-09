@@ -11,7 +11,7 @@ import { showToast } from "../client-forms";
 
 export { ago, localTime, useNow, span } from "../agents/live-util";
 
-/** `0m 41s`, `1m 52s`, `1h 03m` — a deploy's own length. */
+/** `0m 41s`, `1m 52s`, `1h 03m`, a deploy's own length. */
 export function dur(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return "";
   const s = Math.round(ms / 1000);

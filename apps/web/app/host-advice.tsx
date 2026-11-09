@@ -8,17 +8,17 @@ import { Check, Copy } from "@phosphor-icons/react";
 import { useOnScreen } from "../lib/area-shown";
 
 /**
- * "This computer is out of memory" — said to the person who can fix it, and ONLY when it is.
+ * "This computer is out of memory", said to the person who can fix it, and ONLY when it is.
  *
  * The words come from the API (operator_advice in self_observability.py), which names the
- * measured cause — memory, disk, cpu, or BOSS itself on a server with room — and gives restart
+ * measured cause, memory, disk, cpu, or BOSS itself on a server with room, and gives restart
  * advice only for a laptop's Docker VM. A fixed "out of memory, restart" once appeared on a
  * healthy 16 GB Linux server; this component renders the API's wording and adds none of its own.
  *
  * WHY THIS COMPONENT EXISTS. Two runs this week were read as BOSS degrading while the machine
  * underneath was thrashing: one took 85 minutes that should have taken 20, another 242 minutes
  * of which 63 were actual work. Both diagnoses came from a person reading container logs by
- * hand. A customer has nobody to do that, and the operator's verdict was exact — "there will be
+ * hand. A customer has nobody to do that, and the operator's verdict was exact, "there will be
  * no one to give that info to customer".
  *
  * Deliberately quiet. `show:false` on a healthy machine renders nothing at all: an indicator
@@ -78,7 +78,7 @@ export function HostAdviceBanner(
           saying the computer is struggling has said the same thing twice. */}
       <Warning className="host-advice-icon" size={16} weight="bold"
                aria-hidden data-testid="host-advice-icon" />
-      {/* The text keeps the layout it already had — a wrapping row — and the icon takes a
+      {/* The text keeps the layout it already had, a wrapping row, and the icon takes a
           column beside it. Adding the icon as a plain sibling would have let it wrap onto a
           line of its own once the detail got long, which is exactly the case that matters. */}
       <div className="host-advice-body">
@@ -90,7 +90,7 @@ export function HostAdviceBanner(
   );
 }
 
-/** The server's advice with its `commands` drawn as code, each with Copy — never as literal
+/** The server's advice with its `commands` drawn as code, each with Copy, never as literal
  *  backticks (Command Center re-test, 4). The words around them are unchanged. */
 export function AdviceText({ text }: { text: string }) {
   const parts = text.split(/`([^`]+)`/);

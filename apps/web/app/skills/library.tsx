@@ -3,7 +3,7 @@
 /**
  * Library (spec §5.5): every skill and every MCP server, one list each, with authoring and any
  * custom server. Skills BOSS uses itself (machinery only, held by nobody, in no ability) are
- * behind `Show internal` — the old page explained them in a sentence per row.
+ * behind `Show internal`, the old page explained them in a sentence per row.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DotsThree, FileText, MagnifyingGlass, Plus, Sparkle } from "@phosphor-icons/react";
@@ -31,7 +31,7 @@ export function askBossAboutSkills(projectId: string): void {
     role: "Program Manager",
     question:
       "I want to create a skill for this project. A skill is the reusable unit of doing that a"
-      + " workflow step runs — trimming a video, posting to a channel, calling one tool on an"
+      + " workflow step runs, trimming a video, posting to a channel, calling one tool on an"
       + " MCP server. Ask me what you need to know, then draft it and I will create it."
       + ` Start by telling me which skills ${projectId} already has, so I do not ask for one`
       + " that exists.",
@@ -56,7 +56,7 @@ export function usedBy(ability: Ability | undefined, ref: string): number {
 }
 
 /**
- * A shipped skill's status (K13). One in a Kit ability is as ready as its ability — Open an
+ * A shipped skill's status (K13). One in a Kit ability is as ready as its ability, Open an
  * issue is not Ready while File tickets is not set up. One outside every ability is Ready only
  * when the catalogue says it can run (`usable`); a cost sync with no provider key is Set up.
  */
@@ -179,7 +179,7 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
       out.push({ id: b.id, label: skillLabel(b.id, ability), origin: "built_in", tier: b.risk_tier ?? 0,
                  status: builtInStatus(b, ability, holders.length),
                  holders, ability, used: usedBy(ability, `skill:${b.id}`), internal,
-                 tip: b.description ? `${b.id} · ${b.description}` : b.id });
+                 tip: b.description ? `${b.id}, ${b.description}` : b.id });
     }
     return out;
   }, [skills, builtIn, assignments, abilityOfSkill, crewKeys]); // eslint-disable-line react-hooks/exhaustive-deps

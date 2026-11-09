@@ -116,7 +116,7 @@ describe("Infra › Cloud", () => {
     await open("?area=infra&view=cloud&cloud=capacity&pool=pool_1", "inf-pool-drawer");
     for (const id of ["inf-capacity-queue", "inf-capacity-counts", "inf-cloud-api-health", "inf-cloud-table", "inf-capacity-plan",
       "inf-pool-history", "inf-capacity-add-pool", "inf-capacity-review"]) expect($(id), id).not.toBeNull();
-    expect($("inf-capacity-queue")?.textContent).toContain("Queue 12 · Leased 2 · Running 2");
+    expect($("inf-capacity-queue")?.textContent).toContain("Queue 12, Leased 2, Running 2");
     expect($("inf-pool-history")?.textContent).toContain("1 → 2");
     await act(async () => { ($("inf-pool-drawer-close") as HTMLButtonElement).click(); });
     await press("inf-capacity-add-pool");

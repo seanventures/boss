@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Outputs (factory spec §4.5.5): the Brief, then eight rows, one line each — label · the server's
- * word · the face of the agent who made it — expanding in place, one at a time. The Brief is what
+ * Outputs (factory spec §4.5.5): the Brief, then eight rows, one line each, label, the server's
+ * word, the face of the agent who made it, expanding in place, one at a time. The Brief is what
  * the build was asked and how it was built: the old per-build page's contract and meta rows,
  * which the redesign had dropped (parity audit). Every collapsed value is the
  * server's `word`; nothing here counts tests (only commands are real) or draws a diff (hunks are
@@ -241,7 +241,7 @@ function ChecksBody({ c, projectId, actor, onRefresh }: { c: Cockpit; projectId:
     return <span className="fx-out-col"><span className="fx-muted">{checks?.word || "After review"}</span>{evidence}</span>;
   }
   // WAIVE FROM WHERE THE FAILURES ARE LISTED (the old Iterate block's override), for any
-  // stopped build with a failing check — not only one whose card is on the Floor.
+  // stopped build with a failing check, not only one whose card is on the Floor.
   const failing = checks.gates.filter((g) => !g.ok && !g.waivedBy);
   const canWaive = failing.some((g) => g.waivable) && ["needs_waiver", "failed", "blocked"].includes(c.state.state);
   return (
@@ -303,8 +303,8 @@ function BriefBody({ c }: { c: Cockpit }) {
         <span className="fx-kv"><span className="fx-out-sub">Repo</span>
           {github && b.branch ? (
             <a className="ag-link fx-mono" href={`${github}/tree/${encodeURIComponent(b.branch)}`} target="_blank" rel="noreferrer"
-               data-user-text title={b.branch}>{b.repo} · {b.branch} ↗</a>
-          ) : <span className="fx-mono" data-user-text>{[b.repo, b.branch].filter(Boolean).join(" · ")}</span>}
+               data-user-text title={b.branch}>{b.repo}, {b.branch} </a>
+          ) : <span className="fx-mono" data-user-text>{[b.repo, b.branch].filter(Boolean).join(", ")}</span>}
         </span>
       ) : null}
       {b.workflow ? (
@@ -315,12 +315,12 @@ function BriefBody({ c }: { c: Cockpit }) {
       ) : null}
       {b.engine || b.model ? (
         <span className="fx-kv"><span className="fx-out-sub">Built with</span>
-          <span data-user-text>{[b.engine, b.model].filter(Boolean).join(" · ")}</span>
+          <span data-user-text>{[b.engine, b.model].filter(Boolean).join(", ")}</span>
         </span>
       ) : null}
       {b.reviewEngine || b.reviewModel ? (
         <span className="fx-kv"><span className="fx-out-sub">Reviewed with</span>
-          <span data-user-text>{[b.reviewEngine, b.reviewModel].filter(Boolean).join(" · ")}</span>
+          <span data-user-text>{[b.reviewEngine, b.reviewModel].filter(Boolean).join(", ")}</span>
           <span className="fx-muted" title={b.crossModel ? "A different model reviewed the code: no self-grading" : "The model that built it also reviewed it"}>
             {b.crossModel ? "cross-model" : "same model"}
           </span>
@@ -338,17 +338,17 @@ function BriefBody({ c }: { c: Cockpit }) {
       ) : null}
       {b.profile || typeof b.riskTier === "number" ? (
         <span className="fx-kv"><span className="fx-out-sub" title="The profile and risk tier set which checks run">Setup</span>
-          <span data-user-text>{[b.profile, typeof b.riskTier === "number" ? `risk tier ${b.riskTier}` : ""].filter(Boolean).join(" · ")}</span>
+          <span data-user-text>{[b.profile, typeof b.riskTier === "number" ? `risk tier ${b.riskTier}` : ""].filter(Boolean).join(", ")}</span>
         </span>
       ) : null}
       {b.reviewerIndependent !== undefined || b.testAuthorIndependent !== undefined ? (
         <span className="fx-kv"><span className="fx-out-sub" title="Whether a different agent reviewed the code and wrote the tests">Independent</span>
-          <span>reviewer {yes(b.reviewerIndependent)} · tests {yes(b.testAuthorIndependent)}</span>
+          <span>reviewer {yes(b.reviewerIndependent)}, tests {yes(b.testAuthorIndependent)}</span>
         </span>
       ) : null}
       {b.builtOn || typeof b.turns === "number" ? (
         <span className="fx-kv"><span className="fx-out-sub">Ran on</span>
-          <span data-user-text>{[b.builtOn, typeof b.turns === "number" ? plural(b.turns, "turn") : ""].filter(Boolean).join(" · ")}</span>
+          <span data-user-text>{[b.builtOn, typeof b.turns === "number" ? plural(b.turns, "turn") : ""].filter(Boolean).join(", ")}</span>
         </span>
       ) : null}
       {b.deferredFindings ? (
@@ -379,9 +379,9 @@ function TestsBody({ c }: { c: Cockpit }) {
       {t.commands.map((cmd, i) => (
         <span key={i} className="fx-cmd" data-ok={cmd.ok}>
           <span className="fx-mono" data-user-text>{cmd.command}</span>
-          <span> · exit {cmd.exitCode ?? "?"}</span>
-          <span> · {cmd.timedOut ? "timed out" : cmd.ok ? "ok" : "failed"}</span>
-          {typeof cmd.durationMs === "number" ? <span className="fx-muted"> · {secondsWord(Math.round(cmd.durationMs / 1000))}</span> : null}
+          <span>, exit {cmd.exitCode ?? "?"}</span>
+          <span>, {cmd.timedOut ? "timed out" : cmd.ok ? "ok" : "failed"}</span>
+          {typeof cmd.durationMs === "number" ? <span className="fx-muted">, {secondsWord(Math.round(cmd.durationMs / 1000))}</span> : null}
         </span>
       ))}
       {t.outputTail ? (
@@ -406,7 +406,7 @@ function ChangesBody({ c }: { c: Cockpit }) {
       {files.map((f) => (
         <span key={f.path} className="fx-file">
           <span className="fx-mono fx-trunc" title={f.path} data-user-text>{f.path}</span>
-          {typeof f.bytes === "number" ? <span className="fx-muted"> · {f.bytes} bytes</span> : null}
+          {typeof f.bytes === "number" ? <span className="fx-muted">, {f.bytes} bytes</span> : null}
         </span>
       ))}
     </span>
@@ -489,7 +489,7 @@ export function isPassedOver(p: Pick<PreviewOutput, "status" | "steps">, i: numb
 /** The steps toggle's words: how it is running once it runs; how far it got while it boots. */
 export function stepsWord(p: Pick<PreviewOutput, "status" | "steps" | "stepsDone" | "stepsTotal">): string {
   const serving = [...p.steps].reverse().find((x) => x.status === "ok");
-  if (p.status === "running") return serving ? `Running · ${serving.label}` : "How it started";
+  if (p.status === "running") return serving ? `Running, ${serving.label}` : "How it started";
   const finished = p.steps.filter((x) => x.status === "ok" || x.status === "skipped" || x.status === "failed").length;
   const total = p.stepsTotal ?? p.steps.length;
   return `${Math.min(finished || p.stepsDone || 0, total)} of ${plural(total, "step")}`;
@@ -501,7 +501,7 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
   const [error, setError] = useState("");
   // Pressed and not yet read back: it says so at once (walk D9, D10), not after the boot.
   const [starting, setStarting] = useState(false);
-  // A library build has no live app: the press ran its tests instead (the old "Ran tests —
+  // A library build has no live app: the press ran its tests instead (the old "Ran tests , 
   // passed (library build)"), which is an answer, not an error.
   const [note, setNote] = useState("");
   const [showNote, setShowNote] = useState(false);
@@ -543,7 +543,7 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
   const passed = note ? (
     <span className="fx-out-col" data-testid="fx-preview-note">
       <button type="button" className="ag-link" aria-expanded={showNote} onClick={() => setShowNote((v) => !v)}
-              title="A library or CLI has no live app: its tests ran instead">Tests passed · no live app {showNote ? "▴" : "▾"}</button>
+              title="A library or CLI has no live app: its tests ran instead">Tests passed, no live app {showNote ? "▴" : "▾"}</button>
       {showNote ? <pre className="fx-log fx-log-small" data-user-text>{note}</pre> : null}
     </span>
   ) : null;
@@ -595,9 +595,9 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
               <span aria-hidden>{x.status === "ok" ? "✓" : passedOver || x.status === "skipped" ? "–" : x.status === "failed" ? "✗" : "…"} </span>
               <span className="ag-sr">{passedOver ? "passed over" : x.status}</span>
               <span data-user-text>{x.label}</span>
-              {passedOver ? <span className="fx-muted"> · passed over</span> : null}
-              {x.durationMs ? <span className="fx-muted"> · {secondsWord(Math.round(x.durationMs / 1000))}</span> : null}
-              {x.log ? <span className="fx-muted fx-trunc" title={x.log} data-user-text> · {x.log}</span> : null}
+              {passedOver ? <span className="fx-muted">, passed over</span> : null}
+              {x.durationMs ? <span className="fx-muted">, {secondsWord(Math.round(x.durationMs / 1000))}</span> : null}
+              {x.log ? <span className="fx-muted fx-trunc" title={x.log} data-user-text>, {x.log}</span> : null}
             </span>
             );
           })}
@@ -645,13 +645,13 @@ function CallsFold({ projectId, runId, metered }: { projectId: string; runId: st
               {calls.map((x, i) => (
                 <span key={i} className="fx-call" data-ok={x.ok} data-testid={`fx-call-${x.stage}`}>
                   <span className="fx-mono" data-user-text>{x.stage}</span>
-                  <span> · {whoName(x.role)}</span>
-                  <span className="fx-muted" data-user-text> · {x.model || x.engine}</span>
-                  {x.turns ? <span className="fx-muted"> · {plural(x.turns, "turn")}</span> : null}
-                  {x.latencyMs >= 1000 ? <span className="fx-muted"> · {secondsWord(Math.round(x.latencyMs / 1000))}</span> : null}
-                  {x.retries ? <span className="fx-muted"> · {plural(x.retries, "retry", "retries")}</span> : null}
-                  {metered && x.usd ? <span> · {x.usd < 0.01 ? `$${x.usd.toFixed(3)}` : money(x.usd)}</span> : null}
-                  {!x.ok ? <span className="fx-err fx-trunc" title={x.error ?? undefined} data-user-text> · {x.error ?? "failed"}</span> : null}
+                  <span>, {whoName(x.role)}</span>
+                  <span className="fx-muted" data-user-text>, {x.model || x.engine}</span>
+                  {x.turns ? <span className="fx-muted">, {plural(x.turns, "turn")}</span> : null}
+                  {x.latencyMs >= 1000 ? <span className="fx-muted">, {secondsWord(Math.round(x.latencyMs / 1000))}</span> : null}
+                  {x.retries ? <span className="fx-muted">, {plural(x.retries, "retry", "retries")}</span> : null}
+                  {metered && x.usd ? <span>, {x.usd < 0.01 ? `$${x.usd.toFixed(3)}` : money(x.usd)}</span> : null}
+                  {!x.ok ? <span className="fx-err fx-trunc" title={x.error ?? undefined} data-user-text>, {x.error ?? "failed"}</span> : null}
                 </span>
               ))}
             </span>

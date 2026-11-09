@@ -4,7 +4,7 @@ import React, { type ReactNode } from "react";
 
 import type { AreaId } from "../lib/area-ids";
 
-// A link that switches console areas CLIENT-SIDE (instant — all area sections
+// A link that switches console areas CLIENT-SIDE (instant, all area sections
 // are already in the DOM, shown/hidden by CSS) instead of doing a Next
 // navigation that re-runs the whole server page (~15 API calls). It keeps a real
 // href so right-click / cmd-click / open-in-new-tab still work, and dispatches a

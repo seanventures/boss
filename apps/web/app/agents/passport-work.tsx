@@ -3,8 +3,8 @@
 /**
  * Work: what this agent has actually done, newest first (spec §3.4 › Work).
  *
- * Every row is one recorded act from `/v1/agents/{role}/acts` — a step it ran, a build stage, a
- * panel seat, a chat turn — with who handed it the work and how, in the API's own words
+ * Every row is one recorded act from `/v1/agents/{role}/acts`, a step it ran, a build stage, a
+ * panel seat, a chat turn, with who handed it the work and how, in the API's own words
  * (`edge_label`, never composed here). A live act gets the `Now` card on top. `What I remember`
  * is the role's own memories, each with a way to make it forget. Nothing on this tab is
  * generated: an agent with no signed work says so and points at where to give it some.

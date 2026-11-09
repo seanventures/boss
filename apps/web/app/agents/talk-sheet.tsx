@@ -2,8 +2,8 @@
 
 /**
  * Talk to one agent (spec §0.2 A.1, §3.10): a sheet over whatever the operator was looking at,
- * headed by the agent's face — thinking while its turn is in flight, speaking while its words
- * arrive — its name, the AI badge and its line. A `plan` is the same sheet with a goal: it
+ * headed by the agent's face, thinking while its turn is in flight, speaking while its words
+ * arrive, its name, the AI badge and its line. A `plan` is the same sheet with a goal: it
  * scopes the work and ends in a start card (§0.2 A.2).
  */
 

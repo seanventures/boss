@@ -44,8 +44,8 @@ export function DashboardPanel({
         <h3 style={{ margin: 0 }}>Mission Dashboard</h3>
         <p className="detail" role="status">
           {feed?.blockedReason
-            ? `Dashboard snapshot unavailable — ${feed.blockedReason}`
-            : "Dashboard snapshot unavailable — is the control plane reachable?"}
+            ? `Dashboard snapshot unavailable, ${feed.blockedReason}`
+            : "Dashboard snapshot unavailable, is the control plane reachable?"}
         </p>
       </article>
     );
@@ -61,20 +61,20 @@ export function DashboardPanel({
         <span className="detail" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>cursor {s.cursor}</span>
       </div>
 
-      {/* KPI strip — one bordered row, hairline-divided cells (not separate cards) */}
+      {/* KPI strip, one bordered row, hairline-divided cells (not separate cards) */}
       <div className="kpi-strip">
         <Kpi label="Budget" value={s.budgetState.toUpperCase()} color={tone(s.budgetState)} hint={`${usd(avail)} available`} />
         <Kpi label="Awaiting You" value={s.workload.pendingDecisions} color={s.workload.pendingDecisions > 0 ? "var(--amber)" : undefined} hint={`${s.workload.highRiskPending} high-risk`} />
         <Kpi label="Open Tasks" value={s.workload.openTasks} hint={`${s.workload.completedTasks} done`} />
-        <Kpi label="Running" value={running} color={running > 0 ? "var(--teal)" : undefined} hint={`${s.queue.queued} queued · ${s.queue.retryable} retry`} />
+        <Kpi label="Running" value={running} color={running > 0 ? "var(--teal)" : undefined} hint={`${s.queue.queued} queued, ${s.queue.retryable} retry`} />
         <Kpi label="Run-rate 1h" value={usd(s.spend.runRate1hUsdMicros)} hint={`of ${usd(s.spend.capUsdMicros)} cap`} />
         <Kpi label="Canary" value={s.canary ? s.canary.status.toUpperCase() : "—"} color={s.canary ? tone(s.canary.status) : undefined} hint={s.canary ? `${s.canary.passed}/${s.canary.failed}/${s.canary.skipped}` : "not run"} />
       </div>
 
-      {/* Health & signals — hairline-divided rows, status as colored mono text */}
+      {/* Health & signals, hairline-divided rows, status as colored mono text */}
       <article className="stack-card" style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ padding: "13px 16px", borderBottom: "1px solid var(--border)" }}>
-          <span className="eyebrow">Health &amp; Signals</span>
+          <span className="area-name">Health &amp; Signals</span>
         </div>
         <div className="hairline-list">
           <div className="hairline-row">
@@ -92,7 +92,7 @@ export function DashboardPanel({
           </div>
           <div className="hairline-row">
             <span className="detail" style={{ color: "var(--ink-soft)" }}>Eval harness</span>
-            <StatusText label={s.evals ? `${s.evals.status.toUpperCase()} · ${s.evals.passed}/${s.evals.failed}` : "NOT RUN"}
+            <StatusText label={s.evals ? `${s.evals.status.toUpperCase()}, ${s.evals.passed}/${s.evals.failed}` : "NOT RUN"}
               color={s.evals ? tone(s.evals.status) : "var(--muted)"} />
           </div>
         </div>

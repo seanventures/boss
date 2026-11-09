@@ -2,15 +2,15 @@
 
 /**
  * Infra → Deploy a repository: a whole application stack, from a registered repository at a ref,
- * onto a VM BOSS onboarded — planned, approved, run and health-gated by BOSS.
+ * onto a VM BOSS onboarded, planned, approved, run and health-gated by BOSS.
  *
  * The repository says HOW it is deployed (its `boss.deploy.yaml`: install/update steps, env,
  * health); this panel only says WHAT (repository + ref) and WHERE (a stack target on a VM). That
- * split is the point: the console never learns how BOSS, or anything as large, is built — so any
+ * split is the point: the console never learns how BOSS, or anything as large, is built, so any
  * application that ships a manifest deploys through the same four clicks.
  *
  * Every state the operator can see is the API's record, re-read while it moves. Buttons are the
- * record's own `actions`, decided by the API — never a guess from status or what was last pressed.
+ * record's own `actions`, decided by the API, never a guess from status or what was last pressed.
  */
 import { GatedButton } from "../components/gated";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -105,7 +105,7 @@ export function StackDeployPanel({ projectId, actor }: { projectId: string; acto
               <p className="detail" data-testid="stack-targets-empty" style={{ margin: 0 }}>
                 {verified.length
                   ? "No stack targets yet. Add one to say where a repository deploys."
-                  : "No stack targets yet. Add and verify a VM under Hosts first — a stack target names the VM it runs on."}
+                  : "No stack targets yet. Add and verify a VM under Hosts first, a stack target names the VM it runs on."}
               </p>
             ) : targets.map((t) => {
               const recent = (byTarget[t.id] ?? []).slice(0, 5);
@@ -118,8 +118,8 @@ export function StackDeployPanel({ projectId, actor }: { projectId: string; acto
                     <span className="cap-badge">{t.environment}</span>
                     <span className="detail">
                       {isAttached(t) ? `on ${hostName(t.host_id) || t.target_ref}` : "not on a VM yet"}
-                      {" · "}<code>{targetRepository(t)}</code>
-                      {" · "}<code>{targetManifestPath(t)}</code>
+                      {", "}<code>{targetRepository(t)}</code>
+                      {", "}<code>{targetManifestPath(t)}</code>
                     </span>
                     {url ? <a className="detail" href={browserHref(url)} target="_blank" rel="noreferrer">{url}</a> : null}
                     {isAttached(t) ? (
@@ -142,8 +142,8 @@ export function StackDeployPanel({ projectId, actor }: { projectId: string; acto
                                   aria-expanded={openId === d.id}>
                             <span className={`cap-badge tone-${statusTone(String(d.status))}`}>{statusLabel(String(d.status))}</span>
                             {" "}<code>{d.ref}</code>
-                            {d.commit ? <> · <code>{shortCommit(d.commit)}</code></> : null}
-                            <span className="detail"> · {when(d.created_at)}</span>
+                            {d.commit ? <>, <code>{shortCommit(d.commit)}</code></> : null}
+                            <span className="detail">, {when(d.created_at)}</span>
                           </button>
                         </li>
                       ))}
@@ -204,7 +204,7 @@ function AddStackTarget({ projectId, actor, hosts, repos, suggested, onAdded }: 
     const problem = targetFormProblem(input);
     if (problem) { setError(problem); return; }
     const host = hosts.find((h) => h.id === input.hostId);
-    if (!host) { setError("That VM is no longer reachable — verify it under Hosts."); return; }
+    if (!host) { setError("That VM is no longer reachable, verify it under Hosts."); return; }
     setBusy(true); setError(null);
     try {
       const r = await createStackTarget(projectId, actor, { ...input, host });
@@ -217,7 +217,7 @@ function AddStackTarget({ projectId, actor, hosts, repos, suggested, onAdded }: 
     return (
       <p className="detail" data-testid="stack-add-target-no-host">
         A stack target runs on a verified VM. Add one under Hosts above, put its key on the VM,
-        and press Verify — then come back here.
+        and press Verify, then come back here.
       </p>
     );
   }
@@ -228,7 +228,7 @@ function AddStackTarget({ projectId, actor, hosts, repos, suggested, onAdded }: 
           VM
           <select name="host_id" defaultValue={hosts[0]?.id}>
             {hosts.map((h) => (
-              <option key={h.id} value={h.id}>{h.name} · {h.ssh_user || "root"}@{h.address}</option>
+              <option key={h.id} value={h.id}>{h.name}, {h.ssh_user || "root"}@{h.address}</option>
             ))}
           </select>
         </label>
@@ -270,7 +270,7 @@ function RepoSelect({ repos, suggested, value, onChange }: {
       <label>
         Repository
         <span className="detail" data-testid="stack-no-repos">
-          No repository is registered — connect one under Repo and models.
+          No repository is registered, connect one under Repo and models.
         </span>
         <input type="hidden" name="repository" value="" />
       </label>
@@ -342,7 +342,7 @@ function DeployRepository({ projectId, actor, repos, suggested, targets, targetI
           Deploy to
           <select name="target_id" value={selected?.id ?? ""} onChange={(e) => onTarget(e.target.value)}>
             {targets.map((t) => (
-              <option key={t.id} value={t.id}>{t.app_name} · {t.environment}</option>
+              <option key={t.id} value={t.id}>{t.app_name}, {t.environment}</option>
             ))}
           </select>
         </label>
@@ -489,7 +489,7 @@ export function StackDeploymentView({ deploymentId, actor, initial, onChanged, o
       {status === "awaiting_approval" && !d.decision_id ? (
         <p className="detail">Waiting for the approval to be raised…</p>
       ) : null}
-      {status === "running" ? <p className="detail">Deploying — this view follows it.</p> : null}
+      {status === "running" ? <p className="detail">Deploying, this view follows it.</p> : null}
 
       {error ? <p className="detail" role="alert" data-testid="stack-action-error">{error}</p> : null}
 
@@ -524,8 +524,8 @@ export function StackDeploymentView({ deploymentId, actor, initial, onChanged, o
   );
 }
 
-/** The plan's steps as lines. The engine groups them by phase — {install: [...], update: [...]}
- *  — and this read them as a flat list, so every plan said "No steps recorded". */
+/** The plan's steps as lines. The engine groups them by phase, {install: [...], update: [...]}
+ * , and this read them as a flat list, so every plan said "No steps recorded". */
 export function planSteps(steps: unknown): string[] {
   if (Array.isArray(steps)) return steps.map((s) => stepText(s as never));
   if (steps && typeof steps === "object") {

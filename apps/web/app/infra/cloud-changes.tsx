@@ -2,7 +2,7 @@
 
 /**
  * Infra › Cloud › Changes (spec §4.8; parity P-S-35, P-S-36, P-S-43): every proposed change to
- * a cloud account — its operations, rollback plan, receipts and drift reports — with `Approve`
+ * a cloud account, its operations, rollback plan, receipts and drift reports, with `Approve`
  * and `Apply` where the server says they apply, a `Drift` chip that narrows to changes with
  * drift, and `+ Change`: an Operations editor that refuses invalid JSON with the line it broke
  * on, and a cost typed in dollars (sent as micros). Every "change set" link lands here
@@ -103,7 +103,7 @@ function ChangeDrawer({ change: c, actor, poll, canWrite, onClose }: CloudViewPr
   return (
     <Drawer label={`${c.title} change`} testId="inf-change-drawer" width={520} onClose={onClose}
             head={<><strong className="inf-trunc" data-copy="data" title={c.title}>{c.title}</strong><StateWord w={c.state} /></>}>
-      <span className="inf-muted"><span data-copy="data">{c.account?.name ?? "No account"}</span> · Tier {c.risk} · {c.cost}</span>
+      <span className="inf-muted"><span data-copy="data">{c.account?.name ?? "No account"}</span>, Tier {c.risk}, {c.cost}</span>
       {c.summary ? <span className="inf-muted inf-trunc" data-copy="data" title={c.summary}>{c.summary}</span> : null}
       {canWrite && c.can.approve_deploy && c.decisionId ? (
         <div className="inf-actions">
@@ -129,7 +129,7 @@ function ChangeDrawer({ change: c, actor, poll, canWrite, onClose }: CloudViewPr
           c.operations.length === 0 ? <Empty>No operations</Empty> : (
             <ul className="cloud-list">
               {c.operations.map((o, i) => (
-                <li key={i}><span data-copy="data">{o.action}</span><span className="inf-muted" data-copy="data">{o.resourceType}{o.resourceRef ? ` · ${o.resourceRef}` : ""}</span>
+                <li key={i}><span data-copy="data">{o.action}</span><span className="inf-muted" data-copy="data">{o.resourceType}{o.resourceRef ? `, ${o.resourceRef}` : ""}</span>
                   {o.destructive ? <span className="cloud-chip" data-kind="destructive" title="Deletes or replaces something">Destructive</span> : null}</li>
               ))}
             </ul>
@@ -154,7 +154,7 @@ function ChangeDrawer({ change: c, actor, poll, canWrite, onClose }: CloudViewPr
           <ul className="cloud-list">{c.drift.map((d) => (
             <li key={d.id}><span data-copy="data">{d.classification}</span>
               <span className="inf-trunc inf-muted" data-copy="data" title={d.summary}>{d.summary}</span>
-              <span className="inf-num inf-faint" title="Unmanaged · orphaned · security-affecting">{d.unmanaged} · {d.orphaned} · {d.security}</span></li>
+              <span className="inf-num inf-faint" title="Unmanaged, orphaned, security-affecting">{d.unmanaged}, {d.orphaned}, {d.security}</span></li>
           ))}</ul>
         )}
       </DrawerSection>

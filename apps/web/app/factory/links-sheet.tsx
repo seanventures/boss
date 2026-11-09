@@ -2,8 +2,8 @@
 
 /**
  * App ▸ Links (APP_TEMPLATES_AND_SECURITY_LOOP.md §5.5): one surface for what this app talks to.
- * Rows read `ALIAS → App · preview · test users · active`, with the address AS THE APP SEES IT —
- * the env var it reads (`BOSS_LINK_BANK_URL`, copy), never the gateway's internal host — when it
+ * Rows read `ALIAS → App, preview, test users, active`, with the address AS THE APP SEES IT , 
+ * the env var it reads (`BOSS_LINK_BANK_URL`, copy), never the gateway's internal host, when it
  * was last used, and Revoke (asks first). No credential value is ever shown; "Reveal test users" (D9) needs
  * `app_secret:write` with step-up and is audited. "+ Link" adds one: another app of this project,
  * Preview or Deployed, with or without its test users.
@@ -49,10 +49,10 @@ export function linkAddress(l: AppLink): { text: string; copy: string; tip: stri
   return { text: envVar, copy: envVar, tip: `The app reads ${l.provider_app}'s preview address from ${envVar}; BOSS's link gateway forwards it, to that preview only` };
 }
 
-/** The row's words: `BANK → Banking · preview · test users · active`. */
+/** The row's words: `BANK → Banking, preview, test users, active`. */
 export function linkWords(l: AppLink): string {
   return [`${l.alias} → ${l.provider_app}`, l.env === "deploy" ? "deployed" : "preview",
-    l.credentials === "test_users" ? "test users" : null, l.status].filter(Boolean).join(" · ");
+    l.credentials === "test_users" ? "test users" : null, l.status].filter(Boolean).join(", ");
 }
 
 export type LinksSheetProps = {
@@ -157,8 +157,8 @@ export function LinksSheet({ projectId, appKey, app, others, onClose }: LinksShe
                       <button type="button" className="ag-link fx-link-url" title={`${addr.tip}. Copy.`}
                               data-testid={`fx-link-copy-${l.alias}`} onClick={() => copy(addr.copy)}>{addr.text}</button>
                     ) : <span title="The provider has no deploy with a public address yet">no address yet</span>}
-                    <span title="Last request through this link">{l.last_used_at ? ` · used ${ago(l.last_used_at, now)}` : " · never used"}</span>
-                    {l.test_users ? <span title="Generated, test-only, rotated on each new preview">{` · ${l.test_users.count} test users`}</span> : null}
+                    <span title="Last request through this link">{l.last_used_at ? `, used ${ago(l.last_used_at, now)}` : ", never used"}</span>
+                    {l.test_users ? <span title="Generated, test-only, rotated on each new preview">{`, ${l.test_users.count} test users`}</span> : null}
                   </span>
                   {confirm === l.id ? (
                     <span className="fx-link-confirm" role="alertdialog" aria-label={`Revoke ${l.alias}?`} data-testid={`fx-link-confirm-${l.alias}`}>

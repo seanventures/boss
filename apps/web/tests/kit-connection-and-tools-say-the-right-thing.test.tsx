@@ -97,6 +97,6 @@ describe("Tools: the locked rule can be read, and review shows what is reviewed 
     await render(<ToolsSection ability={a} projectId="p1" actor="ceo" onChanged={() => {}} />);
     await click('[data-testid="kit-review-open-web-intel"]');
     expect($('[data-testid="kit-review-url"]')!.textContent).toBe("http://mcp-tools:8770/mcp");
-    expect($('[data-testid="kit-review-facts"]')!.textContent).toBe("2 tools · Highest: Reads");
+    expect($('[data-testid="kit-review-facts"]')!.textContent).toBe("2 tools, Highest: Reads");
   });
 });

@@ -315,8 +315,8 @@ describe("App ▸ Setup", () => {
     await mount(<AppSetup projectId="p1" appKey="shop" />, "owner");
     expect($('[data-testid="tpl-applied-stripe-checkout"]').textContent).toContain("PR open");
     // The connector's key, per place it runs; its generated webhook secret is BOSS's (Settings).
-    expect($('[data-testid="tpl-env-STRIPE_SECRET_KEY-preview"]').textContent).toBe("Preview · Needs a key");
-    expect($('[data-testid="tpl-env-STRIPE_SECRET_KEY-deploy"]').textContent).toBe("Deploy · Not set");
+    expect($('[data-testid="tpl-env-STRIPE_SECRET_KEY-preview"]').textContent).toBe("Preview, Needs a key");
+    expect($('[data-testid="tpl-env-STRIPE_SECRET_KEY-deploy"]').textContent).toBe("Deploy, Not set");
     expect($('[data-testid="tpl-summary-stripe-checkout"]').textContent).toBe("Needs 1 key before it works for real.");
     expect($('[data-testid="tpl-setup-secret-STRIPE_WEBHOOK_SECRET"]')).toBeNull();
     await press('[data-testid="tpl-tab-settings"]');

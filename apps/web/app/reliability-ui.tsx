@@ -31,7 +31,7 @@ function Pill({ text, color }: { text: string; color: string }) {
       style={{
         fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 999,
         color, border: `1px solid ${color}55`, background: `${color}18`,
-        textTransform: "uppercase", letterSpacing: "0.04em", whiteSpace: "nowrap",
+        textTransform: "none", letterSpacing: "0", whiteSpace: "nowrap",
       }}
     >
       {text}
@@ -63,7 +63,7 @@ function IncidentRow({ projectId, incident }: { projectId: string; incident: Rel
     <div
       style={{
         display: "flex", alignItems: "center", gap: 10, padding: "9px 10px",
-        borderLeft: `3px solid ${sev}`, background: "var(--panel-2, rgba(128,128,128,0.04))",
+        borderLeft: `3px solid ${sev}`, background: "var(--panel-2, var(--boss-c-8123cd9e1f))",
         borderRadius: 8,
       }}
     >
@@ -79,8 +79,8 @@ function IncidentRow({ projectId, incident }: { projectId: string; incident: Rel
           ) : null}
         </div>
         <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>
-          {incident.signal_count} signal{incident.signal_count === 1 ? "" : "s"} · confidence{" "}
-          {Number(incident.confidence ?? 0).toFixed(2)} · last seen{" "}
+          {incident.signal_count} signal{incident.signal_count === 1 ? "" : "s"}, confidence{" "}
+          {Number(incident.confidence ?? 0).toFixed(2)}, last seen{" "}
           <span>{formatDateTime(incident.last_seen)}</span>
         </div>
       </div>
@@ -119,13 +119,13 @@ export function ReliabilityHome({ feed }: { feed: ReliabilityFeed }) {
         <h3 style={{ margin: 0 }}>Incident board</h3>
         <p className="detail">
           Signals cluster into named incidents; diagnose runs the autonomous investigation engine
-          (memory · change-correlation · dependency graph), and Fix PR launches the governed
-          remediation pipeline — tested, review-paneled, gated.
+          (memory, change-correlation, dependency graph), and Fix PR launches the governed
+          remediation pipeline, tested, review-paneled, gated.
         </p>
         {!feed.apiReachable ? (
-          <p className="detail">API unreachable — the board will populate once the control plane responds.</p>
+          <p className="detail">API unreachable, the board will populate once the control plane responds.</p>
         ) : incidents.length === 0 ? (
-          <p className="detail">No incidents — scans are clean or none have run yet.</p>
+          <p className="detail">No incidents, scans are clean or none have run yet.</p>
         ) : (
           <div style={{ display: "grid", gap: 6 }}>
             {incidents.map((i) => (
@@ -138,7 +138,7 @@ export function ReliabilityHome({ feed }: { feed: ReliabilityFeed }) {
       <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
         <article className="stack-card">
           <h3 style={{ margin: 0 }}>Learning</h3>
-          <p className="detail">The loop gets smarter per incident — verdicts tune thresholds and feed few-shot context.</p>
+          <p className="detail">The loop gets smarter per incident, verdicts tune thresholds and feed few-shot context.</p>
           <div style={{ display: "grid", gap: 5, fontSize: 12.5, color: "var(--ink-soft)" }}>
             <div>False-alarm rate: <b style={{ color: "var(--ink)" }}>{falseAlarm == null ? "—" : `${Math.round(falseAlarm * 100)}%`}</b></div>
             <div>Fix success rate: <b style={{ color: "var(--ink)" }}>{fixSuccess == null ? "—" : `${Math.round(fixSuccess * 100)}%`}</b></div>
@@ -150,12 +150,12 @@ export function ReliabilityHome({ feed }: { feed: ReliabilityFeed }) {
 
         <article className="stack-card">
           <h3 style={{ margin: 0 }}>Autonomy policy</h3>
-          <p className="detail">How far the agent may go alone — every action stays receipted and gated.</p>
+          <p className="detail">How far the agent may go alone, every action stays receipted and gated.</p>
           <div style={{ display: "grid", gap: 5, fontSize: 12.5, color: "var(--ink-soft)" }}>
             <div>
               Auto-remediate:{" "}
               <Pill
-                text={policy?.auto_remediate ? "ON — Tier-0" : "OFF — Tier-1"}
+                text={policy?.auto_remediate ? "ON, Tier-0" : "OFF, Tier-1"}
                 color={policy?.auto_remediate ? "#3fb950" : "#8b949e"}
               />
             </div>

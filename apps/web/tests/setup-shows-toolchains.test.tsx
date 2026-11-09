@@ -35,7 +35,7 @@ describe("Setup › Toolchains", () => {
     fakeApi(view);
     mounted = await mountBoard(view);
     const java = document.body.querySelector('[data-testid="toolchain-java"]')!;
-    expect(java.textContent).toBe("Java · off");
+    expect(java.textContent).toBe("Java, off");
     expect(java.getAttribute("data-tip")).toContain("boss toolchains enable java");
   });
 

@@ -10,7 +10,7 @@ import { ssoErrorWords } from "../auth-flow";
 import { SignIn } from "./sign-in";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Sign in · BOSS" };
+export const metadata = { title: "Sign in, BOSS" };
 
 type Props = { searchParams: Promise<{ next?: string; error?: string }> };
 
@@ -23,7 +23,7 @@ export default async function LoginPage({ searchParams }: Props) {
   const state = await loadAuthOptionsState();
   if (!state.available) return <AuthUnavailable host={state.host} />;
   // NOBODY CAN SIGN IN TO AN UNCLAIMED BOSS (BOSSAPP-813): no "Welcome back", no form, no
-  // provider tiles — straight to the claim (the form itself on a private network, else the
+  // provider tiles, straight to the claim (the form itself on a private network, else the
   // setup-link step). `/` reaches here through middleware's no-session redirect.
   if (state.options.claim) redirect("/claim");
   return <SignIn options={state.options} next={next} notice={ssoErrorWords(params.error)} />;

@@ -7,11 +7,11 @@
  * EVERY ROW IS A RECORDED FACT and hides when it has nothing true to say: who is busy now (the 4s
  * presence store), what finished or failed in the window, the oldest open item, busy time, who
  * the team hands work to, metered spend and the models it called, and what it is missing (the
- * Kit; roles a workflow names that nobody fills — an empty seat drawn as a dashed `Missing`).
+ * Kit; roles a workflow names that nobody fills, an empty seat drawn as a dashed `Missing`).
  *
  * Kept from Zones (§5 parity): faces in their real state, live first; the badges; Click selects
  * (the Agent panel), Shift+click / Shift+Enter opens the Passport; one roving 2-D tab stop
- * across every card (nextInGrid); search dims to 30%; the hidden `Team · Agent · State · Now`
+ * across every card (nextInGrid); search dims to 30%; the hidden `Team, Agent, State, Now`
  * table; and under 640px the drill-down list with the same testids.
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -66,7 +66,7 @@ function working(team: OrgTeam, live: LiveMap): number {
   return team.members.filter((m) => ["working", "thinking", "speaking"].includes(liveState(live, m))).length;
 }
 
-/** The teams drawn: an empty Yours is never drawn — unless an empty seat (a missing role)
+/** The teams drawn: an empty Yours is never drawn, unless an empty seat (a missing role)
  *  belongs there, which is something true to say. */
 export function shownTeams(board: OrgBoard): OrgTeam[] {
   return board.teams.filter((t) => !(t.key === "yours" && t.members.length === 0
@@ -88,7 +88,7 @@ function stepGapPhrases(team: OrgTeam): { label: string; n: number; tip: string 
 type Givable = { ability: string; label: string; roleKey: string; needsSetup: boolean };
 
 /** Everything `Give ▾` lists on this team: recommended-not-held, then a step's need. One the
- *  Kit would refuse until it is set up says so and links there (walk D6) — never a Give that
+ *  Kit would refuse until it is set up says so and links there (walk D6), never a Give that
  *  fails. */
 export function givable(team: OrgTeam): Givable[] {
   const out = new Map<string, Givable>();
@@ -404,14 +404,14 @@ function GapsRow({ team, actions }: { team: OrgTeam; actions: OrgActions | null 
                   <a key={`${g.ability}:${g.roleKey}`} role="menuitem" href={kitHref(g.ability)}
                      data-testid={`ag-orgteam-setup-${g.ability}-${g.roleKey}`}
                      title={`${g.label} must be set up in the Kit before anyone can hold it`}>
-                    <span data-user-text>{g.label}</span> · Set up first ↗
+                    <span data-user-text>{g.label}</span>, Set up first 
                   </a>
                 ) : (
                   <GatedButton key={`${g.ability}:${g.roleKey}`} permission={ORG_GIVE_PERMISSION} type="button" role="menuitem"
                           data-testid={`ag-orgteam-give-${g.ability}-${g.roleKey}`}
                           title={`Give ${g.label} to ${nameOf(g.roleKey)}`}
                           onClick={() => { setOpen(false); void actions.give(g.ability, g.label, g.roleKey); }}>
-                    <span data-user-text>{g.label}</span> → <span data-user-text>{nameOf(g.roleKey)}</span>
+                    <span data-user-text>{g.label}</span>: <span data-user-text>{nameOf(g.roleKey)}</span>
                   </GatedButton>
                 )))}
               </MenuPop>
@@ -539,7 +539,7 @@ function TeamList(props: OrgTeamsProps & { teams: OrgTeam[] }) {
               <Badges team={{ working: working(t, live), needsYou: t.needsYou }} />
               {stats.length ? (
                 <span className="ag-zones-lstats">
-                  {stats.map((x, i) => <span key={x}>{i ? " · " : ""}{x}</span>)}
+                  {stats.map((x, i) => <span key={x}>{i ? ", " : ""}{x}</span>)}
                 </span>
               ) : null}
             </button>
@@ -552,7 +552,7 @@ function TeamList(props: OrgTeamsProps & { teams: OrgTeam[] }) {
                               data-testid={`ag-zones-member-${m.roleKey}`}>
                         <Face m={m} size={24} still />
                         <span data-user-text>{m.name}</span>
-                        <span className="ag-zones-lstate"> · {STATE_WORD[m.state]}</span>
+                        <span className="ag-zones-lstate">, {STATE_WORD[m.state]}</span>
                       </button>
                     </li>
                   ))}

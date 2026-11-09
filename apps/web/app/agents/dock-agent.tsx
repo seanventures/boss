@@ -5,11 +5,11 @@
  *
  * The head is the agent: its face ringed `thinking` while a turn is in flight and `speaking`
  * while its words arrive, its name, the `AI` badge, its tagline, and what the conversation is
- * about (`About: Build · Ship it ×`). Each answer carries the agent's face in a 24px gutter.
- * Work the agent cites renders as chips that open the Act card (`I ran this · 14:02 ↗`).
+ * about (`About: Build, Ship it ×`). Each answer carries the agent's face in a 24px gutter.
+ * Work the agent cites renders as chips that open the Act card (`I ran this, 14:02 `).
  *
  * THE DOCK CARRIES THE ROLE KEY. A display name ("QA Lead") resolved through a table of titles
- * drifts — the same agent was a different colour in the dock than on its step. The key is what
+ * drifts, the same agent was a different colour in the dock than on its step. The key is what
  * the face, the name and the turn use; the display name is only a fallback for older doors.
  */
 import { X } from "@phosphor-icons/react";
@@ -24,7 +24,7 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /**
  * The role key a dock is talking to, as the turn sends it: the key it was opened with, else its
- * name resolved by the kit. Never a guess — a key made up from a display name ("QA Lead" →
+ * name resolved by the kit. Never a guess, a key made up from a display name ("QA Lead" →
  * `qa_lead`, while the agent is `qa`) would address an agent that does not exist.
  */
 export function dockRoleKey(roleKey: string | undefined, roleName: string | undefined): string | null {
@@ -54,7 +54,7 @@ export const SPEAK_DECAY_MS = 300;
 /**
  * The dock agent's state from what is really happening: `thinking` while a turn is in flight
  * and nothing has arrived, `speaking` for SPEAK_DECAY_MS after each chunk of its words, `idle`
- * otherwise. `chunk()` is called once per arrival — a whole reply today, each token when the
+ * otherwise. `chunk()` is called once per arrival, a whole reply today, each token when the
  * turn streams.
  */
 export function useDockSpeech(inFlight: boolean): { state: AvatarState; chunk(): void } {
@@ -116,7 +116,7 @@ function hhmm(iso: string): string {
   return Number.isNaN(d.getTime()) ? "" : `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
 }
 
-/** One cited piece of work: `I ran this · 14:02 ↗` (UTC, as the console tells time), opening its Act card. */
+/** One cited piece of work: `I ran this, 14:02 ` (UTC, as the console tells time), opening its Act card. */
 function CitedAct({ actId, projectId, viewer, speaker }: {
   actId: string; projectId: string; viewer: string; speaker: string | null;
 }) {
@@ -131,7 +131,7 @@ function CitedAct({ actId, projectId, viewer, speaker }: {
   return (
     <span className="ag-cite" data-testid="ag-cite" data-act-id={act.actId}>
       <ActFace act={act} viewer={viewer} size={20} label={`${who} ran this`}>
-        <span className="ag-cite-text">{who} ran this{at ? ` · ${at}` : ""} ↗</span>
+        <span className="ag-cite-text">{who} ran this{at ? `, ${at}` : ""} </span>
       </ActFace>
     </span>
   );

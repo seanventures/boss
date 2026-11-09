@@ -4,7 +4,7 @@ import { Reset } from "./reset";
 import { emailSignInOffered } from "../../../lib/identity/email-sign-in";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Reset password · BOSS" };
+export const metadata = { title: "Reset password, BOSS" };
 
 /** Forgot password / set a new one. An address is never carried in the URL (privacy). */
 export default async function ResetPage() {

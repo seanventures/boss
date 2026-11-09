@@ -2,12 +2,12 @@
 
 /**
  * AN AGENT CONVERSATION, READ BACK (KG-V2): the brief a person sent, the agent's answer, and what
- * it did — for a demo, and for an audit. Opened from Agent Studio › Activity › Talks, from a
+ * it did, for a demo, and for an audit. Opened from Agent Studio › Activity › Talks, from a
  * conversation's node in the Knowledge Graph, or by link (`?area=workforce&view=activity&
  * conversation=<thread>`).
  *
  * Read-only. Every word is the record's (lib/agent-conversation.ts): no model writes any of it, and
- * no id is ever text a person reads — a graph item is its title, a chip that opens it in the graph.
+ * no id is ever text a person reads, a graph item is its title, a chip that opens it in the graph.
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
@@ -93,7 +93,7 @@ export function ConversationView({ messages, error, knowledge, signedIn, orgId, 
     <aside className="cv-sheet" role="dialog" aria-modal="false" aria-label={title} data-testid="cv-sheet">
       <header className="cv-head">
         <div className="cv-head-main">
-          <span className="cv-eyebrow">Conversation</span>
+          <span className="cv-area-name">Conversation</span>
           <h2 className="cv-title" data-user-text data-testid="cv-title">{chips(title, "title")}</h2>
           <div className="cv-meta">
             {roleKey ? (
@@ -109,7 +109,7 @@ export function ConversationView({ messages, error, knowledge, signedIn, orgId, 
             <span className="cv-asker" data-testid="cv-asker">Asked by <strong data-user-text>{asker}</strong></span>
             {started ? (
               <time className="cv-muted" dateTime={started} title={utcTitle(started)} data-testid="cv-started">
-                {dayLabel(started)} · {clock(started, { seconds: false })}
+                {dayLabel(started)}, {clock(started, { seconds: false })}
               </time>
             ) : null}
           </div>
@@ -128,7 +128,7 @@ export function ConversationView({ messages, error, knowledge, signedIn, orgId, 
             {t.ask ? <Brief message={t.ask} asker={asker} inline={chips} /> : null}
             {t.answers.map((m) => isPress(m) ? (
               <div key={m.id} className="cv-press" data-testid="cv-press">
-                <Markdown text={m.content.replace(/^(✓|⚠) The operator/, `$1 ${asker === "the operator" ? "The operator" : asker}`)} inline={chips} />
+                <Markdown text={m.content.replace(/^(✓|\u26a0) The operator/, `$1 ${asker === "the operator" ? "The operator" : asker}`)} inline={chips} />
               </div>
             ) : (
               <Answer key={m.id} message={m} name={agentName} roleKey={m.agentRole || roleKey}
@@ -184,7 +184,7 @@ function Answer({ message, name, roleKey, produced, orgId, inline }: {
                      title={`Open “${l.opens.title}” in the Knowledge Graph`}>{l.text}</a>
                 ) : <span>{l.text}</span>}
                 {l.count ? <span className="cv-muted"> ×{l.count}</span> : null}
-                {!l.ok ? <span className="cv-failed"> · failed</span> : null}
+                {!l.ok ? <span className="cv-failed">, failed</span> : null}
               </li>
             ))}
           </ol>
@@ -217,7 +217,7 @@ function NodeChip({ id, title, kind, orgId, how }: { id: string; title: string; 
   const word = kind ? kindWords(kind) : "";
   return (
     <a className="cv-chip cv-node" href={inThisProject(kgNodeHref(id, orgId))} data-testid="cv-node-chip" data-kind={kind || undefined}
-       title={`${word ? `${word[0].toUpperCase()}${word.slice(1)}` : "Item"}${how ? ` · ${how}` : ""} · open in the Knowledge Graph`}>
+       title={`${word ? `${word[0].toUpperCase()}${word.slice(1)}` : "Item"}${how ? `, ${how}` : ""}, open in the Knowledge Graph`}>
       <span data-user-text>{title}</span>
     </a>
   );

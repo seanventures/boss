@@ -14,7 +14,7 @@ import { identityStubEnabled } from "../../lib/identity/stub/enabled";
  * The v2 shell: top bar, project strip, sidebar, autonomy footer.
  *
  * The nav is nine items, in the artifact's order. The internal ids are kept as the route
- * segments because they say what each screen is FOR in a way the labels do not — `panels`
+ * segments because they say what each screen is FOR in a way the labels do not, `panels`
  * is where agents argue, `factory` is the workforce, `timeline` is the audit trail.
  */
 
@@ -22,7 +22,7 @@ import { identityStubEnabled } from "../../lib/identity/stub/enabled";
  * The nine screens, and honestly which of them exist yet.
  *
  * `built: false` is not decoration. Six of these pointed at routes that did not exist, so the
- * nav offered six links that 404 — which is the same defect the operator opened this whole
+ * nav offered six links that 404, which is the same defect the operator opened this whole
  * effort with ("fake buttons"), reproduced in the replacement for the console that had them.
  *
  * An unbuilt entry still navigates, to a page that says what will live there and links to the
@@ -57,8 +57,8 @@ function money(n: number | null | undefined): string {
 
 /**
  * THE v2 SCREENS MIRROR WHO IS SIGNED IN (round 3 role walk). The Shell rendered no
- * IdentityProvider, so every gated control under it — the autonomy footer's "Switch to Full auto"
- * (approval_rule:manage, Owner only) — asked the unmirrored default, which allows everything:
+ * IdentityProvider, so every gated control under it, the autonomy footer's "Switch to Full auto"
+ * (approval_rule:manage, Owner only), asked the unmirrored default, which allows everything:
  * a Viewer saw it live. Like ConsoleShell, the Shell loads the person's org and project
  * permissions and provides them; the API still decides every call.
  */
@@ -105,12 +105,12 @@ function ShellFrame({
         </button>
 
         {/* Starts a project HERE now, rather than sending the operator to the other console.
-            Was a link to /v2/new, a route that did not exist -- the console's primary call to
+            Was a link to /v2/new, a route that did not exist, the console's primary call to
             action 404ed. */}
         <LaunchButton projectId={overview.company.id} orgId={orgId} />
 
         <div className="v2-topbar-right">
-          {/* Burn reads as machine data, so it is mono and tabular — the numbers line up
+          {/* Burn reads as machine data, so it is mono and tabular, the numbers line up
               as they change, which is the point of watching a spend figure at all. */}
           <span className="v2-meta" data-testid="v2-burn">
             <span className="v2-label">Burn</span>
@@ -191,7 +191,7 @@ function ShellFrame({
 
           {/* Autonomy. A REAL switch now: Full auto lets small, reversible, well-understood
               gates approve themselves, and nothing else. See services/autonomy.py for what it
-              must still refuse — the design question was never "how do I auto-approve a gate"
+              must still refuse, the design question was never "how do I auto-approve a gate"
               but "what must remain impossible after I do". */}
           <AutonomyControl
             projectId={overview.company.id}

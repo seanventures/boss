@@ -51,7 +51,7 @@ describe("the run strip says what happened", () => {
     await mount(<StationLine stations={blockedAtReview()} density="header" now={now} />);
     const check = $("[data-key=check]")!;
     expect(check.getAttribute("data-status")).toBe("failed");
-    expect(check.querySelector(".fx-bay-word")?.textContent).toBe("Failed · 30s");
+    expect(check.querySelector(".fx-bay-word")?.textContent).toBe("Failed, 30s");
     expect(check.querySelector(".fx-bay-word")?.getAttribute("title")).toBe("app didn't start");
 
     const review = $("[data-key=review]")!;
@@ -72,9 +72,9 @@ describe("the run strip says what happened", () => {
 
   it("the Floor row's tooltip says it too", async () => {
     await mount(<StationLine stations={blockedAtReview()} density="row" />);
-    expect($("[data-key=check]")?.getAttribute("title")).toContain("Check · Failed");
+    expect($("[data-key=check]")?.getAttribute("title")).toContain("Check, Failed");
     expect($("[data-key=check]")?.getAttribute("title")).toContain("app didn't start");
-    expect($("[data-key=pr]")?.getAttribute("title")).toContain("PR · Not reached");
+    expect($("[data-key=pr]")?.getAttribute("title")).toContain("PR, Not reached");
   });
 
   it("a failed or stopped face is never drawn stuck", async () => {

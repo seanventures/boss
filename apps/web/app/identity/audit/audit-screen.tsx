@@ -29,7 +29,7 @@ import { EMPTY_FILTERS, EVENT_GROUPS, apiQuery, inGroup, parseSearch, queryFrom,
 
 type Kind = "all" | "people" | "agents" | "keys" | "system";
 const KINDS: { id: Kind; label: string }[] = [
-  { id: "all", label: "Kind: people · agents · keys" }, { id: "people", label: "Kind: people" },
+  { id: "all", label: "Kind: people, agents, keys" }, { id: "people", label: "Kind: people" },
   { id: "agents", label: "Kind: agents" }, { id: "keys", label: "Kind: keys" }, { id: "system", label: "Kind: system" },
 ];
 type Range = "1h" | "24h" | "7d" | "all";
@@ -45,8 +45,8 @@ function dayLabel(iso: string, now: number): string {
   const today = new Date(now);
   const yesterday = new Date(now - 86_400_000);
   const base = `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
-  if (key(d) === key(today)) return `TODAY · ${base}`;
-  if (key(d) === key(yesterday)) return `YESTERDAY · ${base}`;
+  if (key(d) === key(today)) return `TODAY, ${base}`;
+  if (key(d) === key(yesterday)) return `YESTERDAY, ${base}`;
   return base;
 }
 
@@ -94,7 +94,7 @@ function Drawer({ e, onFilter }: { e: AuditEvent; onFilter: (f: Partial<AuditFil
   return (
     <aside className="idn-drawer" data-outcome={e.outcome} aria-labelledby="idn-dr-h" data-testid="audit-drawer">
       <div className="idn-dr-h">
-        <div className="idn-evc" title={e.event_type}>{eventWords(e.event_type)} · #{e.seq.toLocaleString("en-US")}</div>
+        <div className="idn-evc" title={e.event_type}>{eventWords(e.event_type)}, #{e.seq.toLocaleString("en-US")}</div>
         <h2 id="idn-dr-h" data-copy="data">{plainText(e.headline)}</h2>
         {e.event_type === "access.requested" ? (
           <a className="idn-link" href={REQUESTS_PATH} title="Grant or decline it in Access requests" data-testid="audit-review-request">Review request</a>
@@ -178,7 +178,7 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
   const [selected, setSelected] = useState<string | null>(firstPick);
   const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
 
-  // Names ↔ ids from what is on screen, for `chain:Sam` and the person chip.
+  // Names  ids from what is on screen, for `chain:Sam` and the person chip.
   const names = useMemo(() => {
     const m = new Map<string, string>();
     for (const e of events) {
@@ -303,8 +303,8 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
         {chain ? (
           <span className="idn-verified" data-ok={chain.ok} data-pending={(chain.ok && !chain.verified_at) || undefined} role="status" data-testid="chain-status">
             {chain.ok && chain.verified_at ? <ShieldCheck size={14} aria-hidden /> : <ShieldWarning size={14} aria-hidden />}
-            {!chain.ok ? `Chain broken at #${chain.first_break}` : chain.verified_at ? "Chain verified" : "Not verified yet"} · <span title="Events in the hash chain">{chain.seq.toLocaleString("en-US")} events</span>
-            {chain.verified_at ? <> · {clock(chain.verified_at).slice(0, 5)}</> : null}
+            {!chain.ok ? `Chain broken at #${chain.first_break}` : chain.verified_at ? "Chain verified" : "Not verified yet"}, <span title="Events in the hash chain">{chain.seq.toLocaleString("en-US")} events</span>
+            {chain.verified_at ? <>, {clock(chain.verified_at).slice(0, 5)}</> : null}
           </span>
         ) : null}
         <span className="idn-spacer" />
@@ -313,7 +313,7 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
             <Check size={15} aria-hidden /> {verifying ? "Verifying…" : "Verify now"}
           </CanButton>
           <CanButton permission="audit:export" className="idn-btn" onClick={exportLog} tip="Asks you to confirm it's you first" data-testid="export-audit">
-            <DownloadSimple size={15} aria-hidden /> Export · step-up
+            <DownloadSimple size={15} aria-hidden /> Export, step-up
           </CanButton>
         </div>
       </header>

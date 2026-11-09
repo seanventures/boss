@@ -40,7 +40,7 @@ describe("learning edges on the canvas", () => {
     expect(merged).toHaveLength(3);
     const b4 = merged.find((e) => e.src === "b4")!;
     expect(b4.kind).toBe("reused");
-    expect(learningWords(b4)).toBe("reused · also cited");
+    expect(learningWords(b4)).toBe("reused, also cited");
     expect(merged.find((e) => e.src === "b3")!.kind).toBe("produced");
     expect(merged.find((e) => e.kind === "calls")).toEqual(edges[4]);
   });

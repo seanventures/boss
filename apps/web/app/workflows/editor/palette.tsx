@@ -5,7 +5,7 @@
  *
  * Rows are a glyph and a name. What a step does, needs and makes is a three-line tooltip, never
  * a paragraph in the column. A row is clicked (insert after the selection, or at the end) or
- * dragged onto a gap in the lane. Branch blocks — Branch, Do at the same time, Repeat until — are
+ * dragged onto a gap in the lane. Branch blocks, Branch, Do at the same time, Repeat until, are
  * offered when the server lists them, and land whole (lib/workflow-blocks.ts `placeBlock`).
  */
 import { CaretLeft, CaretRight, LockSimple, MagnifyingGlass, PencilSimple, Plus, Warning } from "@phosphor-icons/react";
@@ -40,12 +40,12 @@ function minutes(n: number | undefined): string {
   return n >= 90 ? `~${Math.round(n / 60)}h` : `~${Math.round(n)} min`;
 }
 
-/** At most three lines: what it does · what it needs and makes · how long and who decides. */
+/** At most three lines: what it does, what it needs and makes, how long and who decides. */
 export function entryTip(summary: string | undefined, needs: string[], makes: string[],
                          typical?: number, forced?: boolean): string {
   const io = [needs.length ? `Needs: ${needs.join(", ")}` : "", makes.length ? `Makes: ${makes.join(", ")}` : ""]
-    .filter(Boolean).join(" · ");
-  const extra = [minutes(typical), forced ? "Always asks a person" : ""].filter(Boolean).join(" · ");
+    .filter(Boolean).join(", ");
+  const extra = [minutes(typical), forced ? "Always asks a person" : ""].filter(Boolean).join(", ");
   return [summary?.trim() ?? "", io, extra].filter(Boolean).join("\n");
 }
 

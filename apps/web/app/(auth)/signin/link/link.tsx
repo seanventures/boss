@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * A MAGIC LINK LANDS HERE (IDENTITY.md §4.14): `/signin/link#t=<token>` — the token rides in the
+ * A MAGIC LINK LANDS HERE (IDENTITY.md §4.14): `/signin/link#t=<token>`, the token rides in the
  * fragment, so it never reaches an access log, and is removed from the address bar at once. The
  * API accepts it only in the browser that asked for it, once, within 10 minutes. Roles that
  * require MFA still finish with a second factor.

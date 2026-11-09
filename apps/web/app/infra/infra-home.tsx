@@ -3,9 +3,9 @@
 /**
  * INFRA (infra-observability spec §4.1-§4.8): where your apps run and how they got there.
  *
- *   Infra   [● Fleet 3] [Deploys] [Previews 2] [Cloud]   2 ready · 5 apps · 1 needs you   [Find] [+ Add ▾] [Ask BOSS]
+ *   Infra   [● Fleet 3] [Deploys] [Previews 2] [Cloud]   2 ready, 5 apps, 1 needs you   [Find] [+ Add ▾] [Ask BOSS]
  *   NEEDS YOU   AttentionCards from infra_view.attention(), filtered to Infra (≤ 4, then +n more)
- *   <tab>       Fleet (racks) · Deploys (rail) · Previews · Cloud (the resource plane)
+ *   <tab>       Fleet (racks), Deploys (rail), Previews, Cloud (the resource plane)
  *
  * The URL is the state (`view=`, drawers `host=` `target=` `deploy=` `preview=` `account=` …,
  * `q=`). Every tab polls its own ETag'd view through usePolled; nothing here refreshes the
@@ -77,9 +77,9 @@ export function InfraHome({ projectId, actor, orgId }: { projectId: string; acto
       <AreaHead area="infra" title="Infra" tabs={tabs} active={url.view} onTab={setTab}
                 counts={c ? (
                   <>
-                    <span>{c.ready} ready</span><span aria-hidden> · </span>
+                    <span>{c.ready} ready</span><span aria-hidden>, </span>
                     <span>{c.apps} {c.apps === 1 ? "app" : "apps"}</span>
-                    {needs ? <><span aria-hidden> · </span><span className="inf-needs-count">{needs === 1 ? "1 needs you" : `${needs} need you`}</span></> : null}
+                    {needs ? <><span aria-hidden>, </span><span className="inf-needs-count">{needs === 1 ? "1 needs you" : `${needs} need you`}</span></> : null}
                   </>
                 ) : null}>
         <FindBox value={query} onChange={(v) => { setQuery(v); writeUrl({ q: v || null }, "replace"); }} label="Find" testId="infra-find" />

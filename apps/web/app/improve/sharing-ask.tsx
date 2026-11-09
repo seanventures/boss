@@ -2,7 +2,7 @@
 
 /**
  * Setup's last question (docs/product/RUN_SCORECARDS.md, "Consent"): Improve BOSS, asked ONCE,
- * in the doc's own words, off unless the person turns it on. "Not now" is an answer too — it is
+ * in the doc's own words, off unless the person turns it on. "Not now" is an answer too, it is
  * recorded (Govern's log) so the question is not asked again; Govern › Sharing changes it later.
  *
  * Under it, said plainly because it is on by default: the daily heartbeat, what it carries, and
@@ -68,7 +68,7 @@ export function SharingAsk({ projectId, actor }: { projectId: string; actor: str
       {!v.env_disabled ? (
         <span className="im-ask-head" data-testid="su-heartbeat">
           <span className="im-muted" title="Once a day, separate from Improve BOSS. Nothing else.">
-            Daily heartbeat {sw.heartbeat.on ? "on" : "off"}{v.blocked ? " · no collector set" : ""}
+            Daily heartbeat {sw.heartbeat.on ? "on" : "off"}{v.blocked ? ", no collector set" : ""}
           </span>
           <HeartbeatFields />
           <a className="ag-link" href={govern} data-testid="su-heartbeat-optout"

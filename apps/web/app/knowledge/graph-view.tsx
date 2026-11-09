@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * THE GRAPH TAB (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.2–§5.5): `[tree | canvas | detail]` under one
- * toolbar — search (⌘K), Whole repo · Focus, hops 1–3, layer chips, zoom − / + / Fit, the repo
- * picker and List view; "Built … · Rebuild" sits on the line under it. The tree, the canvas and
+ * THE GRAPH TAB (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.2, §5.5): `[tree | canvas | detail]` under one
+ * toolbar, search (⌘K), Whole repo, Focus, hops 1, 3, layer chips, zoom − / + / Fit, the repo
+ * picker and List view; "Built …, Rebuild" sits on the line under it. The tree, the canvas and
  * the panel share one selection; every view change is pushed on a small history so Esc goes back.
  *
  * Tester round 1: Whole repo draws at most ten areas (the rest fold into "N more areas", one press
@@ -51,13 +51,13 @@ export const FOCUS_MORE = FOCUS_CEILING;
 export const PANEL_KEY = "boss.kg.panel";
 
 /** The two graphs on one canvas (design §4.2, §4.7.3): the Knowledge Graph's Code, Rules,
- *  Learning and Domain, and the Context Graph — what agents did and decided. */
+ *  Learning and Domain, and the Context Graph, what agents did and decided. */
 const LAYER_CHIPS: Array<{ key: Layer; label: string; tip: string }> = [
   { key: "code", label: "Code", tip: "Code, indexed from the repository" },
   { key: "rules", label: "Rules", tip: "Business rules agents proposed and people approved" },
   { key: "learning", label: "Learning", tip: "What agents learned while they worked" },
   { key: "domain", label: "Domain", tip: "Regulations, clauses and documents: the reference world your ontology pack adds" },
-  { key: "context", label: "Context", tip: "The Context Graph: cases, the agents' decisions, precedents and remediation — what agents did and decided" },
+  { key: "context", label: "Context", tip: "The Context Graph: cases, the agents' decisions, precedents and remediation, what agents did and decided" },
 ];
 
 export type GraphViewProps = {
@@ -120,15 +120,15 @@ function fittedScale(pos: Map<string, Pt>, nodes: CanvasNode[], mode: "overview"
 /**
  * THE FOCUS PICTURE (tester round 5 P1: 2 hops / Show 200 a hairball, rethought, not tuned). The
  * first ring is the centre's own neighbours, each a node; every further hop is drawn as PACKAGE
- * CLUSTERS ("loanaccount/domain · 37 classes"), each beside its one way in; a cluster's classes
+ * CLUSTERS ("loanaccount/domain, 37 classes"), each beside its one way in; a cluster's classes
  * are drawn only when it is opened. Nodes on a ring are spaced by the room their LABELS need
  * (RING_SLOT, CLUSTER_SLOT) and a ring holds only as many as it has label slots at the scale the
- * picture opens at — the rest fold into "+N in <package>" groups — so every drawn node is named.
+ * picture opens at, the rest fold into "+N in <package>" groups, so every drawn node is named.
  */
 export function layFocus(center: string, read: Array<KgViewNode & { hop: number }>, inView: KgViewEdge[], view: { w: number; h: number }) {
   const ringAspect = view.w / Math.max(1, view.h);
   // Between two rings: a first-ring label beside its node (about 150 px at the sides, a row at
-  // the top and bottom) and the cluster bubble beyond it — labels never lie on a ring.
+  // the top and bottom) and the cluster bubble beyond it, labels never lie on a ring.
   const gap = Math.max(92, 190 / Math.min(RING_ASPECT_MAX, Math.max(RING_ASPECT_MIN, ringAspect)));
   // With an outer ring (2 hops and more) the first ring opens wider (tester round 6: at 2 hops it
   // was about 280 px across, its labels cut or missing): it takes the room between the centre and
@@ -193,7 +193,7 @@ function treeTabFor(layer: string): KgTreeTab {
 }
 
 /** The work area fits the viewport: from its top to the window's bottom (P1-11), never shorter than
- *  a usable canvas — the height is the window's less the chrome above and below it, measured, never
+ *  a usable canvas, the height is the window's less the chrome above and below it, measured, never
  *  a fixed number. Full screen (round 6), it is the window less the toolbar and the status line. */
 function useFitHeight(full = false): [React.RefObject<HTMLDivElement | null>, number | null] {
   const ref = useRef<HTMLDivElement>(null);
@@ -279,7 +279,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   // The drawer over the canvas's right edge: the selection is panned out from under it.
   const [occlude, setOcclude] = useState(0);
   // The canvas's size (to 20 px) and the drawer's width: every picture is laid out to what the
-  // canvas holds at a readable scale — how many areas one Whole-repo page draws, how many
+  // canvas holds at a readable scale, how many areas one Whole-repo page draws, how many
   // neighbours a Focus ring names before folding the rest into groups (tester rounds 2-3).
   const [stageSize, setStageSize] = useState<{ w: number; h: number; panel: number }>({ w: 1000, h: 520, panel: 0 });
   useEffect(() => {
@@ -410,7 +410,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   // ── what the canvas draws ────────────────────────────────────────────────────────────────
   const page = view.mode === "overview" ? view.page : 0;
   // The Whole-repo layout: as many areas a page as the canvas shows at a readable scale, laid
-  // out once per page — selecting a bubble never re-lays it out (round 3 P2).
+  // out once per page, selecting a bubble never re-lays it out (round 3 P2).
   const overviewPicture = useMemo(() => {
     const o = overview.data;
     if (view.mode !== "overview" || !o) return null;
@@ -420,7 +420,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
       const pick = pickOverview(o.areas, o.layers, o.edges, page, (folded, total) => ({
         id: MORE_ID, key: MORE_ID, kind: "more", layer: "code", trust_tier: "observed",
         label: `${folded.length.toLocaleString("en-US")} more ${noun}`,
-        sub: `of ${total.toLocaleString("en-US")} · double-click for the next`,
+        sub: `of ${total.toLocaleString("en-US")}, double-click for the next`,
         counts: { [noun]: folded.length },
       } as KgViewNode), per);
       const pos = overviewLayout(pick.nodes.map((n) => ({ id: n.id, key: n.key, w: boxWidth(n) })), pick.edges, pinned, aspect);
@@ -457,7 +457,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
     if (!h) return null;
     const read: Array<KgViewNode & { hop: number }> = h.nodes.slice(0, FOCUS_CEILING + 1);
     const readIds = new Set(read.map((n) => n.id));
-    // Exactly what the server answered — the same count every time (tester round 2) — with each
+    // Exactly what the server answered, the same count every time (tester round 2), with each
     // hop's ring capped and the rest folded into "+N in <package>" groups, so 2 hops or 200
     // neighbours still read: every node labelled, none on another.
     // The learning loop one line per pair, its most telling word on it (mergeLearningEdges).
@@ -768,7 +768,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   } else if (busy) {
     stage = <CanvasLoading nodes={(repos ?? []).reduce((n, r) => n + (r.graph?.nodes ?? 0), 0) || null} />;
   } else if (view.mode === "overview" && o && !o.areas.length && o.map && o.map.built === false && (!chips.size || chips.has("code"))) {
-    // Code in the graph, and its map could not be built (RCA 2026-10-31): said, with Rebuild —
+    // Code in the graph, and its map could not be built (RCA 2026-10-31): said, with Rebuild , 
     // never "No code yet" over 51k code nodes.
     stage = (
       <StageCard testId="kg-map-error" tone="amber" title="The map of this code could not be built"
@@ -1094,14 +1094,14 @@ export function hitTitle(label: string): string {
 export function hitTip(label: string, where: string | null): string {
   return where && where !== label ? `${label}\n${where}` : label;
 }
-/** A long identifier wraps at its words — camelCase humps, ".", "/", "_", "-" — never mid-word
+/** A long identifier wraps at its words, camelCase humps, ".", "/", "_", "-", never mid-word
  *  ("…TransactionProc / essor"): a word-break opportunity at each. */
 export function breakParts(text: string): string[] {
   return text.split(/(?<=[a-z0-9])(?=[A-Z])|(?<=[./_-])(?=[^\s])/);
 }
 
 /** A search result's title in at most two lines, cut at a word (hitTitle): shortened a few
- *  characters at a time, at words, until it fits its two lines — the CSS clamp alone cut
+ *  characters at a time, at words, until it fits its two lines, the CSS clamp alone cut
  *  mid-word ("…the interest amount o…"). The whole title is the row's tooltip. */
 function FitTitle({ label }: { label: string }) {
   const ref = useRef<HTMLSpanElement>(null);

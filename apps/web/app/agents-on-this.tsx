@@ -4,18 +4,18 @@
  * Who is on this app, on the screen where the work happens.
  *
  * A workflow showed eight steps and never said who would run them. The only role anywhere on
- * the page was the gate's `approver_role` — "release_manager signs this off" — and that is one
+ * the page was the gate's `approver_role`, "release_manager signs this off", and that is one
  * agent out of the several that build, review, test and ship the thing. The implicit assignment
  * lived in `STAGE_ROLES`, a map used for cost attribution at write time and never displayed.
  *
  * FIRST IN THE CHAIN, BUT NOT A CAPABILITY. This began as a panel above the rail and the
- * operator could not find it — "where when creating a new project do we have the option to
+ * operator could not find it, "where when creating a new project do we have the option to
  * assign the agents?" A block over the chain is something you have to notice; a node IN the
  * chain is where somebody reading the steps already is. So it renders as step one.
  *
  * It is still not a workflow capability. A real step would mean editing all twelve catalogue
  * workflows, a new capability in the runtime, and something that can execute, fail and block a
- * run — and assignment is a property of the app, not a stage of its delivery. The node carries
+ * run, and assignment is a property of the app, not a stage of its delivery. The node carries
  * no duration and no status badge, because it does not run: it says "auto-confirmed", which is
  * exactly what happened when start_run seeded it.
  *
@@ -104,7 +104,7 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
   if (!appName.trim()) return null;
 
   const assigned = agents ?? [];
-  // NOTHING RECORDED, but agents run it anyway — the project's team. The distinction the panel
+  // NOTHING RECORDED, but agents run it anyway, the project's team. The distinction the panel
   // must never lose: "no row" is not "no one".
   const builtin = assigned.length > 0 && assigned.every((a) => a.source === "builtin");
   const onIt = new Set(assigned.map((a) => a.role_key));
@@ -122,8 +122,8 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
 
       {agents !== null && !assigned.length ? (
         // NOBODY ASSIGNED IS NOT THE SAME AS NOBODY WORKING. An app with no assignment lets any
-        // agent act — enforcement stops work that contradicts a decision, not work nobody has
-        // decided about — and saying so is the difference between "unconfigured" and "blocked".
+        // agent act, enforcement stops work that contradicts a decision, not work nobody has
+        // decided about, and saying so is the difference between "unconfigured" and "blocked".
         <p className="detail" data-testid="aot-empty">
           {/* Reached only when the project itself has no team AND nothing is recorded, which is
               a real state and a rare one. It still does not claim nobody works on it. */}
@@ -135,8 +135,8 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
 
       <div className="aot-list">
         {/* A FACE AND A NAME, the way the meeting room has always drawn a panel. These were
-            bare text with a tiny uppercase source word after each — "Adversarial Reviewer BY
-            DEFAULT  Chief Architect BY DEFAULT" — a run-on line where the label competed with
+            bare text with a tiny uppercase source word after each, "Adversarial Reviewer BY
+            DEFAULT  Chief Architect BY DEFAULT", a run-on line where the label competed with
             the name and nothing separated one agent from the next. */}
         {assigned.map((a) => (
           <AgentChip key={a.role_key} roleKey={a.role_key} label={nameOf(a.role_key)}

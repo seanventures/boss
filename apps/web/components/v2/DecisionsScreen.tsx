@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import React from "react";
 
 import { useState } from "react";
@@ -13,7 +13,7 @@ import type {
 } from "../../lib/v2/decisions";
 
 /**
- * Decisions — every gate waiting on a human.
+ * Decisions, every gate waiting on a human.
  *
  * THE CONSEQUENCE IS THE HEADLINE, NOT THE QUESTION
  * -------------------------------------------------
@@ -23,7 +23,7 @@ import type {
  * list of things about to be decided for you.
  *
  * So each row leads with what happens if it is ignored, and the count of self-resolving gates
- * sits at the top — that is the number worth interrupting someone for.
+ * sits at the top, that is the number worth interrupting someone for.
  */
 
 export function DecisionsScreen({ queue, panels }: { queue: DecisionQueue; panels?: PanelFeed }) {
@@ -34,7 +34,7 @@ export function DecisionsScreen({ queue, panels }: { queue: DecisionQueue; panel
         <p className="v2-empty">
           Could not reach the control plane
           {queue.blockedReason ? ` (${queue.blockedReason})` : ""}. This is NOT &ldquo;no gates
-          are waiting&rdquo; — an unanswered gate can resolve itself, so an empty list here
+          are waiting&rdquo;, an unanswered gate can resolve itself, so an empty list here
           would be the most dangerous thing this page could say.
         </p>
       </section>
@@ -51,7 +51,7 @@ export function DecisionsScreen({ queue, panels }: { queue: DecisionQueue; panel
             : `${queue.total} waiting on you`}
           {queue.auto_resolving > 0 ? (
             <>
-              {" · "}
+              {", "}
               <b className="v2-dec-auto" data-testid="v2-decisions-auto">
                 {queue.auto_resolving} will be decided without you
               </b>
@@ -83,7 +83,7 @@ export function DecisionsScreen({ queue, panels }: { queue: DecisionQueue; panel
  * NOT A LIVE FEED, AND THE PAGE SAYS SO
  * -------------------------------------
  * The reference streams a scripted debate with a filling vote tally. BOSS's panels are real and
- * produce real minutes, but they are not watched live — so this shows where each one got to and
+ * produce real minutes, but they are not watched live, so this shows where each one got to and
  * what each agent actually said, rather than animating turns that are not arriving. A fake live
  * feed would be the most convincing lie in this console: it would look exactly like the feature
  * working.
@@ -197,7 +197,7 @@ function PanelDetail({ p }: { p: V2Panel }) {
       {/* WHAT WAS SAID. */}
       {p.turns.length === 0 ? (
         <p className="v2-empty" data-testid={`v2-panel-noturns-${p.id}`}>
-          No deliberation was recorded for this panel, so what was argued is not available —
+          No deliberation was recorded for this panel, so what was argued is not available , 
           only the outcome below.
         </p>
       ) : (
@@ -213,7 +213,7 @@ function PanelDetail({ p }: { p: V2Panel }) {
           and are not the same event. */}
       {p.synthesis || p.decisions.length > 0 || p.dissent.length > 0 ? (
         <div className="v2-verdict" data-testid={`v2-panel-verdict-${p.id}`}>
-          <span className="v2-verdict-label v2-mono">PANEL VERDICT</span>
+          <span className="v2-verdict-label v2-mono">Panel verdict</span>
           {/* What the panel agreed, in its own words. The `decisions` column is empty on every
               real meeting; the synthesis is where the outcome actually is. */}
           {p.synthesis ? (
@@ -223,12 +223,12 @@ function PanelDetail({ p }: { p: V2Panel }) {
           ) : null}
           {p.decisions.length > 0 ? (
             <p className="v2-verdict-text" data-testid={`v2-panel-decisions-${p.id}`}>
-              {p.decisions.join(" · ")}
+              {p.decisions.join(", ")}
             </p>
           ) : null}
           {p.dissent.length > 0 ? (
             <p className="v2-panel-dissent" data-testid={`v2-panel-dissent-${p.id}`}>
-              dissent: {p.dissent.join(" · ")}
+              dissent: {p.dissent.join(", ")}
             </p>
           ) : null}
         </div>
@@ -261,7 +261,7 @@ function Turn({ t, panel, index }: { t: V2Turn; panel: string; index: number }) 
           </span>
         ) : null}
       </span>
-      {/* The arguments are markdown — the agents write headings, bold and tables. Rendered
+      {/* The arguments are markdown, the agents write headings, bold and tables. Rendered
           with the console's existing dependency-free renderer, which exists for exactly this
           prose. Shown raw, the reader sees ** and ## instead of emphasis. */}
       <div className="v2-turn-text">
@@ -271,7 +271,7 @@ function Turn({ t, panel, index }: { t: V2Turn; panel: string; index: number }) 
           that was never shown. */}
       {t.truncated ? (
         <p className="v2-turn-clipped v2-mono" data-testid={`v2-turn-clipped-${panel}-${index}`}>
-          argument continues — clipped for this view
+          argument continues, clipped for this view
         </p>
       ) : null}
     </li>
@@ -300,10 +300,10 @@ function DecisionRow({ d }: { d: V2Decision }) {
           data-will-fire={willFire}
           data-testid={`v2-decision-if-ignored-${d.id}`}
         >
-          {willFire ? "⏳ " : ""}
+          {willFire ? "Waiting" : ""}
           {d.if_ignored}
           {d.deadline_at ? (
-            <span className="v2-row-meta-dim"> · by {d.deadline_at.slice(0, 16).replace("T", " ")}</span>
+            <span className="v2-row-meta-dim">, by {d.deadline_at.slice(0, 16).replace("T", " ")}</span>
           ) : null}
         </span>
 
@@ -329,12 +329,12 @@ function DecisionRow({ d }: { d: V2Decision }) {
             <>
               {"  "}
               <span className="v2-row-meta-dim">answers</span>{" "}
-              {d.allowed_actions.map((a) => a.label).join(" · ")}
+              {d.allowed_actions.map((a) => a.label).join(", ")}
             </>
           ) : d.options.length > 0 ? (
             <>
               {"  "}
-              <span className="v2-row-meta-dim">options</span> {d.options.join(" · ")}
+              <span className="v2-row-meta-dim">options</span> {d.options.join(", ")}
             </>
           ) : null}
         </span>
@@ -348,7 +348,7 @@ function DecisionRow({ d }: { d: V2Decision }) {
         href={`/?area=decisions#${encodeURIComponent(d.id)}`}
         data-testid={`v2-decision-open-${d.id}`}
       >
-        Review →
+        Review
       </Link>
     </li>
   );

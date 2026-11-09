@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Setup › Add a GitHub account (BOSSAPP-808 screen 3): a side panel in three steps —
- * 1 How to connect · 2 Pick repos · 3 Check access.
+ * Setup › Add a GitHub account (BOSSAPP-808 screen 3): a side panel in three steps , 
+ * 1 How to connect, 2 Pick repos, 3 Check access.
  *
  * Every way in is one that already worked: "Sign in with GitHub" (device flow, github-signin-row),
  * the BOSS app installed on an organisation (the same sign-in lists its repos), a pasted

@@ -65,7 +65,7 @@ export function FocusedAgents({
     <article className="stack-card" data-testid="focused-agents">
       <div className="section-head">
         <div>
-          <span className="eyebrow">Optional</span>
+          <span className="area-name">Optional</span>
           <h2>On-duty automations</h2>
         </div>
       </div>
@@ -186,9 +186,9 @@ export function FocusedAgents({
           <div>
             <h4>{agent.name}</h4>
             <p className="detail">
-              {agent.kind} · {agent.mode} · {agent.status}
-              {agent.lastStatus ? ` · ${agent.lastStatus}` : ""}
-              {agent.lastTickAt ? ` · ${formatDateTime(agent.lastTickAt)}` : ""}
+              {agent.kind}, {agent.mode}, {agent.status}
+              {agent.lastStatus ? `, ${agent.lastStatus}` : ""}
+              {agent.lastTickAt ? `, ${formatDateTime(agent.lastTickAt)}` : ""}
             </p>
             <p className="detail">{agent.focus}</p>
           </div>

@@ -35,11 +35,11 @@ export function creditsText(chain: Chain, viewer: string, title: string): string
   const rows = creditRows(chain, viewer);
   const agents = rows.filter((r) => r.roleKey).length;
   return [
-    `${title} — made by ${agents} ${agents === 1 ? "agent" : "agents"}`,
-    ...rows.map((r) => `• ${r.name}${r.role !== r.name ? ` (${r.role})` : ""}${r.line ? ` — ${r.line}` : ""}`),
-    `${chain.totals.steps} steps · ${minutesLabel(chain.totals.minutes)} · ${spendLabel(chain.totals.cost, chain.totals.included)}`,
+    `${title}, made by ${agents} ${agents === 1 ? "agent" : "agents"}`,
+    ...rows.map((r) => `• ${r.name}${r.role !== r.name ? ` (${r.role})` : ""}${r.line ? `, ${r.line}` : ""}`),
+    `${chain.totals.steps} steps, ${minutesLabel(chain.totals.minutes)}, ${spendLabel(chain.totals.cost, chain.totals.included)}`,
     `Accountable: ${chain.accountable === viewer ? viewer || "you" : chain.people?.[chain.accountable] || chain.accountable}`,
-    "Built with BOSS · open source",
+    "Built with BOSS, open source",
   ].join("\n");
 }
 
@@ -129,7 +129,7 @@ export function CreditsDialog({ chain, runId, projectId, viewer, title, onClose 
       <div className="ag-credits" role="dialog" aria-modal="true" aria-label="Run credits" data-testid="ag-credits">
         <header className="ag-credits-head">
           <span className="ag-credits-title">
-            <span className="eyebrow">Made by</span>
+            <span className="area-name">Made by</span>
             <strong data-user-text>{title}</strong>
           </span>
           <button type="button" ref={closeRef} className="ag-credits-close" onClick={onClose}

@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * Deploys `⋯ › Rules` (spec §4.6; parity P-S-37): environment policies — which runtime mode
+ * Deploys `⋯ › Rules` (spec §4.6; parity P-S-37): environment policies, which runtime mode
  * each environment allows, which target kinds, and which gates a provider-backed deploy must
- * pass — and the list of policies saved. The old Deployment Registry's `Save environment
+ * pass, and the list of policies saved. The old Deployment Registry's `Save environment
  * policy`, with the gates said in plain words.
  */
 import { GatedButton } from "../../components/gated";

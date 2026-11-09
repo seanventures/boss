@@ -61,7 +61,7 @@ export function StartsWith({ schema, dispatch, readOnly }: {
       {fields.map((f) => (
         <button key={f.name} type="button" className="wf-chip wf-chip-btn" disabled={readOnly}
                 ref={(el) => { if (el) anchors.current.set(f.name, el); else anchors.current.delete(f.name); }}
-                data-tip={f.required ? `${f.name} · required` : f.name} aria-haspopup="dialog"
+                data-tip={f.required ? `${f.name}, required` : f.name} aria-haspopup="dialog"
                 onClick={() => setOpen(f.name)} data-testid={`wf-start-field-${f.name}`}>
           {f.label}{f.required ? <span className="wf-required-dot" aria-label="required" /> : null}
         </button>

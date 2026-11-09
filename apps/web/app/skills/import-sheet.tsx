@@ -3,7 +3,7 @@
 /**
  * Library › ⋯ › Import: a skill as a capability-bundle YAML (the same import Access and packs
  * had), or MCP servers as JSON (`{"mcpServers": {"name": {"url": …}}}`, the shape editors use).
- * Imported servers arrive unreviewed and without tokens — a token is typed in its drawer.
+ * Imported servers arrive unreviewed and without tokens, a token is typed in its drawer.
  */
 import React, { useState } from "react";
 
@@ -40,7 +40,7 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
                                                              risk_tier: Number(spec.risk_tier ?? 1) });
           if (!r.ok) throw new Error(`${name}: ${r.error}`);
         }
-        showToast("success", `Saved · ${entries.length} servers`);
+        showToast("success", `Saved, ${entries.length} servers`);
       } else {
         const form = new FormData();
         form.set("project_id", projectId); form.set("actor", actor); form.set("yaml", body);

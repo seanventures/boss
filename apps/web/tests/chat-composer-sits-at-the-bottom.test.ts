@@ -87,7 +87,7 @@ describe("the layout is in the stylesheet", () => {
 
 describe("it holds on a small screen", () => {
   it("the dock becomes the full width rather than a sliver", () => {
-    expect(CSS).toContain(".bx-dock { width: 100vw !important; }");
+    expect(CSS).toContain(".bx-dock { width: 100% !important; }");
   });
 
   it("the shell keeps a floor so the transcript cannot vanish entirely", () => {

@@ -142,7 +142,7 @@ export function TopBar(p: {
           {meta.is_catalogue && meta.copy ? (
             <button type="button" className="wf-chip wf-chip-btn wf-open-copy" data-tone="accent" onClick={p.onOpenCopy}
                     data-tip={meta.copy.name} data-testid="wf-open-copy">
-              <span className="wf-cut">You have a copy · Open</span>
+              <span className="wf-cut">You have a copy, Open</span>
             </button>
           ) : null}
 
@@ -228,7 +228,7 @@ export function TopBar(p: {
                 <Btn className="wf-menu-item" blocked={current ? "Open now" : blocked}
                      onClick={() => { close(); p.onOpenVersion(v.version); }} testId={`wf-open-v${v.version}`}>
                   <span>v{v.version}</span>
-                  <span className="wf-menu-meta">{current ? "Current" : `Open · ${formatDate(v.published_at, "")}`}</span>
+                  <span className="wf-menu-meta">{current ? "Current" : `Open, ${formatDate(v.published_at, "")}`}</span>
                 </Btn>
               </li>
             );

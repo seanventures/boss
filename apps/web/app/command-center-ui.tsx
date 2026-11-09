@@ -76,7 +76,7 @@ export function needsOrder(view: CommandCenterView | null, items: AttentionItem[
   };
 }
 
-/** Agents on a live run's current step — the same missions In flight draws — so a face glows
+/** Agents on a live run's current step, the same missions In flight draws, so a face glows
  *  exactly while its run moves (independent test: Juno worked, her face sat still). */
 export function workingOn(missions: { state: string; hops: { kind: string; roleKey?: string | null; state?: string }[] }[]): Set<string> {
   const out = new Set<string>();
@@ -116,7 +116,7 @@ export type CommandCenterProps = {
   /** What you can do here (the full help card) for the `?` popover. */
   help?: React.ReactNode;
   /** The project page's "What should we add?" card is above (BOSSAPP-810): it is where a task is
-   *  typed, so the hero drops its own "Describe your first task" box — Ask BOSS stays, closed. */
+   *  typed, so the hero drops its own "Describe your first task" box, Ask BOSS stays, closed. */
   startCard?: boolean;
   /** The Factory's apps as the server read them (wire + ETag), or null. */
   initialApps?: { wire: unknown; etag: string | null } | null;
@@ -159,7 +159,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const now = useNow(30_000);
 
   const status = statusOf(view, reachable, readAt, !live);
-  const statusTip = !reachable && error ? `${status.tip} · ${error}` : status.tip;
+  const statusTip = !reachable && error ? `${status.tip}, ${error}` : status.tip;
 
   const rootRef = useRef<HTMLDivElement>(null);
   // THE LOADING BAR ENDS WHEN THIS IS ON SCREEN: once, when the instance you see has a view.
@@ -247,7 +247,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       <section className="cc-hero cc-workspace" aria-label="Next action" data-testid="cc-hero" data-next={action.kind}>
         <div className="cc-hero-bg" aria-hidden><div className="cc-aurora" /></div>
         <div className="cc-hero-l">
-          <div className="cc-eyebrow" data-tone={sys.tone} data-key={status.key} data-testid="cc-status" title={statusTip}>
+          <div className="cc-area-name" data-tone={sys.tone} data-key={status.key} data-testid="cc-status" title={statusTip}>
             <span className="cc-dot" data-tone={sys.tone} aria-hidden />
             <span {...(status.key === "unreachable" ? { "data-testid": "cc2-load-error" } : {})}>{sys.text}</span>
             {status.key !== "unreachable" && status.key !== "quiet" ? (
@@ -304,7 +304,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       </details>
       {view ? (
         <details className="cc-secondary" data-testid="cc-team-details">
-          <summary>{view.counts.agents} configured roles · {reachable ? `${view.counts.working} observed working` : "current activity unavailable"}</summary>
+          <summary>{view.counts.agents} configured roles, {reachable ? `${view.counts.working} observed working` : "current activity unavailable"}</summary>
           <p className="cc-secondary-note">Configured roles; activity comes from records.</p>
           <Proof n={proof} orgId={orgId} />
           <TeamGrid teams={view.teams} agents={view.agents} waiting={waiting} working={working} orgId={orgId}

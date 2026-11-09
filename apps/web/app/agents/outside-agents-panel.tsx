@@ -5,7 +5,7 @@
  * tested, suspended or removed. One surface, the API's own words for every refusal.
  *
  * THE AUTH SECRET NEVER COMES BACK. The form writes it through `/v1/secrets` (infra's own
- * store) and only hands the resulting `secret_ref_id` to `/v1/external-agents` — the same two
+ * store) and only hands the resulting `secret_ref_id` to `/v1/external-agents`, the same two
  * steps the API itself requires (routers/external_agents.py `_public` never includes a value).
  * Suspend/Remove ask a NAMED confirm first: pressing once shows "Suspend <name>? / Confirm", a
  * second, different press cancels it, so nothing is revoked on a stray click.

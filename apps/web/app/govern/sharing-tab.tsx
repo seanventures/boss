@@ -5,12 +5,12 @@
  * the BOSS project, and the controls over it.
  *
  *   SHARING       Improve BOSS     <the consent wording, verbatim>          [ off ]
- *                 Daily heartbeat  random id · version · OS · …             [ on  ]
- *   NEXT PAYLOAD  1.9 KB gzip · 6.2 KB JSON · Frozen 3m ago · Sends ~Tue 03:17   [Export batch]
+ *                 Daily heartbeat  random id, version, OS, …             [ on  ]
+ *   NEXT PAYLOAD  1.9 KB gzip, 6.2 KB JSON, Frozen 3m ago, Sends ~Tue 03:17   [Export batch]
  *                 { the exact bytes the next send posts, decoded }
- *   SENT          the last 30 sends: day · kind · status · size                  [View]
+ *   SENT          the last 30 sends: day, kind, status, size                  [View]
  *   INSTALL ID    bi_…                                     [Rotate] [Delete what was sent]
- *   SCORE         Score v1 · the weights, editable                               [Save]
+ *   SCORE         Score v1, the weights, editable                               [Save]
  *   COLLECTOR     Collector mode (BOSS's own server)                             [ off ]
  *
  * The preview IS what is sent: reading it freezes the next payload (services/improve_boss.cut).
@@ -101,7 +101,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
     // SAY WHAT HAPPENED TO THE OLD ID (P4): deleted, kept until its delete goes, or never sent.
     const got = (r.data as { rotated?: { old?: string; removed?: number } }).rotated ?? {};
     // THE COLLECTOR'S OWN COUNT (re-check item 2): "deleted" only when it removed something.
-    setRotated(got.old === "deleted" ? `Old id deleted · ${records(got.removed ?? 0)}`
+    setRotated(got.old === "deleted" ? `Old id deleted, ${records(got.removed ?? 0)}`
       : got.old === "nothing_held" ? "Collector held nothing for the old id"
       : got.old === "kept" ? "Old id kept until its delete goes through" : "Old id never sent");
     showToast("success", "New install id");
@@ -115,8 +115,8 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
     const deleted = r.ok && (r.data as { deleted?: boolean }).deleted;
     const removed = r.ok ? Number((r.data as { removed?: number }).removed ?? 0) : 0;
     showToast(deleted ? "success" : "error", !deleted ? "Delete failed" : removed ? "Sent data deleted" : "Nothing was held");
-    setRotated(!deleted ? "Not deleted yet · kept to retry"
-      : removed ? `Deleted · ${records(removed)} at the collector` : "The collector held nothing");
+    setRotated(!deleted ? "Not deleted yet, kept to retry"
+      : removed ? `Deleted, ${records(removed)} at the collector` : "The collector held nothing");
     read.reload();
     void loadPreview();
   };
@@ -180,7 +180,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
             <span className="im-row-what">
               <ConsentText />
               <span className="im-who" title="Recorded in Govern changes">
-                {sw.improve.asked ? `${sw.improve.on ? "On" : "Off"} · ${sw.improve.by_name ?? "—"} · ${ago(sw.improve.at)}` : "Off by default"}
+                {sw.improve.asked ? `${sw.improve.on ? "On" : "Off"}, ${sw.improve.by_name ?? "—"}, ${ago(sw.improve.at)}` : "Off by default"}
               </span>
             </span>
             <Toggle on={sw.improve.on && !locked} label="Improve BOSS" disabled={locked || busy !== ""}
@@ -191,7 +191,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
             <span className="im-row-what">
               <HeartbeatFields />
               <span className="im-who" title="Separate from Improve BOSS. On by default; this is the opt-out.">
-                {sw.heartbeat.asked ? `${sw.heartbeat.on ? "On" : "Off"} · ${sw.heartbeat.by_name ?? "—"} · ${ago(sw.heartbeat.at)}` : "On by default"}
+                {sw.heartbeat.asked ? `${sw.heartbeat.on ? "On" : "Off"}, ${sw.heartbeat.by_name ?? "—"}, ${ago(sw.heartbeat.at)}` : "On by default"}
               </span>
             </span>
             <Toggle on={sw.heartbeat.on && !locked} label="Daily heartbeat" disabled={locked || busy !== ""}
@@ -231,9 +231,10 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
       </section>
 
       <section className="gv-sec" aria-labelledby="im-next-head">
-        <h3 className="gv-sec-head" id="im-next-head">NEXT PAYLOAD
+        <div className="gv-sec-head">
+          <h3 className="gv-sec-head" id="im-next-head">NEXT PAYLOAD</h3>
           {p ? <span className="gv-badge" title="Compressed, as it goes over the wire">{kb(p.bytes_gz)}</span> : null}
-        </h3>
+        </div>
         <div className="im-payload" data-testid="gv-payload">
           {p ? (
             <>
@@ -241,7 +242,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
                 <span title="Uncompressed JSON">{kb(p.bytes_raw)} JSON</span>
                 <span title={`Cut ${localFull(p.cut_at)}. Later work goes in the next one.`}>Frozen {ago(p.cut_at)}</span>
                 {preview?.next_due_at && !stop ? <span title="A random time each day; one send a day at most">Sends ~{whenWords(preview.next_due_at)}</span>
-                  : stop ? <span className="gv-value-note" title="It is shown and exportable; nothing goes out">Not sent · {locked ? "off" : "no collector"}</span> : null}
+                  : stop ? <span className="gv-value-note" title="It is shown and exportable; nothing goes out">Not sent, {locked ? "off" : "no collector"}</span> : null}
                 {Object.keys(p.aggregated ?? {}).length ? <span className="gv-value-note" title="Over the size cap or many runs: sent as counts">Aggregated</span> : null}
                 <span className="gv-spacer" />
                 <a className="ag-btn" href={improveHref("export", { project_id: projectId, actor })} download
@@ -259,10 +260,11 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
       </section>
 
       <section className="gv-sec" aria-labelledby="im-sent-head">
-        <h3 className="gv-sec-head" id="im-sent-head">SENT
+        <div className="gv-sec-head">
+          <h3 className="gv-sec-head" id="im-sent-head">SENT</h3>
           <span className="gv-badge" title="The last 30 sends, kept on this install">{v.sends.length}</span>
           {v.unsent_batches ? <span className="gv-badge" title="Batches waiting; at most 7 are kept">{v.unsent_batches} waiting</span> : null}
-        </h3>
+        </div>
         {v.sends.length ? (
           <ul className="im-log" data-testid="gv-sends">
             {v.sends.map((s) => {
@@ -274,7 +276,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
                     <span>{KIND[s.kind] ?? s.kind}</span>
                     <span className="im-status" data-tone={st.tone}
                           title={s.error ? `Error: ${s.error}` : s.http_status ? `HTTP ${s.http_status}` : undefined}>{st.word}</span>
-                    <span title={`${kb(s.bytes_raw)} JSON`}>{kb(s.bytes_gz)}{Object.keys(s.aggregated ?? {}).length ? " · aggregated" : ""}</span>
+                    <span title={`${kb(s.bytes_raw)} JSON`}>{kb(s.bytes_gz)}{Object.keys(s.aggregated ?? {}).length ? ", aggregated" : ""}</span>
                     {s.kind === "daily" ? (
                       <button type="button" className="ag-link" data-testid="gv-send-view" aria-expanded={open?.id === s.id}
                               onClick={() => void view(s)}>{open?.id === s.id ? "Hide" : "View"}</button>
@@ -305,7 +307,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
                       onClick={() => setConfirmForget(true)}>Delete what was sent</GatedButton>
             </span>
           </span>
-          {stop ? <span className="im-muted" data-testid="gv-forget-why">Delete needs a collector · {locked ? `off by ${v.env_disabled}` : "none set"}</span> : null}
+          {stop ? <span className="im-muted" data-testid="gv-forget-why">Delete needs a collector, {locked ? `off by ${v.env_disabled}` : "none set"}</span> : null}
           {rotated ? <span className="im-muted" role="status" data-testid="gv-rotated">{rotated}</span> : null}
           {(v.retired_waiting ?? 0) > 0 ? (
             <span className="im-muted" data-testid="gv-retired" title="Their deletes are retried with the daily send">
@@ -324,9 +326,10 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
       </section>
 
       <section className="gv-sec" aria-labelledby="im-score-head">
-        <h3 className="gv-sec-head" id="im-score-head">SCORE
+        <div className="gv-sec-head">
+          <h3 className="gv-sec-head" id="im-score-head">SCORE</h3>
           <span className="gv-badge" title="Scores only compare within one version">v{v.score.version}</span>
-        </h3>
+        </div>
         <div className="im-weights" data-testid="gv-weights">
           {v.score.weights.map((w) => {
             const val = weights[w.key] ?? String(w.value);

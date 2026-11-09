@@ -1,13 +1,13 @@
 "use client";
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import React from "react";
 
 import type { V2Agent, V2Handoff, Workforce } from "../../lib/v2/workforce";
 
 /**
- * Hive — the agents as a graph, and the work moving between them.
+ * Hive, the agents as a graph, and the work moving between them.
  *
  * THE GEOMETRY IS THE REFERENCE'S, NOT AN APPROXIMATION
  * ----------------------------------------------------
@@ -18,7 +18,7 @@ import type { V2Agent, V2Handoff, Workforce } from "../../lib/v2/workforce";
  *   inner  radius 130, starting at -PI/2
  *   outer  radius 250, starting at -PI/2 + 0.35
  *
- * The 0.35 radian offset on the outer ring is why it looks scattered rather than concentric —
+ * The 0.35 radian offset on the outer ring is why it looks scattered rather than concentric , 
  * the two rings deliberately do not line up. Nodes carry a halo at r+12, the label sits at
  * y+r+13 and the status at y-r-8, and edges are QUADRATIC curves whose control point is offset
  * 28px perpendicular to the chord. All measured out of the reference's own source rather than
@@ -127,7 +127,7 @@ export function HiveScreen({ workforce }: { workforce: Workforce }) {
       <header className="v2-screen-head">
         <h1 className="v2-screen-title">Hive</h1>
         <p className="v2-screen-sub">
-          {workforce.agents.length} agents · {workforce.handoffs.length} handoff routes observed
+          {workforce.agents.length} agents, {workforce.handoffs.length} handoff routes observed
           in {workforce.window_hours}h
         </p>
       </header>
@@ -169,7 +169,7 @@ export function HiveScreen({ workforce }: { workforce: Workforce }) {
                   >
                     <title>{`${h.source} → ${h.target}: ${h.times} handoff${h.times === 1 ? "" : "s"}${h.last_action ? ` (last: ${h.last_action})` : ""}`}</title>
                   </path>
-                  {/* The first words of what was handed over, on the curve — so the graph says
+                  {/* The first words of what was handed over, on the curve, so the graph says
                       what moved, not only that something did. */}
                   {h.last_action ? (
                     <text x={lx} y={ly} className="v2-hive-edge-label" textAnchor="middle">
@@ -183,7 +183,7 @@ export function HiveScreen({ workforce }: { workforce: Workforce }) {
             {nodes.map((n) => (
               <g key={n.id} data-testid={`v2-hive-node-${n.id}`} data-status={n.status}>
                 {/* The halo. Pulses only while the agent is working, so motion means
-                    something — a graph where everything pulses says nothing. */}
+                    something, a graph where everything pulses says nothing. */}
                 <circle
                   cx={n.x}
                   cy={n.y}
@@ -201,10 +201,10 @@ export function HiveScreen({ workforce }: { workforce: Workforce }) {
                   data-status={n.status}
                   data-ring={n.ring}
                 >
-                  <title>{`${n.name} — ${n.status}: ${n.task}`}</title>
+                  <title>{`${n.name}, ${n.status}: ${n.task}`}</title>
                 </circle>
 
-                {/* Status above, name below — the reference's own placement. */}
+                {/* Status above, name below, the reference's own placement. */}
                 <text x={n.x} y={n.y - n.r - 8} className="v2-hive-status" textAnchor="middle">
                   {n.status}
                 </text>

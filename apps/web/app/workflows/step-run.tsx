@@ -4,16 +4,16 @@
  * A run step's panel, led by the step's RUN rather than by the agent (operator, 2026-10-04:
  * "too much info about the agent … more information about that workflow step's run").
  *
- * - `StepDoneBy`: one line, "Done by <face> <name> · $cost · model", the step's facts under it,
+ * - `StepDoneBy`: one line, "Done by <face> <name>, $cost, model", the step's facts under it,
  *   and the full agent card (StepSignedBy) one press away, below the facts.
- * - `stepOutput`: what the step MADE, for a person — an allow-list of human outputs; every
+ * - `stepOutput`: what the step MADE, for a person, an allow-list of human outputs; every
  *   machine field (ids, awaits, verdicts) is kept under one "Details" disclosure.
  * - `StepActivity`: the step's log as sentences, errors first, and "Step log", a deep link to
  *   the activity log scoped to this step (`?area=activity&wfr=…&step=…`).
  * - `useStepActivity`: one read of that scope, shared by the Done-by line and Activity.
  *
  * WHO is one answer (`stepActor`): the agent that ran it (the run's work record, else ran_as),
- * else who the workflow assigns it to — the very view the lane node draws — so the node, the
+ * else who the workflow assigns it to, the very view the lane node draws, so the node, the
  * chain and this panel cannot name three different people for one step.
  */
 import { WhyThisModel, type RouteRow } from "../why-this-model";
@@ -39,7 +39,7 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 export const STEP_ACTIVITY_ROWS = 5;
 
 /** The activity log, scoped to one step of one workflow run. Keeps the org and project, and
- *  carries the names the panel shows, so the log says "Build, review and test · Lead Triage
+ *  carries the names the panel shows, so the log says "Build, review and test, Lead Triage
  *  Inbox" rather than two ids. */
 export function stepLogHref(search: string, workflowRunId: string, stepId: string,
                             names: { step?: string; run?: string } = {}): string {
@@ -67,7 +67,7 @@ export function stepActor(ran: LaneAgent | undefined, planned: StepView["agent"]
     return { roleKey: planned.role_key ?? null, variant: "agent", ran: false, ...(outsideName ? { name: outsideName } : {}) };
   }
   if (planned.kind === "auto") {
-    // BOSS's own deterministic code says so ("BOSS · no model"), never "Auto".
+    // BOSS's own deterministic code says so ("BOSS, no model"), never "Auto".
     return planned.role_key ? { roleKey: planned.role_key, variant: "agent", ran: false }
       : planned.label !== "Auto" ? { roleKey: null, variant: "boss", ran: false, name: planned.label }
       : { roleKey: null, variant: "auto", ran: false };
@@ -84,7 +84,7 @@ export function actorName(actor: StepActor): string {
 
 export type OutputFact = { label: string; value: string; tip?: string; href?: string };
 
-/** A RECORD ID IS A LINK, NEVER TEXT (rc10 tester: "Details · 11" listed `deprun_…`, `dec_…`,
+/** A RECORD ID IS A LINK, NEVER TEXT (rc10 tester: "Details, 11" listed `deprun_…`, `dec_…`,
  *  `chg_…` on a finished deploy step). The kinds a person can open become a named link; the
  *  rest (targets, jobs, acts) are bookkeeping the panel already names elsewhere and drop. */
 const ID_LINKS: Array<[RegExp, string, (id: string) => string]> = [
@@ -99,7 +99,7 @@ const ID_LINKS: Array<[RegExp, string, (id: string) => string]> = [
 // BOSS's own record prefixes, named: a looser shape matched words like "not_applicable".
 const RECORD_ID = /^(deprun|sdep|dec|chg|crun|wfr|deptgt|job|act|rrcpt|res|agt|usr|dh|tsk|mrun|prev|qg|drun|asb|tpl|tapp|disc|mtg|sfx)_[A-Za-z0-9]+$/;
 /** Lifecycle fields that describe a step IN FLIGHT. On a finished step they are stale: a
- *  succeeded deploy still said "verdict awaiting · next action approve_decision". */
+ *  succeeded deploy still said "verdict awaiting, next action approve_decision". */
 const IN_FLIGHT = new Set(["await", "verdict", "awaited_status", "next_action", "waiting_on",
   "awaiting", "pending_decision"]);
 const FINISHED = new Set(["succeeded", "failed", "skipped", "deadlettered", "cancelled", "completed"]);
@@ -217,8 +217,8 @@ const SENTENCES: Record<string, string> = {
   "code_task.completed": "Work finished",
   "code_task.failed": "Work failed",
   // Fix and redeploy (engine deploy_repair): the deploy failed for the app's reason.
-  "deploy.fix_started": "Deploy failed — fixing the app",
-  "deploy.redeploying": "App fixed — deploying again",
+  "deploy.fix_started": "Deploy failed, fixing the app",
+  "deploy.redeploying": "App fixed, deploying again",
   "recovery.decided": "The step's agent decided how to recover",
   "recovery.resumed": "Recovery: running the step again",
   "boss.recommendation_recorded": "Recorded a fix for BOSS's developers",
@@ -278,7 +278,7 @@ export type StepActivityState = {
 const EMPTY: StepActivityState = { rows: [], loaded: false, errors: 0, warnings: 0, model: "", cost: 0, calls: 0 };
 
 /** The step's log as the panel shows it: sentences, bookkeeping out, repeats folded, and
- *  errors and warnings PINNED FIRST — a panel that shows five rows must never hide the error
+ *  errors and warnings PINNED FIRST, a panel that shows five rows must never hide the error
  *  the step log has. Pure, so it is tested without a fetch. */
 export function summariseStepActivity(items: ActivityLogItem[]): Omit<StepActivityState, "loaded"> {
   const calls = items.filter((i) => i.source === "llm_call");
@@ -307,7 +307,7 @@ export function summariseStepActivity(items: ActivityLogItem[]): Omit<StepActivi
 
 /** The step's log, read in ONE bounded query (`summary=1`: the newest non-verbose rows, errors
  *  first, with the error/warn counts and the step's model calls), re-read every 5s while the
- *  step is live with its ETag — a 304 when nothing happened — and never while the console is
+ *  step is live with its ETag, a 304 when nothing happened, and never while the console is
  *  Paused or the tab hidden. It used to page 100 rows through a 50,000-row scan every 5s. */
 export function useStepActivity(projectId: string, workflowRunId: string | undefined, stepId: string,
                                 live: boolean, version: string): StepActivityState {
@@ -357,7 +357,7 @@ export function actorVerb(phase: string, status: string): string {
   return "Done by";
 }
 
-/** "Done by <face> <name> · $0.03 · model", the step's facts, and the agent's card below them. */
+/** "Done by <face> <name>, $0.03, model", the step's facts, and the agent's card below them. */
 export function StepDoneBy({ act, approval, output, phase, status, planned, viewer, projectId, failure,
                              question, cost, calls, model, onAsk, stepId, facts, skipped,
                              askBossTip = "Ask about this step", route = null, spend = null }: {
@@ -397,8 +397,8 @@ export function StepDoneBy({ act, approval, output, phase, status, planned, view
   }
   const actor = stepActor(laneAgentOf(output, act, viewer), planned);
   const named = actor ? nameOf(actor.roleKey, actor.variant, actor.personId, actor.name) : null;
-  // EVERY ATTEMPT'S SPEND. The step's own act holds none of it — the calls land on its build
-  // stages and panel seats, and a retry is a new act — so the chain's per-step sum comes first.
+  // EVERY ATTEMPT'S SPEND. The step's own act holds none of it, the calls land on its build
+  // stages and panel seats, and a retry is a new act, so the chain's per-step sum comes first.
   const spent = spend ? spend.costUsd : act?.costUsd || cost;
   const included = spend ? spend.includedUsd : act?.includedUsd ?? 0;
   // A PRICE ONLY WHERE MODELS WERE USED. A deploy a person approved made no model call, and
@@ -481,7 +481,7 @@ export function StepOutputFacts({ facts, details }: { facts: OutputFact[]; detai
       ) : null}
       {details.length ? (
         <details className="wf-stepout-details" data-testid="dw-step-details">
-          <summary>Details · {details.length}</summary>
+          <summary>Details, {details.length}</summary>
           <dl className="wf-stepout wf-stepout-mono">
             {details.map((f) => (
               <div key={`${f.label}:${f.value}`}>
@@ -521,12 +521,12 @@ export function StepActivity({ state, href, live, settled = false, failed = fals
   return (
     <section className="wf-step-sec" data-testid="dw-step-activity" aria-label="Activity">
       <header className="wf-step-sec-head">
-        <span className="eyebrow">Activity</span>
+        <span className="area-name">Activity</span>
         {loud ? <span className="wf-step-sec-loud" data-testid="dw-step-log-loud"
                       data-level={settled ? "recovered" : state.errors ? "error" : "warn"}
                       title={settled ? "Problems the step hit and fixed before it succeeded" : undefined}>
                   {loud}</span> : null}
-        <a className="wf-link wf-step-sec-link" href={href} data-testid="dw-step-log">Step log →</a>
+        <a className="wf-link wf-step-sec-link" href={href} data-testid="dw-step-log">Step log</a>
       </header>
       {!state.loaded ? (
         <span className="wf-step-empty">Reading…</span>
@@ -552,14 +552,14 @@ export function StepSection({ title, testId, children, empty }: {
 }) {
   return (
     <section className="wf-step-sec" data-testid={testId} aria-label={title}>
-      <header className="wf-step-sec-head"><span className="eyebrow">{title}</span></header>
+      <header className="wf-step-sec-head"><span className="area-name">{title}</span></header>
       {children ?? <span className="wf-step-empty">{empty}</span>}
     </section>
   );
 }
 
-/** "Started 18:01 · Attempt 2": when it began (the reader's own local time, like every other
- *  clock in the console — see lib/log-time) and whether it is a retry. No "Z": `clock()` is
+/** "Started 18:01, Attempt 2": when it began (the reader's own local time, like every other
+ *  clock in the console, see lib/log-time) and whether it is a retry. No "Z": `clock()` is
  *  local, not UTC, and a trailing "Z" mislabelled it as UTC (BOSSAPP-615). */
 export function stepFacts(step: { started_at?: string | null; attempt?: number }): string[] {
   const out: string[] = [];

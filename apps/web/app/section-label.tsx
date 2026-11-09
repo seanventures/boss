@@ -1,7 +1,7 @@
 /**
  * THE SECTION LABEL: Setup's green `MODEL` label, shared. Setup's rows, the agent Passport and
  * the Kit use this one component and one CSS rule (`.section-label` in globals.css, beside
- * `.section-head h2.eyebrow`), so the pages cannot drift apart.
+ * `.section-head h2.area-name`), so the pages cannot drift apart.
  *
  * Level 2 (the default) is the green label: teal, 12px, bold, uppercase, wide tracking.
  * Level 1 is a section title in ink.

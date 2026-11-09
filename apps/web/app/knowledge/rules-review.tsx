@@ -239,7 +239,7 @@ function ClauseChips({ items, onFocusNode }: { items: KgClauseEvidence[]; onFocu
           <button type="button" className="kg-ev-chip" onClick={() => onFocusNode(e.clause_id)} data-testid="kg-clause-focus"
                   title={e.citation ?? e.section}>
             <span className="kg-dot" data-layer="domain" aria-hidden />
-            <span>{e.document ? <span data-user-text>{e.document}</span> : "Document"} · {e.section}{e.page ? ` · p. ${e.page}` : ""}</span>
+            <span>{e.document ? <span data-user-text>{e.document}</span> : "Document"}, {e.section}{e.page ? `, p. ${e.page}` : ""}</span>
           </button>
           {e.quote ? <blockquote className="kg-ev-quote" data-user-text>{e.quote}</blockquote> : null}
         </li>
@@ -374,13 +374,13 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
         {dq ? <>
           {dq.dimension ? <span className="kg-chip" data-testid="kg-dq-dimension">{dq.dimension}</span> : null}
           {dq.severity ? <span className="kg-chip" data-severity={dq.severity.toLowerCase()}>{dq.severity} severity</span> : null}
-          {dq.system ? <span>{dq.system}{dq.feed ? ` · ${dq.feed}` : ""}</span> : null}
+          {dq.system ? <span>{dq.system}{dq.feed ? `, ${dq.feed}` : ""}</span> : null}
         </> : <span className="kg-chip">{r.category.replace(/_/g, " ")}</span>}
         <span title="How sure the proposing agent was, capped by its evidence">{Math.round(r.confidence * 100)}% confident</span>
-        <span>Proposed by <strong>{by}</strong>{r.provenance.at ? ` · ${when(r.provenance.at)}` : ""}</span>
+        <span>Proposed by <strong>{by}</strong>{r.provenance.at ? `, ${when(r.provenance.at)}` : ""}</span>
         {run ? <a className="inf-link" href={run} data-testid="kg-rule-run">its run ↗</a> : null}
         {/* Names the approver (round 6): the person's display name, else "the operator". */}
-        {r.review ? <span data-testid="kg-rule-approver">{r.status === "rejected" ? "Rejected" : r.status === "approved" ? "Approved" : "Reviewed"} by <strong>{personName(r.review.by, r.review.by_name)}</strong> · {when(r.review.at)}{r.review.note ? ` — “${r.review.note}”` : ""}</span> : null}
+        {r.review ? <span data-testid="kg-rule-approver">{r.status === "rejected" ? "Rejected" : r.status === "approved" ? "Approved" : "Reviewed"} by <strong>{personName(r.review.by, r.review.by_name)}</strong>, {when(r.review.at)}{r.review.note ? `, “${r.review.note}”` : ""}</span> : null}
         {r.version > 1 ? <span>version {r.version}</span> : null}
       </div>
       <ClauseChips items={r.clause_evidence ?? []} onFocusNode={onFocusNode} />
@@ -392,7 +392,7 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
               <button type="button" className="kg-ev-chip" onClick={() => onFocusNode(e.symbol_id)} title={e.excerpt ?? e.label}
                       data-testid="kg-evidence-focus">
                 <span className="kg-dot" style={{ background: "var(--kg-method)" }} aria-hidden />
-                <span className="inf-mono">{e.label}{e.lines ? `:${e.lines[0]}–${e.lines[1]}` : ""}</span>
+                <span className="inf-mono">{e.label}{e.lines ? `:${e.lines[0]}, ${e.lines[1]}` : ""}</span>
               </button>
               {href ? <a className="inf-link" href={href} target="_blank" rel="noreferrer" data-testid="kg-evidence-code">code ↗</a> : null}
               {e.excerpt ? <code className="kg-ev-excerpt" data-user-text>{e.excerpt}</code> : null}

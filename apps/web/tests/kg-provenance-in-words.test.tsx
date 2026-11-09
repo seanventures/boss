@@ -146,7 +146,7 @@ describe("the Rules review card says who in words", () => {
     mockKgFetch({ "/view/rules$": { body: { ...FX.rules, items } } });
     await mount(<RulesReview projectId="p" actor="ceo" onFocusNode={() => {}} />);
     await settle();
-    expect($$('[data-testid="kg-rule-approver"]').map((e) => e.textContent?.split(" · ")[0]))
+    expect($$('[data-testid="kg-rule-approver"]').map((e) => e.textContent?.split(", ")[0]))
       .toEqual(["Approved by Example Person", "Approved by the operator"]);
   });
 });

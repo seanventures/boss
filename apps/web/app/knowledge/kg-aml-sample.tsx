@@ -2,9 +2,9 @@
 
 /**
  * KNOWLEDGE GRAPH › DOCUMENTS › AML SAMPLE (case study 4). One row: "Load AML sample" puts
- * NorthPeak Lending's synthetic bank into the project — the banking-aml pack, the sample's mock
+ * NorthPeak Lending's synthetic bank into the project, the banking-aml pack, the sample's mock
  * connectors (case management, KYC, transactions), the customers/accounts/alerts in the graph and
- * the aml_alert_investigation workflow — through POST /v1/knowledge/samples/aml, the same action
+ * the aml_alert_investigation workflow, through POST /v1/knowledge/samples/aml, the same action
  * the agent's `load_aml_sample` tool takes. Then each alert offers "Investigate", which starts
  * aml_alert_investigation with that alert (app/workflows/delivery-api.ts `post("start")`), and
  * shows the latest investigation's case status and the person's determination.
@@ -48,7 +48,7 @@ function AlertRow({ w, row, alert, workflowKey, archived, onStarted }: {
       {nodeId
         ? <a className="inf-link kg-doc-clause-section" href={kgNodeHref(nodeId)} data-testid="kg-aml-alert-link" title={row.alert_id}>{row.customer_name}</a>
         : <span className="kg-doc-clause-section" title={row.alert_id}>{row.customer_name}</span>}
-      <span className="kg-doc-clause-text">{row.account_label} — {row.rule_text || row.rule}, risk score {row.score}, {row.flagged_count} flagged transaction{row.flagged_count === 1 ? "" : "s"}, raised {row.raised_at}</span>
+      <span className="kg-doc-clause-text">{row.account_label}, {row.rule_text || row.rule}, risk score {row.score}, {row.flagged_count} flagged transaction{row.flagged_count === 1 ? "" : "s"}, raised {row.raised_at}</span>
       <span className="kg-quiet" data-testid="kg-aml-alert-status">{row.status_label}</span>
       <span className="kg-doc-check">
         <GatedButton permission={SCAN_START} className="ag-btn" data-testid="kg-aml-investigate"

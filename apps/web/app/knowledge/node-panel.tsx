@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * THE DETAIL PANEL (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.6): what one node is, top to bottom —
+ * THE DETAIL PANEL (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.6): what one node is, top to bottom , 
  * header (layer badge, kind, title, copy id), statement, attributes, connections (clickable,
  * paged by 20), vector, learned → used, provenance, and the actions its kind and the viewer's
  * permissions allow. Area, package and layer bubbles are summarised from the overview the canvas
@@ -116,7 +116,7 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
     return (
       <aside className="kg-panel" data-testid="kg-panel" data-state="none" aria-label="Details">
         <div className="kg-panel-none" data-testid="kg-panel-none">
-          <span className="kg-eyebrow">Details</span>
+          <span className="kg-area-name">Details</span>
           <p>Select a node, a row in the tree, or a search result to see what it is, what it connects to and where it came from.</p>
         </div>
       </aside>
@@ -138,7 +138,7 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
       <header className="kg-panel-head">
         <div className="kg-panel-badges">
           <span className="kg-badge" data-layer={layer} data-testid="kg-panel-layer">{LAYER_NAME[layer] ?? layer}</span>
-          {kind ? <span className="kg-panel-kind" data-testid="kg-panel-kind">{kind}{detail?.language ? ` · ${cap(detail.language)}` : ""}</span> : null}
+          {kind ? <span className="kg-panel-kind" data-testid="kg-panel-kind">{kind}{detail?.language ? `, ${cap(detail.language)}` : ""}</span> : null}
           <span className="ag-spacer" />
           <CopyId id={nodeId} />
           {close}
@@ -213,7 +213,7 @@ function PanelSkeleton() {
 function Section({ title, children, testId }: { title: string; children: React.ReactNode; testId: string }) {
   return (
     <section className="kg-sec" data-testid={testId}>
-      <h4 className="kg-eyebrow">{title}</h4>
+      <h4 className="kg-area-name">{title}</h4>
       {children}
     </section>
   );
@@ -222,12 +222,12 @@ function Section({ title, children, testId }: { title: string; children: React.R
 function NodeRow({ n, note, onPick }: { n: KgViewNode; note?: string; onPick: () => void }) {
   return (
     <li>
-      <button type="button" className="kg-conn" onClick={onPick} title={`${kindName(n.kind, n.symbol_kind, n.id)} · ${n.label}${n.sub ? ` · ${n.sub}` : ""}`}
+      <button type="button" className="kg-conn" onClick={onPick} title={`${kindName(n.kind, n.symbol_kind, n.id)}, ${n.label}${n.sub ? `, ${n.sub}` : ""}`}
               data-testid="kg-conn-item">
         <span className="kg-dot" style={{ background: `var(${kindToken(n.kind, n.symbol_kind, n.id)})` }} aria-hidden />
         <span className="kg-conn-label" data-user-text>{n.label}</span>
         {note ? <span className="kg-conn-note">{note}</span> : null}
-        <span className="kg-conn-go" aria-hidden>›</span>
+        
       </button>
     </li>
   );
@@ -276,17 +276,17 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
 
 /** A time attribute (`last_seen_at`, any ISO timestamp): said by the area's one formatter, in the
  *  viewer's zone (tester round 5: "last seen at 2026-10-25T07:20:40Z" beside "00:13 PDT"). */
-/** "Assessment · Compliance assessment step · Nov 01, 05:27 PDT". */
+/** "Assessment, Compliance assessment step, Nov 01, 05:27 PDT". */
 export function contextFacts(c: KgContextCard): Array<{ k: string; v: string; mono?: boolean; title?: string }> {
   const out: Array<{ k: string; v: string; mono?: boolean; title?: string }> = [];
   if (c.step) out.push({ k: "Step", v: c.step });
   if (c.run) out.push({ k: "Run", v: c.run.label });
   if (c.agent) {
     const who = c.agent.kind === "deterministic"
-      ? "BOSS · a deterministic step (no model)"
+      ? "BOSS, a deterministic step (no model)"
       : c.agent.kind === "outside"
-        ? `${c.agent.name} · an outside agent`
-        : c.agent.role && c.agent.role !== c.agent.name ? `${c.agent.name} · ${c.agent.role}` : c.agent.name;
+        ? `${c.agent.name}, an outside agent`
+        : c.agent.role && c.agent.role !== c.agent.name ? `${c.agent.name}, ${c.agent.role}` : c.agent.name;
     out.push({ k: "Agent", v: who });
   }
   if (c.workflow_version) out.push({ k: "Workflow", v: c.workflow_version });
@@ -298,7 +298,7 @@ export function contextFacts(c: KgContextCard): Array<{ k: string; v: string; mo
 
 /**
  * THE CONTEXT CARD (design §4.7.3): what an agent decided, in words; which step of which run,
- * which agent, under which workflow and policy version and fingerprint, when — and what it hangs
+ * which agent, under which workflow and policy version and fingerprint, when, and what it hangs
  * on: the case it belongs to, what it cited, the precedent and the remediation, each one press
  * from its own Focus. A case lists its decisions, remediation, precedent and runs the same way.
  */
@@ -331,7 +331,7 @@ function ContextCard({ c, layer, orgId, onFocusNode }: {
           <div className="kg-ctx-links" data-testid="kg-ctx-links">
             {c.links.map((link) => (
               <div key={link.key} data-link={link.key}>
-                <h5 className="kg-ctx-link-head">{link.label}{link.total > link.items.length ? ` · ${link.items.length} of ${link.total}` : link.items.length > 1 ? ` · ${link.items.length}` : ""}</h5>
+                <h5 className="kg-ctx-link-head">{link.label}{link.total > link.items.length ? `, ${link.items.length} of ${link.total}` : link.items.length > 1 ? `, ${link.items.length}` : ""}</h5>
                 <ul className="kg-conn-list">
                   {link.items.map((n) => <NodeRow key={n.id} n={n} note={n.sub} onPick={() => onFocusNode(n.id, n)} />)}
                 </ul>
@@ -369,7 +369,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
   const statusWord = d.node.status ?? (typeof a.status === "string" ? a.status : null);
   const trust = isRule && approvalWords(d.provenance)
     ? approvalWords(d.provenance)
-    : isRule ? `${cap(statusWord ?? "proposed")} · not yet trusted by agents` : d.node.trust_tier === "inferred" ? "Inferred by an agent · not reviewed" : null;
+    : isRule ? `${cap(statusWord ?? "proposed")}, not yet trusted by agents` : d.node.trust_tier === "inferred" ? "Inferred by an agent, not reviewed" : null;
   // Words only: a scan id, a content key or any id-shaped value is a record, never an attribute
   // a person reads (tester round 4: "scan id rscan_…", "content key d376f6deefbc3548").
   const extra = Object.entries(a).filter(([k, v]) => !ATTR_SKIP.has(k) && isWordsAttr(k, v));
@@ -395,7 +395,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
           {d.path ? (
             <div className="kg-attr"><dt>path</dt><dd className="inf-mono">
               {href ? <a href={href} target="_blank" rel="noreferrer" className="inf-link kg-path" data-testid="kg-panel-code-link" title="Open on GitHub at these lines">
-                {d.path.split("/").pop()}{d.line ? `:${d.line}${d.end_line && d.end_line !== d.line ? `–${d.end_line}` : ""}` : ""} ↗</a>
+                {d.path.split("/").pop()}{d.line ? `:${d.line}${d.end_line && d.end_line !== d.line ? `-${d.end_line}` : ""}` : ""}</a>
                 : <span>{d.path}{d.line ? `:${d.line}` : ""}</span>}
             </dd></div>
           ) : null}
@@ -434,7 +434,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
       {d.usage.consulted_runs || d.usage.reused_runs ? (
         <p className="kg-usage" data-testid="kg-panel-usage">
           {d.usage.consulted_runs ? `Consulted by ${d.usage.consulted_runs.toLocaleString("en-US")} ${d.usage.consulted_runs === 1 ? "run" : "runs"}` : ""}
-          {d.usage.consulted_runs && d.usage.reused_runs ? " · " : ""}
+          {d.usage.consulted_runs && d.usage.reused_runs ? ", " : ""}
           {d.usage.reused_runs ? `reused by ${d.usage.reused_runs.toLocaleString("en-US")}` : ""}
         </p>
       ) : null}
@@ -472,13 +472,13 @@ function Members({ d, w, onFocusNode }: {
     if (page) setGroup({ ...group, items: [...group.items, ...page.items.filter((i) => !group.items.some((y) => y.id === i.id))] });
   };
   return (
-    <Section title={`Methods · ${group.total.toLocaleString("en-US")}`} testId="kg-panel-members">
+    <Section title={`Methods, ${group.total.toLocaleString("en-US")}`} testId="kg-panel-members">
       <ul className="kg-conn-list">
         {group.items.map((m) => <MemberRow key={m.id} m={m} w={w} onFocusNode={onFocusNode} />)}
       </ul>
       {group.items.length < group.total ? (
         <button type="button" className="inf-link kg-more" data-testid="kg-members-more" disabled={busy} onClick={() => void more()}>
-          {busy ? "Loading…" : `Show all · next ${Math.min(20, group.total - group.items.length)} (${group.items.length} of ${group.total.toLocaleString("en-US")})`}
+          {busy ? "Loading…" : `Show all, next ${Math.min(20, group.total - group.items.length)} (${group.items.length} of ${group.total.toLocaleString("en-US")})`}
         </button>
       ) : null}
     </Section>
@@ -506,7 +506,7 @@ function MemberRow({ m, w, onFocusNode }: { m: KgViewNode; w: { projectId: strin
                 title={`Open the method-level view of ${m.label}`}>
           <span className="kg-dot" style={{ background: `var(${kindToken(m.kind, m.symbol_kind, m.id)})` }} aria-hidden />
           <span className="kg-conn-label" data-user-text>{m.label}</span>
-          <span className="kg-conn-go" aria-hidden>›</span>
+          
         </button>
       </span>
       {open ? (
@@ -516,7 +516,7 @@ function MemberRow({ m, w, onFocusNode }: { m: KgViewNode; w: { projectId: strin
           {conn && !conn.length ? <p className="kg-quiet">Nothing connects to it.</p> : null}
           {conn?.length ? (
             <>
-              <p className="kg-quiet">{conn.map((g) => `${g.label} ${g.total.toLocaleString("en-US")}`).join(" · ")}</p>
+              <p className="kg-quiet">{conn.map((g) => `${g.label} ${g.total.toLocaleString("en-US")}`).join(", ")}</p>
               <ul className="kg-conn-list">
                 {conn.flatMap((g) => g.items.slice(0, 3).map((n) => ({ g, n }))).slice(0, 6).map(({ g, n }) => (
                   <NodeRow key={`${g.kind}-${g.direction}-${n.id}`} n={n} note={g.label} onPick={() => onFocusNode(n.id, n)} />
@@ -542,7 +542,7 @@ function Connections({ d, w, onFocusNode, viewEdges, viewNote = null }: {
   const [err, setErr] = useState<string | null>(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setGroups(own(d.connections)), [d]);
-  const summary = groups.map((g) => `${g.label} ${g.total.toLocaleString("en-US")}`).join(" · ");
+  const summary = groups.map((g) => `${g.label} ${g.total.toLocaleString("en-US")}`).join(", ");
   const more = async (g: KgConnectionGroup) => {
     const k = `${g.kind}:${g.direction}`;
     setBusy(k); setErr(null);
@@ -559,8 +559,8 @@ function Connections({ d, w, onFocusNode, viewEdges, viewNote = null }: {
       {groups.length ? <p className="kg-quiet" data-testid="kg-panel-conn-summary">{summary}</p> : !viewEdges?.length ? <p className="kg-quiet">Nothing connects to it.</p> : null}
       {viewEdges?.length && isLearnedKind(d.node.kind) ? <LearningView viewEdges={viewEdges} onFocusNode={onFocusNode} /> : null}
       {viewEdges?.length && !isLearnedKind(d.node.kind) ? (
-        // What the canvas draws for it right now — class calls rolled up from its methods
-        // included — so a line on the canvas is always a row here.
+        // What the canvas draws for it right now, class calls rolled up from its methods
+        // included, so a line on the canvas is always a row here.
         <div className="kg-group" data-testid="kg-conn-view">
           <h5 className="kg-group-head" title="The connections drawn on the canvas now" data-testid="kg-conn-view-count">In this view <span>{viewNote ?? viewEdges.length.toLocaleString("en-US")}</span></h5>
           <ul className="kg-conn-list">
@@ -581,7 +581,7 @@ function Connections({ d, w, onFocusNode, viewEdges, viewNote = null }: {
             </ul>
             {g.items.length < g.total ? (
               <button type="button" className="inf-link kg-more" data-testid="kg-conn-more" disabled={busy === k} onClick={() => void more(g)}>
-                {busy === k ? "Loading…" : `Show all · next ${Math.min(20, g.total - g.items.length)} (${g.items.length} of ${g.total.toLocaleString("en-US")})`}
+                {busy === k ? "Loading…" : `Show all, next ${Math.min(20, g.total - g.items.length)} (${g.items.length} of ${g.total.toLocaleString("en-US")})`}
               </button>
             ) : null}
           </div>
@@ -604,7 +604,7 @@ const LEARNING_HEADS: Record<string, string> = {
 
 /**
  * WHAT THE CANVAS DRAWS AROUND A LEARNING, in the canvas's own words and colours: "Reused by:
- * B4 · Incident… (Site Reliability Engineer)". The learning loop first, in LEARNING_EDGES order;
+ * B4, Incident… (Site Reliability Engineer)". The learning loop first, in LEARNING_EDGES order;
  * any other edge (proposed by, supersedes) after it, by its kind.
  */
 function LearningView({ viewEdges, onFocusNode }: {
@@ -633,19 +633,19 @@ function LearningView({ viewEdges, onFocusNode }: {
               {rows.map(({ edge, other, out }) => {
                 const who = conversationAgent(other);
                 const also = edge.also?.length ? `also ${edge.also.join(", ")}` : null;
-                const note = [who, also].filter(Boolean).join(" · ");
+                const note = [who, also].filter(Boolean).join(", ");
                 return (
                   <li key={`v-${other.id}-${edge.kind}-${out}`}>
-                    {/* The name whole on its line, who and what else under it ("Reused by: B4 · Incident…
+                    {/* The name whole on its line, who and what else under it ("Reused by: B4, Incident…
                         (Site Reliability Engineer)"): a long title never squeezes the agent out. */}
                     <button type="button" className="kg-conn kg-learn-row" onClick={() => onFocusNode(other.id, other)}
-                            title={`${kindName(other.kind, other.symbol_kind, other.id)} · ${other.label}${note ? ` · ${note}` : ""}`} data-testid="kg-conn-item">
+                            title={`${kindName(other.kind, other.symbol_kind, other.id)}, ${other.label}${note ? `, ${note}` : ""}`} data-testid="kg-conn-item">
                       <span className="kg-dot" style={{ background: `var(${kindToken(other.kind, other.symbol_kind, other.id)})` }} aria-hidden />
                       <span className="kg-learn-row-text">
                         <span className="kg-conn-label" data-user-text>{other.label}</span>
-                        {note ? <span className="kg-learn-row-note">{who ? `(${who})` : ""}{who && also ? " · " : ""}{also ?? ""}</span> : null}
+                        {note ? <span className="kg-learn-row-note">{who ? `(${who})` : ""}{who && also ? ", " : ""}{also ?? ""}</span> : null}
                       </span>
-                      <span className="kg-conn-go" aria-hidden>›</span>
+                      
                     </button>
                   </li>
                 );
@@ -760,7 +760,7 @@ function Lineage({ d, orgId }: { d: KgNodeDetailResponse; orgId?: string | null 
           ? <a className="inf-link" href={learnedRun} title={runCut?.cut ? runCut.full : undefined}>{runCut ? `“${runCut.text}”` : "its run"}</a>
           : <span title={runCut?.cut ? runCut.full : undefined}>“{runCut?.text}”</span>}</> : d.provenance.conversation_title ? <> in the conversation “{d.provenance.conversation_title}”</> : null}
         {stepWords(l.learned.step) || l.learned.at ? ` (${[stepWords(l.learned.step), when(l.learned.at)].filter(Boolean).join(", ")})` : ""}
-        {l.used.length ? " → used by " : " · not used by a later run yet"}
+        {l.used.length ? " → used by " : ", not used by a later run yet"}
         {l.used.map((u, i) => (
           <React.Fragment key={`${u.run_id}-${i}`}>
             {i ? ", " : ""}
@@ -804,8 +804,8 @@ function Provenance({ p, layer, orgId }: { p: KgProvenance; layer: string; orgId
 
 /** Parity with the old explorer (§5.1): why a node is believed, and what a change to it reaches. */
 /** What depends on a node (tester round 2: blast radius said "reaches nothing" for a class with
- *  112 referrers and 53 importers): every incoming code edge — callers, references, imports,
- *  dispatch, implementations, subclasses, overrides — from the detail the panel already holds. */
+ *  112 referrers and 53 importers): every incoming code edge, callers, references, imports,
+ *  dispatch, implementations, subclasses, overrides, from the detail the panel already holds. */
 export function dependents(d: KgNodeDetailResponse): KgConnectionGroup[] {
   const reach = new Set(["calls", "references", "imports", "dispatches_to", "implements", "extends", "overrides", "reads", "writes", "governs"]);
   return d.connections.filter((g) => g.direction === "in" && reach.has(g.kind) && g.total > 0);
@@ -846,7 +846,7 @@ function WhyAndBlast({ w, nodeId, detail, onFocusNode }: { w: { projectId: strin
             {direct.length ? (
               <>
                 <p className="kg-quiet" data-testid="kg-blast-summary">
-                  A change here reaches {total.toLocaleString("en-US")} {total === 1 ? "place" : "places"} directly: {direct.map((g) => `${g.label.toLowerCase()} ${g.total.toLocaleString("en-US")}`).join(" · ")}
+                  A change here reaches {total.toLocaleString("en-US")} {total === 1 ? "place" : "places"} directly: {direct.map((g) => `${g.label.toLowerCase()} ${g.total.toLocaleString("en-US")}`).join(", ")}
                 </p>
                 <ul className="kg-conn-list">
                   {direct.flatMap((g) => g.items.slice(0, 4).map((n) => ({ g, n }))).slice(0, 10).map(({ g, n }) => (
@@ -862,7 +862,7 @@ function WhyAndBlast({ w, nodeId, detail, onFocusNode }: { w: { projectId: strin
             const id = b.id ?? b.node_id;
             return (
               <li key={`${id ?? b.name}-${i}`}>
-                {id ? <button type="button" className="kg-conn" onClick={() => onFocusNode(id)}><span className="kg-conn-label">{b.name ?? id}</span><span className="kg-conn-go" aria-hidden>›</span></button>
+                {id ? <button type="button" className="kg-conn" onClick={() => onFocusNode(id)}><span className="kg-conn-label">{b.name ?? id}</span></button>
                   : <span className="kg-conn">{b.name ?? "unnamed"}</span>}
               </li>
             );
@@ -901,7 +901,7 @@ export function PanelActions({ w, node, detail, archived, rulesLocked, onEditRul
   if (!scannable && !proposedRule && !run && !thread && node.kind !== "fact") return null;
   return (
     <section className="kg-sec kg-sec-actions" data-testid="kg-panel-actions">
-      <h4 className="kg-eyebrow">Actions</h4>
+      <h4 className="kg-area-name">Actions</h4>
       {scannable ? (rulesLocked ? <p className="kg-quiet" data-testid="kg-scan-locked">{rulesLocked}</p>
         : <ScanForRules w={w} node={node} archived={archived} archivedWhy={archivedWhy} />) : null}
       {proposedRule ? (
@@ -984,7 +984,7 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
                      onClick={() => setOpen(true)}>Scan for rules here</GatedButton>
         {/* The cost and the cap, before the press (tester round 4: no cost was ever shown). */}
         <p className="kg-quiet" data-testid="kg-scan-cost">
-          Spends at most ${(valid ? amount : (limits?.budget_usd ?? 2)).toFixed(2)} from the knowledge budget · reads up to {maxFiles} files · proposes up to {maxRules} rules
+          Spends at most ${(valid ? amount : (limits?.budget_usd ?? 2)).toFixed(2)} from the knowledge budget, reads up to {maxFiles} files, proposes up to {maxRules} rules
         </p>
         {msg ? <p className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-scan-msg">{msg.text}</p> : null}
       </div>
@@ -994,7 +994,7 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
     <form className="kg-scan-preview" data-testid="kg-scan-preview" noValidate onSubmit={(e) => { e.preventDefault(); if (valid) void start(); }}>
       <p className="kg-scan-what">
         {sentenceStart(reader)} reads {node.kind === "symbol" ? <><span data-user-text>{node.label}</span> and the code it calls</> : <>the code in <span data-user-text>{node.label}</span></>}
-        — up to <strong>{maxFiles} files</strong>, the most connected first — and proposes up to
+       , up to <strong>{maxFiles} files</strong>, the most connected first, and proposes up to
         <strong> {maxRules} rules</strong>, each with the lines that show it. It stops at whichever limit comes first. No rule is trusted until
         a person approves it.</p>
       <label className="kg-field">
@@ -1006,7 +1006,7 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
       <p className="kg-quiet">Reserved from the project's knowledge budget before the first model call.</p>
       <div className="kg-panel-actions">
         <GatedButton permission={SCAN_START} type="submit" className="ag-btn ag-btn-primary" data-testid="kg-scan-start" disabled={busy || !valid}>
-          {busy ? "Starting…" : `Start scan · up to $${valid ? amount.toFixed(2) : "—"}`}
+          {busy ? "Starting…" : `Start scan, up to $${valid ? amount.toFixed(2) : "—"}`}
         </GatedButton>
         <button type="button" className="inf-link" onClick={() => setOpen(false)}>Cancel</button>
       </div>

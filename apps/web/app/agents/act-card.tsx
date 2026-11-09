@@ -71,8 +71,8 @@ export function subjectOf(act: Act): DockSubject | null {
 
 /** Talk to the agent that did this work, 1:1 and about the work itself: the conversation carries
  *  the act, so the agent sees what it did and its reply is signed as a child of that act (it
- *  shows in the run's lineage). Asking again reopens the talk about this step — never a fresh,
- *  empty one — so what was asked is still there. Work no agent signed (a built-in, a person's)
+ *  shows in the run's lineage). Asking again reopens the talk about this step, never a fresh,
+ *  empty one, so what was asked is still there. Work no agent signed (a built-in, a person's)
  *  keeps the dock. */
 export function askAboutAct(act: Act, question = ""): void {
   if (act.roleKey) {
@@ -95,8 +95,8 @@ function Row({ label, tip, children, testId }: { label: string; tip?: string; ch
   );
 }
 
-/** `Instructions · 2 files` (agent-loadout §3.4): the instructions this version of the agent
- *  carried — read from that version, so an edit since does not rewrite history. */
+/** `Instructions, 2 files` (agent-loadout §3.4): the instructions this version of the agent
+ *  carried, read from that version, so an edit since does not rewrite history. */
 export function ActInstructionsView({ docs }: { docs: VersionDoc[] }) {
   const [open, setOpen] = useState<string | null>(null);
   const [list, setList] = useState(false);
@@ -157,7 +157,7 @@ export function ActCard({ act, viewer, inline, onClose, askless }: {
   const handedVariant = act.handedBy.kind === "boss" ? "boss"
     : act.handedBy.kind === "person" ? (act.handedBy.id === viewer ? "you" : "person") : "agent";
   const considered = act.considered.map((k) => nameOf(k).name);
-  const howTip = [considered.join(", "), act.why].filter(Boolean).join(" · ");
+  const howTip = [considered.join(", "), act.why].filter(Boolean).join(", ");
   const took = tookLabel(act);
   const cost = act.costUsd ? usd(act.costUsd) : "";
   const turnsHref = act.links.code_task_run_id && act.kind === "stage"
@@ -225,9 +225,9 @@ export function ActCard({ act, viewer, inline, onClose, askless }: {
           </Row>
         ) : null}
         {took || cost ? (
-          <Row label="Time · cost">
-            <span data-tip={act.tokensIn || act.tokensOut ? `${kilo(act.tokensIn)} in · ${kilo(act.tokensOut)} out` : undefined}>
-              {[took, cost].filter(Boolean).join(" · ")}
+          <Row label="Time, cost">
+            <span data-tip={act.tokensIn || act.tokensOut ? `${kilo(act.tokensIn)} in, ${kilo(act.tokensOut)} out` : undefined}>
+              {[took, cost].filter(Boolean).join(", ")}
             </span>
           </Row>
         ) : null}

@@ -106,8 +106,7 @@ export function ArchitecturePanel({ reviewId, projectId, actorId = "", stepStatu
           <DecisionActions decision={decision} projectId={projectId} actorId={actorId} />
         ) : (
           <a className="rp-btn sm primary" href={decisionHref(search, decision.id)}>
-            Review in Approvals →
-          </a>
+            Review in Approvals</a>
         )
       ) : null}
     </div>

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The Now band (build page, top of the body): what the build is doing, in one look — the stage
+ * The Now band (build page, top of the body): what the build is doing, in one look, the stage
  * against its time limit, the attempt, where it was seeded from, your retry note, files so far,
  * the last test result with the failing tests, the gates and the cost. Short values; the
  * details are in tooltips and in the one list under Tests and Gates.

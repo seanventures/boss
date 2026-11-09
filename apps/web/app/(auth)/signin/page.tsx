@@ -11,15 +11,15 @@ import { ssoErrorWords } from "../auth-flow";
 import { SignIn } from "../login/sign-in";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Sign in · BOSS" };
+export const metadata = { title: "Sign in, BOSS" };
 
 type Props = { searchParams: Promise<{ step?: string; error?: string; next?: string }> };
 
 /**
  * WHERE SINGLE SIGN-ON COMES BACK (apps/api/app/routers/identity_sso.py `_redirect`):
- *   /signin?step=mfa      — the IdP said who you are; BOSS still needs your second factor (the
+ *   /signin?step=mfa     , the IdP said who you are; BOSS still needs your second factor (the
  *                           pre-auth cookie carries the rest, so the code screen opens directly);
- *   /signin?error=<code>  — it did not finish; say why, in words, and offer the other ways in.
+ *   /signin?error=<code> , it did not finish; say why, in words, and offer the other ways in.
  * Success goes to `/`, a link from My account to `/account?linked=1`, enrolment to `/enrol`.
  * Anything else here is the ordinary sign-in page.
  */

@@ -4,10 +4,10 @@
  * THE AGENT'S OWN STEPS, as an agent design is drawn (design §4.7.2; the
  * reference "1. Sentinel Agent" screen). Four bands:
  *
- *   Knowledge Graph vN · read only        the kinds the agent reads, in their domain colours
- *   <Agent> · steps                       its numbered steps, from the stage before to the next
- *   Context Graph vN · read and write     the kinds it writes (hexagons), and context it reads
- *   External systems · via MCP            the outside systems its steps call
+ *   Knowledge Graph vN, read only        the kinds the agent reads, in their domain colours
+ *   <Agent>, steps                       its numbered steps, from the stage before to the next
+ *   Context Graph vN, read and write     the kinds it writes (hexagons), and context it reads
+ *   External systems, via MCP            the outside systems its steps call
  *
  * Grey lines are reads, blue lines writes, dotted lines MCP calls; every line belongs to ONE
  * numbered step. Select a step or a node to light only its lines. "Show the last run" marks
@@ -331,13 +331,13 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
         <rect className="pls-band" x={PAD} y={kgTop} width={W - 2 * PAD} height={kgH} rx={10} />
         <text className="pls-band-label" x={W - PAD - 18} y={kgTop + 26} textAnchor="end" data-testid="band-kg">{kgTitle}</text>
         <rect className="pls-band" x={PAD} y={stTop} width={W - 2 * PAD} height={stH} rx={10} />
-        <text className="pls-band-label" x={W - PAD - 18} y={stTop + 26} textAnchor="end" data-testid="band-steps">{`${stage.title} · steps`}</text>
+        <text className="pls-band-label" x={W - PAD - 18} y={stTop + 26} textAnchor="end" data-testid="band-steps">{`${stage.title}, steps`}</text>
         <rect className="pls-band" x={PAD} y={cgTop} width={W - 2 * PAD} height={cgH} rx={10} />
         <text className="pls-band-label" x={W - PAD - 18} y={cgTop + 26} textAnchor="end" data-testid="band-cg">{cgTitle}</text>
         {model.systems.length ? (
           <>
             <rect className="pls-band" x={PAD} y={exTop} width={W - 2 * PAD} height={exH} rx={10} />
-            <text className="pls-band-label" x={W - PAD - 18} y={exTop + 26} textAnchor="end" data-testid="band-mcp">External systems · via MCP</text>
+            <text className="pls-band-label" x={W - PAD - 18} y={exTop + 26} textAnchor="end" data-testid="band-mcp">External systems, via MCP</text>
           </>
         ) : null}
         {!model.kg.length ? (
@@ -513,7 +513,7 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
 
       {selStep ? (
         <div className="pl-node-detail pls-detail" data-testid="step-detail" role="status">
-          <div className="pls-detail-title">{`Step ${selStep.n} · ${selStep.name}`}</div>
+          <div className="pls-detail-title">{`Step ${selStep.n}, ${selStep.name}`}</div>
           {selStep.explain ? <p>{selStep.explain}</p> : null}
           <ul>
             {selStep.reads.length ? <li><b>Reads</b> {selStep.reads.map(label).join(", ")}</li> : null}
@@ -527,13 +527,13 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
       ) : selNode ? (
         <div className="pl-node-detail pls-detail" data-testid="map-node-detail" role="status">
           <div className="pls-detail-title">
-            {selNode.label}{selNode.band === "kg" ? " · Knowledge Graph, read only" : " · Context Graph"}
+            {selNode.label}{selNode.band === "kg" ? ", Knowledge Graph, read only" : ", Context Graph"}
           </div>
           <p>{nodeWords(selNode, steps)}</p>
         </div>
       ) : selSystem ? (
         <div className="pl-node-detail pls-detail" data-testid="map-node-detail" role="status">
-          <div className="pls-detail-title">{`${selSystem.label} · outside system, via MCP`}</div>
+          <div className="pls-detail-title">{`${selSystem.label}, outside system, via MCP`}</div>
           <p>
             {`Called by step${callers(selSystem.key, steps).length === 1 ? "" : "s"} ${callers(selSystem.key, steps).join(", ") || "none"}`}
             {selSystem.tools.length ? `: ${selSystem.tools.map(humanTool).join(", ")}` : ""}
@@ -545,9 +545,9 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
   );
 }
 
-/** "Knowledge Graph v3 · read only"; without a version, "Knowledge Graph · read only". */
+/** "Knowledge Graph v3, read only"; without a version, "Knowledge Graph, read only". */
 export function bandTitle(graph: string, version: number | null, access: string): string {
-  return `${graph}${version ? ` v${version}` : ""} · ${access}`;
+  return `${graph}${version ? ` v${version}` : ""}, ${access}`;
 }
 
 function callers(key: string, steps: AgentStepDef[]): number[] {

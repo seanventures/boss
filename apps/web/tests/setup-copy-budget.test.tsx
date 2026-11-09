@@ -82,7 +82,7 @@ describe("the board stays within the copy budget", () => {
     mounted = await mountBoard(view);
     audit(document.body);
     const used = q(document.body, "su-model-used")!;
-    expect(used.textContent).toBe("Used for Build · Review · Chat +3");
+    expect(used.textContent).toBe("Used for Build, Review, Chat +3");
     expect(used.getAttribute("data-tip")).toContain("Hard problems, Routine work");
   });
 

@@ -3,13 +3,13 @@
 /**
  * The app drawer (spec §4.9, `app=<target_id>`, 560 px): one deployed app over the window.
  *
- *   api · prod  ● Down  since 1h 4m                                         ⋯  ×
+ *   api, prod  ● Down  since 1h 4m                                         ⋯  ×
  *   Uptime 24h 91.3%  Uptime 7d 98.7%  p95 240 ms  Last probe 2m  Build a1b2c3d [Serving 9f1e2d3]  Host ↗
  *   <latency chart>
- *   TRAFFIC  Requests 42/min · Errors 1.2% · p50 18 ms · p95 240 ms · Alert Within limit
+ *   TRAFFIC  Requests 42/min, Errors 1.2%, p50 18 ms, p95 240 ms, Alert Within limit
  *            Metrics: scraped 20s ago   (or the failure in words: "Metrics endpoint returned 404")
  *   INCIDENT   the app's alert, answered (incident-card.tsx), when its metrics carry an incident
- *   INCIDENTS  start · duration (Ongoing) · first error · deploy before it ↗
+ *   INCIDENTS  start, duration (Ongoing), first error, deploy before it 
  *   [Probe now] Open app ↗  Dashboard ↗  Logs ↗  [Ask BOSS]
  *
  * Two tabs, [Overview | Alerts] (`atab=alerts`, which Factory ⋯ › Alerts links to): Alerts is
@@ -17,8 +17,8 @@
  * once BOSS has checked that Grafana answers; otherwise it says why, with Check and Deploy stack.
  *
  * `Probe now` probes THIS app only (operator decision §11.5) and kicks both polls; the toast is
- * `Probed · <word>`. The `Serving <v>` chip appears only when the app reports a build other than
- * the one last deployed — the server says so (`serving_mismatch`); nothing is compared here.
+ * `Probed, <word>`. The `Serving <v>` chip appears only when the app reports a build other than
+ * the one last deployed, the server says so (`serving_mismatch`); nothing is compared here.
  */
 import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
@@ -95,7 +95,7 @@ export function TrafficSection({ m, now }: { m: AppMetrics; now: number | null }
         ) : null}
       </div>
       <span className="inf-faint" data-testid="obs-metrics-word" data-tone={tone}
-            title={[m.url, m.route ? `via ${m.route}` : null, m.naming ? `names: ${m.naming}` : null].filter(Boolean).join(" · ") || undefined}>
+            title={[m.url, m.route ? `via ${m.route}` : null, m.naming ? `names: ${m.naming}` : null].filter(Boolean).join(", ") || undefined}>
         {word}
       </span>
     </DrawerSection>
@@ -112,7 +112,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
   const close = () => go({ app: null, atab: null }, "push");
   const tab = url.atab;
   const setTab = (t: "overview" | "alerts") => go({ atab: t === "alerts" ? "alerts" : null }, "replace");
-  const name = d ? `${d.app} · ${d.env}` : row ? `${row.app} · ${row.env}` : targetId;
+  const name = d ? `${d.app}, ${d.env}` : row ? `${row.app}, ${row.env}` : targetId;
   const word = d ? { word: d.word, tone: d.tone } : row ? { word: row.word, tone: row.tone } : null;
   const incidentId = d ? (url.inc ?? d.metrics.alert?.incidentId ?? null) : null;
   const since = d?.since ?? row?.since ?? null;
@@ -124,7 +124,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
                                                 { project_id: projectId, actor }, { scope: `obs:probe:${targetId}`, label: "Probe now" });
     setBusy(false);
     if (r.ok) {
-      showToast("success", `Probed · ${r.body?.word ?? "done"}`);
+      showToast("success", `Probed, ${r.body?.word ?? "done"}`);
       notifyChanged("observability", { target_id: targetId });
       detail.refresh();
       pulse.refresh();
@@ -147,7 +147,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
       <span className="obs-dhead-name" data-copy="data" data-user-text>{name}</span>
       {word ? <StateWord w={word} testId="obs-app-state" /> : null}
       <span className="inf-faint inf-num" data-testid="obs-app-since" title={since ? lt.full(since) : "Never probed"}>
-        {since && now !== null ? `since ${dur((now - Date.parse(since)) / 1000)}` : since ? "since —" : "No signal"}
+        {since && now !== null ? `since ${dur((now - Date.parse(since)) / 1000)}` : since ? "since , " : "No signal"}
       </span>
       <button type="button" className="ag-icon-btn" aria-label="Copy link" title="Copy link" data-testid="obs-app-copy" onClick={copyLink}>⋯</button>
     </span>

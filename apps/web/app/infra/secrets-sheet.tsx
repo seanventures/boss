@@ -2,7 +2,7 @@
 
 /**
  * The Secrets sheet (spec §4.3 `+ Add › Secret`, §4.6 Deploys `⋯ › Secrets`; parity P-I-53):
- * the old SecretsPanel — name, kind, backend, write-only value, `Upload`, `Generate keypair`,
+ * the old SecretsPanel, name, kind, backend, write-only value, `Upload`, `Generate keypair`,
  * and the list with `Verify`. BOSS keeps a reference, never the value: the value field is
  * cleared the moment it is written through, and the only key material shown is a public half.
  */

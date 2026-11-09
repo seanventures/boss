@@ -2,7 +2,7 @@
 
 /**
  * `See its prompt` (agent-loadout spec §3.3): exactly what the model is given, without the task,
- * by layer — Rules · Identity · Remit · Instructions · Voice · Memory — for Work, Chat or Panel.
+ * by layer, Rules, Identity, Remit, Instructions, Voice, Memory, for Work, Chat or Panel.
  * Read-only, with Copy. It is how an operator checks that an upload landed, and where.
  */
 import { X } from "@phosphor-icons/react";

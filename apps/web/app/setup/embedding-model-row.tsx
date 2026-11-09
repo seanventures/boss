@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * EMBEDDING MODEL — one for the whole org, in the Models step (operator decisions 2026-10-22/23;
+ * EMBEDDING MODEL, one for the whole org, in the Models step (operator decisions 2026-10-22/23;
  * engine services/knowledge/embedding_slot.py). Set once; every project uses it.
  *
  * ONE URL, NOT FIVE FIELDS. For Azure the operator pastes the endpoint or the whole Target URI
@@ -41,7 +41,7 @@ const FIELD_TIPS: Record<string, string> = {
 
 type Form = Record<string, string>;
 
-/** What one pasted URL says — the engine's parse_url, mirrored so the form can prefill. */
+/** What one pasted URL says, the engine's parse_url, mirrored so the form can prefill. */
 export function parseUrl(provider: string, url: string): { endpoint?: string; deployment?: string;
                                                            api_version?: string; base_url?: string } {
   const raw = (url ?? "").trim();
@@ -87,7 +87,7 @@ function CheckLine({ slot }: { slot: EmbeddingModel }) {
   return (
     <span className="su-line" data-testid="su-embedding-check" data-state={check.state}>
       <Dot tone={tone} />
-      <strong>{slot.label} · <span data-user-text>{slot.model}</span>{slot.dimension ? ` · ${slot.dimension} dims` : ""}</strong>
+      <strong>{slot.label}, <span data-user-text>{slot.model}</span>{slot.dimension ? `, ${slot.dimension} dims` : ""}</strong>
       <span className="su-faint">{check.state === "ok" ? "Working" : check.state === "failed" ? "Check failed" : "Not checked"}</span>
       {/* The model's own reply, or its own error: the provider's words, not BOSS's copy. */}
       {check.state !== "unchecked" ? (
@@ -135,7 +135,7 @@ export function EmbeddingModelRow({ startOpen = false }: {
       const next = await setupWrite<SetupView>(projectId, op, body, { label });
       apply(next);
       const state = next.embedding_model?.check?.state;
-      toast(state === "failed" ? "Saved · check failed" : done, state === "failed" ? "error" : "success");
+      toast(state === "failed" ? "Saved, check failed" : done, state === "failed" ? "error" : "success");
       return true;
     } catch (error) {
       toast((error as SetupFailure).message || "Not saved", "error");
@@ -147,7 +147,7 @@ export function EmbeddingModelRow({ startOpen = false }: {
     for (const name of [...shown, ...extra]) if (form[name]?.trim()) body[name] = form[name].trim();
     if (needsConsent) body.accept_database_fallback = consent;
     setForm((f) => ({ ...f, api_key: "" }));
-    if (await write("embedding_model", body, "Save & check", "Saved · Working")) setEditing(false);
+    if (await write("embedding_model", body, "Save & check", "Saved, Working")) setEditing(false);
   };
   const ready = !(fields.includes("url") && provider === "azure" && !form.url?.trim())
     && !(fields.includes("dimension") && !form.dimension?.trim());
@@ -158,7 +158,7 @@ export function EmbeddingModelRow({ startOpen = false }: {
              autoComplete="off" aria-label={name === "url" ? urlLabel(provider) : FIELD_LABELS[name] ?? name}
              data-testid={`su-embedding-${name}`} value={value(name)}
              placeholder={name === "api_key" && slot.has_key && slot.provider === provider
-               ? "Stored · leave empty to keep"
+               ? "Stored, leave empty to keep"
                : name === "url" ? chosen?.example_base_url ?? PLACEHOLDERS.endpoint : PLACEHOLDERS[name] ?? ""}
              title={FIELD_TIPS[name]}
              onChange={(e) => setForm((f) => ({ ...f, [name]: e.target.value }))} />
@@ -180,7 +180,7 @@ export function EmbeddingModelRow({ startOpen = false }: {
             <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm"
                          disabled={busy} data-testid="su-embedding-recheck"
                          title="One tiny embedding through BOSS's budget." data-tip="One tiny embedding through BOSS's budget."
-                         onClick={() => void write("embedding_model_check", {}, "Check", "Checked · Working")}>Check</GatedButton>
+                         onClick={() => void write("embedding_model_check", {}, "Check", "Checked, Working")}>Check</GatedButton>
             <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm"
                          disabled={busy} data-testid="su-embedding-change" onClick={() => setEditing((v) => !v)}>
               {editing ? "Cancel" : "Change"}
@@ -202,7 +202,7 @@ export function EmbeddingModelRow({ startOpen = false }: {
           <span className="su-line">
             {/* The reason is the server's, whole, in the title; the line itself stays short. */}
             <span className="su-line su-faint" data-testid="su-embedding-off" title={slot.reason}>
-              <Dot tone="grey" />Not set · search uses text and graph only
+              <Dot tone="grey" />Not set, search uses text and graph only
             </span>
             <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm"
                          data-testid="su-embedding-setup" aria-expanded={settingUp}

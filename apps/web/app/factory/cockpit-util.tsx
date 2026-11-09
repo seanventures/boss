@@ -20,7 +20,7 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 /**
  * A link to another console area that KEEPS WHO YOU ARE (`org=`). The cockpit built these from
  * scratch (`?area=activity&run=…`), which dropped the org and landed the operator on the
- * organisation picker — the fault url-intent.ts's consoleHref exists to prevent. The area is
+ * organisation picker, the fault url-intent.ts's consoleHref exists to prevent. The area is
  * typed: a research origin linked to `area=discoveries`, an area the console does not have.
  */
 export function areaHref(params: { area: AreaId } & Record<string, string | null | undefined>): string {
@@ -61,7 +61,7 @@ export function StationFaceView({ station, size = 24, still }: { station: Statio
     const n = nameOf(station.hollowRole).name;
     return (
       <span className="fx-face" data-face="hollow" data-role={station.hollowRole} data-hollow
-            title={station.tip || `Next: ${n} · ${station.label}`}>
+            title={station.tip || `Next: ${n}, ${station.label}`}>
         <RunFace roleKey={station.hollowRole} size={size} state="idle" />
       </span>
     );
@@ -75,7 +75,7 @@ export function StationFaceView({ station, size = 24, still }: { station: Statio
   return <span className="fx-face-dot" data-face="none" title={station.tip || `Next: ${station.label}`} aria-hidden />;
 }
 
-/** `09:12` — absolute, with the ISO time as its title (spec §7 Audit). */
+/** `09:12`, absolute, with the ISO time as its title (spec §7 Audit). */
 export function clockOf(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);

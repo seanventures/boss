@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Setup on one page (BOSSAPP-808 screen 2): three blocks — GitHub accounts, Repositories BOSS can
- * work on, Models — each a short table with one "+ Add" action. Every pill comes from the server
+ * Setup on one page (BOSSAPP-808 screen 2): three blocks, GitHub accounts, Repositories BOSS can
+ * work on, Models, each a short table with one "+ Add" action. Every pill comes from the server
  * (GET /v1/setup `github_accounts`, `repositories`, `models`); nothing here maps a state to a tone.
  * The forms are the existing ones (AddAccountPanel's steps, AddRepo, TokenForm), in drawers.
  *
@@ -47,7 +47,7 @@ export function accountsOf(view: SetupView, signin?: SigninStatus | null): GitHu
   if (me?.login && !rows.some((r) => (r.login ?? "").toLowerCase() === me.login!.toLowerCase())) {
     rows.push({
       id: `signin:${me.id}`, connection_id: null, scope: "project", kind: "personal_signin",
-      name: me.login, login: me.login, how: "Personal · signed in with GitHub", personal: true,
+      name: me.login, login: me.login, how: "Personal, signed in with GitHub", personal: true,
       repo_count: 0, expires_at: null,
       pill: { state: "signed_in", tone: "green", label: "Connected", tip: "Signed in. Add a repo to build in." },
     });
@@ -65,13 +65,13 @@ export function reposOf(view: SetupView): SetupRepository[] {
   }));
 }
 
-/** "Read · Write · PRs ✓", or the checks that did not pass ("Write ✗"). Text only, no tone. */
+/** "Read, Write, PRs ✓", or the checks that did not pass ("Write ✗"). Text only, no tone. */
 export function accessLine(checks: SetupRepository["checks"]): string {
   if (!checks) return "Not checked";
   const keys = ["read", "write", "pull_requests"] as const;
-  if (keys.every((k) => checks[k].ok === true)) return "Read · Write · PRs ✓";
+  if (keys.every((k) => checks[k].ok === true)) return "Read, Write, PRs ✓";
   const failed = keys.filter((k) => checks[k].ok === false).map((k) => `${CHECK_NAMES[k]} ✗`);
-  if (failed.length) return failed.join(" · ");
+  if (failed.length) return failed.join(", ");
   return "Not checked";
 }
 
@@ -279,7 +279,7 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
             <span className="su-faint" data-testid="su-add-repo-context">
               To this project
               {(() => { const a = connectable.find((x) => x.connection_id === open.connectionId);
-                        return a ? ` · via ${a.name}` : ""; })()}
+                        return a ? `, via ${a.name}` : ""; })()}
             </span>
             {connectable.length > 1 ? (
               <div className="su-chips" role="radiogroup" aria-label="Account">
@@ -317,7 +317,7 @@ export function WhoDoesWhat({ view, onChange }: { view: SetupView; onChange: (jo
           <button type="button" className="su-chip su-chip-btn" onClick={() => onChange(j.label)} data-testid={`su-who-${j.job}`}
                   title={`${j.resolved!.why} Click to choose the model for ${j.label}.`}
                   data-tip={`${j.resolved!.why} Click to choose the model for ${j.label}.`}>
-            {j.label} → {j.resolved!.label}
+            {j.label}: {j.resolved!.label}
           </button>
           {j.resolved!.pill ? <Pill pill={j.resolved!.pill} testid={`su-who-pill-${j.job}`} /> : null}
         </React.Fragment>

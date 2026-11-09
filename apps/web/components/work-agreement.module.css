@@ -1,20 +1,25 @@
-.backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / .6); }
-.sheet { width: min(780px, 100%); max-height: 92dvh; display: flex; flex-direction: column; background: var(--panel, #171b23); color: var(--text, #eef1f7); border: 1px solid var(--border, #39414e); border-radius: 16px; box-shadow: 0 24px 90px #0008; outline-offset: 3px; }
-.header { padding: 24px 28px 18px; border-bottom: 1px solid var(--border, #39414e); }
-.header p { color: var(--muted, #b1bac9); margin: 0 0 6px; font-size: 0.68421rem; }
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
+.backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: 24px; background: var(--boss-c-448a2cc399); }
+.sheet { width: min(780px, 100%); max-height: 92dvh; display: flex; flex-direction: column; background: var(--panel, var(--boss-c-171b23)); color: var(--text, var(--boss-c-eef1f7)); border: 1px solid var(--border, var(--boss-c-39414e)); border-radius: 16px; box-shadow: 0 24px 90px var(--boss-c-0008); outline-offset: 3px; }
+.header { padding: 24px 28px 18px; border-bottom: 1px solid var(--border, var(--boss-c-39414e)); }
+.header p { color: var(--muted, var(--boss-c-b1bac9)); margin: 0 0 6px; font-size: 0.68421rem; }
 .header h2 { margin: 0; font-size: 1.26316rem; letter-spacing: -.025em; }
 .body { padding: 8px 28px 24px; overflow: auto; overscroll-behavior: contain; }
 .details { line-height: 1.55; font-size: 0.73684rem; overflow-wrap: anywhere; }
 .details h3 { margin: 26px 0 10px; font-size: 0.78947rem; }
-.lead { color: var(--muted, #b1bac9); }
-.brief { white-space: pre-wrap; padding: 16px 18px; margin: 0; border-left: 3px solid var(--accent, #89c5a4); background: rgb(128 128 128 / .08); }
+.lead { color: var(--muted, var(--boss-c-b1bac9)); }
+.brief { white-space: pre-wrap; padding: 16px 18px; margin: 0; border-left: 3px solid var(--accent, var(--boss-c-89c5a4)); background: var(--boss-c-ae1388eec7); }
 .facts { display: grid; grid-template-columns: 9.47368rem 1fr; gap: 8px 18px; margin: 0; }
-.facts dt { color: var(--muted, #b1bac9); }
+.facts dt { color: var(--muted, var(--boss-c-b1bac9)); }
 .facts dd { margin: 0; }
 .steps { padding-left: 24px; }
 .steps li { padding: 0 0 14px 6px; }
 .steps p { margin: 5px 0 0; }
-.note { font-size: 0.68421rem; color: var(--muted, #b1bac9); }
-.footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; padding: 16px 28px; border-top: 1px solid var(--border, #39414e); }
-.error { color: var(--danger, #fca5a5); }
+.note { font-size: 0.68421rem; color: var(--muted, var(--boss-c-b1bac9)); }
+.footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; padding: 16px 28px; border-top: 1px solid var(--border, var(--boss-c-39414e)); }
+.error { color: var(--danger, var(--boss-c-fca5a5)); }
 @media (max-width: 580px) { .backdrop { padding: 8px; } .sheet { max-height: 96dvh; border-radius: 12px; } .header, .body { padding-left: 18px; padding-right: 18px; } .header h2 { font-size: 1.10526rem; } .facts { grid-template-columns: 1fr; gap: 2px; } .facts dd { margin-bottom: 10px; } .footer { padding: 14px 18px; } }

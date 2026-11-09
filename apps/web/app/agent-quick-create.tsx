@@ -5,13 +5,13 @@
  *
  * There were four: the roster's quick create, Agent Studio's five-step wizard, Team
  * structure's "Add agent from template", and Studio's "Install starter catalog". Each made a
- * different thing — a role with grants, a Studio definition with none, a definition with no
- * role — so what an operator had "created" depended on where they had clicked. Now:
+ * different thing, a role with grants, a Studio definition with none, a definition with no
+ * role, so what an operator had "created" depended on where they had clicked. Now:
  *
  *   - Blank makes the agent and gives it its skills and MCP servers in one request
  *     (POST /v1/agents), so it can be put on a workflow step the moment this closes;
  *   - Advanced, on the same tab, adds the runtime profile the wizard collected (prompts, rules,
- *     model selection, limits) — written after the agent, with what it uses granted;
+ *     model selection, limits), written after the agent, with what it uses granted;
  *   - From template installs a shipped template, or adopts a Studio definition no agent
  *     answers to yet, and makes the agent for it.
  */
@@ -88,7 +88,7 @@ export function profileDraft(input: {
 
 /**
  * The voice a new agent is born with: the face the operator chose (if any), and a callsign and
- * tagline if they typed them. Never a cast member's callsign, tagline or hand-drawn parts — a new
+ * tagline if they typed them. Never a cast member's callsign, tagline or hand-drawn parts, a new
  * agent born from `qa` is not a second Vera (principle 2.1, one identity everywhere).
  */
 export function birthPersona(o: { face?: AvatarSpec; callsign?: string; tagline?: string; about?: string;
@@ -166,7 +166,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   const afterBirth = () => {
     if (!birth) return;
     const shown = birth.identity.callsign || birth.identity.name;
-    toast("success", birth.agentId ? `${shown} is born · ${shortId(birth.agentId)}` : `${shown} is born`);
+    toast("success", birth.agentId ? `${shown} is born, ${shortId(birth.agentId)}` : `${shown} is born`);
     onCreated(birth.roleKey);
     askAgent(birth.roleKey, birth.identity.name, { from: "passport" });
   };
@@ -210,15 +210,15 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   const mayUpdate = useCan("agent:update").allowed;
   const submit = async () => {
     if (!name.trim()) { setFailed("Name it first"); return; }
-    if (taken) { setFailed(`“${key}” exists — pick another name`); return; }
-    if (keyInvalid) { setFailed("Key: letters, digits, _ — start with a letter"); return; }
+    if (taken) { setFailed(`“${key}” exists, pick another name`); return; }
+    if (keyInvalid) { setFailed("Key: letters, digits, _, start with a letter"); return; }
     if (callsignTaken(callsign)) { setFailed(`Callsign “${callsign.trim()}” is taken`); return; }
     const mcpServers: McpGrant[] = Object.entries(servers)
       .map(([server_id, tools]) => ({ server_id, tools: parseToolList(tools) }));
     setBusy(true);
     setFailed("");
     if (profile) {
-      // WITH A PROFILE: the wizard's submission — the agent and its grants first, then the
+      // WITH A PROFILE: the wizard's submission, the agent and its grants first, then the
       // Studio definition, validated and published.
       if (nameMakesNoKey) { setBusy(false); setFailed("A profile needs a name in English letters"); return; }
       const fresh = profileDraft({
@@ -346,7 +346,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
 
             {loadFailed ? (
               <p className="aq-bad" data-testid="aq-load-failed" title={loadFailed}>
-                Could not load skills — add them later
+                Could not load skills, add them later
               </p>
             ) : null}
 
@@ -363,8 +363,8 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
                   return (
                     <label key={s.skill_id} className={on ? "selected" : ""}
                            title={[s.summary || s.label,
-                                   s.risk_tier >= 2 ? `Risk ${s.risk_tier} — needs approval each time` : "",
-                                   !s.enabled ? "Not enabled in this project" : ""].filter(Boolean).join(" · ")}>
+                                   s.risk_tier >= 2 ? `Risk ${s.risk_tier}, needs approval each time` : "",
+                                   !s.enabled ? "Not enabled in this project" : ""].filter(Boolean).join(", ")}>
                       <input type="checkbox" checked={on}
                              data-testid={`aq-skill-${s.skill_id}`}
                              onChange={() => setSkills(on ? skills.filter((x) => x !== s.skill_id)
@@ -387,7 +387,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
                   return (
                     <label key={m.mcp_server_id} className={on ? "selected" : ""}
                            title={[m.description || m.url, !m.enabled ? "Disabled in this project" : ""]
-                             .filter(Boolean).join(" · ")}>
+                             .filter(Boolean).join(", ")}>
                       <input type="checkbox" checked={on}
                              data-testid={`aq-mcp-${m.mcp_server_id}`}
                              onChange={() => {
@@ -440,7 +440,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
                   </select>
                 </label>
                 {advanced.selectionMode === "pinned" ? (
-                  <label className="aw-field"><span>Model id <HelpTip label="Model id" text="A model, or source:model — e.g. claude_code:opus, ollama:llama3.1." /></span>
+                  <label className="aw-field"><span>Model id <HelpTip label="Model id" text="A model, or source:model, e.g. claude_code:opus, ollama:llama3.1." /></span>
                     <input value={advanced.pinnedModel} data-testid="aq-pinned-model"
                            onChange={(e) => setA("pinnedModel", e.target.value)} />
                   </label>
@@ -509,7 +509,7 @@ function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn
   }, [projectId]);
 
   /** The agent a template or definition stands for: made when no agent has its key yet, and
-   *  born — so a template agent has a passport like any other. */
+   *  born, so a template agent has a passport like any other. */
   const ensureAgent = async (roleKey: string, name: string, purpose: string, templateKey: string): Promise<boolean> => {
     if (existing.has(roleKey)) { onCreated(roleKey); return true; }
     // A template keeps its role's face as shipped (docs/cast): no new seed, no persona face. A
@@ -640,7 +640,7 @@ export function callsignTaken(callsign: string): boolean {
 
 /** From archetype: the hand-drawn cast, the operator's crew first and the "thinks like"
  *  archetypes last. A "thinks like" archetype is a way of thinking, never a person; a role starts
- *  from that role's voice. The new agent gets its OWN face and name — never the cast member's. */
+ *  from that role's voice. The new agent gets its OWN face and name, never the cast member's. */
 function ArchetypePicker({ projectId, actor, existing, onBorn }: {
   projectId: string; actor: string; existing: Set<string>;
   onBorn: (roleKey: string, agentId: string, name: string, persona?: Persona) => void;
@@ -701,7 +701,7 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
             <button key={k} type="button" role="radio" aria-checked={pick === k} className="ag-arch"
                     data-testid={`aq-arch-${k}`}
                     title={[thinks ? "Inspired by a way of thinking" : "Starts from this role's voice", who.tagline]
-                      .filter(Boolean).join(" · ")}
+                      .filter(Boolean).join(", ")}
                     onClick={() => choose(k)}>
               <AgFace roleKey={k} identity={who} size={48} decorative />
               <span className="ag-arch-name">{who.callsign || who.name}</span>

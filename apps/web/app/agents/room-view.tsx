@@ -17,7 +17,7 @@
  * question asked (clipped, the whole of it in the tooltip). Who is in the room is shown as
  * faces beside it, never as a title that a first turn then swaps out.
  *
- * Layout: the table stays put and the transcript scrolls inside its own pane — the page never
+ * Layout: the table stays put and the transcript scrolls inside its own pane, the page never
  * scrolls (the operator's note on the Run view, applied here from the start).
  */
 
@@ -116,7 +116,7 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
             {conversation ? title.text : "Opening…"}
           </strong>
           <span className="ag-room-members ag-stack" data-testid="ag-room-members"
-                title={named.map((s) => seatName(s).name).join(" · ")}>
+                title={named.map((s) => seatName(s).name).join(", ")}>
             {seats.map((k) => <ConverseFace key={k} roleKey={k} size={24} state={stateOf(k)} />)}
           </span>
           <span className="ag-spacer" />
@@ -170,7 +170,7 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
               <ToToggle key={k} roleKey={k} on={to.includes(k)} onToggle={() => toggle(k)} />
             ))}
           </div>
-          <Composer placeholder="Ask the room · @ to mention" seats={named}
+          <Composer placeholder="Ask the room, @ to mention" seats={named}
                     disabled={busy || !conversation || conversation.status === "closed"} autoFocus
                     onSend={send}
                     onMention={(k) => setTo((all) => all.includes(k) ? all : [...all, k])}
@@ -244,7 +244,7 @@ function SummaryCard({ turn, summary, onStart, onDecision }: {
     <section className="ag-summary" data-testid="ag-summary" aria-label="Room summary">
       <header className="ag-summary-head">
         <ConverseFace roleKey={summary.byRoleKey} size={24} />
-        <span className="ag-eyebrow">Summary</span>
+        <span className="ag-area-name">Summary</span>
         <span className="ag-muted">by {by.name}</span>
         <AiBadge />
       </header>
@@ -287,7 +287,7 @@ function Stance({ roleKey, word }: { roleKey: string; word: "For" | "Against" })
   const who = seatName(useSeat(roleKey));
   return (
     <span className="ag-chip" data-stance={word.toLowerCase()} title={`${who.name}: ${word.toLowerCase()}`}>
-      <i className="ag-dot" aria-hidden />{word} · {who.name}
+      <i className="ag-dot" aria-hidden />{word}, {who.name}
     </span>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Setup › Model routing (docs/product/MODEL_ROUTER.md) — where "Who does what" lived.
+ * Setup › Model routing (docs/product/MODEL_ROUTER.md), where "Who does what" lived.
  *
  * Smart | Fixed. Smart picks a tier per step from the task (Fast / Balanced / Frontier), holds
  * the floors, moves cheap work off a subscription near its limit and escalates on evidence.
@@ -46,7 +46,7 @@ function useSave() {
   // marked unavailable with the reason, and a press does nothing.
   const gate = useGate("setup:manage");
   const save = async (policy: Record<string, unknown>, label: string) => {
-    // Controls are never disabled while saving — a disabled button drops keyboard focus to
+    // Controls are never disabled while saving, a disabled button drops keyboard focus to
     // <body>. A second press during a save is ignored here instead.
     if (busy || !gate.allowed) return false;
     setBusy(true);
@@ -54,7 +54,7 @@ function useSave() {
       const next = await setupWrite<SetupView>(projectId, "routing", {
         policy, version: view.routing?.version ?? null }, { label });
       apply(next);
-      toast(`Saved · ${label}`);
+      toast(`Saved, ${label}`);
       return true;
     } catch (error) {
       const refusal = (error as SetupFailure).refusal as { headline?: string; message?: string }
@@ -66,7 +66,7 @@ function useSave() {
   return { save, busy, gate };
 }
 
-/** Focus a control by test id after the next render — for when the pressed one unmounted
+/** Focus a control by test id after the next render, for when the pressed one unmounted
  *  (a removed chip, a closed popover), so keyboard focus never falls to <body>. */
 function useRefocus(): (testid: string) => void {
   const [target, setTarget] = useState<string | null>(null);
@@ -83,13 +83,13 @@ function TierDot({ tier }: { tier: Tier }) {
   return <span className={`mr-dot mr-${tier}`} aria-hidden="true" />;
 }
 
-/** Every source · model a tier can name, from what is connected. */
+/** Every source, model a tier can name, from what is connected. */
 function useOptions(routing: Routing): RouteTarget[] {
   return useMemo(() => {
     const out: RouteTarget[] = [];
     for (const s of routing.sources) {
       for (const m of s.models.length ? s.models : [null]) {
-        out.push({ engine: s.engine, model: m, label: m ? `${s.label} · ${m}` : s.label });
+        out.push({ engine: s.engine, model: m, label: m ? `${s.label}, ${m}` : s.label });
       }
     }
     return out;
@@ -216,7 +216,7 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
 function Meter({ h }: { h: Routing["headroom"][number] }) {
   const left = h.left == null ? null : Math.round(h.left * 100);
   const when = localWith(h.resets_at, { weekday: "short", hour: "2-digit", minute: "2-digit" }) || null;
-  const tip = `${h.source_label}: ${h.describe}${when ? ` · resets ${when}` : ""}`
+  const tip = `${h.source_label}: ${h.describe}${when ? `, resets ${when}` : ""}`
     + (h.basis === "estimate" ? " (estimated from calls)" : h.basis === "unknown" ? " (not reported yet)" : "");
   return (
     <div className="mr-line" data-testid={`mr-headroom-${h.engine}`}>
@@ -229,7 +229,7 @@ function Meter({ h }: { h: Routing["headroom"][number] }) {
       <span className={`su-pill su-tone-${STATE_TONE[h.state] ?? "grey"}`} title={tip} data-tip={tip}
             data-testid={`mr-headroom-state-${h.engine}`}>
         <span className={`su-dot su-tone-${STATE_TONE[h.state] ?? "grey"}`} aria-hidden="true" />
-        {h.label}{left != null && h.state !== "exhausted" ? ` · ${left}% left` : ""}
+        {h.label}{left != null && h.state !== "exhausted" ? `, ${left}% left` : ""}
       </span>
       {when ? <span className="su-faint">resets {when}</span> : null}
     </div>
@@ -245,7 +245,7 @@ function Headroom({ routing, metersOnly = false }: { routing: Routing; metersOnl
   if (!subs.length) return null;
   if (metersOnly) {
     // Fixed mode moves nothing, but how much of each subscription is left is still worth
-    // seeing — it is the same account the operator's own work spends.
+    // seeing, it is the same account the operator's own work spends.
     return (
       <div className="mr-section" data-testid="mr-headroom">
         <span className="mr-sub" title="How much of each subscription's window is left.">Headroom</span>
@@ -313,8 +313,8 @@ function Classifier({ routing }: { routing: Routing }) {
   const c = routing.classifier;
   const [criteria, setCriteria] = useState(c.criteria);
   useEffect(() => setCriteria(c.criteria), [c.criteria]);
-  const jev = c.jev === "held" ? { label: "Jev · paused", tip: "Live Jev calls are held (BOSS-451). Rules answer instead." }
-    : c.jev === "ready" ? { label: "Jev · ready", tip: "TypeSafe Jev classifies first." }
+  const jev = c.jev === "held" ? { label: "Jev, paused", tip: "Live Jev calls are held (BOSS-451). Rules answer instead." }
+    : c.jev === "ready" ? { label: "Jev, ready", tip: "TypeSafe Jev classifies first." }
     : { label: "No Jev key", tip: "Add a TypeSafe key under Decisions to use Jev." };
   return (
     <div className="mr-section" data-testid="mr-classifier">
@@ -354,7 +354,7 @@ function Classifier({ routing }: { routing: Routing }) {
 function Week({ routing }: { routing: Routing }) {
   const w = routing.week;
   const total = TIERS.reduce((n, t) => n + (w.tiers[t] ?? 0), 0);
-  const mix = TIERS.map((t) => `${TIER_LABEL[t]} ${total ? Math.round(((w.tiers[t] ?? 0) / total) * 100) : 0}%`).join(" · ");
+  const mix = TIERS.map((t) => `${TIER_LABEL[t]} ${total ? Math.round(((w.tiers[t] ?? 0) / total) * 100) : 0}%`).join(", ");
   return (
     <div className="mr-section" data-testid="mr-week">
       <span className="mr-sub" title="Routes in the last 7 days.">This week</span>
@@ -393,7 +393,7 @@ function Pins({ open, onToggle, routing }: {
               onClick={onToggle} title={smart ? PREFER_TIP : "Which model does each job."}>
         {smart ? "Prefer for a job" : "Pin a job"}
         <CaretRight size={12} className={open ? "su-rot" : undefined} aria-hidden="true" />
-        {pinned ? <span className="su-faint"> · {pinned} {smart ? "preferred" : "pinned"}</span> : null}
+        {pinned ? <span className="su-faint">, {pinned} {smart ? "preferred" : "pinned"}</span> : null}
       </button>
       {open ? (
         <div className="su-jobs">
@@ -430,7 +430,7 @@ function Summary({ routing }: { routing: Routing }) {
       )) : null}
       {tight ? (
         <span className={`su-pill su-tone-${STATE_TONE[tight.state]}`} title={tight.describe}>
-          {tight.source_label} · {tight.label}</span>
+          {tight.source_label}, {tight.label}</span>
       ) : null}
     </>
   );

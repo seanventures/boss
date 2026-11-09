@@ -6,7 +6,7 @@
  *
  *     [ Deploy now ]  Ships this build to Pricing Experiment Log · staging (192.0.2.202:3017).
  *     ...
- *     Approved — starting. The gate is signed off; the step moves as soon as a worker picks
+ *     Approved, starting. The gate is signed off; the step moves as soon as a worker picks
  *     it up, usually within a minute.
  *
  * Pressing it would have started a SECOND deploy of the same build while the first was being
@@ -37,7 +37,7 @@ describe("an approved gate stops offering the press that answers it", () => {
   });
 
   it("and the panel still says what is happening instead", () => {
-    expect(UI).toContain("Approved — starting.");
+    expect(UI).toContain("Approved, starting.");
   });
 });
 

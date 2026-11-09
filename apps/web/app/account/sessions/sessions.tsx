@@ -53,7 +53,7 @@ export function MySessions({ sessions: initial }: { sessions: SessionRow[] }) {
             <span className="idn-d">{s.device === "phone" ? <DeviceMobile size={17} aria-hidden /> : <Desktop size={17} aria-hidden />}</span>
             <span>
               <b data-copy="data">{s.client}</b> {s.current ? <Pill tone="info">this one</Pill> : null}
-              <small data-copy="data">{[s.location, publicAddress(s.ip), methodWords(s.methods)].filter(Boolean).join(" · ")} · started <Ago iso={s.started_at} /></small>
+              <small data-copy="data">{[s.location, publicAddress(s.ip), methodWords(s.methods)].filter(Boolean).join(", ")}, started <Ago iso={s.started_at} /></small>
             </span>
             {s.current ? <span className="idn-dim">now</span> : (
               <button type="button" className="idn-btn sm" aria-label={`End ${s.client}`} onClick={() => end(() => idDelete(`/v1/identity/me/sessions/${encodeURIComponent(s.id)}`), "Session ended")}>End</button>

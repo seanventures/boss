@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* Start a project (BOSSAPP-810): New project, Import a repo, the project page.
    Built on the console's tokens (design-system.css) and the New project sheet (globals .bx-np-*). */
 
@@ -24,7 +29,7 @@
   font: inherit;
 }
 .spj-choice b { font-family: var(--display); font-size: 1.05rem; color: var(--ink); font-weight: 600; }
-.spj-choice:hover, .spj-choice:focus-visible { border-color: var(--accent-line); background: var(--accent-soft); }
+.spj-choice:hover, .spj-choice:focus-visible { border-color: var(--accent-line); background: var(--accent-soft); outline: 2px solid currentColor; outline-offset: 2px;}
 .spj-choice[data-highlight] { border-color: var(--accent-line); background: var(--accent-soft); }
 .spj-tag { font-size: 0.68rem; letter-spacing: 0; color: var(--accent-text); font-weight: 700; }
 .spj-line { font-size: 0.82rem; line-height: 1.4; }
@@ -37,7 +42,7 @@
 }
 .spj-preset b { color: var(--ink); font-weight: 600; font-size: 0.84rem; }
 .spj-preset span { font-size: 0.74rem; }
-.spj-preset:hover, .spj-preset:focus-visible { border-color: var(--accent-line); }
+.spj-preset:hover, .spj-preset:focus-visible { border-color: var(--accent-line); outline: 2px solid currentColor; outline-offset: 2px;}
 .spj-preset[data-kind="knowledge_graph"] span { color: var(--teal); }
 .spj-preset-all { align-content: center; }
 .spj-preset-all b { color: var(--accent-text); }
@@ -51,7 +56,7 @@
 .spj-flow li b, .spj-next li b { color: var(--ink); font-size: 0.84rem; }
 .spj-flow li span, .spj-next li span { color: var(--faint); font-size: 0.74rem; }
 .spj-flow li:nth-child(1) span, .spj-flow li:nth-child(4) span, .spj-next li[data-you] span { color: var(--amber); }
-.spj-next li[data-you] { border-color: rgba(245, 181, 68, 0.35); background: var(--amber-soft); }
+.spj-next li[data-you] { border-color: var(--boss-c-e1d5f2e5d2); background: var(--amber-soft); }
 
 /* Screen 2: three columns */
 .spj-import { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
@@ -80,7 +85,7 @@
 .spj-facts div[data-known] dd { color: var(--ink); }
 .spj-map { display: grid; gap: 6px; font-size: 0.8rem; color: var(--ink-soft); }
 .spj-bar { display: block; height: 6px; border-radius: 3px; background: var(--surface); overflow: hidden; }
-.spj-bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.4s ease; }
+.spj-bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: none; }
 .spj-check { display: flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 0.82rem; cursor: pointer; }
 .spj-check input { accent-color: var(--accent); }
 .spj-wide { width: 100%; }

@@ -231,7 +231,7 @@ function AppCard({ status, reload, back = false, repos = [] }: {
   useEffect(() => { setVerified(status.app.verified ?? null); }, [status.app.verified]);
 
   // `quiet`: an ask nobody pressed for (on open, a repository change, coming back to the tab).
-  // Its failure stays in the card's own lines — never a toast over whatever area is on screen
+  // Its failure stays in the card's own lines, never a toast over whatever area is on screen
   // (KG round 6: "Reload and retry" over the Knowledge Graph came from this card, mounted hidden
   // in Setup, asking GitHub on its own). An aborted request is never a failure.
   const verify = useCallback(async (quiet = false) => {
@@ -246,10 +246,10 @@ function AppCard({ status, reload, back = false, repos = [] }: {
   // Asked on its own only while Setup is the area on screen (every area stays mounted hidden).
   const onScreen = useOnScreen();
   // ASKED AGAIN when GitHub sends the person back, when Test all runs, and once when the App is
-  // installed but GitHub was never asked — never trusted from what BOSS requested.
+  // installed but GitHub was never asked, never trusted from what BOSS requested.
   const installed = app.installed && app.source === "setup";
   // Asked on open when GitHub was never asked, when the stored answer has a gap (it may have been
-  // closed on GitHub since) or is older than VERIFY_STALE_S — never shown stale as if current.
+  // closed on GitHub since) or is older than VERIFY_STALE_S, never shown stale as if current.
   const stored = status.app.verified;
   const needsAsking = !stored || stored.ok === false
     || !stored.checked_at || Date.now() / 1000 - stored.checked_at > VERIFY_STALE_S;
@@ -350,7 +350,7 @@ function AppCard({ status, reload, back = false, repos = [] }: {
   } else if (!app.installed) {
     body = (
       <>
-        <span className="su-line"><Dot tone="amber" />Created{app.slug ? <span className="su-mono" data-user-text>{app.slug}</span> : null} · not installed</span>
+        <span className="su-line"><Dot tone="amber" />Created{app.slug ? <span className="su-mono" data-user-text>{app.slug}</span> : null}, not installed</span>
         <div className="su-line">
           {links.install ? <Out href={links.install} testid="gh-app-install"
                                tip="Pick the repos it may touch.">Install on GitHub</Out> : null}
@@ -444,7 +444,7 @@ function TokenCard({ status, reload }: { status: GitHubStatus; reload: () => voi
           </span>
           <span className="su-line su-faint">
             {token.login ? <>as <span className="su-mono" data-user-text>@{token.login}</span></> : null}
-            {token.migrated ? " · moved from BOSS_GITHUB_TOKEN" : ""}
+            {token.migrated ? ", moved from BOSS_GITHUB_TOKEN" : ""}
           </span>
           <button type="button" className="su-link" onClick={() => setConfirming(true)} data-testid="gh-token-remove">Remove</button>
         </>

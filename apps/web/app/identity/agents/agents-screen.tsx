@@ -2,7 +2,7 @@
 
 /**
  * IDENTITY › AGENTS (IDENTITY.md §9.6): each Passport with its sponsor, ceiling preset, status,
- * active grants and last run — an agent without a sponsor is flagged — and every delegation
+ * active grants and last run, an agent without a sponsor is flagged, and every delegation
  * grant (person → agents), each opening the lineage view.
  */
 import React, { useMemo, useState } from "react";
@@ -49,12 +49,12 @@ export function AgentsScreen({ agents, delegations, delegationsFailure = null }:
     <>
       <div className="idn-sec-h">
         <h1 className="idn-h1">Agents</h1>
-        <span className="idn-sub" title="Each agent carries a Passport: what it may be given, and who sponsors it">{agents.filter((a) => a.status !== "revoked").length} agents · {agents.filter((a) => a.status === "suspended").length} suspended</span>
+        <span className="idn-sub" title="Each agent carries a Passport: what it may be given, and who sponsors it">{agents.filter((a) => a.status !== "revoked").length} agents, {agents.filter((a) => a.status === "suspended").length} suspended</span>
         <span className="idn-spacer" />
         <div className="idn-segs" role="group" aria-label="Show">
           {FILTERS.map((f) => (
             <button key={f.id} type="button" aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>
-              {f.label}{f.id === "unsponsored" && unsponsored ? ` · ${unsponsored}` : ""}
+              {f.label}{f.id === "unsponsored" && unsponsored ? `, ${unsponsored}` : ""}
             </button>
           ))}
         </div>
@@ -79,7 +79,7 @@ export function AgentsScreen({ agents, delegations, delegationsFailure = null }:
                 {a.ceiling_preset && presetName(a.ceiling_preset).toLowerCase() !== a.title.toLowerCase()
                   ? <span className="idn-chip" title="Access limit: the most anyone may delegate to it">{presetName(a.ceiling_preset)} limit</span> : null}
               </span>
-              <small>{a.active_grants} {a.active_grants === 1 ? "grant" : "grants"} · last run <Ago iso={a.last_run_at} /></small>
+              <small>{a.active_grants} {a.active_grants === 1 ? "grant" : "grants"}, last run <Ago iso={a.last_run_at} /></small>
             </span>
             <Pill tone={statusTone(a.status)}>{a.status}</Pill>
           </a>

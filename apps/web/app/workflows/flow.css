@@ -1,3 +1,4 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* Workflow Studio: flow. Classes are prefixed wf- and use only the base tokens. */
 
 /* ── The lane ──────────────────────────────────────────────────────────────────
@@ -73,13 +74,13 @@
 .wf-lane-row { position: relative; display: flex; align-items: stretch; min-width: 0; }
 .wf-lane-row > .wf-lane-viewport { flex: 1 1 auto; min-width: 0; }
 .wf-lane[data-mode="design"] .wf-lane-row { flex: 0 1 auto; min-height: 0; }
-.wf-lane-fade {
+.wf-lane-edge {
   position: absolute; top: 0; bottom: 0; width: 40px; z-index: 2;
   pointer-events: none; opacity: 0; transition: opacity 150ms ease;
 }
-.wf-lane-fade[data-side="left"] { left: 40px; background: linear-gradient(90deg, var(--surface), transparent); }
-.wf-lane-fade[data-side="right"] { right: 40px; background: linear-gradient(270deg, var(--surface), transparent); }
-.wf-lane-fade[data-on] { opacity: 1; }
+.wf-lane-edge[data-side="left"] { left: 40px; background: linear-gradient(90deg, var(--surface), transparent); }
+.wf-lane-edge[data-side="right"] { right: 40px; background: linear-gradient(270deg, var(--surface), transparent); }
+.wf-lane-edge[data-on] { opacity: 1; }
 .wf-lane-arrow {
   flex: none; align-self: center; margin: 0 4px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -105,7 +106,7 @@
   animation: wf-flow 1.6s linear infinite;
 }
 .wf-conn[data-flow="future"] { background: color-mix(in srgb, var(--faint) 30%, transparent); }
-@keyframes wf-flow { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@keyframes wf-flow { from { background-position: 100% 0;} to { background-position: -100% 0;} }
 
 /* Branched flows are drawn as curves. */
 .wf-edges { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
@@ -206,7 +207,7 @@
   cursor: pointer;
   user-select: none;
   touch-action: manipulation;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 120ms ease;
 }
 .wf-lane[data-mode="design"] .wf-node { cursor: grab; }
 .wf-node:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
@@ -403,8 +404,8 @@
 /* The step in flight breathes; only its shadow moves, so nothing reflows for a long run. */
 .wf-node[data-phase="moving"] .wf-node-icon { animation: wf-pulse 1.8s ease-in-out infinite; }
 @keyframes wf-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
-  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);}
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent);}
 }
 @media (prefers-reduced-motion: reduce) {
   .wf-node[data-phase="moving"] .wf-node-icon { animation: none; box-shadow: 0 0 0 2px var(--accent); }

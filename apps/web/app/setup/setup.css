@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* Repo and models. Classes are prefixed su- and use only the base tokens. */
 
 .su-board {
@@ -112,7 +117,7 @@
 .su-dot.su-tone-grey { background: var(--faint); }
 svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-spin { animation: su-spin 0.9s linear infinite; }
-@keyframes su-spin { to { transform: rotate(360deg); } }
+@keyframes su-spin { to { transform: rotate(360deg);} }
 @media (prefers-reduced-motion: reduce) { .su-spin { animation: none; } }
 
 .su-chip {
@@ -377,12 +382,12 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--boss-c-17ab3dd1ab);
   display: flex;
   justify-content: flex-end;
 }
 .su-drawer {
-  width: min(480px, 100vw);
+  width: min(480px, 100%);
   height: 100%;
   overflow: auto;
   background: var(--surface);
@@ -409,7 +414,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
   .su-try .su-btn { width: 100%; justify-content: center; }
   .su-drawer-scrim { align-items: flex-end; justify-content: stretch; }
   .su-drawer {
-    width: 100vw;
+    width: 100%;
     height: auto;
     max-height: 88vh;
     border-left: 0;
@@ -423,8 +428,8 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-model .su-menu { margin-left: auto; }
 
 /* The verdict is the page's one answer: a dot and a solid tone, never a faint tint. */
-.su-verdict.su-tone-red { background: var(--red); color: #fff; }
-.su-verdict.su-tone-red .su-dot { background: #fff; }
+.su-verdict.su-tone-red { background: var(--red); color: var(--boss-c-fff); }
+.su-verdict.su-tone-red .su-dot { background: var(--boss-c-fff); }
 .su-verdict.su-tone-green .su-dot { background: var(--green); }
 
 /* A model row: menu and age stay on the line's end, wrapping as one. */
@@ -483,7 +488,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-cap-form { padding-left: 4px; }
 .su-cap-form select { min-height: 30px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink); font: inherit; font-size: 0.8125rem; }
 .su-cap-sessions { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0 0 0 12px; list-style: none; border-left: 2px solid var(--border); }
-.su-cap-label { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.su-cap-label { font-size: 0.75rem; font-weight: 700; letter-spacing: 0; text-transform: none; }
 
 /* GitHub access: three ways side by side (stacked on a phone); the active one is outlined. */
 .su-ways { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; min-width: 0; }
@@ -513,7 +518,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .mr-body { gap: 16px; }
 .mr-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-height: 28px; min-width: 0; }
 .mr-sub {
-  font: 700 0.6875rem/1 var(--sans); letter-spacing: 0.06em; text-transform: uppercase;
+  font: 700 0.6875rem/1 var(--sans); letter-spacing: 0; text-transform: none;
   color: var(--faint); cursor: help;
 }
 .mr-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r); overflow: hidden; }
@@ -523,7 +528,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 }
 .mr-seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
 .mr-seg button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
-.mr-seg button:disabled { cursor: default; opacity: 0.6; }
+.mr-seg button:disabled { cursor: default; opacity: 0.6; cursor: not-allowed;}
 .mr-tiers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .mr-tier {
   display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px;
@@ -636,12 +641,12 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 
 /* ---- Advanced: everything past ① GitHub ② Repos ③ Model ④ Try it, folded, one plain line each ---- */
 .su-advanced { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: .75rem; }
-.su-advanced-summary { cursor: pointer; font-size: .8125rem; font-weight: 600; letter-spacing: .08em;
-  text-transform: uppercase; color: var(--faint); padding: .25rem 0; list-style: revert; }
+.su-advanced-summary { cursor: pointer; font-size: .8125rem; font-weight: 600; letter-spacing: 0;
+  text-transform: none; color: var(--faint); padding: .25rem 0; list-style: revert; }
 .su-advanced[open] > .su-advanced-summary { color: inherit; margin-bottom: .5rem; }
 .su-adv-item { margin-top: .5rem; }
 .su-adv-why { display: block; font-size: .75rem; margin: .25rem 0 0; }
-.su-code { font-size: 1.125rem; letter-spacing: .12em; padding: .25rem .5rem; border-radius: 6px;
+.su-code { font-size: 1.125rem; letter-spacing: 0; padding: .25rem .5rem; border-radius: 6px;
   border: 1px solid var(--border); }
 
 /* Setup choices stay in document flow; forms remain mounted when a disclosure closes. */
@@ -668,7 +673,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 
 /* A held connection proof: why, in words, then Review → Release the hold. */
 .su-held { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px 12px;
-           border: 1px solid var(--line, rgba(127,127,127,.3)); border-radius: 8px; }
+           border: 1px solid var(--line, var(--boss-c-02767a6ebf)); border-radius: 8px; }
 .su-held-summary { line-height: 1.4; }
 .su-held > .su-btn { align-self: flex-start; }
 .su-held-review { display: flex; flex-direction: column; gap: 8px; }
@@ -679,7 +684,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 /* Add model › Subscription › Sign in (BOSSAPP-769): the provider's URL and one-time code. */
 .su-signin { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .su-signin-code { height: auto; padding: 6px 10px; cursor: copy; }
-.su-signin-code code { font: 600 1.25rem var(--mono); letter-spacing: .14em; }
+.su-signin-code code { font: 600 1.25rem var(--mono); letter-spacing: 0; }
 .su-signin-code:hover { border-color: var(--accent); }
 .su-signin-code-field input { width: 220px; font-family: var(--mono); }
 .su-signin-stopped { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
@@ -793,7 +798,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 /* ② Repos › Connect GitHub (BOSSAPP-815): what happens on GitHub, before it opens. */
 .su-next-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; }
 button.su-chip { background: transparent; font: 600 0.75rem/1 var(--sans); cursor: pointer; }
-button.su-chip:hover, button.su-chip:focus-visible { border-color: var(--accent); }
+button.su-chip:hover, button.su-chip:focus-visible { border-color: var(--accent); outline: 2px solid currentColor; outline-offset: 2px;}
 button.su-chip[aria-checked="true"] { color: var(--accent); border-color: var(--accent); }
 
 /* ── Repo and models: one place per thing (2026-11-05) ─────────────────────────── */

@@ -20,8 +20,8 @@ function Pill({ text, color }: { text: string; color: string }) {
         color,
         border: `1px solid ${color}55`,
         background: `${color}18`,
-        textTransform: "uppercase",
-        letterSpacing: "0.04em",
+        textTransform: "none",
+        letterSpacing: "0",
         whiteSpace: "nowrap",
       }}
     >
@@ -43,7 +43,7 @@ export function KnowledgeGraphPanel({ feed }: { feed: KnowledgeGraphFeed }) {
       <section className="ct-block" data-empty-state="knowledge-graph-unreachable">
         <div className="ct-block-title">Knowledge graph</div>
         <p className="empty-state" style={{ padding: "12px 0" }}>
-          Control plane unreachable — graph health could not be loaded.
+          Control plane unreachable, graph health could not be loaded.
         </p>
       </section>
     );
@@ -114,7 +114,7 @@ export function KnowledgeGraphPanel({ feed }: { feed: KnowledgeGraphFeed }) {
                 const res = await seedGraphFromInfra(feed.projectId);
                 if (res?.health) {
                   setSeedNote(
-                    `Seeded ${res.seeded?.resources ?? 0} resources · ${res.health.node_count} nodes`,
+                    `Seeded ${res.seeded?.resources ?? 0} resources, ${res.health.node_count} nodes`,
                   );
                 } else {
                   setSeedNote("Seed failed or control plane unreachable.");
@@ -182,8 +182,8 @@ export function KnowledgeGraphPanel({ feed }: { feed: KnowledgeGraphFeed }) {
                     {summary.rca.root?.name || summary.rca.root?.node_key}
                   </b>
                   <span style={{ color: "var(--muted)", marginLeft: 8 }}>
-                    {summary.rca.subgraph.node_count} nodes · {summary.rca.subgraph.edge_count}{" "}
-                    edges · {summary.rca.known_causes_count} known causes
+                    {summary.rca.subgraph.node_count} nodes, {summary.rca.subgraph.edge_count}{" "}
+                    edges, {summary.rca.known_causes_count} known causes
                   </span>
                 </div>
                 <div>
@@ -212,7 +212,7 @@ export function KnowledgeGraphPanel({ feed }: { feed: KnowledgeGraphFeed }) {
                           style={{
                             padding: "8px 10px",
                             borderRadius: 8,
-                            background: "var(--panel-2, rgba(128,128,128,0.04))",
+                            background: "var(--panel-2, var(--boss-c-8123cd9e1f))",
                             fontSize: 13,
                             display: "flex",
                             gap: 8,
@@ -250,7 +250,7 @@ export function KnowledgeGraphPanel({ feed }: { feed: KnowledgeGraphFeed }) {
                   fontSize: 12.5,
                   padding: "6px 8px",
                   borderRadius: 6,
-                  background: "var(--panel-2, rgba(128,128,128,0.04))",
+                  background: "var(--panel-2, var(--boss-c-8123cd9e1f))",
                 }}
               >
                 <Pill text={n.kind} color="#a371f7" />
@@ -282,15 +282,15 @@ function Stat({
         padding: "10px 12px",
         borderRadius: 10,
         border: "1px solid var(--line)",
-        background: "var(--panel-2, rgba(128,128,128,0.03))",
+        background: "var(--panel-2, var(--boss-c-9f78f25dd8))",
       }}
     >
       <div
         style={{
           fontSize: 11,
           color: "var(--muted)",
-          textTransform: "uppercase",
-          letterSpacing: "0.04em",
+          textTransform: "none",
+          letterSpacing: "0",
         }}
       >
         {label}
@@ -299,7 +299,7 @@ function Stat({
         style={{
           fontSize: 16,
           fontWeight: 700,
-          color: ok === false ? "#d29922" : ok ? "#3fb950" : "var(--ink)",
+          color: ok === false ? "var(--boss-c-d29922)" : ok ? "var(--boss-c-3fb950)" : "var(--ink)",
           marginTop: 2,
         }}
       >

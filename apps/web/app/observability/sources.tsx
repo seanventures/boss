@@ -3,14 +3,14 @@
 /**
  * Observability › Sources (spec §4.13): where the telemetry comes from.
  *
- *   STACK         OTel → Prometheus → Grafana · ● Running · boss-1 ↗ · prometheus: running …   [Redeploy] Grafana ↗
- *   SCRAPED APPS  App · Env · Scrape URL · Dashboard ↗ / No dashboard · Not watched
- *   SOURCES       Kind · Name · URL · Enabled                                          [Check config]
- *   SIGNAL SOURCES  OTLP · remote write · webhooks · heartbeats: last seen, in/refused, Rotate, Test
- *   GAPS          No metrics backend · No log backend · Nothing watched yet
+ *   STACK         OTel → Prometheus → Grafana, ● Running, boss-1 , prometheus: running …   [Redeploy] Grafana 
+ *   SCRAPED APPS  App, Env, Scrape URL, Dashboard  / No dashboard, Not watched
+ *   SOURCES       Kind, Name, URL, Enabled                                          [Check config]
+ *   SIGNAL SOURCES  OTLP, remote write, webhooks, heartbeats: last seen, in/refused, Rotate, Test
+ *   GAPS          No metrics backend, No log backend, Nothing watched yet
  *                                                                                      [Add tools…]
  *
- * The stack's status is the server's (cached 60 s — never an SSH probe per poll). `Deploy
+ * The stack's status is the server's (cached 60 s, never an SSH probe per poll). `Deploy
  * stack` / `Redeploy` posts the existing stack-deploy route and then re-polls this view (the old
  * panel never refreshed after a deploy). `Status unknown` offers `Check now`, which asks for a
  * fresh reading once (`fresh=1`). No machine: `Needs a machine` + `Add host ↗` into Infra.
@@ -134,7 +134,7 @@ function SourcesList({ s, projectId, actor }: { s: Sources; projectId: string; a
             <li key={x.id} className="obs-line" data-testid="obs-source-row">
               <span className="obs-chip">{x.kind}</span>
               <span className="obs-strong" data-copy="data">{x.name}</span>
-              {x.url ? <span className="inf-mono inf-faint inf-trunc" title={x.url} data-copy="data">{x.url}</span> : <span className="inf-faint">—</span>}
+              {x.url ? <span className="inf-mono inf-faint inf-trunc" title={x.url} data-copy="data">{x.url}</span> : <span className="inf-faint">{"—"}</span>}
               <span className="ag-spacer" />
               <span className={x.enabled ? "obs-ok" : "inf-faint"}>{x.enabled ? "Enabled" : "Disabled"}</span>
             </li>

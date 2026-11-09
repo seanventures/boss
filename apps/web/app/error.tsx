@@ -6,7 +6,7 @@ import React from "react";
  * WHAT HAPPENED AND WHAT TO DO, instead of Next's "Application error".
  *
  * The console had no error boundary. Ninety-odd server actions return void and throw when the
- * API refuses them — onboarding an organization, the identity forms, the meeting-role forms — so
+ * API refuses them, onboarding an organization, the identity forms, the meeting-role forms, so
  * any refusal landed on Next's generic page with no word about what failed and no way back to
  * where the operator was. This boundary keeps the console's chrome-free page honest: it says a
  * request failed, gives the reason when there is one (and the error id the server logged when
@@ -39,7 +39,7 @@ export default function ConsoleError({
         </p>
         {error?.digest ? (
           <p className="org-gate-sub">
-            Error id <code className="mono">{error.digest}</code> — the same id is in the console
+            Error id <code className="mono">{error.digest}</code>, the same id is in the console
             container&apos;s log next to the full reason.
           </p>
         ) : null}

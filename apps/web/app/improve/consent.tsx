@@ -3,7 +3,7 @@
 /**
  * The consent wording, VERBATIM from docs/product/RUN_SCORECARDS.md ("Consent"), and the one
  * place it is rendered. What a person agrees to is never paraphrased, so it is exempt from the
- * console's copy budget (`[data-consent]`, tests/_helpers/copy-budget.ts) — and a test holds this
+ * console's copy budget (`[data-consent]`, tests/_helpers/copy-budget.ts), and a test holds this
  * text to the doc's.
  */
 import React from "react";

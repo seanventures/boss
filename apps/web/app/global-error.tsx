@@ -4,7 +4,7 @@ import React from "react";
 
 /**
  * The last resort: an error in the root layout itself, where app/error.tsx cannot render. Same
- * promise — say what happened and what to do — with no stylesheet to lean on, because the
+ * promise, say what happened and what to do, with no stylesheet to lean on, because the
  * layout that loads it is the thing that failed.
  */
 export default function GlobalError({
@@ -24,7 +24,7 @@ export default function GlobalError({
         </p>
         {error?.digest ? (
           <p>
-            Error id <code>{error.digest}</code> — search the console container&apos;s log for it to
+            Error id <code>{error.digest}</code>, search the console container&apos;s log for it to
             see the full reason.
           </p>
         ) : null}

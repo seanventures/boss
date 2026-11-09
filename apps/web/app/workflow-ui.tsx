@@ -7,7 +7,7 @@ import { pushUrlParam, readUrlParam } from "./url-nav";
 import { actorWords } from "../lib/actor-words";
 
 /* ============================================================
-   Shared types (structural — match the page feeds)
+   Shared types (structural, match the page feeds)
    ============================================================ */
 
 type Task = {
@@ -132,7 +132,7 @@ function eventMeta(t: string): { Icon: typeof Ic.dot; label: string; tone: Tone 
     "job.heartbeat": { Icon: Ic.pulse, label: "Heartbeat", tone: "muted" },
     "job.succeeded": { Icon: Ic.check, label: "Job succeeded", tone: "green" },
     "job.deadlettered": { Icon: Ic.alert, label: "Job dead-lettered", tone: "red" },
-    "job.cancelled_budget_blocked": { Icon: Ic.ban, label: "Cancelled — no budget", tone: "red" },
+    "job.cancelled_budget_blocked": { Icon: Ic.ban, label: "Cancelled, no budget", tone: "red" },
     "plan.created": { Icon: Ic.doc, label: "Plan created", tone: "green" },
     "software_factory.plan_created": { Icon: Ic.doc, label: "Plan created", tone: "green" },
     "software_factory.plan_failed": { Icon: Ic.x, label: "Plan failed", tone: "red" },
@@ -177,7 +177,7 @@ function outputMeta(kind: string): { Icon: typeof Ic.dot; tone: Tone; label: str
     case "pull_request": return { Icon: Ic.branch, tone: "accent", label: "GitHub PR" };
     case "plan_draft": return { Icon: Ic.doc, tone: "blue", label: "Design doc" };
     case "command_brief": return { Icon: Ic.doc, tone: "muted", label: "Command brief" };
-    case "meeting_minutes": return { Icon: Ic.gavel, tone: "accent", label: "Agent meeting · minutes" };
+    case "meeting_minutes": return { Icon: Ic.gavel, tone: "accent", label: "Agent meeting, minutes" };
     case "test_report": return { Icon: Ic.beaker, tone: "green", label: "Test report" };
     case "diff_manifest": return { Icon: Ic.doc, tone: "blue", label: "Diff manifest" };
     case "review_packet": return { Icon: Ic.doc, tone: "muted", label: "Review packet" };
@@ -290,14 +290,14 @@ function fmtDuration(fromIso: string, toIso: string): string {
   return `${m}m ${Math.round(s % 60)}s`;
 }
 function fmtTime(iso: string): string {
-  // UTC clock — identical on Node SSR and every browser (avoids React #418).
+  // UTC clock, identical on Node SSR and every browser (avoids React #418).
   return formatTime(iso, iso);
 }
 function Pill({ tone, children }: { tone: Tone; children: ReactNode }) {
   return <span className={`wf-pill tone-${tone}`}>{children}</span>;
 }
 
-/* One agent step — compact by default (one line each, …), expand on click. */
+/* One agent step, compact by default (one line each, …), expand on click. */
 function AgentStepRow({ s }: { s: AgentRun["transcript"][number] }) {
   const [open, setOpen] = useState(false);
   const isMcp = s.tool.startsWith("mcp_");
@@ -320,7 +320,7 @@ function AgentStepRow({ s }: { s: AgentRun["transcript"][number] }) {
         {s.thought ? <div className="wf-agent-thought">{s.thought}</div> : null}
         <code className="mono wf-agent-tool">
           {isMcp ? <span className="wf-mcp-badge">MCP</span> : null}
-          {isDeferred ? <span className="wf-defer-badge">⏸ NEEDS APPROVAL</span> : null}
+          {isDeferred ? <span className="wf-defer-badge"> NEEDS APPROVAL</span> : null}
           {s.resumed ? <span className="wf-resume-badge">↻ APPROVED &amp; RESUMED</span> : null}
           {s.tool}({argsStr})
         </code>
@@ -359,7 +359,7 @@ export function WorkBoard({
       agentRuns[0]?.task_id ?? tasks[0]?.id,
   );
   // Honor a task deep-link (e.g. "View in Work →") on client-side navigation,
-  // not just first mount — select the linked task when ?task= actually changes.
+  // not just first mount, select the linked task when ?task= actually changes.
   // Guard with a ref so periodic data refreshes (which hand us a NEW `tasks`
   // array reference) don't re-fire this and snap a manual selection back to the
   // URL's task.
@@ -432,7 +432,7 @@ export function WorkBoard({
   const steps: { label: string; done: boolean; tone: Tone; sub?: string }[] = [
     { label: "Command received", done: true, tone: "green", sub: "Task created" },
     { label: "Planned", done: hasPlan, tone: hasPlan ? "green" : "muted", sub: hasPlan ? "plan_draft produced" : "waiting for worker" },
-    { label: "Decision raised", done: !!reviewDecision, tone: reviewDecision ? (approved ? "green" : rejected ? "red" : "amber") : "muted", sub: reviewDecision ? `review · ${reviewDecision.status}` : "—" },
+    { label: "Decision raised", done: !!reviewDecision, tone: reviewDecision ? (approved ? "green" : rejected ? "red" : "amber") : "muted", sub: reviewDecision ? `review, ${reviewDecision.status}` : "—" },
     { label: "Approved", done: approved, tone: approved ? "green" : rejected ? "red" : "muted", sub: approved ? "human approved" : rejected ? "rejected" : "awaiting approval" },
     { label: "Executed", done: executed, tone: executed ? "green" : "muted", sub: executed ? "follow-on ran" : "—" },
     { label: "Outcome", done: executed, tone: blockedDecision ? "amber" : executed ? "green" : "muted", sub: blockedDecision ? blockedDecision.question : executed ? "complete" : "—" },
@@ -452,7 +452,7 @@ export function WorkBoard({
               <span className="wf-task-body">
                 <span className="wf-task-title">{t.title.replace(/^CEO command:\s*/, "")}</span>
                 <span className="wf-task-meta">
-                  {t.priority.toUpperCase()} · tier {t.riskTier} · {js.length} job{js.length === 1 ? "" : "s"}
+                  {t.priority.toUpperCase()}, tier {t.riskTier}, {js.length} job{js.length === 1 ? "" : "s"}
                 </span>
               </span>
             </button>
@@ -465,7 +465,7 @@ export function WorkBoard({
           <>
             <div className="wf-detail-head" ref={detailRef} tabIndex={-1}>
               <div>
-                <span className="eyebrow">Run trace</span>
+                <span className="area-name">Run trace</span>
                 <h3 className="wf-detail-title">{active.title.replace(/^CEO command:\s*/, "")}</h3>
                 <p className="mono">{active.id}</p>
               </div>
@@ -521,7 +521,7 @@ export function WorkBoard({
                             <span className={`wf-ic tone-${m.tone}`}><m.Icon /></span>
                             <span className="wf-out-body">
                               <span className="wf-out-title">{o.title}</span>
-                              <span className="wf-out-sub">{m.label}{o.status ? ` · ${o.status}` : ""}</span>
+                              <span className="wf-out-sub">{m.label}{o.status ? `, ${o.status}` : ""}</span>
                             </span>
                             <span className="wf-out-go">open task <Ic.arrow /></span>
                           </button>
@@ -539,7 +539,7 @@ export function WorkBoard({
                               <span className={`wf-ic tone-${m.tone}`}><m.Icon /></span>
                               <span className="wf-out-body">
                                 <span className="wf-out-title">{o.title}</span>
-                                <span className="wf-out-sub">{m.label} · view ▾</span>
+                                <span className="wf-out-sub">{m.label}, view ▾</span>
                               </span>
                             </summary>
                             <div className="wf-out-doc-body">{docText}</div>
@@ -602,7 +602,7 @@ export function WorkBoard({
                   <span className="wf-ic tone-blue"><Ic.tool /></span>
                   Agent steps <span className="wf-count">{tRun.tool_calls} tool{tRun.tool_calls === 1 ? "" : "s"}</span>
                   <span style={{ marginLeft: "auto", fontSize: "0.76rem", color: "var(--muted)", fontWeight: 500 }}>
-                    {tRun.total_tokens} tokens · ${(tRun.cost_usd_micros / 1e6).toFixed(4)} · {tRun.model}
+                    {tRun.total_tokens} tokens, ${(tRun.cost_usd_micros / 1e6).toFixed(4)}, {tRun.model}
                   </span>
                 </div>
                 <div className="wf-agent">
@@ -620,7 +620,7 @@ export function WorkBoard({
                   <span className="wf-ic tone-accent"><Ic.chat /></span>
                   <span className="wf-convo-title">Conversation</span>
                   <span className="wf-count">{tRun.conversation.length} turns</span>
-                  <span className="wf-convo-hint">agent ⇄ LLM · click to expand the full back-and-forth ▾</span>
+                  <span className="wf-convo-hint">agent ⇄ LLM, click to expand the full back-and-forth ▾</span>
                 </summary>
                 <div className="wf-convo">
                   {tRun.conversation.map((turn, i) => (
@@ -647,7 +647,7 @@ export function WorkBoard({
                     <span className={`wf-ic tone-${m.tone}`}><m.Icon /></span>
                     <span className="wf-tl-body">
                       <span className="wf-tl-label">{m.label}</span>
-                      <span className="wf-tl-meta">{actorWords(e.actor)} ·{fmtTime(e.createdAt)}{gap ? ` · +${gap}` : ""}</span>
+                      <span className="wf-tl-meta">{actorWords(e.actor)} ·{fmtTime(e.createdAt)}{gap ? `, +${gap}` : ""}</span>
                     </span>
                   </div>
                 );
@@ -663,7 +663,7 @@ export function WorkBoard({
               {tDecisions.map((d) => {
                 const tone: Tone = d.status === "approved" ? "green" : d.status === "rejected" ? "red" : d.status === "pending" ? "amber" : "muted";
                 return (
-                  <span key={d.id} className={`wf-outcome-chip tone-${tone}`}><Ic.gavel /> {d.question.slice(0, 40)} · {d.status}</span>
+                  <span key={d.id} className={`wf-outcome-chip tone-${tone}`}><Ic.gavel /> {d.question.slice(0, 40)}, {d.status}</span>
                 );
               })}
               {tArtifacts.length === 0 && tDecisions.length === 0 ? <p className="detail">No outcome yet.</p> : null}
@@ -671,7 +671,7 @@ export function WorkBoard({
           </>
         ) : <div className="wf-detail-head" ref={detailRef} tabIndex={-1} role="status">
           <div>
-            <span className="eyebrow">Run trace</span>
+            <span className="area-name">Run trace</span>
             <h3 className="wf-detail-title">Task unavailable</h3>
             <p className="detail">{selected} is unavailable in this project&apos;s task feed.</p>
           </div>
@@ -728,8 +728,8 @@ export function WorkflowHealth({
       <div className={`wf-banner tone-${allClear ? "green" : failed > 0 || deadletters.length > 0 ? "red" : "amber"}`}>
         <span className="wf-ic"><Ic.shield /></span>
         {allClear
-          ? "All workflows healthy — no failures, stale leases, or blockers."
-          : `${failed} failed · ${deadletters.length} dead-letter${deadletters.length === 1 ? "" : "s"} · ${staleLeaseJobIds.length} stale lease${staleLeaseJobIds.length === 1 ? "" : "s"} · ${blockerCount} blocker${blockerCount === 1 ? "" : "s"} need attention.`}
+          ? "All workflows healthy, no failures, stale leases, or blockers."
+          : `${failed} failed, ${deadletters.length} dead-letter${deadletters.length === 1 ? "" : "s"}, ${staleLeaseJobIds.length} stale lease${staleLeaseJobIds.length === 1 ? "" : "s"}, ${blockerCount} blocker${blockerCount === 1 ? "" : "s"} need attention.`}
       </div>
 
       <div className="wf-stats">
@@ -771,7 +771,7 @@ export function WorkflowHealth({
                   <span className="wf-ic tone-red"><Ic.alert /></span>
                   <span className="wf-fail-body">
                     <span className="wf-fail-reason">{d.reason}</span>
-                    <span className="wf-tl-meta">{d.sourceKind} · {d.status} · {fmtTime(d.createdAt)}</span>
+                    <span className="wf-tl-meta">{d.sourceKind}, {d.status}, {fmtTime(d.createdAt)}</span>
                   </span>
                 </div>
               ))}

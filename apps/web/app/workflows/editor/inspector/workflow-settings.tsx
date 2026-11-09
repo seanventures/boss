@@ -38,7 +38,7 @@ function toast(type: "success" | "error", message: string) {
  *
  * NAME AND DESCRIPTION DO NOT MAKE A VERSION. On a published workflow with nothing else changed
  * they are PATCHed when the field is left, and the draft's baseline moves with them, so Save
- * stays disabled. With other unsaved edits they ride along with the next Save instead — a rename
+ * stays disabled. With other unsaved edits they ride along with the next Save instead, a rename
  * must never mark unsaved step edits as saved.
  */
 export function WorkflowSettings({ state, dispatch, projectId, actor, usedFor, onSchedule, onClose }: {
@@ -122,7 +122,7 @@ export function WorkflowSettings({ state, dispatch, projectId, actor, usedFor, o
       ) : null}
 
       {/* WEBHOOKS (#512): another system starts this workflow. Only on a saved workflow of the
-          operator's own — a trigger names the workflow by key, and a standard is not theirs. */}
+          operator's own, a trigger names the workflow by key, and a standard is not theirs. */}
       {meta.workflow_key && meta.definition_id && !standard ? (
         <WebhookTriggers projectId={projectId} workflowKey={meta.workflow_key} actor={actor} />
       ) : null}

@@ -51,7 +51,7 @@ describe("every Live state, by its words", () => {
 
   it("nothing running: Start work ↗ and Plan it with Juno, which opens the plan talk with the PM", async () => {
     await mount(view(stateOf(board({ missions: [] }))));
-    expect(text('[data-testid="ag-live-nothing-running"]')).toBe("Nothing runningStart work ↗Plan it with Juno");
+    expect(text('[data-testid="ag-live-nothing-running"]')).toBe("Nothing runningStart workPlan it with Juno");
     const opened: { kind: string; roleKey?: string }[] = [];
     const on = (e: Event) => opened.push((e as CustomEvent<(typeof opened)[number]>).detail);
     window.addEventListener("boss:converse", on);
@@ -95,15 +95,15 @@ describe("every Live state, by its words", () => {
     expect($$(".ag-mission")).toHaveLength(22);
   });
 
-  it("a run stopped at a failed step: its card says Failed and offers the run's answers; its row says Failed · step 3", async () => {
+  it("a run stopped at a failed step: its card says Failed and offers the run's answers; its row says Failed, step 3", async () => {
     await mount(view(stateOf(board())));
     const c = $('[data-testid="ag-att-run:wfr_ship:build"]')!;
-    expect(c.querySelector(".ag-att-context")?.textContent).toBe("Ship it #180 · step 3 of 7 · Failed");
+    expect(c.querySelector(".ag-att-context")?.textContent).toBe("Ship it #180, step 3 of 7, Failed");
     const retry = c.querySelector<HTMLButtonElement>('[data-testid="ag-att-answer-retry_step"]')!;
     const skip = c.querySelector<HTMLButtonElement>('[data-testid="ag-att-answer-skip_step"]')!;
     expect([retry.textContent, retry.disabled]).toEqual(["Retry", false]);
     expect([skip.textContent, skip.disabled, skip.title]).toEqual(["Skip", true, "A required step cannot be skipped."]);
-    expect($('[data-testid="ag-mission-wfr_ship"] .ag-mission-now')?.textContent).toBe("Failed · step 3");
+    expect($('[data-testid="ag-mission-wfr_ship"] .ag-mission-now')?.textContent).toBe("Failed, step 3");
     expect($('[data-testid="ag-mission-wfr_ship"]')?.dataset.state).toBe("stopped");
   });
 
@@ -115,7 +115,7 @@ describe("every Live state, by its words", () => {
 
   it("waiting on a timer or a sub-run: Waiting · what", async () => {
     await mount(view(stateOf(board({ missions: [mission({ state: "waiting", waiting_on: "build to finish" })] }))));
-    expect($(".ag-mission-now")?.textContent).toContain("Waiting · build to finish");
+    expect($(".ag-mission-now")?.textContent).toContain("Waiting, build to finish");
   });
 
   it("waiting on a named person: Waiting on <role>", async () => {
@@ -125,14 +125,14 @@ describe("every Live state, by its words", () => {
 
   it("just finished: Finished · n steps · time", async () => {
     await mount(view(stateOf(board({ missions: [mission({ state: "done", step_index: 7, elapsed_seconds: 2520 })] }))));
-    expect($(".ag-mission-now")?.textContent).toBe("Finished · 7 steps · 42m");
+    expect($(".ag-mission-now")?.textContent).toBe("Finished, 7 steps, 42m");
   });
 
   it("a run waiting on you: Waiting on you, and its You hop focuses the card — opening the overflow first", async () => {
     const cards = [...Array.from({ length: 5 }, (_, i) => failed({ id: `run:x${i}:b`, run: { id: `x${i}`, subject: `X${i}` } })),
                    gate()];
     await mount(view(stateOf(board({ attention: cards }))));
-    expect($('[data-testid="ag-mission-wfr_video"] .ag-mission-now')?.textContent).toMatch(/^Waiting on you · step 5 of 7/);
+    expect($('[data-testid="ag-mission-wfr_video"] .ag-mission-now')?.textContent).toMatch(/^Waiting on you, step 5 of 7/);
     expect($('[data-testid="ag-att-dec_gate"]')).toBeNull();
     await click($('[data-testid="ag-mission-you-wfr_video"]'));
     const c = $('[data-testid="ag-att-dec_gate"]');

@@ -3,11 +3,11 @@
 /**
  * Govern › Limits in plain words (BOSSAPP-807): how much BOSS may spend (per month, per day,
  * per minute), what happens when a limit is reached, and an optional monthly limit per
- * project — then one Save. Before saving, the last 30 days are replayed against the typed caps
+ * project, then one Save. Before saving, the last 30 days are replayed against the typed caps
  * (`cap_preview`, the board's own replay). Everything else (pace, thresholds, token guides,
  * review rounds, Captain) stays on the board, one click away under "Advanced".
  *
- * Writes: `limits` (POST /v1/govern/limits — only the fields changed, with the budget version
+ * Writes: `limits` (POST /v1/govern/limits, only the fields changed, with the budget version
  * as If-Match) and `project_limit` per changed project (a project budget envelope).
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -215,9 +215,9 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
         </span>
         {envelope ? (
           <span className="gv-pace-preview" data-testid="gv-limits-pace-sets" title="Exactly what Pace writes. Fine-tune the caps below.">
-            Sets {money(envelope.monthly_cap_usd_micros)}/month · {money(envelope.daily_cap_usd_micros)}/day
-            {" · "}{money(envelope.burst_cap_usd_micros_per_min, { perMin: true })} burst
-            {" · "}{envelope.max_concurrent_jobs} jobs · {envelope.max_workers_total} workers
+            Sets {money(envelope.monthly_cap_usd_micros)}/month, {money(envelope.daily_cap_usd_micros)}/day
+            {", "}{money(envelope.burst_cap_usd_micros_per_min, { perMin: true })} burst
+            {", "}{envelope.max_concurrent_jobs} jobs, {envelope.max_workers_total} workers
           </span>
         ) : null}
       </section>
@@ -226,7 +226,7 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
         <h3 id="gv-howmuch-h" className="gv-card-title">How much BOSS may spend</h3>
         <MoneyField id="gv-month" label="Per month" testid="month" value={month} onChange={edit(setMonth)} inputRef={monthRef}
                     error={monthErr}
-                    hint={`Used ${money(monthPeriod?.spent_usd_micros ?? monthPeriod?.actual_usd_micros)}${monthPeriod?.resets_at ? ` · resets ${resetDay(monthPeriod.resets_at)}` : ""}`} />
+                    hint={`Used ${money(monthPeriod?.spent_usd_micros ?? monthPeriod?.actual_usd_micros)}${monthPeriod?.resets_at ? `, resets ${resetDay(monthPeriod.resets_at)}` : ""}`} />
         <MoneyField id="gv-day" label="Per day" testid="day" value={day} onChange={edit(setDay)}
                     error={dayErr} hint={`Used ${money(dayPeriod?.spent_usd_micros ?? dayPeriod?.actual_usd_micros)} today`} />
         <MoneyField id="gv-burst" label="Burst per minute" testid="burst" value={burst} onChange={edit(setBurst)} perMin
@@ -250,7 +250,7 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
       </section>
 
       <section className="gv-card" aria-labelledby="gv-perproject-h" data-testid="gv-perproject">
-        <h3 id="gv-perproject-h" className="gv-card-title">Per project <span className="gv-muted">(optional)</span></h3>
+        <h3 id="gv-perproject-h" className="gv-card-title">Per project (optional)</h3>
         {rows === null ? <span className="gv-skel gv-skel-short" aria-busy="true" /> : rows.length ? (
           <ul className="gv-proj-rows">
             {rows.map((r) => (

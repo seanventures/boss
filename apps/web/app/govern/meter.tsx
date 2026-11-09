@@ -57,9 +57,9 @@ function capIn(seconds: number | null): string {
 }
 
 /** Money spent this period, the same figure get_costs gives (included_spend.ledger_spend): what
- *  the caps count (settled, and running builds' money not settled yet), plus what no cap counts —
+ *  the caps count (settled, and running builds' money not settled yet), plus what no cap counts , 
  *  builds from before builds were metered, and self-fixes (their own budget), said apart only
- *  while there are any — and what subscription calls ran beside it, at list price, never money. */
+ *  while there are any, and what subscription calls ran beside it, at list price, never money. */
 function Spent({ ledger, fallbackIncluded }: { ledger?: MeterData["ledger"]; fallbackIncluded: number }) {
   const included = ledger ? ledger.included_usd_micros : fallbackIncluded;
   if (!ledger && included <= 0) return null;
@@ -73,14 +73,14 @@ function Spent({ ledger, fallbackIncluded }: { ledger?: MeterData["ledger"]; fal
       ) : null}
       {ledger && ledger.not_under_cap_usd_micros > 0 ? (
         <span data-testid="gv-spent-uncapped" title="Spent outside the caps: builds that ran before caps counted builds, and BOSS's self-fixes (they keep their own budget). New builds are under the caps.">
-          {" · "}Outside caps {money(ledger.not_under_cap_usd_micros)} ⓘ
+          {", "}Outside caps {money(ledger.not_under_cap_usd_micros)} ⓘ
         </span>
       ) : null}
       {included > 0 ? (
         <span data-testid="gv-included"
               title={ledger ? `Ran on a subscription (${ledger.included_calls} calls): an estimate at list price. Not money, not counted.`
                 : "Ran on a subscription. Not money, not counted."}>
-          {ledger ? ` · Included in plan ~${money(included)}` : `Included in plan ${money(included)}`}
+          {ledger ? `, Included in plan ~${money(included)}` : `Included in plan ${money(included)}`}
         </span>
       ) : null}
     </div>
@@ -134,10 +134,10 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
   const providerHold = meter.legacy_provider_hold;
   const paidWorkHeld = Boolean(historicalHold || providerHold);
   const metaTip = [
-    `Reserved ${money(meter.reserved_usd_micros)} · ${holds(meter.active_reservations_count)}`,
+    `Reserved ${money(meter.reserved_usd_micros)}, ${holds(meter.active_reservations_count)}`,
     `Burn ${money(meter.burn_rate_usd_micros_per_hour)}/h`,
     meter.time_to_cap_seconds !== null ? `Cap in ${capIn(meter.time_to_cap_seconds)}` : "",
-  ].filter(Boolean).join(" · ");
+  ].filter(Boolean).join(", ");
   return (
     <section className="gv-meter" data-testid="gv-meter" data-state={meter.state} title={metaTip}>
       <div className="gv-meter-line">
@@ -152,7 +152,7 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
         <span className="gv-reset">resets {meter.resets_at_label}</span>
         <span className="gv-spacer" />
         <span className="gv-meta" data-testid="gv-meter-meta">
-          <span>Reserved {money(meter.reserved_usd_micros)} · {holds(meter.active_reservations_count)}</span>
+          <span>Reserved {money(meter.reserved_usd_micros)}, {holds(meter.active_reservations_count)}</span>
           <span>Burn {money(meter.burn_rate_usd_micros_per_hour)}/h</span>
           {meter.time_to_cap_seconds !== null ? <span>Cap in {capIn(meter.time_to_cap_seconds)}</span> : null}
         </span>

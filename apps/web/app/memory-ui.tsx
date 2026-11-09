@@ -9,7 +9,7 @@ import { apiWrite } from "../lib/api-write";
  *  THE STORE IS USELESS TO AN OPERATOR WHO CANNOT SEE IT.
  *
  *  A lesson is a rule every future session will follow. One that is wrong and invisible is
- *  worse than having no memory at all — which is why BOSS records lessons as `proposed` and
+ *  worse than having no memory at all, which is why BOSS records lessons as `proposed` and
  *  binds nothing until a human says so, and why that queue is the first thing on this panel
  *  rather than a settings page nobody opens.
  *
@@ -60,7 +60,7 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
       const params = new URLSearchParams({ project_id: projectId, actor });
       const r = await fetch(`/api/memory?${params}`, { cache: "no-store" });
       const body = (await r.json()) as Payload;
-      // SAY WHAT FAILED AND WHAT TO DO. This read "failed" — a word with no subject and no
+      // SAY WHAT FAILED AND WHAT TO DO. This read "failed", a word with no subject and no
       // next step (console walk, 2026-10-02).
       if (r.ok) { setData(body); setError(null); }
       else {
@@ -96,7 +96,7 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
       if (!r.ok) {
         const verb = action === "forget" ? "retire" : decision === "rejected" ? "reject" : "accept";
         setError(`Could not ${verb} "${memory.body.slice(0, 80)}": ${body?.error ?? `HTTP ${r.status}`}. `
-                 + "Nothing changed — press it again.");
+                 + "Nothing changed, press it again.");
       } else setError(null);
       // RELOAD RATHER THAN PATCH LOCAL STATE. Accepting a rule changes what every later
       // session is told; showing a stale list after that is how an operator ends up unsure
@@ -127,7 +127,7 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
       </summary>
 
       <p className="detail mem-intro">
-        Recorded in earlier sessions and read at the start of every new one — this is why you
+        Recorded in earlier sessions and read at the start of every new one, this is why you
         do not have to repeat yourself. A <strong>Rule</strong> is binding, so BOSS cannot make
         one on its own: it proposes, you decide.
       </p>
@@ -198,15 +198,15 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
 
       {memories.length === 0 ? (
         <p className="detail" data-testid="memory-empty">
-          Nothing recorded yet. Correct BOSS in a conversation — &ldquo;always run the frontend
-          checks before calling a change done&rdquo; — and it will propose that as a rule here.
+          Nothing recorded yet. Correct BOSS in a conversation, &ldquo;always run the frontend
+          checks before calling a change done&rdquo;, and it will propose that as a rule here.
         </p>
       ) : null}
     </details>
   );
 }
 
-/** Where a long conversation had got to — read from storage, not from the scrollback.
+/** Where a long conversation had got to, read from storage, not from the scrollback.
  *
  *  A long thread eventually has its early turns compacted away and the objective is usually
  *  the first thing to go. This is the same record the agent re-reads each turn, shown to the

@@ -2,9 +2,9 @@
 
 /**
  * NEW ALERT RULE (BOSSAPP-598 feedback 4): a rule on any metric the app ACTUALLY reports,
- * without writing PromQL — and the PromQL it writes, always on show.
+ * without writing PromQL, and the PromQL it writes, always on show.
  *
- *   App          [ Order API · staging ▾ ]            (preselected in the app drawer)
+ *   App          [ Order API, staging ▾ ]            (preselected in the app drawer)
  *   Metric       [ orders_created_total      ] counter   (the app's scraped/ingested series)
  *   Measure      [ rate ▾ ]  over [ 5m ▾ ]  where [ result="error"      ]
  *   Fire when    [ > ▾ ] [ 0.5 ]   for [ 2 ] min    Severity ⬣SEV1 ▲SEV2 ◐SEV3 ⓘSEV4
@@ -65,8 +65,8 @@ export function buildExpr(o: { name: string; type?: string; agg: Agg; window: st
 
 /** BOSS's own runbooks (app_alerts.RUNBOOKS), or none. */
 export const RUNBOOKS: { url: string; label: string }[] = [
-  { url: "boss:runbook/app-serving", label: "BOSS · The app is serving badly" },
-  { url: "boss:runbook/app-down", label: "BOSS · The app is down" },
+  { url: "boss:runbook/app-serving", label: "BOSS, The app is serving badly" },
+  { url: "boss:runbook/app-down", label: "BOSS, The app is down" },
   { url: "", label: "None" },
 ];
 
@@ -159,7 +159,7 @@ export function RuleBuilder({ targetId, apps, projectId, actor, severities = SEV
             <span>App</span>
             <select value={app} data-testid="obs-builder-app" title="The app whose metrics the rule reads"
                     onChange={(e) => { setApp(e.target.value); setMetricName(""); }}>
-              {apps.map((a) => <option key={a.targetId} value={a.targetId}>{a.app} · {a.env}</option>)}
+              {apps.map((a) => <option key={a.targetId} value={a.targetId}>{a.app}, {a.env}</option>)}
             </select>
           </label>
         ) : null}
@@ -177,7 +177,7 @@ export function RuleBuilder({ targetId, apps, projectId, actor, severities = SEV
                        setAgg(aggsFor(metrics.find((m) => m.name === v) ?? null)[0]);
                      }} />
               <datalist id="obs-builder-metrics">
-                {metrics.map((m) => <option key={m.name} value={m.name}>{m.type}{m.help ? ` · ${m.help}` : ""}</option>)}
+                {metrics.map((m) => <option key={m.name} value={m.name}>{m.type}{m.help ? `, ${m.help}` : ""}</option>)}
               </datalist>
             </label>
             {metric ? (

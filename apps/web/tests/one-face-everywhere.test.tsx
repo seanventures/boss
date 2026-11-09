@@ -101,7 +101,7 @@ describe("one agent, one face, on every surface", () => {
     expect(renderToStaticMarkup(<AgentAvatar agent="qa" size={32} />)).toContain(">AI</span>");
     expect(renderToStaticMarkup(<AgentAvatar agent="qa" size={24} />)).not.toContain(">AI</span>");
     expect(renderToStaticMarkup(<AgentAvatar variant="auto" size={48} />)).not.toContain(">AI</span>");
-    expect(renderToStaticMarkup(<AgentChip roleKey="qa" />)).toContain('data-tip="QA Lead · Vera · AI agent"');
+    expect(renderToStaticMarkup(<AgentChip roleKey="qa" />)).toContain('data-tip="QA Lead, Vera, AI agent"');
   });
 
   it("a paused agent shows paused wherever it appears, whatever it was last doing", async () => {

@@ -4,10 +4,10 @@
  * OBSERVABILITY (infra-observability spec §4.9-§4.13): is it alive, how fast, and what is BOSS's
  * thinking costing.
  *
- *   Observability [● Apps 5] [Models] [System ●] [Sources]   4 up · 1 slow · $3.12 · 24h   [24h|7d|30d] [Find] [Ask BOSS]
- *   NEEDS YOU   AttentionCards tagged Observability (app down, the system doctor) — not on Alerts,
+ *   Observability [● Apps 5] [Models] [System ●] [Sources]   4 up, 1 slow, $3.12, 24h   [24h|7d|30d] [Find] [Ask BOSS]
+ *   NEEDS YOU   AttentionCards tagged Observability (app down, the system doctor), not on Alerts,
  *               which shows only its alerts and incidents
- *   <tab>       Apps (the Pulse) · Models (the llm_calls ledger) · System (BOSS's machine) · Sources
+ *   <tab>       Apps (the Pulse), Models (the llm_calls ledger), System (BOSS's machine), Sources
  *
  * One window control drives every number and chart on a tab, and it lives in the URL (`win=`).
  * `view=` names the tab; `tab=` is accepted too (Govern links `?area=observability&tab=models`).
@@ -121,12 +121,12 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
                 counts={c ? (
                   <>
                     <span>{c.up} up</span>
-                    {c.slow ? <><span aria-hidden> · </span><span>{c.slow} slow</span></> : null}
-                    {c.down ? <><span aria-hidden> · </span><span className="inf-needs-count">{c.down} down</span></> : null}
+                    {c.slow ? <><span aria-hidden>, </span><span>{c.slow} slow</span></> : null}
+                    {c.down ? <><span aria-hidden>, </span><span className="inf-needs-count">{c.down} down</span></> : null}
                     {spend > 0 ? (
-                      <><span aria-hidden> · </span>
+                      <><span aria-hidden>, </span>
                         <span title={pulse.data?.spend24hEstimated ? "Some prices were estimated, not billed" : "Metered model spend, last 24 hours"}>
-                          {usd(spend)}{pulse.data?.spend24hEstimated ? " est." : ""} · 24h
+                          {usd(spend)}{pulse.data?.spend24hEstimated ? " est." : ""}, 24h
                         </span></>
                     ) : null}
                   </>

@@ -3,17 +3,17 @@
 /**
  * Observability › System (spec §4.11; the stability work's real data): BOSS's own machine.
  *
- *   BOSS MACHINE      build 4c1d2e9 · 2h          This BOSS container's memory cap ⓘ
+ *   BOSS MACHINE      build 4c1d2e9, 2h          This BOSS container's memory cap ⓘ
  *    Memory ███████░░ 78% High   CPU ██░░ 0.41/core OK   Disk ████░ 44% OK   Swap 0 MB OK
  *    New OOM kills 0
- *   WORK   Queue 3 · Leased 2 · Running 2 · In flight 4                      Command Center ↗
- *   STALLS · 24H 2   ▯▯▯▮▯▯▯▯▯▮▯   + the 8 newest
- *   FINDINGS 2       AttentionCards (system_health) — options, confirm and act are the card's
+ *   WORK   Queue 3, Leased 2, Running 2, In flight 4                      Command Center 
+ *   STALLS, 24H 2   ▯▯▯▮▯▯▯▯▯▮▯   + the 8 newest
+ *   FINDINGS 2       AttentionCards (system_health), options, confirm and act are the card's
  *   WHAT BOSS DID    the system doctor's recent actions
  *
  * Every number is a reading the server sends: a gauge draws a bar only where a percent (or load
  * per core against 1.0) exists, and says `Not measurable here` where the machine gave nothing.
- * The gauges are measured inside the BOSS container — never your deploy hosts.
+ * The gauges are measured inside the BOSS container, never your deploy hosts.
  */
 import React, { useEffect, useRef, useState } from "react";
 
@@ -28,7 +28,7 @@ import { useLocalTime } from "../../lib/local-time";
 
 // ── a gauge ─────────────────────────────────────────────────────────────────────────────────
 
-/** The bar's fill as a share 0..1 — only from a real percent, or load per core against 1.0. */
+/** The bar's fill as a share 0..1, only from a real percent, or load per core against 1.0. */
 export function gaugeShare(kind: "memory" | "cpu" | "disk" | "swap", b: Band | null): number | null {
   if (!b || b.value === null) return null;
   if (kind === "cpu") return Math.max(0, Math.min(1, b.value));
@@ -97,7 +97,7 @@ function StallStrip({ strip, fromMs }: { strip: number[]; fromMs: number }) {
           {strip.map((c, i) => (
             <rect key={i} className="obs-stallcell" data-k={c > 0 ? "stall" : "none"} x={i * 10 + 1} y={c > 0 ? 0 : 1} width={8} height={c > 0 ? 12 : 10} rx={1.5}
                   vectorEffect="non-scaling-stroke">
-              <title>{`${hhmm(fromMs + i * cellMs)} · ${c ? `${c} ${c === 1 ? "stall" : "stalls"}` : "No stalls"}`}</title>
+              <title>{`${hhmm(fromMs + i * cellMs)}, ${c ? `${c} ${c === 1 ? "stall" : "stalls"}` : "No stalls"}`}</title>
             </rect>
           ))}
         </svg>
@@ -118,7 +118,7 @@ function Stalls({ s, now }: { s: System; now: number | null }) {
   const fromMs = now === null ? NaN : now - 24 * 3600_000;   // the clock starts after mount
   return (
     <section className="obs-zone" aria-labelledby="obs-stalls-head" data-testid="obs-stalls">
-      <ZoneHead id="obs-stalls-head" label="STALLS · 24H" count={s.stalls.total} />
+      <ZoneHead id="obs-stalls-head" label="STALLS, 24H" count={s.stalls.total} />
       <StallStrip strip={s.stalls.strip} fromMs={fromMs} />
       {s.stalls.rows.length === 0 ? <Empty testId="obs-stalls-none">No stalls</Empty> : (
         <ul className="obs-list">
@@ -182,7 +182,7 @@ export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
         <ZoneHead id="obs-machine-head" label="BOSS MACHINE">
           {s.build.sha7 ? (
             <span className="inf-faint inf-num" title={s.build.builtAt ? `Built ${lt.full(s.build.builtAt)}` : undefined} data-testid="obs-build">
-              build <span className="inf-mono" data-copy="data">{s.build.sha7}</span>{s.build.builtAt && now !== null ? ` · ${ago(s.build.builtAt, now)}` : ""}
+              build <span className="inf-mono" data-copy="data">{s.build.sha7}</span>{s.build.builtAt && now !== null ? `, ${ago(s.build.builtAt, now)}` : ""}
             </span>
           ) : null}
           <span className="obs-scope" title={scopeTip} data-testid="obs-machine-scope">
@@ -211,7 +211,7 @@ export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
           <span><span className="inf-muted">Running</span> {s.work.running}</span>
           <span><span className="inf-muted">In flight</span> {s.work.inFlight}</span>
           {s.work.buildsAtOnce ? (
-            // The admission label is a sentence ("Builds at once: 2 (auto) · 1 queued…"): the
+            // The admission label is a sentence ("Builds at once: 2 (auto), 1 queued…"): the
             // line names the setting once and shows its value.
             <span title={s.work.buildsAtOnce}><span className="inf-muted">At once</span>{" "}
               {s.work.buildsAtOnce.replace(/^Builds at once:\s*/i, "").split(" · ")[0]}</span>

@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The first run, inside the Kit (spec §5.2 Essentials). Four tiles joined like the Studio lane —
- * Open pull requests → Web research → File tickets → Email → Test crew — each with its state and
+ * The first run, inside the Kit (spec §5.2 Essentials). Four tiles joined like the Studio lane , 
+ * Open pull requests → Web research → File tickets → Email → Test crew, each with its state and
  * one button. It shows until all four are Ready (then one line), or until dismissed; `&setup=1`
  * brings it back. After a passing Test crew it is gone for good.
  *
@@ -78,7 +78,7 @@ export function EssentialsStrip({ essentials, testing, onOpen, onAction, onTestC
                 onClick={onDismiss}><X size={14} /></button>
       </header>
       {/* ON A PHONE, ONE LINE (K3): the four as dots (the next one ringed), the count, and the
-          next one's button — four 240px tiles stacked pushed the first card a screen down. */}
+          next one's button, four 240px tiles stacked pushed the first card a screen down. */}
       <div className="kit-ess-compact" data-testid="kit-essentials-compact" data-tip={TIP.essentials}>
         <span className="kit-ess-dots">
           {essentials.map((a, i) => {
@@ -86,7 +86,7 @@ export function EssentialsStrip({ essentials, testing, onOpen, onAction, onTestC
             return (
               <button key={a.key} type="button" className="kit-ess-dot" data-status={status}
                       data-next={a === next || undefined}
-                      aria-label={`${i + 1} ${a.label} · ${PILL[status]}`} data-tip={`${a.label} · ${PILL[status]}`}
+                      aria-label={`${i + 1} ${a.label}, ${PILL[status]}`} data-tip={`${a.label}, ${PILL[status]}`}
                       data-testid={`kit-ess-dot-${a.key}`} onClick={() => onOpen(a.key)}>
                 <span className="kit-dot" data-tone={PILL_TONE[status]} />
               </button>
@@ -97,11 +97,11 @@ export function EssentialsStrip({ essentials, testing, onOpen, onAction, onTestC
         <span className="kit-spacer" />
         {next && nextStatus ? (
           ACTION_OF[nextStatus] === "repo" ? (
-            <a className="kit-btn kit-btn-sm" href={REPO_HREF} data-tip={next.label} aria-label={`${next.label} · ${TILE_BUTTON[nextStatus]}`}
+            <a className="kit-btn kit-btn-sm" href={REPO_HREF} data-tip={next.label} aria-label={`${next.label}, ${TILE_BUTTON[nextStatus]}`}
                data-testid="kit-ess-compact-action">{TILE_BUTTON[nextStatus]}</a>
           ) : (
             <button type="button" className="kit-btn kit-btn-sm" disabled={nextStatus === "testing"} data-tip={next.label}
-                    aria-label={`${next.label} · ${TILE_BUTTON[nextStatus]}`}
+                    aria-label={`${next.label}, ${TILE_BUTTON[nextStatus]}`}
                     data-testid="kit-ess-compact-action" onClick={() => press(next, nextStatus)}>
               {TILE_BUTTON[nextStatus]}
             </button>
@@ -119,7 +119,7 @@ export function EssentialsStrip({ essentials, testing, onOpen, onAction, onTestC
               <span className="kit-ess-num">{i + 1}</span>
               <AbilityIcon name={a.icon} size={20} />
               <span className="kit-ess-label" data-tip={a.tip}>{a.label}</span>
-              <span className="kit-dot" data-tone={PILL_TONE[status]} data-tip={`${PILL[status]} · ${a.status_tip}`} />
+              <span className="kit-dot" data-tone={PILL_TONE[status]} data-tip={`${PILL[status]}, ${a.status_tip}`} />
               {action === "repo" ? (
                 <a className="kit-btn kit-btn-sm" href={REPO_HREF} onClick={(e) => e.stopPropagation()}
                    data-testid={`kit-ess-action-${a.key}`}>{TILE_BUTTON[status]}</a>

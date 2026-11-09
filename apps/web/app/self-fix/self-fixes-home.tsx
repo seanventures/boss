@@ -7,10 +7,10 @@
  *   Self-fixes                                     Autonomy ▁▂▂▅▇ 62% this week ⓘ
  *   Status       Fix                                   Area    Run        Upstream
  *   ● Verified   retire app from the old shared project deploy  wfr_f383…  Not sent [Send]
- *   ● Needs you  planner reads the app folder           build   wfr_9a1c…  —
+ *   ● Needs you  planner reads the app folder           build   wfr_9a1c…  , 
  *
  *   One fix (?sfx=): problem → diagnosis → fix → tests → review → approved → installed →
- *   resumed → upstream, each with when and what, and Diff · Output · Remove · Send to BOSS team.
+ *   resumed → upstream, each with when and what, and Diff, Output, Remove, Send to BOSS team.
  *
  * Recorded bugs a self-fix did not start for are listed under it, each with "Fix it" (a person
  * starts the self-fix from the recommendation).
@@ -70,8 +70,8 @@ export function AutonomyTile({ view }: { view: AutonomyView | null }) {
   const last = view.trend.length ? view.trend[view.trend.length - 1] : null;
   const rate = last ? last.rate : view.totals.rate;
   const t = view.totals;
-  const tip = `${AUTONOMY_TIP} Over ${view.window}: ${t.problems} problems · BOSS ${t.by_boss} · people ${t.by_person}`
-    + ` · outside agents ${t.by_outside_agent} · open ${t.open}. BOSS-side only: ${pct(view.boss_side?.rate)}.`;
+  const tip = `${AUTONOMY_TIP} Over ${view.window}: ${t.problems} problems, BOSS ${t.by_boss}, people ${t.by_person}`
+    + `, outside agents ${t.by_outside_agent}, open ${t.open}. BOSS-side only: ${pct(view.boss_side?.rate)}.`;
   return (
     <span className="sfx-autonomy" data-testid="sfx-autonomy" title={tip}>
       <span className="sfx-sub">Autonomy</span>
@@ -157,7 +157,7 @@ function Lineage({ one, projectId, actor, onSend, onChanged, onBack }: {
       {show === "output" ? (
         <ol className="sfx-events" data-testid="sfx-one-events">
           {one.events.map((e, i) => (
-            <li key={i} title={`${e.event_type} · ${e.actor}`} data-user-text>{e.data?.sentence || e.event_type}</li>
+            <li key={i} title={`${e.event_type}, ${e.actor}`} data-user-text>{e.data?.sentence || e.event_type}</li>
           ))}
         </ol>
       ) : null}
@@ -262,7 +262,7 @@ export function SelfFixesHome({ projectId, actor }: { projectId: string; actor: 
           {open.length ? (
             <details className="sfx-recs" data-testid="sfx-recs">
               <summary title="Bugs BOSS recorded in its own code that it did not fix by itself">
-                Recorded, not fixed · {open.length}
+                Recorded, not fixed, {open.length}
               </summary>
               <ul>
                 {open.map((r) => (

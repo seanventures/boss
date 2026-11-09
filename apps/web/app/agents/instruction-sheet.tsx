@@ -6,7 +6,7 @@
  *
  * Every change of name, text or modes runs a DRY RUN (debounced, not a press): the API lints
  * and measures it and stores nothing, so the estimate, the warnings and any refusal are the
- * server's own — `Add` stays disabled until one passes. A refusal is one red line of ≤ 6 words
+ * server's own, `Add` stays disabled until one passes. A refusal is one red line of ≤ 6 words
  * with the full reason (the line, the phrase) in its tooltip; a secret is never echoed back.
  */
 import { GatedButton } from "../../components/gated";

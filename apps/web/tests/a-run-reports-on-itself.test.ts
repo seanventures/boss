@@ -119,8 +119,8 @@ describe("next steps are ranked and visible", () => {
 describe("the panel's plumbing", () => {
   it("uses the eyebrow type the operator picked from Setup", () => {
     // "can we use the one from Setup -> Already on this install (I like this font)"
-    expect(UI).toContain('className="eyebrow rr-title"');
-    expect(CSS).toContain(".eyebrow {");
+    expect(UI).toContain('className="area-name rr-title"');
+    expect(CSS).toContain(".area-name {");
   });
 
   it("is collapsed until somebody asks for it", () => {
@@ -146,7 +146,7 @@ describe("the panel's plumbing", () => {
   it("keeps the heading a heading, inside the summary", () => {
     // <summary> takes flow content, so the landmark survives the collapse. Dropping to a
     // <span> for the type would trade it away for nothing.
-    expect(UI).toMatch(/<h3 className="eyebrow rr-title">/);
+    expect(UI).toMatch(/<h3 className="area-name rr-title">/);
     const summary = UI.slice(UI.indexOf("rr-root-summary"), UI.indexOf("rr-root-flag"));
     expect(summary).toContain("<h3");
   });

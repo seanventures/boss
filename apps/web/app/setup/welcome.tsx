@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Get BOSS working in 3 steps (BOSSAPP-808 screen 1): Connect GitHub · Add a model · Try a sample
+ * Get BOSS working in 3 steps (BOSSAPP-808 screen 1): Connect GitHub, Add a model, Try a sample
  * project. Shown to a new install until the three are done (Setup › Get started reopens it).
  * Done-ness is the server's: a green account or working repo, a green model, a first PR (`try.done`).
  * The project buttons only link to the New project flow (`/?new_project=sample|import|idea`).

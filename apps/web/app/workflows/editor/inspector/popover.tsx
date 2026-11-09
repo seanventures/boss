@@ -40,7 +40,7 @@ export function placePopover(anchor: { top: number; bottom: number; left: number
  *
  * PORTALLED AND FIXED. The inspector is a scrolling 380px drawer; a popover positioned inside it
  * is clipped by the drawer's own overflow. This places itself against the trigger's rectangle
- * (`placePopover`), and closes on Esc or a press outside — the same contract as HelpTip, so the
+ * (`placePopover`), and closes on Esc or a press outside, the same contract as HelpTip, so the
  * console has one way a floating thing behaves.
  *
  * Its class is `wf-pop wf-pop-float`: the Library's in-card menus are also `.wf-pop`, absolute

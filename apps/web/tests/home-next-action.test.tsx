@@ -166,7 +166,7 @@ describe("the mounted home keeps the main action and draft accessible", () => {
   it("configured roles are secondary and current work counts remain readable", async () => {
     await mount(page());
     expect(tid("cc-team-details")?.hasAttribute("open")).toBe(false);
-    expect(tid("cc-team-details")?.querySelector("summary")?.textContent).toBe("7 configured roles · 0 observed working");
+    expect(tid("cc-team-details")?.querySelector("summary")?.textContent).toBe("7 configured roles, 0 observed working");
   });
   it("typing survives a real polled state change and closing/reopening the same composer", async () => {
     await mount(page());

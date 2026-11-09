@@ -51,7 +51,7 @@ describe("App › Components", () => {
     expect(front).toContain("Live—");
     expect(tid("mr-cmp-card-contracts")?.textContent).toContain("npm @acme/contracts");
     expect(tid("mr-cmp-card-contracts")?.textContent).toContain("Needs—");
-    expect(tid("mr-cmp-deploy-deploy")?.textContent).toContain("acme/infra · /envs/storefront");
+    expect(tid("mr-cmp-deploy-deploy")?.textContent).toContain("acme/infra, /envs/storefront");
     expect(tid("mr-cmp-deploy-deploy")?.textContent).toContain("Read only");
     expect(tid("mr-cmp-no-changes")).not.toBeNull();
     expect(tid("mr-cmp-scope")?.textContent).toBe(

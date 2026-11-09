@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * MY ACCOUNT › SECURITY (IDENTITY.md §9, §4.2–§4.7): your passkeys (add, rename, remove), the
+ * MY ACCOUNT › SECURITY (IDENTITY.md §9, §4.2, §4.7): your passkeys (add, rename, remove), the
  * authenticator app (on or off), recovery codes (how many left; regenerate, shown once), your
  * password, and the SSO identities linked to you. Every change here needs a fresh second factor:
  * the API answers step_up_required and the step-up sheet opens (useGuardedCall).
@@ -120,7 +120,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pw, setPw] = useState({ current: "", next: "" });
-  // "Set password" until there is one (a passkey-first account has none — BOSSAPP-812).
+  // "Set password" until there is one (a passkey-first account has none, BOSSAPP-812).
   const [pwSet, setPwSet] = useState<boolean | null>(null);
   const hasPassword = pwSet ?? !!me?.sign_in.password;
   const [pwError, setPwError] = useState<string | null>(null);
@@ -167,7 +167,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
       window.location.assign(ssoLinkStartPath(p.id));
     } catch (e) {
       setLinkError(e instanceof IdentityError && e.code === "step_up_required"
-        ? `${p.name} can't be linked from here — sign out and sign in with it instead.`
+        ? `${p.name} can't be linked from here, sign out and sign in with it instead.`
         : e instanceof IdentityError && e.code === "step_up_cancelled" ? null : said(e));
     }
   };
@@ -194,7 +194,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             {passkeys.map((f) => (
               <div key={f.id} className="idn-fac">
                 <span className="idn-d" data-kind={f.kind}>{FACTOR_ICON[f.kind]}</span>
-                <span><b data-copy="data">{f.name}</b><small>Passkey · {f.last_used_at ? <>used <Ago iso={f.last_used_at} /></> : "not used yet"}</small></span>
+                <span><b data-copy="data">{f.name}</b><small>Passkey, {f.last_used_at ? <>used <Ago iso={f.last_used_at} /></> : "not used yet"}</small></span>
                 <span className="idn-row">
                   {f.note ? <span className="idn-dim">{f.note}</span> : null}
                   <button type="button" className="idn-btn sm ghost" aria-label={`Rename ${f.name}`} title="Rename" onClick={() => { setRename(f.name); setSheet({ rename: f }); }}><PencilSimple size={14} aria-hidden /></button>
@@ -206,7 +206,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             ))}
             <div className="idn-fac">
               <span className="idn-d" data-kind="totp">{FACTOR_ICON.totp}</span>
-              <span><b>Authenticator app</b><small>{totp ? <>6-digit codes · {totp.last_used_at ? <>used <Ago iso={totp.last_used_at} /></> : "not used yet"}</> : "Not set up"}</small></span>
+              <span><b>Authenticator app</b><small>{totp ? <>6-digit codes, {totp.last_used_at ? <>used <Ago iso={totp.last_used_at} /></> : "not used yet"}</> : "Not set up"}</small></span>
               {totp ? (
                 <button type="button" className="idn-btn sm" aria-disabled={lastFactor(totp) || undefined}
                   title={lastFactor(totp) ? "Your access role needs a second factor" : "Stop using the app"}
@@ -215,7 +215,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             </div>
             <div className="idn-fac">
               <span className="idn-d" data-kind="recovery">{FACTOR_ICON.recovery}</span>
-              <span><b>Recovery codes</b><small>{left ? `${left} of 10 left` : left === 0 ? "None to use · make a set" : recovery?.detail ?? "None to use · make a set"}</small></span>
+              <span><b>Recovery codes</b><small>{left ? `${left} of 10 left` : left === 0 ? "None to use, make a set" : recovery?.detail ?? "None to use, make a set"}</small></span>
               <button type="button" className="idn-btn sm" data-testid="regen-codes"
                 onClick={() => act("New recovery codes replace the old ones.", async () => {
                   const r = await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {});
@@ -241,7 +241,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
         <section className="idn-card" aria-labelledby="acc-pw-h">
           <div className="idn-card-h">
             <h2 id="acc-pw-h">Password</h2>
-            <span className="idn-sub" data-testid="pw-state">{hasPassword ? "You have one" : "None yet · add one to sign in from any browser"}</span>
+            <span className="idn-sub" data-testid="pw-state">{hasPassword ? "You have one" : "None yet, add one to sign in from any browser"}</span>
           </div>
           <form className="idn-form" onSubmit={(e) => {
             e.preventDefault();
@@ -282,7 +282,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
           {identities.length ? identities.map((i) => (
             <div key={i.id} className="idn-fac">
               <span className="idn-d" data-kind="sso"><Key size={16} aria-hidden /></span>
-              <span><b>{i.provider}</b><small data-copy="data">{i.label} · linked <Ago iso={i.linked_at} /></small></span>
+              <span><b>{i.provider}</b><small data-copy="data">{i.label}, linked <Ago iso={i.linked_at} /></small></span>
               <button type="button" className="idn-btn sm ghost" onClick={() => guarded("Unlinking changes how you sign in.", () => idDelete(`/v1/identity/me/identities/${encodeURIComponent(i.id)}`))
                 .then(() => { setIdentities((xs) => xs.filter((x) => x.id !== i.id)); showToast("success", "Unlinked"); })
                 .catch((e) => setError(said(e)))}>Unlink</button>
@@ -338,7 +338,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
       ) : null}
       {sheet === "codes" && codes ? (
         <Sheet title="Your new recovery codes" icon={<LockSimple size={18} aria-hidden />} onClose={() => undefined} locked testId="codes-sheet">
-          <p className="idn-lede2" data-copy="prose">The old codes stopped working. Store these now — BOSS can't show them again.</p>
+          <p className="idn-lede2" data-copy="prose">The old codes stopped working. Store these now, BOSS can't show them again.</p>
           <RecoveryCodesView codes={codes} host={host} continueLabel="Done" onContinue={() => { setCodes(null); setSheet(null); }} />
         </Sheet>
       ) : null}

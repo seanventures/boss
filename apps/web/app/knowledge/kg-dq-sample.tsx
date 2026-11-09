@@ -43,7 +43,7 @@ export function DqRulebookSample({ projectId, actor, orgId, archived = false, on
   if (!sample || !sample.available) return null;
   const loaded = !!sample.document_id;
   const state = loaded
-    ? `Loaded: ${sample.sections} sections · ${sample.rules.proposed} rules waiting for review · ${sample.rules.approved} approved`
+    ? `Loaded: ${sample.sections} sections, ${sample.rules.proposed} rules waiting for review, ${sample.rules.approved} approved`
     : sample.pending_upload_id ? "Read, waiting for you to check its sections" : "Not loaded";
   return (
     <section className="kg-doc" data-testid="kg-dq-sample" aria-label="DQ sample">

@@ -89,7 +89,7 @@ describe("the same contract as the Approvals inbox", () => {
       allowed_actions: [{ action: "approve", label: "Approve and merge" },
                         { action: "reject", label: "Keep blocked" }],
     })] })} />);
-    expect(html).toContain("Approve and merge · Keep blocked");
+    expect(html).toContain("Approve and merge, Keep blocked");
   });
 
   it("a refusal reads as a notice with what to do", () => {

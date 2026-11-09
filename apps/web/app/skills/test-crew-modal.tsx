@@ -2,7 +2,7 @@
 
 /**
  * Test crew (spec §5.6): every Ready ability's test, then for each Essential "can at least one
- * agent use it right now?" — the holders, the approval rule and the server, read the way the
+ * agent use it right now?", the holders, the approval rule and the server, read the way the
  * runtime reads them. The live check (optional) runs one call AS Juno and one AS Strata through
  * their own grants, with receipts.
  */

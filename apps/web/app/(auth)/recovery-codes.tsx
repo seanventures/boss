@@ -3,7 +3,7 @@
 /**
  * RECOVERY CODES, SHOWN ONCE (IDENTITY.md §4.7, §9.7): ten codes, each single-use. Download,
  * print or copy them; Continue stays locked until the person says they stored them. The codes
- * live only in this component's memory and are gone when it unmounts — BOSS keeps hashes only.
+ * live only in this component's memory and are gone when it unmounts, BOSS keeps hashes only.
  */
 import React, { useState } from "react";
 import { Copy, DownloadSimple, Printer, ShieldCheck } from "@phosphor-icons/react";

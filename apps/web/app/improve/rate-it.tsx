@@ -2,7 +2,7 @@
 
 /**
  * One tap, never blocking, never nagging (docs/product/RUN_SCORECARDS.md, "Feedback the person
- * gives"). Stored locally always — whether or not Improve BOSS is on — because it feeds this
+ * gives"). Stored locally always, whether or not Improve BOSS is on, because it feeds this
  * install's own scorecards and experiments.
  *
  *   Would you ship this?  [Yes] [With changes] [No]          → then, optional: [Too slow] [Misread brief] …
@@ -78,7 +78,7 @@ export function RateIt({ projectId, actor, subject, id, testId }: {
     return () => { live = false; };
   }, [projectId, actor, key, id]);
 
-  // An OPEN ask counts toward the person's three a day — once per subject per page.
+  // An OPEN ask counts toward the person's three a day, once per subject per page.
   useEffect(() => {
     if (!view || !open || rating || marked.current || shownThisPage.has(key) || subject === "answer") return;
     marked.current = true;
@@ -152,7 +152,7 @@ export function RateIt({ projectId, actor, subject, id, testId }: {
 
 /**
  * The reasons on a rejection or a steer: the build chips, optional, sent with the action that
- * already exists (the reject press, the steer press) — never a separate question.
+ * already exists (the reject press, the steer press), never a separate question.
  */
 export function ReasonChips({ value, onChange, testId, label = "Why? Optional" }: {
   value: string[]; onChange: (next: string[]) => void; testId?: string; label?: string;

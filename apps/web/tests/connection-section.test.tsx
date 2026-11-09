@@ -58,6 +58,6 @@ describe("a connection", () => {
   it("an ability with nothing to connect says so in one row", async () => {
     installKitApi();
     await render(<ConnectionSection ability={ability(KITS.fresh, "web_research")} projectId="p1" actor="ceo" onChanged={() => {}} />);
-    expect($('[data-testid="kit-conn-none"]')!.textContent).toContain("Built in · Nothing to connect");
+    expect($('[data-testid="kit-conn-none"]')!.textContent).toContain("Built in, Nothing to connect");
   });
 });

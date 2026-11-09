@@ -143,7 +143,7 @@ describe("saving a standard", () => {
       from_workflow_key: "standard_delivery", update_copy_id: null,
     }]);
     expect(navigated).toEqual(["standard_delivery_mine"]);
-    expect(toasts).toContain("Saved as your copy · v1");
+    expect(toasts).toContain("Saved as your copy, v1");
     expect(box.state!.meta).toMatchObject({ definition_id: "def_copy", workflow_key: "standard_delivery_mine",
                                             is_catalogue: false, from_workflow_key: "standard_delivery", version: 1 });
 
@@ -154,7 +154,7 @@ describe("saving a standard", () => {
     await press("save");
     expect(published()[1]).toMatchObject({ definition_id: "def_copy", from_workflow_key: "standard_delivery" });
     expect(published()[1].update_copy_id).toBeUndefined();
-    expect(toasts).toContain("Saved · v2");
+    expect(toasts).toContain("Saved, v2");
   });
 
   it("with a copy: the default updates it — no new definition", async () => {
@@ -209,7 +209,7 @@ describe("saving your own workflow", () => {
     expect(q<HTMLButtonElement>(el, "save")!.title).toBe("Publish as the next version (Ctrl+S)");
     await press("save");
     expect(published()).toEqual([expect.objectContaining({ definition_id: "def_own", name: "My flow" })]);
-    expect(toasts).toContain("Saved · v4");
+    expect(toasts).toContain("Saved, v4");
     expect(q<HTMLButtonElement>(el, "save")!.disabled).toBe(true);
   });
 
@@ -228,7 +228,7 @@ describe("saving your own workflow", () => {
     });
     await act(async () => { finish(created("def_own", "my_flow", "My flow", 4)); });
     await settle();
-    expect(toasts).toContain("Saved · v4");
+    expect(toasts).toContain("Saved, v4");
     // What was published is the new baseline...
     expect(box.state!.loaded).toEqual(sent);
     expect(box.state!.loadedMeta).toMatchObject({ name: "My flow", version: 4 });
@@ -309,7 +309,7 @@ describe("saving your own workflow", () => {
     await press("save");
     expect(published()).toEqual([expect.objectContaining({ definition_id: null, name: "Untitled workflow" })]);
     expect(navigated).toEqual(["untitled_workflow"]);
-    expect(toasts).toContain("Saved · v1");
+    expect(toasts).toContain("Saved, v1");
   });
 });
 

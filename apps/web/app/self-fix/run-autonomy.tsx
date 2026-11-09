@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * THE RUN'S AUTONOMY, IN ONE LINE (docs/product/BOSS_FIXES_ITSELF.md §12): "3 problems · BOSS
- * solved 2 · you solved 1". A problem is one failure episode of a step; how it was resolved is
- * decided when it closes — by BOSS's agents end to end (approving counts as governance, not work),
+ * THE RUN'S AUTONOMY, IN ONE LINE (docs/product/BOSS_FIXES_ITSELF.md §12): "3 problems, BOSS
+ * solved 2, you solved 1". A problem is one failure episode of a step; how it was resolved is
+ * decided when it closes, by BOSS's agents end to end (approving counts as governance, not work),
  * by a person, by an outside coding agent, or still open. Nothing is drawn for a run with no
  * problems: a clean run needs no line.
  */
@@ -26,7 +26,7 @@ export function runAutonomyLine(v: RunAutonomyView): string {
   if (c.by_person) parts.push(`you solved ${c.by_person}`);
   if (c.by_outside_agent) parts.push(`outside agent ${c.by_outside_agent}`);
   if (c.open) parts.push(`${c.open} open`);
-  return parts.join(" · ");
+  return parts.join(", ");
 }
 
 export function RunAutonomy({ projectId, runId, live }: { projectId: string; runId: string; live: boolean }) {

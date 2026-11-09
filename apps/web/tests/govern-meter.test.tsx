@@ -40,7 +40,7 @@ describe("the meter draws real numbers", () => {
 
   it("one hold is a hold", async () => {
     await mount(<GovernMeter meter={{ ...METER, active_reservations_count: 1 } as Meter} error="" onRetry={() => {}} />);
-    expect($("[data-testid=gv-meter]")!.textContent).toContain("· 1 hold");
+    expect($("[data-testid=gv-meter]")!.textContent).toContain(", 1 hold");
     expect($("[data-testid=gv-meter]")!.textContent).not.toContain("1 holds");
   });
 
@@ -75,7 +75,7 @@ describe("the meter draws real numbers", () => {
     expect($("[data-testid=gv-spent-money]")!.textContent).toBe("Spent $292.43");
     expect($("[data-testid=gv-spent-money]")!.getAttribute("title")).toContain("Counted by caps $8.42");
     expect($("[data-testid=gv-spent-uncapped]")!.textContent).toContain("Outside caps $284.01");
-    expect($("[data-testid=gv-included]")!.textContent).toBe(" · Included in plan ~$488.49");
+    expect($("[data-testid=gv-included]")!.textContent).toBe(", Included in plan ~$488.49");
     expect($("[data-testid=gv-included]")!.getAttribute("title")).toContain("an estimate at list price. Not money");
     unmount();
     await mount(<GovernMeter meter={{ ...METER, ledger: { ...ledger, not_under_cap_usd_micros: 0, included_usd_micros: 0 } }}

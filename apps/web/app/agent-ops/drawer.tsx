@@ -52,7 +52,7 @@ function EvidenceList({ items, orgId }: { items: Evidence[]; orgId?: string | nu
     <ul className="aa-evidence" data-testid="aa-evidence">
       {items.map((e, i) => {
         const href = evidenceHref(e, orgId);
-        const body = <><span className="aa-ev-kind">{e.kind.replace(/_/g, " ")}</span><code>{e.ref}</code>{e.note ? <span> · {e.note}</span> : null}</>;
+        const body = <><span className="aa-ev-kind">{e.kind.replace(/_/g, " ")}</span><code>{e.ref}</code>{e.note ? <span>, {e.note}</span> : null}</>;
         return <li key={`${e.kind}-${e.ref}-${i}`}>{href ? <a href={href} target={href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{body}</a> : body}</li>;
       })}
     </ul>
@@ -86,7 +86,7 @@ function DecisionView({ d, projectId, orgId, onChanged }: { d: Decision; project
   const votes = consensus?.votes ?? [];
   const submit = async () => {
     const r = await overrideDecision(projectId, d.act_id, chosen.trim(), why.trim());
-    showToast(r.ok ? "success" : "error", r.ok ? "Overridden — agents follow your choice" : `Not overridden: ${r.error}`);
+    showToast(r.ok ? "success" : "error", r.ok ? "Overridden, agents follow your choice" : `Not overridden: ${r.error}`);
     if (r.ok) { setOverriding(false); onChanged(); }
   };
   return (
@@ -100,16 +100,16 @@ function DecisionView({ d, projectId, orgId, onChanged }: { d: Decision; project
       </div>
       <dl className="aa-facts">
         <dt>Decided by</dt><dd><Face who={d.decided_by} size={18} /> {d.decider_kind}</dd>
-        {d.autonomy_level ? <><dt>Allowed at</dt><dd>{d.autonomy_level} · {LEVEL_WORDS[d.autonomy_level] ?? ""}</dd></> : null}
+        {d.autonomy_level ? <><dt>Allowed at</dt><dd>{d.autonomy_level}, {LEVEL_WORDS[d.autonomy_level] ?? ""}</dd></> : null}
         {d.confidence !== null ? <><dt>Confidence</dt><dd><span className="aa-meter" style={{ ["--v" as string]: d.confidence }} aria-hidden />{Math.round(d.confidence * 100)}%</dd></> : null}
-        {d.reversibility ? <><dt>Undo</dt><dd>{d.reversibility}{d.undo ? ` · ${d.undo}` : ""}</dd></> : null}
+        {d.reversibility ? <><dt>Undo</dt><dd>{d.reversibility}{d.undo ? `, ${d.undo}` : ""}</dd></> : null}
         <dt>Cost</dt><dd>{money(microsUsd(d.cost_usd_micros))}</dd>
         {d.outcome ? <><dt>Outcome</dt><dd>{d.outcome}</dd></> : null}
       </dl>
       {d.rationale ? <><h4>Why</h4><p data-user-text data-testid="aa-rationale">{d.rationale}</p></> : null}
       {votes.length ? (
         <>
-          <h4>Votes{consensus?.mode ? <span className="aa-sub"> · {consensus.mode.replace(/_/g, " ")}</span> : null}</h4>
+          <h4>Votes{consensus?.mode ? <span className="aa-sub">, {consensus.mode.replace(/_/g, " ")}</span> : null}</h4>
           <ul className="aa-votes" data-testid="aa-votes">
             {votes.map((v, i) => (
               <li key={`${v.party}-${i}`} data-vote={v.vote}><Face who={String(v.party)} size={20} />{v.vote === "approve" ? "✓" : v.vote === "reject" ? "✕" : "–"}</li>
@@ -176,13 +176,13 @@ export function NodeDrawer({ target, graph, messages, projectId, orgId, onClose,
   if (ref?.kind === "act") body = decision ? <DecisionView d={decision} projectId={projectId} orgId={orgId} onChanged={onChanged} /> : <p className="aa-sub">Loading…</p>;
   else if (ref?.kind === "signal") body = signal ? (
     <dl className="aa-facts" data-testid="aa-drawer-signal">
-      <dt>Signal</dt><dd data-user-text>{signal.title}</dd><dt>Source</dt><dd>{signal.source} · {signal.kind}</dd>
+      <dt>Signal</dt><dd data-user-text>{signal.title}</dd><dt>Source</dt><dd>{signal.source}, {signal.kind}</dd>
       <dt>Severity</dt><dd>{signal.severity}</dd><dt>Seen</dt><dd>{signal.occurrences}×</dd>
     </dl>
-  ) : <p className="aa-sub">{node?.badges.join(" · ")}</p>;
+  ) : <p className="aa-sub">{node?.badges.join(", ")}</p>;
   else if (message) body = (
     <div data-testid="aa-drawer-message">
-      <p className="aa-who"><Face who={message.sender} /> {partyName(message.sender, graph)} · <span className="aa-chip-xs">{message.kind}</span></p>
+      <p className="aa-who"><Face who={message.sender} /> {partyName(message.sender, graph)}, <span className="aa-chip-xs">{message.kind}</span></p>
       <p data-user-text>{bodyText(message)}</p>
       {Array.isArray(message.body.evidence) ? <EvidenceList items={message.body.evidence as Evidence[]} orgId={orgId} /> : null}
       {replies.length ? <><h4>Replies</h4><Thread messages={replies} graph={graph} /></> : null}
@@ -213,7 +213,7 @@ export function NodeDrawer({ target, graph, messages, projectId, orgId, onClose,
       <dt>Ended</dt><dd>{graph.item.lifecycle}</dd>
       {graph.item.resolved_by ? <><dt>By</dt><dd><Face who={graph.item.resolved_by} size={18} /> {partyName(graph.item.resolved_by, graph)}</dd></> : null}
       <dt>Cost</dt><dd>{money(graph.badges.cost_usd)}</dd>
-      {graph.links.length ? <><dt>Linked</dt><dd>{graph.links.map((l) => `${l.kind.replace(/_/g, " ")} ${l.ref}`).join(" · ")}</dd></> : null}
+      {graph.links.length ? <><dt>Linked</dt><dd>{graph.links.map((l) => `${l.kind.replace(/_/g, " ")} ${l.ref}`).join(", ")}</dd></> : null}
     </dl>
   );
 
@@ -222,7 +222,7 @@ export function NodeDrawer({ target, graph, messages, projectId, orgId, onClose,
       <header className="aa-drawer-h">
         {node ? <NodeFace node={node} size={32} /> : null}
         <div>
-          <span className="aa-eyebrow">{kind}</span>
+          <span className="aa-area-name">{kind}</span>
           <h3 data-user-text>{title}</h3>
         </div>
         <button type="button" className="aa-x" aria-label="Close" data-testid="aa-drawer-close" onClick={onClose}>✕</button>

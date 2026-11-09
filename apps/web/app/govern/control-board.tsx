@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Govern › Limits: every control as one row (spec §4.4.3) — the value the ENGINE will use, where
+ * Govern › Limits: every control as one row (spec §4.4.3), the value the ENGINE will use, where
  * it came from, what enforces it, and when it last stopped something. Where the stored value
- * and the effective one differ, both are shown (`set 3 · min 6`), because a label that says
+ * and the effective one differ, both are shown (`set 3, min 6`), because a label that says
  * more than the engine does is the thing this screen exists to stop.
  *
  * Edits open in place with their effect before saving, are saved only by Save or Enter (never on
- * blur — a tab-away must not change a production limit), and carry the version the row showed:
+ * blur, a tab-away must not change a production limit), and carry the version the row showed:
  * a limit someone else changed meanwhile is refused (`Changed by … just now`), not overwritten.
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -73,10 +73,10 @@ export function valueText(c: Control): string {
   }
 }
 
-/** The second line when the stored value is not what runs: `set 3 · min 6`, `set 0 · reads as 2`. */
+/** The second line when the stored value is not what runs: `set 3, min 6`, `set 0, reads as 2`. */
 export function noteText(c: Control): { text: string; tip: string } | null {
-  if (c.note?.kind === "floor") return { text: `set ${c.note.stored} · min ${c.note.floor}`, tip: `Values under ${c.note.floor} behave like ${c.note.floor} today` };
-  if (c.note?.kind === "reads_as") return { text: `set 0 · reads as ${c.note.reads_as}`, tip: `0 is read as ${c.note.reads_as} today` };
+  if (c.note?.kind === "floor") return { text: `set ${c.note.stored}, min ${c.note.floor}`, tip: `Values under ${c.note.floor} behave like ${c.note.floor} today` };
+  if (c.note?.kind === "reads_as") return { text: `set 0, reads as ${c.note.reads_as}`, tip: `0 is read as ${c.note.reads_as} today` };
   if (c.note?.kind === "default") return { text: "(default)", tip: "BOSS's default. Edit to set your own." };
   return null;
 }
@@ -105,8 +105,8 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
-/** The board's rows, in order, with the names the server gives them — so a board that can't
- *  reach BOSS still reads `Daily cap —`, never `daily_cap —` (D8). */
+/** The board's rows, in order, with the names the server gives them, so a board that can't
+ *  reach BOSS still reads `Daily cap , `, never `daily_cap , ` (D8). */
 export const SPEND_ROWS: [string, string][] = [
   ["daily_cap", "Daily cap"], ["monthly_cap", "Monthly cap"], ["burst", "Burst"], ["pace", "Pace"]];
 export const AGENT_ROWS: [string, string][] = [
@@ -232,7 +232,7 @@ function ControlRow({ keyName, control: c, projectId, actor, disabled, editing, 
         {c?.running_now ? (
           <span className="gv-value-note gv-running-now" data-testid={`gv-running-now-${keyName}`}
                 title="Memory is low, so the review panel runs one seat at a time.">
-            · running {c.running_now.value} now (memory)
+           , running {c.running_now.value} now (memory)
           </span>
         ) : null}
       </span>
@@ -249,7 +249,7 @@ function ControlRow({ keyName, control: c, projectId, actor, disabled, editing, 
         {evidence ? (
           <a className="ag-link" data-testid={`gv-evidence-${keyName}`} href={logHref({ kind: evidence.log.kind, range: "7d" })}
              title="Open the Log at these">{evidence.word}</a>
-        ) : c ? <span title="BOSS doesn't record when this bites">—</span> : null}
+        ) : c ? <span title="BOSS doesn't record when this bites">{"—"}</span> : null}
       </span>
       <span className="gv-act">
         {editable || byPace ? (
@@ -321,7 +321,7 @@ function NumberEditor({ control, busy, onSave, onCancel }: {
              min={control.bounds?.min ?? undefined} max={control.bounds?.max ?? undefined} step="any"
              aria-invalid={error ? true : undefined}
              value={text} onChange={(e) => setText(e.target.value)} data-testid="gv-input" />
-      {control.bounds ? <span className="gv-bounds">{control.bounds.min}–{control.bounds.max}</span> : null}
+      {control.bounds ? <span className="gv-bounds">{control.bounds.min}, {control.bounds.max}</span> : null}
       {n !== null && effective !== null ? (
         <span className="gv-preview-line" data-testid="gv-will-use">BOSS will use {effective}</span>
       ) : <FieldError error={error} />}
@@ -400,9 +400,9 @@ function PaceEditor({ control, projectId, busy, onApply, onCancel }: {
       {env && env.operational_intensity === asked ? (
         <span className="gv-pace-preview" data-testid="gv-pace-preview"
               title="Exactly what Apply writes">
-          <span>Daily {money(env.daily_cap_usd_micros)}</span> · <span>Monthly {money(env.monthly_cap_usd_micros)}</span>
-          {" · "}<span>Burst {money(env.burst_cap_usd_micros_per_min, { perMin: true })}</span>
-          {" · "}<span>Jobs {env.max_concurrent_jobs}</span> · <span>Workers {env.max_workers_total}</span>
+          <span>Daily {money(env.daily_cap_usd_micros)}</span>, <span>Monthly {money(env.monthly_cap_usd_micros)}</span>
+          {", "}<span>Burst {money(env.burst_cap_usd_micros_per_min, { perMin: true })}</span>
+          {", "}<span>Jobs {env.max_concurrent_jobs}</span>, <span>Workers {env.max_workers_total}</span>
         </span>
       ) : <span className="gv-pace-preview" aria-busy="true" />}
       <span className="gv-edit-buttons">
@@ -455,21 +455,22 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
   };
   return (
     <section className="gv-sec" aria-labelledby="gv-sec-tokens" data-advisory="true">
-      <h3 id="gv-sec-tokens" className="gv-sec-head">
-        TOKEN GUIDES <span className="gv-badge" title="Shapes alerts and tips. Doesn't stop model calls.">Advisory</span>
-      </h3>
+      <div className="gv-sec-head">
+        <h3 id="gv-sec-tokens" className="gv-sec-head">TOKEN GUIDES</h3>
+        <span className="gv-badge" title="Shapes alerts and tips. Doesn't stop model calls.">Advisory</span>
+      </div>
       <ul className="gv-rows" role="list">
         <li className="gv-row" data-advisory="true" data-testid="gv-control-token_default">
           <span className="gv-name">Project default</span>
           <span className="gv-value">
             <span className="gv-value-main" data-testid="gv-value-token_default">
-              {def ? (<><span>{k(def.max_tokens_per_day)} tok/day</span> · <span>{money(def.max_cost_usd_micros_per_day)}/day</span>
-                {" · "}<span>alert {Math.round((def.alert_at_pct ?? 0.8) * 100)}%</span></>) : "—"}
+              {def ? (<><span>{k(def.max_tokens_per_day)} tok/day</span>, <span>{money(def.max_cost_usd_micros_per_day)}/day</span>
+                {", "}<span>alert {Math.round((def.alert_at_pct ?? 0.8) * 100)}%</span></>) : "—"}
             </span>
           </span>
           <span className="gv-source">{def ? (def.source === "stored" ? "Set here" : "Default") : ""}</span>
           <span className="gv-enforced" data-advisory title="Shapes alerts and tips. Doesn't stop model calls.">Advisory</span>
-          <span className="gv-evidence"><span title="BOSS doesn't record when this bites">—</span></span>
+          <span className="gv-evidence"><span title="BOSS doesn't record when this bites">{"—"}</span></span>
           <span className="gv-act" />
         </li>
         <li className="gv-row" data-advisory="true" data-testid="gv-control-token_per_step" data-editing={editing || undefined}>
@@ -479,7 +480,7 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
                   title="Tokens per model call, by step. Edit to change one.">
               {capped.length
                 ? shownSteps.map((p, i) => (
-                  <React.Fragment key={p.stage}>{i ? " · " : ""}<span data-testid={`gv-step-${p.stage}`}
+                  <React.Fragment key={p.stage}>{i ? ", " : ""}<span data-testid={`gv-step-${p.stage}`}
                     data-set={p.source === "stored" || undefined}>{stageWord(p.stage)} {k(p.max_total_tokens_per_call)}</span></React.Fragment>))
                 : "—"}
             </span>
@@ -490,7 +491,7 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
           </span>
           <span className="gv-source">{steps.some((p) => p.source === "stored") ? "Set here" : "Default"}</span>
           <span className="gv-enforced" data-advisory title="Shapes alerts and tips. Doesn't stop model calls.">Advisory</span>
-          <span className="gv-evidence"><span title="BOSS doesn't record when this bites">—</span></span>
+          <span className="gv-evidence"><span title="BOSS doesn't record when this bites">{"—"}</span></span>
           <span className="gv-act">
             <GatedButton permission="policy:manage" type="button" className="ag-btn" data-testid="gv-token-edit" disabled={disabled}
                     onClick={() => setEditing((e) => !e)}>Edit</GatedButton>

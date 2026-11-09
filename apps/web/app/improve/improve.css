@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* Improve BOSS, run scorecards, experiments and the person's feedback (docs/product/RUN_SCORECARDS.md).
    Tokens only: every colour is a var(); 390px layouts under 720px; motion has a still. */
 
@@ -85,7 +90,7 @@
 .im-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .im-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .im-tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
-.im-tile-k { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.im-tile-k { font-size: 0.68rem; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--faint); }
 .im-tile-v { font-size: 1.25rem; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .im-table { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
 .im-tr {
@@ -93,7 +98,7 @@
   min-height: 42px; padding: 4px 14px; border-bottom: 1px solid var(--border); font-size: 0.82rem; color: var(--ink-soft); font-variant-numeric: tabular-nums;
 }
 .im-tr:last-child { border-bottom: 0; }
-.im-th { min-height: 32px; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.im-th { min-height: 32px; font-size: 0.68rem; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--faint); }
 .im-key { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 600; }
 .im-score { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .im-score svg { flex: 1 1 auto; min-width: 60px; height: 14px; }
@@ -117,7 +122,7 @@
 .im-arms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .im-arm { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-2); }
 .im-arm[data-winner] { border-color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
-.im-arm-k { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; color: var(--faint); }
+.im-arm-k { font-size: 0.7rem; font-weight: 700; letter-spacing: 0; color: var(--faint); }
 .im-arm-v { font-size: 0.95rem; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
 .im-arm-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .im-verdict { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: var(--surface-3); color: var(--ink); font-size: 0.78rem; font-weight: 650; }
@@ -133,7 +138,7 @@
 .im-form-end { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .im-err { color: var(--red); font-size: 0.8rem; }
 .im-proof { display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; border: 1px solid var(--accent-line); border-radius: var(--r-xl); background: var(--accent-soft); }
-.im-proof-k { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; color: var(--accent-text); }
+.im-proof-k { font-size: 0.7rem; font-weight: 700; letter-spacing: 0; color: var(--accent-text); }
 .im-proof-v { margin: 0; font-size: 1.2rem; font-weight: 700; color: var(--ink); }
 .im-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .im-bars { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -151,7 +156,7 @@
 .im-cohorts td[data-heat="2"] { background: color-mix(in srgb, var(--accent) 45%, var(--surface)); }
 .im-cohorts td[data-heat="1"] { background: var(--accent-soft); }
 .im-panel { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
-.im-panel-k { margin: 0; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; color: var(--faint); }
+.im-panel-k { margin: 0; font-size: 0.7rem; font-weight: 700; letter-spacing: 0; color: var(--faint); }
 .im-muted { color: var(--muted); font-size: 0.8rem; }
 
 /* ── Share this run ──────────────────────────────────────────────────────────────────────── */

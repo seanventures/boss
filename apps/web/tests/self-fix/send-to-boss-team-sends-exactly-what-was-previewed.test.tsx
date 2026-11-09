@@ -31,11 +31,11 @@ describe("Send to BOSS team", () => {
     expect(opsOf(calls, "preview")).toHaveLength(1);
     expect(tid("sfx-send-channel")?.textContent).toBe(
       "Opens a pull request on github.com/seanventures/boss from your fork example-person/boss.");
-    expect(tid("sfx-send-similar")?.textContent).toBe("Similar: none open · none merged");
+    expect(tid("sfx-send-similar")?.textContent).toBe("Similar: none open, none merged");
     expect(tid("sfx-send-title")?.textContent).toContain("fix(deploy)");
     expect($$('[data-testid="sfx-send-labels"] .cap-badge').map((b) => b.textContent)).toEqual(
       ["source:boss-agent", "boss:self-fix", "area:deploy", "verified:local", "engine:codex"]);
-    expect(tid("sfx-send-diff")?.textContent).toContain("2 file(s) · +154 −1");
+    expect(tid("sfx-send-diff")?.textContent).toContain("2 file(s), +154 −1");
     expect(tid("sfx-send-view-diff")?.getAttribute("title")).toContain("Not editable");
     expect(tid("sfx-send-trailers")?.textContent).toContain("BOSS-Self-Fix-Ref: 3fa9c0e1b2d4");
     expect(tid("sfx-send-check-ok")).toBeTruthy();

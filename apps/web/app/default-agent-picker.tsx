@@ -3,12 +3,12 @@
 /**
  * The project's default team, chosen where the workflow is chosen.
  *
- * "I did not see option in the command center to assign the agents at the time of creation —
+ * "I did not see option in the command center to assign the agents at the time of creation , 
  *  this design is very confusing." Fair, and the reason is structural rather than an oversight:
  * the Command Center's Build does not create a project. It sends the directive down panel → PRD
  * → code, so at the moment of pressing it there is no app for anyone to be assigned to.
  *
- * What can be chosen here is exactly what the workflow picker beside it chooses — a DEFAULT for
+ * What can be chosen here is exactly what the workflow picker beside it chooses, a DEFAULT for
  * this project. It seeds every app that follows, and each app can then differ on its own
  * workflow. One control per level: the project's team here, this app's team there.
  *
@@ -117,7 +117,7 @@ export function DefaultAgentPicker({ projectId, actor, faces = false }: {
                 statement and the one that is true. */}
             {current.length
               ? "Every new project here starts with these. Each one can differ on its workflow."
-              : "No team chosen, so BOSS uses its built-in set — the agents that run research, "
+              : "No team chosen, so BOSS uses its built-in set, the agents that run research, "
                 + "the panel and the build anyway. Pick some to make it a decision."}
           </p>
           <div className="aot-list">

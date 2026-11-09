@@ -138,7 +138,7 @@ describe("toasts say what the check said", () => {
     mounted = await mountBoard(repoDone(), "?area=setup&add=openrouter");
     await type(q(document.body, "su-model-key"), "sk-or-v1-0123456789abcdef");
     await click(q(document.body, "su-model-connect"));
-    expect(toasts).toContain("Connected · Limited · 14:20");
+    expect(toasts).toContain("Connected, Limited · 14:20");
     expect(toasts).not.toContain("Connected · Working");
   });
 });

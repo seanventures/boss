@@ -5,7 +5,7 @@
  * Bank data platform" is the product action (POST /v1/knowledge/samples/dq, confirmed; the
  * agent's `load_dq_platform` tool takes the same one): the banking-dq pack beside the project's
  * other packs, the DQ Monitor and the Profile Service connectors, the platform into the graph, the DQ workflows
- * and the daily escalation sweep. The rules come from the rulebook, never from here — the row
+ * and the daily escalation sweep. The rules come from the rulebook, never from here, the row
  * says how many are in the graph. Then the DQ Monitor's exception groups are listed by close of business,
  * each with "Investigate" (starts dq_incident_rca with that group), and the scheduled trigger can
  * be turned on: every morning, an investigation per group the DQ Monitor graded Error.
@@ -24,7 +24,7 @@ type Who = { projectId: string; actor: string };
 
 function groupStatus(g: KgDqGroup): string {
   if (g.grade !== "Error") return `${g.grade}: dashboard only`;
-  if (g.incident_id) return `${g.incident_id} · ${g.incident_status ?? "open"}`;
+  if (g.incident_id) return `${g.incident_id}, ${g.incident_status ?? "open"}`;
   if (g.run_status) return `Investigation ${g.run_status}`;
   return "Not investigated";
 }
@@ -63,7 +63,7 @@ function GroupRow({ w, group, workflowKey, archived, onStarted }: {
     <li className="kg-doc-clause" data-testid="kg-dq-group">
       <span className="kg-doc-clause-section">{label}</span>
       <span className="kg-doc-clause-text">
-        {group.rule_id}: {group.failed} of {group.population} failed on {group.column} — the DQ Monitor graded {group.grade}
+        {group.rule_id}: {group.failed} of {group.population} failed on {group.column}, the DQ Monitor graded {group.grade}
       </span>
       <span className="kg-quiet" data-testid="kg-dq-group-status">{groupStatus(group)}</span>
       <span className="kg-doc-check">
@@ -127,7 +127,7 @@ export function DqPlatformSample({ projectId, actor, archived = false, onLoaded 
         <span className="kg-doc-pack-label">DQ platform</span>
         <span className="kg-doc-pack-value" data-testid="kg-dq-platform-state">
           {platform.loaded
-            ? `NorthPeak Bank's data platform is loaded · ${platform.rules_in_graph} of ${platform.rules_in_rulebook} DQ rules in the graph`
+            ? `NorthPeak Bank's data platform is loaded, ${platform.rules_in_graph} of ${platform.rules_in_rulebook} DQ rules in the graph`
             : "Not loaded"}
         </span>
         <GatedButton permission={DOCUMENT_MANAGE} className="ag-btn" data-testid="kg-dq-load" disabled={archived || busy}

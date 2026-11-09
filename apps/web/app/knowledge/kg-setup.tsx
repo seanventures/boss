@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * KNOWLEDGE GRAPH › SETUP — a knowledge-graph project, set up in order (BOSSAPP-768 project flow).
+ * KNOWLEDGE GRAPH › SETUP, a knowledge-graph project, set up in order (BOSSAPP-768 project flow).
  *
- * The operator: "There's no good sequencing — we need a proper UI flow to create the knowledge
+ * The operator: "There's no good sequencing, we need a proper UI flow to create the knowledge
  * graph and how it is associated with Agents for a particular project." This is that flow, in the
  * Setup stepper's pattern (setup-row.tsx, lib/setup-stepper.ts): numbered rows, the current step
  * open, finished steps one line with Change, later steps waiting with why.
@@ -91,7 +91,7 @@ export function KgIntro({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
-/** The intro, put away: one line in the tab row — the three layers, and "?" to read it again. */
+/** The intro, put away: one line in the tab row, the three layers, and "?" to read it again. */
 export function KgIntroLegend({ onOpen }: { onOpen: () => void }) {
   return (
     <span className="kg-intro-legend" data-testid="kg-intro-legend">
@@ -128,7 +128,7 @@ export function KgSetupStrip({ setup, onOpen, onDismiss }: { setup: KgSetupRespo
   if (!next) return null;
   return (
     <p className="kg-banner kg-setup-strip" role="note" data-testid="kg-setup-strip">
-      <span className="kg-banner-text">Setup · {stepsLeftWords(setup)}. Next: <b>{next.label}</b></span>
+      <span className="kg-banner-text">Setup, {stepsLeftWords(setup)}. Next: <b>{next.label}</b></span>
       <button type="button" className="ag-btn" data-testid="kg-setup-continue" onClick={onOpen}>Continue setup</button>
       {onDismiss ? (
         <button type="button" className="kg-intro-close" aria-label="Put the setup strip away" title="Put away: Setup stays one press away in the tab row"
@@ -146,7 +146,7 @@ export function KgSetupChip({ setup, onOpen }: { setup: KgSetupResponse; onOpen:
   const next = SETUP_STEPS.find((s) => s.key === setup.next);
   return (
     <button type="button" className="kg-setup-chip" data-testid="kg-setup-chip" data-done={done || undefined} onClick={onOpen}
-            title={done ? "The knowledge graph is set up: open Setup" : `Setup · ${stepsLeftWords(setup)}. Next: ${next?.label ?? ""}`}>
+            title={done ? "The knowledge graph is set up: open Setup" : `Setup, ${stepsLeftWords(setup)}. Next: ${next?.label ?? ""}`}>
       {done ? <Check size={12} weight="bold" aria-hidden /> : null}
       {done ? "Set up" : `Setup ${setup.done_count}/${setup.steps.length}`}
     </button>
@@ -237,7 +237,7 @@ export function KgSetup({ w, setup, error, onReload, onOpenTab, archived }: {
           </div>
           <div className="kg-setup-body">
             <p className="kg-setup-summary">{allDone
-              ? `${setup.code_nodes.toLocaleString("en-US")} code nodes · ${setup.rules.approved} approved rules · ${setup.learnings} learnings. Agents on this project are given it as they work.`
+              ? `${setup.code_nodes.toLocaleString("en-US")} code nodes, ${setup.rules.approved} approved rules, ${setup.learnings} learnings. Agents on this project are given it as they work.`
               : "The Knowledge Graph opens with the code, the rules and what agents learned, on one canvas."}</p>
           </div>
           <div className="kg-setup-aside">
@@ -328,7 +328,7 @@ function ImportStep({ w, setup, archived, onChanged }: {
         <select className="input kg-setup-select" value={pick} disabled={!view || !view.addable.length || !!busy || archived}
                 aria-label="Add a repository" data-testid="kg-import-pick" onChange={(e) => setPick(e.target.value)}>
           <option value="">{!view ? "Reading the allowed repositories…" : view.addable.length ? "Choose a repository…" : "Nothing more to add"}</option>
-          {(view?.addable ?? []).map((a) => <option key={a.id} value={a.id}>{a.full_name}{a.language ? ` · ${a.language}` : ""}</option>)}
+          {(view?.addable ?? []).map((a) => <option key={a.id} value={a.id}>{a.full_name}{a.language ? `, ${a.language}` : ""}</option>)}
         </select>
         <GatedButton permission="repository:manage" className="ag-btn ag-btn-primary" data-testid="kg-import-add"
                      disabled={!pick || !!busy || archived} title={archived ? ARCHIVED_WHY : "Add it to this project; indexing starts by itself"}
@@ -340,7 +340,7 @@ function ImportStep({ w, setup, archived, onChanged }: {
       </div>
       <p className="kg-quiet">
         Lists the repositories allowed for BOSS in <a className="inf-link" href={registry} data-testid="kg-import-registry">Repo and models</a>
-        {view?.not_allowed_count ? ` · ${view.not_allowed_count} more there ${view.not_allowed_count === 1 ? "is" : "are"} not allowed yet` : ""}.
+        {view?.not_allowed_count ? `, ${view.not_allowed_count} more there ${view.not_allowed_count === 1 ? "is" : "are"} not allowed yet` : ""}.
       </p>
       {view && view.registry_in_use === false && !repos.length ? (
         <p className="kg-quiet" data-testid="kg-import-no-registry">No repository is allowed for BOSS yet. Tick one in Repo and models › Repositories, then add it here.</p>
@@ -443,18 +443,18 @@ function ScanStep({ w, setup, archived, onStarted }: { w: Who; setup: KgSetupRes
   return (
     <div className="kg-setup-scan" data-testid="kg-scan-step">
       {setup.scans.latest ? (
-        <p className="kg-quiet" data-testid="kg-scan-latest">Last scan: {setup.scans.latest.status}{setup.scans.running ? " — proposed rules arrive in Rules review as it reads" : ""}.</p>
+        <p className="kg-quiet" data-testid="kg-scan-latest">Last scan: {setup.scans.latest.status}{setup.scans.running ? ", proposed rules arrive in Rules review as it reads" : ""}.</p>
       ) : null}
       {setup.areas.length ? (
         <>
-          <p className="kg-setup-sub">Choose an area{scanner ? <> · <span>{scanner.display_name} reads it</span></> : null}</p>
+          <p className="kg-setup-sub">Choose an area{scanner ? <>, <span>{scanner.display_name} reads it</span></> : null}</p>
           <div className="kg-area-list" role="radiogroup" aria-label="The area to scan" data-testid="kg-scan-areas">
             {setup.areas.map((a) => (
               <label key={a.key} className="kg-area" data-on={a.key === area || undefined}>
                 <input type="radio" name="kg-scan-area" value={a.key} checked={a.key === area} onChange={() => setArea(a.key)} />
                 <span className="kg-dot" data-layer="code" aria-hidden />
                 <span className="kg-area-name" data-user-text>{a.label}</span>
-                <small>{a.classes.toLocaleString("en-US")} classes · {a.packages.toLocaleString("en-US")} packages</small>
+                <small>{a.classes.toLocaleString("en-US")} classes, {a.packages.toLocaleString("en-US")} packages</small>
               </label>
             ))}
           </div>

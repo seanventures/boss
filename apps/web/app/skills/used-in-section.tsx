@@ -26,7 +26,7 @@ export function UsedInSection({ ability }: { ability: Ability }) {
         <li key={`${u.workflow_key}:${u.step_id}`}>
           <a href={`?area=delivery_workflows&wf=${encodeURIComponent(u.workflow_key)}&step=${encodeURIComponent(u.step_id)}`}
              data-tip={`${u.workflow_name} › ${u.step_title}`}>
-            <span data-user-text>{u.workflow_name}</span> › <span data-user-text>{u.step_title}</span>
+            <span data-user-text>{u.workflow_name}</span>, <span data-user-text>{u.step_title}</span>
           </a>
         </li>
       ))}

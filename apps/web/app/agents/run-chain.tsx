@@ -7,7 +7,7 @@
  *
  * Hops are in the order the work happened. Parallel work stacks in one column (⇉). A step's own
  * inner work folds under it (`+5 inside Build`) and opens into its sub-chain; a repair loop is
- * said once (`Forge ↔ Rook ×3`). Every face opens its Act card. Every edge's words are the
+ * said once (`Forge  Rook ×3`). Every face opens its Act card. Every edge's words are the
  * server's edge label, on hover, with the scope that crossed it.
  *
  * LIVE, TRUTHFULLY: the hop doing work right now rings `working` (from its act's status), and an
@@ -27,7 +27,7 @@ function edgeTip(acts: Act[]): string | undefined {
   const lines: string[] = [];
   for (const a of acts) {
     const scope = [...a.scope.skills, ...a.scope.mcp];
-    const said = [a.edgeLabel, scope.length ? scope.join(", ") : ""].filter(Boolean).join(" · ");
+    const said = [a.edgeLabel, scope.length ? scope.join(", ") : ""].filter(Boolean).join(", ");
     if (said) lines.push(acts.length > 1 ? `${nameOf(a.roleKey).name}: ${said}` : said);
   }
   return lines.length ? lines.join("\n") : undefined;
@@ -72,7 +72,7 @@ function HopView({ hop, viewer, fresh, depth, attempt }: {
             <Name act={a} viewer={viewer} />
             {hop.steps && hop.steps.length > 1 ? (
               <span className="ag-chain-steps" data-testid="ag-chain-steps" data-tip={hop.steps.join("\n")}>
-                · {hop.steps.length} steps
+               , {hop.steps.length} steps
               </span>
             ) : null}
             {attempts.length > 1 ? (
@@ -80,7 +80,7 @@ function HopView({ hop, viewer, fresh, depth, attempt }: {
               <button type="button" className="ag-chain-fold ag-chain-tries" aria-expanded={tries}
                       data-testid="ag-chain-attempts" onClick={() => setTries((v) => !v)}
                       data-tip="Each attempt at this step, with its own work">
-                · {attempts.length} attempts
+               , {attempts.length} attempts
                 {tries ? <CaretDown size={10} weight="bold" aria-hidden /> : <CaretRight size={10} weight="bold" aria-hidden />}
               </button>
             ) : null}
@@ -135,7 +135,7 @@ function Items({ items, viewer, fresh, depth }: {
                   <ActFace act={lastOf(it.acts, it.a.acts[0])} viewer={viewer} size={depth ? 20 : 24} />
                   <Name act={it.a.acts[0]} viewer={viewer} />
                 </span>
-                <span className="ag-chain-swap" aria-label="back and forth">↔</span>
+                <span className="ag-chain-swap" aria-label="back and forth">Link</span>
                 <span className="ag-chain-who">
                   <ActFace act={lastOf(it.acts, it.b.acts[0])} viewer={viewer} size={depth ? 20 : 24} />
                   <Name act={it.b.acts[0]} viewer={viewer} />
@@ -163,7 +163,7 @@ function itemNames(it: ChainItem, viewer: string): string {
   return hops.map((h) => h.acts.map((a) => {
     const w = whoDid(a, viewer);
     return nameOf(w.roleKey, w.variant, w.personId, w.name).name;
-  }).join(", ")).join(" ↔ ");
+  }).join(", ")).join(" / ");
 }
 
 export function RunChain({ chain, viewer, defaultOpen = true }: {

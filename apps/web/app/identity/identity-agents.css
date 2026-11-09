@@ -1,3 +1,4 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* Identity › agents, delegation lineage, audit and sign-in settings (idn- classes; tokens only — see identity.css). */
 
 /* page titles that are not heroes */
@@ -73,7 +74,7 @@ a.idn-dg:hover { border-color: var(--border-strong); }
   .idn-chain-rule { display: none; }
   .idn-funnel { height: 54px; }
   .idn-funnel .idn-lbls div { font-size: 0.84211rem; }
-  .idn-funnel .idn-lbls small { font-size: 0.44737rem; letter-spacing: 0.06em; }
+  .idn-funnel .idn-lbls small { font-size: 0.44737rem; letter-spacing: 0; }
   .idn-prov-grid { grid-template-columns: minmax(0, 1fr); }
   .idn-fb-more { grid-template-columns: minmax(0, 1fr); }
   .idn-domains { max-width: none; }

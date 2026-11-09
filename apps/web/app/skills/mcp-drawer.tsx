@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * The MCP drawer (spec §5.5): the ability drawer's sections for one server — Connection (URL and
- * sign-in, Save & test), Tools (Allow · Ask · Off per tool, replacing the "tool = tier" box),
- * Agents, Used in — plus `More` (the data boundary), collapsed. A token is typed once and never
+ * The MCP drawer (spec §5.5): the ability drawer's sections for one server, Connection (URL and
+ * sign-in, Save & test), Tools (Allow, Ask, Off per tool, replacing the "tool = tier" box),
+ * Agents, Used in, plus `More` (the data boundary), collapsed. A token is typed once and never
  * shown again; a URL change voids the review (the API does it, the drawer says it).
  */
 import { GatedButton, useGate } from "../../components/gated";
@@ -101,7 +101,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
           setBusy(false);
           const message = t.ok ? String(t.data.error ?? "Can't reach server") : t.error;
           setError({ field: secret ? "secret" : "url", message });
-          showToast("error", `Test failed · ${shortError(message)}`);
+          showToast("error", `Test failed, ${shortError(message)}`);
           return;
         }
       }
@@ -113,9 +113,9 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
     const fresh = probe.ok ? probe.data.items.find((x) => x.id === server.id) : null;
     if (fresh && fresh.reachable === false) {
       setError({ field: "url", message: fresh.last_error ?? "Can't reach server" });
-      showToast("error", `Test failed · ${shortError(fresh.last_error)}`);
+      showToast("error", `Test failed, ${shortError(fresh.last_error)}`);
     } else {
-      showToast("success", `Connected · ${plural(fresh?.tools.length ?? server.tools.length, "tool")}`);
+      showToast("success", `Connected, ${plural(fresh?.tools.length ?? server.tools.length, "tool")}`);
     }
     setSecret(""); setReplacing(false);
     onChanged();
@@ -124,7 +124,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
   const pick = async (tool: KitTool, policy: ToolPolicy) => {
     const r = await mcpApi.policy(projectId, actor, server.id, tool.label, policy);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", `${tool.label} · ${POLICY_LABEL[policy]}`);
+    showToast("success", `${tool.label}, ${POLICY_LABEL[policy]}`);
     onChanged();
   };
 
@@ -216,7 +216,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
             server.auth?.set && !replacing ? (
               <div className="kit-field" data-testid="kit-mcp-secret-set">
                 <span className="kit-field-label">Token</span>
-                <span className="kit-secret-set">Set · …{server.auth.last4 ?? ""}</span>
+                <span className="kit-secret-set">Set, …{server.auth.last4 ?? ""}</span>
                 <button type="button" className="kit-link" onClick={() => setReplacing(true)}>Replace</button>
               </div>
             ) : (
@@ -281,7 +281,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
             )}
         </Section>
         {tries.map((a) => (
-          <Section key={a.key} id={`try-${a.key}`} label={tries.length > 1 ? `Try it · ${a.label}` : "Try it"} tip={TIP.tryIt}>
+          <Section key={a.key} id={`try-${a.key}`} label={tries.length > 1 ? `Try it, ${a.label}` : "Try it"} tip={TIP.tryIt}>
             <TrySection ability={a} projectId={projectId} actor={actor} />
           </Section>
         ))}

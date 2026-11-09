@@ -2,8 +2,8 @@
 /**
  * Repo and models › Repositories (multi-repo screen 1, app/multirepo/registry.tsx), against the
  * API's real shapes at the fetch boundary:
- *   - draws the mockup: GitHub App · acme, nine repositories, Read · Write · PRs checks, Working /
- *     Read only / Not allowed / Archived, the read-only note, "Save · 4 allowed";
+ *   - draws the mockup: GitHub App, acme, nine repositories, Read · Write · PRs checks, Working /
+ *     Read only / Not allowed / Archived, the read-only note, "Save, 4 allowed";
  *   - filters All 9 / Allowed 4 / Needs a fix 1 / Not allowed 5, and Find;
  *   - an archived repository cannot be ticked;
  *   - Save sends exactly the ticked ids (PUT /v1/github/repos/allowed) and draws the answer;
@@ -38,7 +38,7 @@ describe("Repo and models › Repositories", () => {
     const calls = api();
     await mount();
     expect(calls[0]).toMatchObject({ method: "GET", path: "/v1/github/repos", search: "?project_id=p1" });
-    expect(tid("mr-reg-title")?.textContent).toBe("GitHub App · acme");
+    expect(tid("mr-reg-title")?.textContent).toBe("GitHub App, acme");
     expect(tid("mr-reg-sub")?.textContent).toContain("reaches 9 repositories");
     expect(rows()).toHaveLength(9);
     expect(tid("mr-reg-row-ghr_web")?.textContent).toContain("acme/web");
@@ -53,7 +53,7 @@ describe("Repo and models › Repositories", () => {
     expect(tid("mr-reg-state-ghr_legacy")?.textContent).toBe("Archived");
     expect(tid("mr-reg-row-ghr_contracts")?.textContent).toContain("Acme Shop, Payments");
     expect(tid("mr-reg-readonly-ghr_infra")?.textContent).toContain("acme/infra is read only.");
-    expect(tid("mr-reg-save")?.textContent).toBe("Save · 4 allowed");
+    expect(tid("mr-reg-save")?.textContent).toBe("Save, 4 allowed");
     expect(tid("mr-reg-change")?.getAttribute("href")).toContain("github.com");
     // In use and listed: no Refresh from GitHub.
     expect(tid("mr-reg-refresh")).toBeNull();
@@ -95,7 +95,7 @@ describe("Repo and models › Repositories", () => {
     await click(tid("mr-reg-tick-ghr_mobile"));
     await click(tid("mr-reg-tick-ghr_api"));
     expect(tid("mr-reg-row-ghr_mobile")?.hasAttribute("data-changed")).toBe(true);
-    expect(tid("mr-reg-save")?.textContent).toBe("Save · 4 allowed");
+    expect(tid("mr-reg-save")?.textContent).toBe("Save, 4 allowed");
     await click(tid("mr-reg-save"));
     const put = calls.find((c) => c.method === "PUT");
     expect(put).toMatchObject({ path: "/v1/github/repos/allowed",

@@ -221,7 +221,7 @@ export function ReleaseStatusPanel({
         <h3 style={{ margin: 0 }}>Release status</h3>
         <p className="detail">
           Control plane unreachable
-          {snapshot.blockedReason ? ` — ${snapshot.blockedReason}` : "."}
+          {snapshot.blockedReason ? `, ${snapshot.blockedReason}` : "."}
         </p>
       </article>
     );
@@ -259,7 +259,7 @@ export function ReleaseStatusPanel({
           value={snapshot.totals.releasePlans}
           hint={
             last
-              ? `${last.name}${last.targetDate ? ` · ${last.targetDate}` : ""}`
+              ? `${last.name}${last.targetDate ? `, ${last.targetDate}` : ""}`
               : "none yet"
           }
         />
@@ -267,7 +267,7 @@ export function ReleaseStatusPanel({
       {last ? (
         <article className="stack-card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ padding: "13px 16px", borderBottom: "1px solid var(--border)" }}>
-            <span className="eyebrow">Last / active release</span>
+            <span className="area-name">Last / active release</span>
           </div>
           <div className="hairline-list">
             <div className="hairline-row">
@@ -307,7 +307,7 @@ export function ReleaseStatusPanel({
                   ? "none"
                   : last.issueLinks.map((ln, i) => (
                       <span key={`${ln.tracker}-${ln.issueKey}-${i}`}>
-                        {i > 0 ? " · " : ""}
+                        {i > 0 ? ", " : ""}
                         {ln.url ? (
                           <a href={ln.url} target="_blank" rel="noreferrer">
                             {ln.tracker}:{ln.issueKey}
@@ -341,7 +341,7 @@ export function ReleaseBoardPanel({ board }: { board: ReleaseBoard | null }) {
         <h3 style={{ margin: 0 }}>Delivery board</h3>
         <p className="detail">
           Control plane unreachable
-          {board.blockedReason ? ` — ${board.blockedReason}` : "."}
+          {board.blockedReason ? `, ${board.blockedReason}` : "."}
         </p>
       </article>
     );
@@ -363,7 +363,7 @@ export function ReleaseBoardPanel({ board }: { board: ReleaseBoard | null }) {
         <div>
           <h3 style={{ margin: 0 }}>Delivery board</h3>
           <p className="detail" style={{ margin: "4px 0 0" }}>
-            Built · building · planned · blocked — feature catalog, work items,
+            Built, building, planned, blocked, feature catalog, work items,
             tasks, and deployments.
           </p>
         </div>
@@ -402,7 +402,7 @@ export function ReleasePlansList({ plans }: { plans: ReleasePlan[] }) {
   return (
     <article className="stack-card" style={{ padding: 0, overflow: "hidden" }}>
       <div style={{ padding: "13px 16px", borderBottom: "1px solid var(--border)" }}>
-        <span className="eyebrow">Release plans</span>
+        <span className="area-name">Release plans</span>
       </div>
       <div className="hairline-list">
         {plans.map((plan) => (
@@ -411,9 +411,9 @@ export function ReleasePlansList({ plans }: { plans: ReleasePlan[] }) {
               <span style={{ fontWeight: 600 }}>{plan.name}</span>
               <span className="detail" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>
                 {plan.id}
-                {plan.targetDate ? ` · ${plan.targetDate}` : ""}
+                {plan.targetDate ? `, ${plan.targetDate}` : ""}
                 {plan.issueLinks.length
-                  ? ` · ${plan.issueLinks.length} linked issue${plan.issueLinks.length === 1 ? "" : "s"}`
+                  ? `, ${plan.issueLinks.length} linked issue${plan.issueLinks.length === 1 ? "" : "s"}`
                   : ""}
               </span>
             </div>

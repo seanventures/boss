@@ -4,7 +4,7 @@
  * SERVICE ACCOUNTS AND KEYS (mockup f, IDENTITY.md §5, §9.5).
  *
  * Non-human accounts for CI and scripts: owners, an access role, and keys. A key is identified
- * by its random public id and its name — BOSS never shows any part of a secret again after the
+ * by its random public id and its name, BOSS never shows any part of a secret again after the
  * one dialog that shows it whole (D20). Creating a key: name, scopes (a preset or a custom pick,
  * never more than the account holds), projects, networks, expiry; rotating is the same form with
  * the old key and an overlap. The secret lives only in this component's state while the dialog
@@ -59,7 +59,7 @@ function Expires({ k }: { k: ApiKey }) {
     const h = Math.max(1, Math.round((Date.parse(k.grace_until) - now) / 3_600_000));
     return <span className="idn-pill mute" title="Stops working when the overlap ends">grace {h}h</span>;
   }
-  if (!k.expires_at) return <span className="idn-pill warn" title="No expiry · flagged in posture">never</span>;
+  if (!k.expires_at) return <span className="idn-pill warn" title="No expiry, flagged in posture">never</span>;
   const d = daysUntil(k.expires_at, now) ?? 0;
   if (d <= 0) return <span className="idn-pill bad">expired</span>;
   return <span className={`idn-pill ${d <= 14 ? "warn" : "ok"}`} title={`Expires ${shortDate(k.expires_at)}`}>in {d} {d === 1 ? "day" : "days"}</span>;
@@ -94,7 +94,7 @@ export function ShownOnce({ issued, account, onClose }: { issued: IssuedSecret; 
         <code data-testid="secret" data-copy="data" aria-label="The new key">{issued.secret}</code>
         <button type="button" className="idn-btn sm primary" data-autofocus onClick={async () => {
           try { await navigator.clipboard.writeText(issued.secret); setCopied(true); showToast("success", "Copied"); }
-          catch { showToast("error", "Copy blocked · select it"); }
+          catch { showToast("error", "Copy blocked, select it"); }
         }}>
           {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />} {copied ? "Copied" : "Copy"}
         </button>
@@ -104,10 +104,10 @@ export function ShownOnce({ issued, account, onClose }: { issued: IssuedSecret; 
         <span>Close this and the key is gone for good: BOSS keeps only a hash. Lost it? Rotate.{issued.replaces ? " The old key keeps working for the overlap you chose, then stops." : ""}</span>
       </div>
       <dl className="idn-sum">
-        <dt>Name</dt><dd data-copy="data">{k.name}{k.rotated_from ? " (rotated)" : null} · {account}</dd>
+        <dt>Name</dt><dd data-copy="data">{k.name}{k.rotated_from ? " (rotated)" : null}, {account}</dd>
         <dt>Key id</dt><dd data-raw-ok title="The public part of the key: BOSS shows it in logs and lists"><code className="idn-kid">{k.id}</code></dd>
         <dt>Scopes</dt><dd>{k.scopes.map((p) => <Perm key={p} p={p} sm />)}</dd>
-        <dt>Limits</dt><dd data-copy="data">{k.projects?.length ? `project ${k.projects.join(", ")}` : "all projects"}{k.networks ? ` · ${k.networks}` : ""} · {k.expires_at ? `expires ${shortDate(k.expires_at)}` : "no expiry"}</dd>
+        <dt>Limits</dt><dd data-copy="data">{k.projects?.length ? `project ${k.projects.join(", ")}` : "all projects"}{k.networks ? `, ${k.networks}` : ""}, {k.expires_at ? `expires ${shortDate(k.expires_at)}` : "no expiry"}</dd>
         {issued.replaces ? <><dt>Overlap</dt><dd data-copy="data">the old key {issued.replaces.stops_at ? <>stops <Ago iso={issued.replaces.stops_at} /></> : "stopped now"}</dd></> : null}
       </dl>
       <div className="idn-mf">
@@ -164,7 +164,7 @@ function KeyForm({ sa, held, noExpiryAllowed, maxDays, replacing, onCancel, onIs
       <div className="idn-form">
         <div className="idn-field">
           <label htmlFor="key-name">Name</label>
-          <input id="key-name" className="idn-input" value={d.name} onChange={(e) => set({ name: e.target.value })} placeholder="GitHub Actions · deploy" data-autofocus />
+          <input id="key-name" className="idn-input" value={d.name} onChange={(e) => set({ name: e.target.value })} placeholder="GitHub Actions, deploy" data-autofocus />
         </div>
         <div className="idn-field">
           <span className="idn-label" id="preset-l">Preset</span>
@@ -176,7 +176,7 @@ function KeyForm({ sa, held, noExpiryAllowed, maxDays, replacing, onCancel, onIs
           </div>
         </div>
         <div className="idn-field idn-full">
-          <span className="idn-label">Scopes · {d.scopes.length} of {sa.name}'s {held.length}</span>
+          <span className="idn-label">Scopes, {d.scopes.length} of {sa.name}'s {held.length}</span>
           <div className="idn-row idn-scopes-edit" data-testid="scopes">
             {d.scopes.map((p) => (
               <button key={p} type="button" className="idn-scope" title={`Remove ${p}`} aria-label={`Remove ${permissionName(p)}`}
@@ -196,7 +196,7 @@ function KeyForm({ sa, held, noExpiryAllowed, maxDays, replacing, onCancel, onIs
               </select>
             </label>
           </div>
-          <span className="idn-tipline" data-copy="prose"><Key size={11} className={stepUpInScopes.length ? "idn-warn" : undefined} aria-hidden /> Step-up permissions are unavailable to keys unless listed here.</span>
+          <span className="idn-tooltipline" data-copy="prose"><Key size={11} className={stepUpInScopes.length ? "idn-warn" : undefined} aria-hidden /> Step-up permissions are unavailable to keys unless listed here.</span>
         </div>
         <div className="idn-field">
           <label htmlFor="key-projects">Projects</label>
@@ -204,7 +204,7 @@ function KeyForm({ sa, held, noExpiryAllowed, maxDays, replacing, onCancel, onIs
         </div>
         <div className="idn-field">
           <label htmlFor="key-nets" title="IP ranges in CIDR form, e.g. 10.0.0.0/8">Allowed networks</label>
-          <input id="key-nets" className="idn-input" value={d.networks} onChange={(e) => set({ networks: e.target.value })} placeholder="any · or CIDRs" />
+          <input id="key-nets" className="idn-input" value={d.networks} onChange={(e) => set({ networks: e.target.value })} placeholder="any, or CIDRs" />
         </div>
         <div className="idn-field">
           <span className="idn-label" id="exp-l">Expires</span>
@@ -360,7 +360,7 @@ function NewAccount({ roles, people, maxDays, onClose, onMade }: {
         {withKey ? (
           <>
             <div className="idn-field"><label htmlFor="sa-key-name">Key name</label>
-              <input id="sa-key-name" className="idn-input" value={key.name} onChange={(e) => setKey({ ...key, name: e.target.value })} placeholder="GitHub Actions · deploy" /></div>
+              <input id="sa-key-name" className="idn-input" value={key.name} onChange={(e) => setKey({ ...key, name: e.target.value })} placeholder="GitHub Actions, deploy" /></div>
             <div className="idn-field">
               <span className="idn-label" id="sa-key-preset">Scopes</span>
               <div className="idn-segs" role="group" aria-labelledby="sa-key-preset">
@@ -463,8 +463,8 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
               <span className={`idn-ico${x.kind === "legacy" ? " warn" : ""}`}><SaIcon sa={x} /></span>
               <span>
                 <b>{x.name}</b>
-                <small data-copy="data">{x.kind === "scim" ? "System · directory sync only" : x.kind === "legacy" ? x.description
-                  : `Owner ${x.owners.map((o) => o.name).join(", ") || "none"} · ${keyCount(x.keys.filter((k) => k.status !== "revoked").length)}${x.bindings[0] ? ` · ${x.bindings[0].role_name}` : ""}`}</small>
+                <small data-copy="data">{x.kind === "scim" ? "System, directory sync only" : x.kind === "legacy" ? x.description
+                  : `Owner ${x.owners.map((o) => o.name).join(", ") || "none"}, ${keyCount(x.keys.filter((k) => k.status !== "revoked").length)}${x.bindings[0] ? `, ${x.bindings[0].role_name}` : ""}`}</small>
               </span>
               <Badge sa={x} />
             </button>
@@ -480,7 +480,7 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
               <span className="idn-bigico"><SaIcon sa={sa} size={24} /></span>
               <div>
                 <h2 id="idn-sa-name">{sa.name}</h2>
-                <span className="idn-dim idn-small" data-copy="data">{sa.description}{sa.created_by ? ` · created by ${actorWords(sa.created_by)},${shortDate(sa.created_at)}` : ""}</span>
+                <span className="idn-dim idn-small" data-copy="data">{sa.description}{sa.created_by ? `, created by ${actorWords(sa.created_by)},${shortDate(sa.created_at)}` : ""}</span>
               </div>
               <span className="idn-spacer" />
               <CanButton permission="service_account:manage" className="idn-btn sm" onClick={() => setEditing("all")} disabled={sa.kind !== "service"} tip="Name, owners and access roles" data-testid="edit-sa-open">Edit</CanButton>
@@ -521,7 +521,7 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
               <div><span className="idn-label">Effective</span>
                 <span title="Each key gets only the part its scopes allow">{sa.effective} permissions, narrowed per key</span></div>
               <div><span className="idn-label">Last used</span>
-                <span>{sa.last_used ? <><Ago iso={sa.last_used.at} /> · <span data-copy="data">{sa.last_used.client}</span></> : "never"}</span></div>
+                <span>{sa.last_used ? <><Ago iso={sa.last_used.at} />, <span data-copy="data">{sa.last_used.client}</span></> : "never"}</span></div>
             </div>
             <ErrorLine error={error} />
 
@@ -540,7 +540,7 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
                         <td><span className="idn-kname" data-copy="data" title={`Key ${k.id}`}>{k.name}</span></td>
                         <td><span className="idn-scopes">{k.scopes.map((p) => <Perm key={p} p={p} sm />)}</span></td>
                         <td>{k.projects?.join(", ") ?? "all"}</td>
-                        <td className="idn-small">{k.last_used_at ? <><Ago iso={k.last_used_at} />{publicAddress(k.last_used_ip) ? <span className="idn-mono idn-dim"> · {publicAddress(k.last_used_ip)}</span> : null}</> : "never"}</td>
+                        <td className="idn-small">{k.last_used_at ? <><Ago iso={k.last_used_at} />{publicAddress(k.last_used_ip) ? <span className="idn-mono idn-dim">, {publicAddress(k.last_used_ip)}</span> : null}</> : "never"}</td>
                         <td><Expires k={k} /></td>
                         <td>
                           <span className="idn-row idn-nowrap">

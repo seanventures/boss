@@ -2,11 +2,11 @@
 
 /**
  * Observability › Sources › SIGNAL SOURCES (BOSSAPP-598): everything that sends BOSS metrics or
- * alerts — OTLP, remote write, webhooks from other tools, heartbeats — and whether it is getting
+ * alerts, OTLP, remote write, webhooks from other tools, heartbeats, and whether it is getting
  * through. It lives with the stack's sources (one surface: where telemetry comes from); who is
  * told is Notify's job.
  *
- *   ● checkout-api  OpenTelemetry · prod   last 07:00 · 1,204 in / 3 refused · 24h   Rotate  Test
+ *   ● checkout-api  OpenTelemetry, prod   last 07:00, 1,204 in / 3 refused, 24h   Rotate  Test
  *                   Last refusal 06:58: "the signature did not match"
  *
  * Rotate shows the new token once; the old one keeps working for a short overlap, said in words.
@@ -53,12 +53,12 @@ function SourceLine({ s, projectId, actor, onDone, onToken }: {
       <span className="obs-line">
         <span className="obs-adot" data-tone={!s.enabled ? "grey" : s.connected ? "green" : "amber"} aria-hidden />
         <span className="obs-strong" data-user-text>{s.name}</span>
-        <span className="inf-muted">{s.kind}{s.environment ? ` · ${s.environment}` : ""}</span>
+        <span className="inf-muted">{s.kind}{s.environment ? `, ${s.environment}` : ""}</span>
         <span className="inf-faint" title={s.lastSeenAt ? lt.full(s.lastSeenAt) : "Nothing has arrived yet"}>
           {s.lastSeenAt ? `last ${whenWord(s.lastSeenAt, lt)}` : "nothing yet"}
         </span>
         <span className="inf-faint inf-num" title="Accepted / refused in the last 24 hours">
-          {s.accepted24h.toLocaleString("en-US")} in{s.refused24h ? ` / ${s.refused24h.toLocaleString("en-US")} refused` : ""} · 24h
+          {s.accepted24h.toLocaleString("en-US")} in{s.refused24h ? ` / ${s.refused24h.toLocaleString("en-US")} refused` : ""}, 24h
         </span>
         {!s.connected && s.enabled ? <span className="obs-chip" data-tone="amber" title="Nothing has arrived recently">Not connected</span> : null}
         {!s.enabled ? <span className="obs-chip">Off</span> : null}

@@ -2,8 +2,8 @@ import type { NativeTool, McpServerWithTools, SkillSummary } from "../lib/capabi
 
 function riskLabel(tier: number): { label: string; tone: string } {
   if (tier <= 0) return { label: "read-only", tone: "muted" };
-  if (tier === 1) return { label: "tier 1 · auto", tone: "blue" };
-  return { label: `tier ${tier} · approval`, tone: "amber" };
+  if (tier === 1) return { label: "tier 1, auto", tone: "blue" };
+  return { label: `tier ${tier}, approval`, tone: "amber" };
 }
 
 export function CapabilitiesView({
@@ -53,7 +53,7 @@ export function CapabilitiesView({
           <span className="cap-engine-label">Reasoning engine</span>
           <strong className="cap-engine-name">{engineLabel}</strong>
           {engineModel ? <code className="cap-engine-model">{engineModel}</code> : null}
-          <span className="cap-engine-note">BOSS drives the loop · this backend serves each completion</span>
+          <span className="cap-engine-note">BOSS drives the loop, this backend serves each completion</span>
         </div>
       ) : null}
 
@@ -68,7 +68,7 @@ export function CapabilitiesView({
       {/* ---- Native tools ---- */}
       <div className="cap-section-head">
         <h3>Native tools</h3>
-        <span className="cap-section-sub">Built-in · governed by risk tier</span>
+        <span className="cap-section-sub">Built-in, governed by risk tier</span>
       </div>
       <div className="cap-grid">
         {[...reads, ...writes].map((t) => {
@@ -101,7 +101,7 @@ export function CapabilitiesView({
       {/* ---- Internal skills registry ---- */}
       <div className="cap-section-head">
         <h3>Internal skills</h3>
-        <span className="cap-section-sub">Governed capability units the execution plane runs · shared across agents</span>
+        <span className="cap-section-sub">Governed capability units the execution plane runs, shared across agents</span>
       </div>
       {skills.length === 0 ? (
         <p className="detail">No skills registered.</p>
@@ -145,19 +145,19 @@ export function CapabilitiesView({
 
       {/* ---- MCP servers ----
           THE SAME PANEL the Skills and MCP page mounts. This screen had its own list and its
-          own form, built on server actions that threw on any refusal — a bad URL or a taken
-          name showed the generic error page — had no tier 0, called tier 1 "auto", could not
+          own form, built on server actions that threw on any refusal, a bad URL or a taken
+          name showed the generic error page, had no tier 0, called tier 1 "auto", could not
           edit a server and removed one with no question asked while steps still used it. */}
       <div className="cap-section-head">
         <h3>MCP servers</h3>
-        <span className="cap-section-sub">Pluggable tool backends · JSON-RPC over HTTP · plug in external &amp; org-specific servers</span>
+        <span className="cap-section-sub">Pluggable tool backends, JSON-RPC over HTTP, plug in external &amp; org-specific servers</span>
       </div>
       {!apiReachable ? (
         <p className="detail">Capabilities API unreachable.</p>
       ) : (
         // ONE HOME FOR MCP SERVERS: Skills & MCP › Library manages them; this links there.
         <a className="kit-link" href="?area=skills&tab=library&lib=mcp" data-testid="capabilities-mcp-link">
-          MCP servers · {(mcpServers as Array<{ enabled?: boolean; reachable?: boolean | null; trusted?: boolean }>)
+          MCP servers, {(mcpServers as Array<{ enabled?: boolean; reachable?: boolean | null; trusted?: boolean }>)
             .filter((s) => s.enabled !== false && s.reachable === true && s.trusted).length} ready ↗
         </a>
       )}

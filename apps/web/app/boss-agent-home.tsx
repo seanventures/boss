@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The BOSS Agent — one surface, with the whole factory in front of it.
+ * The BOSS Agent, one surface, with the whole factory in front of it.
  *
  * THREE THINGS BECAME ONE. There were an agent chat area (a thread rail and a composer that
  * knew nothing about the system it was attached to), a Metatron Captain page (whose durable
@@ -9,15 +9,15 @@
  * autopilot (switched off after one afternoon of repairing things nobody asked about). The
  * operator used one of the three and did not like it.
  *
- * What they DID like is the agent as it appears on Workflows, Infra, Factory and Monitoring —
+ * What they DID like is the agent as it appears on Workflows, Infra, Factory and Monitoring , 
  * and what makes it good there is not the model. It is that the screen hands it the facts
  * before the first word: the app that is down, named, with its error and its address. A
  * composer with no context is the same agent doing worse, because the operator has to type
  * what the page already knew.
  *
  * So this page is the briefing first and the conversation second. Every row names something
- * real, carries what the failure MEANS — the Shepherd's taxonomy, which was always the good
- * part — and offers the remedy as a button. Nothing runs until it is pressed; that is the one
+ * real, carries what the failure MEANS, the Shepherd's taxonomy, which was always the good
+ * part, and offers the remedy as a button. Nothing runs until it is pressed; that is the one
  * thing the Shepherd got wrong and the reason it was turned off.
  */
 
@@ -35,7 +35,7 @@ type Item = {
   title?: string; app?: string; step?: string; environment?: string; at?: string;
   status?: string; error?: string; note?: string; since?: string;
   phase?: string | null; quiet_minutes?: number; run_id?: string;
-  /** "4 days ago" — a stopped row four days old is a different fact from one four minutes old. */
+  /** "4 days ago", a stopped row four days old is a different fact from one four minutes old. */
   age?: string;
   /** Whether the recorded reason still holds. Two rows asserted "no active deployment target"
    *  while the project had six. */
@@ -61,17 +61,17 @@ export function itemHeadline(item: Item): string {
     case "decision":
       return item.title || item.id;
     case "workflow_step":
-      return `${item.app ?? "an app"} — ${item.step} ${item.status}`;
+      return `${item.app ?? "an app"}, ${item.step} ${item.status}`;
     case "unhealthy_app":
       return `${item.app} (${item.environment}) at ${item.at}`;
     case "quiet_build":
-      return `${item.app} — ${item.quiet_minutes}m quiet in ${item.phase ?? "its phase"}`;
+      return `${item.app}, ${item.quiet_minutes}m quiet in ${item.phase ?? "its phase"}`;
     default:
       return item.id;
   }
 }
 
-/** WHAT THIS ROW IS ABOUT — the record the dock's answer is drawn from.
+/** WHAT THIS ROW IS ABOUT, the record the dock's answer is drawn from.
  *
  *  The row's facts used to be folded into the question as prose, error cut to 300 characters,
  *  with "Check the app's code and the host before answering" on the end. That is the sentence
@@ -104,7 +104,7 @@ export function itemQuestion(item: Item): string {
     case "unhealthy_app":
       return `Why is ${item.app} (${item.environment}) not answering, and what is the fix?`;
     case "quiet_build":
-      return `Is ${item.app} still working or stuck? Tell me which — do not cancel anything.`;
+      return `Is ${item.app} still working or stuck? Tell me which, do not cancel anything.`;
     default:
       return `Tell me about ${item.id}.`;
   }
@@ -132,7 +132,7 @@ export function BossAgentHome({ projectId, actor, initialTaskId, roleName }: {
 
   useEffect(() => { void load(); }, [load]);
   // A decision approved on the Approvals screen, a step re-queued from Workflows, a target set
-  // in Factory — all of them change what is on this list.
+  // in Factory, all of them change what is on this list.
   useEffect(() => onChanged(() => { void load(); }, "agent-home"), [load]);
 
   const items = briefing?.items ?? [];
@@ -140,31 +140,31 @@ export function BossAgentHome({ projectId, actor, initialTaskId, roleName }: {
     <div style={{ display: "grid", gap: 18 }} data-testid="boss-agent-home">
       <section className="ct-block" data-testid="agent-briefing">
         <div className="ct-block-title">
-          What wants you{briefing ? ` · ${briefing.total}` : ""}
+          What wants you{briefing ? `, ${briefing.total}` : ""}
         </div>
         {failed ? (
           // NOT an empty list. "Nothing needs you" and "I could not look" are opposite claims,
           // and rendering the second as the first is how a console says everything is fine
           // during an outage.
           <p className="detail" data-testid="agent-briefing-failed">
-            The briefing could not be read — {failed}. This is not the same as “nothing needs
+            The briefing could not be read, {failed}. This is not the same as “nothing needs
             you”; ask below and BOSS will look directly.
           </p>
         ) : null}
         {/* PART OF THE FACTORY WENT UNREAD. Reporting the rest as the whole picture is how a
-            console says everything is fine during an outage — and it already happened once
+            console says everything is fine during an outage, and it already happened once
             here: a query named a column the table does not have, and the page answered
             "nothing needs you" while six decisions sat unanswered. */}
         {Object.keys(briefing?.errors ?? {}).length ? (
           <p className="detail" data-testid="agent-briefing-partial">
             Could not read: {Object.entries(briefing!.errors!)
               .map(([k, v]) => `${k} (${v})`).join("; ")}. What is listed below is therefore
-            incomplete — ask BOSS and it will look directly.
+            incomplete, ask BOSS and it will look directly.
           </p>
         ) : null}
         {!failed && briefing?.quiet ? (
           <p className="detail" data-testid="agent-briefing-quiet">
-            Nothing is blocked, failed, unanswered or unhealthy right now. Ask anything below —
+            Nothing is blocked, failed, unanswered or unhealthy right now. Ask anything below , 
             BOSS reads the live system, it does not answer from this list.
           </p>
         ) : null}
@@ -188,8 +188,8 @@ export function BossAgentHome({ projectId, actor, initialTaskId, roleName }: {
                       {item.age}
                     </span> : null}
                   </div>
-                  {/* THE REASON HAS SINCE GONE FALSE. Not dropped — the step really did stop,
-                      and hiding that would be its own lie — but said plainly, so an operator
+                  {/* THE REASON HAS SINCE GONE FALSE. Not dropped, the step really did stop,
+                      and hiding that would be its own lie, but said plainly, so an operator
                       does not go looking for a problem that has already been dealt with. */}
                   {item.blocker?.cleared ? (
                     <div className="fb-cleared" data-testid="agent-item-cleared">
@@ -203,14 +203,14 @@ export function BossAgentHome({ projectId, actor, initialTaskId, roleName }: {
                     </div>
                   ) : null}
                   {item.note ? <div className="detail">{item.note}</div> : null}
-                  {/* WHAT IT MEANS — the Shepherd's taxonomy, which was always the good part.
+                  {/* WHAT IT MEANS, the Shepherd's taxonomy, which was always the good part.
                       It is offered here, never run: that is the one thing the autopilot got
                       wrong and the reason it was turned off. */}
                   {item.diagnosis?.kind ? (
                     <div className="fb-diagnosis" data-testid="agent-diagnosis">
                       <span className="fb-kind">{item.diagnosis.kind}</span>
                       {(item.diagnosis.remedies ?? []).slice(0, 2).map((r) => (
-                        <span className="detail" key={r.id}> · usually: {r.describe}</span>
+                        <span className="detail" key={r.id}>, usually: {r.describe}</span>
                       ))}
                     </div>
                   ) : null}
@@ -231,7 +231,7 @@ export function BossAgentHome({ projectId, actor, initialTaskId, roleName }: {
         })}
       </section>
 
-      {/* The conversation, unchanged — same component the dock uses, so there is one chat in
+      {/* The conversation, unchanged, same component the dock uses, so there is one chat in
           BOSS rather than two that drift. */}
       <AgentChat projectId={projectId} actor={actor}
                  initialTaskId={initialTaskId} roleName={roleName} />

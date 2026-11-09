@@ -3,7 +3,7 @@
 /**
  * `Tools ▾` (spec §5.3 3): narrow which of an MCP-backed ability's tools ONE agent may call
  * (role_mcp_servers.tools). Rarely used, so it lives behind the agent's ⋯. Narrowing below what
- * the ability needs makes the agent stop holding the ability — said by its toggle afterwards.
+ * the ability needs makes the agent stop holding the ability, said by its toggle afterwards.
  */
 import { useGate } from "../../components/gated";
 import React, { useEffect, useState } from "react";

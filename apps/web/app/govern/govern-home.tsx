@@ -4,7 +4,7 @@
  * Govern: how hard and how much BOSS may spend, how close it is, and what the limits stopped
  * (activity-govern spec §4.4; the Spend-first flow of BOSSAPP-807). One read opens it (`GET /v1/govern`, ETag-polled every 15s while
  * visible and Live); Spend and Envelopes each read only when opened. Nothing here is fetched by
- * the page render, so arriving by the rail never shows "not loaded" — the data is the screen's.
+ * the page render, so arriving by the rail never shows "not loaded", the data is the screen's.
  */
 import React, { useEffect, useRef, useState } from "react";
 
@@ -26,7 +26,7 @@ export const GOVERN_POLL_MS = 15_000;
 /**
  * BOSSAPP-807: Spend is the landing (no `tab`), Limits the second screen. Everything that was
  * a tab stays, one click away under More: "Where the money went" (the old Spend tab, `spend`),
- * the control board ("Advanced", `board` — and wherever a link names a `focus` row), Envelopes,
+ * the control board ("Advanced", `board`, and wherever a link names a `focus` row), Envelopes,
  * Sharing and Self-fix. Old links keep working: ?tab=spend|envelopes|sharing|selffix open what
  * they opened, ?focus=… still lands on that row of the board.
  */
@@ -35,7 +35,7 @@ const MAIN: { key: Tab; label: string; tip: string }[] = [
   { key: "overview", label: "Spend", tip: "How much, on which model and project" },
   { key: "limits", label: "Limits", tip: "Caps, what happens at them, per project" },
   // AUTONOMY & SAFETY (autonomous agents, BOSSAPP-905): what agents may do on their own, their
-  // track record, today's ambient budget and the stop switch — one surface.
+  // track record, today's ambient budget and the stop switch, one surface.
   { key: "autonomy", label: "Autonomy", tip: "What agents may do on their own, and the stop switch" },
 ];
 const MORE: { key: Tab; label: string; tip: string }[] = [

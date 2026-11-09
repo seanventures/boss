@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Factory › Apps (factory spec §4.6): an aligned table, one row per app — App · Crew · State ·
- * PR · Deploy · Spend · Builds · Updated. The chevron column is always there (disabled for one
+ * Factory › Apps (factory spec §4.6): an aligned table, one row per app, App, Crew, State ·
+ * PR, Deploy, Spend, Builds, Updated. The chevron column is always there (disabled for one
  * build) so every name starts at the same x; names wrap, never cut mid-word. The whole row opens
  * the app's newest WORKING build; the chevron lists its builds, numbered by their place in the
  * app (Build 1 = the first), each with only the stations it really ran.
@@ -61,7 +61,7 @@ export type AppRow = {
    *  whether it ran on a subscription only, its repo, its brief and when it last moved. */
   prNumber?: number; prUrl?: string; prState?: PrState; costUsd?: number; included?: boolean;
   repo?: string; brief?: string; at?: string;
-  /** The app's id (finalize_ctx.app_id): what app-level surfaces — App › Security — address. */
+  /** The app's id (finalize_ctx.app_id): what app-level surfaces, App › Security, address. */
   appId?: string;
   /** The app's key (its name's identity key): what templates, secrets, Setup and links address. */
   appKey?: string;
@@ -71,7 +71,7 @@ export type AppRow = {
 
 const BUILT = new Set(["pr_open", "merged", "deployed", "done_no_pr"]);
 
-/** The build an app opens on: its newest that BUILT something (the old card's pickBuiltRun) —
+/** The build an app opens on: its newest that BUILT something (the old card's pickBuiltRun) , 
  *  not a failed follow-up that happens to be newer than the working app. */
 export function builtBuild(builds: AppBuild[]): AppBuild | undefined {
   return builds.find((b) => (b.row ? BUILT.has(b.row.state) : /^(PR open|Merged|Deployed|Done)/.test(b.word))) ?? builds[0];
@@ -81,7 +81,7 @@ export function builtBuild(builds: AppBuild[]): AppBuild | undefined {
 function runWord(r: CodeTaskRun): string {
   const s = String(r.status ?? "");
   if (s === "running" || s === "queued" || s === "repairing") return "Building";
-  if (s === "completed") return r.pull_request_url ? "PR open" : "Done · no PR";
+  if (s === "completed") return r.pull_request_url ? "PR open" : "Done, no PR";
   if (s === "failed") return "Failed";
   if (s === "cancelled") return "Stopped";
   if (s === "blocked") return "Blocked";
@@ -174,7 +174,7 @@ function useServerApps(projectId: string): AppRow[] | null {
 export type AppSort = "updated" | "spend" | "name";
 const SORT_LABEL: Record<AppSort, string> = { updated: "Updated", spend: "Spend", name: "App" };
 
-/** Updated (newest first, the default), Spend (most first), Name (A–Z). Stable inside. */
+/** Updated (newest first, the default), Spend (most first), Name (A, Z). Stable inside. */
 export function sortApps(apps: AppRow[], by: AppSort): AppRow[] {
   const t = (a: AppRow) => (a.at ? Date.parse(a.at) : 0) || 0;
   return apps.map((a, i) => ({ a, i })).sort((x, y) => {
@@ -187,12 +187,12 @@ export function sortApps(apps: AppRow[], by: AppSort): AppRow[] {
 
 const CREW_MAX = 5;
 
-/** The agents who built it, side by side — never overlapped into a smudge — each named. */
+/** The agents who built it, side by side, never overlapped into a smudge, each named. */
 function Crew({ roleKeys }: { roleKeys: string[] }) {
   useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const shown = roleKeys.slice(0, CREW_MAX);
   const rest = roleKeys.slice(CREW_MAX);
-  if (!shown.length) return <span className="fx-muted" title="No agent has signed work on it yet">—</span>;
+  if (!shown.length) return <span className="fx-muted" title="No agent has signed work on it yet">{"—"}</span>;
   return (
     <span className="fx-crew" role="list" aria-label={roleKeys.map((k) => nameOf(k).name).join(", ")}>
       {shown.map((k) => (
@@ -206,8 +206,8 @@ function Crew({ roleKeys }: { roleKeys: string[] }) {
 }
 
 function PrCell({ number, url, state, repo, testId }: { number?: number; url?: string; state?: PrState; repo?: string; testId?: string }) {
-  if (!number) return <span className="fx-muted">—</span>;
-  const tip = `PR #${number} is ${state ?? "open"}${repo ? ` · ${repo}` : ""}`;
+  if (!number) return <span className="fx-muted">{"—"}</span>;
+  const tip = `PR #${number} is ${state ?? "open"}${repo ? `, ${repo}` : ""}`;
   return (
     <span className="fx-pr" data-state={state ?? "open"}>
       <a className="ag-link" href={url} target="_blank" rel="noreferrer" title={tip} data-testid={testId}
@@ -243,7 +243,7 @@ function stateCell(b: { word: string; row?: BuildRowData }): { word: string; whe
   return { word: b.word, where: st && !b.word.split(" · ").includes(st.label) ? st.label : "" };
 }
 
-/** The row's setup chip ("Set up sign-in · 2 providers"), or null when nothing needs you. */
+/** The row's setup chip ("Set up sign-in, 2 providers"), or null when nothing needs you. */
 const chipOf = (a: AppRow) => setupChip(a.setup);
 
 export type AppsTabProps = {
@@ -328,7 +328,7 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
           const opens = built?.runId ?? a.key;
           const lastFailed = a.builds[0] && built && a.builds[0] !== built
             && (a.builds[0].row?.state === "failed" || a.builds[0].word.startsWith("Failed"));
-          // Shipped AND building (the old card's "shipped · building"): a newer build is on the line.
+          // Shipped AND building (the old card's "shipped, building"): a newer build is on the line.
           const alsoBuilding = a.builds[0] && built && a.builds[0] !== built
             && ["building", "queued", "quiet", "budget_wait"].includes(a.builds[0].row?.state ?? "");
           const shown = built ?? a.builds[0];
@@ -416,16 +416,16 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
                 <span className="fx-c-crew" role="cell"><Crew roleKeys={a.builders} /></span>
                 <span className="fx-c-state fx-row-now" role="cell">
                   <span className="fx-word">{state.word}</span>
-                  {state.where ? <span className="fx-state-where" title="The station it is at">{` · ${state.where}`}</span> : null}
-                  {lastFailed ? <span className="fx-muted" title="The newest build of this app failed; the one that works opens">{" · last failed"}</span> : null}
-                  {alsoBuilding ? <span className="fx-muted" title="A newer build of this app is on the line">{" · building"}</span> : null}
+                  {state.where ? <span className="fx-state-where" title="The station it is at">{`, ${state.where}`}</span> : null}
+                  {lastFailed ? <span className="fx-muted" title="The newest build of this app failed; the one that works opens">{", last failed"}</span> : null}
+                  {alsoBuilding ? <span className="fx-muted" title="A newer build of this app is on the line">{", building"}</span> : null}
                 </span>
                 <span className="fx-c-pr fx-app-pr" role="cell">
                   <PrCell number={a.prNumber} url={a.prUrl} state={a.prState} repo={a.repo} testId={`fx-app-pr-${a.key}`} />
                 </span>
                 <span className="fx-c-deploy fx-app-deploys" role="cell"
-                      title={a.deploys.map((d) => d.word ?? d.env).join(" · ") || "Not deployed"}>
-                  {deploy ? <span data-ok={deploy.ok || undefined}>{deploy.word ?? `${deploy.env} ${deploy.ok ? "✓" : "—"}`}</span> : <span className="fx-muted">—</span>}
+                      title={a.deploys.map((d) => d.word ?? d.env).join(", ") || "Not deployed"}>
+                  {deploy ? <span data-ok={deploy.ok || undefined}>{deploy.word ?? `${deploy.env} ${deploy.ok ? "✓" : "—"}`}</span> : <span className="fx-muted">{"—"}</span>}
                   {a.deploys.length > 1 ? <span className="fx-muted"> +{a.deploys.length - 1}</span> : null}
                 </span>
                 <span className="fx-c-spend fx-app-spend" role="cell" title={spend.tip}>{spend.text}</span>
@@ -446,7 +446,7 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
                         <span className="fx-c-chev" role="cell" />
                         <span className="fx-c-app fx-build-n" role="cell">
                           <span data-testid={`fx-build-n-${b.runId}`}>Build {b.order ?? a.builds.length - i}</span>
-                          {b.at ? <span className="fx-muted" title={localTime(b.at)}> · {dayOf(b.at)}</span> : null}
+                          {b.at ? <span className="fx-muted" title={localTime(b.at)}>, {dayOf(b.at)}</span> : null}
                           {i === 0 ? <span className="fx-latest" title="The newest build of this app">latest</span> : null}
                         </span>
                         <span className="fx-c-crew" role="cell">

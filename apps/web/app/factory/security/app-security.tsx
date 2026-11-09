@@ -3,9 +3,9 @@
 /**
  * App › Security (APP_TEMPLATES_AND_SECURITY_LOOP.md §4.6): one surface for an app's security.
  *
- *   Security · Shift swap board                         [Scan now] [Security review]
- *   Last scan  2 min ago · 1a2b3c4 · Code 3 · Dependencies 3 · Running app 14
- *   Review     Scan ✓ · Panel ✓ · Choose (needs you) · Fix · Re-scan · …       [Report]
+ *   Security, Shift swap board                         [Scan now] [Security review]
+ *   Last scan  2 min ago, 1a2b3c4, Code 3, Dependencies 3, Running app 14
+ *   Review     Scan ✓, Panel ✓, Choose (needs you), Fix, Re-scan, …       [Report]
  *              ☑ P0 Parameterise the user lookup … [Fix selected]
  *   Findings   [Tool ▾] [Severity ▾] [Status ▾]   row → evidence + Accept / False positive
  *
@@ -136,7 +136,7 @@ export function AppSecurity({ projectId, appKey, appName }: AppSecurityProps) {
           </div>
           <ol className="sec-steps" aria-label="Steps">
             {review.steps.map((s) => (
-              <li key={s.id} className="sec-step" data-state={stepWord(s)} title={`${STEP_TIP[s.id] ?? s.id}${s.note ? ` — ${s.note}` : ""}${s.error ? ` — ${s.error}` : ""}`}>
+              <li key={s.id} className="sec-step" data-state={stepWord(s)} title={`${STEP_TIP[s.id] ?? s.id}${s.note ? `, ${s.note}` : ""}${s.error ? `, ${s.error}` : ""}`}>
                 <span className="sec-step-name">{STEP_LABEL[s.id] ?? s.id}</span>
                 <span className="sec-step-word">{stepWord(s)}</span>
               </li>
@@ -206,14 +206,14 @@ function ScanSummary({ scan, scans, onPick, now }: { scan: Scan; scans: Scan[]; 
       <div className="sec-card-head">
         <h3>{running ? "Scanning" : "Last scan"}</h3>
         <span className="sec-muted" title={localTime(scan.endedAt || scan.startedAt)}>
-          {when(scan)}{scan.commit ? ` · ${shortSha(scan)}` : ""}
-          {scan.zapMode === "api" ? " · active API scan" : ""}
+          {when(scan)}{scan.commit ? `, ${shortSha(scan)}` : ""}
+          {scan.zapMode === "api" ? ", active API scan" : ""}
         </span>
         {scans.length > 1 ? (
           <label className="sec-select sec-push">
             <span className="sr-only">Scan</span>
             <select value={scan.id} onChange={(e) => onPick(e.target.value)} aria-label="Pick a scan" data-testid="sec-pick-scan">
-              {scans.map((s) => <option key={s.id} value={s.id}>{`${when(s)} · ${s.commit ? s.commit.slice(0, 7) : s.status}`}</option>)}
+              {scans.map((s) => <option key={s.id} value={s.id}>{`${when(s)}, ${s.commit ? s.commit.slice(0, 7) : s.status}`}</option>)}
             </select>
           </label>
         ) : null}

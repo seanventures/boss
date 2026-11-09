@@ -96,10 +96,10 @@ export function LearnedStrip({ projectId, actor, runId, live, orgId }: {
   return (
     <section className="kg-strip" data-testid="kg-learned-strip" aria-label="Learned so far" data-live={live || undefined}>
       <header className="kg-strip-head">
-        <span className="kg-eyebrow">Learned so far</span>
+        <span className="kg-area-name">Learned so far</span>
         {items.length ? (
           <span className="kg-strip-count" data-testid="kg-learned-count">
-            {learned ? `${learned} learned` : ""}{learned && used ? " · " : ""}{used ? `${used} consulted` : ""}
+            {learned ? `${learned} learned` : ""}{learned && used ? ", " : ""}{used ? `${used} consulted` : ""}
           </span>
         ) : null}
         {live ? <span className="kg-live" title="New items appear here as the agents record them"><span className="kg-live-dot" aria-hidden />live</span> : null}
@@ -120,11 +120,11 @@ export function LearnedStrip({ projectId, actor, runId, live, orgId }: {
           {items.map((i) => (
             <li key={i.id}>
               <a className="kg-strip-item" href={kgNodeHref(i.id, orgId)} data-testid="kg-learned-item" data-how={i.how}
-                 title={`${kindName(i.kind)} · open it in the Graph`}>
+                 title={`${kindName(i.kind)}, open it in the Graph`}>
                 <span className="kg-dot" style={{ background: `var(${kindToken(i.kind)})` }} aria-hidden />
                 <span className="kg-strip-how">{i.how === "learned" ? kindName(i.kind) : i.how === "reused" ? "Reused" : "Consulted"}</span>
                 <span className="kg-strip-title" data-user-text>{i.title}</span>
-                <span className="kg-strip-when">{[i.step, clock(i.at)].filter(Boolean).join(" · ")}</span>
+                <span className="kg-strip-when">{[i.step, clock(i.at)].filter(Boolean).join(", ")}</span>
               </a>
             </li>
           ))}

@@ -133,7 +133,7 @@ export function SeatsScreen({ data, people, failure = null }: { data: SeatsRespo
       <div className="idn-sec-h">
         <h1 className="idn-h1">Approval seats</h1>
         <span className="idn-sub" title="Who approves decisions at each risk tier">
-          {data ? `${cards.length} seats${vacant.length ? ` · ${vacant.length} vacant tier${vacant.length === 1 ? "" : "s"}` : ""}` : ""}
+          {data ? `${cards.length} seats${vacant.length ? `, ${vacant.length} vacant tier${vacant.length === 1 ? "" : "s"}` : ""}` : ""}
         </span>
       </div>
       {failure ? <ErrorState what="approval seats" failure={failure} testId="seats-error" /> : null}

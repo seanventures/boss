@@ -255,8 +255,8 @@ describe("hit testing, labels, keyboard order, kinds", () => {
     expect(kindToken("layer", null, "layer:rules")).toBe("--kg-layer-rules");
     expect(kindName("layer", null, "layer:learning")).toBe("Learning layer");
     // The interface is the operator's sky blue, the class the console blue.
-    expect(css).toContain("--kg-interface: #7dd3fc;");
-    expect(css).toContain("--kg-class: #5b9dff;");
+    expect(css).toContain("--kg-interface: var(--boss-c-7dd3fc);");
+    expect(css).toContain("--kg-class: var(--boss-c-5b9dff);");
     // Only kg.css holds hex colours: the area's TSX and the layout never spell one.
     for (const f of ["lib/kg-layout.ts", "app/knowledge/graph-canvas.tsx", "app/knowledge/graph-view.tsx", "app/knowledge/node-panel.tsx",
       "app/knowledge/project-tree.tsx", "app/knowledge/rules-review.tsx", "app/knowledge/kg-states.tsx", "app/knowledge/learned-strip.tsx",

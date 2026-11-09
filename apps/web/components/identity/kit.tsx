@@ -34,7 +34,7 @@ export function agoText(iso: string | null | undefined, now: number, empty = "ne
   return future ? `in ${s}` : `${s} ago`;
 }
 
-/** "3m ago", "in 6 days" — from the page's clock, stable through hydration. */
+/** "3m ago", "in 6 days", from the page's clock, stable through hydration. */
 export function Ago({ iso, empty = "never", bare = false }: { iso: string | null | undefined; empty?: string; bare?: boolean }) {
   const now = useNow();
   const text = agoText(iso, now, empty);
@@ -128,7 +128,7 @@ export function Pill({ tone, children, tip }: { tone: "ok" | "warn" | "bad" | "i
 export function Sheet({ title, icon, onClose, wide = false, side = false, locked = false, children, testId, layer }: {
   title: ReactNode; icon?: ReactNode; onClose: () => void; wide?: boolean; side?: boolean; locked?: boolean; children: ReactNode; testId?: string;
   /** "step-up": the top of the console's z-order scale (--z-step-up), at the end of <body>, so it
-   *  is above whatever sheet or dialog is waiting on it — never inside the shell's stacking context. */
+   *  is above whatever sheet or dialog is waiting on it, never inside the shell's stacking context. */
   layer?: "step-up";
 }) {
   const ref = useRef<HTMLDivElement>(null);

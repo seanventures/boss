@@ -1,3 +1,4 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* Archive a project (app/project-archive.tsx; BOSSAPP-768 S5). Console tokens only. */
 
 .backdrop {
@@ -7,7 +8,7 @@
   display: grid;
   place-items: center;
   padding: 16px;
-  background: rgba(2, 7, 13, 0.72);
+  background: var(--boss-c-6891288a7a);
   backdrop-filter: blur(6px);
 }
 
@@ -18,9 +19,9 @@
   padding: 20px 22px 18px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-xl, 12px);
-  background: var(--surface, #0b1522);
+  background: var(--surface, var(--boss-c-0b1522));
   color: var(--ink);
-  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 32px 90px var(--boss-c-4c46ca1826);
   font-size: 0.875rem;
   line-height: 1.45;
 }
@@ -31,8 +32,8 @@
   margin: 0 0 6px;
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--faint);
 }
 
@@ -70,7 +71,7 @@
 }
 .secondary { border: 1px solid var(--border-strong); background: transparent; color: var(--ink); }
 .secondary:hover:not(:disabled) { background: var(--surface-2); }
-.danger { border: 1px solid var(--red); background: var(--red); color: #fff; font-weight: 600; }
+.danger { border: 1px solid var(--red); background: var(--red); color: var(--boss-c-fff); font-weight: 600; }
 .danger:hover:not(:disabled) { filter: brightness(1.08); }
 .danger:disabled, .danger[aria-disabled="true"], .restore:disabled, .restore[aria-disabled="true"],
 .secondary:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -90,7 +91,7 @@
   justify-content: space-between;
   gap: 10px;
   padding: 10px 12px;
-  border: 1px solid rgba(242, 100, 122, 0.4);
+  border: 1px solid var(--boss-c-226204e3fe);
   border-radius: var(--r-sm, 8px);
   background: var(--red-soft);
   color: var(--ink);
@@ -109,14 +110,14 @@
 .skeleton span:nth-child(2) { width: 80%; }
 .skeleton span:nth-child(3) { width: 60%; }
 .skeleton p { margin: 4px 0 0; }
-@keyframes archive-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes archive-shimmer { from { background-position: 200% 0;} to { background-position: -200% 0;} }
 @media (prefers-reduced-motion: reduce) { .skeleton span { animation: none; } }
 
 .badge {
   display: inline-block;
   margin-left: 6px;
   padding: 1px 6px;
-  border: 1px solid rgba(245, 181, 68, 0.45);
+  border: 1px solid var(--boss-c-1b8fbc60b3);
   border-radius: 999px;
   background: var(--amber-soft);
   color: var(--amber);
@@ -147,7 +148,7 @@
   gap: 10px;
   flex-wrap: wrap;
   padding: 6px 10px;
-  border: 1px solid rgba(245, 181, 68, 0.4);
+  border: 1px solid var(--boss-c-660fe7b6ca);
   border-radius: var(--r-sm, 8px);
   background: var(--amber-soft);
   color: var(--ink);

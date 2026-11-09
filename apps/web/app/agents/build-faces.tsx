@@ -64,7 +64,7 @@ export function useStageFaces(stages: Act[], phaseStages: Record<string, string[
   }, [stages, phaseStages, viewer]);
 }
 
-/** `Made by 5 agents · accountable: <you> · Credits ↗` under the pull request. */
+/** `Made by 5 agents, accountable: <you>, Credits ` under the pull request. */
 export function PrMadeBy({ chain, runId, projectId, viewer = "", title }: {
   chain: Chain | null; runId: string | null; projectId: string; viewer?: string; title: string;
 }) {
@@ -75,7 +75,7 @@ export function PrMadeBy({ chain, runId, projectId, viewer = "", title }: {
   const who = chain.accountable && chain.accountable === viewer ? "you" : chain.accountable || "—";
   return (
     <span className="ag-made-by" data-testid="ag-pr-made-by">
-      Made by {n} {n === 1 ? "agent" : "agents"} · accountable: {who} ·{" "}
+      Made by {n} {n === 1 ? "agent" : "agents"}, accountable: {who} ·{" "}
       <button type="button" className="ag-link-btn" data-testid="ag-pr-credits" onClick={() => setOpen(true)}>
         Credits ↗
       </button>

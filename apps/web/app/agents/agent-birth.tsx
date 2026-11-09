@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The birth (spec §3.11, §7): 900ms in which a new agent is put together — head, visor, hat
- * dropping on, emblem popping — and a `BORN` stamp lands on its certificate: ID, date, by You.
+ * The birth (spec §3.11, §7): 900ms in which a new agent is put together, head, visor, hat
+ * dropping on, emblem popping, and a `BORN` stamp lands on its certificate: ID, date, by You.
  * Then it becomes the Passport. Under reduced motion it is the finished certificate, stamped.
  * A press anywhere skips straight on; nothing waits on the animation.
  */

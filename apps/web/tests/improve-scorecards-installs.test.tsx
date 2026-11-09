@@ -87,7 +87,7 @@ describe("Observability › Installs", () => {
     expect($("[data-testid=in-proof]")!.textContent).toContain("312 active installs this month, 41% still active after 30 days");
     expect($("[data-testid=in-active]")!.textContent).toContain("312");
     expect($("[data-testid=in-csv]")!.getAttribute("href")).toContain("view=collector_csv");
-    expect($("[data-testid=in-harness]")!.textContent).toContain("claude_code · 0.74");
+    expect($("[data-testid=in-harness]")!.textContent).toContain("claude_code, 0.74");
     expect($("[data-testid=in-installer]")!.textContent).toContain("Not reported");
   });
 });

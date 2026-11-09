@@ -70,7 +70,7 @@ describe("v2 deployment planning controls", () => {
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="v2-deploy"]')!.click());
 
     const note = host.querySelector('[data-testid="v2-controls-plan"]')!;
-    expect(note.textContent).toContain("Demo to staging-host · staging");
+    expect(note.textContent).toContain("Demo to staging-host, staging");
     expect(note.textContent).toContain("Nothing has deployed");
     expect(note.querySelector('a[href*="area=decisions"]')).not.toBeNull();
   });

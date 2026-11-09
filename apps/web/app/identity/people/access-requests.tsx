@@ -127,7 +127,7 @@ export function AccessRequests({ requests, roles, failure = null, project = null
       <div className="idn-card-h">
         <h2 id="idn-req-h"><HandWaving size={16} aria-hidden /> Access requests</h2>
         <span className="idn-sub" title={project ? `Requests for ${project}, where you assign roles` : "Requests across the org"}>
-          {open.length} waiting{project ? ` · ${project}` : ""}
+          {open.length} waiting{project ? `, ${project}` : ""}
         </span>
       </div>
       {open.map((r) => (
@@ -138,7 +138,7 @@ export function AccessRequests({ requests, roles, failure = null, project = null
               <span className="idn-dim">asks for</span> <Perm p={r.permission_key} sm />
               {r.project_id ? <span className="idn-dim">in {r.project_id}</span> : null}
             </span>
-            <small className="idn-dim" data-copy="data">{r.reason ? `“${r.reason}” · ` : ""}<Ago iso={r.created_at} /></small>
+            <small className="idn-dim" data-copy="data">{r.reason ? `“${r.reason}”, ` : ""}<Ago iso={r.created_at} /></small>
           </span>
           <span className="idn-row">
             <CanButton permission="role_binding:assign" projectId={judgedAt(r)} className="idn-btn sm" tip="Close it without granting" data-testid={`request-deny-${r.id}`}

@@ -54,7 +54,7 @@ function RepoCard({ repo }: { repo: RepoActivity }) {
     <article className="ra-repo">
       <header className="ra-repo-head">
         <div>
-          <span className="eyebrow">Repository</span>
+          <span className="area-name">Repository</span>
           <h3 className="ra-repo-name">
             <a
               href={repoUrl(repo.full_name)}
@@ -94,7 +94,7 @@ function RepoCard({ repo }: { repo: RepoActivity }) {
         <Kpi
           label="Success rate"
           value={repo.success_rate === null ? "—" : `${repo.success_rate}%`}
-          hint={`${repo.runs_completed} done · ${repo.runs_failed} failed`}
+          hint={`${repo.runs_completed} done, ${repo.runs_failed} failed`}
           tone={
             repo.success_rate === null ? "idle" : repo.success_rate >= 60 ? "ok" : "bad"
           }
@@ -173,11 +173,11 @@ export function RepoActivityPanel({ repos }: { repos: RepoActivity[] }) {
     <section className="panel-stack" data-area="github" aria-label="Repository activity">
       <div className="section-head">
         <div>
-          <span className="eyebrow">Repository Activity</span>
+          <span className="area-name">Repository Activity</span>
           <h2>What BOSS shipped in your repositories.</h2>
         </div>
         <p className="status-meta">
-          Runs, merges, first-pass rate and spend — measured from the work BOSS actually ran.
+          Runs, merges, first-pass rate and spend, measured from the work BOSS actually ran.
         </p>
       </div>
       {repos.length === 0 ? (

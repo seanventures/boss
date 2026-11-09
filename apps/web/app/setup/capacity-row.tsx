@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The Models list: ONE row per model source — a Models row (the server's last real proof) joined
- * to its source record — each a single line: name, pill, one plain sentence, one primary action,
+ * The Models list: ONE row per model source, a Models row (the server's last real proof) joined
+ * to its source record, each a single line: name, pill, one plain sentence, one primary action,
  * then Details (what it is, in words; the ids in a tooltip) and ⋯ (everything else).
  *
  * Connected, uncertain and attention sources stay in view. Sources proven unused are offered in
@@ -44,10 +44,10 @@ export type CapSource = {
   /** Anthropic rows only: which Anthropic credential `claude` runs on (never a value). */
   claudeActive?: string | null;
   /** The Models row's own pill for this source, from its last real proof (BOSSAPP-769). When
-   *  present it IS the badge: a failed proof never reads "Active · Available". */
+   *  present it IS the badge: a failed proof never reads "Active, Available". */
   pill?: SourcePill | null;
   /** The subscription BOSS signs in INSIDE the server for this source (codex | claude_code |
-   *  grok), from the API — its Sign in runs that login, never the official-session form. */
+   *  grok), from the API, its Sign in runs that login, never the official-session form. */
   signInProvider?: string | null;
 };
 export type SourcePill = { state: string; label: string; tone: Tone; checked_at: string | null };
@@ -108,7 +108,7 @@ export function badgeOf(src: CapSource): { label: string; tone: Tone; proven: bo
   return { ...stateOf(src), proven: false };
 }
 /** A subscription BOSS signs in inside the server, whose login is missing or refused: its row
- *  offers Sign in (a fresh in-container login — the stale session is signed out first). */
+ *  offers Sign in (a fresh in-container login, the stale session is signed out first). */
 export function offersSignIn(src: CapSource): boolean {
   if (!src.signInProvider) return false;
   const state = src.pill?.state ?? "";
@@ -183,7 +183,7 @@ function ClaudePaysWith() {
     setBusy(true);
     try {
       apply(await setupWrite<SetupView>(projectId, "claude_credential", { order }, { label }));
-      toast(`Saved · Claude Code: ${label}`);
+      toast(`Saved, Claude Code: ${label}`);
     } catch (error) {
       const refusal = (error as SetupFailure).refusal as { headline?: string; message?: string } | undefined;
       toast(refusal?.message ?? refusal?.headline ?? "Not saved", "error");
@@ -293,7 +293,7 @@ function StartForm({ src, onStart }: { src: CapSource; onStart: (mode: string, s
 const CAPACITY_STATES = ["available", "limited", "exhausted", "unknown"];
 
 /** `Complete session`: the reference the login produced, the scopes, and the capacity it
- *  reports — validated fields, assembled into observed_capacity here, never typed as JSON. */
+ *  reports, validated fields, assembled into observed_capacity here, never typed as JSON. */
 export function completeBody(f: { ref: string; scopes: string; state: string; resetAt: string }): Obj | null {
   const ref = f.ref.trim();
   if (!ref || !CAPACITY_STATES.includes(f.state)) return null;
@@ -397,7 +397,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
   const red = pill.tone === "red";
   // A bare "Working" that hasn't been proven in a while is a stale green: the pill stays green
   // (nothing failed) but the row still owes a Test action and an honest "checked Xh ago", same
-  // as an amber/red row — a login can die silently between checks.
+  // as an amber/red row, a login can die silently between checks.
   const checkedAt = serverPill?.at ?? src?.pill?.checked_at ?? null;
   const checkedAgeMs = checkedAt ? Date.now() - Date.parse(checkedAt) : null;
   const staleGreen = pill.tone === "green" && checkedAgeMs != null && checkedAgeMs > 2 * 3600 * 1000;
@@ -503,7 +503,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
     );
   }
 
-  // EVERYTHING ELSE behind ⋯ — named for what it does.
+  // EVERYTHING ELSE behind ⋯, named for what it does.
   const menu: MenuItem[] = [];
   if (entry) menu.push({ label: "Test", onSelect: test, testid: "su-menu-test" });
   if (signInProvider && (entry || src?.connection === "connected")) {
@@ -522,7 +522,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
     menu.push({ label: "Remove", danger: true, onSelect: () => void remove(false), testid: "su-menu-remove" });
   }
 
-  const ids = `Source ${id}${provider ? ` · provider ${provider}` : ""}${src?.kind ? ` · ${src.kind}` : ""}`;
+  const ids = `Source ${id}${provider ? `, provider ${provider}` : ""}${src?.kind ? `, ${src.kind}` : ""}`;
   const mine = sessions.filter((x) => x.sourceId === id);
   const models = src?.models ?? [];
   const kindWord = entry ? KIND[entry.kind].label : KIND_WORDS[src?.kind ?? ""] ?? words(src?.kind ?? "");
@@ -535,7 +535,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
                  ? "BOSS's own sign-in obtained this token on the BOSS server. Every Claude run uses it."
                  : "Claude Code's own short-lived login. Sign in again for a long-lived token."}
                className="su-faint su-src-credential" testid="su-model-credential">
-            · {entry.credential.label}
+           , {entry.credential.label}
           </Tip>
         ) : null}
         <span className={`su-pill su-tone-${pill.tone}`} role="status" data-testid="su-model-pill"
@@ -698,7 +698,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
   // the header above it.
   useEffect(() => { void load(); }, [load, view]);
 
-  /** After a write: toast, then the board is re-read — and the list with it. */
+  /** After a write: toast, then the board is re-read, and the list with it. */
   const after = async (failed: string | null, done: string) => {
     if (failed) { toast(failed.length > 80 ? "Not saved" : failed, "error"); return false; }
     toast(done);
@@ -710,8 +710,8 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
   const confirmedUnused = (src: CapSource) => readsComplete && !error && !locked && src.credentialAbsent
     && src.connection === "not_connected"
     && ["declared", "needs_connection", "missing_credentials", "missing_oauth_connection"].includes(src.effective)
-    // EVERY KIND, not only keys and logins (boss-1, 2026-11-05): "Managed gateway · Not connected"
-    // and "Local model · Not configured" sat amber in the list, counted as needing you, though
+    // EVERY KIND, not only keys and logins (boss-1, 2026-11-05): "Managed gateway, Not connected"
+    // and "Local model, Not configured" sat amber in the list, counted as needing you, though
     // nobody had ever added them. Untouched is untouched; they wait under More sources.
     && src.capacity === "unknown"
     && !onBoard.has(src.sourceId) && !sessions.some((x) => x.sourceId === src.sourceId);
@@ -731,7 +731,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
     section.setMore(choices.map((c) => ({ id: c.sourceId, label: sourceName(c.sourceId) })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [choiceKey]);
-  // A source picked there appears here — kept in view, scrolled to, its action focused. A form
+  // A source picked there appears here, kept in view, scrolled to, its action focused. A form
   // already open on another source keeps what was typed in it.
   useEffect(() => {
     if (!picked) return;
@@ -774,13 +774,13 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                      onForm={(v) => { setEdited((prev) => new Set(prev).add(item.id)); setOpen(v ? item.id : null); }}
                      actions={{ who, after }} />
         ))}
-        {/* OFFICIAL-LOGIN SESSIONS, only when there are some: "Sessions · None started here"
+        {/* OFFICIAL-LOGIN SESSIONS, only when there are some: "Sessions, None started here"
             on every install said nothing. */}
         {sessions.length || sessionError ? <div className="su-line su-src-foot" data-testid="setup-entitlement-session">
           <Tip tip="Official logins started from a plan above." className="su-faint su-cap-label">Sessions</Tip>
           <span className="su-faint" data-testid="setup-entitlement-session-count">
             {sessionError ? <Tip tip={sessionError}>Can&apos;t load sessions</Tip>
-              : sessions.length ? `${sessions.length} · ${sessions.filter((x) => x.status === "operator_action_required").length} waiting`
+              : sessions.length ? `${sessions.length}, ${sessions.filter((x) => x.status === "operator_action_required").length} waiting`
               // HONEST "NONE": a subscription signed in on the BOSS server is not a session here;
               // its state is the source's own badge above.
               : <Tip tip="None started here. Server sign-ins show on their source above.">None started here</Tip>}

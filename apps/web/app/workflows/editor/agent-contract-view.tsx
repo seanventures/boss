@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * THE AGENT READ/WRITE VIEW (design §4.7.2): one stage, in three bands —
+ * THE AGENT READ/WRITE VIEW (design §4.7.2): one stage, in three bands , 
  *
  *   Knowledge Graph (read only)   the kinds its contract reads          grey lines
  *   the stage and who runs it     + outside systems it calls over MCP   dotted lines
@@ -43,15 +43,15 @@ const CALL_W = 210;
 const CALL_H = 40;
 
 function nodeSub(n: { side: Side; required: boolean; overlay: Overlay; traced?: TracedKind; declared?: ContractKind }): string {
-  if (n.overlay === "missing") return n.required ? "required · not done" : "declared, not done";
-  if (n.overlay === "undeclared") return `done, not declared · ${n.traced?.count ?? 0}`;
+  if (n.overlay === "missing") return n.required ? "required, not done" : "declared, not done";
+  if (n.overlay === "undeclared") return `done, not declared, ${n.traced?.count ?? 0}`;
   if (n.overlay === "done") return `${n.side === "read" ? "read" : "wrote"} ${n.traced?.count ?? 0}`;
   const parts: string[] = [];
   // A required write is marked ● on its label; its decision type says more than "required".
   if (n.declared?.decision_type) parts.push(n.declared.decision_type);
   else if (n.required) parts.push("required");
   if (n.declared?.via) parts.push(`via ${kindLabel(n.declared.via).toLowerCase()}`);
-  return parts.join(" · ");
+  return parts.join(", ");
 }
 
 function graphNodes(side: Side, declared: ContractKind[], traced: TracedKind[] | null): GraphNode[] {
@@ -98,13 +98,13 @@ function bandHeight(count: number): number {
   return Math.max(1, Math.ceil(count / PER_ROW)) * (NODE_H + GAP) - GAP;
 }
 
-/** IDs read in a row, each hoverable for its words: "MON-1 severity never goes down · MON-2 …". */
+/** IDs read in a row, each hoverable for its words: "MON-1 severity never goes down, MON-2 …". */
 function Notes({ notes, testid }: { notes: DesignNote[]; testid: string }) {
   return (
     <p className="pl-notes" data-testid={testid}>
       {notes.map((n, i) => (
         <React.Fragment key={`${n.id}-${i}`}>
-          {i > 0 ? <span className="pl-notes-sep" aria-hidden> · </span> : null}
+          {i > 0 ? <span className="pl-notes-sep" aria-hidden>, </span> : null}
           <span className="pl-note-item" title={n.id ? `${n.id}: ${n.text}` : n.text}>
             {n.id ? <b className="pl-note-id">{n.id}</b> : null}{n.id && n.text ? " " : ""}{n.text}
           </span>
@@ -259,8 +259,8 @@ export function AgentContractView({ stage, hasRun, onClose, graph, onDesignActio
     return {
       key: `${c.mcp}-${c.tool}`, label: system.length <= 4 ? system.toUpperCase() : system,
       sub: !overlay ? humanTool(tool)
-        : made ? `${humanTool(tool)} · called ${made}`
-        : `${humanTool(tool)} · ${missing ? "declared, not done" : "not recorded"}`,
+        : made ? `${humanTool(tool)}, called ${made}`
+        : `${humanTool(tool)}, ${missing ? "declared, not done" : "not recorded"}`,
       made, missing,
     };
   });
@@ -300,7 +300,7 @@ export function AgentContractView({ stage, hasRun, onClose, graph, onDesignActio
         <div>
           <div className="pl-acv-kicker">
             {stage.number ? `Stage ${stage.number}` : stage.placement === "shared" ? "Shared service" : stage.placement === "side" ? (stage.sideLabel ?? "Side path") : "Stage"}
-            {steps ? " · agent design" : " · read/write view"}
+            {steps ? ", agent design" : ", read/write view"}
           </div>
           <h3 className="pl-acv-title">{stage.number ? `${stage.number}. ${stage.title}` : stage.title}</h3>
           <div className="pl-acv-desc">{stage.description}</div>
@@ -422,7 +422,7 @@ export function AgentContractView({ stage, hasRun, onClose, graph, onDesignActio
           <rect x={stepX} y={stepY} width={STEP_W} height={STEP_H} rx={12} />
           <text x={stepX + STEP_W / 2} y={stepY + 28} textAnchor="middle" className="pl-step-title">{clip(stage.title, 30)}</text>
           <text x={stepX + STEP_W / 2} y={stepY + 50} textAnchor="middle" className="pl-step-sub">
-            {clip(stage.runsAs.label, 36)}{overlay ? ` · ${STATUS_LABEL[stage.status]}` : ""}
+            {clip(stage.runsAs.label, 36)}{overlay ? `, ${STATUS_LABEL[stage.status]}` : ""}
           </text>
         </g>
 
@@ -471,15 +471,15 @@ export function AgentContractView({ stage, hasRun, onClose, graph, onDesignActio
       {selectedNode ? (
         <div className="pl-node-detail" data-testid="node-detail" role="status">
           <b>{selectedNode.label}</b>
-          {selectedNode.side === "read" ? " · Knowledge Graph read" : " · Context Graph write"}
-          {selectedNode.required ? " · required" : ""}
+          {selectedNode.side === "read" ? ", Knowledge Graph read" : ", Context Graph write"}
+          {selectedNode.required ? ", required" : ""}
           {selectedNode.traced ? (
             <>
-              {` · the last run ${selectedNode.side === "read" ? "read" : "wrote"} ${selectedNode.traced.count}`}
+              {`, the last run ${selectedNode.side === "read" ? "read" : "wrote"} ${selectedNode.traced.count}`}
               {selectedNode.traced.decision_types.length ? ` (${selectedNode.traced.decision_types.join(", ")})` : ""}
               {selectedNode.traced.examples.length ? `: ${selectedNode.traced.examples.join(", ")}` : ""}
             </>
-          ) : selectedNode.overlay === "missing" ? " · the last run did not do this" : null}
+          ) : selectedNode.overlay === "missing" ? ", the last run did not do this" : null}
         </div>
       ) : null}
       </>)}

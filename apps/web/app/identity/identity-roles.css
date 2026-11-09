@@ -1,3 +1,4 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* Identity › Access roles, the role editor, Service accounts and keys (mockups c and f).
    Tokens only: every colour is a var() from design-system.css or identity.css's token block. */
 
@@ -5,7 +6,7 @@
 .idn-small { font-size: 0.65789rem; }
 .idn-mt { margin-top: 12px; }
 .idn-nowrap { flex-wrap: nowrap; }
-.idn-tipline { font-size: 0.63158rem; color: var(--faint); line-height: 1.45; margin: 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.idn-tooltipline { font-size: 0.63158rem; color: var(--faint); line-height: 1.45; margin: 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
 /* the editor header */
 .idn-rh-t { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -32,19 +33,19 @@
 .idn-mx-group + .idn-mx-group { border-top: 1px solid var(--border); }
 button.idn-mx-cat { width: 100%; text-align: left; cursor: pointer; }
 button.idn-mx-cat:hover { color: var(--idn-mint); }
-.idn-mx-cat .idn-n { color: var(--faint); letter-spacing: 0.05em; margin-left: auto; }
+.idn-mx-cat .idn-n { color: var(--faint); letter-spacing: 0; margin-left: auto; }
 .idn-tg { cursor: pointer; transition: border-color 120ms, background 120ms; }
 .idn-tg[aria-disabled="true"] { cursor: not-allowed; }
 .idn-tg[data-error="true"] { box-shadow: 0 0 0 2px var(--red); }
 .idn-tg svg { flex: none; }
 .idn-cell-err { grid-column: 1 / -1; font-size: 0.63158rem; color: var(--idn-ink-bad); }
 .idn-mx-closed { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 14px 16px; border-top: 1px solid var(--border); }
-.idn-mx-closed button { display: inline-flex; align-items: center; gap: 6px; font: 500 0.52632rem var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); cursor: pointer; min-height: 28px; }
+.idn-mx-closed button { display: inline-flex; align-items: center; gap: 6px; font: 500 0.52632rem var(--mono); letter-spacing: 0; text-transform: none; color: var(--faint); cursor: pointer; min-height: 28px; }
 .idn-mx-closed button:hover { color: var(--teal); }
-.idn-mx-closed .idn-n { letter-spacing: 0.04em; color: var(--muted); }
+.idn-mx-closed .idn-n { letter-spacing: 0; color: var(--muted); }
 
 /* impact */
-.idn-imp .idn-eyebrow { letter-spacing: 0.24em; }
+.idn-imp .idn-area-name { letter-spacing: 0; font-family: inherit;}
 .idn-imp-people { margin: 10px 0 2px; }
 .idn-gl-sub { display: block; font-size: 0.57895rem; color: var(--faint); }
 .idn-imp .idn-note { margin-top: 12px; }

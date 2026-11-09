@@ -20,7 +20,7 @@ export function LiveJobsCard({ feed }: { feed: LiveJobsFeed }) {
                 <h4>{job.kind}</h4>
                 <p className="detail">
                   {job.status}
-                  {job.attempt != null ? ` · attempt ${job.attempt}` : ""}
+                  {job.attempt != null ? `, attempt ${job.attempt}` : ""}
                 </p>
               </div>
               <code className="mono">{job.id}</code>

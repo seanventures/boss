@@ -4,10 +4,10 @@
  * KNOWLEDGE GRAPH › DOCUMENTS (KG P7a): the regulation documents and clauses in a project's
  * Knowledge Graph. The pack row (with Change over the shipped packs), "Upload a document (PDF)"
  * (rulebook source G3: BOSS proposes the sections, a person checks and confirms them before
- * anything is added — kg-upload.tsx), an "Add regulation" form for pasted text (one section +
+ * anything is added, kg-upload.tsx), an "Add regulation" form for pasted text (one section +
  * exact text per clause; BOSS never segments a pasted blob), the samples, and the list of
  * documents and their clauses. Each clause links to its node in Graph; a pasted clause offers
- * "Check compliance" — starting banking_regulatory_compliance with the clause's implementing rule
+ * "Check compliance", starting banking_regulatory_compliance with the clause's implementing rule
  * as subject when there is exactly one, asking when there are several. An uploaded document with
  * rule cards offers "Extract rules".
  *
@@ -75,7 +75,7 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
     if (NO_WORKFLOW_RE.test(err)) { setNeedsInstall(true); return; }
     if (NEEDS_SUBJECT_RE.test(err)) {
       setNeedsSubject(true);
-      // The clause has nothing linked yet — offer the project's existing business rules to
+      // The clause has nothing linked yet, offer the project's existing business rules to
       // pick from, not the clause's (empty) linked-rules list.
       const found = await getRules(w, { status: "approved" });
       setCandidateRules(found.ok
@@ -86,7 +86,7 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
   }, [documentId, w]);
 
   // The initial "approved" rules list can miss the clause's implementing rule (not yet
-  // approved, or named differently) — a free-text search over the project's rules lets the
+  // approved, or named differently), a free-text search over the project's rules lets the
   // operator find it instead of being stuck with that fixed list.
   const searchRules = useCallback(async () => {
     const q = ruleQuery.trim();
@@ -106,7 +106,7 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
   }, [ruleQuery, w]);
 
   // Picking a rule must PERSIST the clause→rule link (criterion 6: a later check must find it
-  // linked), not just pass it as this one run's subject_id — so the write happens first, through
+  // linked), not just pass it as this one run's subject_id, so the write happens first, through
   // the same `implemented_by` edge `regulatory_trace` proposes, and only then does start retry.
   const linkAndStart = useCallback(async () => {
     if (!linkChosen) return;
@@ -209,7 +209,7 @@ function DocumentCard({ w, doc, archived, extractWhy }: {
     <li className="kg-doc" data-testid="kg-doc">
       <div className="kg-doc-head">
         <span className="kg-doc-title" data-user-text>{doc.title}</span>
-        {doc.filename ? <span className="kg-quiet" data-testid="kg-doc-file"><span data-user-text>{doc.filename}</span>{doc.pages ? ` · ${doc.pages} pages` : ""} · {doc.clauses.length} sections{cards ? `, ${cards} rule cards` : ""}</span>
+        {doc.filename ? <span className="kg-quiet" data-testid="kg-doc-file"><span data-user-text>{doc.filename}</span>{doc.pages ? `, ${doc.pages} pages` : ""}, {doc.clauses.length} sections{cards ? `, ${cards} rule cards` : ""}</span>
           : doc.citation ? <span className="kg-quiet">{doc.citation}</span> : null}
         {doc.added_at ? <span className="kg-quiet">{kgWhen(doc.added_at)}</span> : null}
         {cards ? <ExtractRules w={w} documentId={doc.id} title={doc.title} archived={archived} disabledWhy={extractWhy} /> : null}
@@ -375,7 +375,7 @@ export function DocumentsTab({ projectId, actor, archived = false }: {
       {pending.map((preview) => (
         <UploadPreview key={preview.upload_id} w={w} preview={preview} archived={archived} onDone={(done) => {
           setPending((cur) => cur.filter((x) => x.upload_id !== preview.upload_id));
-          setAdded(done ? `Added “${done.title}”: ${done.sections} sections${done.rule_cards ? `, ${done.rule_cards} of them rule cards — Extract rules reads them next` : ""}.`
+          setAdded(done ? `Added “${done.title}”: ${done.sections} sections${done.rule_cards ? `, ${done.rule_cards} of them rule cards, Extract rules reads them next` : ""}.`
                         : "Discarded: nothing was added.");
           void load();
         }} />

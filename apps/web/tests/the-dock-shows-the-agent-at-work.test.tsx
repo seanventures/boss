@@ -6,7 +6,7 @@
  *  - The face shows `thinking` while a turn is in flight and `speaking` when its words arrive,
  *    then settles — from the turn's real state, not a timer started on send.
  *  - The turn carries the agent's role KEY and the work it is about (`context.act_id`).
- *  - Work the answer cites is a chip, `I ran this · 14:02 ↗`, that opens its Act card.
+ *  - Work the answer cites is a chip, `I ran this, 14:02 `, that opens its Act card.
  *  - "Not about this work" drops the context for the next turn.
  *
  * The real panel is mounted; the server action is faked and holds the turn until released.
@@ -141,7 +141,7 @@ describe("the dock, with the agent in it", () => {
     expect(answer.querySelector('[data-testid="ag-dock-gutter"] .ag-face')?.getAttribute("data-role-key")).toBe("qa");
     const chip = answer.querySelector('[data-testid="ag-cite"]')!;
     expect(chip.getAttribute("data-act-id")).toBe("act_cited");
-    expect(chip.querySelector(".ag-cite-text")?.textContent).toBe("I ran this · 14:02 ↗");
+    expect(chip.querySelector(".ag-cite-text")?.textContent).toBe("I ran this, 14:02 ");
     await act(async () => (chip.querySelector('[data-testid="ag-act-face"]') as HTMLButtonElement).click());
     expect(document.querySelector('[role="dialog"] [data-testid="ag-act-card"]')?.getAttribute("data-act-id")).toBe("act_cited");
   });

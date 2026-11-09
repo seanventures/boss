@@ -47,18 +47,18 @@ export const SPEC_FIRST = { feature: "@panel-feature", rebuild: "@panel-rebuild"
  *  approved PRD to a build on this app's own branch instead of a fresh scaffold. */
 export function specFirstDirective(mode: "feature" | "rebuild", app: string, repo: string, runId: string, what: string): string {
   return mode === "feature"
-    ? `Add a feature to "${app}" — an existing, working application in `
+    ? `Add a feature to "${app}", an existing, working application in `
       + `${repo || "this project"}. [boss:extend_run=${runId}]\n\n`
       + `What is wanted: ${what.trim()}\n\n`
       + `Write a PRD for THIS FEATURE ONLY. The app already exists and must keep working: do `
       + `not redesign it, do not re-scaffold it, do not restate the whole product. Cover what `
       + `changes, what must not change, the acceptance scenarios for the new behaviour, and `
       + `the evidence required to prove them.`
-    : `Rebuild "${app}" — an existing application in ${repo || "this project"}.\n\n`
+    : `Rebuild "${app}", an existing application in ${repo || "this project"}.\n\n`
       + `What is wrong with the current build: ${what.trim()}\n\n`
       + `Write a PRD for a replacement that fixes this. It must be a real, working full-stack `
       + `application: a server, a database with migrations and seed data, and a UI that is `
-      + `visually finished — considered layout, typography, spacing and states (loading, empty, `
+      + `visually finished, considered layout, typography, spacing and states (loading, empty, `
       + `error), not an unstyled prototype. Include acceptance scenarios and the evidence `
       + `required to prove them.`;
 }

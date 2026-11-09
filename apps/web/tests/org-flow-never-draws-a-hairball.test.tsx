@@ -69,7 +69,7 @@ describe("Flow", () => {
   it("a failed edge says failed in words, and its node says it too", async () => {
     await render(orgWire());
     const state = $$(".ag-flow-edge-label").find((b) => b.dataset.state === "failed")!;
-    expect(state.textContent).toBe("×31 · 2 failed ✕ · 1 waiting ⏸");
+    expect(state.textContent).toBe("×31, 2 failed ✕, 1 waiting ");
     expect($('path.ag-flow-edge[data-edge="engineering>quality"]')!.dataset.state).toBe("failed");
     expect($('[data-testid="ag-flow-node-engineering"]')!.getAttribute("aria-label"))
       .toBe("Engineering, 4 agents, hands to Quality 31 times, 2 failed");
@@ -107,7 +107,7 @@ describe("Flow", () => {
     await settle();
     const panel = $('[data-testid="ag-org-edge"]')!;
     expect(panel.textContent).toContain("Engineering → Quality");
-    expect($('[data-testid="ag-org-edge-summary"]')!.textContent).toBe("31 handoffs · 2 failed · 1 waiting");
+    expect($('[data-testid="ag-org-edge-summary"]')!.textContent).toBe("31 handoffs, 2 failed, 1 waiting");
     expect($('[data-testid="ag-org-edge-pair-software_engineer-qa"]')!.textContent).toContain("×18");
     const rows = $('[data-testid="ag-org-edge-rows"]')!;
     expect(rows.textContent).toContain("Failed");

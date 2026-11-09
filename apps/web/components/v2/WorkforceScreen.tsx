@@ -1,7 +1,7 @@
 "use client";
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import React, { useMemo, useState } from "react";
 
 import type { V2Agent, Workforce } from "../../lib/v2/workforce";
@@ -9,7 +9,7 @@ import type { DecisionQueue } from "../../lib/v2/decisions";
 import { AgentChat } from "./AgentChat";
 
 /**
- * Workforce — every agent, what it is doing, and what it costs.
+ * Workforce, every agent, what it is doing, and what it costs.
  *
  * THE STATUS DESCRIBES THE AGENT, NOT THE SCHEMA
  * ----------------------------------------------
@@ -21,7 +21,7 @@ import { AgentChat } from "./AgentChat";
  * STUCK IS ITS OWN STATUS
  * -----------------------
  * A step that has been running for half an hour is not working. Calling it working is how a
- * wedged agent stays invisible — one sat for 22 minutes before a human noticed.
+ * wedged agent stays invisible, one sat for 22 minutes before a human noticed.
  */
 
 const FILTERS = ["ALL", "WORKING", "STUCK", "IDLE"] as const;
@@ -46,7 +46,7 @@ export function WorkforceScreen({
    *  an agent that is blocked and a gate that is blocking it are the same problem seen from
    *  two ends. */
   inbox?: DecisionQueue;
-  /** Never defaulted at the call site into something invented — "operator" produced
+  /** Never defaulted at the call site into something invented, "operator" produced
    *  "Authenticated principal 'ceo' is not allowed to act as 'operator'". */
   actor?: string;
 }) {
@@ -70,7 +70,7 @@ export function WorkforceScreen({
         <p className="v2-empty">
           Could not reach the control plane
           {workforce.blockedReason ? ` (${workforce.blockedReason})` : ""}. No agent counts are
-          shown — a zero here would read as an idle company rather than an unanswered question.
+          shown, a zero here would read as an idle company rather than an unanswered question.
         </p>
       </section>
     );
@@ -83,10 +83,10 @@ export function WorkforceScreen({
       <header className="v2-screen-head">
         <h1 className="v2-screen-title">Workforce</h1>
         <p className="v2-screen-sub">
-          {workforce.counts.total} agents · last {workforce.window_hours}h
+          {workforce.counts.total} agents, last {workforce.window_hours}h
           {stuck > 0 ? (
             <>
-              {" · "}
+              {", "}
               <b className="v2-wf-stuck" data-testid="v2-workforce-stuck">
                 {stuck} stuck
               </b>
@@ -121,15 +121,12 @@ export function WorkforceScreen({
           act. This says what is waiting and what happens if it is ignored. */}
       {inbox && inbox.apiReachable && inbox.items.length > 0 ? (
         <div className="v2-inbox" data-testid="v2-workforce-inbox">
-          <h2 className="v2-ws-h">
-            Waiting on you
-            {inbox.auto_resolving > 0 ? (
-              <span className="v2-dec-auto" data-testid="v2-workforce-inbox-auto">
-                {" "}
-                · {inbox.auto_resolving} will be decided without you
-              </span>
-            ) : null}
-          </h2>
+          <h2 className="v2-ws-h">Waiting on you</h2>
+          {inbox.auto_resolving > 0 ? (
+            <span className="v2-dec-auto" data-testid="v2-workforce-inbox-auto">
+              {inbox.auto_resolving} will be decided without you
+            </span>
+          ) : null}
           <ul className="v2-rows">
             {inbox.items.slice(0, 5).map((d) => (
               <li className="v2-row" key={d.id} data-testid={`v2-inbox-${d.id}`}>
@@ -147,8 +144,7 @@ export function WorkforceScreen({
                   href={`/v2/panels${projectId ? "" : ""}`}
                   data-testid={`v2-inbox-open-${d.id}`}
                 >
-                  Review →
-                </a>
+                  Review</a>
               </li>
             ))}
           </ul>
@@ -164,7 +160,7 @@ export function WorkforceScreen({
           {workforce.unregistered.length} agent
           {workforce.unregistered.length === 1 ? " is" : "s are"} running work without a
           registered role, so nothing governs {workforce.unregistered.length === 1 ? "it" : "them"}
-          — no trust score, no autonomy level, no violation tracking.
+         , no trust score, no autonomy level, no violation tracking.
         </p>
       ) : null}
 
@@ -187,7 +183,7 @@ export function WorkforceScreen({
       ) : (
         <ul className="v2-cards" data-testid="v2-workforce-list">
           {/* Rank comes from position in the ALREADY-SORTED list the engine returned, not from
-              a second sort here — two orderings of the same data eventually disagree. */}
+              a second sort here, two orderings of the same data eventually disagree. */}
           {shown.map((a, i) => (
             <AgentCard key={a.id} a={a} onChat={() => setChatWith(a)} rank={i + 1}
                        busiest={busiest} />
@@ -240,7 +236,7 @@ function scoreTone(rate: number | null | undefined): string {
  *
  * The page is ranked by VOLUME, which says who has done the most but not who is doing it now.
  * A month of work and ten minutes ago both render IDLE with a good score, and that is the
- * difference an operator most wants at a glance -- so recency is its own signal, and it is the
+ * difference an operator most wants at a glance, so recency is its own signal, and it is the
  * one thing on this page that keeps moving.
  */
 function recency(a: V2Agent): "live" | "today" | "week" | "cold" {
@@ -262,7 +258,7 @@ function volume(a: V2Agent): number {
 function AgentCard({ a, onChat, rank, busiest }:
   { a: V2Agent; onChat: () => void; rank: number; busiest: number }) {
   // Share of the busiest agent's volume. A floor of 3% keeps a real but tiny contribution
-  // visible — a bar of zero width reads as no bar, which is the thing it must not say.
+  // visible, a bar of zero width reads as no bar, which is the thing it must not say.
   const share = volume(a) > 0 && busiest > 0 ? volume(a) / busiest : null;
   return (
     <li
@@ -381,13 +377,13 @@ function AgentCard({ a, onChat, rank, busiest }:
       ) : null}
 
       {/* The bar animates from zero to its width on load. It is the one piece of motion on this
-          page that is visible on EVERY card that has done work -- the breathing border only
+          page that is visible on EVERY card that has done work, the breathing border only
           applies to an agent working this instant, and on a quiet afternoon that is nobody, so
           the page looked as static as before. Width is the success rate, so the motion is
           carrying the number rather than decorating it. */}
       {/* LENGTH IS VOLUME, COLOUR IS QUALITY.
           The first version made length the success rate, and on the live page every agent sat
-          at or near 100% — so twenty-eight identical full-width green bars carried no
+          at or near 100%, so twenty-eight identical full-width green bars carried no
           information and dominated every card. Success rate is nearly constant here; volume is
           not (865 steps against 84 calls), so length now shows share of the busiest agent's
           work and the ranking is readable down the page. Colour still carries the rate, which
@@ -402,7 +398,7 @@ function AgentCard({ a, onChat, rank, busiest }:
         </div>
       ) : null}
 
-      {/* WHAT IT DOES, in its own vocabulary — the stages it spends its calls on. */}
+      {/* WHAT IT DOES, in its own vocabulary, the stages it spends its calls on. */}
       {a.top_stages?.length ? (
         <div className="v2-stages" data-testid={`v2-agent-stages-${a.id}`}>
           {a.top_stages.map((st) => (

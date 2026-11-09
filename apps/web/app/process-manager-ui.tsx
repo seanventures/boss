@@ -131,7 +131,7 @@ export function ProcessManager({
     <article className="stack-card" data-testid="process-manager">
       <div className="section-head">
         <div>
-          <span className="eyebrow">Steward</span>
+          <span className="area-name">Steward</span>
           <h2>Project manager</h2>
         </div>
       </div>
@@ -184,7 +184,7 @@ export function ProcessManager({
           <div>
             <p className="detail">
               {typeof state.lastTick.status === "string" ? state.lastTick.status : "recorded"}
-              {lastTickAt ? ` · ${formatDateTime(lastTickAt)}` : ""}
+              {lastTickAt ? `, ${formatDateTime(lastTickAt)}` : ""}
             </p>
             {typeof state.lastTick.operate === "string" ? (
               <p className="detail">{state.lastTick.operate}</p>
@@ -237,7 +237,7 @@ export function ProcessManager({
             <h4>{String(proposal.title || proposal.summary || "proposal")}</h4>
             <p className="detail">
               {typeof proposal.status === "string" ? proposal.status : "read-only"}
-              {typeof proposal.kind === "string" ? ` · ${proposal.kind}` : ""}
+              {typeof proposal.kind === "string" ? `, ${proposal.kind}` : ""}
             </p>
             {typeof proposal.summary === "string" && proposal.title ? (
               <p className="detail">{proposal.summary}</p>

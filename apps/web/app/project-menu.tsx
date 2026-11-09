@@ -43,7 +43,7 @@ const HOME_TIP = "The home project can't be archived: BOSS's own agent and the w
 /**
  * THE PROJECT MENU, in the top bar beside the organization: which project is open, the org's
  * other projects, and New project (POST /v1/projects, `project:create`). New project asks what
- * the project is FOR first — build an app, or a knowledge graph for an existing codebase — and a
+ * the project is FOR first, build an app, or a knowledge graph for an existing codebase, and a
  * knowledge-graph project opens on its guided setup (Knowledge Graph › Setup). A project's type
  * shows beside its name. Short labels, tooltips
  * for the rest. The API decides the permission and its step-up; the button only mirrors it.
@@ -59,7 +59,7 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
   homeId: string;
   orgId?: string;
 }) {
-  // NEW PROJECT (BOSSAPP-810): which screen of the flow is open — the three doors and the presets,
+  // NEW PROJECT (BOSSAPP-810): which screen of the flow is open, the three doors and the presets,
   // the sample, Import a repo, the idea (one sentence), or the name-and-description form (both types).
   // `/?new_project=sample|import|idea|1` opens it at that choice (the Welcome screen's links).
   const [step, setStep] = useState<StartStep | null>(null);
@@ -94,7 +94,7 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
     <>
     <details ref={menu} className="bx-project-menu" data-testid="project-menu"
              onToggle={onToggle}>
-      <summary title={`Project${projectTypeBadge(active?.type) ? ` · ${projectTypeBadge(active?.type)}` : ""} · switch, create, or archive one`}>
+      <summary title={`Project${projectTypeBadge(active?.type) ? `, ${projectTypeBadge(active?.type)}` : ""}, switch, create, or archive one`}>
         {active?.name ?? archived?.name ?? activeId}
         {projectTypeBadge(active?.type) ? <span className="bx-project-menu-type" data-testid="project-menu-type">{projectTypeBadge(active?.type)}</span> : null}
         {archived ? <span className="bx-project-menu-archived" data-testid="project-menu-archived-badge">Archived</span> : null}

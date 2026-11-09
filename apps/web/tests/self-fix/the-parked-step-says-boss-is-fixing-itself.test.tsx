@@ -34,7 +34,7 @@ describe("the parked step says BOSS is fixing itself", () => {
     expect(tid("sfx-stage-reproduced")?.getAttribute("title")).toBe("BOSS wrote a test that fails because of this bug");
     expect(tid("sfx-stage-you")?.getAttribute("title")).toBe("Waiting for your approval");
     expect(tid("sfx-strip-line")?.textContent).toContain("Making it pass");
-    expect(tid("sfx-strip-facts")?.textContent).toBe("stack_deploy.py · 1 test added · $1.84 of $10.00 · 6 min");
+    expect(tid("sfx-strip-facts")?.textContent).toBe("stack_deploy.py, 1 test added, $1.84 of $10.00, 6 min");
     expect(tid("sfx-strip-open")?.getAttribute("href")).toContain(`area=self_fixes`);
     expect(tid("sfx-strip-open")?.getAttribute("href")).toContain(`sfx=${SFX}`);
     expect(tid("sfx-strip-approve")).toBeNull();

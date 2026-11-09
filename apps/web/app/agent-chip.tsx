@@ -3,8 +3,8 @@
 /**
  * An agent, as a face and a name.
  *
- * The assignment lists rendered as bare text with a tiny uppercase source word after each one —
- * "Adversarial Reviewer BY DEFAULT  Chief Architect BY DEFAULT  QA Lead BY DEFAULT" — a run-on
+ * The assignment lists rendered as bare text with a tiny uppercase source word after each one , 
+ * "Adversarial Reviewer BY DEFAULT  Chief Architect BY DEFAULT  QA Lead BY DEFAULT", a run-on
  * line where the label competed with the name and nothing separated one agent from the next.
  * The meeting room had the right shape: a face, the name beside it, one pill per agent.
  *
@@ -85,7 +85,7 @@ export function agentMeta(key: string, label?: string) {
 export function AgentChip({ roleKey, label, note, children, href, size = 24, state }: {
   roleKey: string;
   label?: string;
-  /** Where this agent came from — "by default", "chosen". Secondary to the name, never louder. */
+  /** Where this agent came from, "by default", "chosen". Secondary to the name, never louder. */
   note?: string;
   /** A remove button, or nothing on a read-only list. */
   children?: ReactNode;
@@ -98,7 +98,7 @@ export function AgentChip({ roleKey, label, note, children, href, size = 24, sta
   const meta = agentMeta(roleKey, label);
   const identity = useIdentity(roleKey || label || ""); // repaints when identities load
   const name = label || identity.name;
-  const callsign = identity.callsign && identity.callsign !== name ? ` · ${identity.callsign}` : "";
+  const callsign = identity.callsign && identity.callsign !== name ? `, ${identity.callsign}` : "";
   // One state for the face, its word and the chip: a paused or retired agent is paused or
   // retired here whatever it was last doing (§2.5 truthful state).
   const shown = withLifecycle(state ?? "idle", identity.lifecycle);
@@ -106,7 +106,7 @@ export function AgentChip({ roleKey, label, note, children, href, size = 24, sta
   return (
     <span className="agent-chip" data-testid={`agent-chip-${roleKey}`} data-state={sayState ? shown : undefined}>
       <AgentAvatar identity={identity} size={size} state={shown} aiBadge={false}
-                   className={`mr-avatar tone-${meta.tone} ag-face`} tip={`${name}${callsign} · AI agent`} />
+                   className={`mr-avatar tone-${meta.tone} ag-face`} tip={`${name}${callsign}, AI agent`} />
       {href
         ? <a className="agent-chip-name" href={href}>{name}</a>
         : <span className="agent-chip-name">{name}</span>}

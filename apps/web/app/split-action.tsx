@@ -3,20 +3,20 @@
 /**
  * One button that does the usual thing, with the rest behind a caret.
  *
- * The composer had three peers — Ask, Research, Build → — sitting inside the same flex row as
+ * The composer had three peers, Ask, Research, Build →, sitting inside the same flex row as
  * the textarea, the workflow picker and the agent picker. Six things competing for one line, so
  * the textarea collapsed to half its width and the controls marched right off toward the edge.
  * Three buttons of equal weight also say the three actions are equally likely, and they are not:
  * asking is free and constant, building spends money and happens once.
  *
  * WHY "ASK" IS THE FACE AND NOT "BUILD". Enter sends, which is the one convention a composer
- * cannot break — and Enter fires whatever the primary button is. A face reading "Build" would
+ * cannot break, and Enter fires whatever the primary button is. A face reading "Build" would
  * mean a stray Enter starts a governed pipeline that spends money, which is the opposite of
  * every instruction this console has been given. Build is one click away in the menu, labelled
  * with what it costs. Flipping the face is a one-line change if that trade is wanted.
  */
 
-// Imported by name so this component can be RENDERED in a test rather than only grepped —
+// Imported by name so this component can be RENDERED in a test rather than only grepped , 
 // tsconfig has jsx:preserve, so a file without React in scope cannot be mounted by vitest.
 // A button that ran the wrong action for a day is precisely what source-reading cannot catch.
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -28,7 +28,7 @@ export type Action = {
   /** What pressing it does, in a line. The menu is where somebody learns the difference. */
   hint: string;
   onRun: () => void;
-  /** Shown on the item — "spends money", "free". Never buried in a tooltip. */
+  /** Shown on the item, "spends money", "free". Never buried in a tooltip. */
   cost?: string;
   /** The viewer lacks the permission this needs (components/gated.tsx useGate().reason): the
    *  control stays visible, reads as disabled, says why, and does nothing when pressed. */
@@ -51,7 +51,7 @@ export function SplitAction({ primary: given, others, disabled, busy }: {
   //: The composer box carries `backdrop-filter: blur(6px)`, which creates a stacking context.
   //: So `z-index: 30` on the menu only ever ranked it against its own siblings INSIDE that box,
   //: and the reply block that comes after the box painted straight over it: two sets of text
-  //: overlapping, the options unreadable. z-index cannot fix that from the inside — the menu
+  //: overlapping, the options unreadable. z-index cannot fix that from the inside, the menu
   //: has to leave the box, which is the same trap the template page hit.
   const [at, setAt] = useState<{ top: number; right: number; up: boolean } | null>(null);
 
@@ -87,7 +87,7 @@ export function SplitAction({ primary: given, others, disabled, busy }: {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       const target = e.target as Node;
-      // The menu is no longer inside `wrap` — it is portalled — so it has to be asked too, or
+      // The menu is no longer inside `wrap`, it is portalled, so it has to be asked too, or
       // mousedown closes it and the click never reaches the item.
       if (wrap.current?.contains(target) || menu.current?.contains(target)) return;
       setOpen(false);
@@ -107,7 +107,7 @@ export function SplitAction({ primary: given, others, disabled, busy }: {
         className="split-action-main"
         // NOT type="submit". THE VISIBLE BUTTON RAN A DIFFERENT ACTION THAN ITS LABEL.
         //
-        // As a submit button this never called `primary.onRun` — it relied on the enclosing
+        // As a submit button this never called `primary.onRun`, it relied on the enclosing
         // form's onSubmit, which was still wired to Ask from when Ask was the primary. So
         // pressing "Build →" ran a chat turn: forty seconds of a model answering, a reply full
         // of buttons, and no workflow run anywhere. The component declared an onRun and never

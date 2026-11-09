@@ -2,7 +2,7 @@
 
 /**
  * LOADOUT, the Passport's first section (agent-loadout spec §3): what the agent can do and how
- * it is told to work — `Skills`, `MCP` and `Instructions` — above everything it has done.
+ * it is told to work, `Skills`, `MCP` and `Instructions`, above everything it has done.
  *
  * The Passport used to be ordered by history: skills and MCP were its 9th to 12th blocks, under
  * the apps, panels and assignments, and on three surfaces at once. An operator asked for them
@@ -95,7 +95,7 @@ export function PassportLoadout({ projectId, roleKey, actor, agentName, register
                         fileName={skillFile.fileName} text={skillFile.text} onClose={() => setSkillFile(null)}
                         onCreated={(label, version) => {
                           setSkillFile(null);
-                          showToast("success", `Created ${label} · gave it to ${agentName}`);
+                          showToast("success", `Created ${label}, gave it to ${agentName}`);
                           if (version) onVersion(version);
                           setReload((n) => n + 1);
                           onChanged();

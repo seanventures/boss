@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * The host drawer (spec §4.4, `host=<id>`): SETUP while the machine is not Ready — the old
+ * The host drawer (spec §4.4, `host=<id>`): SETUP while the machine is not Ready, the old
  * FleetPanel wizard, every stage's controls kept, labels shortened (§5.1) with the old long
- * labels as tooltips — then FACTS, CHECKS, ON THIS MACHINE and RETIRE behind a typed-name
+ * labels as tooltips, then FACTS, CHECKS, ON THIS MACHINE and RETIRE behind a typed-name
  * confirm (the retire the old panel did with no confirm at all). This computer (`host=this`)
  * shows its facts from hardware_places and `Correct record`; it has no retire.
  *
@@ -33,7 +33,7 @@ import { StageLine } from "./rack";
 
 const STORES: { key: string; label: string; tip: string }[] = [
   { key: "database", label: "Database", tip: "database (survives restarts)" },
-  { key: "file", label: "File", tip: "file (local disk — lost on redeploy)" },
+  { key: "file", label: "File", tip: "file (local disk, lost on redeploy)" },
   { key: "platform_secret_store", label: "Secret store", tip: "platform_secret_store" },
 ];
 
@@ -50,7 +50,7 @@ function useBusy(): [Busy, <T>(key: string, fn: () => Promise<T>) => Promise<T |
 }
 
 /** A fact in words. A label set is an object, and String() of it printed "[object Object]"
- *  in the host drawer: it reads `role ci · region fsn1` now, and an empty one is "—". */
+ *  in the host drawer: it reads `role ci, region fsn1` now, and an empty one is "—". */
 export const fact = (v: unknown): string => {
   if (v === null || v === undefined || v === "") return "—";
   if (Array.isArray(v)) return v.length ? v.map(fact).join(", ") : "—";
@@ -58,7 +58,7 @@ export const fact = (v: unknown): string => {
     const pairs = Object.entries(v as Record<string, unknown>)
       .filter(([, x]) => x !== null && x !== undefined && x !== "")
       .map(([k, x]) => (x === true ? k : `${k} ${fact(x)}`));
-    return pairs.length ? pairs.join(" · ") : "—";
+    return pairs.length ? pairs.join(", ") : "—";
   }
   return String(v);
 };
@@ -197,7 +197,7 @@ function Setup({ host, actor, refresh }: { host: HostDetail; actor: string; refr
           {command ? <CopyButton text={command} label="Copy command" testId="inf-stage-copy-command" /> : null}
           {can.verify ? (
             <GatedButton permission="host:manage" type="button" className={current === "install" ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="inf-stage-ran"
-                    disabled={busy !== null} title="Checks BOSS can now reach the machine (I've run it — verify)"
+                    disabled={busy !== null} title="Checks BOSS can now reach the machine (I've run it, verify)"
                     onClick={() => void verify("ran", "I ran it")}>{busy === "ran" ? "Connecting…" : "I ran it"}</GatedButton>
           ) : null}
         </div>
@@ -352,7 +352,7 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
 
   const head = h ? (
     <>
-      <span className="inf-drawer-title inf-trunc" data-copy="data">{h.thisComputer ? `This computer · ${h.name}` : h.name}</span>
+      <span className="inf-drawer-title inf-trunc" data-copy="data">{h.thisComputer ? `This computer, ${h.name}` : h.name}</span>
       <StateWord w={h.state} testId="inf-host-state" />
       <Menu label="⋯" testId="inf-host-more" tip="More" items={[
         { key: "copy", label: "Copy address", testId: "inf-host-copy-address", hidden: !h.facts.address,
@@ -387,7 +387,7 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
                 <dt>Arch</dt><dd>{fact(h.facts.arch)}</dd>
                 <dt>Labels</dt><dd data-copy="data">{fact(h.facts.labels)}</dd>
                 <dt>Ports</dt><dd className="inf-num">{h.facts.port_min !== undefined && h.facts.port_min !== null
-                  ? `${fact(h.facts.port_min)}–${fact(h.facts.port_max)}` : "—"}</dd>
+                  ? `${fact(h.facts.port_min)}, ${fact(h.facts.port_max)}` : "—"}</dd>
                 <dt>Max apps</dt><dd className="inf-num">{fact(h.facts.max_apps)}</dd>
                 <dt>Key</dt><dd className="inf-key-fact">
                   <span className="inf-mono inf-trunc" data-copy="data" title={fact(h.facts.key_fingerprint)}>{fact(h.facts.key_fingerprint)}</span>
@@ -399,7 +399,7 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
                     <dd data-testid="inf-host-hostkey" title={h.hostKey.words}>
                       <span className={h.hostKey.pinned ? "inf-mono inf-trunc" : "inf-muted"} data-copy="data">
                         {h.hostKey.pinned ? h.hostKey.fingerprint : "Not pinned yet"}</span>
-                      <span className="inf-muted"> — {h.hostKey.words}</span>
+                      <span className="inf-muted">, {h.hostKey.words}</span>
                     </dd>
                   </>
                 ) : null}
@@ -421,7 +421,7 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
               {h.findings.length ? (
                 <ul className="inf-checks">
                   {h.findings.map((f, i) => (
-                    <li key={`${f.kind}-${i}`} data-ok={f.ok ? "1" : "0"} data-copy="data" title={[f.detail, f.remedy].filter(Boolean).join(" · ") || undefined}>
+                    <li key={`${f.kind}-${i}`} data-ok={f.ok ? "1" : "0"} data-copy="data" title={[f.detail, f.remedy].filter(Boolean).join(", ") || undefined}>
                       <span className="inf-check-mark" aria-label={f.ok ? "Passed" : "Failed"}>{f.ok ? "✓" : "✗"}</span>
                       <span>{f.label}</span>
                       {!f.ok && f.remedy ? <span className="inf-muted inf-trunc" data-copy="data">{f.remedy}</span> : null}
@@ -439,7 +439,7 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
                 {h.residents.map((r) => (
                   <li key={`${r.kind}-${r.id}`}>
                     <button type="button" className="inf-row-btn" data-testid={`inf-host-resident-${r.id}`} onClick={() => onResident(r)}>
-                      <span className="inf-trunc" data-copy="data">{r.kind === "target" && r.env ? `${r.name} · ${r.env}` : r.name}</span>
+                      <span className="inf-trunc" data-copy="data">{r.kind === "target" && r.env ? `${r.name}, ${r.env}` : r.name}</span>
                       <StateWord w={r.health} />
                     </button>
                   </li>

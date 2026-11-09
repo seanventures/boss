@@ -233,13 +233,13 @@ function formatRecommendation(decision: DecisionFeedItem): string {
   const vstatus = str("validation_status");
   const vsummary = str("validation_summary");
 
-  // A code-change / PR review — spell out WHAT is being approved and its check status.
+  // A code-change / PR review, spell out WHAT is being approved and its check status.
   if (action === "review_pull_request") {
     return [
       title ? `Approve the code change “${title}”.` : "Approve this code change.",
       pr ? `Pull request ${prNum} is open on GitHub with the full diff to review.` : "",
       vstatus
-        ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? ` — ${vsummary}` : ""}.`
+        ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? `, ${vsummary}` : ""}.`
         : "",
       "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
     ]
@@ -414,7 +414,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   //
   // These were seven sequential awaits, each a full round-trip before the next began. Measured,
   // that is where the load time lived: cold TTFB 22s, but with every feed served from memory
-  // the SAME page renders in 1.9s — so ~20 of the 22 seconds was waiting, not working. And the
+  // the SAME page renders in 1.9s, so ~20 of the 22 seconds was waiting, not working. And the
   // waiting was not the API's fault: it serves 82 concurrent requests in 1.6s, and Node issues
   // 82 in 0.8s. The page simply asked for them one at a time.
   //
@@ -475,7 +475,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   }
   // THE SESSION IS PROVEN LIVE FOR THIS REQUEST: /me and /me/permissions answered just now, fresh
   // (lib/feed-cache.ts never keeps an identity read). For the rest of this render a feed this
-  // session fetched at this same identity epoch within the last few seconds may be reused —
+  // session fetched at this same identity epoch within the last few seconds may be reused , 
   // a revoked session never gets here, and a role change moves the epoch (lib/feed-cache.ts).
   if (enrolment.me && enrolment.org && !enrolment.problem) {
     enterLiveProof(await liveProofFor(requestHeaders.get("cookie"), enrolment.org.epoch));
@@ -486,9 +486,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // RENDER THE AREA THE OPERATOR ASKED FOR, AND NOT THE OTHER THIRTY-NINE.
   //
   // Measured on the live box: 8.3 MB of HTML and ~9s of server render per load, 78% of it an
-  // RSC payload carrying every area at once — Discovery 949 KB, Task Shepherd 431 KB,
-  // Decisions 326 KB — all of it parsed and hydrated by the operator's machine, all but one
-  // hidden by a CSS rule. The data was never the problem: every feed answers in 83–235 ms.
+  // RSC payload carrying every area at once, Discovery 949 KB, Task Shepherd 431 KB,
+  // Decisions 326 KB, all of it parsed and hydrated by the operator's machine, all but one
+  // hidden by a CSS rule. The data was never the problem: every feed answers in 83, 235 ms.
   //
   // This was only possible once the sidebar started navigating (see ConsoleShell.go): while it
   // switched areas with pushState and no server round-trip, whichever area the server happened
@@ -501,12 +501,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // A CLICK ON THE RAIL DOES NO WORK. THAT IS THE REQUIREMENT, AND IT OUTRANKS PAYLOAD SIZE.
   //
   // Rendering one area per request cut this page from 8.3 MB to 25-235 KB, and it made every
-  // menu click cost a server round trip AND a full React teardown — ~50 components unmounted
+  // menu click cost a server round trip AND a full React teardown, ~50 components unmounted
   // and ~50 mounted, every time. Reported over and over, in escalating terms, ending at "it is
   // taking really really horrible time to load". Three separate attempts to buy the latency
   // back (keeping the outgoing area painted, hover prefetch, a client router cache) each fixed
   // part of it and none fixed the cost that matters, because the cost that matters is React
-  // rebuilding the screen — and no amount of caching the payload avoids that.
+  // rebuilding the screen, and no amount of caching the payload avoids that.
   //
   // Before the split, all forty areas were in the DOM and `main[data-active=X]` revealed one
   // with CSS. A click did no fetching, no unmounting and no mounting. It was instant, and the
@@ -539,7 +539,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // `run` as well as `discovery`, because that is the name the workflow step already sends.
   // ONLY A DOSSIER'S ID. `run=` is shared: Panels reads a meeting run there (mrun_) and the
   // Factory a code task (crun_), and taking those as a dossier sent Research looking for a
-  // dossier called mrun_… — a not-found it then kept asking about.
+  // dossier called mrun_…, a not-found it then kept asking about.
   const requestedDiscovery = researchRunParam(
     getParam(resolvedSearchParams?.discovery), getParam(resolvedSearchParams?.run));
   const metatronQuestion = getParam(resolvedSearchParams?.q);
@@ -555,13 +555,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // The console reads ?org=, but links and bookmarks carrying ?org_id= exist (one shipped from
   // the Ask BOSS panel). The failure is nasty out of proportion to the typo: the org resolves
   // to nothing, the operator is dropped on the picker mid-session, and OrgGate's stored-org
-  // effect redirects back a second later — so it reads as the console randomly logging you out
+  // effect redirects back a second later, so it reads as the console randomly logging you out
   // and recovering. Treating org_id as an alias makes that class of link harmless.
   const requestedOrgId =
     getParam(resolvedSearchParams?.org) || getParam(resolvedSearchParams?.org_id);
   const orgs = await orgsP;
   // A URL WITHOUT AN ORG MEANS THE ORG THIS SESSION IS IN (lib/console-org.ts). Only a genuine
-  // choice — `?pick=1`, or nothing remembered among several orgs — draws the picker; a link or
+  // choice, `?pick=1`, or nothing remembered among several orgs, draws the picker; a link or
   // a page load that lost `?org=` no longer flashes it mid-session.
   const pickRequested = getParam(resolvedSearchParams?.pick) === "1";
   const rememberedOrgId = pickRequested ? undefined : requestCookies.get(ORG_COOKIE)?.value;
@@ -613,7 +613,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // org's own project, as before.
   // Build L: RESOLVE BEFORE FETCH. A deep link that opens an object by id (?build=, ?meeting=,
   // ?wfr=/?run=, ?decision=, ?self_fix=, ?escalation=, ?thread=) used to render against whichever
-  // project happened to be selected — the wrong one — and then flip to "Can't reach BOSS" when
+  // project happened to be selected, the wrong one, and then flip to "Can't reach BOSS" when
   // that object's feeds 404'd. Before the fan-out below reads activeProjectId, ask the control
   // plane which project the object actually belongs to and switch to it. Fails open (keeps the
   // current project) so a resolver hiccup never blocks the console.
@@ -645,8 +645,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     fullDocument: isFullDocumentRequest((name) => requestHeaders.get(name)),
   });
   // WHO IS SIGNED IN, AND WHAT THEY MAY OPEN (IDENTITY.md §6.5). Read before any area's feeds:
-  // an area the viewer cannot open is neither fetched nor rendered — the shell shows
-  // <AccessDenied> for it — so no area loads and then 403s.
+  // an area the viewer cannot open is neither fetched nor rendered, the shell shows
+  // <AccessDenied> for it, so no area loads and then 403s.
   const identity = await identityP;
   const identityUnavailable = !identity.org;
   const orgSnap = identity.org ? snapshotFrom(identity.org) : null;
@@ -667,7 +667,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // These loaders were written in August and never wired in; the test asserting the wiring has
   // been red ever since. Substituted BY POSITION into the fan-out below rather than lifted out
   // of it: that array has 79 entries destructured positionally, and re-ordering it would
-  // silently swap two feeds — a far worse failure than the one being fixed.
+  // silently swap two feeds, a far worse failure than the one being fixed.
   // THE PACKS FOLLOW `needs`, NOT THE AREA THE SERVER WAS ASKED FOR.
   //
   // They were gated on `?area=` while every area renders and the rail switches client-side, so
@@ -694,18 +694,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // EVERYTHING BELOW NEEDS activeProjectId AND NOTHING ELSE, SO IT ALL STARTS NOW.
   //
   // Measured: 6.5 seconds to first byte, and the feeds themselves total only ~0.8 MB and under
-  // a second each. The time was not fetch volume — it was EIGHT sequential `await Promise.all`
+  // a second each. The time was not fetch volume, it was EIGHT sequential `await Promise.all`
   // batches, each waiting for the slowest member of the one before it, when the only real
   // dependency in the chain is searchParams -> orgs -> activeProjectId -> everything.
   //
   // These are started here, together, and awaited where their values are used. The destructuring
   // below is unchanged; what changes is that the requests are in flight concurrently instead of
-  // in four separate round trips. Nothing is reordered and nothing is dropped — a batch that
+  // in four separate round trips. Nothing is reordered and nothing is dropped, a batch that
   // genuinely depends on an earlier result (costInsights, the assurance-derived feeds) still
   // waits for it.
   // Read by the Workforce area alone. "ALWAYS FETCHED, deliberately" above dates from when the rail
   // switched areas with no server round trip; areas load lazily now (lib/area-loading.ts), and an
-  // area not in `loadedAreas` is neither rendered nor fetched — so this is an ordinary gate.
+  // area not in `loadedAreas` is neither rendered nor fetched, so this is an ordinary gate.
   const workforceP = gate(needs("workforce"), () => fetchWorkforce(activeProjectId),
                           () => emptyWorkforce(activeProjectId, NOT_REQUESTED));
   const orgChartP = gate(needs("workforce"), () => fetchOrgChart(activeProjectId),
@@ -742,15 +742,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const [workforceData, orgChartData] = await Promise.all([workforceP, orgChartP]);
 
   // GOVERN READS ITS OWN DATA (app/govern: one GET /v1/govern, then one per tab opened), so
-  // nothing about spend is fetched by this render any more — eleven reads, one a POST, used to
+  // nothing about spend is fetched by this render any more, eleven reads, one a POST, used to
   // run here on every render of every area that needed them.
   const [assuranceArea] = await Promise.all([assuranceP]);
   const assuranceFeed = assuranceArea.assuranceFeed;
   // The platform-ops feeds. They need the project id and `assuranceArea`, both of which exist
-  // here — so waiting until after the 66-feed wave cost a third round trip for nothing.
+  // here, so waiting until after the 66-feed wave cost a third round trip for nothing.
   // Each of these 17 feeds is read by exactly one area's JSX (verified: every one has zero
   // uses outside a `shows(...)` block). `shows()` renders one area per request, so fetching
-  // the other 16 is pure latency — and firing ~85 requests at once is what made a click cost
+  // the other 16 is pure latency, and firing ~85 requests at once is what made a click cost
   // seconds: individually these endpoints answer in 0.2-0.8s, but they queue behind each
   // other in the API's worker pool. Each fetcher returns the same empty its unreachable path
   // already produced, so the positions below are unchanged and nothing is reordered.
@@ -859,8 +859,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchLatestCanary(activeProjectId, needs("ops")),
       fetchPlans(activeProjectId, needs("work")),
       // Was the single biggest cost on this page, for eight numbers: it called
-      // /v1/audit/export, which serialises the entire audit trail — 192 MB in 62 seconds on
-      // this project — so the Ops screen could display eight counts. It now asks
+      // /v1/audit/export, which serialises the entire audit trail, 192 MB in 62 seconds on
+      // this project, so the Ops screen could display eight counts. It now asks
       // /v1/audit/summary, which counts in SQL and answers in well under a second, so this is
       // an ordinary area gate like the rest.
       fetchAuditSummary(activeProjectId, needs("ops")),
@@ -972,7 +972,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     artifacts.items,
   );
   // Command Center (handoff format): live agent states for the coordination
-  // graph — the busiest agents first so live work is what orbits the core.
+  // graph, the busiest agents first so live work is what orbits the core.
   const ccRoster = buildAgentRoster(roles.items, tasks.items);
   const ccStateRank = { running: 0, blocked: 1, verified: 2, idle: 3 } as const;
   const ccGraphAgents = [...ccRoster]
@@ -1000,7 +1000,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         actor: activeActor?.displayName ?? activeActorId,
         // The header shows names; anything that CALLS the API needs ids. The agent dock was
         // handed the display name ("BOSS dogfood bootstrap") and every request came back
-        // "project not found" — a label and an identifier are not interchangeable just
+        // "project not found", a label and an identifier are not interchangeable just
         // because both are strings.
         projectId: activeProjectId,
         actorId: activeActorId,
@@ -1036,8 +1036,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
         {/* ONE AGENT SURFACE.
             There were three: this chat area, a Metatron Captain page, and the Task Shepherd
-            autopilot. The operator used one of them and did not like it — "I never used
-            Metatron and Agent chat is not good" — while praising the SAME agent everywhere
+            autopilot. The operator used one of them and did not like it, "I never used
+            Metatron and Agent chat is not good", while praising the SAME agent everywhere
             else, because those screens hand it their facts before the first word. So the chat
             keeps its component and gains the whole factory in front of it; Metatron's page is
             gone (its `metatron_sessions` table does not exist in this database, so it was a
@@ -1048,7 +1048,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <BossAgentHome projectId={activeProjectId} actor={activeActorId}
                          initialTaskId={requestedWorkTask || undefined}
                          roleName={requestedRole || undefined} />
-          {/* WHAT BOSS KNOWS — lessons and rules it keeps between sessions — beside the agent
+          {/* WHAT BOSS KNOWS, lessons and rules it keeps between sessions, beside the agent
               that uses them (skills-mcp spec D-1; it used to sit inside Skills and MCP). */}
           <MemoryHome projectId={activeProjectId} actor={activeActorId} />
         </section>
@@ -1145,8 +1145,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {/* THE BRIDGE (command-center spec §4): one section, one read. Ask BOSS is still FIRST
-            and still the agent that can act — the old entry point was a Metatron "Status Query"
-            form far below the fold that could only answer — laid out as one line until used.
+            and still the agent that can act, the old entry point was a Metatron "Status Query"
+            form far below the fold that could only answer, laid out as one line until used.
             The delivery strip is THIS WEEK now, counting workflow runs (it counted code tasks
             beside tiles that counted runs), and the help card is a `?` on the status line,
             inline before the first run. See command-center-ui.tsx. */}
@@ -1179,16 +1179,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {/* THE DIAGNOSTIC GRID IS GONE, DELIBERATELY.
             Eleven tiles: Project, Database "Connected", Auth Session "Ceo", Budget State,
             Pending Decisions, Active Jobs, Open Tasks, Blocking State "Clear", Artifacts,
-            Events, Deadletters. Almost all of it answered a question an operator never asks —
+            Events, Deadletters. Almost all of it answered a question an operator never asks , 
             whether Postgres is reachable and which auth method the console used are things
             they find out by the console working at all. Three were already duplicated by the
             KPI row above (pending decisions, open tasks, active jobs).
 
             The one line worth keeping was Deadletters, because a non-zero count is work that
-            FAILED and is sitting unseen — so it survives as an alert that only appears when
+            FAILED and is sitting unseen, so it survives as an alert that only appears when
             there is something to act on, rather than as a tile reading 0 forever. */}
         {/* The deadletter alert is gone too. "25 items failed and are waiting" floating
-            above the fold says a number and nothing else — not what failed, not when, not
+            above the fold says a number and nothing else, not what failed, not when, not
             whether it matters now. A count with no context is an anxiety generator, not a
             signal; failures belong next to the work they came from, which is Monitoring. */}
 
@@ -1454,7 +1454,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
         ) : null}
 
-        {/* REPO AND MODELS: where BOSS writes code and what it thinks with — one board over
+        {/* REPO AND MODELS: where BOSS writes code and what it thinks with, one board over
             one server view (app/setup/setup-board.tsx). Outgoing email lives in Skills and MCP. */}
         {shows("setup") ? (
         <section className="panel-stack" data-area="setup" aria-label="Repo and models">
@@ -1485,8 +1485,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         {shows("budget") ? (
         <section className="panel-stack" data-area="budget" aria-label="Govern">
-          {/* GOVERN, AS ONE PAGE (activity-govern spec §4.4): the meter, then Limits · Spend ·
-              Envelopes. It reads its own data client-side — one GET /v1/govern and one per tab —
+          {/* GOVERN, AS ONE PAGE (activity-govern spec §4.4): the meter, then Limits, Spend ·
+              Envelopes. It reads its own data client-side, one GET /v1/govern and one per tab , 
               so a rail switch never finds it "not loaded". */}
           <GovernHome projectId={activeProjectId} actor={activeActorId} />
         </section>
@@ -2064,14 +2064,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </p>
                         <p className="detail">
                           {message.status === "dry_run"
-                            ? "dry-run — no provider send"
+                            ? "dry-run, no provider send"
                             : (message.receiptId ?? message.body)}
                         </p>
                       </div>
                       {message.status === "draft" || message.status === "dry_run" ? (
                         <div>
                           {message.status === "dry_run" ? (
-                            <p className="detail">dry-run — no provider send</p>
+                            <p className="detail">dry-run, no provider send</p>
                           ) : null}
                           <ActionForm permission="comms:send" action={dryRunOutboxMessageAction}>
                             <input type="hidden" name="message_id" value={message.id} />
@@ -2205,7 +2205,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h3>Skill YAML</h3>
               {/* ONE HOME: importing and exporting skills is Skills & MCP › Library › ⋯. */}
               <a className="kit-link" href="?area=skills&tab=library" data-testid="org-skills-link">
-                Import or export in Skills &amp; MCP ↗
+                Import or export in Skills &amp; MCP 
               </a>
             </article>
 
@@ -2301,7 +2301,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 communityIncluded
               />
               <p className="detail" style={{ marginTop: 8 }}>
-                Self-hosted OIDC, SAML, and SCIM IdP registry — included in Community.
+                Self-hosted OIDC, SAML, and SCIM IdP registry, included in Community.
               </p>
               {!identityRegistry.apiReachable ? (
                 <p className="detail">
@@ -2383,7 +2383,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <input className="input" name="audience" placeholder="boss-api" />
                     </label>
                     <label className="field">
-                      <span>JWKS URL</span>
+                      <span><abbr>JWKS</abbr> <abbr>URL</abbr></span>
                       <input className="input" name="jwks_url" placeholder="https://idp.example/.well-known/jwks.json" />
                     </label>
                     <label className="field">
@@ -2391,7 +2391,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <input className="input" name="entity_id" />
                     </label>
                     <label className="field">
-                      <span>SAML SSO URL</span>
+                      <span><abbr>SAML</abbr> <abbr>SSO</abbr> <abbr>URL</abbr></span>
                       <input className="input" name="sso_url" />
                     </label>
                     <label className="field">
@@ -2864,15 +2864,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   label: `Tests ${testTotal > 0 ? `pass (${testPass}/${testTotal})` : st.tests_passed ? "pass" : "did not pass"}`,
                 });
               if (st.security_verdict)
-                checks.push({ ok: /pass|clean|ok|none/i.test(st.security_verdict), label: `Security scan — ${st.security_verdict}` });
+                checks.push({ ok: /pass|clean|ok|none/i.test(st.security_verdict), label: `Security scan, ${st.security_verdict}` });
               if (st.reviewer_independent != null)
                 checks.push({ ok: st.reviewer_independent, label: "Independent reviewer signed off" });
               if (st.regressions_ok != null)
                 checks.push({ ok: st.regressions_ok, label: "No regressions detected" });
               if (st.consistency_verdict)
-                checks.push({ ok: /pass|ok|consistent/i.test(st.consistency_verdict), label: `Consistency — ${st.consistency_verdict}` });
+                checks.push({ ok: /pass|ok|consistent/i.test(st.consistency_verdict), label: `Consistency, ${st.consistency_verdict}` });
               if (checks.length === 0)
-                checks.push({ ok: verified, label: verified ? "Governed pipeline completed" : `Status — ${codeTask.status}` });
+                checks.push({ ok: verified, label: verified ? "Governed pipeline completed" : `Status, ${codeTask.status}` });
               return (
                 <article className="mission-evidence-receipt">
                   <header>
@@ -2881,7 +2881,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <strong>{codeTask.title}</strong>
                       <small>
                         {codeTask.id}
-                        {modelName ? ` · ${modelName}` : ""} · {codeTask.phase}
+                        {modelName ? `, ${modelName}` : ""}, {codeTask.phase}
                       </small>
                     </span>
                     <span className={`status-text ${verified ? "verified" : failed ? "blocked" : "running"}`}>
@@ -2899,7 +2899,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <span className="del">−{st.deletions ?? 0}</span>
                           </>
                         ) : st.files_changed != null ? (
-                          // Not "—" beside "Files changed · 53": the files are known, the
+                          // Not "—" beside "Files changed, 53": the files are known, the
                           // line counts are what was not recorded (console walk, 2026-10-02).
                           `${st.files_changed} files`
                         ) : (
@@ -2925,9 +2925,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   <div className="mission-receipt-verification">
                     <strong>Verification</strong>
                     {checks.map((c, i) => (
-                      <p key={i}>
-                        <span className={`dot ${c.ok ? "green" : "red"}`} aria-hidden /> {c.label}
-                      </p>
+                      <p key={i}>{c.label}</p>
                     ))}
                   </div>
                   <div className="mission-receipt-files">
@@ -2940,7 +2938,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <code>
                         {st.summary
                           ?? (st.files_changed
-                            ? `${st.files_changed} files changed; this run did not record their paths — the pull request lists them.`
+                            ? `${st.files_changed} files changed; this run did not record their paths, the pull request lists them.`
                             : "No file list recorded for this run.")}
                       </code>
                     )}
@@ -2960,7 +2958,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <span className="mission-receipt-avatar">RC</span>
                     <span>
                       <strong>{titleCaseToken(receipt.effectKind)}</strong>
-                      <small>{receipt.id} · {formatDateTime(receipt.createdAt)}</small>
+                      <small>{receipt.id}, {formatDateTime(receipt.createdAt)}</small>
                     </span>
                     <span className="status-text verified"><span className="dot green" />{receipt.status}</span>
                   </header>
@@ -2971,9 +2969,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   </div>
                   <div className="mission-receipt-verification">
                     <strong>Verification</strong>
-                    <p><span className="dot green" aria-hidden /> Durable receipt recorded in the control plane</p>
-                    <p><span className="dot green" aria-hidden /> Unique dedupe key prevents duplicate effects</p>
-                    <p><span className="dot green" aria-hidden /> Provider and job lineage remain auditable</p>
+                    <p>Durable receipt recorded in the control plane</p>
+                    <p>Unique dedupe key prevents duplicate effects</p>
+                    <p>Provider and job lineage remain auditable</p>
                   </div>
                 </article>
               );
@@ -3075,7 +3073,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
         ) : null}
 
-        {/* Apps — the object the console never had.
+        {/* Apps, the object the console never had.
             A run is a job; an app is the thing a person has in mind. Its spec is under
             Meetings, its runs under Code Tasks, its preview under CI/CD and its health under
             Monitoring, so "where is my ApproveIt?" had no answer and was reconstructed by
@@ -3087,7 +3085,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             orgId={activeOrgId}
             codeTasks={codeTasksFeed.items.map(slimRunForFactory)}
             codeTaskTotal={codeTasksFeed.total}
-            // A panel that is RUNNING has no code run yet, so Factory -- which lists runs --
+            // A panel that is RUNNING has no code run yet, so Factory, which lists runs --
             // could not show it at all. The work existed and the page that tracks work said
             // nothing, which is why a convened meeting looked like a dead button.
             meetings={meetingRooms.items}
@@ -3214,11 +3212,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           {/* NO WORK BOARD HERE. The Factory flow board ("where official work is, and why it
               stalled") used to sit above this log. It is a status board, not a log: it answers
               where work stands, while this screen exists to answer what the machinery actually
-              emitted — BOSS's own records, the workflow's steps, the deploys, and the
+              emitted, BOSS's own records, the workflow's steps, the deploys, and the
               containers' output. Mixing the two made the log look like a dashboard and pushed
               the first log line below the fold. */}
           {/* The viewer reads `?run=` and `?wfr=` itself. Neither can be passed from here: this is a server
-              component, and the Factory links across with pushState — a client-side navigation
+              component, and the Factory links across with pushState, a client-side navigation
               that never re-runs it. Threading it through props would have worked on a reload
               and silently done nothing on the click that matters. */}
           <LogExplorer projectId={activeProjectId} actor={activeActorId} />
@@ -3509,7 +3507,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             Last remediation {deadletter.latestRemediation.action} /{" "}
                             {deadletter.latestRemediation.status}
                             {deadletter.latestRemediation.error
-                              ? ` — ${deadletter.latestRemediation.error}`
+                              ? `, ${deadletter.latestRemediation.error}`
                               : ""}
                           </p>
                         ) : null}

@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * Ask BOSS — the first thing on the Command Center.
+ * Ask BOSS, the first thing on the Command Center.
  *
  * What was here was a "Status Query" form that posted to Metatron: three inputs, a GET
  * submit, and a read-only paragraph back. It sat below the fold, it could only answer, and
  * two of its three fields asked the operator for ids they would have to go and look up.
  *
  * The agent can already do all of this and act as well, so the entry point is one line of
- * plain language at the top of the page. Scope is inferred, not typed — an operator who has
+ * plain language at the top of the page. Scope is inferred, not typed, an operator who has
  * to find a task id before asking a question will go and read the table instead, which is
  * exactly the behaviour this is meant to replace.
  *
@@ -46,7 +46,7 @@ import { GatedButton, useGate } from "../components/gated";
 import { useIdentity } from "../components/identity/identity-provider";
 const NORMAL_SECONDS = 20;
 // The same bound the dock uses. A deep turn is genuinely longer since the answering agent
-// moved to Opus — 192s for 27 lookups, measured — and 120 handed control back in the middle of
+// moved to Opus, 192s for 27 lookups, measured, and 120 handed control back in the middle of
 // work that was going fine. Kept in step with agent-ui.tsx deliberately: two numbers for one
 // behaviour is how the Command Center came to be reporting "running long" while the dock,
 // asking the same agent the same kind of question, was not.
@@ -71,7 +71,7 @@ const OPENERS = [
 /**
  * Starter outcomes, for the case the composer is worst at: an empty box and no idea.
  *
- * These are DIRECTIVES, not questions — each one goes down the governed path (panel, PRD,
+ * These are DIRECTIVES, not questions, each one goes down the governed path (panel, PRD,
  * code task), which is the same thing the separate "Assign an outcome" bar used to do. They
  * exist because a blank prompt is the hardest possible first run, and because the fastest way
  * to learn what BOSS does is to watch it do one.
@@ -79,7 +79,7 @@ const OPENERS = [
 /**
  * Starter briefs.
  *
- * These were one-line prompts that fired a governed build the instant they were clicked —
+ * These were one-line prompts that fired a governed build the instant they were clicked , 
  * which is both too little information to build from and too much commitment for a click. A
  * brief now DRAFTS into the composer: it says what the thing is, who it is for, what it must
  * do, and how you know it worked, and the operator edits it before pressing Build.
@@ -92,7 +92,7 @@ const OPENERS = [
 export type Idea = {
   tag: string; title: string; brief: string;
   /** Hue for the card's thumbnail. A wall of identical grey cards is a list pretending to be a
-   *  gallery — colour is what makes sixteen of them scannable rather than readable. */
+   *  gallery, colour is what makes sixteen of them scannable rather than readable. */
   /** Which glyph the thumbnail draws. Inline SVG, not an image URL: the console must render
    *  with no network beyond its own origin, and a broken <img> is worse than no picture. */
   glyph: GlyphId;
@@ -100,17 +100,17 @@ export type Idea = {
 
 type GlyphId = keyof typeof GLYPHS;
 
-/** Small, flat marks — a suggestion of the domain, not an illustration of it. Each is a single
+/** Small, flat marks, a suggestion of the domain, not an illustration of it. Each is a single
  *  path on a 24-box so they sit at the same optical weight. */
 
-/** A miniature of the app the idea describes — an inbox, a board, a chart, a calendar, a
- *  timeline — drawn over the card's colour.
+/** A miniature of the app the idea describes, an inbox, a board, a chart, a calendar, a
+ *  timeline, drawn over the card's colour.
  *
  *  A gradient wash is not an image. The operator asked for imagery and got coloured
  *  rectangles twice; what a starter card wants to show is what the thing would LOOK like, so
  *  these are little UI mockups: window chrome, rows, columns, bars, milestones.
  *
- *  Drawn, not fetched, for the same reason as before — this console is reachable only over the
+ *  Drawn, not fetched, for the same reason as before, this console is reachable only over the
  *  tailnet, and a card that depends on a CDN is a broken image the day the CDN is unreachable.
  *  White at low opacity over the hue, so one set of shapes works on every colour.
  */
@@ -119,12 +119,12 @@ type GlyphId = keyof typeof GLYPHS;
  *  TOPICAL images.
  *
  *  Cards had a seeded Picsum photograph over the drawing. Picsum serves an ARBITRARY photo per
- *  seed — so "Docs freshness board" got an iceberg, "Lead triage inbox" got a mountain range
+ *  seed, so "Docs freshness board" got an iceberg, "Lead triage inbox" got a mountain range
  *  and "Change calendar" got a suspension bridge at sunset. Stable per idea, and meaningless:
  *  a gallery of holiday scenery on a page about software you are about to build. It reads as
  *  decoration applied without looking at it, because that is exactly what it was.
  *
- *  The tools this imitates do not use stock photos either. They show the THING — a small
+ *  The tools this imitates do not use stock photos either. They show the THING, a small
  *  rendering of the app's own interface. That is what MOCKUPS below draws: a board for a
  *  board, rows for an inbox, a chart for a report. It is topical by construction, needs no
  *  API key, no network, and cannot arrive as a picnic.
@@ -133,28 +133,28 @@ type GlyphId = keyof typeof GLYPHS;
 
 /** The palette. FOUR TONES THAT BELONG TOGETHER, not a hue wheel.
  *
- *  Cards carried ` 152, 268, 196, 28, 340, 12` — points scattered at random around the
+ *  Cards carried ` 152, 268, 196, 28, 340, 12`, points scattered at random around the
  *  colour circle, one per card. Sixteen unrelated colours next to each other is why a row of
  *  them read as arbitrary: nothing said these were one product. A template gallery wants the
- *  opposite — one surface, one language, an accent that varies just enough to tell cards
+ *  opposite, one surface, one language, an accent that varies just enough to tell cards
  *  apart. So the surface is fixed and only the accent moves, across four cool tones drawn from
  *  the console's own palette.
  */
 /** THE PALETTE, TAKEN FROM WHAT ACTUALLY WORKED.
  *
- *  "Living Colors" — an app BOSS built and the operator liked on sight — has NO image files at
+ *  "Living Colors", an app BOSS built and the operator liked on sight, has NO image files at
  *  all. Its look is twelve CSS gradients over four vivid tokens: 330 81% 58%, 262 83% 63%,
- *  24 95% 58%, 172 66% 42%. Saturation 66–95%, lightness 42–63%, painted across whole sections
+ *  24 95% 58%, 172 66% 42%. Saturation 66, 95%, lightness 42, 63%, painted across whole sections
  *  with two big blurred orbs for depth and white content on top.
  *
- *  These cards were the opposite: #161c2e / #1d2438 / #273049 — saturation about 25%, lightness
- *  12–20% — a near-black window covering the whole cover with a few coloured pixels in it. Dark
+ *  These cards were the opposite: #161c2e / #1d2438 / #273049, saturation about 25%, lightness
+ *  12, 20%, a near-black window covering the whole cover with a few coloured pixels in it. Dark
  *  UI screenshots, competently drawn and completely flat, which is what "the images are so
  *  poor" meant and it was right.
  *
  *  Same technique here: a three-stop gradient per domain, orbs, and the app's own layout drawn
- *  in WHITE over it. Not the earlier washed-out attempt — that failed because it used a random
- *  hue per card, a texture layer, a 48% wash over the bottom half, and shapes at 6–14% opacity
+ *  in WHITE over it. Not the earlier washed-out attempt, that failed because it used a random
+ *  hue per card, a texture layer, a 48% wash over the bottom half, and shapes at 6, 14% opacity
  *  that could not hold an edge. The colour is coherent per domain and the shapes are opaque.
  */
 const DOMAIN_GRADIENTS: Record<string, [string, string, string]> = {
@@ -172,8 +172,8 @@ function gradientFor(tag: string): [string, string, string] {
   return DOMAIN_GRADIENTS[tag] ?? DOMAIN_GRADIENTS.Team;
 }
 
-/** The layout drawn ON the colour. White, at opacities that hold an edge — the previous
- *  version's 6–14% is why it read as weather rather than as a picture of anything. */
+/** The layout drawn ON the colour. White, at opacities that hold an edge, the previous
+ *  version's 6, 14% is why it read as weather rather than as a picture of anything. */
 const UI = {
   chrome: "rgba(255,255,255,.10)",
   panel: "rgba(255,255,255,.14)",
@@ -183,7 +183,7 @@ const UI = {
   bright: "rgba(255,255,255,.95)",
 } as const;
 
-/** The highlight colour on top of a coloured field is white, not another hue — a second
+/** The highlight colour on top of a coloured field is white, not another hue, a second
  *  saturated colour on a saturated ground is mud, which the first attempt proved. */
 function accentFor(_title: string): string {
   return "rgba(255,255,255,.95)";
@@ -196,25 +196,25 @@ function Line({ x, y, w, h = 4, c = UI.text, o = 1 }: {
   return <rect x={x} y={y} width={w} height={h} rx={h / 2} fill={c} opacity={o} />;
 }
 
-/** The app's own interface, in miniature — the thing a starter card should show.
+/** The app's own interface, in miniature, the thing a starter card should show.
  *
  *  Each of these is a small SCREENSHOT: a sidebar, a header, and content laid out the way the
  *  idea implies. An inbox is rows with avatars and a status pill; a board is columns of cards;
  *  an audit is a chart with an axis; a rotation is a month grid; an incident is a timeline.
- *  The accent appears two or three times at most — the selected item, the primary button, one
- *  data point — which is how real interfaces use colour and why this reads as a product
+ *  The accent appears two or three times at most, the selected item, the primary button, one
+ *  data point, which is how real interfaces use colour and why this reads as a product
  *  instead of as decoration.
  */
 /** The file name a card's photograph would have, if one has been supplied.
  *
  *  REAL IMAGES, SERVED BY THIS APP. Not a CDN: the console is tailnet-only, so an image
- *  fetched from the internet is a broken card the day that host is unreachable — which is why
+ *  fetched from the internet is a broken card the day that host is unreachable, which is why
  *  the seeded-Picsum attempt was removed. `public/` is same-origin, needs no key, and the file
  *  is in the repo, so what ships is what was reviewed.
  *
  *  A missing file is not an error. `onError` hides the <img> and the drawn mockup underneath
  *  shows instead, so the strip is complete with none of these present, all sixteen present, or
- *  any number in between — which is what makes it safe to add them one at a time.
+ *  any number in between, which is what makes it safe to add them one at a time.
  */
 function photoFor(title: string): string {
   return `/starters/${slugFor(title)}.jpg`;
@@ -225,7 +225,7 @@ export function slugFor(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-/** A panel inside the window — the surface content sits on. */
+/** A panel inside the window, the surface content sits on. */
 function Panel({ x = 78, y = 30, w = 222, h = 82 }: {
   x?: number; y?: number; w?: number; h?: number;
 }) {
@@ -241,12 +241,12 @@ function Row({ x, y, w, h = 16, c = UI.row, o = 1 }: {
 
 /** SIXTEEN IDEAS, SIXTEEN DRAWINGS.
  *
- *  The previous set had five, and mapped them by GLYPH — so seven of the sixteen ideas showed
+ *  The previous set had five, and mapped them by GLYPH, so seven of the sixteen ideas showed
  *  the identical rows-with-avatars picture and three more shared a second one. On screen that
  *  is three adjacent cards that differ only in accent colour, which is not a gallery: it is one
  *  image recoloured, and an operator said so.
  *
- *  Each idea now gets a layout that belongs to IT — a scorecard has criteria and ratings, a
+ *  Each idea now gets a layout that belongs to IT, a scorecard has criteria and ratings, a
  *  freshness board has age bars with stale rows in warning colour, a linter has underlined
  *  code, a rota has people against weeks. Two cards next to each other cannot look alike
  *  because no two draw the same thing.
@@ -577,7 +577,7 @@ const GLYPHS = {
  * The cover art, drawn once and shown twice.
  *
  * It lived inline in the card, so when the enlarged view opened there was nothing to show and
- * the operator's first observation was "the image is missing" — the one thing that made the
+ * the operator's first observation was "the image is missing", the one thing that made the
  * card worth looking at vanished exactly where there was room for it. Lovable's detail page
  * leads with a large preview; ours led with a tag.
  *
@@ -586,7 +586,7 @@ const GLYPHS = {
  *
  * NO SVG FILTERS. The depth used to come from two circles under `feGaussianBlur stdDeviation
  * 18`, which is a filter primitive: the browser rasterises the filtered region on its own pass,
- * and at the size the detail page renders it — a 320-wide viewBox scaled past 900px — that pass
+ * and at the size the detail page renders it, a 320-wide viewBox scaled past 900px, that pass
  * lands a frame or more after everything else. "The image renders late" is exactly what that
  * looks like. Radial gradients produce the same soft orb with no filter graph at all, so the
  * artwork paints with the first frame like any other fill.
@@ -596,15 +596,15 @@ export function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string })
   const accent = accentFor(idea.title);
   return (
     // `meet`, NOT `slice`. Slice fills the box and throws away whatever does not fit, so the
-    // moment a container's ratio differs from the drawing's 2.5:1 the art is cropped — the
+    // moment a container's ratio differs from the drawing's 2.5:1 the art is cropped, the
     // detail page's 16/9 frame cut about 29% off the sides, taking the primary button in half
     // and most of the sidebar with it. `meet` fits the whole drawing in; the containers are
     // shaped 320/128 so there is nothing to letterbox, and if one ever drifts the picture
     // shrinks instead of losing a piece.
     <svg className="askboss-idea-shot" viewBox="0 0 320 128"
-         preserveAspectRatio="xMidYMid meet">
+         preserveAspectRatio="xMidYMid meet" aria-hidden="true">
       {/* THE COLOUR FIELD, the way Living Colors does it: a three-stop gradient across the
-          whole area, then two large soft orbs for depth. That app has no image files —
+          whole area, then two large soft orbs for depth. That app has no image files , 
           this IS how it looks good. */}
       <defs>
         <linearGradient id={`g-${slug}`} x1="0" y1="0" x2="1" y2="1">
@@ -612,7 +612,7 @@ export function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string })
           <stop offset="52%" stopColor={gradientFor(idea.tag)[1]} />
           <stop offset="100%" stopColor={gradientFor(idea.tag)[2]} />
         </linearGradient>
-        {/* The orbs, as gradients rather than blurred shapes — same softness, no filter pass. */}
+        {/* The orbs, as gradients rather than blurred shapes, same softness, no filter pass. */}
         <radialGradient id={`o1-${slug}`}>
           <stop offset="0%" stopColor="rgba(255,255,255,.26)" />
           <stop offset="55%" stopColor="rgba(255,255,255,.13)" />
@@ -643,7 +643,7 @@ export function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string })
         </g>
       ))}
       {/* The content pane's header: a title and one primary button. The accent appears here
-          and on exactly one thing below — sparingly, the way a real interface uses colour. */}
+          and on exactly one thing below, sparingly, the way a real interface uses colour. */}
       <Line x={78} y={13} w={64} h={5} c={UI.bright} o={0.95} />
       <rect x="258" y="10" width="42" height="12" rx="6" fill={accent} opacity=".92" />
       <Line x={266} y={15} w={26} h={3} c="#0d1220" o={0.55} />
@@ -656,7 +656,7 @@ export function IdeaCover({ idea, scope = "c" }: { idea: Idea; scope?: string })
 function IdeaPhoto({ title }: { title: string }) {
   return (
     // HIDDEN UNTIL IT LOADS, rather than shown until it fails. `onError` alone leaves a
-    // broken-image icon wherever the handler has not run — in a server render, with JS still
+    // broken-image icon wherever the handler has not run, in a server render, with JS still
     // loading, or for the moment before the request 404s.
     <img className="askboss-idea-photo" src={photoFor(title)} alt=""
          loading="lazy" decoding="async" style={{ display: "none" }}
@@ -861,7 +861,7 @@ Weights are visible and editable: whether a Sunday counts double is a team decis
 ];
 
 /**
- * Research seeds — the step BEFORE a build.
+ * Research seeds, the step BEFORE a build.
  *
  * The composer could ask and it could build, so the only way in was to already know what you
  * wanted made. Discovery is the stage for when you do not: it researches a seed on the web and
@@ -889,8 +889,8 @@ export function ideaFor(idea: Idea): string {
     || idea.brief.split("\n")[0].replace(/^Build /, "");
 }
 
-/** Opens the composer's Ideas — the gallery when `grid` — from elsewhere on the page (the
- *  Command Center's "All 16 ↗"). The composer owns the gallery; nothing else draws a copy. */
+/** Opens the composer's Ideas, the gallery when `grid`, from elsewhere on the page (the
+ *  Command Center's "All 16 "). The composer owns the gallery; nothing else draws a copy. */
 /** A run named by what was asked for: its first line, cut at a word, never an id. */
 export function namedRun(text: string): string {
   const line = (text.trim().split("\n")[0] ?? "").replace(/^(build|make|create)\s+(an?|the)\s+/i, "");
@@ -916,7 +916,7 @@ export function openTemplate(title: string): void {
 /**
  * POST to one of our own route handlers, with the same stall bound `ask` already had.
  *
- * Research and Build were Server Actions, which re-render the whole route to reply — on a
+ * Research and Build were Server Actions, which re-render the whole route to reply, on a
  * 20-27s console that meant pressing Research showed a spinner for 163 seconds for a call that
  * enqueues in about one. They were also the two paths with NO timeout, so nothing ever ended
  * the spin. Both are fixed here: a route handler returns JSON only, and the wait is bounded.
@@ -939,13 +939,13 @@ async function postBounded(
     ]);
     if (r === stalled) {
       return { ok: false,
-               error: `No answer after ${STALL_SECONDS}s. It may still be running — nothing was `
+               error: `No answer after ${STALL_SECONDS}s. It may still be running, nothing was `
                       + "cancelled. Check the area before trying again." };
     }
     const data = await (r as Response).json().catch(() => ({}));
     if (!(r as Response).ok) {
       // ALWAYS A STRING. Our routes flatten a refusal (lib/start-refusal), but this renders
-      // `error` as text, and one route that forgot would crash the hero again — as Build did
+      // `error` as text, and one route that forgot would crash the hero again, as Build did
       // when the checklist arrived as `error` (review of the readiness change).
       const said = data?.error;
       return { ok: false, status: (r as Response).status,
@@ -961,14 +961,14 @@ async function postBounded(
 /**
  * The workflow every new project in this project follows.
  *
- * "Build →" does not create a project — it sends the directive down panel → PRD → then code.
+ * "Build →" does not create a project, it sends the directive down panel → PRD → then code.
  * Threading a per-press workflow choice through a meeting and an approval before it reaches
  * the eventual code task would be real plumbing for a choice nobody makes twice. Setting the
  * project's DEFAULT is one control that governs everything that follows, including whatever
  * the panel produces, and it is what workflow mappings are for.
  *
- * Writes through the `apply` action that already exists — the same one the Workflows area
- * uses — so there is one way a mapping gets created, not two that can disagree.
+ * Writes through the `apply` action that already exists, the same one the Workflows area
+ * uses, so there is one way a mapping gets created, not two that can disagree.
  */
 export function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
   const [items, setItems] = useState<Array<{
@@ -1022,8 +1022,8 @@ export function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
       }
       // SAY WHICH WAY IT WENT, AND WHY.
       //
-      // `failed (500)` was the whole message for a fault the API could describe exactly — an
-      // enabled mapping already occupied the slot — so the operator got a status code for a
+      // `failed (500)` was the whole message for a fault the API could describe exactly, an
+      // enabled mapping already occupied the slot, so the operator got a status code for a
       // condition that had a sentence. A bare number sends someone to the logs for something
       // the response already said.
       const body = await res.json().catch(() => ({}));
@@ -1034,7 +1034,7 @@ export function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
         // The full sentence ran the width of the composer to confirm something the dropdown
         // beside it already shows. "Saved" is the whole message when the choice took effect;
         // the sentence stays as the tooltip, and is shown in full only for the outcome that
-        // genuinely needs reading — an org-scoped or higher-priority rule outranking this one,
+        // genuinely needs reading, an org-scoped or higher-priority rule outranking this one,
         // which otherwise surfaces when the next project starts on the wrong workflow.
         const inForce = String(body?.in_force ?? key);
         setNote({ text: inForce === key ? "Saved" : String(body?.note ?? "Saved"),
@@ -1053,7 +1053,7 @@ export function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
   if (!items.length) return null;
   return (
     <div className="askboss-wf" data-testid="askboss-default-workflow">
-      {/* Short. The full sentence lives in the tooltip — a label that is longer than the
+      {/* Short. The full sentence lives in the tooltip, a label that is longer than the
           control it names is a label competing with the thing it describes. */}
       <label className="askboss-wf-label" htmlFor="askboss-wf-select"
              title="The workflow every new project in this project will follow">Workflow</label>
@@ -1086,7 +1086,7 @@ export function AskBossHero({
   layout = "bar",
 }: {
   projectId: string;
-  //: `hero`: the Command Center's composer (cc v2) — the pickers as chips on the row, Talk to
+  //: `hero`: the Command Center's composer (cc v2), the pickers as chips on the row, Talk to
   //: BOSS beside Build. Only the look changes; every action and state is the same.
   layout?: "bar" | "hero";
   actor: string;
@@ -1141,7 +1141,7 @@ export function AskBossHero({
   const [probe, setProbe] = useState<{ id: string } | null>(null);
   const [landing, setLanding] = useState(false);
   const landingFor = useRef("");
-  //: THE GALLERY. Compared against lovable.dev/templates — 204 templates in a grid — ours were
+  //: THE GALLERY. Compared against lovable.dev/templates, 204 templates in a grid, ours were
   //: sixteen cards on a conveyor you cannot scan. "See all" fixes that; facets were tried and
   //: removed, because sixteen items that fit on one screen do not need filtering.
   const [gridMode, setGridMode] = useState(false);
@@ -1152,7 +1152,7 @@ export function AskBossHero({
   //: A FULL PAGE, NOT A DIALOG. It was a centred sheet floating over the console, and with a
   //: cover image, a pitch, five feature cards and eight standards in it, it did not fit:
   //: everything below "Designed for" was inside an 88vh scroll box with the dashboard showing
-  //: around the edges. Lovable's is a page — its own screen, its own back link, two columns.
+  //: around the edges. Lovable's is a page, its own screen, its own back link, two columns.
   //: Ours is now the same, because that is what this much content needs.
   const [openIdea, setOpenIdea] = useState<Idea | null>(null);
   const [error, setError] = useState("");
@@ -1167,7 +1167,7 @@ export function AskBossHero({
   // SURVIVE A RE-RENDER OF THE PAGE UNDERNEATH.
   //
   // Server actions that revalidate ("/") re-render the whole console tree, and this panel's
-  // answer went with it -- observed live: the reply arrived and vanished in the same frame.
+  // answer went with it, observed live: the reply arrived and vanished in the same frame.
   // askBossAction no longer revalidates, but runAgentActionAction still must (a button click
   // really does change the board), and any future action might. Rather than audit every call
   // site forever, the panel restores its own last answer. sessionStorage, not local: an answer
@@ -1206,7 +1206,7 @@ export function AskBossHero({
    * A full-screen view that the Back button walks straight out of is worse than a dialog: the
    * operator's muscle memory for "get me out of this" would leave the console entirely. It has
    * a URL, Back closes it, and a link to it opens it. `template=` is a query param on the same
-   * route, so this is history manipulation, not navigation — nothing re-renders on the server.
+   * route, so this is history manipulation, not navigation, nothing re-renders on the server.
    */
   const templateOf = useCallback(
     (slug: string) => IDEAS.find((i) => slugFor(i.title) === slug) ?? null, []);
@@ -1243,7 +1243,7 @@ export function AskBossHero({
     } catch { /* non-browser */ }
   }, []);
 
-  /* Escape closes it, and the page underneath does not scroll while it is open — a full-screen
+  /* Escape closes it, and the page underneath does not scroll while it is open, a full-screen
    * view over a scrollable console otherwise scrolls the console when you reach its end. */
   useEffect(() => {
     if (!openIdea) return;
@@ -1279,12 +1279,12 @@ export function AskBossHero({
       ]);
       if (r === stalled) {
         // "ASK AGAIN IN A MOMENT" IS WORK THIS PAGE CAN DO. The turn was not cancelled, its
-        // steps are still arriving above, and its answer lands in the thread by itself — so
+        // steps are still arriving above, and its answer lands in the thread by itself, so
         // this watches for it. Asking again would start a SECOND turn and pay for it twice.
         landingFor.current = message;
         setLanding(true);
         setError(
-          `Still working — past ${STALL_SECONDS}s. Nothing was cancelled; the answer will ` +
+          `Still working, past ${STALL_SECONDS}s. Nothing was cancelled; the answer will ` +
           "appear here on its own when it lands.",
         );
         return;
@@ -1299,7 +1299,7 @@ export function AskBossHero({
     });
   }, [busy, projectId, actor, threadId]);
 
-  // WHAT IT IS DOING, WHILE IT IS DOING IT — the dock's poller, here too.
+  // WHAT IT IS DOING, WHILE IT IS DOING IT, the dock's poller, here too.
   //
   // A stopwatch counting toward a stall bound tells the operator only that time is passing. The
   // steps tell them the turn is alive and what it is looking at, which is the difference
@@ -1372,7 +1372,7 @@ export function AskBossHero({
       // just changed. Same signal the dock sends.
       if (ok) notifyChanged("command-center", { tool: a.tool });
       setReply((prev) =>
-        `${prev}\n\n${ok ? "✓" : "⚠"} **${a.label}**${ok ? " — done." : ` failed: ${data?.error ?? r.error ?? "unknown error"}`}`);
+        `${prev}\n\n${ok ? "✓" : "Warning"} **${a.label}**${ok ? ", done." : ` failed: ${data?.error ?? r.error ?? "unknown error"}`}`);
       // An offer is spent once taken: leaving it on screen invites a second, duplicate run.
       setProposed((p) => p.filter((x) => x.id !== a.id));
       setRanAction(null);
@@ -1478,7 +1478,7 @@ export function AskBossHero({
         setBuildIntent(null); setAgreement(null);
         setInput("");
         setReply(`**Started.** Taking you to the workflow…\n\n` +
-          (runId ? `[${namedRun(directive)} run ↗](${linkTo({ area: "delivery_workflows", wfr: runId }, orgId)})` : ""));
+          (runId ? `[${namedRun(directive)} run](${linkTo({ area: "delivery_workflows", wfr: runId }, orgId)})` : ""));
         const url = new URL(window.location.href);
         url.searchParams.set("area", "delivery_workflows");
         if (runId) url.searchParams.set("wfr", runId);
@@ -1529,11 +1529,11 @@ export function AskBossHero({
   /**
    * Put a brief in the composer. Deliberately does NOT build.
    *
-   * Clicking a suggestion used to fire a governed build immediately — a click that spends money
+   * Clicking a suggestion used to fire a governed build immediately, a click that spends money
    * on a one-line spec nobody had read. It drafts now: the operator edits the brief, then
    * presses Build when they mean it.
    */
-  /** Open the conversation with whatever they have typed — an idea, or a question. */
+  /** Open the conversation with whatever they have typed, an idea, or a question. */
   const discuss = useCallback((text: string) => {
     const seed = text.trim();
     if (!seed) return;
@@ -1546,8 +1546,8 @@ export function AskBossHero({
     //
     // Worse than the wrong heading: that thread's history goes into the model's context, so
     // an idea about a trading website would have been answered next to a discussion of probe
-    // latencies. A new idea is a new conversation with BOSS in general — role null, fresh,
-    // discuss — and an idea is about no record yet, so there is no subject.
+    // latencies. A new idea is a new conversation with BOSS in general, role null, fresh,
+    // discuss, and an idea is about no record yet, so there is no subject.
     openDockAbout({ subject: null, question: seed, role: null, mode: "discuss", fresh: true,
                     history: "push" });
   }, []);
@@ -1600,7 +1600,7 @@ export function AskBossHero({
    * Start a Discovery run: research first, decide what to build after.
    *
    * Restored after a careless edit removed it along with the idea-paging state it happened to
-   * sit next to — the build caught it, which is the argument for typechecking before deploying.
+   * sit next to, the build caught it, which is the argument for typechecking before deploying.
    */
   const research = useCallback((seedText: string) => {
     const seed = seedText.trim();
@@ -1611,8 +1611,8 @@ export function AskBossHero({
       if (!r.ok) { setError(r.error ?? "Could not start the research run."); return; }
       setInput("");
       setReply(
-        `**Researching.** ${r.data?.run_id ? `[${namedRun(seed)} research ↗](${linkTo({ area: "discovery" }, orgId)})` : "The research"} is gathering sources.\n\n` +
-        `It produces a cited dossier and candidate outcomes — watch it under **Discovery**. ` +
+        `**Researching.** ${r.data?.run_id ? `[${namedRun(seed)} research ](${linkTo({ area: "discovery" }, orgId)})` : "The research"} is gathering sources.\n\n` +
+        `It produces a cited dossier and candidate outcomes, watch it under **Discovery**. ` +
         `When something looks worth building, bring it back here and press Build.`,
       );
     });
@@ -1621,7 +1621,7 @@ export function AskBossHero({
   // A SLOW DRIFT THE OPERATOR CAN OVERRIDE.
   //
   // Manual scrolling alone means the cards sit still and most people never learn there are
-  // sixteen. The strip drifts continuously instead — slowly enough to read across, not in
+  // sixteen. The strip drifts continuously instead, slowly enough to read across, not in
   // page-sized jumps, so nothing you are looking at is ever yanked away.
   //
   // It stops the moment attention lands on it: pointer over the strip OR the composer, focus
@@ -1629,7 +1629,7 @@ export function AskBossHero({
   // competes with what you are doing is worse than no motion.
   const [stripHeld, setStripHeld] = useState(false);
   //: `Ideas` (command-center spec §4.6): today's "Need an example?" contents, unchanged, in a
-  //: popover anchored to the composer — or inline on a fresh install.
+  //: popover anchored to the composer, or inline on a fresh install.
   const [ideasOpen, setIdeasOpen] = useState(ideasInline);
   const ideasRef = useRef<HTMLDivElement>(null);
   const ideasButton = useRef<HTMLButtonElement>(null);
@@ -1685,7 +1685,7 @@ export function AskBossHero({
     // ACCUMULATE THE SUB-PIXEL REMAINDER.
     //
     // This is why the drift did nothing at all. 14px/s is about 0.23px per frame at 60fps, and
-    // scrollLeft is rounded to whole pixels — so `scrollLeft = scrollLeft + 0.23` rounded
+    // scrollLeft is rounded to whole pixels, so `scrollLeft = scrollLeft + 0.23` rounded
     // straight back to the same integer, every frame, forever. The motion has to be banked
     // until it is worth at least one pixel and then applied.
     let carry = 0;
@@ -1733,7 +1733,7 @@ export function AskBossHero({
     <section className="askboss" data-state={state} data-layout={layout} aria-label="Ask BOSS">
       <div className="askboss-aura" aria-hidden />
       <div className="askboss-inner">
-        {/* NO HEADER IN VIEW (command-center spec §4.6, copy budget). The eyebrow is the
+        {/* NO HEADER IN VIEW (command-center spec §4.6, copy budget). The area-name is the
             section's aria-label, the title the textarea's, and the sub the ✦'s tooltip. The
             busy status sits in the bar, and the turn view below says what is happening. */}
         <form
@@ -1764,7 +1764,7 @@ export function AskBossHero({
               // so a box inviting questions turned typed questions into builds. Questions go
               // through "Talk to BOSS" beside Build.
               placeholder={layout === "hero"
-                ? "Describe an app or a change — e.g. “A lead-triage inbox that scores inbound and drafts replies”"
+                ? "Describe an app or a change, e.g. “A lead-triage inbox that scores inbound and drafts replies”"
                 : "Describe what to build…"}
               onChange={(e) => {
                 setInput(e.target.value);
@@ -1775,7 +1775,7 @@ export function AskBossHero({
               // ENTER IS A NEWLINE HERE, and Cmd/Ctrl+Enter is send.
               //
               // Enter used to send, which is right when the primary action is free. The primary
-              // is Build now — it convenes a panel, writes a PRD and starts code — and a box
+              // is Build now, it convenes a panel, writes a PRD and starts code, and a box
               // whose main content is a multi-line brief is a box where Shift is pressed dozens
               // of times. One slip and a governed pipeline starts. So the modifier is required,
               // the way it is in every other composer that submits something expensive.
@@ -1788,20 +1788,20 @@ export function AskBossHero({
               data-testid="askboss-input"
             />
             {/* THE CONTROLS, ON THEIR OWN LINE.
-                Six things shared one flex row — the textarea, three peer buttons, the workflow
-                picker and the agent picker — so the textarea collapsed to half its width and
+                Six things shared one flex row, the textarea, three peer buttons, the workflow
+                picker and the agent picker, so the textarea collapsed to half its width and
                 the buttons marched toward the right edge. A composer's box is for what you are
                 writing; everything that acts on it belongs beneath. */}
             <div className="askboss-bar" data-settings-open={settingsOpen || layout === "hero" ? "true" : undefined}>
               {busy ? (
                 <span className="askboss-busy" role="status">
-                  {slow ? `Still working · ${elapsed}s` : "Working"}
+                  {slow ? `Still working, ${elapsed}s` : "Working"}
                 </span>
               ) : null}
               <div className="askboss-bar-settings">
                 <DefaultWorkflowPicker projectId={projectId} />
                 {/* WHO RUNS IT, chosen where the workflow is chosen. Build does not create a
-                    project — it sends the directive down panel → PRD → code — so there is no
+                    project, it sends the directive down panel → PRD → code, so there is no
                     app here to assign anyone to. What can be set is what this project does by
                     default, which then seeds every app that follows. */}
                 <DefaultAgentPicker projectId={projectId} actor={actor} faces={layout === "hero"} />
@@ -1812,7 +1812,7 @@ export function AskBossHero({
                 // the same `discuss` the split menu runs in the bar layout.
                 <button type="button" className="askboss-talk" data-testid="askboss-talk"
                         disabled={busy || !input.trim()}
-                        title="An idea or the running system — BOSS asks what it needs to know, pushes back, and starts nothing unless you say so."
+                        title="An idea or the running system, BOSS asks what it needs to know, pushes back, and starts nothing unless you say so."
                         onClick={() => discuss(input)}>
                   Talk to BOSS
                 </button>
@@ -1828,12 +1828,12 @@ export function AskBossHero({
                   ...(layout === "hero" ? [] : [
                   /* ONE DOOR. "Discuss it" and "Ask about the system" were the same model over
                      the same tools writing into the same threads, separated by a paragraph of
-                     system prompt — so the menu was asking the operator to classify their own
+                     system prompt, so the menu was asking the operator to classify their own
                      question before they were allowed to ask it. The agent decides now, per
                      turn, which is also the only way a conversation that starts as an idea and
                      turns into "why did the last one fail" works at all. */
                   { id: "discuss", label: "Talk to BOSS", cost: "free",
-                    hint: "An idea or the running system — BOSS asks what it needs to know, "
+                    hint: "An idea or the running system, BOSS asks what it needs to know, "
                           + "pushes back, and starts nothing unless you say so.",
                     onRun: () => discuss(input) }]),
                   ...(researchAvailable ? [{ id: "research", label: "Research",
@@ -1888,8 +1888,8 @@ export function AskBossHero({
             </div>
             <div className="askboss-ideas">
               {/* COMPACT ON PURPOSE. These were four full-width sentences, which is a lot of
-                  height for a secondary path and pushed the composer — the thing that should
-                  read first — down the panel. The chip carries a short label; the full question
+                  height for a secondary path and pushed the composer, the thing that should
+                  read first, down the panel. The chip carries a short label; the full question
                   goes into the composer on click, where it can be edited before it runs. */}
               {researchAvailable ? <div className="askboss-research-row">
                 <span className="askboss-research-label">Not sure yet?</span>
@@ -1932,7 +1932,7 @@ export function AskBossHero({
                 </span>
                 {/* NO FILTERS. Eight chips were added by analogy with Lovable, which has 204
                     templates and genuinely needs them. We have sixteen, all visible in one
-                    press of "See all" — so the chips cost a row of screen and a decision to
+                    press of "See all", so the chips cost a row of screen and a decision to
                     save nobody any scrolling. The operator's judgement, and it is right:
                     filtering is for sets you cannot see the end of. */}
                 <div className="askboss-ideas-nav">
@@ -1950,11 +1950,11 @@ export function AskBossHero({
                     aria-label={drift ? "Pause auto-scroll" : "Resume auto-scroll"}
                     title={drift ? "Pause auto-scroll" : "Resume auto-scroll"}
                     onClick={() => setDrift((d) => !d)}
-                  >{drift ? "❙❙" : "▶"}</button>
+                  >{drift ? "❙❙" : "Play"}</button>
                   <button type="button" className="askboss-arrow" aria-label="Scroll left"
                           onClick={() => nudge(-1)}>←</button>
                   <button type="button" className="askboss-arrow" aria-label="Scroll right"
-                          onClick={() => nudge(1)}>→</button>
+                          onClick={() => nudge(1)}>Next</button>
                 </div>
               </div>
               <div
@@ -1979,7 +1979,7 @@ export function AskBossHero({
                         Two versions shipped a gradient wash and the operator said, correctly,
                         that a wash is not an image. A starter card should show what the thing
                         would LOOK like, so this is a miniature of the app: window chrome and a
-                        layout matching the idea — an inbox is rows, a triage board is columns,
+                        layout matching the idea, an inbox is rows, a triage board is columns,
                         an audit is bars, a rotation is a calendar, an incident is a timeline.
 
                         DRAWN, NOT FETCHED. This console is reachable only over the tailnet, so
@@ -1987,14 +1987,14 @@ export function AskBossHero({
                         SVG costs no request, cannot 404, and is the same every time. */}
                     <span className="askboss-idea-cover" aria-hidden>
                       {/* The app, in miniature. Window chrome and a layout that matches what
-                          the idea is — an inbox looks like rows, a board looks like columns —
+                          the idea is, an inbox looks like rows, a board looks like columns , 
                           so the card previews the thing rather than tinting a rectangle.
                           Shared with the enlarged view, which is where it was missing. */}
                       <IdeaCover idea={i} scope="card" />
                       <IdeaPhoto title={i.title} />
                       <span className="askboss-idea-mark">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                             strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                             strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                           <path d={GLYPHS[i.glyph]} />
                         </svg>
                       </span>
@@ -2019,7 +2019,7 @@ export function AskBossHero({
                         .split("What it must do:")[1]?.split("Done when:")[0]
                         ?.split("\n").filter((l) => l.trim().startsWith("-"))
                         .slice(0, 2).map((l) => l.replace(/^\s*-\s*/, "").trim())
-                        .join(" · ") ?? "").slice(0, 150)}
+                        .join(", ") ?? "").slice(0, 150)}
                     </span>
                     </span>
                   </button>
@@ -2031,27 +2031,27 @@ export function AskBossHero({
         </form>
 
         {/* THE TEMPLATE PAGE.
-            Lovable's card opens a PAGE with the template's full story — its own screen, a back
+            Lovable's card opens a PAGE with the template's full story, its own screen, a back
             link, a large preview on the left and a rail on the right carrying the title, the
             description, the button and who it is for. Ours was a centred dialog, and once it
             held a cover image, a pitch, five feature cards and eight standards it stopped
             fitting: everything past "Designed for" lived in an 88vh scroll box with the
-            dashboard visible around the edges. The operator's read — "it does not render well
-            inline" — is the correct one, and the answer is a page.
+            dashboard visible around the edges. The operator's read, "it does not render well
+            inline", is the correct one, and the answer is a page.
 
             Where this deliberately differs from theirs: they show a screenshot of a finished
-            thing. Ours does not exist yet — BOSS builds it, to this specification — so the
+            thing. Ours does not exist yet, BOSS builds it, to this specification, so the
             specification IS the preview, and the honest thing to show is the contract the
             build will be held to. */}
         {/* PORTALLED TO THE BODY, and it has to be.
             `.bx-shell` carries `isolation: isolate`, which makes each shell a self-contained
-            stacking context — and the console renders MORE THAN ONE of them (Next streams the
+            stacking context, and the console renders MORE THAN ONE of them (Next streams the
             tree into a hidden <div id="S:0"> holding a second complete .bx-shell). Two isolated
             contexts are compared as whole units in DOM order, so a `position: fixed; z-index:
             70` element inside one of them cannot paint above ANYTHING in the other, whatever
             number you give it. Measured live: the project strip covered the template page, its
             own "Back to templates" header included, leaving no way out of a full-screen view
-            except navigating elsewhere and returning — which is exactly what the operator
+            except navigating elsewhere and returning, which is exactly what the operator
             described having to do.
             Raising the z-index cannot fix that. Leaving the shell can. */}
         {openIdea && typeof document !== "undefined" ? createPortal(
@@ -2062,12 +2062,12 @@ export function AskBossHero({
                       onClick={closeTemplate}>
                 ← Back to templates
               </button>
-              <span className="tpl-crumb">Templates · {openIdea.tag}</span>
+              <span className="tpl-crumb">Templates, {openIdea.tag}</span>
             </header>
 
             <div className="tpl-page-inner">
               {/* TWO COLUMNS, the way a detail page is shaped: the thing on the left at the
-                  size it deserves, and everything needed to decide on the right — so the
+                  size it deserves, and everything needed to decide on the right, so the
                   button is never below the fold on a wide screen. */}
               <div className="tpl-top">
                 <div className="tpl-preview">
@@ -2076,7 +2076,7 @@ export function AskBossHero({
                     <IdeaPhoto title={openIdea.title} />
                   </div>
                   <p className="tpl-shot-note">
-                    An impression of the app, not a screenshot — this one has not been built
+                    An impression of the app, not a screenshot, this one has not been built
                     yet. What is below is the specification BOSS will be held to.
                   </p>
                 </div>
@@ -2091,7 +2091,7 @@ export function AskBossHero({
                   </p>
 
                   <div className="tpl-actions">
-                    {/* The composer gets the FULL brief — features, screens and quality bar —
+                    {/* The composer gets the FULL brief, features, screens and quality bar , 
                         not the five-bullet version the card was built from. What you read is
                         what is asked for. */}
                     <button type="button" className="tpl-go" data-testid="askboss-sheet-build"
@@ -2100,14 +2100,13 @@ export function AskBossHero({
                                           brief: buildBrief(openIdea.title, openIdea.brief) });
                               closeTemplate();
                             }}>
-                      Start this build →
-                    </button>
+                      Start this build</button>
                     {/* Reading the brief is not the same as being sure. Asking first costs a
                         conversation; being wrong costs a build. */}
                     <button type="button" className="askboss-ghost"
                             data-testid="askboss-sheet-ask"
                             onClick={() => {
-                              setInput(`I am considering this build:\n\n${openIdea.title} — `
+                              setInput(`I am considering this build:\n\n${openIdea.title}, `
                                        + `${facetsOf(openIdea.brief).audience}\n\n`
                                        + "What would you want settled before starting it, and "
                                        + "is there anything here we have already built?");
@@ -2135,7 +2134,7 @@ export function AskBossHero({
               <div className="askboss-sheet-body">
                 {/* THE ANSWER TO "THE CONTENT IS VERY LESS".
                     Five bullets specify an MVP, and an MVP is exactly what BOSS built. These
-                    cards are the capability list — and they are not marketing copy: the same
+                    cards are the capability list, and they are not marketing copy: the same
                     text is appended to the brief by `buildBrief`, so every card here is
                     something the build is held to. Reading it and not getting it would be the
                     same broken promise as a green health check over a dead app. */}
@@ -2198,9 +2197,9 @@ export function AskBossHero({
                   <h4>What BOSS will do</h4>
                   <ol>
                     {researchAvailable ? <li>Research the idea and cite what it finds</li>
-                      : <li>Start from your brief — new Discovery research is paused in Community</li>}
+                      : <li>Start from your brief, new Discovery research is paused in Community</li>}
                     <li>Convene a panel of roles to argue the shape of it</li>
-                    <li>Write a PRD — <strong>you approve it</strong> before any code</li>
+                    <li>Write a PRD, <strong>you approve it</strong> before any code</li>
                     <li>Build, review and test it, then open a pull request</li>
                     {deploymentAvailable ? <li>Deploy it, asking you first unless the plan says your deploy policy decides</li>
                       : <li>Review the release; SSH host deployment is paused in Community</li>}
@@ -2217,8 +2216,7 @@ export function AskBossHero({
                                         brief: buildBrief(openIdea.title, openIdea.brief) });
                             closeTemplate();
                           }}>
-                    Start this build →
-                  </button>
+                    Start this build</button>
                   <button type="button" className="askboss-ghost" onClick={closeTemplate}>
                     Back to templates
                   </button>
@@ -2231,9 +2229,9 @@ export function AskBossHero({
 
         {/* WHAT IT IS DOING, NOT HOW LONG IT HAS BEEN DOING IT.
             A stopwatch counting toward a stall bound says only that time is passing, and "43s
-            / ~120s · running long" reads as a warning about work that is going exactly to
+            / ~120s, running long" reads as a warning about work that is going exactly to
             plan. The most recent real step is evidence the turn is alive AND tells the
-            operator what is being looked at — the dock has had this; the Command Center, which
+            operator what is being looked at, the dock has had this; the Command Center, which
             is where people ask first, did not. */}
         {busy || landing || probe ? (
           <p className="askboss-status" data-slow={slow && !probe} aria-live="polite"
@@ -2242,11 +2240,11 @@ export function AskBossHero({
             {steps.length
               ? steps[steps.length - 1]
               : probe
-                ? "Debugging — reading the code, the database and the host. A few minutes."
+                ? "Debugging, reading the code, the database and the host. A few minutes."
                 : landing
                   ? "Still working. The answer will appear here on its own."
                   : slow
-                    ? "Still working — it has not been dropped."
+                    ? "Still working, it has not been dropped."
                     : "Reading the system and choosing tools…"}
             <span className="askboss-elapsed">
               {/* No stall budget against a debugging session or a turn already past the bound:
@@ -2256,7 +2254,7 @@ export function AskBossHero({
             </span>
           </p>
         ) : null}
-        {/* The trail, oldest first — four is enough to show it is chaining without pushing the
+        {/* The trail, oldest first, four is enough to show it is chaining without pushing the
             answer off the screen when it arrives. */}
         {(busy || landing) && steps.length > 1 ? (
           <ol className="askboss-steps" data-testid="askboss-steps">
@@ -2271,7 +2269,7 @@ export function AskBossHero({
           // feature as "nothing happens". A message nobody is shown is not a message.
           <p className="askboss-error" data-testid="askboss-error"
              ref={(node) => node?.scrollIntoView({ block: "nearest", behavior: "smooth" })}>
-            ⚠ {error}
+             {error}
           </p>
         ) : null}
 
@@ -2297,7 +2295,7 @@ export function AskBossHero({
         {proposed.length > 0 ? (
           <div className="askboss-actions" data-testid="askboss-actions">
             <p className="askboss-actions-head"
-               title="BOSS can do this for you — nothing runs until you choose.">BOSS can do this:</p>
+               title="BOSS can do this for you, nothing runs until you choose.">BOSS can do this:</p>
             <div className="askboss-actions-row">
               {proposed.map((a) => (
                 <GatedButton
@@ -2331,8 +2329,7 @@ export function AskBossHero({
                 a second later. That flicker was this link. */}
             <a className="askboss-reset"
                href={`/?${orgId ? `org=${encodeURIComponent(orgId)}&` : ""}area=agent`}>
-              Open the full agent panel →
-            </a>
+              Open the full agent panel</a>
           </div>
         ) : null}
       </div>

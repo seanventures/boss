@@ -48,7 +48,7 @@ export function WorkflowRegistryView({
       <article className="stack-card">
         <div className="card-heading-row">
           <div>
-            <span className="eyebrow">Registry</span>
+            <span className="area-name">Registry</span>
             <h3>Reusable workflows</h3>
           </div>
           <span className="status-meta">{definitions.length} definitions</span>
@@ -80,7 +80,7 @@ export function WorkflowRegistryView({
       <article className="stack-card">
         <div className="card-heading-row">
           <div>
-            <span className="eyebrow">Runs</span>
+            <span className="area-name">Runs</span>
             <h3>Durable execution</h3>
           </div>
           <span className="status-meta">{runs.length} recent</span>
@@ -93,7 +93,7 @@ export function WorkflowRegistryView({
               <div className="workflow-registry-row" key={run.id}>
                 <div>
                   <strong>{run.workflow_name}</strong>
-                  <p className="detail">v{run.version} · {formatTime(run.updated_at)}</p>
+                  <p className="detail">v{run.version}, {formatTime(run.updated_at)}</p>
                 </div>
                 <div className="workflow-registry-meta">
                   <span className={`badge tone-${tone(run.status)}`}>{run.status}</span>
@@ -108,7 +108,7 @@ export function WorkflowRegistryView({
       <article className="stack-card workflow-run-timeline">
         <div className="card-heading-row">
           <div>
-            <span className="eyebrow">Pinned run</span>
+            <span className="area-name">Pinned run</span>
             <h3>{selectedRun ? selectedRun.workflow_name : "Run timeline"}</h3>
           </div>
           {selectedRun ? (
@@ -120,7 +120,7 @@ export function WorkflowRegistryView({
         ) : (
           <>
             <p className="detail mono-soft">
-              version {selectedRun.version} · {selectedRun.workflow_version_id}
+              version {selectedRun.version}, {selectedRun.workflow_version_id}
             </p>
             <div className="workflow-step-strip" aria-label="Workflow step status">
               {selectedRun.steps.map((step) => (
@@ -128,7 +128,7 @@ export function WorkflowRegistryView({
                   <span className={`workflow-step-dot tone-${tone(step.status)}`} />
                   <span>
                     <strong>{step.step_id}</strong>
-                    <small>{step.step_kind} · {step.status}{step.iteration ? ` · loop ${step.iteration}` : ""}</small>
+                    <small>{step.step_kind}, {step.status}{step.iteration ? `, loop ${step.iteration}` : ""}</small>
                   </span>
                 </div>
               ))}

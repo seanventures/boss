@@ -29,20 +29,20 @@ import { useSecrets } from "./secrets-sheet";
 
 const CELL_S = 45 * 60;
 
-/** `Up · 99.4% · 24h` — a share of stored probes, never progress. */
+/** `Up, 99.4%, 24h`, a share of stored probes, never progress. */
 export function uptimeLine(t: Pick<TargetDetail, "health" | "uptime24h">): string {
-  if (t.uptime24h === null) return `${t.health.word} · 24h`;
+  if (t.uptime24h === null) return `${t.health.word}, 24h`;
   const pct = t.uptime24h * 100;
-  return `${t.health.word} · ${pct >= 99.95 && pct < 100 ? "99.9" : pct.toFixed(1)}% · 24h`;
+  return `${t.health.word}, ${pct >= 99.95 && pct < 100 ? "99.9" : pct.toFixed(1)}%, 24h`;
 }
 
-/** One compact deploy row (RECENT DEPLOYS): the rail's pieces — state, sha, trigger, approver,
- *  step dots, duration, age — in the drawer's width; opens the deploy drawer. */
+/** One compact deploy row (RECENT DEPLOYS): the rail's pieces, state, sha, trigger, approver,
+ *  step dots, duration, age, in the drawer's width; opens the deploy drawer. */
 function RecentRow({ d, now, onOpen }: { d: DeployRow; now: number | null; onOpen: (ref: string) => void }) {
   return (
     <li>
       <button type="button" className="inf-row-btn" data-testid={`inf-target-recent-${d.ref}`} onClick={() => onOpen(d.ref)}
-              title={[d.refName, d.startedAt ? localTime(d.startedAt) : null].filter(Boolean).join(" · ") || undefined}>
+              title={[d.refName, d.startedAt ? localTime(d.startedAt) : null].filter(Boolean).join(", ") || undefined}>
         <StateWord w={{ word: d.word, tone: d.tone }} />
         <span className="inf-mono" data-copy="data">{d.sha7 ?? "—"}</span>
         <span className="inf-muted">{triggerWord(d)}</span>
@@ -130,7 +130,7 @@ function Secrets({ projectId, actor, t, canBind, refresh }: { projectId: string;
             <label className="inf-field"><span>Secret</span>
               <select value={secretId} onChange={(e) => setSecretId(e.target.value)} data-testid="inf-target-bind-secret">
                 <option value="">Choose…</option>
-                {secrets.map((s) => <option key={s.secret_ref_id} value={s.secret_ref_id}>{s.name.split("/").pop()} · {s.secret_kind}</option>)}
+                {secrets.map((s) => <option key={s.secret_ref_id} value={s.secret_ref_id}>{s.name.split("/").pop()}, {s.secret_kind}</option>)}
               </select></label>
           </div>
           <div className="inf-actions">
@@ -152,7 +152,7 @@ function MoveSheet({ t, projectId, actor, racks, onClose, onMoved }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
-    <Sheet title={`Move ${t.app} · ${t.env}`} testId="inf-move-sheet" onClose={onClose}>
+    <Sheet title={`Move ${t.app}, ${t.env}`} testId="inf-move-sheet" onClose={onClose}>
       {choices.length ? (
         <form className="inf-form" onSubmit={async (e) => {
           e.preventDefault();
@@ -168,7 +168,7 @@ function MoveSheet({ t, projectId, actor, racks, onClose, onMoved }: {
         }}>
           <label className="inf-field"><span>Machine</span>
             <select value={hostId} onChange={(e) => setHostId(e.target.value)} data-testid="inf-move-host">
-              {choices.map((c) => <option key={c.id} value={c.id}>{c.name}{c.address ? ` · ${c.address}` : ""}</option>)}
+              {choices.map((c) => <option key={c.id} value={c.id}>{c.name}{c.address ? `, ${c.address}` : ""}</option>)}
             </select></label>
           <div className="inf-actions">
             <GatedButton permission="deployment_target:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-move-submit">Move</GatedButton>
@@ -182,7 +182,7 @@ function MoveSheet({ t, projectId, actor, racks, onClose, onMoved }: {
 }
 
 /** Remove the app from its host: what goes, a separate opt-in for its data, then the deploy flow
- *  (approval or policy) — the run's state shows in Deploys like any deploy. */
+ *  (approval or policy), the run's state shows in Deploys like any deploy. */
 export function RemoveAppSheet({ t, actor, onClose, onPlanned }: { t: TargetDetail; actor: string; onClose: () => void; onPlanned: () => void }) {
   const name = t.app;
   const [typed, setTyped] = useState("");
@@ -191,7 +191,7 @@ export function RemoveAppSheet({ t, actor, onClose, onPlanned }: { t: TargetDeta
   const [error, setError] = useState<string | null>(null);
   const host = t.where.host?.name ?? "its host";
   return (
-    <Sheet title={`Remove ${t.app} · ${t.env}?`} testId="inf-target-remove-sheet" onClose={onClose}>
+    <Sheet title={`Remove ${t.app}, ${t.env}?`} testId="inf-target-remove-sheet" onClose={onClose}>
       <form className="inf-form" onSubmit={async (e) => {
         e.preventDefault();
         if (!confirmed(name, typed)) return;
@@ -209,7 +209,7 @@ export function RemoveAppSheet({ t, actor, onClose, onPlanned }: { t: TargetDeta
         <label className="inf-check" title="Database volumes and the app's data folder">
           <input type="checkbox" checked={deleteData} onChange={(e) => setDeleteData(e.target.checked)}
                  data-testid="inf-target-remove-data" />
-          Also delete its data (database volumes) — can&apos;t be undone
+          Also delete its data (database volumes), can&apos;t be undone
         </label>
         <TypedConfirm name={name} value={typed} onChange={setTyped} testId="inf-target-remove-confirm" />
         <div className="inf-actions">
@@ -229,7 +229,7 @@ function RetireTargetSheet({ t, actor, onClose, onRetired }: { t: TargetDetail; 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
-    <Sheet title={`Retire ${t.app} · ${t.env}?`} testId="inf-target-retire-sheet" onClose={onClose}>
+    <Sheet title={`Retire ${t.app}, ${t.env}?`} testId="inf-target-retire-sheet" onClose={onClose}>
       <form className="inf-form" onSubmit={async (e) => {
         e.preventDefault();
         if (!confirmed(name, typed)) return;
@@ -264,8 +264,8 @@ function DeploySection({ t, projectId, actor, canWrite, now, refresh, onDeploy }
   t: TargetDetail; projectId: string; actor: string; canWrite: boolean; now: number | null; refresh: () => void;
   onDeploy: (ref: string) => void;
 }) {
-  // THE REF FIELD TAKES A BRANCH, TAG OR COMMIT. `where.ref` is the target's address — an SSH
-  // target's is "root@192.0.2.202:22" — and prefilling it here planned that as the commit to
+  // THE REF FIELD TAKES A BRANCH, TAG OR COMMIT. `where.ref` is the target's address, an SSH
+  // target's is "root@192.0.2.202:22", and prefilling it here planned that as the commit to
   // ship. Only a ref-shaped value (no ':' or space, as git requires) is a starting point.
   const [ref, setRef] = useState(gitRefOrEmpty(t.where.ref));
   const [refs, setRefs] = useState<{ name: string; sha?: string }[] | null>(null);
@@ -305,14 +305,14 @@ function DeploySection({ t, projectId, actor, canWrite, now, refresh, onDeploy }
       <div className="inf-last-deploy" data-testid="inf-target-last-deploy">
         {last ? (
           <>
-            <a className="inf-link inf-mono" href={deployHref(last.ref)} data-copy="data" title={`Deployed ${last.sha7 ?? "—"} · ${localTime(last.finishedAt)} · ${last.word}`}
+            <a className="inf-link inf-mono" href={deployHref(last.ref)} data-copy="data" title={`Deployed ${last.sha7 ?? "—"}, ${localTime(last.finishedAt)}, ${last.word}`}
                onClick={(e) => { e.preventDefault(); onDeploy(last.ref); }}>{last.sha7 ?? "—"} ↗</a>
             <StateWord w={{ word: last.word, tone: last.tone }} />
             {last.finishedAt && now !== null ? <span className="inf-faint">{ago(last.finishedAt, now)}</span> : null}
             {last.failedAfter ? (
               <a className="inf-link inf-failed-after" href={deployHref(last.failedAfter.ref)} data-testid="inf-target-failed-after"
                  onClick={(e) => { e.preventDefault(); onDeploy(last.failedAfter!.ref); }}>
-                Last attempt failed{now !== null ? ` · ${ago(last.failedAfter.at, now)} ago` : ""}
+                Last attempt failed{now !== null ? `, ${ago(last.failedAfter.at, now)} ago` : ""}
               </a>
             ) : null}
             {last.runId ? <a className="inf-link" href={buildHref(last.runId)} title="Open the build that made this"
@@ -368,7 +368,7 @@ export function TargetDrawer({ projectId, actor, targetId, canWrite, racks, onCl
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("sheet") === "remove" ? "remove" : null);
   const t = detail.data;
   const openDeploy = (ref: string) => go({ view: "deploys", target: null, host: null, deploy: ref });
-  const label = t ? `${t.app} · ${t.env}` : "App";
+  const label = t ? `${t.app}, ${t.env}` : "App";
   const end = now ?? NaN;   // the clock starts after mount
   const head = t ? (
     <>

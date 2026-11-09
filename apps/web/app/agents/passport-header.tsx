@@ -6,8 +6,8 @@
  * Left, the 128px face (PASSPORT_FACE_PX), breathing and blinking when idle. Centre, the name, the
  * role, the `AI agent` badge, its lifecycle and its own two lines about itself. Right, the
  * certificate: an ID that never changes, when and by whom it was born, where it came from, the
- * human accountable for it, the version of its definition, and an honest `Local · tokens coming`.
- * Every value here is the API's (`/v1/agents/{role}/passport`) — nothing is computed to look
+ * human accountable for it, the version of its definition, and an honest `Local, tokens coming`.
+ * Every value here is the API's (`/v1/agents/{role}/passport`), nothing is computed to look
  * plausible. Below, the vitals strip and the actions; then the section nav.
  *
  * Five quick clicks on the face make it wave and say its first phrase. Local, no model call.
@@ -54,8 +54,8 @@ export function vitalsLine(v: Passport["vitals"]): string[] {
   return out;
 }
 
-/** What the agent page itself knows (`/api/agents/{role}`), for what a passport does not carry —
- *  violations, the reporting line — and for the whole strip on an API with no passport. */
+/** What the agent page itself knows (`/api/agents/{role}`), for what a passport does not carry , 
+ *  violations, the reporting line, and for the whole strip on an API with no passport. */
 export type DetailFacts = {
   violations: number; reportsTo: string | null;
   apps: number; spend: number; panels: number;
@@ -108,10 +108,10 @@ export function certRows(passport: Passport | null, actor: string, reportsTo: st
     { key: "version", label: "Version", tip: CERT_TIPS.version, testId: "ag-cert-version", mono: true,
       value: passport ? versionLine(passport.version, passport.fingerprint) : "—",
       copy: passport ? (fp ? `v${passport.version} ${fp}` : `v${passport.version}`) : undefined,
-      full: passport && fp ? `v${passport.version} · ${fp}` : undefined },
+      full: passport && fp ? `v${passport.version}, ${fp}` : undefined },
     { key: "reports", label: "Reports to", tip: CERT_TIPS.reports, testId: "ag-cert-reports",
       value: reportsTo ? identityOf(reportsTo).name : "—" },
-    { key: "identity", label: "Identity", tip: CERT_TIPS.identity, value: "Local · tokens coming", testId: "ag-cert-identity" },
+    { key: "identity", label: "Identity", tip: CERT_TIPS.identity, value: "Local, tokens coming", testId: "ag-cert-identity" },
   ];
   return rows;
 }
@@ -191,7 +191,7 @@ export function PassportHeader({ projectId, actor, roleKey, name, passport, onAs
       return;
     }
     onChanged(r.data);
-    toast("success", next === "paused" ? `${title} paused · skipped by Auto`
+    toast("success", next === "paused" ? `${title} paused, skipped by Auto`
       : next === "retired" ? `${title} retired` : `${title} resumed`);
   };
 

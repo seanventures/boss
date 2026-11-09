@@ -27,7 +27,7 @@ describe("the pulse is real counts", () => {
     expect(bars).toHaveLength(4);
     expect(bars[2].getAttribute("data-errors")).toBe("true");
     expect(bars[2].getAttribute("title")).toBe(pulseTip(h.buckets[2], 900));
-    expect(bars[2].getAttribute("title")).toMatch(/^\d\d:\d\d–\d\d:\d\d · 10 lines · 1 error$/);
+    expect(bars[2].getAttribute("title")).toMatch(/^\d\d:\d\d–\d\d:\d\d, 10 lines, 1 error$/);
     expect(bars[1].querySelector(".lx-bar-stack")!.getAttribute("style")).toContain("height: 0%");
   });
 

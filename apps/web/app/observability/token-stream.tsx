@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The token stream (spec §4.10): the window's 24 buckets as a stacked area, one band per group —
+ * The token stream (spec §4.10): the window's 24 buckets as a stacked area, one band per group , 
  * the top 5 by the chosen metric plus `Other`, as the server sends them. Latency is not a sum,
  * so it draws one p95 line per group instead of stacking.
  *

@@ -126,7 +126,7 @@ describe("the State column", () => {
     ] });
     const states = Object.fromEntries($$(".fx-app-row").map((r) => [r.querySelector(".fx-app-name")?.textContent,
       (r.querySelector(".fx-c-state")?.textContent ?? "").trim()]));
-    expect(states).toEqual({ "On line": "Reviewing · Review", Shipped: "PR open" });
+    expect(states).toEqual({ "On line": "Reviewing, Review", Shipped: "PR open" });
   });
 });
 

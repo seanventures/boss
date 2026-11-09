@@ -1,8 +1,8 @@
 /**
  * CHECKS FAILING ON A MERGE CARD (engine services/checks_failing.py).
  *
- * A build whose checks still fail after its repair rounds opens its pull request anyway — a
- * draft labelled `checks failing` — and the workflow goes on to this card. The card must say so
+ * A build whose checks still fail after its repair rounds opens its pull request anyway, a
+ * draft labelled `checks failing`, and the workflow goes on to this card. The card must say so
  * before anything else, security first, and its merge is a person's stated decision: the engine
  * refuses a plain Approve, so the card asks for the reason and sends a forced merge.
  */
@@ -65,7 +65,7 @@ export function ChecksFailing({ record }: { record: ChecksFailingRecord }) {
       <ul data-testid="decision-checks-gates">
         {record.gates.map((g) => (
           <li key={g.gate} data-security={g.security || undefined}>
-            {g.security ? <b>Security · </b> : null}
+            {g.security ? <b>Security, </b> : null}
             <b>{g.label}</b> <span className="v2-mono">({g.gate})</span>
             {g.detail ? <>: {g.detail}</> : null}
           </li>
@@ -77,7 +77,7 @@ export function ChecksFailing({ record }: { record: ChecksFailingRecord }) {
           <ul>
             {record.findings.map((f, i) => (
               <li key={`${f.gate}-${i}`} data-security={f.security || undefined}>
-                {f.security ? <b>Security · </b> : null}
+                {f.security ? <b>Security, </b> : null}
                 <span className="v2-mono">[{f.severity.toUpperCase()}] {f.stage}{f.where ? ` ${f.where}` : ""}</span>{" "}
                 <span style={{ whiteSpace: "pre-wrap" }}>{f.text}</span>
               </li>

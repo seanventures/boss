@@ -518,8 +518,8 @@ describe("the room", () => {
     const [older, summary] = [...document.querySelectorAll('[data-testid="ag-summary"]')];
     // An older card's action already opened says so after a reload.
     expect(older.querySelector("a[href*='decision=dec_0']")).not.toBeNull();
-    expect(summary.textContent).toContain("For · Juno");
-    expect(summary.textContent).toContain("Against · Sentry");
+    expect(summary.textContent).toContain("For, Juno");
+    expect(summary.textContent).toContain("Against, Sentry");
     await act(async () => { summary.querySelector<HTMLButtonElement>('[data-testid="ag-open-decision"]')!.click(); });
     await settle();
     // Each card opens its own action: (its summary turn, index).
@@ -604,7 +604,7 @@ describe("one name per agent", () => {
     expect(room.querySelector('[data-testid="ag-seat-qa"] .ag-seat-name')!.textContent).toBe("Vera");
     expect(room.querySelector('[data-testid="ag-seat-qa"] .ag-seat-role')!.textContent).toBe("QA Lead");
     expect(room.querySelector('[data-testid="ag-to-security_reviewer"]')!.textContent).toBe("Sentry");
-    expect(room.querySelector('[data-testid="ag-room-members"]')!.getAttribute("title")).toBe("Juno · Vera · Sentry");
+    expect(room.querySelector('[data-testid="ag-room-members"]')!.getAttribute("title")).toBe("Juno, Vera, Sentry");
   });
 });
 
@@ -719,7 +719,7 @@ describe("a room opened from a preset", () => {
     expect(title.textContent).toBe("Incident");
     expect(room.getAttribute("aria-label")).toBe("Incident");
     // The members are named beside it: faces, with their callsigns in the tooltip.
-    expect(room.querySelector('[data-testid="ag-room-members"]')!.getAttribute("title")).toBe("Vera · Juno");
+    expect(room.querySelector('[data-testid="ag-room-members"]')!.getAttribute("title")).toBe("Vera, Juno");
   });
 
   it("the first question replaces the opening name once it is asked", async () => {

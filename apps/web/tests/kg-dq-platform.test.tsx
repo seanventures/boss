@@ -66,7 +66,7 @@ describe("Documents tab: DQ platform", () => {
     await act(async () => { select.value = "2026-10-05"; select.dispatchEvent(new Event("change", { bubbles: true })); });
     await settle();
     expect($$('[data-testid="kg-dq-group-status"]').map((e) => e.textContent)).toEqual([
-      "INC-505 · open", "Not investigated"]);
+      "INC-505, open", "Not investigated"]);
   });
 
   it("Investigate starts dq_incident_rca with that exception group and links the run", async () => {

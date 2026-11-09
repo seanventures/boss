@@ -1,3 +1,5 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
 /* ── Observability (infra-observability spec §4.9-§4.13, §5.2-§5.4) ──
    obs- classes only; tokens only. The Pulse strip is shared with Infra's tiles (mini density).
    A gap is an outlined cell, never green; a cell with no ok probe is red AND hatched, so colour
@@ -94,7 +96,7 @@
 .obs-dhead-name { font-weight: 700; font-size: 0.98rem; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
 .obs-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; }
 .obs-fact { display: inline-flex; flex-direction: column; gap: 1px; min-width: 0; }
-.obs-fact-k { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.obs-fact-k { font-size: 0.68rem; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--faint); }
 .obs-fact-v { font-size: 0.9rem; color: var(--ink); font-weight: 600; }
 .obs-incident { padding: 2px 0; }
 .obs-incident[data-ongoing="1"] { box-shadow: inset 2px 0 0 var(--red); padding-left: 8px; }
@@ -139,7 +141,7 @@
   display: grid; grid-template-columns: 1fr auto; grid-template-areas: "k spark" "v spark"; align-items: center; gap: 2px 10px;
   min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
-.obs-stat-k { grid-area: k; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.obs-stat-k { grid-area: k; font-size: 0.7rem; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--faint); }
 .obs-stat-v { grid-area: v; min-width: 0; font-size: 1.02rem; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .obs-stat .obs-spark { grid-area: spark; }
 .obs-spark { display: block; width: 72px; height: 20px; overflow: visible; }
@@ -212,7 +214,7 @@
   min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
 .obs-gauge[data-absent="1"] { grid-template-areas: "k k" "v v"; }
-.obs-gauge-k { grid-area: k; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.obs-gauge-k { grid-area: k; font-size: 0.7rem; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--faint); }
 .obs-gauge[data-absent="1"] .inf-faint { grid-area: v; font-size: 0.8rem; }
 .obs-gauge-bar { grid-area: bar; display: block; width: 100%; height: 6px; }
 .obs-gauge-track { fill: var(--surface-3); }
@@ -245,7 +247,7 @@
 .obs-inline-field { flex-direction: row; align-items: center; gap: 8px; }
 .obs-ask-menu {
   box-sizing: border-box;
-  min-width: min(300px, calc(100vw - 16px));
+  min-width: min(300px, calc(100% - 16px));
   max-width: min(420px, calc(100vw - 16px));
 }
 /* The trigger is at the left of a wrapped header: grow right, into the page, not off the screen. */
@@ -375,6 +377,7 @@
 
 /* ── SEV1–SEV4 and status chips (BOSSAPP-598 feedback 5, 6). Built from the theme tokens. ── */
 :root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
   --obs-sev1: var(--red);
   --obs-sev2: color-mix(in srgb, var(--red) 55%, var(--amber));
   --obs-sev3: var(--amber);

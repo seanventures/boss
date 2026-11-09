@@ -194,7 +194,7 @@ describe("the sheets and the denied page", () => {
     expect(sheet.textContent).toContain("Let Forge and Vera act for you?");
     expect(sheet.textContent).toContain("For this build only");
     expect(sheet.textContent).toContain("For 30 days");
-    expect(sheet.textContent).toContain("acme/web · push to boss/* · open PRs");
+    expect(sheet.textContent).toContain("acme/web, push to boss/* · open PRs");
   });
 
   it("AccessDenied names the permission and who can grant it", async () => {

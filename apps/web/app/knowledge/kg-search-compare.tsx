@@ -3,7 +3,7 @@
 /**
  * BY WORDS AND BY MEANING, SIDE BY SIDE (rulebook source G9). The same query two ways: the words
  * column is the Graph's own search (names and the words of names and bodies); the meaning column
- * is the embedding model's nearest items alone — no words. An item only meaning found is marked,
+ * is the embedding model's nearest items alone, no words. An item only meaning found is marked,
  * so a viewer sees what a keyword search misses ("What happens when a payment is short?" finds the
  * rule that says "a payment less than a periodic payment").
  */
@@ -57,7 +57,7 @@ export function SearchCompare({ w, q, layers, onPick, onClose }: {
   return (
     <div className="kg-cmp" role="dialog" aria-label={`“${q}” by words and by meaning`} data-testid="kg-search-compare">
       <div className="kg-cmp-head">
-        <span className="kg-eyebrow">“<span data-user-text>{q}</span>” by words and by meaning</span>
+        <span className="kg-area-name">“<span data-user-text>{q}</span>” by words and by meaning</span>
         <button type="button" className="ag-icon-btn" aria-label="Close the comparison" onClick={onClose}><X size={12} aria-hidden /></button>
       </div>
       {error ? <p className="kg-inline-err" role="alert">{error}</p> : null}

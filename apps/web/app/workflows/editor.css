@@ -1,3 +1,4 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* Workflow Studio: editor. Classes are prefixed wf- and use only the base tokens. */
 
 /* ── Shell ─────────────────────────────────────────────────────────────────────
@@ -146,7 +147,7 @@
 
 /* "Starts with". */
 .wf-starts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.wf-starts-label { color: var(--muted); font: 600 0.75rem/1 var(--sans); text-transform: uppercase; letter-spacing: 0.06em; }
+.wf-starts-label { color: var(--muted); font: 600 0.75rem/1 var(--sans); text-transform: none; letter-spacing: 0; }
 
 /* ── Palette ── */
 .wf-palette {
@@ -165,17 +166,17 @@
   padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r);
   background: var(--bg); color: var(--faint);
 }
-.wf-pal-search:focus-within { border-color: var(--accent); }
+.wf-pal-search:focus-within { border-color: var(--accent); outline: 2px solid currentColor; outline-offset: 2px;}
 .wf-pal-search input {
   flex: 1; min-width: 0; height: 30px; border: 0; outline: none;
   background: transparent; color: var(--ink); font: 400 0.8125rem/1 var(--sans);
 }
 .wf-pal-scroll { overflow-y: auto; overflow-x: hidden; padding-bottom: 8px; }
 .wf-pal-heading {
-  position: sticky; top: 0; z-index: 1;
+  position: sticky; inset-block-start: 0; z-index: 1;
   margin: 0; padding: 8px 12px 4px;
   background: var(--surface); color: var(--faint);
-  font: 700 0.75rem/1 var(--sans); text-transform: uppercase; letter-spacing: 0.08em;
+  font: 700 0.75rem/1 var(--sans); text-transform: none; letter-spacing: 0;
 }
 .wf-pal-list { list-style: none; margin: 0; padding: 0 4px; }
 .wf-pal-row { position: relative; display: flex; align-items: center; }
@@ -269,7 +270,7 @@
 
 /* ── Toast, FAB, sheet, loading ── */
 .wf-toast {
-  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: var(--z-flow-toast);
+  position: fixed; left: 50%; bottom: 24px; translate: -50% 0; z-index: var(--z-flow-toast);
   display: inline-flex; align-items: center; gap: 12px;
   padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--r-xl);
   background: var(--surface); color: var(--ink); box-shadow: var(--shadow);

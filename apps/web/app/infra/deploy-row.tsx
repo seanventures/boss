@@ -2,10 +2,10 @@
 
 /**
  * One deploy as a 56px rail row (infra-observability spec §4.6, §6.3): state dot + word,
- * `app · env`, sha7, host or account, the trigger word, the approver's face, one step dot per
- * manifest step, duration, age, the one action the row's `can` allows, and `↗` to its drawer.
+ * `app, env`, sha7, host or account, the trigger word, the approver's face, one step dot per
+ * manifest step, duration, age, the one action the row's `can` allows, and `Open` to its drawer.
  * The words and `can` are the server's; this file maps no raw status. `DeployRail` groups rows by
- * day (TODAY · YESTERDAY · <weekday>) — the Deploys tab and the target drawer's RECENT DEPLOYS
+ * day (TODAY, YESTERDAY, <weekday>), the Deploys tab and the target drawer's RECENT DEPLOYS
  * both draw it.
  */
 import { GatedButton } from "../../components/gated";
@@ -24,20 +24,20 @@ const STEP_WORD: Record<StepState, string> = { done: "done", running: "running",
 
 /** One dot per manifest step: filled done, ◐ running (sweeps), ✗ failed, ○ waiting. */
 export function StepDots({ steps, durationOf }: { steps: { s: StepState; t: string }[]; durationOf?: (i: number) => string }) {
-  if (!steps.length) return <span className="inf-steps inf-faint" aria-label="No steps">—</span>;
+  if (!steps.length) return <span className="inf-steps inf-faint" aria-label="No steps">{"—"}</span>;
   const done = steps.filter((s) => s.s === "done").length;
   return (
     <span className="inf-steps" role="img" aria-label={`${done} of ${steps.length} steps done`} data-testid="inf-step-dots">
       {steps.map((s, i) => (
         <span key={i} className="inf-step" data-s={s.s} data-anim={s.s === "running" ? "" : undefined}
-              title={[s.t || `Step ${i + 1}`, STEP_WORD[s.s], durationOf?.(i)].filter(Boolean).join(" · ")}
+              title={[s.t || `Step ${i + 1}`, STEP_WORD[s.s], durationOf?.(i)].filter(Boolean).join(", ")}
               aria-hidden>{GLYPH[s.s]}</span>
       ))}
     </span>
   );
 }
 
-/** `manual` · `merge` · `workflow` · `redeploy`, or `↩ <sha7>` for a rollback. */
+/** `manual`, `merge`, `workflow`, `redeploy`, or `↩ <sha7>` for a rollback. */
 export function triggerWord(row: Pick<DeployRow, "trigger" | "rollbackOfSha7">): string {
   return row.trigger === "rollback" ? (row.rollbackOfSha7 ? `↩ ${row.rollbackOfSha7}` : "rollback") : row.trigger;
 }
@@ -57,7 +57,7 @@ export function Approver({ approver }: { approver: DeployRow["approver"] }) {
 }
 
 /** APPROVE IS ONE PRESS. Between the approval landing and the next read of the row, the row
- *  still said `can.approve` — so the button came back, and a second press answered "Couldn't do
+ *  still said `can.approve`, so the button came back, and a second press answered "Couldn't do
  *  that" over a deploy that was already starting. Once a verdict lands, the row reads it until
  *  the server's state moves on. */
 export function useVerdict(row: Pick<DeployRow, "ref" | "state">) {
@@ -106,7 +106,7 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
   // and a Superseded row from hours ago read "4m", growing beside the live one.
   const neverRan = ["superseded", "rejected", "cancelled"].includes(row.phase);
   const age = ago(neverRan ? row.startedAt ?? row.finishedAt : row.finishedAt ?? row.startedAt, now);
-  const tip = [row.sentence, where, row.approver?.actor === "you" ? "approved by you" : ""].filter(Boolean).join(" · ");
+  const tip = [row.sentence, where, row.approver?.actor === "you" ? "approved by you" : ""].filter(Boolean).join(", ");
 
   const decide = async (v: "approve" | "reject") => {
     if (!row.decisionId) return;
@@ -115,7 +115,7 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
     setBusy(null);
     if (!r.ok) { setError(r.error); return; }
     give(v);
-    showToast("success", v === "approve" ? "Approved · starting the deploy" : "Deploy rejected");
+    showToast("success", v === "approve" ? "Approved, starting the deploy" : "Deploy rejected");
     afterWrite(onChanged);
   };
   const canDecide = verdict === null;
@@ -133,8 +133,8 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
     <li className="inf-dep-row" data-testid="inf-deploy-row" data-ref={row.ref} data-tone={row.tone}
         data-phase={verdict === "approve" ? "queued" : row.phase} title={tip || undefined}>
       <StateWord w={shownWord(row, verdict)} />
-      <button type="button" className="inf-dep-name" onClick={() => onOpen(row.ref)} title={`${row.app} · ${row.env}`}>
-        <span data-copy="data">{row.app}</span><span className="inf-faint"> · </span><span data-copy="data">{row.env}</span>
+      <button type="button" className="inf-dep-name" onClick={() => onOpen(row.ref)} title={`${row.app}, ${row.env}`}>
+        <span data-copy="data">{row.app}</span><span className="inf-faint">, </span><span data-copy="data">{row.env}</span>
       </button>
       <span className="inf-mono inf-dep-sha" data-copy="data" title={row.refName ? `Ref ${row.refName}` : undefined}>{row.sha7 ?? "—"}</span>
       <span className="inf-dep-host inf-trunc inf-muted" data-copy="data" title={where || undefined}>{where || "—"}</span>
@@ -149,7 +149,7 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
           <button type="button" className="inf-link inf-failed-after" data-testid="inf-deploy-failed-after"
                   title={`A newer deploy failed${now !== null ? ` ${ago(row.failedAfter.at, now)} ago` : ""}. Open it.`}
                   onClick={() => onOpen(row.failedAfter!.ref)}>
-            Last attempt failed{now !== null ? ` · ${ago(row.failedAfter.at, now)} ago` : ""}
+            Last attempt failed{now !== null ? `, ${ago(row.failedAfter.at, now)} ago` : ""}
           </button>
         ) : null}
         <OpenApp url={row.openUrl} testId="inf-deploy-row-open-app" />
@@ -170,12 +170,12 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
         {error ? <span className="inf-error inf-trunc" role="alert" title={inWords(error)} data-copy="data">Couldn&apos;t do that</span> : null}
       </span>
       <button type="button" className="inf-link inf-dep-go" aria-label={`Open ${row.app} ${row.env} deploy`}
-              data-testid="inf-deploy-row-open" onClick={() => onOpen(row.ref)}>↗</button>
+              data-testid="inf-deploy-row-open" onClick={() => onOpen(row.ref)}>Open</button>
     </li>
   );
 }
 
-/** TODAY · YESTERDAY · MONDAY … · Sep 28 — by the local day a deploy started. */
+/** TODAY, YESTERDAY, MONDAY …, Sep 28, by the local day a deploy started. */
 export function dayLabel(iso: string | null, now: number, lt: LocalTime = LOCAL): string {
   if (!iso) return "EARLIER";
   const d = new Date(iso);

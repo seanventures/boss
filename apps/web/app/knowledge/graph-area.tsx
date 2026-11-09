@@ -1,16 +1,16 @@
 "use client";
 
 /**
- * KNOWLEDGE GRAPH — code, rules and what agents learned (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5).
+ * KNOWLEDGE GRAPH, code, rules and what agents learned (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5).
  *
  * Named for what it is (operator, 2026-10-24: "people without context can't assume it is a
  * knowledge graph"): the rail says Knowledge Graph, a first visit gets the intro strip (the three
  * layers, and that every node says which agent added it and who approved it), and a project with
  * no graph gets "Start a knowledge graph for this project", never an empty canvas. The Setup tab
- * (kg-setup.tsx) is a knowledge-graph project's guided flow — import code, assign the team, first
- * scan, review — and such a project opens on it until its code is in (?kg_tab=setup links to it).
+ * (kg-setup.tsx) is a knowledge-graph project's guided flow, import code, assign the team, first
+ * scan, review, and such a project opens on it until its code is in (?kg_tab=setup links to it).
  *
- * The area's shell: the tab row (§5.1: Graph · Rules review · Settings, and Setup), the project's
+ * The area's shell: the tab row (§5.1: Graph, Rules review, Settings, and Setup), the project's
  * repositories and graph status (indexing, the add-on entitlement), the archived banner, and deep
  * links (?kg_node= focuses a node, ?kg_tab=rules&kg_scan= opens a scan's review, ?kg_sub=facts
  * the fact queue). The tabs' bodies are graph-view.tsx, rules-review.tsx and kg-settings.tsx.
@@ -93,7 +93,7 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
     return () => window.removeEventListener("popstate", on);
   }, []);
   // The tab on screen IS the URL's ?kg_tab= (round 5: kg_tab=setup stayed while Graph showed, so a
-  // reload opened Setup) — whichever way it changed: a press, a deep link, the setup auto-route.
+  // reload opened Setup), whichever way it changed: a press, a deep link, the setup auto-route.
   // null, not Next's own history state: with its markers the router would keep, and later write
   // back, the old URL (ConsoleShell's own replaceState calls pass null too).
   useEffect(() => {
@@ -140,14 +140,14 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
   const isKgProject = (setup.data?.project_type ?? projectType) === "knowledge_graph";
   const setupStep = setup.data?.steps.find((st) => st.key === "import");
   const setupWorking = !!setup.data && (setupStep?.state === "working" || setup.data.scans.running > 0);
-  // The setup follows indexing and a running scan by itself — only while it is the tab on screen.
+  // The setup follows indexing and a running scan by itself, only while it is the tab on screen.
   useEffect(() => {
     if (!onScreen || tab !== "setup" || !setupWorking) return undefined;
     const t = setInterval(() => { void loadSetup(); void loadRepos(); }, 5000);
     return () => clearInterval(t);
   }, [onScreen, tab, setupWorking, loadSetup, loadRepos]);
 
-  // Indexing refreshes itself — only while on screen.
+  // Indexing refreshes itself, only while on screen.
   const working = (repos.data ?? []).some((r) => r.status === "queued" || r.status === "running" || r.status === "pending");
   useEffect(() => {
     if (!onScreen || !working) return undefined;

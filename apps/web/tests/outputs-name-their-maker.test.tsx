@@ -58,7 +58,7 @@ describe("Outputs", () => {
     await mount(view(parseCockpit(cockpit()), "changes"));
     expect($('[data-group="Tests"] [data-role]')?.dataset.role).toBe("qa");
     expect($$('[data-testid="fx-out-body-changes"] .fx-file').map((f) => f.textContent)).toEqual(
-      ["tests/export.test.ts · 812 bytes", "tests/csv.test.ts · 400 bytes"]);
+      ["tests/export.test.ts, 812 bytes", "tests/csv.test.ts, 400 bytes"]);
     expect($('[data-testid="fx-out-head-changes"]')?.title).toBe("Files only. Open the PR for the diff.");
   });
 
@@ -66,7 +66,7 @@ describe("Outputs", () => {
     stubFetch(cockpit());
     await mount(view(parseCockpit(cockpit()), "tests"));
     const body = $('[data-testid="fx-out-body-tests"]')!.textContent ?? "";
-    expect(body).toContain("npm test · exit 0 · ok");
+    expect(body).toContain("npm test, exit 0, ok");
     expect(body).not.toMatch(/\d+ tests/);
     await click($('[data-testid="fx-tests-output"]'));
     expect($('[data-testid="fx-out-body-tests"] pre')?.textContent).toBe("ok\nok");

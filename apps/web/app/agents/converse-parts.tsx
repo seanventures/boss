@@ -40,7 +40,7 @@ export function useSeat(roleKey: string | null | undefined): SeatInfo | null {
 
 /**
  * ONE NAME PER AGENT, EVERYWHERE IN A CONVERSATION: its callsign first, its role beside it
- * ("Vera" · "QA Lead"), never the role instead of a callsign it has (§13.9). The header, each
+ * ("Vera", "QA Lead"), never the role instead of a callsign it has (§13.9). The header, each
  * author line, the room's seats, its To chips, the @ menu and the summary all ask this.
  *
  * The callsign is the server's (seat_info, from agent_persona.persona_of): the same one the
@@ -67,7 +67,7 @@ export const STATE_WORD: Record<AvatarState, string> = {
   failed: "Failed", stopped: "Stopped",
 };
 const STATE_GLYPH: Partial<Record<AvatarState, string>> = {
-  thinking: "…", speaking: "≋", working: "⚙", needs_you: "!", done: "✓", stuck: "!",
+  thinking: "…", speaking: "≋", working: "Settings", needs_you: "!", done: "✓", stuck: "!",
 };
 
 /**
@@ -188,7 +188,7 @@ export function ProposalCard({ proposal, onStart, onDismiss, compact }: {
     <section className="ag-proposal" data-status={runId ? "started" : proposal.status}
              data-testid="ag-proposal" aria-label="Start proposal">
       <header className="ag-proposal-head">
-        <span className="ag-eyebrow">Plan</span>
+        <span className="ag-area-name">Plan</span>
         <strong className="ag-proposal-title" data-user-text>{proposal.title}</strong>
         {proposal.why ? <span className="ag-why" data-tip={proposal.why} title={proposal.why}>Why</span> : null}
       </header>

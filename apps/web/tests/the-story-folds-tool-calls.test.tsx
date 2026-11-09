@@ -32,7 +32,7 @@ describe("the Story", () => {
     stubFetch(cockpit());
     await mount(view());
     expect($$(".fx-story-station").map((h) => h.textContent)).toEqual(["Plan", "Tests", "Build"]);
-    expect($('[data-testid="fx-story-act_TESTS0000000001"] .fx-row-what')?.textContent).toBe("Testing · Write tests");
+    expect($('[data-testid="fx-story-act_TESTS0000000001"] .fx-row-what')?.textContent).toBe("Testing, Write tests");
     expect($('[data-testid="fx-story-b1"] .fx-verb')?.textContent).toBe("Cloned the repo");
   });
 
@@ -43,7 +43,7 @@ describe("the Story", () => {
     expect($('[data-testid="fx-tools-act_BUILD0000000001"]')?.textContent).toContain("31 tool calls");
     await click($('[data-testid="fx-tools-act_BUILD0000000001"]'));
     const rows = $$('[data-testid="fx-tools-body-act_BUILD0000000001"] .fx-tool').map((r) => r.textContent);
-    expect(rows).toEqual(["Edit · ok · 340ms", "Bash · failed · 1200ms"]);
+    expect(rows).toEqual(["Edit, ok, 340ms", "Bash, failed, 1200ms"]);
     expect($('[data-testid="fx-tools-log"]')?.textContent).toBe("Open in Activity log ↗");
   });
 

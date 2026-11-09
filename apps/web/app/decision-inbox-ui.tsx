@@ -103,7 +103,7 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
       title ? `Approve the code change “${title}”.` : "Approve this code change.",
       pr ? `Pull request ${prNum} is open on GitHub with the full diff to review.` : "",
       vstatus
-        ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? ` — ${vsummary}` : ""}.`
+        ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? `, ${vsummary}` : ""}.`
         : "",
       "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
     ]
@@ -131,7 +131,7 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
     const rollback = Array.isArray(r["rollback"]) ? String((r["rollback"] as unknown[])[0] ?? "") : "";
     return [
       `Deploy ${str("app_name") || "this app"} to ${str("host") || "its host"}`
-        + `${str("environment") ? ` · ${str("environment")}` : ""}`
+        + `${str("environment") ? `, ${str("environment")}` : ""}`
         + `${commit ? ` at ${commit.slice(0, 12)}` : ""}.`,
       rollback,
       "Your own host: no provider cost.",
@@ -143,7 +143,7 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
   }
   if (action) return action.replaceAll("_", " ");
   // A WORKFLOW GATE, WHICH CARRIES NO `action`. It rendered as the bare words "review
-  // required" — which names the obligation and nothing about the thing being reviewed.
+  // required", which names the obligation and nothing about the thing being reviewed.
   const step = str("step_label") || str("capability").replaceAll("_", " ");
   if (str("workflow_run_id") && step) {
     const app = str("app_name");
@@ -162,7 +162,7 @@ function decisionRuleLabel(decision: DecisionFeedItem): string {
   const tool = typeof decision.recommendation.tool === "string" ? ` (${decision.recommendation.tool})` : "";
   const map: Record<string, string> = {
     execute_agent_tool: `Agent tool requires approval${tool}`,
-    resume_agent_run: `Agent action gated — deferred tool${tool}`,
+    resume_agent_run: `Agent action gated, deferred tool${tool}`,
     review_plan_draft: "Plan ready for review",
     review_pull_request: "Pull request review",
     review_deployment: "Deployment review",
@@ -171,18 +171,18 @@ function decisionRuleLabel(decision: DecisionFeedItem): string {
     "role.autonomy_change": "Role autonomy change",
   };
   if (map[action]) return map[action];
-  if (action) return action.replaceAll("_", " ").replace(/\./g, " · ");
+  if (action) return action.replaceAll("_", " ").replace(/\./g, ", ");
   return "governance gate";
 }
 
 /**
  * WHAT APPROVING A WORKFLOW GATE ACTUALLY DOES.
  *
- * A gate raised by the workflow runner carries no `action` — its recommendation is
- * `{capability, step_id, workflow_run_id, approver_role}` — so every one of them fell through
+ * A gate raised by the workflow runner carries no `action`, its recommendation is
+ * `{capability, step_id, workflow_run_id, approver_role}`, so every one of them fell through
  * `approvalEffectLabel`'s switch to the default, and the Approvals page told the approver:
  *
- *     Approving records your decision — this type has no automated follow-on (no project is
+ *     Approving records your decision, this type has no automated follow-on (no project is
  *     started).
  *
  * over a Deploy gate whose approval builds a container and runs it on a host. The operator's
@@ -192,7 +192,7 @@ function decisionRuleLabel(decision: DecisionFeedItem): string {
  * green button.
  *
  * `gate_completes_step` is the distinction that matters: on a gate capability the approval IS
- * the work, and on an ordinary step held at manual the approval only unblocks it — the step
+ * the work, and on an ordinary step held at manual the approval only unblocks it, the step
  * then runs and does the thing.
  */
 export function workflowGateEffect(r: Record<string, unknown>): string {
@@ -211,7 +211,7 @@ export function workflowGateEffect(r: Record<string, unknown>): string {
         + "any host before this is approved. If no deployment target is set, this step will "
         + "fail rather than guess a destination.";
     case "build":
-      return `Approving starts the build of ${named} — an agent writes code, tests it and `
+      return `Approving starts the build of ${named}, an agent writes code, tests it and `
         + "opens a pull request. It spends model budget.";
     case "preview":
       return `Approving starts a throwaway preview of ${named} on the host so it can be looked `
@@ -235,11 +235,11 @@ export function workflowGateEffect(r: Record<string, unknown>): string {
   // Unknown capability, but still a workflow gate: never claim there is no follow-on.
   return r.gate_completes_step
     ? `Approving completes the “${label}” step and the workflow continues from it.`
-    : `Approving releases the “${label}” step — it then runs, and the workflow continues.`;
+    : `Approving releases the “${label}” step, it then runs, and the workflow continues.`;
 }
 
 /**
- * WHERE IT WOULD ACTUALLY GO — read now, not recorded when the gate opened.
+ * WHERE IT WOULD ACTUALLY GO, read now, not recorded when the gate opened.
  *
  * "Approve the deployment" is not a decision anybody can make well without knowing the
  * destination, and the destination is usually chosen AFTER the gate opens (that is the whole
@@ -303,7 +303,7 @@ function DeployDestination({ recommendation, projectId }: {
   }
   return (
     <p className="dq-destination" data-testid="decision-destination">
-      <strong>Goes to</strong> {state.where} · {state.env} — a container built from this app
+      <strong>Goes to</strong> {state.where}, {state.env}, a container built from this app
       and started there, replacing whatever is running under that name.
     </p>
   );
@@ -351,7 +351,7 @@ function approvalEffectLabel(recommendation: Record<string, unknown>): string {
     case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
     case "self_improvement.begin_canary":
     case "self_improvement.rollout": return "Approving proceeds with the self-improvement rollout.";
-    default: return "Approving records your decision — this type has no automated follow-on (no project is started).";
+    default: return "Approving records your decision, this type has no automated follow-on (no project is started).";
   }
 }
 
@@ -442,7 +442,7 @@ export function workflowGateCard(rec: Record<string, unknown>): WorkflowGateCard
 /** A gate card's subtitle: the workflow by name and the case it is about, never "resume
  *  workflow". */
 export function workflowGateSubtitle(gate: WorkflowGateCard): string {
-  return [gate.workflowName || "Workflow decision", gate.subject].filter(Boolean).join(" · ");
+  return [gate.workflowName || "Workflow decision", gate.subject].filter(Boolean).join(", ");
 }
 
 export function decisionStatusDetail(decision: DecisionFeedItem): string {
@@ -471,7 +471,7 @@ export function decisionStatusDetail(decision: DecisionFeedItem): string {
     // that is; saying a rule fired is what actually happened.
     return `Approved automatically by the approval gate at ${formatDeadline(
       decision.approvedAt,
-    )} — no human reviewed this.`;
+    )}, no human reviewed this.`;
   }
   if (decision.approvedBy?.startsWith("policy:")) {
     return `Approved by this environment's deploy rule at ${formatDeadline(decision.approvedAt)}.`;
@@ -593,9 +593,9 @@ export function DecisionInbox({
     >
       <div className="section-head">
         <div>
-          <span className="eyebrow">Decision Queue</span>
+          <span className="area-name">Decision Queue</span>
           <h2 id="decision-inbox-title">
-            Agents proposed — <span className="dq-you-decide">you decide</span>.
+            Agents proposed, you decide.
           </h2>
         </div>
         <p className="status-meta">
@@ -779,7 +779,7 @@ export function DecisionInboxEmpty({
       <h3>{DECISION_INBOX_EMPTY_TITLE}</h3>
       <p className="detail">
         Nothing needs your signature. Decisions appear here when work hits a
-        human gate — they are not a history dump of already-resolved cards.
+        human gate, they are not a history dump of already-resolved cards.
       </p>
       <ul className="dq-empty-how">
         {DECISION_INBOX_EMPTY_HOWTO.map((item) => (
@@ -792,7 +792,7 @@ export function DecisionInboxEmpty({
             type="button"
             className="linklike"
             onClick={() => {
-              // RESOLVED, as the button says — it opened "all". And a popstate, which the inbox
+              // RESOLVED, as the button says, it opened "all". And a popstate, which the inbox
               // reads, rather than a boss:navigate carrying an object the shell ignores.
               writeFilterToLocation("resolved", orgId);
               window.dispatchEvent(new PopStateEvent("popstate"));
@@ -853,7 +853,7 @@ function DecisionInboxRow({
   const impact = decisionImpact(decision);
   const rec = decision.recommendation;
   // How many times the same cause has re-raised while this stayed open. Each occurrence used
-  // to insert its own row -- thirty identical "Model capacity exhausted" items -- so severity
+  // to insert its own row, thirty identical "Model capacity exhausted" items, so severity
   // now lives on ONE decision instead of by repetition.
   const occurrences = typeof rec.occurrences === "number" ? rec.occurrences : 0;
   const why = typeof rec.why === "string" ? rec.why : "";
@@ -878,7 +878,7 @@ function DecisionInboxRow({
   // recommendation.gate): two alerts at one gate read identically, and its guidance said the
   // recommendation was "above" with nothing above it.
   const gateCard = workflowGateCard(rec);
-  // AML VIDEO POLISH [7]: scoped to the AML gate card — other workflows' excerpts are unchanged.
+  // AML VIDEO POLISH [7]: scoped to the AML gate card, other workflows' excerpts are unchanged.
   const isAmlGateCard = gateCard?.workflowName === "AML Alert Investigation";
 
   // ONE APPROVAL FOR A MULTI-REPO CHANGE: its own card (every PR, review, cross-repo check, cost,
@@ -1002,7 +1002,7 @@ function DecisionInboxRow({
               <summary>
                 Read the full document before approving
                 <span className="dq-doc-size">
-                  {" · "}
+                  {", "}
                   {subject.length.toLocaleString("en-US")} characters
                 </span>
               </summary>
@@ -1035,7 +1035,7 @@ function DecisionInboxRow({
             {linkedTask ? (
               <span className="dq-ev">
                 {/* The ask, not a panel's prompt scaffolding (lib/directive-subject.ts). */}
-                T-{decision.taskId?.slice(-4)} · {displayTitle(linkedTask.title, "task").slice(0, 44)}
+                T-{decision.taskId?.slice(-4)}, {displayTitle(linkedTask.title, "task").slice(0, 44)}
                 {displayTitle(linkedTask.title, "task").length > 44 ? "…" : ""}
               </span>
             ) : null}
@@ -1170,7 +1170,7 @@ function DecisionInboxRow({
  * an action the server never accepted, so it always failed; Approve on a budget or capacity
  * refusal recorded an answer nothing reads; Request changes on a workflow gate parked the run
  * for ever. The engine now decides the list (services/decision_actions.py) and refuses
- * anything else, so this draws exactly `allowedActions` — the primary ones as buttons, the
+ * anything else, so this draws exactly `allowedActions`, the primary ones as buttons, the
  * ones that need a note or a name behind "More".
  */
 export function DecisionActions({ decision, projectId, actorId }: {
@@ -1284,7 +1284,7 @@ export function DecisionActions({ decision, projectId, actorId }: {
       {revise || delegate ? (
         <details className="dq-more">
           <summary>{[revise ? "Request changes" : "", delegate ? "hand to someone else" : ""]
-            .filter(Boolean).join(" · ").replace(/^h/, "H")}</summary>
+            .filter(Boolean).join(", ").replace(/^h/, "H")}</summary>
           <div className="dq-more-body">
             {revise ? (
               <>

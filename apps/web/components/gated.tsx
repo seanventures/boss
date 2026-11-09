@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * PRE-GREY A CONTROL THE VIEWER CANNOT USE — the console-wide primitive for buttons that invoke a
+ * PRE-GREY A CONTROL THE VIEWER CANNOT USE, the console-wide primitive for buttons that invoke a
  * server action through lib/call-action.ts (P1-18).
  *
  * A control whose action needs a permission the viewer lacks stays visible and focusable, reads
- * as disabled (aria-disabled), does nothing when pressed, and says why — in its tooltip and to a
- * screen reader — in the words useCan gives: Needs “Publish workflows” · ask an Admin. When
+ * as disabled (aria-disabled), does nothing when pressed, and says why, in its tooltip and to a
+ * screen reader, in the words useCan gives: Needs “Publish workflows”, ask an Admin. When
  * allowed it is exactly the caller's button (class, title, disabled untouched).
  *
  * The API still decides every call; this only mirrors it (components/identity/identity-provider).

@@ -30,7 +30,7 @@ export function refusalWords(e: unknown): string {
   return refusalSentence(e);
 }
 
-/** "Release Captains" → "release-captains": the group's key (lower case, 1–63, GROUP_KEY). */
+/** "Release Captains" → "release-captains": the group's key (lower case, 1, 63, GROUP_KEY). */
 export function groupKey(name: string): string {
   const k = name.trim().toLowerCase().normalize("NFKD").replace(/[^a-z0-9_.-]+/g, "-").replace(/^[^a-z0-9]+/, "").replace(/-+$/, "");
   return k.slice(0, 63);

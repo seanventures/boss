@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The server's pill, drawn. Colour is never the only signal — the label is always there — and
+ * The server's pill, drawn. Colour is never the only signal, the label is always there, and
  * the tone class comes straight from the server (`pill.tone`); nothing here maps a state to a
  * colour.
  */
@@ -64,7 +64,7 @@ export function Pill({ pill: raw, testid }: { pill: PillT; testid?: string }) {
   );
 }
 
-/** A link out of the console. `↗` is part of the label, as the copy guide spells it. */
+/** A link out of the console. `Open` is part of the label, as the copy guide spells it. */
 export function Out({ href, children, tip, testid }: {
   href: string; children: ReactNode; tip?: string; testid?: string;
 }) {

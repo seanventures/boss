@@ -57,7 +57,7 @@ describe("what an agent can do is on the agent, first", () => {
 
   it("a grant left behind by a deleted skill is shown as off, not hidden", () => {
     const html = loadout([skill("gone", { missing: true })]);
-    expect(html).toMatch(/data-off="true"[^>]*data-tip="Off · not in this project"[^>]*data-testid="agent-skill-gone"/);
+    expect(html).toMatch(/data-off="true"[^>]*data-tip="Off, not in this project"[^>]*data-testid="agent-skill-gone"/);
   });
 
   it("offers + Add to an editor and nothing to a reader", () => {

@@ -53,13 +53,13 @@ describe("one approval for a change (screen 7)", () => {
     await mount();
     expect(calls.map((c) => c.path)).toEqual(expect.arrayContaining(["/v1/change-sets/rcs_1", "/v1/change-sets/rcs_1/deploy-plan"]));
     expect(tid("decision-row")?.dataset.decisionStatus).toBe("pending");
-    expect(tid("mr-approval-eyebrow")?.textContent).toBe("Ship a change · Storefront");
+    expect(tid("mr-approval-eyebrow")?.textContent).toBe("Ship a change, Storefront");
     expect($('[data-testid="mr-approval"] h3')?.textContent).toBe("Add saved carts");
     expect(tid("mr-approval-lead")?.textContent).toBe(
       "One decision for all 3 pull requests. They merge together and deploy together, or not at all.");
     const stats = tid("mr-approval-stats")!.textContent!;
     expect(stats).toContain("3 linked");
-    expect(stats).toContain("contracts #88 · api #412 · web #977");
+    expect(stats).toContain("contracts #88, api #412, web #977");
     expect(tid("mr-approval-review")?.textContent).toContain("0 open");
     expect(tid("mr-approval-review")?.textContent).toContain("3 fixed · adversarial review on each PR");
     expect(tid("mr-approval-xcheck")?.textContent).toContain("5 / 5");
@@ -69,7 +69,7 @@ describe("one approval for a change (screen 7)", () => {
     expect(api412).toContain("+431 −58");
     expect(api412).toContain("✓ passed");
     expect(api412).toContain("v2.32.0 → eu-west-1");
-    expect(tid("mr-approval-row-acme/contracts")?.textContent).toContain("1.4.0 · with the merge");
+    expect(tid("mr-approval-row-acme/contracts")?.textContent).toContain("1.4.0, with the merge");
     expect(tid("mr-approval-rollback")?.textContent).toContain(
       "BOSS rolls every component back to what is live now: contracts 1.3.2, backend v2.31.0, frontend 2026.10.08-3.");
     expect((tid("mr-approval-plan-link") as HTMLAnchorElement).getAttribute("href")).toContain("area=infra");

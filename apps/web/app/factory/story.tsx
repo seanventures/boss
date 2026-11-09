@@ -2,8 +2,8 @@
 
 /**
  * The Story (factory spec §4.5.4): what each agent did on this build, oldest first, grouped
- * under the same station heads as the Line. Every sentence is built from fields — `<Verb> ·
- * <stage title>`, `Steered`, the server's BOSS line — never by a model; the only agent text is
+ * under the same station heads as the Line. Every sentence is built from fields, `<Verb> ·
+ * <stage title>`, `Steered`, the server's BOSS line, never by a model; the only agent text is
  * the trimmed `Said` excerpt the server sends.
  *
  * A fold control is never a promise: `n files ▾`, `n tool calls ▾`, `Said ▾` appear only when
@@ -85,7 +85,7 @@ function ToolsFold({ projectId, runId, act, log, jump }: { projectId: string; ru
         <button type="button" className="ag-link fx-fold-btn" aria-expanded={open} data-testid={`fx-tools-${act.actId}`}
                 onClick={() => setOpen((v) => !v)}>
           {n} tool {n === 1 ? "call" : "calls"}
-          {bad ? <span className="fx-fold-bad"> · {bad} failed</span> : null}
+          {bad ? <span className="fx-fold-bad">, {bad} failed</span> : null}
           {" "}{open ? <CaretDown size={10} weight="bold" aria-hidden /> : <CaretRight size={10} weight="bold" aria-hidden />}
         </button>
         {open ? (
@@ -125,8 +125,8 @@ function ToolsCount({ projectId, runId, act }: { projectId: string; runId: strin
           {tools ? tools.items.slice(0, 50).map((t, i) => (
             <span key={i} className="fx-tool" data-ok={t.ok === null ? undefined : String(t.ok)}>
               <span className="fx-mono">{t.toolName}</span>
-              {t.ok === null ? null : <span> · {t.ok ? "ok" : "failed"}</span>}
-              {t.latencyMs !== null ? <span> · {t.latencyMs}ms</span> : null}
+              {t.ok === null ? null : <span>, {t.ok ? "ok" : "failed"}</span>}
+              {t.latencyMs !== null ? <span>, {t.latencyMs}ms</span> : null}
             </span>
           )) : failed ? <span className="fx-muted">Not available</span> : <span className="fx-muted">Loading</span>}
           <a className="ag-link" href={logHref({ run: runId })} data-testid="fx-tools-log">
@@ -174,7 +174,7 @@ function ActRow({ row, props, live, enter, jump }: { row: StoryAct; props: Story
   // `round n` only on a build that went round (walk D15): a stage re-opened for another reason
   // on a build with no repair rounds is not a round.
   const looped = props.stations.some((st) => st.rounds > 0);
-  const title = [row.title, row.seat ? `seat ${row.seat}` : "", looped && row.round > 1 ? `round ${row.round}` : ""].filter(Boolean).join(" · ");
+  const title = [row.title, row.seat ? `seat ${row.seat}` : "", looped && row.round > 1 ? `round ${row.round}` : ""].filter(Boolean).join(", ");
   const right = [row.word, spanOf(row.startedAt, row.endedAt ?? null, row.endedAt ? null : now),
     costWord(row.costUsd)].filter(Boolean);
   const authored = row.commentsAuthored > 0
@@ -192,7 +192,7 @@ function ActRow({ row, props, live, enter, jump }: { row: StoryAct; props: Story
       <span className="fx-row-main">
         <span className="fx-row-what">
           <span className="fx-verb">{row.verb}</span>
-          <span> · </span>
+          <span>, </span>
           <span data-user-text title={row.label}>{title}</span>
         </span>
         <span className="fx-row-folds">
@@ -223,7 +223,7 @@ function ActRow({ row, props, live, enter, jump }: { row: StoryAct; props: Story
           </span>
         ) : null}
       </span>
-      <span className="fx-row-right">{right.join(" · ")}</span>
+      <span className="fx-row-right">{right.join(", ")}</span>
     </li>
   );
 }
@@ -246,7 +246,7 @@ function YouRow({ row, viewer, enter }: { row: StoryYou; viewer: string; enter?:
         <span className="fx-row-what">
           <span className="fx-verb">{word}</span>
           {row.what === "steered" && row.text ? (
-            <><span> · </span><span className="fx-quote" title={row.text} data-user-text>“{row.text}”</span></>
+            <><span>, </span><span className="fx-quote" title={row.text} data-user-text>“{row.text}”</span></>
           ) : null}
         </span>
         {row.what === "waived" && row.text ? (
@@ -258,7 +258,7 @@ function YouRow({ row, viewer, enter }: { row: StoryYou; viewer: string; enter?:
       <span className="fx-row-right">
         {row.what === "steered" ? (
           row.word && !row.word.startsWith("Queued") && !row.word.startsWith("Read by")
-            // The server's last word on it: `Not read · build ended` (walk D11).
+            // The server's last word on it: `Not read, build ended` (walk D11).
             ? <span data-testid="fx-steer-unread" title="The build ended before the next station">{row.word}</span>
             : row.appliedAt || row.word?.startsWith("Read by")
               ? <span data-testid="fx-steer-read">{row.word ?? `Read by ${whoName(row.appliedRole)}`}</span>
@@ -286,7 +286,7 @@ function BossRow({ row, enter }: { row: StoryBoss; enter?: boolean }) {
         <span className="fx-row-folds">
           <Fold label={plural(cmds.length, "command")} count={cmds.length} testId={`fx-cmds-${row.id}`}>
             {() => <span className="fx-files">{cmds.map((c, i) => (
-              <span key={i} className="fx-mono" data-user-text>{String(c.command ?? "")} · exit {String(c.exit_code ?? "?")}</span>
+              <span key={i} className="fx-mono" data-user-text>{String(c.command ?? "")}, exit {String(c.exit_code ?? "?")}</span>
             ))}</span>}
           </Fold>
           <Fold label={plural(steps.length, "step")} count={steps.length} testId={`fx-steps-${row.id}`}>

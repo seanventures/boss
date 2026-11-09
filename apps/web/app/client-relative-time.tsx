@@ -16,7 +16,7 @@ type Style = "long" | "short" | "compact";
  */
 export function ClientRelativeTime({
   iso,
-  style = "long",
+  style="long",
   empty = "not yet",
   prefix = "",
   suffix = "",

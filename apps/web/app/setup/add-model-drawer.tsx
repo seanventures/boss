@@ -3,7 +3,7 @@
 /**
  * Add a model: three kinds of thing, never one dropdown mixing them. A subscription you sign
  * into, an API key you paste, or a local model on your hardware. Every Connect asks one tiny
- * question — budgeted and receipted — before saying Working.
+ * question, budgeted and receipted, before saying Working.
  *
  * A subscription (Codex, Claude Code, Grok) is never pasted, dropped or imported: Sign in runs the
  * provider's own login on the BOSS server, then Connect proves it (BOSSAPP-769).
@@ -64,7 +64,7 @@ export function HeldProofNotice({ hold, onReleased }: {
       const next = await setupWrite<SetupView>(projectId, "release_hold", {
         receipt_id: hold.receipt_id, reason: reason.trim(),
       }, { label: "Release the hold" });
-      toast("Hold released · Connect again", "success");
+      toast("Hold released, Connect again", "success");
       onReleased(next);
     } catch (error) {
       setRefusal(refusalOf(error));
@@ -88,7 +88,7 @@ export function HeldProofNotice({ hold, onReleased }: {
             <dt>Receipt</dt><dd><code>{hold.receipt_id}</code></dd>
             <dt>Model</dt><dd><code>{hold.model}</code></dd>
             {hold.outcome.http_status ? <><dt>Reply</dt><dd>HTTP {hold.outcome.http_status}
-              {hold.outcome.provider_error_type ? ` · ${hold.outcome.provider_error_type}` : ""}</dd></> : null}
+              {hold.outcome.provider_error_type ? `, ${hold.outcome.provider_error_type}` : ""}</dd></> : null}
             <dt>Held</dt><dd>{usd(hold.held_usd_micros)}</dd>
             <dt>Release charges</dt><dd data-testid="su-held-charge">{charge}</dd>
           </dl>
@@ -142,8 +142,8 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   // Codex, Claude Code and Grok sign in here (the only subscriptions the catalogue offers).
   const signsIn = tile === "subscription" && SIGN_IN_PROVIDERS.has(provider);
   // WHAT THE ROWS SAY, read the same way (model-status): the provider's Models row is its
-  // last real proof; the CLI's own "signed in" only decides that Connect — which proves it and
-  // signs nothing out — comes before Sign in. A login the last proof refused says so beside
+  // last real proof; the CLI's own "signed in" only decides that Connect, which proves it and
+  // signs nothing out, comes before Sign in. A login the last proof refused says so beside
   // Connect ("Check refused"), and Sign in again (which replaces the login) stays one click
   // away; it is never pressed for the person (2026-10-25: a fresh Claude login was at risk).
   const row = providerRow(view, provider);
@@ -255,7 +255,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
         ?? next.models.find((m) => m.provider === provider);
       const label = row?.pill.label ?? "Working";
       const proven = !row || row.pill.tone === "green";
-      toast(`Connected · ${label}`, proven ? "success" : "error");
+      toast(`Connected, ${label}`, proven ? "success" : "error");
       // A subscription whose proof failed stays open on its pill, so Sign in again is right here.
       if (tile === "subscription" && row && !proven) {
         setResult(row.pill);
@@ -326,7 +326,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
       </div>
       <div className="su-chips" role="radiogroup" aria-label="Provider">
         {chips.map((c) => {
-          // THE ROW'S OWN STATUS when it has a row, else what the server found — the same
+          // THE ROW'S OWN STATUS when it has a row, else what the server found, the same
           // answer the list shows (a "Sign in" chip sat beside a "Working" row).
           const st = chipStatus(view, c.provider);
           const show = !!st && (!!st.pill || tile === "subscription" || st.found === "found");

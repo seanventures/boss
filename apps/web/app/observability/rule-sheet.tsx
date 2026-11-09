@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Edit a rule (or add one) — the side sheet (BOSSAPP-598 mockup):
+ * Edit a rule (or add one), the side sheet (BOSSAPP-598 mockup):
  *
  *   Error rate alert
  *     Fire when    errors (5xx) are above [ 5 ]% of requests
@@ -22,7 +22,7 @@
  * TUNE (P1-C) is this sheet. Preview replays the NEW values over the last 24 h next to the rule as
  * it is. A rule the repo owns (boss.deploy.yaml, `tuneVia: pull_request`) shows where it lives
  * (path:line) and its primary press is Propose PR: a pull request that changes only that rule's
- * lines — its row is not overwritten. Any other rule is saved here, audited.
+ * lines, its row is not overwritten. Any other rule is saved here, audited.
  */
 import React, { useState } from "react";
 
@@ -198,7 +198,7 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved, 
             <span className="obs-rbody">
               {rule?.where ? (rule.where.href
                 ? <a className="inf-link inf-mono" href={rule.where.href} target="_blank" rel="noreferrer noopener" data-copy="data"
-                     title={`Lines ${rule.where.line}–${rule.where.endLine} of ${rule.where.path}, as deployed`}>{whereWord(rule.where)} ↗</a>
+                     title={`Lines ${rule.where.line}, ${rule.where.endLine} of ${rule.where.path}, as deployed`}>{whereWord(rule.where)} </a>
                 : <span className="inf-mono" data-copy="data">{whereWord(rule.where)}</span>)
                 : <span className="inf-mono" title="Its line is found when the pull request is opened">boss.deploy.yaml</span>}
             </span>

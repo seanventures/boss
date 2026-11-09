@@ -186,8 +186,8 @@ describe("needs you", () => {
                                  plan_url: "/v1/code-tasks/crun_a" } });
     await mount(page(V(view({ attention: [plan] }))));
     const row = $$('[data-testid="cc-need"]')[0];
-    expect(row.querySelector("b")?.textContent).toBe("Approve the plan · Interview Scorecard");
-    expect(row.textContent).toMatch(/drafted it · waiting \d+[mhd]/);
+    expect(row.querySelector("b")?.textContent).toBe("Approve the plan, Interview Scorecard");
+    expect(row.textContent).toMatch(/drafted it, waiting \d+[mhd]/);
     expect(row.querySelector('[data-testid="cc-need-review"]')?.className).toContain("primary");
   });
 
@@ -197,7 +197,7 @@ describe("needs you", () => {
     await mount(page(V(view({ attention: [d] }))));
     const row = $$('[data-testid="cc-need"]')[0];
     expect(row.textContent).toContain("Allow an OpenAI call without a reservation");
-    expect(row.textContent).toMatch(/Spend guard · raised \d+[mhd] ago/);
+    expect(row.textContent).toMatch(/Spend guard, raised \d+[mhd] ago/);
     expect(row.querySelector(".cc-need-icon")?.textContent).toBe("$");
   });
 
@@ -222,7 +222,7 @@ describe("needs you", () => {
     await mount(page(V(view({ attention: [failed({ at: "2026-09-20T09:00:00Z" })],
                                counts: { agents: 7, working: 0, needs_you: 0, stopped: 1, setup: 0, running: 0, stalled: 0, expired_answerable: 4 } }))));
     expect($$('[data-testid="cc-need"]').length).toBe(0);
-    expect(text('[data-testid="cc-stopped-earlier"]')).toBe("1 stopped earlier ↗");
+    expect(text('[data-testid="cc-stopped-earlier"]')).toBe("1 stopped earlier");
     expect(text('[data-testid="cc2-expired-answerable"]')).toBe("4 expired · still answerable ↗");
     expect(tid("cc2-expired-answerable")?.getAttribute("href")).toContain("decision_filter=expired");
   });
@@ -281,7 +281,7 @@ describe("in flight", () => {
     expect(text('[data-testid="cc2-kpi-running"]')).toBe("0");
     expect(tid("cc2-running-empty")).not.toBeNull();
     expect(text('[data-testid="cc-stalled"] b')).toMatch(/^2 runs stalled \d+\+ days$/);
-    expect(text('[data-testid="cc-stalled"] div span')).toContain("Feature flag expiry tracker · Subscription audit");
+    expect(text('[data-testid="cc-stalled"] div span')).toContain("Feature flag expiry tracker, Subscription audit");
     expect(tid("cc-stalled-open")?.getAttribute("href")).toContain("area=delivery_workflows");
   });
 
@@ -308,7 +308,7 @@ describe("health", () => {
   it("money against the cap (subscription calls free), linked to Budget", async () => {
     await mount(page(V(view())));
     expect(text(".cc-gauge-text b")).toBe("$84.00 of $200");
-    expect(text(".cc-gauge-text > span")).toBe("This month · subscription calls free");
+    expect(text(".cc-gauge-text > span")).toBe("This month, subscription calls free");
     expect(tid("cc-budget-link")?.getAttribute("href")).toContain("area=budget");
   });
 
@@ -316,7 +316,7 @@ describe("health", () => {
     await mount(page(V(view())));
     const dots = $$('[data-testid^="cc-dot-"]');
     expect(dots.length).toBe(7);
-    expect(tid("cc-dot-models")?.getAttribute("title")).toBe("OK · Claude Code working · 212 calls today");
+    expect(tid("cc-dot-models")?.getAttribute("title")).toBe("OK, Claude Code working · 212 calls today");
     expect(tid("cc-dot-models")?.getAttribute("href")).toBe("/?org=org_1&area=setup&focus=models");
     expect(tid("cc-dot-models")?.closest(".cc-sec")).not.toBeNull();
   });
@@ -328,7 +328,7 @@ describe("the shelves", () => {
     const cards = $$('[data-testid="cc-tpl"]');
     expect(cards.length).toBe(16);
     expect(cards[0].querySelector("svg")).not.toBeNull();
-    expect(text('[data-testid="cc-templates-all"]')).toBe("All 16 ↗");
+    expect(text('[data-testid="cc-templates-all"]')).toBe("All 16");
     await click(cards[0]);
     expect(window.location.search).toContain("template=");
     expect(tid("askboss-sheet")).not.toBeNull();
@@ -352,7 +352,7 @@ describe("the shelves", () => {
     expect(cards[1].querySelector(".cc-app-state")?.textContent).toBe("PR #207 open");
     expect(cards[1].querySelector(".cc-mono")).not.toBeNull();   // no template: a monogram
     expect(cards[0].querySelector(".cc-mono")).toBeNull();       // Interview scorecard: its cover
-    expect(cards[0].textContent).toContain("2 builds · $3.58");
+    expect(cards[0].textContent).toContain("2 builds, $3.58");
     expect(cards[0].getAttribute("href")).toContain("build=crun_a");
   });
 
@@ -399,7 +399,7 @@ describe("the pulse", () => {
     const p = pulse() as { days: unknown[]; total: number };
     expect($$('[data-testid="cc-heat"] i:not(.pad)').length).toBe(p.days.length);
     expect(text('[data-testid="cc-heat-foot"]')).toContain(`${p.total}agent steps`);
-    expect(text('[data-testid="cc-heat-foot"]')).toContain("Busiest Sep 3 · 71 steps");
+    expect(text('[data-testid="cc-heat-foot"]')).toContain("Busiest Sep 3, 71 steps");
     expect(text('[data-testid="cc-heat-foot"]')).toContain("2PRs open");
     expect($$('[data-testid="cc-tops"] .cc-top-row').length).toBe(5);
   });
@@ -409,7 +409,7 @@ describe("the pulse", () => {
     const lines = $$('[data-testid="cc-ev"]').map((e) => e.textContent ?? "");
     expect(lines.length).toBe(4);
     expect(lines[1]).toMatch(/planned Interview Scorecard/);
-    expect(lines[2]).toMatch(/reviewed Changelog Composer — asked for changes/);
+    expect(lines[2]).toMatch(/reviewed Changelog Composer, asked for changes/);
     expect($$('[data-testid="cc-ev"]')[3].getAttribute("href")).toContain("wfr=wfr_182");
   });
 
@@ -441,10 +441,10 @@ describe("re-test (independent tester)", () => {
 
   it("today's money is on the card, done today says its failures, this week opens by touch", async () => {
     await mount(page(V(view())));
-    expect(text('[data-testid="cc-today-spend"]')).toBe("Today: $4.12 · $3.80 included");
+    expect(text('[data-testid="cc-today-spend"]')).toBe("Today: $4.12, $3.80 included");
     expect(text('[data-testid="cc-kpi-done-today"]')).toBe("4 done today · 1 failed");
     expect($('[data-testid="cc-week"]')?.tagName).toBe("DETAILS");
-    expect(text('[data-testid="cc-week"] summary')).toBe("This week: 38 finished · 4 failed");
+    expect(text('[data-testid="cc-week"] summary')).toBe("This week: 38 finished, 4 failed");
   });
 
   it("a face glows from the board's one working state (the server folds in live runs)", async () => {
@@ -577,7 +577,7 @@ describe("the composer's replies name what started, never an id", () => {
     const src = readFileSync(resolve(__dirname, "../app/ask-boss-hero.tsx"), "utf8");
     expect(src).not.toMatch(/Run \\`\$\{runId\}\\`/);
     expect(src).not.toMatch(/Discovery run \\`\$\{/);
-    expect(src).toContain("namedRun(directive)} run ↗");
+    expect(src).toContain("namedRun(directive)} run]");
   });
 });
 

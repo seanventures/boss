@@ -63,7 +63,7 @@ describe("Capacity on Repo and models", () => {
     expect(src("anthropic_api").querySelector(".su-pill")?.textContent).toBe("Working");
     expect(src("openai_gateway").querySelector(".su-pill")?.textContent).toBe("Blocked");
     expect(src("claude_max").querySelector(".su-pill")?.textContent).toBe("Needs sign-in");
-    expect(q(document.body, "setup-entitlement-session")?.textContent).toContain("1 · 1 waiting");
+    expect(q(document.body, "setup-entitlement-session")?.textContent).toContain("1, 1 waiting");
     expect(q(document.body, "setup-broker-skills-link")?.getAttribute("href")).toBe("?area=skills");
     expect(overBudget(q(document.body, "setup-entitlements") as HTMLElement)).toEqual([]);
     expect((document.body.textContent ?? "").toLowerCase()).not.toContain("entitlement");
@@ -235,8 +235,8 @@ describe("Capacity on Repo and models", () => {
     };
     for (const [credential, text] of [
       [{ kind: "long_lived_token", label: "long-lived subscription token (until Oct 27, 2027)", expires_at: "2027-10-27T10:00:00+00:00" },
-        "· long-lived subscription token (until Oct 27, 2027)"],
-      [{ kind: "cli_login", label: "CLI login (expires in 7 h)", expires_at: null }, "· CLI login (expires in 7 h)"],
+        ", long-lived subscription token (until Oct 27, 2027)"],
+      [{ kind: "cli_login", label: "CLI login (expires in 7 h)", expires_at: null }, ", CLI login (expires in 7 h)"],
     ] as const) {
       api(view(credential));
       mounted = await mountBoard(view(credential));

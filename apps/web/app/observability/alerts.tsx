@@ -13,8 +13,8 @@
  *   2 selected  [ Ack selected ]
  *
  * Filters live in the URL (aapp, astate, asev, asrc, aflap, aack, aatt). Every row and card carries
- * its SEV flag and a status chip (Firing · Acknowledged · Pending · Resolved · Silenced). An app's name opens its
- * drawer on the Alerts tab — the one place its rules are changed (one surface per job). Ack stops
+ * its SEV flag and a status chip (Firing, Acknowledged, Pending, Resolved, Silenced). An app's name opens its
+ * drawer on the Alerts tab, the one place its rules are changed (one surface per job). Ack stops
  * repeats for 4 hours; it never silences.
  */
 import React, { useState } from "react";
@@ -128,7 +128,7 @@ export function AlertsTab(props: ObsTabProps & { onConnect?: () => void }) {
           <select aria-label="App" value={url.aapp ?? ""} data-testid="obs-alerts-app"
                   onChange={(e) => go({ aapp: e.target.value || null }, "replace")}>
             <option value="">All apps</option>
-            {(d?.apps ?? []).map((a) => <option key={a.targetId} value={a.targetId}>{a.app} · {a.env}</option>)}
+            {(d?.apps ?? []).map((a) => <option key={a.targetId} value={a.targetId}>{a.app}, {a.env}</option>)}
           </select>
         </span>
         <span className="obs-dropchip" data-on={url.astate !== "firing" ? "1" : undefined}>
@@ -141,7 +141,7 @@ export function AlertsTab(props: ObsTabProps & { onConnect?: () => void }) {
           <select aria-label="Severity" value={url.asev ?? ""} data-testid="obs-alerts-severity"
                   onChange={(e) => go({ asev: e.target.value || null }, "replace")}>
             <option value="">Any severity</option>
-            {severities.map((s) => <option key={s.key} value={s.key} title={`${s.word}: ${s.meaning}`}>{s.label} · {s.word}</option>)}
+            {severities.map((s) => <option key={s.key} value={s.key} title={`${s.word}: ${s.meaning}`}>{s.label}, {s.word}</option>)}
           </select>
         </span>
         <span className="obs-dropchip" data-on={url.asrc ? "1" : undefined} title="Where the alert came from">

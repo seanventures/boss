@@ -92,7 +92,7 @@ function sessionTitle(t: Thread): string {
   return cleaned.length > 52 ? cleaned.slice(0, 52).trimEnd() + "…" : cleaned;
 }
 
-/** "3m ago" / "2h ago" / "5d ago" — a chat list is read by recency, not by timestamp. */
+/** "3m ago" / "2h ago" / "5d ago", a chat list is read by recency, not by timestamp. */
 function relativeWhen(iso?: string): string {
   if (!iso) return "";
   const then = Date.parse(iso);
@@ -121,8 +121,8 @@ function railBtn(active: boolean) {
  *
  * The facts block is prepended to the outgoing message so the tools know which run the
  * conversation is about; it is noise to a reader, so it is stripped for display. But this
- * returned `""` for two real inputs — a facts block with no message after it, and one followed
- * by whitespace — and the console rendered that as an empty "You" bubble. From the operator's
+ * returned `""` for two real inputs, a facts block with no message after it, and one followed
+ * by whitespace, and the console rendered that as an empty "You" bubble. From the operator's
  * side their message had simply disappeared, which is worse than showing them the raw context:
  * a chat that loses what you typed cannot be trusted with anything you type next.
  *
@@ -134,7 +134,7 @@ function railBtn(active: boolean) {
  *
  * The block is prepended at send time as `${facts}\n\n${typed}`, so the boundary is the LAST
  * blank line, not the first. Splitting on the first one left everything after it on screen the
- * moment any fact contained a blank line of its own — which is how a one-line question came to
+ * moment any fact contained a blank line of its own, which is how a one-line question came to
  * be displayed under twenty lines of run_id, branch, "DEPLOY THIS ONE" and instructions
  * addressed to the model.
  *
@@ -148,7 +148,7 @@ export const APP_FACTS_END = "[/app context]";
  * What to call an action in the transcript.
  *
  * THIS CRASHED THE WHOLE CONSOLE. `a.kind.replaceAll(...)` assumed every recorded action has a
- * `kind`, and one of the two writers records `{id, tool, ok}` instead — so a thread containing
+ * `kind`, and one of the two writers records `{id, tool, ok}` instead, so a thread containing
  * one of those threw `Cannot read properties of undefined (reading 'replaceAll')` during
  * render, React unmounted the tree, and the operator got "Application error: a client-side
  * exception has occurred" with no console at all. A transcript is a log of what happened; one
@@ -173,7 +173,7 @@ export function stripAppFacts(content: string): string {
   // LEGACY messages, already in the transcript without a terminator. FIRST blank line, not
   // last: a last-blank-line rule strips more of the block, but on a message the operator wrote
   // in several paragraphs it deletes everything except the final one. There is a test called
-  // "chat never loses your message" guarding exactly that, and it is the right guarantee —
+  // "chat never loses your message" guarding exactly that, and it is the right guarantee , 
   // showing some stale context above an old question is a far smaller harm than silently
   // discarding what someone typed. New messages carry the terminator and are exact.
   const split = text.indexOf("\n\n");
@@ -221,7 +221,7 @@ type ProposedAction = {
  * re-render of a 6 MB page. A dock opened during that window waited behind it.
  *
  * A route handler does not queue. The timeout is the second half: a read that never answers
- * must not hold the panel in "Loading…" for ever — the panel opens empty and usable, which is
+ * must not hold the panel in "Loading…" for ever, the panel opens empty and usable, which is
  * a far better failure than a spinner with no end.
  */
 async function read<T>(params: Record<string, string>, ms = 12_000): Promise<T | null> {
@@ -237,7 +237,7 @@ async function read<T>(params: Record<string, string>, ms = 12_000): Promise<T |
     const body = await r.json();
     return (body && typeof body === "object" && "error" in body) ? null : (body as T);
   } catch {
-    return null;                      // aborted, offline, or malformed — the caller recovers
+    return null;                      // aborted, offline, or malformed, the caller recovers
   }
 }
 
@@ -248,7 +248,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   /** Text to seed the composer with, handed in as a PROP rather than read from the URL.
    *
    *  `?ask=` is consumed by whichever AgentChat reads it first, and the console keeps the BOSS
-   *  Agent area mounted at all times — so a starter clicked in Infra was swallowed by an
+   *  Agent area mounted at all times, so a starter clicked in Infra was swallowed by an
    *  instance nobody was looking at, and the dock opened empty. */
   initialMessage?: string;
   /** Whose conversation this is. The dock is not always "BOSS": in Infra you are talking to
@@ -257,7 +257,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   /** Start a NEW conversation rather than reopening the last one.
    *
    *  On mount this panel calls `openThreadAndContext(GENERAL)`, which loads the most recent
-   *  general thread — right for a dock you are returning to, wrong for an idea you have just
+   *  general thread, right for a dock you are returning to, wrong for an idea you have just
    *  decided to discuss. Pressing Discuss on a stock-trading site reopened a thread about
    *  starved queues and put the idea underneath it, so the model would have answered the new
    *  question with the old conversation in context. */
@@ -297,7 +297,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [fileError, setFileError] = useState("");
   const picker = useRef<HTMLInputElement>(null);
 
-  /** Take files from the picker, a paste, or a drop — refusing, with a reason, before upload. */
+  /** Take files from the picker, a paste, or a drop, refusing, with a reason, before upload. */
   const attach = useCallback(async (incoming: FileList | File[] | null) => {
     const list = Array.from(incoming ?? []);
     if (!list.length) return;
@@ -319,14 +319,14 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     if (total > MAX_BYTES) {
       // BEFORE THE ROUND TRIP, not after it. The API enforces the same bound; being told by the
       // server means waiting for an upload that was never going to be accepted.
-      setFileError(`Those come to ${Math.round(total / 1024)}KB — the limit is `
+      setFileError(`Those come to ${Math.round(total / 1024)}KB, the limit is `
                    + `${Math.round(MAX_BYTES / 1024)}KB per message.`);
       return;
     }
     if (next.length) setFiles((f) => [...f, ...next]);
   }, [files]);
   // ADDRESSED FROM SOMEWHERE ELSE. The Agents page sends the operator here with the message
-  // already opened — "@QA Lead — " — so asking one of them something is a click from the card
+  // already opened, "@QA Lead, ", so asking one of them something is a click from the card
   // that named them, rather than navigating here and retyping who you meant.
   useEffect(() => {
     const read = () => {
@@ -339,7 +339,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         const url = new URL(window.location.href);
         url.searchParams.delete("ask");
         window.history.replaceState(null, "", url.toString());
-      } catch { /* non-browser — the text is in the box either way */ }
+      } catch { /* non-browser, the text is in the box either way */ }
     };
     read();
     window.addEventListener("popstate", read);
@@ -348,7 +348,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [pendingPlan, setPendingPlan] = useState<Record<string, unknown> | null>(null);
   /** Actions BOSS is OFFERING. Nothing here has run; a click is what executes it. */
   const [proposed, setProposed] = useState<ProposedAction[]>([]);
-  /** "Investigate further" / "Do the fix" under the last answer — see NextStep. */
+  /** "Investigate further" / "Do the fix" under the last answer, see NextStep. */
   const [nextSteps, setNextSteps] = useState<NextStep[]>([]);
   const [trail, setTrail] = useState<ToolCall[]>([]);
   const [ranAction, setRanAction] = useState<string | null>(null);
@@ -378,8 +378,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [loadingThread, setLoadingThread] = useState(false);
   const [busy, startTransition] = useTransition();
   // WHO IS IN THE DOCK, BY KEY, and what they are doing right now. Thinking while a turn is in
-  // flight, speaking as its words arrive — from the turn's real state, never on a timer.
-  // `dockAgent` is the key the turn sends (given, or resolved — never guessed from a name);
+  // flight, speaking as its words arrive, from the turn's real state, never on a timer.
+  // `dockAgent` is the key the turn sends (given, or resolved, never guessed from a name);
   // `dockFace` is only what the dock draws its face and name from.
   const dockAgent = dockRoleKey(roleKeyProp, roleName);
   const dockFace = dockFaceKey(roleKeyProp, roleName);
@@ -405,7 +405,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   //: MESSAGES TYPED WHILE A TURN IS RUNNING.
   //:
   //: Send was disabled while busy, so a second thought had to be held in the operator's head
-  //: for the two minutes a turn can take — or typed into the box and forgotten. A queue is the
+  //: for the two minutes a turn can take, or typed into the box and forgotten. A queue is the
   //: obvious thing and the panel already has everything it needs for one: the turn ends, the
   //: next message goes.
   //:
@@ -413,13 +413,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   //: cannot see is a message you cannot tell was sent.
   const [queued, setQueued] = useState<string[]>([]);
   //: A turn the operator stopped waiting for. The work itself is a server action and cannot be
-  //: killed from here — so this says what is actually true rather than pretending to cancel.
+  //: killed from here, so this says what is actually true rather than pretending to cancel.
   const [released, setReleased] = useState(false);
   //: Consecutive failed actions handed back for repair. Reset by any success, so a long
   //: conversation is not permanently one strike from giving up.
   const [repairs, setRepairs] = useState(0);
   // HOW LONG, AND WHAT IF IT NEVER ANSWERS.
-  // "It says it will monitor and update and I don't see any waiting signal — it just quits and
+  // "It says it will monitor and update and I don't see any waiting signal, it just quits and
   // I don't know when it will come back." A spinner with no clock and no end state is why:
   // there was no way to tell 8 seconds of work from a turn that had already died. So the
   // elapsed time is always visible, and a turn that outlives NORMAL/STALL says so in the log
@@ -427,14 +427,14 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [elapsed, setElapsed] = useState(0);
   // WHAT IT IS DOING, WHILE IT IS DOING IT.
   //
-  // A turn is one request, so the tool calls are known only when it returns — and the
+  // A turn is one request, so the tool calls are known only when it returns, and the
   // reliability work deliberately makes turns investigate MORE, which makes the wait longer.
-  // The server records each step as it starts; this polls for them. "Working — reading the
+  // The server records each step as it starts; this polls for them. "Working, reading the
   // system" for two minutes is indistinguishable from a turn that has died.
   const [steps, setSteps] = useState<string[]>([]);
   // AND WHAT IS STILL WORKING AFTER THE TURN HAS ANSWERED.
   //
-  // An investigation is a real debugging session — a shell, the repo, the fleet — and it runs
+  // An investigation is a real debugging session, a shell, the repo, the fleet, and it runs
   // for minutes AFTER the chat turn returns. Polling only while `busy` meant the most
   // informative progress BOSS produces went to a table nobody read: the operator saw a
   // finished answer and no sign that anything was still happening.
@@ -476,12 +476,12 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   }, [busy, threadId, probe, landing]);
   // WATCH FOR THE ANSWER THAT OUTRAN THE BOUND.
   //
-  // The turn was never cancelled — it is still running server-side and writes its reply into
+  // The turn was never cancelled, it is still running server-side and writes its reply into
   // this thread when it finishes. Polling for that is the difference between "reopen this in a
   // moment and see" and the answer simply appearing, which is what the operator expected when
   // they pressed send.
   // HOW THIS DOCK WAS OPENED. `?dock_mode=discuss` means the operator brought a subject with
-  // them from the composer rather than clicking into a run — so the panel starts a new thread
+  // them from the composer rather than clicking into a run, so the panel starts a new thread
   // and frames itself around the conversation. It no longer selects a different AGENT: one
   // conversation answers both an idea and a question about the factory (_one_conversation_brief).
   const [discussing, setDiscussing] = useState(false);
@@ -501,7 +501,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     const m = /<<<BOSS-BRIEF\s*([\s\S]*?)BOSS-BRIEF>>>/.exec(text || "");
     return m ? m[1].trim() : null;
   };
-  /** The same message with the wrapped brief removed — it is rendered as its own block. */
+  /** The same message with the wrapped brief removed, it is rendered as its own block. */
   const withoutBrief = (text: string): string =>
     (text || "").replace(/<<<BOSS-BRIEF[\s\S]*?BOSS-BRIEF>>>/g, "").trim();
   /** Hand the brief to the Command Center composer. Still a press away from building. */
@@ -553,7 +553,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           setLanding(false);
           return;
         }
-        // NOTHING IS RUNNING, SO STOP SAYING IT IS — but only after this turn has been
+        // NOTHING IS RUNNING, SO STOP SAYING IT IS, but only after this turn has been
         // seen working. A false on the first sample is "no tool has started yet", which
         // is how every turn begins. Two consecutive not-working reads after that, because
         // a turn between steps can briefly show as idle and one sample would call that death.
@@ -565,7 +565,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           if (quiet.current >= 2) {
             setLanding(false);
             setMessages((m) => [...m, { role: "assistant", content:
-              "That turn ended without an answer — nothing is running now. Whatever it had "
+              "That turn ended without an answer, nothing is running now. Whatever it had "
               + "already done still stands; ask again and it will pick up from the thread." }]);
           }
         }
@@ -580,7 +580,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     return () => window.clearInterval(id);
   }, [busy]);
 
-  // ONE THREAD PER (SUBJECT, AGENT) — the key the turn itself uses (agent_service: project,
+  // ONE THREAD PER (SUBJECT, AGENT), the key the turn itself uses (agent_service: project,
   // surface, external_ref, agent_role). Matching the subject alone opened whichever agent's
   // conversation about it came first. An API older than `agent_role` on the list matches by
   // subject, as before.
@@ -596,7 +596,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
    * Open one conversation by its thread id, or start a fresh one.
    *
    * The rail used to be a list of TASKS with a single "General chat" pinned on top, so the only
-   * way back into a past conversation was to remember which task it hung off — and a
+   * way back into a past conversation was to remember which task it hung off, and a
    * cross-cutting chat had exactly one slot, permanently reused. Tasks now have their own Ask
    * BOSS panel on the card, which is where task-scoped work belongs; this page is the general
    * one, so it is organised the way a chat app is: sessions, newest first, and a New chat
@@ -620,7 +620,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
   const openThreadAndContext = useCallback((id: string, list: Thread[]) => {
     // Proposals are cleared with everything else. Left behind, an offer from the PREVIOUS
-    // conversation stayed on screen while a different thread loaded — and it stays clickable,
+    // conversation stayed on screen while a different thread loaded, and it stays clickable,
     // so "delete all containers on hetzner-ci-01" could be pressed from a chat about
     // something else entirely.
     setSel(id); setMessages([]); setContext(null); setPendingPlan(null); setProposed([]); setNextSteps([]);
@@ -651,8 +651,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   //
   // ON MOUNT, NOT ON FIRST MESSAGE. The history has to be on screen when the panel opens: an
   // operator who cannot see what they were told last time re-asks it, and a role that cannot
-  // see it answers as if the conversation never happened. The window is the thread list's own —
-  // the last week — so a conversation resumes for as long as it is plausibly still yours, and
+  // see it answers as if the conversation never happened. The window is the thread list's own , 
+  // the last week, so a conversation resumes for as long as it is plausibly still yours, and
   // anything older opens fresh rather than silently reviving a month-old argument.
   useEffect(() => {
     let alive = true;
@@ -668,7 +668,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       setTasks(ts); setThreads(ths);
       // A DOOR ABOUT A SUBJECT OPENS THAT SUBJECT'S CONVERSATION WITH THIS AGENT. "Ask Qa about
       // this" mounted with both a subject and a role, and this loaded the role's GENERAL thread
-      // — Qa's unrelated history and its still-clickable proposals — above a question about the
+      //, Qa's unrelated history and its still-clickable proposals, above a question about the
       // step; the turn then moved to the (subject, role) thread mid-panel, and an earlier answer
       // about the same step was never shown (review of 374ba07). The subject's thread, matched
       // on the same (subject, role) key the turn uses, wins; the role's general thread is for a
@@ -702,18 +702,18 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // WHAT TO ASK *THIS* ROLE.
   //
   // Every surface offered the same three: "What changed today?", "Which runs failed and why?",
-  // "What is this run waiting on?" — under a banner announcing the Engineering Captain. Those
+  // "What is this run waiting on?", under a banner announcing the Engineering Captain. Those
   // are questions for a dashboard, and a dashboard is what a named expert is not. The server
   // builds them from the role's lens AND its own record here, so they name real apps, this
   // project's last failure, and positions this role actually took.
   // ONE SURFACE, SO THE STARTERS COVER BOTH. "Which runs failed and why?" alone said this was
   // a dashboard; three product questions alone said it could not answer about the factory.
-  // Phrased as things the OPERATOR says — a chip sends its text as their message, so "Who is
+  // Phrased as things the OPERATOR says, a chip sends its text as their message, so "Who is
   // this for?" would have them asking their own question back to themselves.
   useEffect(() => {
     if (!discussing) return;
     setSuggestions([
-      "Push back — where is this weak?",
+      "Push back, where is this weak?",
       "What is the smallest version worth building?",
       "What changed today?",
     ]);
@@ -751,7 +751,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     if (aboutAct) fd.set("context_act_id", aboutAct);
     // TELL IT WHICH APP.
     //
-    // The agent has tools that can read a run, its repo, its preview and its deployment — and
+    // The agent has tools that can read a run, its repo, its preview and its deployment, and
     // no way to know WHICH run the conversation is about, because the thread key is an opaque
     // id. So it answered "tell me what to do" to "what is the PR link", while the answer sat
     // in the row behind the card. The facts go in front of the message, with the run id, so
@@ -767,7 +767,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     //
     // This used to prepend a block of run facts to every question, because the agent had no
     // idea which app a thread was about. Two things were wrong with it. The operator could
-    // SEE it — their own words buried under a wall of context they never wrote, which no
+    // SEE it, their own words buried under a wall of context they never wrote, which no
     // amount of stripping on render reliably hid, because the server echoes the stored
     // message back. And it did not even work: the facts were a summary, so asked to read the
     // PRD or the diff the agent answered that they were "not present in the searchable data"
@@ -778,12 +778,12 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     fd.set("message", typed);
     // AN IDEA CONVERSATION, when the dock was opened for one. Read from the URL rather than
     // held in state so the link that opens it decides, and reopening the thread keeps it.
-    // `mode` IS GONE FROM THE WIRE. The agent classifies the question itself now — see
-    // _one_conversation_brief — so the console no longer decides on the operator's behalf
+    // `mode` IS GONE FROM THE WIRE. The agent classifies the question itself now, see
+    // _one_conversation_brief, so the console no longer decides on the operator's behalf
     // which of two heads answers.
     if (threadId) fd.set("thread_id", threadId);
     // WHAT THE TURN IS ABOUT. `sel` is a build id or, from an "Ask about this" door, a typed
-    // subject reference (`workflow_step:wfr_…:preview` — see lib/dock-subject.ts) that the
+    // subject reference (`workflow_step:wfr_…:preview`, see lib/dock-subject.ts) that the
     // server resolves into that thing's own record.
     const scopeRef = sel !== GENERAL ? sel : roleRef;
     if (scopeRef) fd.set("external_ref", scopeRef);
@@ -791,18 +791,18 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // A THREAD ID BEFORE THE TURN, OR THE PROGRESS LINE IS DEAD FOR THE WHOLE TURN.
       //
       // `agent_progress` is keyed by thread and the poll needs that key. On a NEW chat the
-      // console learned the id from the turn's RESPONSE — by which time the turn is over.
+      // console learned the id from the turn's RESPONSE, by which time the turn is over.
       // So the first conversation with BOSS, every time, showed one frozen sentence:
-      // "Still working — this turn is running long", for minutes, while a perfectly good
-      // trail ("reading the role's remit", "querying the database — SELECT …") accumulated
+      // "Still working, this turn is running long", for minutes, while a perfectly good
+      // trail ("reading the role's remit", "querying the database, SELECT …") accumulated
       // in a table the page could not yet address.
       //
-      // Reported as "it displays same message for more than 3 mins — how can user wait and
+      // Reported as "it displays same message for more than 3 mins, how can user wait and
       // see same message". One cheap call fixes it: the thread exists before we send, so the
       // poll has something to ask about from the first second.
       //
       // AND IT HAS TO BE THE THREAD THE TURN WILL LAND IN. In boss-1 this asked for a thread by
-      // project and actor alone; the turn — scoped to a step and addressed to Qa — resolved to a
+      // project and actor alone; the turn, scoped to a step and addressed to Qa, resolved to a
       // different one, so every poll for 276 seconds read an empty thread. The ensure call now
       // carries the same (scope, role) key the turn does, and runs whenever the turn has a
       // scope, because a thread id held from an earlier conversation may belong to another.
@@ -824,7 +824,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           }
         } catch {
           // An indicator must never cost the operator their message. Without an id the turn
-          // still runs exactly as before — the progress line just stays generic, which is the
+          // still runs exactly as before, the progress line just stays generic, which is the
           // behaviour this replaced.
         }
       }
@@ -835,11 +835,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // A TURN THAT FAILS TO START MUST NOT LOOK LIKE ONE THAT IS RUNNING.
       //
       // There was no catch here at all. `askBossAction` is a server action, so the CALL can
-      // reject even though the action itself returns errors as data — a dropped round trip, a
+      // reject even though the action itself returns errors as data, a dropped round trip, a
       // proxy timeout, or a queue behind another pending action. The rejection escaped the
       // transition, nothing was appended, and the panel sat on "BOSS is working…" forever.
-      // Measured on the live system: the operator's message was never recorded — the thread
-      // still held four messages — while the console showed a turn in flight.
+      // Measured on the live system: the operator's message was never recorded, the thread
+      // still held four messages, while the console showed a turn in flight.
       let r: Awaited<ReturnType<typeof askBossAction>> | typeof stalled;
       try {
         const turn = () => Promise.race([
@@ -861,7 +861,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         if (asked && await askConsent(asked)) r = await turn();
       } catch (e) {
         setMessages((m) => [...m, { role: "assistant", content:
-          "That message did not reach BOSS — " + String((e as Error)?.message ?? e)
+          "That message did not reach BOSS, " + String((e as Error)?.message ?? e)
           + ". Nothing was started, so nothing is running. Send it again." }]);
         return;
       }
@@ -875,14 +875,14 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         landingFor.current = typed;
         setLanding(true);
         setMessages((m) => [...m, { role: "assistant", content:
-          `Still working — past ${AGENT_STALL_SECONDS}s. Nothing was cancelled and you can ` +
+          `Still working, past ${AGENT_STALL_SECONDS}s. Nothing was cancelled and you can ` +
           "type again; the answer will appear here on its own when it lands." }]);
         // NOT refreshThreads() HERE.
         //
         // It fires a server action, and server actions serialise: this one queues behind the
         // turn that has not answered. React keeps the transition pending until everything
         // started inside it settles, so the composer stayed disabled until the original turn
-        // finished — 131 seconds against a 120 second bound, and the whole point of the bound
+        // finished, 131 seconds against a 120 second bound, and the whole point of the bound
         // is to give control back. Deferred outside the transition instead.
         window.setTimeout(() => refreshThreads(), 0);
         return;
@@ -893,8 +893,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // NEVER DROP WHAT THE OPERATOR JUST TYPED.
         //
         // `send` appends the message optimistically and this replaced the whole list with the
-        // server's. When the server's copy is missing that turn — a thread_id that moved, a
-        // truncated history — the message the operator was looking at disappeared, which is
+        // server's. When the server's copy is missing that turn, a thread_id that moved, a
+        // truncated history, the message the operator was looking at disappeared, which is
         // indistinguishable from "it was never sent".
         // ITS WORDS ARRIVED: one chunk (a whole reply today, each token once turns stream).
         speakChunk();
@@ -922,8 +922,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
         // THE OFFER ARRIVES WITH THE REPLY, AND WAS BEING THROWN AWAY.
         //
-        // Both thread-LOADING paths set this; the one that matters most — the turn you just
-        // took — did not. So the agent would say "I've offered a button to delete all
+        // Both thread-LOADING paths set this; the one that matters most, the turn you just
+        // took, did not. So the agent would say "I've offered a button to delete all
         // containers on hetzner-ci-01", the API really did return the proposal, and the
         // console rendered nothing. Asked where the button was, the agent could only repeat
         // that it had offered one. It had.
@@ -932,7 +932,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // them here does not make anything safer, it makes the action unreachable and the
         // agent look like it is lying.
         setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
-        // THE ANSWER FIRST, THE DIGGING ON REQUEST — see NextStep.
+        // THE ANSWER FIRST, THE DIGGING ON REQUEST, see NextStep.
         setNextSteps(nextStepsOf(d));
         // WHAT THE ANSWER IS BASED ON. See ReadTrail: a confident paragraph with nothing
         // behind it is exactly what makes an operator distrust the whole thing.
@@ -945,7 +945,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // collapsed Details below the message.
         const technical = typeof r.data?.technical === "string" ? r.data.technical : undefined;
         setMessages((m) => [...m, { role: "assistant",
-          content: "⚠ " + (r.error ?? "request failed"), technical }]);
+          content: "Warning" + (r.error ?? "request failed"), technical }]);
       }
     });
   }, [projectId, actor, threadId, sel, roleRef, roleName, refreshThreads, dockAgent, aboutAct, speakChunk]);
@@ -966,8 +966,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     // broken screen, and requiring words alongside it would be the console insisting on
     // ceremony the operator did not need.
     if (!msg && !files.length) return;
-    // QUEUED, NOT REFUSED. An attachment cannot be queued — the file handles are consumed by
-    // the turn that sends them — so a message with files still waits for the turn to end.
+    // QUEUED, NOT REFUSED. An attachment cannot be queued, the file handles are consumed by
+    // the turn that sends them, so a message with files still waits for the turn to end.
     if (busy && !files.length) {
       setQueued((q) => [...q, msg]);
       setInput("");
@@ -989,7 +989,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // THE QUEUE DRAINS ITSELF WHEN THE TURN ENDS.
   //
   // One at a time and in order: sending them together would interleave the answers, and the
-  // second question usually depends on the first one's answer. `released` stops the drain —
+  // second question usually depends on the first one's answer. `released` stops the drain , 
   // an operator who pressed Stop wanted the queued follow-ups stopped too, since they were
   // written for a turn that is no longer the one running.
   useEffect(() => {
@@ -1006,7 +1006,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
    *
    *  HONEST ABOUT WHAT IT CANNOT DO. A turn is a server action; there is no cancel endpoint,
    *  so the model keeps going and its answer still lands in this thread. What this stops is
-   *  the WAITING — the composer comes back, the queue is cleared, and the transcript says so
+   *  the WAITING, the composer comes back, the queue is cleared, and the transcript says so
    *  rather than implying the work was killed. Calling it "Cancel" would be a lie the next
    *  message exposes.
    */
@@ -1014,7 +1014,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     setReleased(true);
     setQueued([]);
     setMessages((m) => [...m, { role: "assistant", content:
-      "Stopped waiting. BOSS may still finish this turn — if it does, the answer appears here. "
+      "Stopped waiting. BOSS may still finish this turn, if it does, the answer appears here. "
       + "Anything you had queued was dropped, so send what you actually want now." }]);
   }, []);
 
@@ -1025,7 +1025,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
    * Clear THIS conversation, and only this one.
    *
    * Scoped to the thread id the panel is currently showing, so a role's chat cannot reach
-   * another role's — there is no wildcard to get wrong. The thread is archived rather than
+   * another role's, there is no wildcard to get wrong. The thread is archived rather than
    * deleted: the messages stay readable by id, and what makes the panel look clear is the
    * server freeing the find-or-create key so the next message opens a fresh thread.
    */
@@ -1067,14 +1067,14 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       const ok = r.ok && payload?.ok !== false;
       // BOSS CHANGED SOMETHING THE OTHER PANELS ARE SHOWING. Clicking "Create the target" here
       // is the same write the Factory card and the Workflows screen render, and neither had a
-      // way to learn it happened — so the operator fixed the problem in the dock and went back
+      // way to learn it happened, so the operator fixed the problem in the dock and went back
       // to a screen still describing it.
       if (ok) notifyChanged("agent", { tool: action.tool });
       // SHOW WHAT IT DID, NOT JUST THAT IT DID SOMETHING.
       //
       // A tick and a label is fine for "cancel a job". For a command on a live host it is not:
       // after clicking "Delete all containers on hetzner-ci-01" the operator got `✓` and had
-      // no way to see the exit code, the output, or what was actually removed — they had to
+      // no way to see the exit code, the output, or what was actually removed, they had to
       // ask someone else to check the box. The tool already returns all of it.
       const body = [
         typeof payload.exit_code === "number" ? `exit ${payload.exit_code}` : "",
@@ -1086,11 +1086,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // IN A CODE FENCE, BECAUSE MARKDOWN EATS IDENTIFIERS.
         //
         // Assistant messages are markdown-rendered, so a validator saying
-        // "needs 'media_artifact_id'" displays as "needs 'mediaartifactid'" — the underscores
+        // "needs 'media_artifact_id'" displays as "needs 'mediaartifactid'", the underscores
         // read as emphasis. The operator reported exactly that string, and an identifier you
         // cannot copy is an error you cannot act on: it does not appear in the schema, the
         // code, or any search.
-        : `⚠ ${action.label} failed:\n\n\`\`\`\n${
+        : ` ${action.label} failed:\n\n\`\`\`\n${
             payload?.error ?? r.error ?? "unknown error"
           }${body ? `\n\n${body}` : ""}\n\`\`\``;
       setRanAction(action.id);
@@ -1104,13 +1104,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // A FAILED ACTION IS THE AGENT'S NEXT TURN, NOT A DEAD END.
       //
       // THIS WAS THE WHOLE "IT JUST RUNS A SCRIPT" PROBLEM. The failure was appended to
-      // CLIENT state and the offer dropped — so the model was never told. It finished the turn
+      // CLIENT state and the offer dropped, so the model was never told. It finished the turn
       // believing it had handed over a working action, and the next time the operator asked it
       // saw a conversation in which nothing had gone wrong, and proposed the same thing again.
       // Ten times, if asked ten times. Not the model refusing to adapt: the harness throwing
       // away the only information it could have adapted to.
       //
-      // The validator's message is precise and actionable — "step 'edit' needs
+      // The validator's message is precise and actionable, "step 'edit' needs
       // 'media_artifact_id', which is not set" is enough to repair the arguments. Handing it
       // back closes the loop, and a loop that carries the error converges where a script
       // cannot.
@@ -1125,7 +1125,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           fd.set("message",
             `The action "${action.label}" FAILED and you have not been told until now.\n\n` +
             `Tool: ${action.tool}\nError: ${reason}\n\n` +
-            "Read that error literally, fix the arguments, and try again yourself — do not " +
+            "Read that error literally, fix the arguments, and try again yourself, do not " +
             "re-offer the same call, do not ask me to confirm, and do not explain the design " +
             "again. If the error names a missing input, supply it or wire it from a step that " +
             "produces it. If this action cannot run here at all, do not ask me to do its work " +
@@ -1154,7 +1154,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
   const task = context?.task as Record<string, unknown> | undefined;
   // A dock opened on a workflow step or a build is about that run. The task-context fetch
-  // keys on a task id, so a step ref comes back with no projects — and used to render the
+  // keys on a task id, so a step ref comes back with no projects, and used to render the
   // empty-task sentence on a chat that already has an app (BOSSAPP-570).
   const dockSubject = sel !== GENERAL ? parseSubjectRef(sel) : null;
   const aboutSubject = dockSubject
@@ -1173,13 +1173,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   return (
     /* LAYOUT LIVES IN CSS, NOT IN INLINE STYLES.
        The grid, the rail width and the log's height were inline, so the dock could only fight
-       them with `!important` — and the one that could not be overridden at all was the log's
+       them with `!important`, and the one that could not be overridden at all was the log's
        `max-height: 52vh`. In a tall panel the transcript stopped at half the viewport and the
        composer sat wherever the content happened to end, with the rest of the panel empty
        below it. A chat's input belongs at the bottom of whatever box it is in, and the
        transcript takes the slack; that is a rule about the shape, not about a pixel count. */
     <div className="agent-chat-shell" data-role={roleName ? "yes" : undefined}>
-      {/* RAIL — General + one entry per task (💬 if it already has a conversation) */}
+      {/* RAIL, General + one entry per task (💬 if it already has a conversation) */}
       <aside className="agent-chat-rail">
         {/* SESSIONS, NOT TASKS.
             The task rail is gone: every task card now has its own Ask BOSS panel, which is the
@@ -1189,7 +1189,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         <button type="button" className="agent-newchat" onClick={() => openSession(null)}>
           <span aria-hidden>＋</span> New chat
         </button>
-        <div className="eyebrow" style={{ margin: "14px 0 6px" }}>Chats</div>
+        <div className="area-name" style={{ margin: "14px 0 6px" }}>Chats</div>
         {generalThreads.length === 0 ? (
           <p className="detail">No conversations yet. Ask BOSS something to start one.</p>
         ) : generalThreads.map((t) => (
@@ -1210,7 +1210,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         ))}
       </aside>
 
-      {/* MAIN — context header + scoped history + input */}
+      {/* MAIN, context header + scoped history + input */}
       <section className="agent-chat-main">
         {dockFace ? (
           <DockAgentHead roleKey={dockFace} roleName={roleName} state={speech.state} projectId={projectId}
@@ -1218,17 +1218,17 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         ) : null}
         {sel === GENERAL ? (
           /* A ROLE CHAT IS NOT "BOSS AGENT". The panel announced the Engineering Captain in its
-             header and then, one line down, "BOSS Agent — What do you want to do?" with a
+             header and then, one line down, "BOSS Agent, What do you want to do?" with a
              description of the general assistant. Two identities in one column reads as a
              template that nobody adapted, which is what it was. */
           <div className="agent-chat-intro">
             {/* WHAT THIS SESSION IS ACTUALLY FOR, read from the ledger rather than from the
                 scrollback above it. A long conversation has its early turns compacted away
-                and the objective is usually the first thing to go — this is the same record
+                and the objective is usually the first thing to go, this is the same record
                 the agent re-reads each turn, so operator and agent see one thing. Renders
                 nothing when there is no long-horizon work, which is most conversations. */}
             <LedgerStrip threadId={threadId} />
-            {dockFace ? null : <span className="eyebrow">{roleName ?? "BOSS Agent"}</span>}
+            {dockFace ? null : <span className="area-name">{roleName ?? "BOSS Agent"}</span>}
             <h2>{threadId
                    ? (roleName
                         ? `Continuing with ${roleName}`
@@ -1241,20 +1241,20 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                        : "What do you want to do?"}</h2>
             {threadId ? (
               roleName ? (
-                <p className="detail">Picking up where you left off — this conversation is kept
+                <p className="detail">Picking up where you left off, this conversation is kept
                    for a week.</p>
               ) : null
             ) : roleName ? (
               <p>Answering from this role&rsquo;s own lens and what it has actually argued on
-                 this project — not from the general assistant.</p>
+                 this project, not from the general assistant.</p>
             ) : discussing ? (
-              /* ONE SURFACE, BOTH KINDS OF QUESTION — so the copy names both rather than
+              /* ONE SURFACE, BOTH KINDS OF QUESTION, so the copy names both rather than
                  promising a discussion and then answering about deploys, or the reverse. */
-              <p>An idea, or what the factory is doing — ask either. BOSS will ask what it
+              <p>An idea, or what the factory is doing, ask either. BOSS will ask what it
                  needs to know, argue the parts that look wrong, and read live state when the
                  question turns on it. Nothing starts until you press Build.</p>
             ) : (
-              <p>Ask anything, or tell BOSS to do it — code, research, a meeting, a PRD, a
+              <p>Ask anything, or tell BOSS to do it, code, research, a meeting, a PRD, a
                  deployment. Work on one app from its card in Factory, where the app context
                  comes with it.</p>
             )}
@@ -1270,7 +1270,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                 {context.code_tasks.map((c) => (
                   <span key={c.id}>
                     {c.status}/{c.phase}
-                    {c.pull_request_url ? <> · <a href={c.pull_request_url} target="_blank" rel="noreferrer">PR #{c.pull_request_number}</a></> : null}
+                    {c.pull_request_url ? <>, <a href={c.pull_request_url} target="_blank" rel="noreferrer">PR #{c.pull_request_number}</a></> : null}
                   </span>
                 ))}
               </div>
@@ -1278,13 +1278,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               <p className="detail" data-testid="agent-about" style={{ marginTop: 6 }}>
                 This chat is about {aboutSubject}.
               </p>
-            ) : <p className="detail" style={{ marginTop: 6 }}>No projects yet for this task — ask BOSS to build or improve it.</p>}
+            ) : <p className="detail" style={{ marginTop: 6 }}>No projects yet for this task, ask BOSS to build or improve it.</p>}
           </div>
         )}
 
         {/* ONE CONTROL, EVERY CONVERSATION.
-            This lived inside the general branch above, so a chat opened on a RUN — the dock's
-            most common state, reached from a card or a workflow step — had no way to start over
+            This lived inside the general branch above, so a chat opened on a RUN, the dock's
+            most common state, reached from a card or a workflow step, had no way to start over
             while the general one did. Same component, same thread machinery, two behaviours
             depending on which branch rendered. `clearChat` was never the limitation: it takes a
             thread_id and has always worked for any of them. */}
@@ -1304,7 +1304,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             <div className="agent-chat-empty">
               <div className="agent-empty-mark" aria-hidden>◆</div>
               <p className="agent-empty-lead">{discussing
-                ? "Nothing here yet — ask away."
+                ? "Nothing here yet, ask away."
                 : `Ask ${roleName ?? "BOSS"} about this work.`}</p>
             </div>
           ) : messages.map((m, i) => (
@@ -1333,8 +1333,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               {/* The app-facts block is addressed to the MODEL, not to the reader. It was
                   prepended to the outgoing message and then echoed back in the transcript, so
                   every question appeared with a wall of run_id / live_preview / "use your
-                  tools" above it — context doing its job and ruining the conversation. */}
-              {/* BOSS answers in markdown — "**What I found**", GFM tables of evidence, bullet
+                  tools" above it, context doing its job and ruining the conversation. */}
+              {/* BOSS answers in markdown, "**What I found**", GFM tables of evidence, bullet
                   lists, `run_id` in backticks. Rendered as preformatted text the operator read
                   raw pipes and asterisks, and an evidence table became unreadable exactly when
                   it mattered most. The renderer already existed and three other views used it;
@@ -1345,7 +1345,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               {m.role === "assistant" ? (
                 <>
                   {/* Its citations ([R:…] / [D:…] / [L:…]) as links named by the cited rule,
-                      clause or learning — never a raw id (rulebook source G6). */}
+                      clause or learning, never a raw id (rulebook source G6). */}
                   <CitedAnswer className="agent-md" projectId={projectId} actor={actor}
                                text={stripAppFacts(withoutBrief(m.content))} />
                   {m.technical ? (
@@ -1357,7 +1357,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                   {/* THE CONVERSATION BECOMES THE THING YOU BUILD.
                       A discussion that ends with "now go and type all that into the composer"
                       wastes the part that took the effort. When the agent hands back a brief,
-                      it is one press to the composer — and still a press, because a chat that
+                      it is one press to the composer, and still a press, because a chat that
                       quietly starts a build is the opposite of a surface for thinking. */}
                   <CitedActs ids={[...citedIds((m as { cited_acts?: unknown }).cited_acts), ...(citedHere[i] ?? [])]}
                              projectId={projectId} viewer={actor} speaker={dockAgent} />
@@ -1374,8 +1374,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                       <button type="button" className="cap-btn primary"
                               data-testid="agent-brief-use"
                               onClick={() => useBrief(briefIn(m.content)!)}>
-                        Use this as the brief →
-                      </button>
+                        Use this as the brief</button>
                       <span className="detail">
                         Drops it into the Command Center. Nothing starts until you press Build.
                       </span>
@@ -1399,7 +1398,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           {/* THINKING IS NOT NOTHING.
               A turn takes 5-30 seconds while the agent chains tools, and the only feedback was
               the Send button changing to "…" at the far bottom of the panel. From the reading
-              position — the bottom of the log — the operator saw their message and then dead
+              position, the bottom of the log, the operator saw their message and then dead
               air, and reasonably concluded the request had been lost. */}
           {busy || probe || landing ? (
             <article className="agent-message assistant" data-testid="agent-working">
@@ -1417,10 +1416,10 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                   {steps.length
                     ? steps[steps.length - 1]
                     : probe
-                      ? "Debugging — reading the code, the database and the host. This takes a few minutes."
+                      ? "Debugging, reading the code, the database and the host. This takes a few minutes."
                       : elapsed >= AGENT_NORMAL_SECONDS
-                        ? "Still working — this turn is running long. It has not been dropped; the next step it reports will appear here."
-                        : "Working — reading the system and choosing tools."}
+                        ? "Still working, this turn is running long. It has not been dropped; the next step it reports will appear here."
+                        : "Working, reading the system and choosing tools."}
                 </span>
                 <span className="agent-working-elapsed" data-testid="agent-elapsed">
                   {/* A stall warning against a 120s budget is wrong for a debugging session,
@@ -1442,7 +1441,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             </article>
           ) : null}
 
-          {/* WHAT IS WAITING ITS TURN. Shown as your own words, dimmed, in order — a queued
+          {/* WHAT IS WAITING ITS TURN. Shown as your own words, dimmed, in order, a queued
               message you cannot see is one you cannot tell was accepted, and the operator
               would retype it. */}
           {queued.map((q, i) => (
@@ -1451,7 +1450,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               <span>You</span>
               <p>{q}</p>
               <span className="detail agent-queued-note">
-                queued — sends when this turn finishes
+                queued, sends when this turn finishes
                 <button type="button" className="linklike"
                         data-testid={`agent-unqueue-${i}`}
                         onClick={() => setQueued((all) => all.filter((_, n) => n !== i))}>
@@ -1463,27 +1462,27 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
           {/* INSIDE THE TRANSCRIPT, NOT UNDER IT.
               These were siblings of the scroll box on a fixed-height shell, so their height came
-              OUT of the conversation: five proposals — each a button plus a paragraph of why —
+              OUT of the conversation: five proposals, each a button plus a paragraph of why , 
               squeezed the log to about one bubble, and a 3,525-character answer was present,
               correct and invisible. The operator saw their own question, then buttons, and no
               reply. They also belong here on the merits: the evidence and the offers are part of
               the answer they came from, and they should scroll with it. */}
         {/* WHAT THE ANSWER IS BASED ON.
               BOSS would read a dozen files to diagnose a bug and then show a paragraph with
-              nothing behind it — `actions` stays empty because a read changes nothing. The
+              nothing behind it, `actions` stays empty because a read changes nothing. The
               operator's only options were to believe it or redo the work by hand. Collapsed by
               default: it is evidence, not narrative, and it should be there when you doubt the
               answer without shouting over it when you do not. */}
           {trail.length > 0 ? (
             <details className="agent-trail" data-testid="agent-trail">
               <summary className="detail">
-                {`What BOSS read for this answer — ${trail.length} lookup${trail.length === 1 ? "" : "s"}`}
+                {`What BOSS read for this answer, ${trail.length} lookup${trail.length === 1 ? "" : "s"}`}
               </summary>
               <ul className="agent-trail-list">
                 {trail.map((call, i) => {
                   const args = call.args || {};
                   // The arguments worth showing: what it searched for and where it looked. The
-                  // ref matters most — a search of the wrong branch is the failure this whole
+                  // ref matters most, a search of the wrong branch is the failure this whole
                   // trail exists to make visible.
                   const detail = ["pattern", "file", "run_id", "repo", "ref", "service", "url"]
                     .filter((k) => args[k] !== undefined && args[k] !== "")
@@ -1503,11 +1502,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
           {/* OFFERS, NOT DEEDS. Each is a tool + arguments BOSS chose but did not run; the click
               is what executes it, verbatim, with no model in between. Cheapest first, because
-              "this link is wrong" does not say whether you want it cleared or the app redeployed —
+              "this link is wrong" does not say whether you want it cleared or the app redeployed , 
               and one of those costs minutes and money. */}
           {/* THE ANSWER CAME FIRST; GOING DEEPER IS A CHOICE. Under an answer BOSS gave from
               the record in one call (boss-1: 347 s became one call), the full investigation and
-              the fix are one press away — and never start on their own. */}
+              the fix are one press away, and never start on their own. */}
           {nextSteps.length > 0 && !busy ? (
             <div className="agent-next-steps" data-testid="agent-next-steps">
               {nextSteps.map((step) => (
@@ -1528,7 +1527,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           {proposed.length > 0 ? (
             <div className="agent-proposals" data-testid="agent-proposals">
               <p className="detail agent-proposals-head">
-                BOSS can do this for you — nothing runs until you choose:
+                BOSS can do this for you, nothing runs until you choose:
               </p>
               {proposed.map((a) => (
                 <div className="agent-proposal" key={a.id}>
@@ -1552,7 +1551,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
         {pendingPlan ? (
           <div className="ct-block" style={{ margin: "8px 0" }}>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>⏸ BOSS drafted a plan — nothing runs until you confirm.</div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}> BOSS drafted a plan, nothing runs until you confirm.</div>
             {typeof pendingPlan.summary === "string" ? (
               <p className="detail" style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{pendingPlan.summary as string}</p>
             ) : null}
@@ -1564,14 +1563,14 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         ) : null}
 
         {/* ABOUT THIS APP, AND STILL THERE ON TURN TWO.
-            These lived inside the empty state, so they existed only until you said anything —
+            These lived inside the empty state, so they existed only until you said anything , 
             which is backwards: on the first turn you do not yet know what to ask, and by the
             third you have read an answer and want the obvious follow-up. A conversation is
             exactly when a suggestion is worth most.
 
-            They are derived from what BOSS RECORDED about this run — findings it deferred,
+            They are derived from what BOSS RECORDED about this run, findings it deferred,
             checks that never ran, tests that missed an injected bug, acceptance criteria with
-            no test — so each one names a real gap in this build rather than a generic prompt
+            no test, so each one names a real gap in this build rather than a generic prompt
             that reads the same whatever you are looking at. */}
         {suggestions.length > 0 ? (
           <div className="agent-suggests agent-suggests-bar" data-testid="agent-suggests">
@@ -1587,9 +1586,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           </div>
         ) : null}
 
-        {/* A TEXTAREA, not a single-line input. The useful questions here are the long ones —
+        {/* A TEXTAREA, not a single-line input. The useful questions here are the long ones , 
             "why did this run take 152 minutes and what went wrong" plus the context that makes
-            it answerable — and a one-line field that scrolls sideways hides what you typed at
+            it answerable, and a one-line field that scrolls sideways hides what you typed at
             exactly the moment you want to re-read it. Enter still sends, so the common short
             message is unchanged; Shift+Enter starts a new line. */}
         {/* ONE SURFACE. The field and its controls were a bare input with a Send button beside
@@ -1601,14 +1600,14 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           <textarea className="agent-input" value={input}
             aria-label="Message BOSS"
             placeholder="Ask BOSS…"
-            // Three lines, not one. The useful questions here are the long ones — "why did
+            // Three lines, not one. The useful questions here are the long ones, "why did
             // this run take 152 minutes and what went wrong", plus the context that makes it
-            // answerable — and a field one line tall says "type something short".
+            // answerable, and a field one line tall says "type something short".
             rows={3}
             onChange={(e) => {
               setInput(e.target.value);
               // Grow with the content up to a cap, then scroll. Reset first so deleting a
-              // line shrinks it back — without that it only ever gets taller.
+              // line shrinks it back, without that it only ever gets taller.
               const el = e.currentTarget;
               el.style.height = "auto";
               // Never below the resting three lines, never above a screenful.
@@ -1649,15 +1648,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                    onChange={(e) => { void attach(e.target.files); e.target.value = ""; }} />
             <button type="button" className="agent-attach" data-testid="agent-attach"
                     onClick={() => picker.current?.click()}
-                    title="Attach a screenshot or a text file — or just paste an image here">
-              📎
-            </button>
+                    title="Attach a screenshot or a text file, or just paste an image here">Attach</button>
             <span className="agent-composer-hint">
               {busy
                 ? (queued.length
-                    ? `BOSS is working — ${queued.length} queued`
-                    : "BOSS is working — send anyway to queue")
-                : "Enter to send · Shift+Enter for a new line"}
+                    ? `BOSS is working, ${queued.length} queued`
+                    : "BOSS is working, send anyway to queue")
+                : "Enter to send, Shift+Enter for a new line"}
             </span>
             {/* STOP WAITING, not cancel. A turn is a server action and cannot be killed from
                 here; this gives the composer back and drops the queue, and the transcript says
@@ -1672,7 +1669,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               </button>
             ) : null}
             {/* NOT disabled while busy any more: pressing it queues. Still disabled with
-                nothing to send — a live-looking button that does nothing is worse than one
+                nothing to send, a live-looking button that does nothing is worse than one
                 that says it is not ready. An attachment cannot be queued, so that case waits. */}
             <GatedButton permission="assistant:chat" type="submit" className="agent-send"
                     disabled={(!input.trim() && !files.length) || (busy && !!files.length)}

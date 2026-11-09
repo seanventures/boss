@@ -48,11 +48,11 @@ describe("linked pull requests (screen 6)", () => {
     expect(tid("mr-pr-pill-3")?.textContent).toBe("Ready");
     const api412 = tid("mr-pr-2")!.textContent!;
     expect(api412).toContain("acme/api");
-    expect(api412).toContain("#412 · PUT/GET /carts/saved, POST /carts/saved/share; owner check; migration 0042");
+    expect(api412).toContain("#412, PUT/GET /carts/saved, POST /carts/saved/share; owner check; migration 0042");
     expect(api412).toContain("+412 −58 · 11 files");
     expect(api412).toContain("✓ CI");
     expect(api412).toContain("✓ gates");
-    expect(tid("mr-pr-links-2")?.textContent?.trim()).toBe("Links the other 2 · base main ← boss/r1482-saved-carts");
+    expect(tid("mr-pr-links-2")?.textContent?.trim()).toBe("Links the other 2, base main ← boss/r1482-saved-carts");
     expect(tid("mr-finding-2-0")?.textContent).toContain("Sentinel");
     expect(tid("mr-finding-2-0")?.textContent).toContain("handlers/saved.go:48");
     expect(tid("mr-finding-2-0")?.textContent).toContain("High");
@@ -69,7 +69,7 @@ describe("linked pull requests (screen 6)", () => {
     expect($$('[data-testid^="mr-xcheck-row-"]').map((r) => r.dataset.pass)).toEqual(["yes", "yes", "no", "yes", "yes"]);
     expect(tid("mr-xcheck-row-2")?.textContent).toContain("web calls only what the contract defines");
     expect(tid("mr-xcheck-row-2")?.textContent).toContain("Fail");
-    expect(tid("mr-set-status")?.textContent).toBe("Set blocked · 2 issues");
+    expect(tid("mr-set-status")?.textContent).toBe("Set blocked, 2 issues");
     expect(tid("mr-set-reason")?.textContent).toContain("Cross-repo check failed");
     expect(tid("mr-set-waits")?.textContent).toContain("The whole set waits.");
     expect(document.body.textContent).not.toMatch(/Approve and ship/);

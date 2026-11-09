@@ -41,8 +41,8 @@ function RunsAsChip({ stage }: { stage: PipelineStage }) {
   );
 }
 
-/** KG P6b: an outside agent's endpoint host — never its auth secret. Its chip already says
- *  "Outside agent · <name>", and its contract reads like every other card's. */
+/** KG P6b: an outside agent's endpoint host, never its auth secret. Its chip already says
+ *  "Outside agent, <name>", and its contract reads like every other card's. */
 function OutsideAgentHost({ stage }: { stage: PipelineStage }) {
   if (!stage.endpointHost) return null;
   return (
@@ -84,7 +84,7 @@ function StageCard({ stage, selected, onSelect, outsideAgents, onAssignCaptain }
   outsideAgents: OutsideAgentOption[]; onAssignCaptain?: Assign;
 }) {
   const summary = contractSummary(stage.contract);
-  // Who runs it can be switched on the stage in hand — one control on screen, not one per card.
+  // Who runs it can be switched on the stage in hand, one control on screen, not one per card.
   const switchable = selected && !!onAssignCaptain && outsideAgents.length > 0
     && !["decision", "for_each", "bounded_loop", "parallel", "condition", "join"].includes(stage.kind);
   return (
@@ -115,7 +115,7 @@ function StageCard({ stage, selected, onSelect, outsideAgents, onAssignCaptain }
            data-empty={summary ? undefined : "true"}
            title={stage.contract ? contractTip(stage.contract) : undefined}>
         {summary ?? "No contract declared"}
-        {stage.contract?.steps?.length ? ` · ${stage.contract.steps.length} steps` : ""}
+        {stage.contract?.steps?.length ? `, ${stage.contract.steps.length} steps` : ""}
       </div>
       <div className="pl-card-run" title="How this stage went on the last run">
         <span className="pl-faint">Last run</span> <StatusPill status={stage.status} />
@@ -125,13 +125,13 @@ function StageCard({ stage, selected, onSelect, outsideAgents, onAssignCaptain }
   );
 }
 
-/** The kinds behind "reads 3 · writes 2", for the hover. */
+/** The kinds behind "reads 3, writes 2", for the hover. */
 function contractTip(c: NonNullable<PipelineStage["contract"]>): string {
   return [
     c.reads.length ? `Reads ${c.reads.map((r) => kindLabel(r.kind)).join(", ")}` : "",
     c.writes.length ? `Writes ${c.writes.map((w) => kindLabel(w.kind)).join(", ")}` : "",
     c.calls.length ? `Calls ${c.calls.map((x) => x.tool || x.mcp).join(", ")}` : "",
-  ].filter(Boolean).join(" · ");
+  ].filter(Boolean).join(", ");
 }
 
 function Arrow() {
@@ -168,7 +168,7 @@ function Frame({ frame, members, children }: {
 }
 
 /** A condition on the flow: what it routes on, and where each answer goes ("A new incident? ·
- *  Yes: Evidence loop · No: Attached to an open incident — stop"). Never an empty box. */
+ *  Yes: Evidence loop, No: Attached to an open incident, stop"). Never an empty box. */
 function Route({ stage }: { stage: PipelineStage }) {
   return (
     <div className="pl-route" data-testid={`route-${stage.id}`} title={stage.description}
@@ -180,12 +180,12 @@ function Route({ stage }: { stage: PipelineStage }) {
   );
 }
 
-/** "Design v0.1 · under revision", "—" when the design names none. */
+/** "Design v0.1, under revision", "—" when the design names none. */
 function referenceWords(stage: PipelineStage): string {
   const ref = stage.design.reference;
   if (!ref) return "—";
   return stage.design.underRevision || (stage.design.status === "in_review" && stage.design.locked?.reference)
-    ? `${ref} · under revision` : ref;
+    ? `${ref}, under revision` : ref;
 }
 
 function formatWhen(iso: string | null): string {
@@ -256,7 +256,7 @@ export function PipelineView({
   }
 
   const byId = new Map(stages.map((s) => [s.id, s]));
-  // An outcome ("Attached to an open incident — stop") is drawn on the condition that leads to
+  // An outcome ("Attached to an open incident, stop") is drawn on the condition that leads to
   // it, not as a box of its own.
   const top = stages.filter((s) => !s.group && s.placement === "main" && !s.outcome);
   const shared = stages.filter((s) => s.placement === "shared");
@@ -294,7 +294,7 @@ export function PipelineView({
         <h2 className="pl-title">{name}</h2>
         <span className="pl-run-line" data-testid="pipeline-last-run">
           {run
-            ? `Last run · ${RUN_WORD[run.status] ?? STATUS_LABEL.pending}${run.started_at ? ` · started ${formatWhen(run.started_at)}` : ""}`
+            ? `Last run, ${RUN_WORD[run.status] ?? STATUS_LABEL.pending}${run.started_at ? `, started ${formatWhen(run.started_at)}` : ""}`
             : "Not run yet: statuses appear after the first run"}
         </span>
       </div>

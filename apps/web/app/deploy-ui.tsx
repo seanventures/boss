@@ -7,9 +7,9 @@
  * only a run that is actually running shows progress and step logs.
  *
  * Three parts:
- *   LiveDeployment    — polls a running deployment and draws its steps, timings and logs
- *   DeployWizard      — choose a target and ref, then show its ChangeSet review step
- *   RecentDeployments — the last N DEPLOYMENTS (not every code task that opened a PR)
+ *   LiveDeployment   , polls a running deployment and draws its steps, timings and logs
+ *   DeployWizard     , choose a target and ref, then show its ChangeSet review step
+ *   RecentDeployments, the last N DEPLOYMENTS (not every code task that opened a PR)
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -79,7 +79,7 @@ const ms = (v?: number | null) =>
   v == null ? "" : v < 1000 ? `${v}ms` : v < 60000 ? `${(v / 1000).toFixed(1)}s`
     : `${Math.floor(v / 60000)}m ${Math.round((v % 60000) / 1000)}s`;
 
-/** Spinner drawn with SVG SMIL — this console applies a per-area CSS allow-list, so a new
+/** Spinner drawn with SVG SMIL, this console applies a per-area CSS allow-list, so a new
  *  keyframe would need registering in three places and silently do nothing until it was. */
 function Spin({ size = 13 }: { size?: number }) {
   return (
@@ -112,7 +112,7 @@ function StepRow({ s, elapsed }: { s: Step; elapsed: number }) {
   const hasLog = !!(s.log || s.error);
 
   return (
-    <div style={{ borderTop: "1px solid rgba(255,255,255,.06)", padding: "7px 0" }}>
+    <div style={{ borderTop: "1px solid var(--boss-c-08e14993c0)", padding: "7px 0" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
         <span style={{ color: mark.color, width: 14, display: "inline-flex" }}>
           {s.status === "running" ? <Spin /> : mark.icon}
@@ -131,11 +131,11 @@ function StepRow({ s, elapsed }: { s: Step; elapsed: number }) {
         )}
       </div>
       {s.error && (
-        <div style={{ color: "#f85149", fontSize: 12, margin: "4px 0 0 24px" }}>{s.error}</div>
+        <div style={{ color: "var(--boss-c-f85149)", fontSize: 12, margin: "4px 0 0 24px" }}>{s.error}</div>
       )}
       {open && s.log && (
         <pre style={{ margin: "6px 0 0 24px", fontSize: 11, whiteSpace: "pre-wrap",
-                      background: "rgba(255,255,255,.04)", padding: 8, borderRadius: 6,
+                      background: "var(--boss-c-12b43a06c4)", padding: 8, borderRadius: 6,
                       maxHeight: 220, overflow: "auto" }}>{s.log}</pre>
       )}
     </div>
@@ -150,7 +150,7 @@ export function LiveDeployment({ runId, onFinished }: {
   const done = useRef(false);
 
   // Poll while running. Stops on a terminal state rather than polling a finished deployment
-  // forever — a console that keeps asking after the answer is final is just noise on the API.
+  // forever, a console that keeps asking after the answer is final is just noise on the API.
   useEffect(() => {
     let live = true;
     let ticks = 0;
@@ -203,7 +203,7 @@ export function LiveDeployment({ runId, onFinished }: {
   const runningStep = run.steps.find((s) => s.status === "running");
 
   return (
-    <div style={{ ...box, ...(failed ? { borderColor: "rgba(248,81,73,.35)" } : {}) }}>
+    <div style={{ ...box, ...(failed ? { borderColor: "var(--boss-c-4e6d71bb7a)" } : {}) }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ color: tone, fontWeight: 600, display: "inline-flex",
                        alignItems: "center", gap: 7 }}>
@@ -212,8 +212,8 @@ export function LiveDeployment({ runId, onFinished }: {
             : run.status === "rolled_back" ? "Rolled back"
             : failed ? "Deployment failed"
             : awaiting ? "Waiting for approval"
-            : queued ? "Approved — starting"
-            : rejected ? "Rejected — nothing deployed"
+            : queued ? "Approved, starting"
+            : rejected ? "Rejected, nothing deployed"
             : planned ? "Awaiting ChangeSet review" : deployed ? "Deployed" : run.status}
         </span>
         <strong style={{ fontSize: 13 }}>{run.app_name}</strong>
@@ -272,7 +272,7 @@ export function LiveDeployment({ runId, onFinished }: {
           already shown the same text twice over (its error line and its log), and printing it
           a third time reads as three different problems. */}
       {failed && run.failure_reason && !run.steps.some((s) => s.status === "failed") && (
-        <div className="detail" style={{ color: "#f85149", fontSize: 12, marginTop: 8 }}>
+        <div className="detail" style={{ color: "var(--boss-c-f85149)", fontSize: 12, marginTop: 8 }}>
           {readableFailure(run.failure_reason).slice(0, 400)}
         </div>
       )}
@@ -325,7 +325,7 @@ export function plannedDeploymentFrom(value: unknown): PlannedDeployment | null 
 
 /** What a host deployment plan will do: where, which commit, rollback and cost. */
 export function PlanReviewDetails({ review }: { review: PlanReview }) {
-  const where = [review.host, review.environment].filter(Boolean).join(" · ");
+  const where = [review.host, review.environment].filter(Boolean).join(", ");
   const micros = review.cost?.expected_cost_usd_micros ?? 0;
   return (
     <div className="detail" style={{ fontSize: 12, display: "grid", gap: 4 }}
@@ -340,7 +340,7 @@ export function PlanReviewDetails({ review }: { review: PlanReview }) {
         <div>Secrets (by reference): {review.secret_refs.map((s) => s.name).join(", ")}</div>
       )}
       {!!review.rollback?.length && <div>Rollback: {review.rollback[0]}</div>}
-      <div>Cost: ${(micros / 1_000_000).toFixed(2)}{review.cost?.note ? ` — ${review.cost.note}` : ""}</div>
+      <div>Cost: ${(micros / 1_000_000).toFixed(2)}{review.cost?.note ? `, ${review.cost.note}` : ""}</div>
     </div>
   );
 }
@@ -348,8 +348,8 @@ export function PlanReviewDetails({ review }: { review: PlanReview }) {
 export function ChangeSetNextStep({ plan }: { plan: PlannedDeployment }) {
   if (plan.next_action === "approve_decision") {
     return (
-      <div style={{ ...box, borderColor: "rgba(210,153,34,.35)" }} role="status">
-        <strong>Plan ready — waiting for approval</strong>
+      <div style={{ ...box, borderColor: "var(--boss-c-a26981c4ba)" }} role="status">
+        <strong>Plan ready, waiting for approval</strong>
         <div style={{ marginTop: 6 }}>
           <PlanReviewDetails review={plan.review || {}} />
         </div>
@@ -361,7 +361,7 @@ export function ChangeSetNextStep({ plan }: { plan: PlannedDeployment }) {
     );
   }
   return (
-    <div style={{ ...box, borderColor: "rgba(210,153,34,.35)" }} role="status">
+    <div style={{ ...box, borderColor: "var(--boss-c-a26981c4ba)" }} role="status">
       <strong>Deployment plan created</strong>
       <div className="detail" style={{ fontSize: 12, marginTop: 6 }}>
         Nothing has deployed. ChangeSet <code>{plan.changeset_id}</code> is ready for review.
@@ -396,7 +396,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
   /** Branches for a target's repo.
    *
    * The owner comes from the repo string, else the target, else the project default. The first
-   * version used only the repo string — which for `boss-sandbox` produced an empty owner, a
+   * version used only the repo string, which for `boss-sandbox` produced an empty owner, a
    * request to `/repos//boss-sandbox/refs`, a 404, and a branch picker that silently listed
    * nothing. A picker that cannot fail visibly is worse than a plain text box. */
   const loadRefs = useCallback(async (t: WizardTarget, fallbackOwner: string) => {
@@ -455,10 +455,10 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
                         setRefs([]); setRef(""); setRefsError(null);
                         if (t) loadRefs(t, defaultOwner);
                       }}>
-                <option value="">— choose —</option>
+                <option value="">,  choose , </option>
                 {active.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.app_name} · {t.environment}
+                    {t.app_name}, {t.environment}
                   </option>
                 ))}
               </select>
@@ -474,17 +474,17 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
               {refs.length > 0 ? (
                 <select style={input} value={ref} onChange={(e) => setRef(e.target.value)}>
                   {/* BOSS leaves a `boss/code/crun_…` branch behind for every code task it has
-                      ever run — thirty of them here, all named after an id nobody recognises.
+                      ever run, thirty of them here, all named after an id nobody recognises.
                       Grouped rather than dropped: deploying one is legitimate (that is how you
                       ship a fix before it merges), but it must not bury `main`. */}
                   {refs.filter((r) => !r.name.startsWith("boss/")).map((r) => (
-                    <option key={r.name} value={r.name}>{r.name} · {r.sha.slice(0, 7)}</option>
+                    <option key={r.name} value={r.name}>{r.name}, {r.sha.slice(0, 7)}</option>
                   ))}
                   {refs.some((r) => r.name.startsWith("boss/")) && (
                     <optgroup label="BOSS work branches">
                       {refs.filter((r) => r.name.startsWith("boss/")).map((r) => (
                         <option key={r.name} value={r.name}>
-                          {r.name} · {r.sha.slice(0, 7)}
+                          {r.name}, {r.sha.slice(0, 7)}
                         </option>
                       ))}
                     </optgroup>
@@ -498,8 +498,8 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
           </div>
 
           {refsError && (
-            <div className="detail" style={{ fontSize: 12, color: "#d29922" }}>
-              {refsError} — type a branch or sha instead.
+            <div className="detail" style={{ fontSize: 12, color: "var(--boss-c-d29922)" }}>
+              {refsError}, type a branch or sha instead.
             </div>
           )}
 
@@ -523,7 +523,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
             </GatedButton>
             <button style={btn} onClick={() => setOpen(false)}>Cancel</button>
             {err && <span role="alert" className="detail"
-                          style={{ color: "#f85149", fontSize: 12 }}>{err}</span>}
+                          style={{ color: "var(--boss-c-f85149)", fontSize: 12 }}>{err}</span>}
           </div>
         </div>
       )}
@@ -547,7 +547,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
 /** A failure reason a person can read.
  *
  * The health verdict is stored as the raw JSON the checker produced, so a failed deployment
- * reported `{"healthy": false, "checks": [{"url": ..., "error": ...}]}` — accurate, and the
+ * reported `{"healthy": false, "checks": [{"url": ..., "error": ...}]}`, accurate, and the
  * kind of thing an operator has to decode rather than read. The JSON is still one click away
  * on the failing step; the row gets the sentence.
  */
@@ -561,7 +561,7 @@ function readableFailure(reason: string): string {
     const what = check.error
       ? check.error
       : `returned ${check.status}, expected ${check.expected}`;
-    return `health check failed — ${check.url || "the app"} ${what}`;
+    return `health check failed, ${check.url || "the app"} ${what}`;
   } catch {
     return text;
   }
@@ -628,7 +628,7 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
         <div className="detail">No deployment plans or runs yet.</div>
       )}
       {rows.map((d) => (
-        <div key={d.id} style={{ borderTop: "1px solid rgba(255,255,255,.07)", padding: "8px 0" }}>
+        <div key={d.id} style={{ borderTop: "1px solid var(--boss-c-bdbe0baeec)", padding: "8px 0" }}>
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap",
                         fontSize: 13 }}>
             <span style={{ color: tone(d.status), fontWeight: 600, minWidth: 78 }}>
@@ -670,7 +670,7 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
             </div>
           )}
           {errors[d.id] && (
-            <div role="alert" className="detail" style={{ color: "#f85149", fontSize: 12, marginTop: 8 }}>
+            <div role="alert" className="detail" style={{ color: "var(--boss-c-f85149)", fontSize: 12, marginTop: 8 }}>
               {errors[d.id]}
             </div>
           )}
@@ -680,7 +680,7 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
             </div>
           )}
           {d.failure_reason && openId !== d.id && (
-            <div className="detail" style={{ color: "#f85149", fontSize: 12, marginTop: 3 }}>
+            <div className="detail" style={{ color: "var(--boss-c-f85149)", fontSize: 12, marginTop: 3 }}>
               {readableFailure(d.failure_reason).slice(0, 200)}
             </div>
           )}

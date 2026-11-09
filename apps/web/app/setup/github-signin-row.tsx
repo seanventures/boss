@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ① GitHub — the one "Sign in with GitHub" (device flow, engine identity/github_device.py).
+ * ① GitHub, the one "Sign in with GitHub" (device flow, engine identity/github_device.py).
  *
  * Press it, type the code at github.com/login/device, approve: BOSS polls until GitHub says yes.
  * No callback URL, so it works on localhost, a tailnet or a private host. The same sign-in is your

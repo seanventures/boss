@@ -4,12 +4,12 @@
  * ONE APPROVAL FOR A CHANGE ACROSS REPOSITORIES (multi-repo screen 7), drawn inside its Approvals
  * row for `recommendation.action === "approve_change_set"`: every pull request of the set, the
  * review, the cross-repo check, the cost, what each component deploys as, and how all of it is
- * rolled back. One decision: Approve and ship all N · Send back (with a note) · Reject. There is
+ * rolled back. One decision: Approve and ship all N, Send back (with a note), Reject. There is
  * no per-PR approval.
  *
  * The answer goes through the inbox's own form (DecisionResolveForm → resolveDecisionAction) with
  * the preview's `content_hash`: the engine pins the approval to the head SHAs that were reviewed,
- * and refuses it when a PR moved since the question was asked — its sentence is shown as is.
+ * and refuses it when a PR moved since the question was asked, its sentence is shown as is.
  * The figures come from the change set (code_task:read) and its deploy plan (deployment:read);
  * when either cannot be read the card still shows what the decision itself carries.
  */
@@ -91,7 +91,7 @@ export function ChangeSetApproval({ decision, projectId, actorId, pending }: {
       <div className="mr-appr-h">
         <span className="mr-appr-icon" aria-hidden><ShieldCheck size={20} /></span>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div className="mr-ui-eyebrow mr-appr-eyebrow" data-testid="mr-approval-eyebrow">Ship a change · {app}</div>
+          <div className="mr-ui-area-name mr-appr-area-name" data-testid="mr-approval-eyebrow">Ship a change, {app}</div>
           <h3 data-user-text>{title}</h3>
           <p className="mr-ui-sub" style={{ margin: 0 }} data-testid="mr-approval-lead">
             One decision for all {n} pull {n === 1 ? "request" : "requests"}. They merge together and deploy together, or not at all.
@@ -106,7 +106,7 @@ export function ChangeSetApproval({ decision, projectId, actorId, pending }: {
         <div className="mr-stats" data-testid="mr-approval-stats">
           <div className="mr-stat">
             <small>Pull requests</small><b>{n} linked</b>
-            <span data-user-text>{prs.map((p) => `${shortName(p.repository)} #${p.pr_number ?? "—"}`).join(" · ")}</span>
+            <span data-user-text>{prs.map((p) => `${shortName(p.repository)} #${p.pr_number ?? "—"}`).join(", ")}</span>
           </div>
           <div className="mr-stat" data-testid="mr-approval-review">
             <small>Review</small>
@@ -138,7 +138,7 @@ export function ChangeSetApproval({ decision, projectId, actorId, pending }: {
                     <td className="mr-ui-mono nw">+{p.additions ?? lane?.additions ?? 0} −{p.deletions ?? lane?.deletions ?? 0}</td>
                     <td>{testsChip(lane?.ci_state)}</td>
                     <td className="mr-ui-mono mr-hide-narrow" data-user-text>
-                      {wave ? `${wave.to ?? "—"}${wave.kind === "host" ? ` → ${wave.host ?? "host"}` : " · with the merge"}` : (p.head_sha ?? "").slice(0, 7) || "—"}
+                      {wave ? `${wave.to ?? "—"}${wave.kind === "host" ? ` → ${wave.host ?? "host"}` : ", with the merge"}` : (p.head_sha ?? "").slice(0, 7) || "—"}
                     </td>
                   </tr>
                 );

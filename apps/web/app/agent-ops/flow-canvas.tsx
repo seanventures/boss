@@ -6,7 +6,7 @@
  * the decision (a diamond), what ran, and how it ended. Words are labels only (≤ 4 per node,
  * ≤ 3 per arrow); badges carry type, level, risk, dissent. A dissenting vote is its own red,
  * dashed arrow that splits off the agreeing ones. "Needs you" is an amber node with its one
- * button. Click any node — or a dissenting arrow — for the drawer; nothing else is text.
+ * button. Click any node, or a dissenting arrow, for the drawer; nothing else is text.
  *
  * Nodes are HTML (focusable buttons with faces); arrows are one SVG beneath them, placed by
  * lib/ambient-layout.ts. Wide charts scroll inside their own frame, never the page.
@@ -21,7 +21,7 @@ export const TYPE_WORDS: Record<string, string> = {
   signal: "Signal", agent: "Agent", person: "Person", policy: "Policy", squad: "Squad", boss: "BOSS",
   action: "Proposed action", decision: "Decision", needs_you: "Needs you", run: "Work started", outcome: "Outcome",
 };
-const ICON: Record<string, string> = { signal: "↯", policy: "§", squad: "⚑", boss: "◆", action: "▶", run: "⚙" };
+const ICON: Record<string, string> = { signal: "↯", policy: "§", squad: "⚑", boss: "◆", action: "Play", run: "Settings" };
 
 function outcomeTone(n: FlowNode): "ok" | "bad" | "quiet" {
   if (n.badges.includes("failed")) return "bad";
@@ -112,7 +112,7 @@ export function FlowCanvas({ nodes, edges, lifecycle, selected, onSelect, onAnsw
           const style = { left: e.lx, top: e.ly };
           return e.ref || e.dissent ? (
             <button key={`l-${e.key}`} type="button" className="aa-edge-label" style={style} data-dissent={e.dissent || undefined}
-                    data-testid="aa-edge-label" title={e.dissent ? "Dissent — see why" : "See the message"}
+                    data-testid="aa-edge-label" title={e.dissent ? "Dissent, see why" : "See the message"}
                     onClick={() => onSelect({ edge: e })}>{text}</button>
           ) : (
             <span key={`l-${e.key}`} className="aa-edge-label" style={style} data-testid="aa-edge-label">{text}</span>
@@ -123,7 +123,7 @@ export function FlowCanvas({ nodes, edges, lifecycle, selected, onSelect, onAnsw
                   data-selected={selected === n.id || undefined} data-active={active === n.id || undefined}
                   data-tone={n.type === "outcome" ? outcomeTone(n) : undefined}
                   style={{ left: n.x, top: n.y, width: n.w, height: n.h }}
-                  aria-label={`${TYPE_WORDS[n.type] ?? n.type}: ${n.label}`} title={`${TYPE_WORDS[n.type] ?? n.type} · open details`}
+                  aria-label={`${TYPE_WORDS[n.type] ?? n.type}: ${n.label}`} title={`${TYPE_WORDS[n.type] ?? n.type}, open details`}
                   onClick={() => onSelect({ node: n })}>
             <NodeBody node={n} active={active === n.id} />
           </button>

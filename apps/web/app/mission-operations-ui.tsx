@@ -75,7 +75,7 @@ export function MissionAgentRoster({
             />
             <span className="ar-identity">
               <span className="ar-name">{agent.name}</span>
-              <span className="ar-sub">{agent.role} · trust {Math.round(agent.trust)}%</span>
+              <span className="ar-sub">{agent.role}, trust {Math.round(agent.trust)}%</span>
             </span>
           </span>
           <span className="ar-now">{agent.currentTask}</span>
@@ -135,7 +135,7 @@ export function MissionTaskBoard({
                     }}
                   >
                     <span className="task-priority" title={task.id}>
-                      {task.priority} · {compactTaskId(task.id)}
+                      {task.priority}, {compactTaskId(task.id)}
                     </span>
                     <strong>{task.title}</strong>
                     <footer className="mission-task-footer">

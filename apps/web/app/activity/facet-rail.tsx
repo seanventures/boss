@@ -5,7 +5,7 @@
  * SERVER's count for the current query (a facet ignores its own selection, so a count says how
  * many lines picking it would show). The agent list used to be built from the 200 rows on
  * screen; these are counted over the whole window. A click adds or removes the value's token in
- * the query bar — the bar is the truth, the rail reflects it.
+ * the query bar, the bar is the truth, the rail reflects it.
  */
 import React, { useState } from "react";
 import {

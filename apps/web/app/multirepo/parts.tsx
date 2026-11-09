@@ -2,7 +2,7 @@
 
 /**
  * The small parts every multi-repo screen draws the same way: a repository's mark and name, its
- * language, its status pill, the Read · Write · PRs checks, a "?" tip, and the component rows
+ * language, its status pill, the Read, Write, PRs checks, a "?" tip, and the component rows
  * (component → repository, build order) the composer and App › Components both edit.
  */
 import React from "react";
@@ -25,7 +25,7 @@ export function GhMark({ size = "md", muted = false }: { size?: "md" | "sm"; mut
 }
 
 export function Lang({ lang }: { lang?: string | null }) {
-  if (!lang) return <span className="mr-ui-lang mr-ui-dim">—</span>;
+  if (!lang) return <span className="mr-ui-lang mr-ui-dim">{"—"}</span>;
   return <span className="mr-ui-lang"><i style={{ background: langColor(lang) }} aria-hidden />{lang}</span>;
 }
 
@@ -125,7 +125,7 @@ export function ComponentRows({ rows, repos, onChange, disabled, withPath = fals
                 <option value="">Choose a repository</option>
                 {repos.map((x) => (
                   <option key={x.binding_id} value={x.binding_id}>
-                    {x.full_name}{x.language ? ` · ${x.language}` : ""}
+                    {x.full_name}{x.language ? `, ${x.language}` : ""}
                   </option>
                 ))}
               </select>

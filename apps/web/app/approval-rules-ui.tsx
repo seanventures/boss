@@ -55,7 +55,7 @@ export function ApprovalRulesView({
           <p>{rules.autonomy_explainer}</p>
         </div>
         {/* SAY WHAT IS BEING COUNTED.
-            These count CAPABILITIES -- the tools, skills and MCP servers BOSS can invoke --
+            These count CAPABILITIES, the tools, skills and MCP servers BOSS can invoke --
             not decisions. Sitting unlabelled above a decision queue, "42 need approval" reads
             as forty-two things waiting on you, when nothing is waiting at all. It got worse
             when the rule grid below was removed: the numbers lost the only thing that
@@ -73,7 +73,7 @@ export function ApprovalRulesView({
           numbers above instead of having to be taken on trust. */}
       <details className="ar-capability-list">
         <summary>
-          What BOSS may do — {needs.length} need approval, {auto.length} run automatically
+          What BOSS may do, {needs.length} need approval, {auto.length} run automatically
         </summary>
         <p className="detail" style={{ margin: "6px 0" }}>
           Set by risk tier: anything at tier {rules.autonomy_threshold + 1} or above stops for a
@@ -96,7 +96,7 @@ export function ApprovalRulesView({
 
         <div className="cap-section-head" style={{ marginTop: 14 }}>
           <h4 style={{ margin: 0, fontSize: "0.82rem" }}>Runs automatically ({auto.length})</h4>
-          <span className="cap-section-sub">no approval — BOSS does these on its own</span>
+          <span className="cap-section-sub">no approval, BOSS does these on its own</span>
         </div>
         <div className="ar-grid">
           {auto.map((t: ApprovalToolRule) => (
@@ -110,12 +110,12 @@ export function ApprovalRulesView({
       </details>
 
       {/* REFERENCE, BELOW THE DECISIONS.
-          Service gates and budget gates are worth keeping -- they say what BOSS will stop for
+          Service gates and budget gates are worth keeping, they say what BOSS will stop for
           -- but nothing here can be acted on, and above the queue they pushed the one thing
           that needs a person off the screen. Kept, moved, and labelled for what they are. */}
       <div className="ar-reference">
         <div className="cap-section-head">
-          <h3>For reference — nothing here needs an action</h3>
+          <h3>For reference, nothing here needs an action</h3>
           <span className="cap-section-sub">
             The gates BOSS already applies. Budgets are set in Govern.
           </span>
@@ -163,14 +163,14 @@ export function ApprovalRulesView({
         <span className="cap-section-sub">Explicit governance policies stored for this org</span>
       </div>
       {rules.policies.length === 0 ? (
-        <p className="detail">No explicit policy records for this org — governance is currently driven by the risk-tier threshold and service gates above.</p>
+        <p className="detail">No explicit policy records for this org, governance is currently driven by the risk-tier threshold and service gates above.</p>
       ) : (
         <div className="ar-grid">
           {rules.policies.map((p) => (
             <div key={p.policy_key + p.version} className="ar-rule">
               <span className={`cap-badge tone-${p.status === "active" ? "green" : "muted"}`}>{p.status}</span>
               <code className="ar-rule-name">{p.policy_key}</code>
-              <span className="ar-rule-meta">{p.title} · v{p.version}</span>
+              <span className="ar-rule-meta">{p.title}, v{p.version}</span>
             </div>
           ))}
         </div>

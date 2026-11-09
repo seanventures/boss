@@ -6,12 +6,12 @@
  *
  *   RULES                                                                    [+ Add rule]
  *    ● Error rate    > 5% for 5 min (≥ 20 req)   Firing   Respond automatically ◉   Tune  Silence
- *    Evaluated by BOSS's own monitoring · from boss.deploy.yaml · changed by Param, Oct 18
+ *    Evaluated by BOSS's own monitoring, from boss.deploy.yaml, changed by Param, Oct 18
  *   SIGNAL SOURCES
- *    ● HelpDesk AI   signed reports · last 07:00 · 7 today                   Rotate token
+ *    ● HelpDesk AI   signed reports, last 07:00, 7 today                   Rotate token
  *   HISTORY                                                [Firing | 24 h | 7 days]
  *    07:05  Error rate 14.4% (rule 5%)  6bf2673  Agent: Opened an incident  Resolved   ▸
- *           ▾ PromQL · value at breach · Explore ↗ · Runbook · the agent's words
+ *           ▾ PromQL, value at breach, Explore , Runbook, the agent's words
  *
  * Rules are tuned in the side sheet (rule-sheet.tsx: a repo rule becomes a pull request, any
  * other is saved and audited) and silenced in silence-sheet.tsx. Every alert from a rule has Tune. Every
@@ -227,7 +227,7 @@ export function AlertBadges({ a }: { a: Alert }) {
       ) : null}
       {a.suppressed.map((x) => (
         <span key={`${x.kind}:${x.id}`} className="obs-chip" data-testid="obs-alert-suppressed"
-              title={[x.reason, x.until ? `until ${lt.full(x.until)}` : null].filter(Boolean).join(" · ") || x.word}>{x.word}</span>
+              title={[x.reason, x.until ? `until ${lt.full(x.until)}` : null].filter(Boolean).join(", ") || x.word}>{x.word}</span>
       ))}
       {a.noDataSince ? (
         <span className="obs-chip" data-tone="amber" data-testid="obs-alert-nodata" title={`No data since ${lt.full(a.noDataSince)}`}>
@@ -247,12 +247,12 @@ export function AlertBadges({ a }: { a: Alert }) {
   );
 }
 
-/** The status chip with its times: Resolved 07:11 · 6 min; Acknowledged · Param (until 16:00). */
+/** The status chip with its times: Resolved 07:11, 6 min; Acknowledged, Param (until 16:00). */
 export function AlertStatus({ a }: { a: Alert }) {
   const lt = useLocalTime();
   const dur = durationWord(alertDuration(a));
   if (a.status.key === "resolved") {
-    return <StatusChip status={a.status} extra={a.clearedAt ? `${whenWord(a.clearedAt, lt)} · ${dur}` : dur}
+    return <StatusChip status={a.status} extra={a.clearedAt ? `${whenWord(a.clearedAt, lt)}, ${dur}` : dur}
                        extraTip={[a.clearedAt ? `Resolved at ${lt.full(a.clearedAt)}` : null, `open ${dur}`, a.clearedWord].filter(Boolean).join(", ")} />;
   }
   const ackTip = a.acked ? `Acknowledged by ${a.acked.by} at ${lt.full(a.acked.at)}${a.acked.until ? `, until ${lt.full(a.acked.until)}` : ""}` : null;
@@ -291,7 +291,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
           ) : null}
         </span>
         {showApp ? (
-          <button type="button" className="inf-link obs-strong" data-testid="obs-alert-app" title={`${a.app} · ${a.env}: its Alerts tab`}
+          <button type="button" className="inf-link obs-strong" data-testid="obs-alert-app" title={`${a.app}, ${a.env}: its Alerts tab`}
                   onClick={onApp}>{a.app}</button>
         ) : null}
         {/* THE RULE IT CAME FROM, one press away: its switches (Respond automatically, Triage),
@@ -312,7 +312,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
           {a.triage.agent ? `${triageAgentName(a.triage)}: ` : "Agent: "}{a.triage.word}</span>
         {a.incident ? (
           // The row's state is its status chip alone: the link names the incident, its status is in the tip.
-          <button type="button" className="inf-link" data-testid="obs-alert-incident" title={`${a.incident.title} · ${a.incident.word}`}
+          <button type="button" className="inf-link" data-testid="obs-alert-incident" title={`${a.incident.title}, ${a.incident.word}`}
                   onClick={onIncident}>Incident</button>
         ) : null}
         <AlertBadges a={a} />
@@ -384,7 +384,7 @@ export function AppAlertsTab({ projectId, actor, targetId, onIncident }: {
 
   const d = rules.data;
   const newest = d?.rules.filter((r) => r.changedAt).sort((a, b) => Date.parse(b.changedAt!) - Date.parse(a.changedAt!))[0];
-  const sourceWord = d ? [...new Set(d.rules.map((r) => r.sourceWord))].join(" · ") : "";
+  const sourceWord = d ? [...new Set(d.rules.map((r) => r.sourceWord))].join(", ") : "";
   return (
     <div className="obs-alerts-tab" data-testid="obs-app-alerts">
       <DrawerSection label="RULES" testId="obs-app-rules" actions={
@@ -408,8 +408,8 @@ export function AppAlertsTab({ projectId, actor, targetId, onIncident }: {
             </ul>
             <span className="inf-faint obs-arule-source" data-testid="obs-rules-source" title={d.evaluatorTip ?? undefined}>
               <span>Evaluated by {d.evaluator}</span>
-              <span aria-hidden> · </span><span>{sourceWord}</span>
-              {newest ? <><span aria-hidden> · </span>
+              <span aria-hidden>, </span><span>{sourceWord}</span>
+              {newest ? <><span aria-hidden>, </span>
                 <span title={lt.full(newest.changedAt)}>changed by {newest.changedBy ?? "someone"}, {lt.day(Date.parse(newest.changedAt!))}</span></> : null}
             </span>
           </>

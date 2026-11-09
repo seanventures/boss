@@ -60,7 +60,7 @@ export function Tip({ text, children, className = "" }: { text: string; children
   return (
     <span className={`idn-tipw ${className}`.trim()} role="presentation">
       {children(id)}
-      <span className="idn-tip" role="tooltip" id={id}>{text}</span>
+      <span className="idn-tooltip" role="tooltip" id={id}>{text}</span>
     </span>
   );
 }

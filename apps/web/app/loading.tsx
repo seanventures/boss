@@ -37,7 +37,7 @@ export default function ConsoleLoading() {
             Loading the console
             {elapsed >= 3 ? (
               <span className="bx-loading-elapsed" data-testid="console-route-loading-elapsed">
-                {elapsed}s{elapsed >= TYPICAL_SECONDS * 2 ? " — longer than usual" : ""}
+                {elapsed}s{elapsed >= TYPICAL_SECONDS * 2 ? ", longer than usual" : ""}
               </span>
             ) : null}
           </span>

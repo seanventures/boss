@@ -279,7 +279,7 @@ export function FlowLane(p: {
   /** Read-only: no drag, no keyboard moves, no gap actions. */
   readOnly?: boolean;
   /** A full page: every title and name in full (wrapped, never cut), nodes sized to their words,
-   *  and Fit never below a readable scale — wider than that, the lane scrolls (geometry.ts). */
+   *  and Fit never below a readable scale, wider than that, the lane scrolls (geometry.ts). */
   wrap?: boolean;
   /** The lane's accessible name. */
   label?: string;
@@ -904,12 +904,12 @@ export function FlowLane(p: {
         <button type="button" className="wf-lane-arrow" data-side="right" data-testid="wf-lane-right"
                 aria-controls={viewportId} aria-label="Scroll the steps right" tabIndex={-1}
                 data-off={!ends.right || undefined} disabled={!ends.right}
-                onClick={() => nudge(1)}>›</button>
+                onClick={() => nudge(1)}>Next</button>
       ) : null}
       {scrolls ? (
         <>
-          <span className="wf-lane-fade" data-side="left" data-on={ends.left || undefined} aria-hidden />
-          <span className="wf-lane-fade" data-side="right" data-on={ends.right || undefined} aria-hidden />
+          <span className="wf-lane-edge" data-side="left" data-on={ends.left || undefined} aria-hidden />
+          <span className="wf-lane-edge" data-side="right" data-on={ends.right || undefined} aria-hidden />
         </>
       ) : null}
       </div>

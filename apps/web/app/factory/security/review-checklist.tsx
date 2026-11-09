@@ -91,7 +91,7 @@ export function ReviewChecklist({ projectId, runId, onDone, review: given }: Rev
             </label>
             {r.fix ? <p className="sec-rec-fix" data-user-text>{r.fix}</p> : null}
             {r.riskIfUnfixed ? <p className="sec-muted" data-user-text>Risk: {r.riskIfUnfixed}</p> : null}
-            {r.falsePositiveReason ? <p className="sec-fp" data-user-text title="The panel's view; only a person can triage">Panel: false positive — {r.falsePositiveReason}</p> : null}
+            {r.falsePositiveReason ? <p className="sec-fp" data-user-text title="The panel's view; only a person can triage">Panel: false positive, {r.falsePositiveReason}</p> : null}
             <ul className="sec-rec-findings">
               {r.fingerprints.map((fp) => {
                 const f = review.findings[fp];

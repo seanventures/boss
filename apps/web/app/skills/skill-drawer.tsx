@@ -152,7 +152,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
               <span className="kit-pop" role="dialog" aria-label="Confirm delete" data-testid="kit-skill-delete-confirm">
                 {consequence.blocked ? (
                   <>
-                    <strong data-tip={consequence.blocked}>In use · can&apos;t delete</strong>
+                    <strong data-tip={consequence.blocked}>In use, can&apos;t delete</strong>
                     <span className="kit-pop-actions"><button type="button" className="kit-btn kit-btn-sm" onClick={() => setConfirm(false)}>Close</button></span>
                   </>
                 ) : (
@@ -320,7 +320,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
                   {stepsOf(ability.used_in.filter((u) => !u.via || u.via === `skill:${builtIn?.id ?? skill?.skill_key ?? ""}`)).map((u) => (
                     <li key={`${u.workflow_key}:${u.step_id}`}>
                       <a href={`?area=delivery_workflows&wf=${encodeURIComponent(u.workflow_key)}&step=${encodeURIComponent(u.step_id)}`}>
-                        <span data-user-text>{u.workflow_name}</span> › <span data-user-text>{u.step_title}</span>
+                        <span data-user-text>{u.workflow_name}</span>, <span data-user-text>{u.step_title}</span>
                       </a>
                     </li>
                   ))}

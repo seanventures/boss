@@ -162,7 +162,7 @@ export function nextInGrid(rects: { left: number; top: number; width: number; he
   return best < 0 ? at : best;
 }
 
-/** `2 working` · `1 needs you`: words, never colour alone. */
+/** `2 working`, `1 needs you`: words, never colour alone. */
 export function Badges({ team }: { team: Pick<TeamSummary, "working" | "needsYou"> }) {
   return (
     <>

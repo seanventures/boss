@@ -36,7 +36,7 @@ describe("an ability's agents", () => {
     await render(<AgentsSection ability={email} crew={kit.crew ?? []} projectId="p1" actor="ceo" onChanged={() => {}} />);
     const off = $('[data-testid="kit-agent-toggle-qa"]') as HTMLButtonElement;
     expect(off.disabled).toBe(true);
-    expect(off.dataset.tip).toBe("Set up Email first");
+    expect(off.dataset.tip).toBe("Set up Email (SMTP) first");
     const held = $(`[data-testid="kit-agent-toggle-${email.holders[0]}"]`) as HTMLButtonElement;
     expect(held.disabled).toBe(false);
   });

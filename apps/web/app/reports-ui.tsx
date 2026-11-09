@@ -85,12 +85,12 @@ export function ReportsView({ report }: { report: ReportFeed }) {
 
       {/* activity chart */}
       <div className="bx-card wf-pad">
-        <div className="wf-section-title">Activity — last 14 days</div>
+        <div className="wf-section-title">Activity, last 14 days</div>
         <div className="rep-chart">
           {d.daily.map((day) => {
             const total = day.succeeded + day.failed;
             return (
-              <div key={day.date} className="rep-col" title={`${day.date} · ${day.tasks} tasks · ${day.succeeded} ok · ${day.failed} failed`}>
+              <div key={day.date} className="rep-col" title={`${day.date}, ${day.tasks} tasks, ${day.succeeded} ok, ${day.failed} failed`}>
                 <div className="rep-bar-wrap">
                   {day.failed > 0 ? <span className="rep-seg seg-red" style={{ height: `${(day.failed / maxDay) * 100}%` }} /> : null}
                   {day.succeeded > 0 ? <span className="rep-seg seg-green" style={{ height: `${(day.succeeded / maxDay) * 100}%` }} /> : null}
@@ -161,7 +161,7 @@ export function ReportsView({ report }: { report: ReportFeed }) {
       {/* agent scorecard */}
       <div className="bx-card wf-pad">
         <div className="wf-section-title"><span className="wf-ic tone-accent"><I.shield /></span> Agent scorecard <span className="wf-count">{d.agents.length} agents</span></div>
-        <p className="detail" style={{ marginTop: -4 }}>Ranked by violations, then lowest trust — so problem agents surface first. Populates as governance reviews are recorded.</p>
+        <p className="detail" style={{ marginTop: -4 }}>Ranked by violations, then lowest trust, so problem agents surface first. Populates as governance reviews are recorded.</p>
         <div className="rep-agents">
           <div className="rep-agent-head">
             <span>Agent</span><span>Trust</span><span>Autonomy</span><span>Runs</span><span>Violations</span><span>Last review</span>

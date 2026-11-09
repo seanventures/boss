@@ -13,7 +13,7 @@ import { SectionLabel } from "../section-label";
 
 function tipFor(t: Toolchain): string {
   if (!t.installed) return `Off. Turn it on on the BOSS host: ${t.enable ?? `boss toolchains enable ${t.name}`}`;
-  const versions = Object.entries(t.versions).map(([k, v]) => `${k} ${v}`).join(" · ");
+  const versions = Object.entries(t.versions).map(([k, v]) => `${k} ${v}`).join(", ");
   return versions || "Always installed.";
 }
 
@@ -33,7 +33,7 @@ export function ToolchainsRow() {
             <span key={t.name} className={`su-pill su-tone-${tone}`} data-testid={`toolchain-${t.name}`}
                   data-installed={t.installed || undefined} title={tip} data-tip={tip}>
               {t.installed ? <span className="su-dot su-tone-green" aria-hidden="true" /> : null}
-              {t.label.split(" (")[0]}{t.installed ? "" : " · off"}
+              {t.label.split(" (")[0]}{t.installed ? "" : ", off"}
             </span>
           );
         })}

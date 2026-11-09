@@ -1,21 +1,21 @@
 "use client";
 
 /**
- * The Incident card in the app drawer (D2): an app's own alert, answered — one surface for what
+ * The Incident card in the app drawer (D2): an app's own alert, answered, one surface for what
  * the monitor saw, who reported it, the root cause, the response run, its verification and the
  * report. Read from GET /v1/reliability/incidents/{id}/response (lib/incident-response.ts).
  *
  *   INCIDENT                                                               ● Responding
  *   helpdesk: error rate 12.5% over 5 min                                       opened 12m ago
- *   WHAT THE MONITOR SAW  Errors 12.5% of 220 · Alert above 5% · Serving a1b2c3d · Previous 9f8e7d6
+ *   WHAT THE MONITOR SAW  Errors 12.5% of 220, Alert above 5%, Serving a1b2c3d, Previous 9f8e7d6
  *                         POST /tickets  GET /tickets/{id}
  *   CUSTOMER REPORTS      3 reports from support-desk  [T-1042] [T-1043]
- *   ROOT CAUSE            <statement>  (basis · confidence)
+ *   ROOT CAUSE            <statement>  (basis, confidence)
  *   RESPONSE              Run ↗  Pull request ↗   (the step dots only before anyone is named)
  *   WHO DID WHAT          each part's agent, its role and job, what it did (responders.tsx)
- *                         (or Respond · "Error rate responds automatically" · Alerts ↗)
+ *                         (or Respond, "Error rate responds automatically", Alerts )
  *   VERIFICATION          <summary>
- *   REPORT                View · Download .md · .json
+ *   REPORT                View, Download .md, .json
  *
  * Each section only when it has data. The status chip is derived from the data
  * (incidentStatus), never sent. Respond starts the catalogue's Incident Response with the
@@ -97,7 +97,7 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
         <span className="ag-spacer" />
         {opened ? (
           <span className="inf-faint inf-num" data-testid="obs-incident-opened" title={lt.full(opened)}>
-            {ago(opened, now) ? `opened ${ago(opened, now)} ago` : "opened —"}
+            {ago(opened, now) ? `opened ${ago(opened, now)} ago` : "opened , "}
           </span>
         ) : null}
       </span>
@@ -180,7 +180,7 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
           <span className="obs-fact-k">Root cause</span>
           <span className="obs-inc-text" data-copy="data">{rca.payload.root_cause}</span>
           <span className="inf-faint" data-copy="data" data-testid="obs-incident-basis">
-            {[basisWords(rca.payload.basis), confidence !== null ? `confidence ${Math.round(confidence * 100)}%` : null].filter(Boolean).join(" · ")}
+            {[basisWords(rca.payload.basis), confidence !== null ? `confidence ${Math.round(confidence * 100)}%` : null].filter(Boolean).join(", ")}
           </span>
         </div>
       ) : null}

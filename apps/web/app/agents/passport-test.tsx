@@ -5,7 +5,7 @@
  *
  * Three probes, each a real model call through the agent's own compiled prompt, streamed into the
  * page while its face speaks: introduce yourself, push back on a plan, and refuse something out
- * of scope. A cheap judge then scores it — `Voice 4/5 · Stays in remit ✓ · Says it's AI ✓` — so
+ * of scope. A cheap judge then scores it, `Voice 4/5, Stays in remit ✓, Says it's AI ✓`, so
  * a voice edit is heard and checked before it reaches real work. An unsaved draft can be tested:
  * the editor passes it in, and the API hears it without saving it. With no model configured it
  * says so and where to fix it, rather than failing silently.
@@ -25,9 +25,9 @@ export const PROBES: { key: Probe; label: string }[] = [
   { key: "out_of_scope", label: "Out of scope" },
 ];
 
-/** `Voice 4/5 · Stays in remit ✓ · Says it's AI ✓` */
+/** `Voice 4/5, Stays in remit ✓, Says it's AI ✓` */
 export function resultLine(r: TestResult): string {
-  return [`Voice ${r.voice}/5`, `Stays in remit ${r.inRemit ? "✓" : "✗"}`, `Says it's AI ${r.saysAi ? "✓" : "✗"}`].join(" · ");
+  return [`Voice ${r.voice}/5`, `Stays in remit ${r.inRemit ? "✓" : "✗"}`, `Says it's AI ${r.saysAi ? "✓" : "✗"}`].join(", ");
 }
 
 export function PassportTest({ projectId, actor, roleKey, persona }: {
@@ -78,7 +78,7 @@ export function PassportTest({ projectId, actor, roleKey, persona }: {
     <div className="ag-test" data-testid="ag-test">
       <div className="ag-test-head">
         <span className="ag-field-label" title="Real model call with this exact prompt.">
-          <Flask size={13} aria-hidden /> Test{persona ? " · draft" : ""}
+          <Flask size={13} aria-hidden /> Test{persona ? ", draft" : ""}
         </span>
         {PROBES.map((x) => (
           <GatedButton permission="agent:test" key={x.key} type="button" className="ag-btn" disabled={busy} aria-pressed={probe === x.key}

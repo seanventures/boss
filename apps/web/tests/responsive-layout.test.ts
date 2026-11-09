@@ -89,6 +89,6 @@ describe("the breakpoints are the ones this console already uses", () => {
     // loading bar all turn there. A layout that adapts at its own private width is a layout
     // that disagrees with the rest of the page halfway through a resize.
     expect(atBreakpoint(900).length).toBeGreaterThan(0);
-    expect(CSS).toContain("@media (max-width: 900px) { .bx-dock { width: 100vw !important; } }");
+    expect(CSS).toContain("@media (max-width: 900px) { .bx-dock { width: 100% !important; } }");
   });
 });

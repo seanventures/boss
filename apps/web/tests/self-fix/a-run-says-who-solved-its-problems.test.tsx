@@ -43,6 +43,6 @@ describe("a run says who solved its problems", () => {
   it("builds the line from the counts when the API sends no sentence", () => {
     const v = runAutonomy(3);
     expect(runAutonomyLine({ ...v, sentence: "", counts: { problems: 4, by_boss: 1, by_person: 1, by_outside_agent: 1, open: 1 } }))
-      .toBe("4 problems · BOSS solved 1 · you solved 1 · outside agent 1 · 1 open");
+      .toBe("4 problems, BOSS solved 1, you solved 1, outside agent 1, 1 open");
   });
 });

@@ -71,7 +71,7 @@ describe("Live never guesses", () => {
   it("upcoming faces are only the ones the workflow names, hollow, with what they will do", async () => {
     await mount(view(board()));
     const next = $$('[data-testid="ag-mission-wfr_182"] .ag-mission-next');
-    expect(next.map((n) => n.title)).toEqual(["Next: Vera · Test"]);
+    expect(next.map((n) => n.title)).toEqual(["Next: Vera, Test"]);
   });
 });
 

@@ -37,9 +37,9 @@ const quiet = {
 describe("every row names something real", () => {
   it.each([
     [decision, "Merge PR #186"],
-    [step, "Lead-Triage Inbox — deploy deadlettered"],
+    [step, "Lead-Triage Inbox, deploy deadlettered"],
     [down, "Change Calendar (staging) at 192.0.2.202:3013"],
-    [quiet, "Interview Scorecard App — 27m quiet in implement"],
+    [quiet, "Interview Scorecard App, 27m quiet in implement"],
   ])("%#", (item, expected) => {
     expect(itemHeadline(item as never)).toBe(expected);
   });

@@ -44,7 +44,7 @@ describe("Factory › Repositories", () => {
     expect(tid("mr-prj-row-bnd_infra")?.textContent).toContain("Read only");
     expect(tid("mr-prj-mode-multi")?.getAttribute("aria-checked")).toBe("true");
     expect(tid("mr-prj-mode-single")?.getAttribute("aria-checked")).toBe("false");
-    expect(tid("mr-prj-app-storefront")?.textContent).toContain("contracts → api → web · deploys with infra");
+    expect(tid("mr-prj-app-storefront")?.textContent).toContain("contracts → api → web, deploys with infra");
     expect(tid("mr-prj-app-storefront")?.querySelector("a")?.getAttribute("href")).toContain("view=components");
     expect(document.body.textContent).toContain("Access follows the app.");
     expect(document.body.textContent).toContain("boss/*");

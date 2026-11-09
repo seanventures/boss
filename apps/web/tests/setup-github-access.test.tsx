@@ -120,7 +120,7 @@ describe("GitHub access", () => {
     mounted = await mountBoard(view);
     await flush();
     expect(api.calls.some((c) => c.op === "repo_app")).toBe(true);
-    expect(document.querySelector('[data-testid="gh-connect-pick"]')!.textContent).toContain("GitHub connected · @acme");
+    expect(document.querySelector('[data-testid="gh-connect-pick"]')!.textContent).toContain("GitHub connected, @acme");
     expect(document.querySelector('[data-testid="su-repo-option-acme/web"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="su-token-input"]')).toBeNull();
     expect(document.body.textContent).toContain("acme/web");

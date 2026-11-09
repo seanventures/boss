@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * BUILD DATABASE — an OVERRIDE, not a step (engine services/build_services.py `decide`). By
+ * BUILD DATABASE, an OVERRIDE, not a step (engine services/build_services.py `decide`). By
  * default (Auto) a build gets its own empty PostgreSQL database when BOSS detects the app needs
  * one: the brief or PRD names PostgreSQL, a template needs it, the plan records
  * `database: postgres`, or the app's code declares it. Always gives every build one; Never none.

@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* Skills & MCP: the Kit, Who can and Library. Classes are prefixed kit- and use only the base tokens. */
 
 .kit-home, .kit-lib, .kit-who { display: flex; flex-direction: column; gap: 14px; min-width: 0; color: var(--ink); font-family: var(--sans); }
@@ -13,7 +18,7 @@
 .kit-tab[aria-selected="true"] { background: var(--surface); color: var(--ink); }
 .kit-progress { font: 600 0.8125rem var(--sans); color: var(--ink-soft); padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
 .kit-search { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); color: var(--faint); min-width: 0; flex: 0 1 220px; }
-.kit-search:focus-within { border-color: var(--accent); }
+.kit-search:focus-within { border-color: var(--accent); outline: 2px solid currentColor; outline-offset: 2px;}
 .kit-search input { border: 0; outline: 0; background: transparent; color: var(--ink); font: 0.875rem var(--sans); min-width: 0; width: 100%; }
 
 /* ── Buttons, links, chips, pills ───────────────────────────────────────────────────────── */
@@ -29,7 +34,7 @@
 .kit-icon-btn:hover { color: var(--ink); border-color: var(--border); }
 .kit-link { border: 0; background: none; padding: 0; color: var(--accent-text); font: 600 0.8125rem var(--sans); cursor: pointer; text-decoration: none; }
 .kit-link:hover { text-decoration: underline; }
-.kit-link:disabled { opacity: 0.5; }
+.kit-link:disabled { opacity: 0.5; cursor: not-allowed;}
 .kit-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font: 600 0.6875rem/1.4 var(--sans); white-space: nowrap; background: transparent; }
 .kit-chip[data-tone="accent"] { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .kit-chip[data-tone="amber"] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
@@ -43,7 +48,7 @@
 .kit-pill[data-tone="amber"] { color: var(--amber); background: var(--amber-soft); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
 .kit-pill[data-tone="faint"] { color: var(--faint); background: transparent; border-color: var(--border); }
 .kit-spin { width: 9px; height: 9px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: kit-spin 0.8s linear infinite; }
-@keyframes kit-spin { to { transform: rotate(360deg); } }
+@keyframes kit-spin { to { transform: rotate(360deg);} }
 @media (prefers-reduced-motion: reduce) { .kit-spin { animation: none; } }
 .kit-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--faint); }
 .kit-dot[data-tone="green"] { background: var(--green); }
@@ -65,7 +70,7 @@
 .kit-home[data-drawer="open"] .kit-body { grid-template-columns: minmax(0, 1fr) 22.10526rem; }
 .kit-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .kit-group { display: flex; flex-direction: column; gap: 8px; }
-.kit-group-label { position: sticky; top: 0; z-index: 2; margin: 0; padding: 4px 0; background: var(--surface); color: var(--faint); font: 700 0.6875rem/1.2 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
+.kit-group-label { position: sticky; top: 0; z-index: 2; margin: 0; padding: 4px 0; background: var(--surface); color: var(--faint); font: 700 0.6875rem/1.2 var(--sans); letter-spacing: 0; text-transform: none; }
 .kit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14.73684rem, 1fr)); gap: 10px; min-width: 0; }
 .kit-card { display: flex; flex-direction: column; gap: 10px; min-height: 88px; min-width: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); cursor: pointer; }
 .kit-card:hover, .kit-card:focus-visible { border-color: var(--accent); outline: none; }
@@ -73,7 +78,7 @@
 .kit-card[data-status="review"] { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
 .kit-card[data-status="off"] { opacity: 0.7; }
 .kit-skeleton { min-height: 88px; cursor: default; background: linear-gradient(90deg, var(--surface), var(--surface-3), var(--surface)); background-size: 200% 100%; animation: kit-shimmer 1.4s ease-in-out infinite; }
-@keyframes kit-shimmer { to { background-position: -200% 0; } }
+@keyframes kit-shimmer { to { background-position: -200% 0;} }
 @media (prefers-reduced-motion: reduce) { .kit-skeleton { animation: none; } }
 .kit-card-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .kit-card-foot { justify-content: space-between; }
@@ -90,7 +95,7 @@
 /* ── Essentials strip: tiles joined like the Studio lane ────────────────────────────────── */
 .kit-ess { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--accent-line); border-radius: var(--r-xl); background: var(--accent-soft); }
 .kit-ess-head { display: flex; align-items: center; justify-content: space-between; }
-.kit-ess-title { font: 700 0.75rem var(--sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-text); }
+.kit-ess-title { font: 700 0.75rem var(--sans); letter-spacing: 0; text-transform: none; color: var(--accent-text); }
 .kit-ess-done { flex-direction: row; align-items: center; gap: 12px; }
 .kit-ess-lane { display: flex; gap: 22px; margin: 0; padding: 0; list-style: none; overflow-x: auto; min-width: 0; }
 .kit-ess-tile { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1 0 190px; max-width: 240px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); cursor: pointer; }
@@ -112,7 +117,7 @@
 .kit-sheet-layer { position: fixed; inset: 0; z-index: 70; }
 /* Over a full-screen page (the agent Passport is `.tpl-page`, z 200): above it, under toasts. */
 .kit-sheet-layer[data-over="page"], .kit-modal[data-over="page"] { z-index: var(--z-over-page); }
-.kit-drawer[data-floating] { position: fixed; top: 64px; right: 12px; bottom: 12px; z-index: 1; width: min(420px, calc(100vw - 24px)); max-height: none; box-shadow: var(--shadow-lg); }
+.kit-drawer[data-floating] { position: fixed; top: 64px; right: 12px; bottom: 12px; z-index: 1; width: min(420px, calc(100% - 24px)); max-height: none; box-shadow: var(--shadow-lg); }
 
 /* ── Drawer: right column, a bottom sheet on a phone ────────────────────────────────────── */
 .kit-drawer { position: sticky; top: 12px; display: flex; flex-direction: column; max-height: calc(100vh - 40px); min-width: 0; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); overflow: hidden; }
@@ -127,7 +132,7 @@
 .kit-drawer > .kit-card-line { padding: 6px 14px 0; }
 .kit-section { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); scroll-margin-top: 8px; }
 .kit-section[data-focus] { animation: kit-flash 1.2s ease-out 1; }
-@keyframes kit-flash { from { background: var(--accent-soft); } to { background: transparent; } }
+@keyframes kit-flash { from { background: var(--accent-soft);} to { background: transparent;} }
 /* Section labels are the shared `.section-label` (app/section-label.tsx, globals.css). */
 .kit-info { display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid currentColor; font: 700 0.5625rem var(--sans); text-transform: none; letter-spacing: 0; cursor: help; }
 .kit-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-width: 0; font: 0.8125rem var(--sans); color: var(--ink-soft); }
@@ -208,11 +213,11 @@
 .kit-matrix { border-collapse: separate; border-spacing: 0; font: 0.8125rem var(--sans); }
 .kit-matrix th, .kit-matrix td { padding: 4px; text-align: center; border-bottom: 1px solid var(--border); }
 /* Compact columns so all twelve fit at 1440 (K18): 76px, the label in up to three short lines. */
-.kit-matrix thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); vertical-align: bottom; width: 4rem; min-width: 4rem; max-width: 4rem; }
+.kit-matrix thead th { position: sticky; inset-block-start: 0; z-index: 2; background: var(--surface); vertical-align: bottom; width: 4rem; min-width: 4rem; max-width: 4rem; }
 .kit-matrix tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left; min-width: 6.94737rem; }
 .kit-col-label { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: break-word; hyphens: auto; }
 .kit-matrix tr[data-focus] th, .kit-matrix tr[data-focus] td { background: var(--accent-soft); }
-.kit-matrix-group th { color: var(--faint); font: 700 0.6875rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase; text-align: left !important; padding-top: 10px; }
+.kit-matrix-group th { color: var(--faint); font: 700 0.6875rem var(--sans); letter-spacing: 0; text-transform: none; text-align: left !important; padding-top: 10px; }
 .kit-col { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; border: 0; background: transparent; color: var(--ink-soft); font: 600 0.6875rem/1.2 var(--sans); cursor: pointer; }
 .kit-col:hover { color: var(--accent-text); }
 .kit-rowhead { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); text-decoration: none; font: 600 0.8125rem var(--sans); border: 0; background: transparent; cursor: pointer; padding: 2px; }

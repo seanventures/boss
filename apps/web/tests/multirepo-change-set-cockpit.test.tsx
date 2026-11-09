@@ -72,7 +72,7 @@ describe("the change's cockpit (screen 5)", () => {
     expect(tid("mr-plan-state-backend")?.textContent).toBe("building");
     expect(tid("mr-plan-state-frontend")?.textContent).toBe("next");
     expect(tid("mr-csc-now")?.textContent).toContain("Tests in acme/api");
-    expect(tid("mr-csc-grant")?.textContent).toBe("Grant: contracts, api, web (write on boss/*) · infra (read). See consent");
+    expect(tid("mr-csc-grant")?.textContent).toBe("Grant: contracts, api, web (write on boss/*), infra (read). See consent");
   });
 
   it("See consent opens the grant read only: the repositories, what it cannot reach, no buttons to grant", async () => {
@@ -85,7 +85,7 @@ describe("the change's cockpit (screen 5)", () => {
     expect(tid("mr-grant-repo-acme/contracts")?.textContent).toContain("Write");
     expect(tid("mr-grant-repo-acme/infra")?.textContent).toContain("Read only");
     expect(sheet.textContent).toContain("acme/mobile");
-    expect(sheet.textContent).toContain("Param · remembered for Storefront");
+    expect(sheet.textContent).toContain("Param, remembered for Storefront");
     expect(sheet.querySelector('[data-testid="consent-mr-allow"]')).toBeNull();
     expect([...sheet.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Close"]);
   });

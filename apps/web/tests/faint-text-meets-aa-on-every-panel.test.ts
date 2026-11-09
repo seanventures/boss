@@ -13,8 +13,23 @@ import { describe, expect, it } from "vitest";
 const css = (f: string) => readFileSync(join(process.cwd(), "app", f), "utf8");
 const ROOT = (() => {
   const src = css("design-system.css");
-  const block = src.slice(src.indexOf(":root {"), src.indexOf("}", src.indexOf(":root {")));
-  return Object.fromEntries([...block.matchAll(/--([a-z0-9-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1], m[2]]));
+  const globals = css("globals.css");
+  const start = src.indexOf(":root {");
+  const block = src.slice(start, src.indexOf("}", start));
+  const hexOf = (value: string): string | undefined => {
+    const direct = value.match(/#[0-9a-f]{6}/i);
+    if (direct) return direct[0];
+    const ref = value.match(/var\(--boss-c-([0-9a-f]{6})\)/i);
+    if (!ref) return undefined;
+    const def = globals.match(new RegExp(`--boss-c-${ref[1]}:\\s*(#[0-9a-f]{6})`, "i"));
+    return def?.[1];
+  };
+  const out: Record<string, string> = {};
+  for (const m of block.matchAll(/--([a-z0-9-]+):\s*([^;]+);/gi)) {
+    const hex = hexOf(m[2]);
+    if (hex) out[m[1]] = hex;
+  }
+  return out;
 })();
 
 function lum(hex: string): number {

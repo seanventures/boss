@@ -73,7 +73,7 @@ describe("Documents › Upload a document", () => {
     expect(atob(staged.content_base64)).toBe("%PDF-");
     // The preview: titles, kinds, pages, first lines, counts — and nothing written yet.
     expect($('[data-testid="kg-upload-preview"]')).toBeTruthy();
-    expect($('[data-testid="kg-upload-counts"]')?.textContent).toContain("45 pages · 3 sections: 1 rule cards, 1 headings, 1 other");
+    expect($('[data-testid="kg-upload-counts"]')?.textContent).toContain("45 pages, 3 sections: 1 rule cards, 1 headings, 1 other");
     const rows = $$('[data-testid="kg-upload-section"]');
     expect(rows).toHaveLength(3);
     expect(rows[2].getAttribute("data-kind")).toBe("rule_card");
@@ -127,7 +127,7 @@ describe("Documents › Upload a document", () => {
       "/api/delivery-workflows$": { body: { run: { id: "wfr_rbx_1" } } },
     });
     await mount(<DocumentsTab {...W} />);
-    expect($('[data-testid="kg-doc-file"]')?.textContent).toContain("45 pages · 12 sections, 11 rule cards");
+    expect($('[data-testid="kg-doc-file"]')?.textContent).toContain("45 pages, 12 sections, 11 rule cards");
     expect($$('[data-testid="kg-doc-clause"]')).toHaveLength(8);
     expect($$('[data-testid="kg-doc-check"]')).toHaveLength(0);
     expect($$('[data-testid="kg-doc-clause-page"]')[1].textContent).toBe("p. 16");
@@ -201,7 +201,7 @@ describe("Documents › DQ sample", () => {
     expect($('[data-testid="kg-dq-sample"] [data-testid="kg-upload-preview"]')).toBeTruthy();
     await press($('[data-testid="kg-dq-sample"] [data-testid="kg-upload-confirm"]'));
     expect($('[data-testid="kg-dq-msg"]')?.textContent).toContain("136 sections, 96 of them rule cards");
-    expect($('[data-testid="kg-dq-sample-state"]')?.textContent).toBe("Loaded: 136 sections · 96 rules waiting for review · 2 approved");
+    expect($('[data-testid="kg-dq-sample-state"]')?.textContent).toBe("Loaded: 136 sections, 96 rules waiting for review, 2 approved");
     expect($('[data-testid="kg-dq-sample"] [data-testid="kg-extract-rules"]')).toBeTruthy();
   });
 
@@ -262,7 +262,7 @@ describe("Rules review › a data-quality rule", () => {
     expect(card.textContent).toContain("CDE-LN-001");
     expect($('[data-testid="kg-dq-links"]')?.textContent).toBe("Linked in the graph: 1 CDE, 1 column. Not in the graph yet: 1 report line.");
     const clause = $('[data-testid="kg-rule-clause"]')!;
-    expect(clause.textContent).toContain("NorthPeak Bank: Loan Data Quality Rulebook v3.2 · NPB-DQ-LN-003 · p. 15");
+    expect(clause.textContent).toContain("NorthPeak Bank: Loan Data Quality Rulebook v3.2, NPB-DQ-LN-003, p. 15");
     expect(clause.textContent).toContain("Check: For every active loan");
     await press($('[data-testid="kg-clause-focus"]'));
     expect(onFocusNode).toHaveBeenCalledWith("kgn_clause_ln003");

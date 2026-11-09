@@ -1,8 +1,9 @@
-.panel { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border, #384050); }
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+.panel { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border, var(--boss-c-384050)); }
 .panel p { max-width: 68ch; line-height: 1.5; }
 .list { display: grid; gap: 1rem; padding-left: 1.25rem; }
 .list code { overflow-wrap: anywhere; }
 .list li { overflow-wrap: anywhere; }
 .editor { display: grid; gap: .5rem; margin-top: .75rem; max-width: 44rem; }
-.editor input, .editor textarea { box-sizing: border-box; width: 100%; color: inherit; background: var(--surface, #17202c); border: 1px solid var(--border, #697386); border-radius: 6px; padding: .65rem; font: inherit; }
-.editor input:focus-visible, .editor textarea:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+.editor input, .editor textarea { box-sizing: border-box; width: 100%; color: inherit; background: var(--surface, var(--boss-c-17202c)); border: 1px solid var(--border, var(--boss-c-697386)); border-radius: 6px; padding: .65rem; font: inherit; }
+.editor input:focus-visible, .editor textarea:focus-visible { outline: 2px solid var(--boss-c-60a5fa); outline-offset: 2px; }

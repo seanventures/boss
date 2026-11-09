@@ -32,7 +32,7 @@ function Result({ state, testid, say }: {
 }) {
   if (!state) return null;
   if (!state.ok) {
-    return <p className="detail" style={{ color: "#f85149" }} data-testid={testid}
+    return <p className="detail" style={{ color: "var(--boss-c-f85149)" }} data-testid={testid}
               data-ok="false">{state.error}</p>;
   }
   if (say) {
@@ -54,8 +54,8 @@ export function InboxAckCard({ items }: { items: AckState[] }) {
     <article className="stack-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
         <h3 style={{ margin: 0 }}>Inbound ack ledger</h3>
-        <span className="pill" style={{ color: pending ? "#d29922" : "#3fb950" }}>
-          {pending} pending · {items.length} total
+        <span className="pill" style={{ color: pending ? "var(--boss-c-d29922)" : "var(--boss-c-3fb950)" }}>
+          {pending} pending, {items.length} total
         </span>
       </div>
       <p className="detail">
@@ -70,16 +70,16 @@ export function InboxAckCard({ items }: { items: AckState[] }) {
             <div className="feed-row" key={a.id}>
               <div>
                 <h4 style={{ margin: 0 }}>
-                  <span style={{ color: tone(a.state), textTransform: "uppercase", fontSize: 12 }}>{a.state}</span>{" "}
+                  <span style={{ color: tone(a.state), textTransform: "none", fontSize: 12 }}>{a.state}</span>{" "}
                   <span style={{ color: "var(--muted)" }}>{a.channel}</span>
                 </h4>
                 <p className="detail">
                   {a.routeKind ?? "—"}
                   {a.targetRef ? ` → ${a.targetRef}` : ""}
-                  {a.reason ? ` · ${a.reason}` : ""}
+                  {a.reason ? `, ${a.reason}` : ""}
                 </p>
               </div>
-              <span className="pill" style={{ color: a.terminal ? "#3fb950" : "#d29922" }}>
+              <span className="pill" style={{ color: a.terminal ? "var(--boss-c-3fb950)" : "var(--boss-c-d29922)" }}>
                 {a.terminal ? "terminal" : "open"}
               </span>
             </div>
@@ -96,7 +96,7 @@ export function SlackToolsCard({ projectId }: { projectId: string }) {
   const [digestState, digestAction, digestPending] = useActionState(callAction(slackDigestAction, undefined, "comms:send"), null);
   return (
     <article className="stack-card">
-      <h3 style={{ margin: 0 }}>Slack — persona render & digest</h3>
+      <h3 style={{ margin: 0 }}>Slack, persona render & digest</h3>
       <form action={renderAction} className="composer compact">
         <div style={{ display: "flex", gap: 8 }}>
           <label className="field" style={{ flex: 1 }}>
@@ -151,7 +151,7 @@ export function MeetingConsensusCard({
   const [sweepState, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction, undefined, "system:operate"), null);
   const bound = Boolean(meetingId);
   // AN OPERATOR FORM, NOT A FIXTURE. On boss-1 this card sat on the Meetings screen with votes
-  // prefilled 2 / 1 / 0, "requires meeting_id" copy and an "mtg_… or mrun_…" placeholder — a
+  // prefilled 2 / 1 / 0, "requires meeting_id" copy and an "mtg_… or mrun_…" placeholder, a
   // debug harness. The counts start empty (a vote nobody cast must not be one press away), the
   // copy says what the tally does, and the stall sweep is folded under Maintenance.
   const body = (
@@ -250,29 +250,29 @@ export function FactoryScaleCard({ wip }: { wip: WipStatus }) {
   return (
     <article className="stack-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-        <h3 style={{ margin: 0 }}>Factory scale — WIP, gate, chunker</h3>
+        <h3 style={{ margin: 0 }}>Factory scale, WIP, gate, chunker</h3>
         {wip?.apiReachable ? (
-          <span className="pill" style={{ color: wip.admit ? "#3fb950" : "#f85149" }}>
-            {wip.inFlight}/{wip.wipLimit} in-flight · {wip.admit ? "slot free" : "WIP full"}
+          <span className="pill" style={{ color: wip.admit ? "var(--boss-c-3fb950)" : "var(--boss-c-f85149)" }}>
+            {wip.inFlight}/{wip.wipLimit} in-flight, {wip.admit ? "slot free" : "WIP full"}
           </span>
         ) : (
-          <span className="pill" style={{ color: "#f85149" }}>WIP unavailable</span>
+          <span className="pill" style={{ color: "var(--boss-c-f85149)" }}>WIP unavailable</span>
         )}
       </div>
       {!wip?.apiReachable ? (
         <p className="detail" role="status" data-factory-wip="error">
           Factory WIP card could not load
-          {wip?.blockedReason ? ` — ${wip.blockedReason}` : " — control plane request failed"}.
+          {wip?.blockedReason ? `, ${wip.blockedReason}` : ", control plane request failed"}.
         </p>
       ) : (
         <p className="detail" data-factory-wip="ok">
           {planeLabel ?? "GitHub plane not advertised on this API."}
-          {wip.fixtureSupported ? " · no-spend fixture supported" : ""}
-          {wip.githubPlaneReason ? ` · ${wip.githubPlaneReason}` : ""}
+          {wip.fixtureSupported ? ", no-spend fixture supported" : ""}
+          {wip.githubPlaneReason ? `, ${wip.githubPlaneReason}` : ""}
         </p>
       )}
 
-      <p className="detail">Confidence-gated merge check — required gates must pass AND confidence ≥ floor.</p>
+      <p className="detail">Confidence-gated merge check, required gates must pass AND confidence ≥ floor.</p>
       <form action={mergeAction} className="composer compact">
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 13 }}>
           <label><input type="checkbox" name="tests_passed" defaultChecked /> tests</label>

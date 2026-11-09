@@ -37,7 +37,7 @@ export function ScimShownOnce({ issued, provider, onClose }: { issued: IssuedSci
         <code data-testid="scim-secret" data-copy="data" aria-label="The sync token">{issued.key}</code>
         <button type="button" className="idn-btn sm primary" data-autofocus onClick={async () => {
           try { await navigator.clipboard.writeText(issued.key); setCopied(true); showToast("success", "Copied"); }
-          catch { showToast("error", "Copy blocked · select it"); }
+          catch { showToast("error", "Copy blocked, select it"); }
         }}>
           {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />} {copied ? "Copied" : "Copy"}
         </button>
@@ -157,7 +157,7 @@ export function ProviderSync({ provider, origin, onClose }: { provider: Provider
 
   const liveKeys = (keys ?? []).filter((k) => k.status !== "revoked");
   return (
-    <Sheet title={`${provider.name} · groups and sync`} icon={<ArrowsClockwise size={18} aria-hidden />} onClose={onClose} wide testId="provider-sync">
+    <Sheet title={`${provider.name}, groups and sync`} icon={<ArrowsClockwise size={18} aria-hidden />} onClose={onClose} wide testId="provider-sync">
       {sso ? (
         <section aria-labelledby="sync-groups-h">
           <div className="idn-card-h"><h3 id="sync-groups-h"><UsersThree size={15} aria-hidden /> Groups at sign-in</h3></div>

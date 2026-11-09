@@ -1,3 +1,7 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* Shared helpers kept out of globals.css (area loading, approval guidance, action results).
    The Command Center itself is app/command-center/cc.css. */
 
@@ -16,7 +20,7 @@
   background: var(--accent);
   animation: area-loading-slide 1.2s ease-in-out infinite;
 }
-@keyframes area-loading-slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@keyframes area-loading-slide { from { transform: translateX(-100%);} to { transform: translateX(250%);} }
 @media (prefers-reduced-motion: reduce) { .area-loading-bar::after { animation: none; width: 100%; opacity: 0.4; } }
 
 /* Approvals: what to do about a refusal, on its card. */
@@ -48,7 +52,7 @@
   border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 0.85rem;
 }
 .as-runs li i {
-  font-style: normal; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.04em;
+  font-style: normal; text-transform: none; font-size: 0.7rem; letter-spacing: 0;
 }
 .as-run-when { color: var(--faint); white-space: nowrap; }
 .as-run-what { color: var(--ink-soft); overflow-wrap: anywhere; }

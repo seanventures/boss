@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Two shelves (cc v2), each ONE horizontally scrolling row — snap, a fade at the right edge and
- * a › button — never a wrapping grid:
+ * Two shelves (cc v2), each ONE horizontally scrolling row, snap, a fade at the right edge and
+ * a › button, never a wrapping grid:
  *
  *   START FROM AN IDEA: the one ideas list (components/v2/templates/catalogue useIdeas: the
  *   catalogue's starters, then the written briefs) with their cover art. A card opens the
@@ -71,7 +71,7 @@ export function Rail({ label, children, testId, resetKey }: {
       ) : null}
       {!end ? (
         <button type="button" className="cc-rail-btn" aria-label={`More: ${label}`} data-testid={`${testId}-next`}
-                onClick={() => nudge(1)}>›</button>
+                onClick={() => nudge(1)}>Next</button>
       ) : null}
     </div>
   );
@@ -82,7 +82,7 @@ export function Rail({ label, children, testId, resetKey }: {
 function TemplateCard({ idea, scope }: { idea: IdeaItem; scope: string }) {
   return (
     <button type="button" className="cc-tpl" data-testid="cc-tpl" data-starter={idea.card ? idea.card.key : undefined}
-            title={`${idea.title} — open the brief. Nothing builds until you press Build.`}
+            title={`${idea.title}, open the brief. Nothing builds until you press Build.`}
             onClick={() => {
               if (!idea.card) { openTemplate(idea.title); return; }
               window.location.assign(composerHref(window.location.search, { title: idea.title, brief: idea.brief }));
@@ -117,7 +117,7 @@ function Gallery({ onClose }: { onClose: () => void }) {
     <div className="tpl-page cc-gallery" role="dialog" aria-modal="true" aria-label="Ideas" data-testid="cc-gallery">
       <header className="tpl-page-head">
         <button type="button" className="tpl-back" onClick={onClose} data-testid="cc-gallery-back">← Back</button>
-        <span className="tpl-crumb">Ideas · {ideas.length}</span>
+        <span className="tpl-crumb">Ideas, {ideas.length}</span>
       </header>
       <div className="tpl-page-inner">
         <h1 className="cc-gallery-h">Start from an idea</h1>
@@ -162,7 +162,7 @@ export function TemplatesShelf() {
         <span className="cc-sub">Each one is a full brief your team can build today</span>
         <span className="cc-spacer" />
         <button type="button" className="cc-link" data-testid="cc-templates-all"
-                title="All the ideas on one page" onClick={open}>All {ideas.length} ↗</button>
+                title="All the ideas on one page" onClick={open}>All {ideas.length}</button>
       </div>
       <Rail label="Ideas" testId="cc-tpl-rail">
         {ideas.map((idea: IdeaItem) => <TemplateCard key={idea.title} idea={idea} scope="cc" />)}
@@ -231,14 +231,14 @@ export function AppsShelf({ apps, attention = [], orgId }: {
         {list.map((a) => {
           const need = needOf(a);
           const state: ShelfState = shelfState(a, need);
-          // The card opens what waits on you, else the latest build — the chip's own rule.
+          // The card opens what waits on you, else the latest build, the chip's own rule.
           const target = need?.runId ?? a.openRunId;
           const idea = templateFor(a.app);
           const builders = a.builders.slice(0, 5);
           return (
             <div key={a.key} className="cc-app" data-state={state}>
               <Go className="cc-app-open" patch={{ area: "code_tasks", view: "apps", build: target, role: null }}
-                  orgId={orgId} testId="cc-app" title={`${a.app} · ${a.word}. Opens it in the Factory.`}>
+                  orgId={orgId} testId="cc-app" title={`${a.app}, ${a.word}. Opens it in the Factory.`}>
                 <span className="cc-app-art" data-state={state}>
                   {idea ? <IdeaCover idea={idea} scope={`app-${a.key}`} /> : <Monogram name={a.app} />}
                   <span className="cc-app-state" data-state={state}>{shelfWord(a, need)}</span>
@@ -249,7 +249,7 @@ export function AppsShelf({ apps, attention = [], orgId }: {
                     <span className="cc-minis" aria-label={builders.map((k) => nameOf(k).name).join(", ")}>
                       {builders.map((k) => <span key={k} className="cc-mini"><AgentAvatar agent={k} size={22} aiBadge={false} /></span>)}
                     </span>
-                    <span>{a.builds} build{a.builds === 1 ? "" : "s"} · {a.costUsd > 0 ? dollars(a.costUsd) : a.included ? "Included" : "$0"}</span>
+                    <span>{a.builds} build{a.builds === 1 ? "" : "s"}, {a.costUsd > 0 ? dollars(a.costUsd) : a.included ? "Included" : "$0"}</span>
                   </span>
                 </span>
               </Go>

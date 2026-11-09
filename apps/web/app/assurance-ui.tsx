@@ -27,7 +27,7 @@ function Status({ value }: { value: string }) {
         padding: "2px 8px",
         fontSize: 11,
         fontWeight: 700,
-        textTransform: "uppercase",
+        textTransform: "none",
       }}
     >
       {value || "unknown"}
@@ -38,7 +38,7 @@ function Status({ value }: { value: string }) {
 function CountCard({ label, value, detail }: { label: string; value: number; detail: string }) {
   return (
     <article className="stack-card">
-      <span className="eyebrow">{label}</span>
+      <span className="area-name">{label}</span>
       <strong style={{ display: "block", fontSize: 32, marginTop: 5 }}>{value}</strong>
       <p className="detail" style={{ marginBottom: 0 }}>{detail}</p>
     </article>
@@ -59,7 +59,7 @@ export function AssuranceCenter({ feed }: { feed: AssuranceFeed }) {
     <div className="stack-grid">
       <div className="section-head">
         <div>
-          <span className="eyebrow">Assurance Center</span>
+          <span className="area-name">Assurance Center</span>
           <h2>Ground truth is measured, fenced, and independently verified.</h2>
           <p className="detail">
             Regression alarms, settled conclusions, proof-bearing claims, surface ownership,
@@ -83,7 +83,7 @@ export function AssuranceCenter({ feed }: { feed: AssuranceFeed }) {
             <div className="detail" data-testid="assurance-empty">
               <p>
                 No cases recorded yet. Proof gates require a <strong>measured contract</strong>
-                — a metric with a baseline/threshold plus an assurance case that cites it.
+               , a metric with a baseline/threshold plus an assurance case that cites it.
                 An empty center is not a healthy production claim.
               </p>
               <p>
@@ -127,7 +127,7 @@ export function AssuranceCenter({ feed }: { feed: AssuranceFeed }) {
         </article>
 
         <article className="stack-card">
-          <h3 style={{ marginTop: 0 }}>Model usage · 30 days</h3>
+          <h3 style={{ marginTop: 0 }}>Model usage, 30 days</h3>
           <p className="detail">
             {Number(modelUsage.totals.calls ?? 0).toLocaleString("en-US")} calls ·{" "}
             {Number(modelUsage.totals.total_tokens ?? 0).toLocaleString("en-US")} tokens ·{" "}

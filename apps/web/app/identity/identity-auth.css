@@ -1,3 +1,4 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* Identity › auth (claim, enrolment, invitations, email landings): idn- classes; tokens only — see identity.css. */
 .idn-auth a.idn-big { text-decoration: none; }
 .idn-auth a.idn-big.p { color: var(--idn-white); }
@@ -13,16 +14,16 @@
 .idn-totp { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 0 0 6px; }
 .idn-qr { width: 168px; height: 168px; border-radius: 12px; background: var(--idn-white); padding: 8px; }
 .idn-totp .idn-f { width: 100%; align-items: center; }
-.idn-secret-key { font: 600 0.94737rem var(--mono); letter-spacing: 0.08em; color: var(--idn-ink-code); background: var(--idn-deep); border: 1px dashed color-mix(in srgb, var(--teal) 45%, transparent); border-radius: 12px; padding: 10px 14px; user-select: all; word-break: break-all; text-align: center; }
+.idn-secret-key { font: 600 0.94737rem var(--mono); letter-spacing: 0; color: var(--idn-ink-code); background: var(--idn-deep); border: 1px dashed color-mix(in srgb, var(--teal) 45%, transparent); border-radius: 12px; padding: 10px 14px; user-select: all; word-break: break-all; text-align: center; }
 .idn-help details[open] summary { margin-bottom: 4px; }
 .idn-help .idn-cmd { margin-bottom: 8px; }
 
 @media print {
-  .idn-auth { background: none; color: black; }
+  .idn-auth { background: none; color: var(--boss-c-1c1917); }
   .idn-auth::before, .idn-auth .idn-brand-mark, .idn-hostline, .idn-code-acts, .idn-stored, .idn-auth .idn-big, .idn-auth .idn-fine { display: none; }
   .idn-panel { box-shadow: none; border: 0; background: none; }
-  .idn-codes { color: black; border-color: black; background: none; }
-  .idn-codes li { color: black; }
+  .idn-codes { color: var(--boss-c-1c1917); border-color: var(--boss-c-1c1917); background: none; }
+  .idn-codes li { color: var(--boss-c-1c1917); }
 }
 /* A waiting line ("Checking your link…"): distinct from the shared .idn-state panels (states.tsx). */
 .idn-wait { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 0.71053rem; color: var(--muted); margin-bottom: 16px; }
@@ -37,14 +38,14 @@
 .idn-auth .idn-panel > h1 { text-align: center; font-size: 1.36842rem; letter-spacing: -0.01em; margin-bottom: 8px; }
 .idn-auth .idn-panel > h1 + .idn-s { text-align: center; margin-bottom: 22px; text-wrap: balance; }
 /* A tap on a disabled option says why in a line below it; the hover tip would only repeat it. */
-.idn-tipw:has([aria-disabled="true"]:focus:not(:focus-visible)) > .idn-tip { opacity: 0; visibility: hidden; }
+.idn-tipw:has([aria-disabled="true"]:focus:not(:focus-visible)) > .idn-tooltip { opacity: 0; visibility: hidden; }
 
 /* the mark: large, centred, lit from behind so the deep blue reads on the dark stage */
 .idn-brand { display: flex; flex-direction: column; align-items: center; gap: 10px; margin: 0 0 20px; }
 .idn-brand-mark { position: relative; width: 88px; height: 88px; display: grid; place-items: center; }
 .idn-brand-mark::before { content: ""; position: absolute; inset: -22px; border-radius: 50%; background: radial-gradient(closest-side, color-mix(in srgb, var(--teal) 30%, transparent), color-mix(in srgb, var(--accent) 12%, transparent) 62%, transparent); }
 .idn-brand-mark img { position: relative; width: 68px; height: auto; filter: brightness(1.3) saturate(1.15) drop-shadow(0 8px 20px color-mix(in srgb, var(--accent) 55%, transparent)); }
-.idn-brand-word { font: 700 1.10526rem/1 var(--display); letter-spacing: 0.24em; padding-left: 0.24em; color: var(--ink); }
+.idn-brand-word { font: 700 1.10526rem/1 var(--display); letter-spacing: 0; padding-left: 0.24em; color: var(--ink); }
 .idn-brand-tag { font-size: 0.60526rem; font-weight: 600; color: var(--muted); border: 1px solid var(--border-strong); border-radius: 999px; padding: 3px 11px; background: color-mix(in srgb, var(--surface-3) 60%, transparent); }
 
 /* which BOSS this is, quietly at the foot of the panel */
@@ -57,12 +58,12 @@
 /* the hover-and-focus tooltip every disabled option carries */
 .idn-tipw { position: relative; display: inline-flex; }
 .idn-tipw.block { display: block; }
-.idn-tip { position: absolute; bottom: calc(100% + 9px); left: 50%; transform: translate(-50%, 4px); width: max-content; max-width: 250px; padding: 7px 10px; border-radius: 9px; background: var(--surface-3); border: 1px solid var(--border-strong); color: var(--ink-soft); font-size: 0.63158rem; font-weight: 500; line-height: 1.4; letter-spacing: 0; text-transform: none; text-align: center; white-space: normal; box-shadow: 0 14px 30px -12px var(--idn-shadow); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 120ms, transform 120ms, visibility 120ms; z-index: 5; }
-.idn-tipw:hover > .idn-tip, .idn-tipw:has(:focus-visible) > .idn-tip { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
-.idn-idps > .idn-tipw:first-child > .idn-tip, .idn-mtabs.seg > .idn-tipw:first-child > .idn-tip { left: 0; transform: translate(0, 4px); }
-.idn-idps > .idn-tipw:last-child > .idn-tip, .idn-mtabs.seg > .idn-tipw:last-child > .idn-tip { left: auto; right: 0; transform: translate(0, 4px); }
-.idn-idps > .idn-tipw:first-child:is(:hover, :has(:focus-visible)) > .idn-tip, .idn-idps > .idn-tipw:last-child:is(:hover, :has(:focus-visible)) > .idn-tip,
-.idn-mtabs.seg > .idn-tipw:first-child:is(:hover, :has(:focus-visible)) > .idn-tip, .idn-mtabs.seg > .idn-tipw:last-child:is(:hover, :has(:focus-visible)) > .idn-tip { transform: none; }
+.idn-tooltip { position: absolute; bottom: calc(100% + 9px); left: 50%; transform: translate(-50%, 4px); width: max-content; max-width: 250px; padding: 7px 10px; border-radius: 9px; background: var(--surface-3); border: 1px solid var(--border-strong); color: var(--ink-soft); font-size: 0.63158rem; font-weight: 500; line-height: 1.4; letter-spacing: 0; text-transform: none; text-align: center; white-space: normal; box-shadow: 0 14px 30px -12px var(--idn-shadow); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 120ms, transform 120ms, visibility 120ms; z-index: 5; }
+.idn-tipw:hover > .idn-tooltip, .idn-tipw:has(:focus-visible) > .idn-tooltip { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+.idn-idps > .idn-tipw:first-child > .idn-tooltip, .idn-mtabs.seg > .idn-tipw:first-child > .idn-tooltip { left: 0; transform: translate(0, 4px); }
+.idn-idps > .idn-tipw:last-child > .idn-tooltip, .idn-mtabs.seg > .idn-tipw:last-child > .idn-tooltip { left: auto; right: 0; transform: translate(0, 4px); }
+.idn-idps > .idn-tipw:first-child:is(:hover, :has(:focus-visible)) > .idn-tooltip, .idn-idps > .idn-tipw:last-child:is(:hover, :has(:focus-visible)) > .idn-tooltip,
+.idn-mtabs.seg > .idn-tipw:first-child:is(:hover, :has(:focus-visible)) > .idn-tooltip, .idn-mtabs.seg > .idn-tipw:last-child:is(:hover, :has(:focus-visible)) > .idn-tooltip { transform: none; }
 
 /* provider squares */
 .idn-idps { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 10px; margin: 2px 0 12px; }
@@ -73,7 +74,7 @@ a.idn-idp:hover { border-color: var(--accent-line); background: color-mix(in srg
 .idn-idp[aria-disabled="true"] > * { opacity: 0.4; filter: grayscale(1); }
 .idn-gg .r { fill: var(--idn-g-red); } .idn-gg .b { fill: var(--idn-g-blue); } .idn-gg .y { fill: var(--idn-g-yellow); } .idn-gg .g { fill: var(--idn-g-green); }
 .idn-ms .r { fill: var(--idn-ms-red); } .idn-ms .g { fill: var(--idn-ms-green); } .idn-ms .b { fill: var(--idn-ms-blue); } .idn-ms .y { fill: var(--idn-ms-yellow); }
-.idn-mono { font: 700 0.68421rem var(--display); letter-spacing: 0.04em; color: var(--ink-soft); }
+.idn-mono { font: 700 0.68421rem var(--display); letter-spacing: 0; color: var(--ink-soft); }
 
 /* the passkey button: tinted, second only to the primary */
 .idn-auth .idn-big { min-height: 52px; border-radius: 14px; font-size: 0.78947rem; }
@@ -86,7 +87,7 @@ a.idn-idp:hover { border-color: var(--accent-line); background: color-mix(in srg
 .idn-auth form .idn-big.p { margin-top: 10px; }
 
 /* "or use email" */
-.idn-auth .idn-or { text-transform: uppercase; letter-spacing: 0.14em; font-size: 0.57895rem; font-weight: 700; margin: 20px 0 16px; }
+.idn-auth .idn-or { text-transform: none; letter-spacing: 0; font-size: 0.57895rem; font-weight: 700; margin: 20px 0 16px; }
 
 /* Keep the usable password form in view when every external method is unavailable. */
 .idn-other-signin { margin-bottom: 14px; }
@@ -112,7 +113,7 @@ a.idn-idp:hover { border-color: var(--accent-line); background: color-mix(in srg
 
 /* fields: a small caps label, a tall well, an icon, and the show/hide eye */
 .idn-auth .idn-f { gap: 7px; margin-bottom: 14px; }
-.idn-auth .idn-f > label:not(.idn-check), .idn-auth .idn-f .idn-flabel { font-size: 0.57895rem; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; color: var(--faint); padding-left: 2px; align-items: baseline; }
+.idn-auth .idn-f > label:not(.idn-check), .idn-auth .idn-f .idn-flabel { font-size: 0.57895rem; letter-spacing: 0; text-transform: none; font-weight: 700; color: var(--faint); padding-left: 2px; align-items: baseline; }
 .idn-auth .idn-f .idn-flabel a, .idn-auth .idn-f .idn-flabel button { text-transform: none; letter-spacing: 0; font-size: 0.65789rem; font-weight: 700; color: var(--teal); }
 .idn-auth .idn-f .idn-i { min-height: 50px; border-radius: 12px; padding: 12px 14px; font-size: 0.76316rem; }
 .idn-auth .idn-i::placeholder { color: color-mix(in srgb, var(--faint) 70%, transparent); }

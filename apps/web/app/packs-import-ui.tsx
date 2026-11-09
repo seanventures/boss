@@ -44,7 +44,7 @@ export function PackImportForm({
       <h4>Import pack YAML</h4>
       <p className="detail">
         Local Community import. Requires pack_manage. Hosted marketplace stays
-        hidden on Community — paste or upload a pack YAML here.
+        hidden on Community, paste or upload a pack YAML here.
       </p>
       <label className="field">
         <span>Pack YAML</span>

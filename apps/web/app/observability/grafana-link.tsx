@@ -4,12 +4,12 @@
  * Grafana, linked only once BOSS has checked that it answers (operator decision 2026-10-18).
  *
  *   header   Grafana ↗                       or  [Grafana not answering] [Check]
- *   drawer   Dashboard ↗                     or  No dashboard · why (tooltip) [Check] [Deploy stack]
+ *   drawer   Dashboard                      or  No dashboard, why (tooltip) [Check] [Deploy stack]
  *
  * The state comes from the server's RECORDED check (observability_stack.endpoint_state): a link
  * built by concatenation to a host whose port does not answer looked exactly like a working one.
  * `Check` asks Grafana now (POST /v1/observability/grafana/check); `Deploy stack` opens Sources,
- * where the stack is deployed — one surface per job.
+ * where the stack is deployed, one surface per job.
  */
 import React, { useState } from "react";
 

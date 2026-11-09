@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Agents › Organization: `Teams · Flow · Lines` (org-view spec §4.1), read from ONE endpoint.
+ * Agents › Organization: `Teams, Flow, Lines` (org-view spec §4.1), read from ONE endpoint.
  *
- *   Teams — a scorecard per team: who is busy, what finished or failed, the oldest wait, busy
+ *   Teams, a scorecard per team: who is busy, what finished or failed, the oldest wait, busy
  *           time, who it hands work to, metered spend and models, and what it is missing.
- *   Flow  — where work goes between teams: fixed columns, ≤12 edges, isolate on press, a run's
+ *   Flow , where work goes between teams: fixed columns, ≤12 edges, isolate on press, a run's
  *           path, and the from×to Table (the accessible Flow).
- *   Lines — today's OrgChartArea (the only editor of reporting lines), plus `Plan vs work`.
+ *   Lines, today's OrgChartArea (the only editor of reporting lines), plus `Plan vs work`.
  *
  * THE URL IS THE STATE: `&layout=teams|flow|lines`, `&days=1|7|30`, `&isolate=<team>`, written
  * with replaceState. A stored or linked `layout=zones|swarm` lands on Teams / Flow. `?run=` lands
@@ -103,7 +103,7 @@ export function OrgView({ projectId, live, search = "", focusRunId, focusTeam, o
   const org = useOrgBoard(projectId, days, true);
   const board = org.board;
   const actions = useMemo(() => (actor ? orgActions(projectId, actor, org.refresh) : null),
-                          // eslint-disable-next-line react-hooks/exhaustive-deps -- its toasts name agents
+                          // eslint-disable-next-line react-hooks/exhaustive-deps, its toasts name agents
                           [projectId, actor, org.refresh, identityV]);
 
   // Back/forward and a link arriving: the URL wins.
@@ -164,7 +164,7 @@ export function OrgView({ projectId, live, search = "", focusRunId, focusTeam, o
     t.planCalls > 0 ? { text: `${t.planCalls} on plan`, tip: "Calls covered by a subscription. Not counted as money." } : null,
     t.untiedUsd > 0 ? { text: `${usdWords(t.untiedUsd)} not tied to an agent`, tip: "Calls with no agent recorded" } : null,
   ].filter(Boolean) as { text: string; tip: string }[] : [{ text: "Spend unknown", tip: t.spendReason ?? "" }]) : [];
-  const totalsTip = totals.map((x) => x.text).join(" · ");
+  const totalsTip = totals.map((x) => x.text).join(", ");
   const stale = !!org.error && !!org.confirmedAt && Date.now() - org.confirmedAt > 60_000;
 
   const onWorksWith = (team: string, from: string, to: string) => {

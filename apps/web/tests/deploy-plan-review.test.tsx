@@ -107,10 +107,10 @@ describe("deployment ChangeSet review flow", () => {
     await chooseTarget();
     await act(async () => button("Create deployment plan").click());
 
-    expect(host.textContent).toContain("Plan ready — waiting for approval");
+    expect(host.textContent).toContain("Plan ready, waiting for approval");
     const review = host.querySelector('[data-testid="plan-review"]')!.textContent!;
     expect(review).toContain("Lead-Triage Inbox");
-    expect(review).toContain("hetzner-ci-01 · staging");
+    expect(review).toContain("hetzner-ci-01, staging");
     expect(review).toContain("0123456789ab");
     expect(review).toContain("Rollback: If the health check fails");
     expect(review).toContain("Cost: $0.00");
@@ -148,7 +148,7 @@ describe("deployment ChangeSet review flow", () => {
     await act(async () => root.render(<RecentDeployments deployments={[previousRun]} />));
     await act(async () => button("plan redeploy").click());
 
-    expect(host.textContent).toContain("Plan ready — waiting for approval");
+    expect(host.textContent).toContain("Plan ready, waiting for approval");
     expect(host.querySelector('[data-testid="plan-review"]')?.textContent)
       .toContain("hetzner-ci-01");
     expect(getDeploymentAction).not.toHaveBeenCalled();

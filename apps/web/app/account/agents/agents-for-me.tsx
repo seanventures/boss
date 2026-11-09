@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * MY ACCOUNT › AGENTS ACTING FOR ME (IDENTITY.md §7.3, §9.6): the grants you gave — which agents,
- * which abilities, where, until when, last used — each revocable, with the cascade said first.
+ * MY ACCOUNT › AGENTS ACTING FOR ME (IDENTITY.md §7.3, §9.6): the grants you gave, which agents,
+ * which abilities, where, until when, last used, each revocable, with the cascade said first.
  * "Let an agent act for me" creates a standing grant: never more than you hold, never a
  * permission no agent may hold. Plus your connections (GitHub) the vault keeps for you.
  */
@@ -127,10 +127,10 @@ export function AgentsForMe({ delegations: initial, agents, connections, untilRe
             <div className="idn-top">
               <span className="idn-stack" aria-hidden>{d.agents.slice(0, 4).map((a) => <AgentAvatar key={a.id} agent={roleKey(a.id)} size={30} />)}</span>
               <span>
-                <b data-copy="data">{d.agents.map((a) => a.name).join(", ")} · {d.label}</b>
+                <b data-copy="data">{d.agents.map((a) => a.name).join(", ")}, {d.label}</b>
                 <small data-copy="data">
                   {d.kind === "task" ? "this build only" : d.expires_at ? `until ${shortDate(d.expires_at)}` : "until revoked"}
-                  {d.projects.length ? ` · ${d.projects.join(", ")}` : ""} · used <Ago iso={d.last_used_at} />
+                  {d.projects.length ? `, ${d.projects.join(", ")}` : ""}, used <Ago iso={d.last_used_at} />
                 </small>
               </span>
               <span className="idn-spacer" />
@@ -144,7 +144,7 @@ export function AgentsForMe({ delegations: initial, agents, connections, untilRe
             <div className="idn-perms">
               {d.permissions.slice(0, 6).map((p) => <Perm key={p} p={p} sm />)}
               {d.permissions.length > 6 ? <span className="idn-chip">+{d.permissions.length - 6}</span> : null}
-              {d.github ? <span className="idn-chip"><GithubLogo size={12} aria-hidden /> {d.github.repos[0]}{d.github.repos.length > 1 ? ` +${d.github.repos.length - 1}` : ""}{d.github.ref_rule ? ` · ${d.github.ref_rule}` : ""}</span> : null}
+              {d.github ? <span className="idn-chip"><GithubLogo size={12} aria-hidden /> {d.github.repos[0]}{d.github.repos.length > 1 ? ` +${d.github.repos.length - 1}` : ""}{d.github.ref_rule ? `, ${d.github.ref_rule}` : ""}</span> : null}
             </div>
           </article>
         ))}
@@ -204,7 +204,7 @@ function Connections({ connections: initial, outcome, failed = false }: { connec
         <span className="idn-d" data-kind="sso"><GithubLogo size={16} aria-hidden /></span>
         <span>
           <b>GitHub</b>
-          <small data-copy="data">{github ? <>{github.account} · linked <Ago iso={github.linked_at} /></> : "For “as me on GitHub” grants"}</small>
+          <small data-copy="data">{github ? <>{github.account}, linked <Ago iso={github.linked_at} /></> : "For “as me on GitHub” grants"}</small>
         </span>
         {failed ? <Pill tone="warn" tip="Your connections could not be read">unknown</Pill>
           : github ? (

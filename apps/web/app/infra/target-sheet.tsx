@@ -125,12 +125,12 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
               <label className="inf-field"><span>VM</span>
                 {vms.length ? (
                   <select name="host_id" defaultValue={hostId && vms.some((h) => h.id === hostId) ? hostId : vms[0].id} data-testid="inf-target-vm">
-                    {vms.map((h) => <option key={h.id} value={h.id}>{h.name}{h.address ? ` · ${h.address}` : ""}</option>)}
+                    {vms.map((h) => <option key={h.id} value={h.id}>{h.name}{h.address ? `, ${h.address}` : ""}</option>)}
                   </select>
                 ) : <span className="inf-muted" title="A stack runs on a verified machine">No ready machine</span>}
               </label>
               <label className="inf-field" title="Lowercase letters, digits and dashes"><span>Name</span>
-                <input name="name" placeholder="optional · from the repository" autoComplete="off" spellCheck={false} data-testid="inf-target-name" /></label>
+                <input name="name" placeholder="optional, from the repository" autoComplete="off" spellCheck={false} data-testid="inf-target-name" /></label>
               <label className="inf-field"><span>Environment</span>
                 <input name="environment" defaultValue="production" autoComplete="off" data-testid="inf-target-env" /></label>
             </div>
@@ -187,7 +187,7 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
               <label className="inf-field"><span>Account</span>
                 <select name="provider_account_id" defaultValue="" data-testid="inf-target-account">
                   <option value="">None</option>
-                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.provider} · {a.account_label}</option>)}
+                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.provider}, {a.account_label}</option>)}
                 </select></label>
               <label className="inf-field" title="The provider's deploy kind, such as digitalocean_app"><span>Kind</span>
                 <input name="target_kind" required placeholder="digitalocean_app" autoComplete="off" spellCheck={false} data-testid="inf-target-reg-kind" /></label>

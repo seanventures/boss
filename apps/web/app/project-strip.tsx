@@ -58,7 +58,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   // LOADING, FAILED AND EMPTY ARE THREE DIFFERENT THINGS.
   //
   // A strip that renders nothing while it loads and nothing when the API is down tells the
-  // operator "there are no projects" in both cases — the same false claim of absence that made
+  // operator "there are no projects" in both cases, the same false claim of absence that made
   // this console report "No verified host yet" before it had looked.
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +72,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   // the same false claim of absence as one that shows nothing at all.
   const [total, setTotal] = useState(0);
   const [confirmedEmpty, setConfirmedEmpty] = useState(false);
-  // True only while a REFRESH is in flight, never during the first load — the first load has
+  // True only while a REFRESH is in flight, never during the first load, the first load has
   // its own "loading" state, and showing both makes the header flicker twice.
   const [refreshing, setRefreshing] = useState(false);
   // Read once per project, not on the 30 s poll: archiving is rare and a page reload follows it.
@@ -114,7 +114,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
       }
         // SAME NAME AS THE CARD IT OPENS.
         //
-        // The overview returns the raw run title — "PRD — Pull‐Request Review‐Time Tracker",
+        // The overview returns the raw run title, "PRD, Pull‐Request Review‐Time Tracker",
         // with a U+2010 hyphen the operator cannot type. Reading a strip that says one thing
         // and a card that says another is worse than either alone, so both go through the one
         // function that decides what an app is called.
@@ -152,7 +152,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   // IT HAS TO KEEP PULLING.
   //
   // The strip fetched once on mount and then never again, so a project that started, gated or
-  // shipped after the page opened simply never appeared — and the header that is supposed to
+  // shipped after the page opened simply never appeared, and the header that is supposed to
   // answer "what is happening right now" was answering "what was happening when you arrived".
   // Thirty seconds is slow enough to be free and fast enough that a gate does not sit unseen.
   useEffect(() => {
@@ -206,12 +206,12 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   /** Open a project in the Factory area.
    *
    *  pushState + a popstate event, the same client-side move the rest of this console uses to
-   *  switch areas — a real navigation would re-render a tree that takes seconds to paint. */
+   *  switch areas, a real navigation would re-render a tree that takes seconds to paint. */
   // THERE ARE MORE, AND THE STRIP HAS TO SAY SO.
   //
   // Forty projects, four visible, and the only clue was a fade at the edge that reads as a
   // style rather than a control. An operator scanning for a project concluded the rest were
-  // not there — the same false absence the console keeps having to be taught not to imply.
+  // not there, the same false absence the console keeps having to be taught not to imply.
   //
   // Buttons rather than scroll-on-hover: hovering to move is unpredictable to aim at, cannot
   // be reached from a keyboard, and fires while the pointer is simply travelling to something
@@ -219,7 +219,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   const scroller = useRef<HTMLDivElement | null>(null);
   // The frame of the animation currently running, so a second click can cancel it. Without
   // this, two clicks in quick succession leave two rAF loops writing `scrollLeft` from
-  // different starting points, and the strip lands somewhere neither click asked for — it
+  // different starting points, and the strip lands somewhere neither click asked for, it
   // measurably jumped BACKWARDS under fast clicking.
   const animation = useRef<number | null>(null);
   const [edges, setEdges] = useState<{ left: boolean; right: boolean }>({ left: false, right: false });
@@ -235,7 +235,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
     //
     // This runs on every scroll event, and a scroll animation fires them at frame rate. Setting
     // a fresh object each time re-rendered a component inside a page with 74 app cards sixty
-    // times a second, which froze the renderer outright — the strip is small, the tree it sits
+    // times a second, which froze the renderer outright, the strip is small, the tree it sits
     // in is not.
     setEdges((current) =>
       current.left === left && current.right === right ? current : { left, right });
@@ -256,7 +256,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
     const el = scroller.current;
     if (!el) return;
     // 80% of a screenful, so a project at the boundary stays visible instead of being paged
-    // past — losing your place is worse than a shorter jump.
+    // past, losing your place is worse than a shorter jump.
     const distance = direction * el.clientWidth * 0.8;
     const from = el.scrollLeft;
     const to = Math.max(0, Math.min(el.scrollWidth - el.clientWidth, from + distance));
@@ -265,7 +265,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
     //
     // Measured in the browser this console is used in: `scrollBy({left: 400, behavior: "auto"})`
     // moved it 300 -> 700, and the identical call with `behavior: "smooth"` moved it nothing at
-    // all. The pager looked correctly wired and silently did nothing — the worst kind of broken,
+    // all. The pager looked correctly wired and silently did nothing, the worst kind of broken,
     // because every test of its markup passes.
     const reduced = typeof window !== "undefined"
       && window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
@@ -273,7 +273,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
     //
     // Chrome stops servicing requestAnimationFrame when a tab is not visible, so an animated
     // scroll started in a background tab simply does not happen. Rare from a person and
-    // constant from anything automating the page — it is how this very control tested as
+    // constant from anything automating the page, it is how this very control tested as
     // "does nothing" while being correctly wired. Jump instead; there is nobody watching the
     // motion anyway.
     const unwatched = typeof document !== "undefined" && document.hidden;
@@ -284,7 +284,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
       // MEASURE BECAUSE WE MOVED IT, not because an event told us.
       //
       // The arrows were derived purely from the `scroll` listener, and a hidden tab defers
-      // those — so after paging to the far right the strip still offered "next" and refused
+      // those, so after paging to the far right the strip still offered "next" and refused
       // "previous", both exactly backwards. We know the position changed; say so.
       measure();
       return;
@@ -309,7 +309,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   const open = useCallback((p: StripProject) => {
     // Asking to SEE a project is not asking to start a new one. This used to copy the whole
     // query string, so a `?new=1` left over from the top-bar button rode along and the form
-    // reader re-fired on arrival — the project you clicked was replaced by an empty form.
+    // reader re-fired on arrival, the project you clicked was replaced by an empty form.
     const search = searchForProject(window.location.search, p.latest_run_id ?? null);
     window.history.pushState({}, "",
       `${window.location.pathname}${search}${window.location.hash}`);
@@ -334,7 +334,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
         <span className="bx-strip-label">{STRIP_LABEL}</span>
         {/* The reason, not a shrug. "Could not load" sends the operator to the API to find out
             what this line already knows. */}
-        <span className="bx-strip-note bx-strip-error">Could not load software projects — {error}</span>
+        <span className="bx-strip-note bx-strip-error">Could not load software projects, {error}</span>
       </nav>
     );
   }
@@ -355,10 +355,10 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
           </span> : null}
         <span aria-hidden>{expanded ? "⌃" : "⌄"}</span>
       </button>
-      {error ? <span className="bx-strip-note bx-strip-error" role="status">Could not refresh — {error}</span> : null}
+      {error ? <span className="bx-strip-note bx-strip-error" role="status">Could not refresh, {error}</span> : null}
       <span className="bx-strip-label">
         {/* WHAT IS MISSING, ON THE LABEL THAT CLAIMS TO LIST THEM.
-            Shown only when the strip does not have them all — a count beside every list is
+            Shown only when the strip does not have them all, a count beside every list is
             noise, a count beside a truncated one is the whole point. */}
         {total > projects.length ? (
           <span className="bx-strip-of" data-testid="bx-strip-of">
@@ -367,7 +367,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
         ) : null}
         {/* Refresh is a state of the label, not a banner. A bar that appears at the top of the
             page every thirty seconds is the thing that was called "very annoying", and it was
-            right — the strip is already the place you look to see whether this is current. */}
+            right, the strip is already the place you look to see whether this is current. */}
         {refreshing ? (
           <span className="bx-strip-syncing" data-testid="bx-strip-syncing"
                 title="Checking for new software projects">Syncing</span>
@@ -395,14 +395,14 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
             key={p.id}
             className="bx-strip-item"
             onClick={() => open(p)}
-            title={`${p.title} — ${p.status.toLowerCase()}, ${p.stage.toLowerCase()} ${p.pct}%`}
+            title={`${p.title}, ${p.status.toLowerCase()}, ${p.stage.toLowerCase()} ${p.pct}%`}
             data-testid={`bx-strip-${p.id}`}
           >
             <span className="bx-strip-dot" data-status={p.status} aria-hidden />
             <span className="bx-strip-name">{p.title}</span>
             <span className="bx-strip-stage">{p.status === "DONE" ? "Shipped" : p.stage}</span>
             {p.status !== "DONE" ? <span className="bx-strip-pct">{p.pct}%</span> : null}
-            {p.status === "GATED" ? <span className="bx-strip-alert">GATED</span> : null}
+            {p.status === "GATED" ? <span className="bx-strip-alert">Gated</span> : null}
           </button>
         ))}
         {shown.length === 0 ? (
@@ -412,7 +412,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
               /* Says which filter is hiding them. An empty strip under a filter reads as "there
                  is nothing", and the operator forgets they narrowed it two minutes ago. */
               : query.trim() ? "No projects match your search"
-              : `No ${FILTER_LABELS[filter].toLowerCase()} — ${projects.length} projects in total`}
+              : `No ${FILTER_LABELS[filter].toLowerCase()}, ${projects.length} projects in total`}
           </span>
         ) : null}
       </div>
@@ -426,7 +426,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
                   data-testid="bx-strip-prev">‹</button>
           <button type="button" className="bx-strip-page" onClick={() => page(1)}
                   disabled={!edges.right} aria-label="Show more projects"
-                  data-testid="bx-strip-next">›</button>
+                  data-testid="bx-strip-next">Next</button>
         </div>
       ) : null}
 

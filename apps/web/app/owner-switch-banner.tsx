@@ -17,8 +17,8 @@ const OBJECT_LABEL: Record<string, string> = {
 
 /**
  * Build L: the console landed on a deep-linked object's OWN project (resolved server-side before
- * the fetch). Stamp `project_id=` onto the URL so every later poll and in-console link keeps it —
- * a copy/pasted link that omitted the project now self-corrects and stays corrected — and tell
+ * the fetch). Stamp `project_id=` onto the URL so every later poll and in-console link keeps it , 
+ * a copy/pasted link that omitted the project now self-corrects and stays corrected, and tell
  * the operator their project switched so the different data on screen is not read as data loss.
  */
 export function OwnerSwitchBanner({
@@ -46,7 +46,7 @@ export function OwnerSwitchBanner({
   return (
     <div className="project-away" role="status" data-testid="owner-switch-banner">
       <span>
-        Switched to <strong>{projectName ?? "this " + label + "’s project"}</strong> — the project
+        Switched to <strong>{projectName ?? "this " + label + "’s project"}</strong>, the project
         this {label} belongs to.
       </span>
       <button type="button" className="bx-link-button" onClick={() => setDismissed(true)}>

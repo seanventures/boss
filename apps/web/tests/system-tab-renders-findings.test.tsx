@@ -64,7 +64,7 @@ describe("BOSS MACHINE", () => {
     // Swap has no percent: a value, no bar.
     expect($("[data-testid='obs-gauge-swap'] svg")).toBeNull();
     expect(text($("[data-testid='obs-gauge-swap']"))).toBe("Swap0 MBOK");
-    expect(text($("[data-testid='obs-build']"))).toBe("build 4c1d2e9 · 2h");
+    expect(text($("[data-testid='obs-build']"))).toBe("build 4c1d2e9, 2h");
     expect($("[data-testid='obs-machine-scope']")?.getAttribute("title")).toContain("not your deploy hosts");
     expect(text($("[data-testid='obs-oom']"))).toBe("New OOM kills0");
   });

@@ -31,7 +31,7 @@ export function AccountMenu() {
     <details className="idn-me" data-testid="account-menu">
       <summary aria-label={`My account: ${me.display_name}`}>
         <Face name={me.display_name} tone={avatarTone(me.principal_id, me.avatar_seed)} size={26} />
-        <span><b>{first}</b><span className="idn-me-role"> · {primaryRoleLabel(me.access_roles)}</span></span>
+        <span><b>{first}</b><span className="idn-me-role">, {primaryRoleLabel(me.access_roles)}</span></span>
         {mfa
           ? <ShieldCheck size={15} className="idn-ok" aria-label="MFA on" />
           : <ShieldWarning size={15} className="idn-warn" aria-label="No second factor" />}
@@ -112,7 +112,7 @@ export function IdentityBanners() {
   const stacked = banners.length >= 2;
   return (
     <div className="idn-banners" data-testid="identity-banners">
-      {stub ? <div className="idn-stub" data-testid="stub-banner">Stub data · identity API not connected</div> : null}
+      {stub ? <div className="idn-stub" data-testid="stub-banner">Stub data, identity API not connected</div> : null}
       {!mirrored ? <div className="idn-banner" data-kind="unavailable" data-copy="prose" title="Controls are not mirrored; BOSS checks every action">Access check offline</div> : null}
       {!stacked ? banners.map((b) => <Banner key={b.id} b={b} onClose={close} />) : (
         <div className="idn-banner-stack" data-testid="banner-stack" data-open={open ? "true" : "false"}>

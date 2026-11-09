@@ -1,7 +1,7 @@
 "use client";
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import React, { useCallback, useEffect, useState } from "react";
 
 /**
@@ -12,7 +12,7 @@ import React, { useCallback, useEffect, useState } from "react";
  * can compare both against the same live data.
  *
  * The choice is remembered, because a preference that resets on every navigation is not a
- * preference. `?console=v1|v2` overrides it for a single visit — useful for a link in a bug
+ * preference. `?console=v1|v2` overrides it for a single visit, useful for a link in a bug
  * report that must land on a specific console regardless of what the reader chose before.
  */
 
@@ -62,7 +62,7 @@ export function ConsoleToggle({
         data-active={current === "v1"}
         disabled={pending}
         onClick={() => go("v1")}
-        title="The current console — every feature, still taking fixes"
+        title="The current console, every feature, still taking fixes"
       >
         v1
       </button>
@@ -72,7 +72,7 @@ export function ConsoleToggle({
         data-active={current === "v2"}
         disabled={pending}
         onClick={() => go("v2")}
-        title="The new console — in progress"
+        title="The new console, in progress"
       >
         v2
       </button>

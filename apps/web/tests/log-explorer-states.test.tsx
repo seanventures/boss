@@ -240,7 +240,7 @@ describe("a line, read", () => {
                                   data: { truncated: true, content_bytes: 120000 } })];
     at("?area=activity&verbose=1&row=t1");
     await mount(<LogExplorer projectId="p1" actor="ceo" />);
-    expect(text("[data-testid=lx-clip]")).toBe("Clipped when stored · 120,000 bytes captured");
+    expect(text("[data-testid=lx-clip]")).toBe("Clipped when stored, 120,000 bytes captured");
     expect($("[data-testid=lx-clip]")!.getAttribute("title")).toBe("A clipped line is not a short one");
   });
 });

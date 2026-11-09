@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Try it (spec §5.3 5): one read-only call through BOSS's receipted path, as BOSS — proof the
+ * Try it (spec §5.3 5): one read-only call through BOSS's receipted path, as BOSS, proof the
  * tool works end to end, not only that the server answers. Only for an ability with a tier-0
  * tool set to Allow (the API refuses anything else).
  */

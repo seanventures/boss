@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* ── The Activity log (activity-govern spec §4.2, §5.2-§5.3) ──
    lx- classes only; design-system tokens only. Motion only on a real state change (a line
    arriving, the drawer, a growing bar), with a still under reduced motion and none while Paused.
@@ -76,7 +81,7 @@
 /* Rail. */
 .lx-rail { display: flex; flex-direction: column; gap: 12px; overflow: auto; min-height: 0; padding-right: 4px; }
 .lx-rail-clear { align-self: flex-start; font-size: 0.8rem; }
-.lx-rail-head { border: 0; background: none; padding: 0; color: var(--faint); font: inherit; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; cursor: pointer; }
+.lx-rail-head { border: 0; background: none; padding: 0; color: var(--faint); font: inherit; font-size: 0.7rem; font-weight: 700; letter-spacing: 0; cursor: pointer; }
 .lx-rail-list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .lx-rail-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .lx-rail-pick {
@@ -106,7 +111,7 @@
 .lx-bar { position: relative; flex: 1 1 0; display: flex; align-items: flex-end; height: 100%; min-width: 1px; padding: 0; border: 0; background: transparent; cursor: inherit; }
 .lx-bar:hover, .lx-bar[data-selected] { background: var(--accent-soft); }
 .lx-bar:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 0; }
-.lx-bar-stack { display: flex; flex-direction: column-reverse; width: 100%; min-height: 0; border-radius: 2px 2px 0 0; overflow: hidden; transition: height 200ms ease-out; }
+.lx-bar-stack { display: flex; flex-direction: column-reverse; width: 100%; min-height: 0; border-radius: 2px 2px 0 0; overflow: hidden; transition: none; }
 .lx-bar[data-errors] .lx-bar-stack { box-shadow: inset 0 2px 0 var(--red); }
 .lx-bar-seg { display: block; flex-basis: 0; min-height: 1px; }
 .lx-bar-seg[data-level="error"] { background: var(--red); }
@@ -119,7 +124,7 @@
 .lx-list { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
 .lx-list-inner { position: relative; }
 .lx-list-inner > * { position: absolute; left: 0; right: 0; top: 0; }
-.lx-day { height: 28px; display: flex; align-items: center; padding: 0 12px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; color: var(--faint); background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.lx-day { height: 28px; display: flex; align-items: center; padding: 0 12px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0; color: var(--faint); background: var(--surface-2); border-bottom: 1px solid var(--border); }
 .lx-runhead { height: 28px; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 20px; font-size: 0.78rem; color: var(--ink-soft); background: var(--surface); border-bottom: 1px dashed var(--border); }
 .lx-runhead-n { color: var(--faint); font-size: 0.74rem; }
 .lx-row {
@@ -131,7 +136,7 @@
 .lx-row:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
 .lx-row[data-in-fold] { padding-left: 24px; }
 .lx-row[data-fresh] { animation: lx-arrive 600ms ease-out 1; }
-@keyframes lx-arrive { from { background: var(--accent-soft); } to { background: transparent; } }
+@keyframes lx-arrive { from { background: var(--accent-soft);} to { background: transparent;} }
 .lx-time { font-family: var(--mono); font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .lx-lvl { display: inline-flex; align-items: center; gap: 4px; font-size: 0.76rem; color: var(--muted); white-space: nowrap; }
 .lx-lvl[data-level="error"] { color: var(--red); }
@@ -150,11 +155,11 @@
 .lx-list-foot { display: flex; justify-content: center; padding: 12px; }
 .lx-end { display: inline-flex; align-items: center; gap: 10px; font-size: 0.8rem; color: var(--faint); }
 .lx-new {
-  position: absolute; z-index: 5; top: 82px; left: 50%; transform: translateX(-50%); padding: 4px 14px; border: 0; border-radius: 999px;
+  position: absolute; z-index: 5; top: 82px; left: 50%; translate: -50% 0; padding: 4px 14px; border: 0; border-radius: 999px;
   background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 0.8rem; font-weight: 650; cursor: pointer; box-shadow: var(--shadow);
   animation: lx-pill 160ms ease-out 1;
 }
-@keyframes lx-pill { from { transform: translate(-50%, -8px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+@keyframes lx-pill { from { transform: translate(-50%, -8px); opacity: 0;} to { transform: translate(-50%, 0); opacity: 1;} }
 .lx-skeleton { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
 .lx-skeleton i { display: block; height: 20px; border-radius: var(--r-sm); background: var(--surface-2); }
 .lx-empty, .lx-banner { justify-content: center; border: 1px dashed var(--border-strong); border-radius: var(--r-xl); }
@@ -166,13 +171,13 @@
   border: 1px solid var(--border-strong); border-radius: var(--r-xl); background: var(--surface); box-shadow: var(--shadow-lg);
   animation: lx-drawer-in 180ms ease-out 1; outline: none; overflow: hidden;
 }
-@keyframes lx-drawer-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes lx-drawer-in { from { transform: translateX(24px); opacity: 0;} to { transform: none; opacity: 1;} }
 .lx-drawer-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
 .lx-drawer-title { margin: 0; font-size: 0.92rem; font-weight: 650; color: var(--ink); overflow-wrap: anywhere; }
 .lx-drawer-body { flex: 1 1 auto; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 12px; min-height: 0; }
 .lx-drawer-gone { padding: 24px 12px; color: var(--muted); }
 .lx-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin: 0; }
-.lx-fact dt { font-size: 0.7rem; color: var(--faint); letter-spacing: 0.04em; }
+.lx-fact dt { font-size: 0.7rem; color: var(--faint); letter-spacing: 0; }
 .lx-fact dd { display: flex; align-items: center; gap: 6px; margin: 2px 0 0; font-size: 0.82rem; color: var(--ink); min-width: 0; }
 .lx-fact-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lx-fact-face { display: inline-flex; align-items: center; gap: 6px; }

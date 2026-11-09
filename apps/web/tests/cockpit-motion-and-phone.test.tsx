@@ -106,7 +106,7 @@ describe("at 390px", () => {
     const word = (key: string) => $$('[data-testid="fx-stations-v"] .fx-vstation')
       .find((li) => li.getAttribute("data-status") !== null
         && li.querySelector(".fx-vstation-label")?.textContent === key)?.querySelector(".fx-vstation-word");
-    expect(word("Check")?.textContent).toBe("Failed · 30s");
+    expect(word("Check")?.textContent).toBe("Failed, 30s");
     expect(word("Check")?.getAttribute("title")).toBe("Failed check: App starts — the app did not start");
     expect(word("Review")?.textContent).toBe("Stopped");
     expect(word("PR")?.textContent).toBe("Not reached");

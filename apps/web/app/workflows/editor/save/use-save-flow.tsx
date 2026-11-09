@@ -40,12 +40,12 @@ function firstBadStep(spec: Spec, problems: Problem[]): string | null {
 type Pop = null | "copy" | "issues" | "start" | "use-for";
 
 /**
- * Check, Save, Save as my copy and Start — the publish half of the editor.
+ * Check, Save, Save as my copy and Start, the publish half of the editor.
  *
  * ONE PATH TO A VERSION. Save always runs `/check` first, then ONE `publish` call: an own
  * workflow gets v(n+1); a new one is created and published at once; a standard becomes your
  * copy (or updates the copy you already have) in the same single call. Nothing is written
- * before the check passes, and Save is disabled while one is in flight — so a double press, a
+ * before the check passes, and Save is disabled while one is in flight, so a double press, a
  * failed publish or a second Save of a standard cannot leave an orphan or a second copy.
  *
  * The host (the editor's top bar) attaches `saveRef` / `startRef` to its buttons and renders
@@ -193,7 +193,7 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
       // `s` is the snapshot that was published: it becomes the baseline, and anything edited
       // since (the editor stays live during a save) is kept as the next unsaved change.
       dispatch({ type: "SAVED", spec: s.spec, meta: next, sent: m });
-      toast("success", m.is_catalogue ? `Saved as your copy · v${result.version}` : `Saved · v${result.version}`);
+      toast("success", m.is_catalogue ? `Saved as your copy, v${result.version}` : `Saved, v${result.version}`);
       const used = m.is_catalogue ? standardUsedFor?.[0] : undefined;
       if (used) {
         try { window.sessionStorage.setItem(USE_FOR_KEY(result.definition.workflow_key), used); } catch { /* */ }
