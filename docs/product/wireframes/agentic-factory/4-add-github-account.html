@@ -1,0 +1,93 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Add a GitHub account</title>
+<link rel="stylesheet" href="../project-experience/console.css"><link rel="stylesheet" href="../project-experience/project.css">
+<link rel="stylesheet" href="../project-experience/new-project-v2/np2.css"><link rel="stylesheet" href="af.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="setup" data-crumb="Repo and models|Add a GitHub account" data-base="../project-experience/">
+<div id="content">
+
+<div class="af-cap">1 · One input: the account you want to add <span class="pin">1</span></div>
+<div class="af-stage">
+<div class="sheet np2 af-sheet" role="dialog" aria-label="Add a GitHub account">
+  <div class="sheet-h"><span class="ico"><i class="ph ph-github-logo"></i></span><h2>Add a GitHub account</h2>
+    <span class="wf-spacer"></span><i class="ph ph-x" title="Close (Esc)"></i></div>
+  <div class="np2-body">
+    <div class="np2-in" title="A GitHub user or organisation name, or a link to it.">
+      <span class="kind"><i class="ph-fill ph-github-logo"></i></span>
+      <div class="txt">kaappu<span class="caret"></span></div>
+      <div class="np2-in-foot"><span>a user or organisation name, or a github.com link</span></div>
+    </div>
+    <div class="np2-detect"><span>Found on GitHub: <b>kaappu</b> · organisation · 14 repositories · you are not signed in to it yet</span></div>
+
+    <!-- AGENT ACTIONS: the path BOSS picked -->
+    <div class="ub">
+      <div class="ub-h"><span class="face" data-a="forge" data-size="m"></span>
+        <div><b>Agent actions</b> <span class="pin">2</span><small>The fastest way for this account: the BOSS app you already own, installed on kaappu</small></div></div>
+      <div class="af-prog" style="margin-top:6px">
+        <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>Found it</b><small>kaappu · org</small></div>
+        <div class="af-ps" data-s="run"><span class="c"><i class="ph ph-lock-open"></i></span><b>Let it install</b><small>one time · you</small></div>
+        <div class="af-ps"><span class="c"><i class="ph ph-download-simple"></i></span><b>Install on kaappu</b><small>on GitHub · you</small></div>
+        <div class="af-ps"><span class="c"><i class="ph ph-list-checks"></i></span><b>Pick repos</b><small>here</small></div>
+        <div class="af-ps"><span class="c"><i class="ph ph-seal-check"></i></span><b>Check access</b><small>BOSS</small></div>
+      </div>
+    </div>
+
+    <!-- STEP A: the one-time switch, only when the app is private and the account is not its owner -->
+    <div class="af-gate">
+      <div class="af-gate-h"><span class="ny-ico">✋</span><div><b>One time: let other accounts install the BOSS app</b> <span class="pin">3</span><small>Your app boss-localhost is private to @paramg, and GitHub only lets a private app be installed on its owner. Making it installable gives nobody access by itself.</small></div></div>
+      <div class="row" style="gap:10px;margin-top:8px">
+        <span class="btn" data-kind="primary"><i class="ph ph-arrow-square-out"></i>Open the app's settings on GitHub</span>
+        <span class="faint" style="font-size:.6rem">Press <b>Make public</b> there. BOSS sees it and moves on, no "I did it" button.</span>
+      </div>
+    </div>
+
+    <!-- STEP B: install on the account -->
+    <div class="af-gate" style="margin-top:10px;opacity:.6">
+      <div class="af-gate-h"><span class="ny-ico">↗</span><div><b>Install on kaappu</b> <span class="pin">4</span><small>Opens GitHub's install page aimed at kaappu. If GitHub shows another account, use your avatar menu → Switch account, then press Install.</small></div></div>
+      <div class="row" style="gap:10px;margin-top:8px">
+        <span class="btn" data-kind="primary"><i class="ph ph-arrow-square-out"></i>Install the BOSS app on kaappu</span>
+        <span class="faint" style="font-size:.6rem">BOSS watches for the new installation and continues here on its own.</span>
+      </div>
+    </div>
+
+    <details style="margin-top:12px"><summary class="faint">Other ways <span class="pin">5</span></summary>
+      <ul class="np2-n" style="margin-top:6px">
+        <li><b>Paste an access token</b> for a locked-down org: BOSS opens GitHub's token page with the right permissions already ticked, and checks the token when you paste it.</li>
+        <li><b>The org has its own GitHub App:</b> paste its install link.</li>
+      </ul>
+    </details>
+  </div>
+  <div class="np2-foot">
+    <span class="tag">≈ 1 minute · 2 clicks on GitHub</span>
+    <span class="wf-spacer"></span>
+    <span class="btn" data-kind="primary" aria-disabled="true" title="Continues on its own when GitHub says the app is installed">Waiting for GitHub…</span>
+  </div>
+</div>
+</div>
+
+<div class="af-cap">2 · Back from GitHub: the new account's repositories <span class="pin">6</span></div>
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="teal"><i class="ph ph-github-logo"></i></span><h3>kaappu · installed</h3><span class="tag" data-tone="green"><span class="dot" data-s="done"></span>connected</span></div>
+  <ul class="np2-n">
+    <li><input type="checkbox" checked> kaappu/helpdesk · used by no project</li>
+    <li><input type="checkbox"> kaappu/website</li>
+    <li><input type="checkbox"> kaappu/infra-scripts</li>
+  </ul>
+  <div class="row" style="gap:10px;margin-top:10px"><span class="btn" data-kind="primary">Allow 1 repository</span><span class="faint" style="font-size:.6rem">Then BOSS checks it can read, branch and open PRs, and shows the result.</span></div>
+</section>
+
+<div class="notes"><b>Design notes</b><ol class="np2-n">
+  <li><b>1</b> One input. BOSS looks the name up on GitHub (public API) and says whether it is a user or an organisation, and whether you are already connected.</li>
+  <li><b>2</b> <b>Agent actions</b>: the path BOSS chose, as steps. The default is always the app you already own; a token is never the first suggestion.</li>
+  <li><b>3</b> Shown only when the app is private and the account is not its owner (the case today). BOSS detects the change by reading the app's public page; no confirm button.</li>
+  <li><b>4</b> The install link is aimed at the account (install_app_on with its id). The words cover the one thing GitHub may need: switching accounts. BOSS polls the app's installations and moves on when the new one appears.</li>
+  <li><b>5</b> The token path stays for locked-down orgs, with GitHub's page prefilled; the custom-app path stays too (parity).</li>
+  <li><b>6</b> The new installation's repositories, with "used by" tags; allowing them runs the existing access check.</li>
+  <li>Later, a separate change: "Sign in with GitHub" for a person's own account can use the same app's sign-in instead of a second OAuth app.</li>
+</ol></div>
+</div>
+<script src="../project-experience/shell.js"></script>
+</body></html>
