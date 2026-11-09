@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from apps.api.app.preview_origin import is_preview_capability_path, listen_settings, preview_only
 from apps.api.serve import preview_listen_env
 from boss_engine.services.preview_service import (
-    PREVIEW_SANDBOX_CSP, operator_preview_open_url, preview_origin_for,
+    PREVIEW_ORIGIN_SANDBOX_CSP, operator_preview_open_url, preview_origin_for,
 )
 
 SESSION = "__Host-boss_session"
@@ -79,7 +79,8 @@ def test_every_credential_is_stripped_and_no_cookie_is_ever_set():
     assert headers["x-request-id"] == "keep-me"
     assert headers["content-type"] == "application/json"
     assert "set-cookie" not in answer.headers
-    assert answer.headers["content-security-policy"] == PREVIEW_SANDBOX_CSP
+    # A preview PAGE on its own origin keeps its own cookies (BOSSAPP-946): allow-same-origin.
+    assert answer.headers["content-security-policy"] == PREVIEW_ORIGIN_SANDBOX_CSP
     assert "access-control-allow-credentials" not in answer.headers
 
 
@@ -98,7 +99,7 @@ def test_the_real_preview_handlers_answer_on_the_preview_origin(client):
     page = previews.get(f"/v1/previews/{preview_id}/web/",
                         headers={"cookie": f"{SESSION}=bss_whatever"})
     assert page.status_code == 200, page.text
-    _sandboxed(page)
+    assert page.headers["content-security-policy"] == PREVIEW_ORIGIN_SANDBOX_CSP
     assert "set-cookie" not in page.headers
     # The API's authenticated surface is not reachable through it, signed in or not.
     me = previews.get("/v1/identity/me", headers={"cookie": f"{SESSION}=bss_whatever"})
