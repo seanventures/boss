@@ -69,12 +69,10 @@ describe("an app card's + Add a feature, clicked", () => {
     await settle();
     await click($("[data-testid=cc-app-add]"));
     await settle();
-    expect($("[data-testid=dw-tab-new]")?.getAttribute("aria-selected")).toBe("true");
-    expect($("[data-testid=np-stub]")?.dataset.mode).toBe("add");
-    expect($("[data-testid=np-stub]")?.dataset.app).toBe("helpdesk");
+    // Add a feature is Project › Work with New work open. The hero must not eat compose=1 as a brief.
+    expect([params().get("area"), params().get("tab"), params().get("compose"), params().get("app")])
+      .toEqual(["project", "work", "1", "helpdesk"]);
     expect(heroBox()?.value ?? "").toBe("");
-    expect([params().get("area"), params().get("tab"), params().get("compose")])
-      .toEqual(["delivery_workflows", "new", null]);
   });
 
   it("New build does the same in New app mode", async () => {
@@ -82,7 +80,8 @@ describe("an app card's + Add a feature, clicked", () => {
     await settle();
     await click($("[data-testid=cc-new]"));
     await settle();
-    expect($("[data-testid=np-stub]")?.dataset.mode).toBe("new");
+    expect(params().get("new_project")).toBe("idea");
+    expect(params().get("compose")).toBeNull();
     expect(heroBox()?.value ?? "").toBe("");
   });
 

@@ -90,7 +90,7 @@ describe("the Factory's URL", () => {
     window.removeEventListener("boss:converse", on);
     expect(opened).toEqual([]);
     const url = new URLSearchParams(window.location.search);
-    expect([url.get("area"), url.get("compose")]).toEqual(["delivery_workflows", "new"]);
+    expect([url.get("area"), url.get("new_project"), url.get("compose")]).toEqual(["code_tasks", "idea", null]);
     window.history.replaceState(null, "", "/?area=code_tasks");
     await click($("[data-testid=fx-new-build]"));
     const menu = $("[data-testid=fx-new-menu]");

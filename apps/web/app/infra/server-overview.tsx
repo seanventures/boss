@@ -3,7 +3,7 @@
 /**
  * INFRA › SERVER (BOSSAPP-914 screen 14): the shared server at a glance, at the top of its Infra
  * drawer — the address and what it is ("Docker host · Ubuntu 22.04 · shared by 3 projects") with
- * Reachable / Unreachable, four tiles (CPU, Memory, Disk rings; Ports used), the projects on it
+ * Reachable / Unreachable, four tiles (CPU, Memory, Disk rings; Ports free, and how many are used), the projects on it
  * (mark, name, env and port, health, Beacon's face, `Project › Deployments`), the host plugins it
  * runs and the recent changes. Shared stays in Infra; each project row links to that project's
  * Deployments, which links back here ("runs on 203.0.113.20 ↗").
@@ -74,7 +74,9 @@ export function ServerOverview({ projectId, hostId, canExec, setup }: {
   // An Infra write (a re-verify, a server's setup moving on) re-reads the glance.
   useEffect(() => onChanged((n) => { if (n.source === "infra") load(); }), [load]);
   if (state === "loading" && !data) return <div className="inf-so inf-so-skel" data-testid="inf-server-loading" aria-busy="true"><span /><span /><span /><span /></div>;
-  if (!data) return null;
+  // An overview that is not one (an empty 200, a host record) must not throw and take the
+  // drawer down with it. The glance simply is not there; retire and the rest of the drawer stay.
+  if (!data?.capacity) return null;
   const readNow = async () => {
     setReading(true); setSaid("");
     try { await hostOverview.readCapacity(projectId, hostId); load(); setSaid("Read just now."); }

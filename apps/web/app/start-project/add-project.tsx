@@ -23,6 +23,8 @@
  * Models and GitHub accounts are global: shown read-only, linked to Repo and models.
  */
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+
+import { useAreaKeydown } from "../../lib/area-keys";
 import { createPortal } from "react-dom";
 import {
   ArrowsIn, ArrowsOut, ArrowsVertical, ChatsCircle, CircleNotch, DotsThree, Flask, FolderOpen, FolderPlus,
@@ -213,6 +215,10 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
 
   // ── a repo already in a project ────────────────────────────────────────────────────────
   const [shared, setShared] = useState<string[]>([]);
+  const highlighted = rows[cursor];
+  const highlightedInUse = highlighted?.type === "repo"
+    && usedBy(allRepos.find((r) => r.id === highlighted.id) ?? {}).length > 0
+    && !shared.includes(highlighted.id);
   const inUse: InUseActions = {
     open: (pid) => go(projectPageHref(pid, homeId)),
     addWork: (pid) => {
@@ -466,18 +472,14 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   // ── keys: Esc closes, ⌘↵ creates ───────────────────────────────────────────────────────
   const createRef = useRef(create);
   createRef.current = create;
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // Esc belongs to whatever sits on top: "Confirm it's you", a popover (it stops the key), the
-      // full-screen editor, then the sheet. The words stay (the draft).
-      if (e.key === "Escape" && !busy && !e.defaultPrevented && !document.querySelector("[data-testid='step-up-sheet']")) {
-        if (full) setFull(false); else onClose();
-      }
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void createRef.current(); }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose, busy, full]);
+  useAreaKeydown((e) => {
+    // Esc belongs to whatever sits on top: "Confirm it's you", a popover (it stops the key), the
+    // full-screen editor, then the sheet. The words stay (the draft).
+    if (e.key === "Escape" && !busy && !e.defaultPrevented && !document.querySelector("[data-testid='step-up-sheet']")) {
+      if (full) setFull(false); else onClose();
+    }
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void createRef.current(); }
+  }, { target: "document" });
   const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     const el = box.current;
@@ -598,7 +600,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             </span>
             <span data-testid="ap-detect-line">
               {kind === "idea" ? <>{forced ? "Reading it as an idea." : "Auto-detected: several lines read as an idea."} Paste <code>owner/repo</code>, a GitHub URL or <code>/srv/app</code> to bring code you have.</>
-                : kind === "repo" ? <>{forced ? "Reading it as a repo." : "Auto-detected."} ↵ picks the top match.</>
+                : kind === "repo" ? <>{forced ? "Reading it as a repo." : "Auto-detected."} {highlightedInUse ? "↵ opens the project this repo is already in." : "↵ picks the top match."}</>
                 : <>A folder on a verified host. ↵ reads it (read-only).</>}
             </span>
           </div>

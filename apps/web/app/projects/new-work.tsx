@@ -23,6 +23,8 @@
  * plan route. No model, or no time: Start uses the words as written. Esc keeps the draft.
  */
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+
+import { useAreaKeydown } from "../../lib/area-keys";
 import { createPortal } from "react-dom";
 import {
   ArrowSquareOut, ArrowsIn, ArrowsOut, ArrowsVertical, Bug, CaretDoubleUp, CaretDown, ChatCircleDots, Check, Database, Equals, File as FileIcon,
@@ -180,21 +182,17 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   closeRef.current = onClose;
   const layer = useRef({ pop, editor, full });
   layer.current = { pop, editor, full };
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault(); e.stopPropagation();
-        if (layer.current.pop) setPop(null);
-        else if (layer.current.editor) setEditor(false);
-        else closeRef.current();
-      } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault(); e.stopPropagation();
-        startRef.current();
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, []);
+  useAreaKeydown((e) => {
+    if (e.key === "Escape") {
+      e.preventDefault(); e.stopPropagation();
+      if (layer.current.pop) setPop(null);
+      else if (layer.current.editor) setEditor(false);
+      else closeRef.current();
+    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault(); e.stopPropagation();
+      startRef.current();
+    }
+  }, { target: "document", capture: true });
   // The chat scrolls inside its own list (never the modal): the newest line in view.
   useEffect(() => {
     const list = chatEnd.current?.parentElement;

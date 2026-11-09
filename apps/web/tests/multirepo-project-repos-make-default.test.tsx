@@ -4,6 +4,7 @@
  * backed by the existing Setup default route — no new backend route. Clicking it reloads the
  * table with the new repository marked "· default".
  */
+import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ProjectRepositories } from "../app/multirepo/project-repos";

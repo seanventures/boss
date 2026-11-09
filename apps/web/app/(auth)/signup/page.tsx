@@ -1,3 +1,5 @@
+import React from "react";
+
 import { loadAuthOptions } from "../auth-options";
 import { SignUp } from "./signup";
 

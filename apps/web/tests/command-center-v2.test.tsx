@@ -140,7 +140,9 @@ describe("the hero", () => {
     expect(tid("askboss-input")).not.toBeNull();
     expect(tid("askboss-talk")?.textContent).toBe("Talk to BOSS");
     expect(tid("split-build")?.textContent).toBe("Review build →");
-    expect(tid("askboss-add-existing")?.getAttribute("href")).toContain("compose=add");
+    expect(tid("askboss-add-existing")?.getAttribute("href")).toContain("compose=1");
+    expect(tid("askboss-add-existing")?.getAttribute("href")).toContain("area=project");
+    expect(tid("askboss-add-existing")?.getAttribute("href")).toContain("tab=work");
     expect(tid("askboss-add-existing")?.getAttribute("href")).toContain("org=org_1");
   });
 
@@ -380,7 +382,9 @@ describe("the shelves", () => {
     await mount(page(V(view())));
     const add = $$('[data-testid="cc-app-add"]')[0];
     expect(add.textContent).toBe("＋ Add a feature");
-    expect(add.getAttribute("href")).toContain("compose=add");
+    expect(add.getAttribute("href")).toContain("compose=1");
+    expect(add.getAttribute("href")).toContain("area=project");
+    expect(add.getAttribute("href")).toContain("tab=work");
     expect(add.getAttribute("href")).toContain("app=crun_a");
     expect(add.getAttribute("href")).toContain("org=org_1");
   });

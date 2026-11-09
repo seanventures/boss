@@ -244,7 +244,11 @@ describe("a repo: inline results, Helm's read, onboarding", () => {
     expect(tid("ap-results")!.textContent).toContain("acme/web");
     expect(tid("ap-results")!.textContent).toContain("Folders on hosts");
     expect(tid("ap-repo-ghr_web")!.getAttribute("aria-selected")).toBe("true");
-    await enter(tid("ap-input"));
+    // acme/web is already in Acme Shop. Enter opens that project; a second project is the
+    // separate-project confirm, which is what picks the repo for Helm to read.
+    expect(tid("ap-detect-line")!.textContent).toContain("already in");
+    await click(tid("ap-repo-ghr_web-separate"));
+    await click(tid("ap-repo-ghr_web-separate-yes"));
     expect(tid("ap-results")).toBeNull();
     const found = tid("ap-found")!;
     expect(found.textContent).toContain("Storefront UI");
