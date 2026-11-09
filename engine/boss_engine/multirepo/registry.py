@@ -30,20 +30,31 @@ Prober = Callable[[Any, Any, str, str, str], dict[str, Any]]
 # ── where the list comes from ──────────────────────────────────────────────────────────────────
 
 def _list_from_app(db: Any) -> list[dict[str, Any]]:
+    """Every account the App is installed on (BOSSAPP-945: Add a GitHub account adds
+    installations beside the default one), each installation's repositories in turn. Another
+    account's installation GitHub no longer lists is skipped; the default one's failure refuses,
+    as before (a refresh would otherwise mark every repository gone)."""
     from ..identity import github_app, github_setup
 
-    token = github_setup.installation_token_all(db)
     out: list[dict[str, Any]] = []
-    for page in range(1, 11):
-        resp = github_app._call("GET", f"/installation/repositories?per_page=100&page={page}",  # noqa: SLF001
-                                token=token)
-        if resp.status != 200:
-            raise MultiRepoError(502, "github_unreachable",
-                                 "GitHub did not list the App's repositories. Try again.")
-        items = (resp.json() or {}).get("repositories") or []
-        out.extend(i for i in items if isinstance(i, dict))
-        if len(items) < 100:
-            break
+    default = str(github_setup.app_config(db).get("installation_id") or "")
+    for inst in github_setup.installation_ids(db) or [default]:
+        try:
+            token = github_setup.installation_token_all(db, inst or None)
+        except github_setup.GitHubSetupError:
+            if not inst or inst == default:
+                raise
+            continue
+        for page in range(1, 11):
+            resp = github_app._call("GET", f"/installation/repositories?per_page=100&page={page}",  # noqa: SLF001
+                                    token=token)
+            if resp.status != 200:
+                raise MultiRepoError(502, "github_unreachable",
+                                     "GitHub did not list the App's repositories. Try again.")
+            items = (resp.json() or {}).get("repositories") or []
+            out.extend(i for i in items if isinstance(i, dict))
+            if len(items) < 100:
+                break
     return out
 
 

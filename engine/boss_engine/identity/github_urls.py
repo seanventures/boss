@@ -89,6 +89,18 @@ def app_permissions(slug: str, owner: Account) -> Optional[str]:
     return f"{base}/permissions" if base else None
 
 
+def app_advanced(slug: str, owner: Account) -> Optional[str]:
+    """The App's "Advanced" settings page, where its owner presses "Make public" so other
+    accounts may install it (a private App installs only on its owner)."""
+    base = app_settings(slug, owner)
+    return f"{base}/advanced" if base else None
+
+
+def account_page(login: str) -> Optional[str]:
+    """A person's or an organisation's public page on GitHub."""
+    return f"{web_base()}/{quote(login, safe='')}" if login else None
+
+
 def installation_settings(installation_id: object, account: Account) -> Optional[str]:
     """The installation's page in the account it is installed on: repositories, and the
     "Accept new permissions" review after the App asks for more."""

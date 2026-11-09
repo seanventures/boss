@@ -18,6 +18,12 @@ Sign in with GitHub (device flow, one published App; engine: identity/github_dev
   POST   /v1/identity/github/device/poll            pending | connected | expired | denied | failed
   GET    /v1/identity/github/reach                  repos I can push to where BOSS is installed; installs needed
 
+Add a GitHub account (BOSSAPP-945; engine: identity/github_accounts.py):
+  POST   /v1/identity/github/accounts/lookup        the account typed: GitHub's record of it + the path
+  POST   /v1/identity/github/accounts/watch         the sheet's poll: App public yet? installed yet (recorded)?
+  GET    /v1/identity/github/accounts/installations/{id}/repos   that installation's repos, with "used by"
+  POST   /v1/identity/github/accounts/allow         the registry's allow + the access check, in words
+
 Every credential lands in the vault and is used only by boss-egress; nothing here returns one.
 """
 from __future__ import annotations
@@ -26,15 +32,16 @@ import re
 from typing import Any, Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import text
 
 from boss_engine.config import get_settings
 from boss_engine.db import begin
-from boss_engine.identity import (P, PublicReason, Scope, authenticated, github_app, github_device,
-                                  github_setup, permit, public)
+from boss_engine.identity import (P, PublicReason, Scope, authenticated, github_accounts, github_app,
+                                  github_device, github_setup, permit, public)
+from boss_engine.multirepo.common import MultiRepoError
 from boss_engine.identity.authn import SESSION_COOKIE, AuthnError, authenticate
 from boss_engine.identity.authn_support import default_org_id, public_origin
 
@@ -64,6 +71,21 @@ class MigrateBody(_Body):
 
 class DevicePollBody(_Body):
     handle: str = Field(min_length=10, max_length=2000)
+
+
+class AccountLookupBody(_Body):
+    account: str = Field(min_length=1, max_length=300)
+
+
+class AccountWatchBody(_Body):
+    login: str = Field(min_length=1, max_length=100)
+    account_id: str = Field(default="", max_length=30, pattern=r"^[0-9]*$")
+
+
+class AccountAllowBody(_Body):
+    project_id: str = Field(min_length=1, max_length=200)
+    installation_id: str = Field(min_length=1, max_length=40, pattern=r"^[0-9]+$")
+    repos: list[str] = Field(min_length=1, max_length=100)
 
 
 def _err(exc: Exception) -> JSONResponse:
@@ -377,6 +399,58 @@ def build_identity_github_router() -> APIRouter:
                 out = github_device.poll(person_id=ctx.principal.id, org_id=ctx.principal.org_id,
                                          handle=body.handle, db=db)
             return {k: v for k, v in out.items() if k != "item"}
+        except Exception as exc:  # noqa: BLE001
+            return _err(exc)
+
+    # ---- Add a GitHub account (BOSSAPP-945; engine: identity/github_accounts.py) ----------------------
+    # Every call to GitHub here is a read. Recording an installation GitHub already lists for the
+    # App is the one write, and it needs github:connect for the organisation.
+    @router.post("/v1/identity/github/accounts/lookup")
+    @permit(P.GITHUB_CONNECT, scope=Scope.org())
+    def account_lookup(body: AccountLookupBody, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                return github_accounts.lookup(db, ctx.principal.org_id, body.account, person_id=ctx.principal.id)
+        except Exception as exc:  # noqa: BLE001
+            return _err(exc)
+
+    @router.post("/v1/identity/github/accounts/watch")
+    @permit(P.GITHUB_CONNECT, scope=Scope.org())
+    def account_watch(body: AccountWatchBody, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                return github_accounts.watch(db, ctx.principal.org_id, body.login, body.account_id,
+                                             person_id=ctx.principal.id)
+        except Exception as exc:  # noqa: BLE001
+            return _err(exc)
+
+    @router.get("/v1/identity/github/accounts/installations/{installation_id}/repos")
+    @permit(P.GITHUB_READ, scope=Scope.org())     # a read: lists the installation's repositories
+    def account_repos(installation_id: str, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                return github_accounts.repositories(db, ctx.principal.org_id, installation_id[:40])
+        except Exception as exc:  # noqa: BLE001
+            return _err(exc)
+
+    @router.post("/v1/identity/github/accounts/allow")
+    @permit(P.REPOSITORY_REGISTER, scope=Scope.project(body="project_id"))
+    def account_allow(request: Request, payload: dict = Body(...)):
+        try:
+            body = AccountAllowBody.model_validate(payload)
+        except ValidationError:
+            return JSONResponse(status_code=422, content={"error": "bad_request",
+                                                          "message": "Say project_id, installation_id and repos."})
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                return github_accounts.allow(db, get_settings(), body.project_id, body.installation_id, body.repos,
+                                             actor=ctx.principal.id, auth=ctx)
+        except MultiRepoError as exc:
+            return JSONResponse(status_code=exc.status, content=exc.body())
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 

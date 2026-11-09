@@ -152,9 +152,10 @@ class InstallationToken:
 
 
 def mint_installation_token(repos: list[str], permissions: Mapping[str, str], *, db: Any) -> InstallationToken:
-    from .github_setup import app_config
+    from .github_setup import app_config, installation_for_owner
 
-    inst = app_config(db)["installation_id"]
+    cfg = app_config(db)
+    inst = cfg["installation_id"]
     if not inst:
         raise GitHubRefused("app_not_installed", 503)
     if not repos:
@@ -162,6 +163,10 @@ def mint_installation_token(repos: list[str], permissions: Mapping[str, str], *,
     owners = {r.split("/", 1)[0] for r in repos}
     if len(owners) != 1:
         raise GitHubRefused("one_owner_per_token", 403)
+    # ONE APP, SEVERAL ACCOUNTS (BOSSAPP-945): a repository's token comes from the installation on
+    # the account that owns it; the default installation when BOSS knows no other for that owner.
+    if cfg.get("source") == "setup":
+        inst = installation_for_owner(db, next(iter(owners))) or inst
     body = {"repositories": [r.split("/", 1)[1] for r in repos], "permissions": dict(permissions)}
     resp = _call("POST", f"/app/installations/{inst}/access_tokens", token=app_jwt(db), body=body)
     if resp.status != 201 and resp.status != 200:

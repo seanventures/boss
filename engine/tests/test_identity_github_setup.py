@@ -506,9 +506,16 @@ def test_every_github_setup_route_is_declared_and_changes_need_github_connect():
         assert access is not None, route.path
         if route.path.endswith(("/created", "/installed")):
             assert type(access).__name__ == "Public"
-        elif route.path.endswith(("/signin", "/reach")) or "/device/" in route.path:
+        elif route.path.endswith(("/signin", "/reach")):
+            # Reading your OWN sign-in status and reach is a session read, self only (PX-45)
+            assert type(access).__name__ == "Authenticated", route.path
+        elif "/device/" in route.path:
             # Sign in with GitHub: a person's OWN connection (github_device), never the org's
             assert access.permission == "connection:use_own", route.path
+        elif route.path.endswith("/accounts/allow"):
+            # Add a GitHub account's "Allow": the registry's own allow (repository:register at
+            # the project, as PATCH /v1/github/repos/{id}); no GitHub credential changes
+            assert access.permission == "repository:register", route.path
         elif route.methods == {"GET"} or route.path.endswith("/app/verify"):
             # a read (the status, the installation picker; verify asks GitHub what it granted and
             # keeps that answer, changing no credential) needs only github:read

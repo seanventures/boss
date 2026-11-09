@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Setup › Add a GitHub account (BOSSAPP-808 screen 3): a side panel in three steps , 
- * 1 How to connect, 2 Pick repos, 3 Check access.
+ * Setup › Add a GitHub account. BOSSAPP-945: it opens on BOSS's guided way (add-github-account.tsx:
+ * one input, the path from GitHub's own answers, BOSS watching GitHub). The steps below (BOSSAPP-808
+ * screen 3: 1 How to connect, 2 Pick repos, 3 Check access) are its "Other ways", kept whole.
  *
  * Every way in is one that already worked: "Sign in with GitHub" (device flow, github-signin-row),
  * the BOSS app installed on an organisation (the same sign-in lists its repos), a pasted
@@ -23,7 +24,9 @@ import { postManifest } from "./github-access-row";
 import { DeviceSignin } from "./github-signin-row";
 import { Consent, CONSENT_REFUSAL, toast, useBoard } from "./parts";
 import { Out, Refusal, Tip } from "./pill";
-import { createTokenUrl, InstallNeededLinks, refusalOf, type SigninFound } from "./repository-row";
+import { InstallNeededLinks, refusalOf, type SigninFound } from "./repository-row";
+import { AddGitHubAccount } from "./add-github-account";
+import { TOKEN_PERMISSIONS, tokenPageFor } from "../../lib/github-accounts";
 
 export type How = "own" | "org" | "token";
 type Step = 1 | 2 | 3;
@@ -114,11 +117,37 @@ function CheckAccess({ names }: { names: string[] }) {
   );
 }
 
+/** Add a GitHub account: BOSS's guided path (add-github-account.tsx) first; the ways that were here
+ *  before (a pasted token, Sign in with GitHub, the org's own App) under "Other ways", whole. */
 export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
   onClose: () => void;
   /** Open Advanced settings on the org's own GitHub App (manifest). */
   onAdvanced: () => void;
   initial?: How | null;
+}) {
+  const [other, setOther] = useState<How | null>(initial);
+  const [account, setAccount] = useState<string | null>(null);
+  return (
+    <Drawer title="Add a GitHub account" onClose={onClose} testid="su-add-account" wide>
+      {other ? (
+        <ClassicSteps key={other} initial={other} onClose={onClose} onAdvanced={onAdvanced} account={account}
+                      onBack={initial ? undefined : () => setOther(null)} />
+      ) : (
+        <AddGitHubAccount onClose={onClose} onAdvanced={onAdvanced}
+                          onOther={(how, login) => { setAccount(login); setOther(how); }} />
+      )}
+    </Drawer>
+  );
+}
+
+/** The steps that were the whole sheet before BOSSAPP-945: How to connect, Pick repos, Check access. */
+function ClassicSteps({ onClose, onAdvanced, initial, onBack, account = null }: {
+  onClose: () => void;
+  onAdvanced: () => void;
+  initial: How;
+  onBack?: () => void;
+  /** The account looked up before choosing this way: the token page names it as the owner. */
+  account?: string | null;
 }) {
   const { projectId, view, apply, signin } = useBoard();
   const signinReady = Boolean(signin?.configured);
@@ -133,7 +162,7 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
   const [orgName, setOrgName] = useState("");
   // RECOMMENDED IS A PATH THAT WORKS ON THIS INSTALL, never a greyed-out one.
   const recommended: How = signinReady || appFlow ? "own" : app ? "org" : "token";
-  const [how, setHow] = useState<How>(initial ?? recommended);
+  const [how, setHow] = useState<How>(initial);
   const [token, setToken] = useState("");
   const [consent, setConsent] = useState(false);
   const [step, setStep] = useState<Step>(1);
@@ -295,10 +324,13 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
                    onKeyDown={(e) => { if (e.key === "Enter") void next(); }} />
             {view.secrets.needs_consent ? <Consent checked={consent} onChange={setConsent} /> : null}
             <div className="su-line">
-              <Out href={createTokenUrl(typeof window !== "undefined" ? window.location.hostname : "this server")}
-                   tip="Opens GitHub with Contents and Pull requests: Read and write ticked."
+              <Out href={tokenPageFor(account, typeof window !== "undefined" ? window.location.hostname : "this server")}
+                   tip="Opens GitHub's new fine-grained token page with these permissions ticked."
                    testid="su-account-create-token">Create token</Out>
             </div>
+            <ul className="su-token-perms" data-testid="su-account-token-perms" aria-label="The token's permissions">
+              {TOKEN_PERMISSIONS.map(([name, level]) => <li key={name}><b>{name}</b>: {level}</li>)}
+            </ul>
           </div>
         ) : null}
       </div>
@@ -317,8 +349,11 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
   const continueLabel = step === 3 ? "Done" : step === 1 && appFlow && how !== "token" ? "Connect GitHub"
     : step === 2 && picked.length ? `Add ${picked.length} repo${picked.length === 1 ? "" : "s"}` : "Continue";
   return (
-    <Drawer title="Add a GitHub account" onClose={onClose} testid="su-add-account">
       <div className="su-stack" data-testid="su-add-account-body" data-step={step}>
+        {onBack && step === 1 ? (
+          <button type="button" className="su-link su-back" onClick={onBack} data-testid="su-account-back">
+            ← Back to BOSS&apos;s way</button>
+        ) : null}
         <StepChips step={step} />
         {body}
         {refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} /> : null}
@@ -333,6 +368,5 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
           )}
         </div>
       </div>
-    </Drawer>
   );
 }
