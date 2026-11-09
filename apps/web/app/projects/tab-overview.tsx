@@ -21,6 +21,7 @@ import { P95_SOURCE, p95Words } from "./tab-deployments";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 import { StartedCards } from "./started-cards";
+import { changeRef } from "../../lib/repo-links";
 import { GitHubWait } from "../../components/github-wait";
 
 /** Each Needs-you card's icon, by what it asks. */
@@ -272,7 +273,7 @@ function MiniRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
       <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" || w.state === "stalled" ? "you" : w.state === "failed" ? "bad" : w.state === "done" ? "done" : undefined} aria-hidden />
       <span style={{ minWidth: 0 }}>
         <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} title={w.detail || w.label} onClick={(e) => { e.stopPropagation(); open(); }}>{w.label}</button>
-        <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? `PR #${w.links.pr.number}` : KIND_WORDS[w.kind] ?? w.kind}</span>{workWhen(w) ? <span className="px-mono">{workWhen(w)}</span> : null}
+        <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? changeRef(w.links.pr.external_url, w.links.pr.number) : KIND_WORDS[w.kind] ?? w.kind}</span>{workWhen(w) ? <span className="px-mono">{workWhen(w)}</span> : null}
           <Cost usd={w.cost_usd} list={w.list_usd} /></span>
       </span>
       {/* 04 at 390: the station strip stays (wireframe .wk-row > .st); faces and the chevron go. */}

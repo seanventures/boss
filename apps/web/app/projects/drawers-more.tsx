@@ -8,7 +8,7 @@
  *                   from the reads the page has (onboarding, work, roadmap, deployments);
  *   NeedsBody       a Needs-you item: why it waits, its path, the work and the PR.
  */
-import { changeHref, isLocalChangeUrl, reviewChangeWords } from "../../lib/repo-links";
+import { changeHref, changeRef, isLocalChangeUrl, reviewChangeWords } from "../../lib/repo-links";
 import { DiagnosisFlow } from "../../components/stuck-work";
 import React from "react";
 import {
@@ -203,7 +203,7 @@ export function StageBody({ ctx, n }: { ctx: PxCtx; n: Node }) {
           {items.length ? <div data-testid="px-stage-work">{items.map((w) => (
             <button key={w.id} type="button" className="px-li px-li-btn" onClick={() => ctx.open("work", w.id)}>
               <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" ? "you" : w.state === "stalled" ? "stalled" : w.state === "done" ? "done" : w.state === "failed" ? "bad" : undefined} aria-hidden />
-              <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{w.label}</b><small>{w.links.pr ? `PR #${w.links.pr.number}` : workWhen(w)}</small></span>
+              <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{w.label}</b><small>{w.links.pr ? changeRef(w.links.pr.external_url, w.links.pr.number) : workWhen(w)}</small></span>
               <Stations stages={w.stages} /></button>))}</div>
             : <Empty icon={Kanban} title="Nothing in flight" line="New work starts from New work, the Roadmap or What's next." />}
         </>
@@ -345,7 +345,7 @@ export function ReleaseList({ n }: { n: NeedsYou }) {
 
 /** The drawer's primary, named for what it does: "Merge PR #3", "Approve deploy". */
 export function actWord(n: NeedsYou): string {
-  if (n.kind === "merge") return /^Merge PR #\d+$/.test(n.label) ? n.label : "Merge";
+  if (n.kind === "merge") return /^Merge (PR|change) #\d+$/.test(n.label) ? n.label : "Merge";
   if (n.kind === "deploy") return "Approve deploy";
   if (n.kind === "plan") return "Approve plan";
   return "Approve";

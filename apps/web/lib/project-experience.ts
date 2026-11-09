@@ -24,7 +24,7 @@ import { obsWrite } from "../app/observability/obs-write";
 import { useAreaShown } from "./area-shown";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
 import { isHydrated, localWith, markHydrated } from "./local-time";
-import { isLocalRepo, repoHref } from "./repo-links";
+import { changeRef, isLocalRepo, repoHref } from "./repo-links";
 import { parseMachine, type MachineChecks } from "./machine-checks";
 
 // ── shared enums (§ Shared enums) ────────────────────────────────────────────────────────────
@@ -779,7 +779,7 @@ export const parseDeployments = (v: unknown): Deployments => {
                hours: a(y.hours).map((h) => { const z = o(h); return { at: s(z.at), n: n(z.n), ok: n(z.ok),
                  state: oneOf(z.state, ["healthy", "degraded", "down", "none"] as const, "none") }; }),
                last_deploy: Object.keys(ld).length ? { commit: s(ld.commit), at: s(ld.at), by: s(ld.by), pr: nn(ld.pr), pr_url: s(ld.pr_url),
-                                                       label: s(ld.label) || (nn(ld.pr) ? `PR #${nn(ld.pr)}` : s(ld.commit)), href: s(ld.href) } : null,
+                                                       label: s(ld.label) || (nn(ld.pr) ? changeRef(s(ld.pr_url), nn(ld.pr)) : s(ld.commit)), href: s(ld.href) } : null,
                demo_logins: a(y.demo_logins).map(parseLogin), policy: y.policy === "person" ? "person" : "auto", href: s(y.href),
                address: s(y.address), deploy: parseTargetDeploy(y.deploy) };
     }),

@@ -95,6 +95,27 @@ export function reviewChangeWords(url: string | null | undefined): string | null
   return local ? `Review change #${local.number} ›` : null;
 }
 
+/** HOW A CHANGE IS NAMED (BOSSAPP-946): "PR #3" on GitHub, "Change #3" for a local change set
+ *  (`lower`: "change #3" mid-sentence, "Merge change #3"). The local-first HelpDesk's page said
+ *  "PR #1", "Merge PR #1" and "Pull request" for a project with no GitHub anywhere. */
+export function changeRef(url: string | null | undefined, n: number | string | null | undefined, lower = false): string {
+  if (isLocalChangeUrl(url)) return n ? `${lower ? "change" : "Change"} #${n}` : (lower ? "the change" : "The change");
+  return n ? `PR #${n}` : (lower ? "the pull request" : "The pull request");
+}
+
+/** A project whose code is on this machine (its repositories are local ones). */
+export function projectIsLocal(repos: ReadonlyArray<{ full_name?: string | null }> | null | undefined): boolean {
+  const list = (repos ?? []).filter((r) => r && r.full_name);
+  return list.length > 0 && list.every((r) => isLocalRepo(r.full_name));
+}
+
+/** A project's change words: GitHub's, or a local project's (no GitHub word anywhere). */
+export function changeWords(local: boolean): { short: string; set: string; station: string; ideaTo: string; merge: string } {
+  return local
+    ? { short: "Change", set: "Change set", station: "Change set", ideaTo: "Idea to change set", merge: "Merge change" }
+    : { short: "PR", set: "Pull request", station: "PR", ideaTo: "Idea to PR", merge: "Merge PR" };
+}
+
 /** The words on a PR link. */
 export function prLinkLabel(url: string | null | undefined): string {
   return isLocalChangeUrl(url) ? "Open change set" : "Open PR on GitHub";

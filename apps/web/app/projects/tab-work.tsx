@@ -9,7 +9,7 @@
  * count); Planned is Marshal's rank, re-ranked by drag or Alt+↑/↓ and saved through the plan
  * route. A row opens its drawer in place. List or Board.
  */
-import { changeHref, isLocalChangeUrl } from "../../lib/repo-links";
+import { changeHref, changeRef, changeWords, isLocalChangeUrl, projectIsLocal } from "../../lib/repo-links";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowBendDownRight, ArrowDown, ArrowUp, Bug, CaretDown, Check, Code, Compass, Database, DotsSixVertical, EnvelopeSimple, FlowArrow, GitMerge,
@@ -62,9 +62,11 @@ function rowTag(w: WorkItem): { label: string; tone?: "red" | "violet" } {
 
 const STATION_NAME: Record<string, string> = { plan: "Plan", design: "Decide", build: "Build", review: "Review", pr: "PR", ship: "Staging" };
 /** "Build · 12m": where a running piece of work is, and for how long. */
-const whereNow = (w: WorkItem) => {
+const whereNow = (w: WorkItem, local = false) => {
   const now = w.flow.length ? w.flow.find((f) => f.state === "now") : w.stages.find((st) => st.state === "now") ?? w.stages.find((st) => st.state === "todo");
-  return [now ? STATION_NAME[now.key] ?? now.label : "", w.age].filter(Boolean).join(" · ");
+  // A local project's PR station is its change set (BOSSAPP-946).
+  const name = now ? (now.key === "pr" ? changeWords(local).station : STATION_NAME[now.key] ?? now.label) : "";
+  return [name, w.age].filter(Boolean).join(" · ");
 };
 /** A finished item's time: the one basis every surface uses (workWhen). */
 const doneDay = (w: WorkItem) => workWhen(w);
@@ -141,7 +143,8 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
         </div>
         <span className="px-spacer" />
         <span className="px-legend px-hide-phone" aria-hidden>
-          {[["P", "Plan"], ["D", "Decide"], ["B", "Build"], ["R", "Review"], ["PR", "PR"], ["S", "Staging"]].map(([k, v]) => <span key={k}><span className="px-st-n">{k}</span>{v}</span>)}
+          {[["P", "Plan"], ["D", "Decide"], ["B", "Build"], ["R", "Review"],
+            projectIsLocal(ctx.overview.project.repos) ? ["CS", "Change set"] : ["PR", "PR"], ["S", "Staging"]].map(([k, v]) => <span key={k}><span className="px-st-n">{k}</span>{v}</span>)}
         </span>
         <div className="px-seg px-hide-phone" role="group" aria-label="View">
           <button type="button" aria-pressed={view === "list"} onClick={() => setView("list")} data-testid="px-work-list"><ListBullets size={13} /> List</button>
@@ -347,7 +350,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
                 stage/age words whenever the build is not working. */}
             {w.why ? <WhyLine why={w.why} testId={`px-work-why-${w.id}`} compact />
               : w.state === "needs_you" ? (setup && w.waiting.length ? <span>Waiting: {w.waiting[0].label}</span> : w.age ? <span>Waiting {w.age}</span> : null)
-              : w.state === "running" ? <span>{whereNow(w)}</span>
+              : w.state === "running" ? <span>{whereNow(w, projectIsLocal(ctx.overview.project.repos))}</span>
               : w.state === "planned" ? (w.next_up ? <span data-testid={`px-work-next-${w.id}`}>Next up</span> : null)
               : w.state === "done" || w.state === "failed" ? <span>{doneDay(w)}</span>
               : w.state === "stalled" ? null : w.age ? <span>{w.age}</span> : null}
@@ -443,7 +446,7 @@ export function DrawerAttempts({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
           <button key={t.id} type="button" className="px-li" style={{ width: "100%", background: "none", border: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer" }}
                   onClick={() => ctx.open("work", t.id)} data-testid={`px-drawer-attempt-${t.id}`}>
             <span className="px-dot" data-s={ATTEMPT_DOT[t.state]} aria-hidden />
-            <span style={{ minWidth: 0 }}><b>{t.label}</b><small>{whenLocal(t.created_at)}{t.pr ? ` · PR #${t.pr.number}` : ""}</small></span>
+            <span style={{ minWidth: 0 }}><b>{t.label}</b><small>{whenLocal(t.created_at)}{t.pr ? ` · ${changeRef(t.pr.external_url, t.pr.number)}` : ""}</small></span>
             <span className="px-tag" data-tone={t.state === "stalled" ? "amber" : t.state === "failed" ? "red" : t.state === "done" ? "green" : undefined}>{ATTEMPT_WORDS[t.state]}</span>
           </button>
         ))}

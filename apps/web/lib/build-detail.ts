@@ -177,6 +177,8 @@ export function nowFacts(c: NowInput, now: number | null): NowFact[] {
 // ── the Outputs, honest about what is missing ────────────────────────────────────────────────
 
 type OutputsInput = NowInput & {
+  /** The build's code is on this machine: its PR is a change set (BOSSAPP-946). */
+  local?: boolean;
   outputs: {
     pr: { word: string } | null;
     tests: { word: string; commands: unknown[] } | null;
@@ -194,7 +196,7 @@ export function missingWord(key: "pr" | "tests" | "changes" | "preview" | "cost"
   const running = c.live;
   if (key === "pr") {
     if (c.outputs.pr?.word) return null;
-    if (running) return { word: "Held until the gates pass", tip: "BOSS opens the PR after the tests, checks and review pass" };
+    if (running) return { word: "Held until the gates pass", tip: `BOSS opens the ${c.local ? "change set" : "PR"} after the tests, checks and review pass` };
     if (st === "cancelled") return { word: "Not opened · stopped" };
     if (st === "failed") return { word: "Not opened · gates failed", tip: s?.gates?.failed.length ? s.gates.failed.join(", ") : undefined };
     return null;

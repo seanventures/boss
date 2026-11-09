@@ -116,6 +116,35 @@ def pr_number(url: Any) -> Optional[int]:
     return int(found.group(1)) if found else None
 
 
+def is_local_change(url: Any) -> bool:
+    """A local change set's URL (http://boss-local/…): a project whose code is on this machine."""
+    from ..local_repo_host import is_local_pr_url
+
+    return is_local_pr_url(url)
+
+
+def change_ref(url: Any, number: Any = None, *, lower: bool = False) -> str:
+    """HOW A CHANGE IS NAMED (BOSSAPP-946): "PR #3" on GitHub, "Change #3" for a local change set
+    — the local-first HelpDesk's page said "PR #1", "Merge PR #1" and "Pull request" for a
+    project with no GitHub anywhere. `lower` for mid-sentence use ("Merge change #3")."""
+    n = number if number is not None else pr_number(url)
+    if is_local_change(url):
+        word = "change" if lower else "Change"
+        return f"{word} #{n}" if n else ("the change" if lower else "The change")
+    return f"PR #{n}" if n else ("the pull request" if lower else "The pull request")
+
+
+def is_local_project(connection: Connection, project_id: str) -> bool:
+    """Whether the project's code lives in a repository BOSS keeps on this machine."""
+    try:
+        from ..local_projects import local_binding
+
+        with connection.begin_nested():
+            return local_binding(connection, project_id) is not None
+    except Exception:  # noqa: BLE001 — no local repositories here: a GitHub project
+        return False
+
+
 def project_row(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
     row = connection.execute(text(
         "SELECT id, name, description, project_type, created_at, archived_at FROM projects "

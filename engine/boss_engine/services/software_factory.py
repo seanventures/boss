@@ -2369,15 +2369,18 @@ class SoftwareFactoryService:
         set_member = _change_sets.member_change_set(connection, run_id) if run_id else None
         from . import checks_failing as _checks_failing
 
+        # A local change set is "change #N", never a PR (BOSSAPP-946).
+        _local = getattr(self.github, "kind", "") == "local"
+        _ref = f"change #{pr.number}" if _local else f"PR #{pr.number}"
         decision_id = None if set_member else self.decisions.create_blocking(
             connection,
             project_id,
             task_id,
-            (f"Checks failing — decide the merge: {title} (PR #{pr.number})"
+            (f"Checks failing — decide the merge: {title} ({_ref})"
              if checks_failing else
              f"Approve follow-up fix after #{follow_up['after']}: "
-             f"{pr_follow_up.work_name(title)} (PR #{pr.number})" if follow_up else
-             f"Approve code change: {title} (PR #{pr.number})"),
+             f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
+             f"Approve code change: {title} ({_ref})"),
             {
                 # FIRST, so nothing it carries can replace the action below. Its keys are the
                 # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
@@ -2387,8 +2390,9 @@ class SoftwareFactoryService:
                 "summary": (
                     (_checks_failing.decision_summary(checks_failing) + " "
                      if checks_failing else "")
-                    + f"BOSS built “{title}” in a sandbox and opened pull request #{pr.number}. "
-                    f"Automated checks: {validation_status}"
+                    + f"BOSS built “{title}” in a sandbox and opened "
+                    + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
+                    + f"Automated checks: {validation_status}"
                     + (f" — {validation_summary}" if validation_summary else "")
                     + (". Review the change in BOSS (it is on this machine), then approve to merge "
                        "into the default branch or reject to send back."

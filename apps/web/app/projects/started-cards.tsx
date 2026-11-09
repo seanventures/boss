@@ -21,8 +21,10 @@ import { Check, CursorClick, FileText, Hand, Plus, Sliders, Rocket } from "@phos
 import { enc, idGet, idPost, IdentityError, refusalSentence } from "../../lib/identity/api";
 import { withConsent } from "../../lib/identity/consent";
 import { useGuardedCall } from "../../components/identity/identity-provider";
+import { GatedButton } from "../../components/gated";
 import type { Brief } from "../../lib/add-project";
 import { consoleHref } from "../console-href";
+import { changeWords, projectIsLocal } from "../../lib/repo-links";
 import { Face, Ico, Tag } from "./kit";
 import type { PxCtx } from "./project-page";
 import "./started.css";
@@ -70,13 +72,16 @@ export function StartedCards({ ctx }: { ctx: PxCtx }) {
   const prdNow = prdState === "waiting";
   const prdTag = PRD_TAG[prdState] ?? PRD_TAG.drafting;
   const decisions = consoleHref({ area: "decisions" });
+  // A local project says "change set", never "PR" (BOSSAPP-946).
+  const words = changeWords(projectIsLocal(ctx.overview?.project?.repos)
+    || ((picks.repos as string[] | undefined) ?? []).some((r) => /^local_/.test(String(r))));
   return (
     <div className="px-stack" data-testid="px-started">
       {v.not_started && !v.run ? <NotStarted ctx={ctx} said={v.not_started} onStarted={() => { setTick((n) => n + 1); ctx.refreshWork(); }} /> : null}
       <section className="px-card" aria-labelledby="px-st-path">
-        <div className="px-card-h"><Ico icon={CursorClick} c="teal" /><h2 id="px-st-path">Idea to PR</h2>
+        <div className="px-card-h"><Ico icon={CursorClick} c="teal" /><h2 id="px-st-path">{words.ideaTo}</h2>
           <Tag tone="blue">2 clicks + your gates</Tag></div>
-        <ol className="px-st-path" aria-label="From the idea to the pull request" data-testid="px-started-path">
+        <ol className="px-st-path" aria-label={`From the idea to the ${words.set.toLowerCase()}`} data-testid="px-started-path">
           <li data-state="done"><span className="px-st-n">1</span>Add project</li>
           <li data-state="done"><span className="px-st-n">2</span>Create and start</li>
           {/* A workflow can visit a station twice (Standard builds again after review): one key each. */}
@@ -160,8 +165,9 @@ function NotStarted({ ctx, said, onStarted }: { ctx: PxCtx; said: NonNullable<St
       <div className="px-card-h"><Ico icon={Rocket} c="amber" /><h2 id="px-st-not">Not started yet</h2><Tag tone="amber">one press</Tag></div>
       <p className="px-faint" style={{ margin: "0 0 10px" }} data-testid="px-started-not-started-words">{said.words}</p>
       {said.resumable ? (
-        <button type="button" className="px-btn" data-kind="primary" disabled={busy} data-testid="px-started-start" onClick={() => void start()}>
-          <Rocket size={12} aria-hidden /> {busy ? "Starting…" : "Start"}</button>
+        <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-kind="primary" disabled={busy}
+                     data-testid="px-started-start" onClick={() => void start()}>
+          <Rocket size={12} aria-hidden /> {busy ? "Starting…" : "Start"}</GatedButton>
       ) : <button type="button" className="px-btn" onClick={() => ctx.tab("work", { compose: "1" })}>Start work from Work</button>}
       {error ? <p role="alert" className="px-faint" style={{ margin: "8px 0 0" }} data-testid="px-started-start-error">{error}</p> : null}
     </section>

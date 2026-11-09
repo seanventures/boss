@@ -680,11 +680,16 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                         "saying what to change."),
                 _delegate(),
             ]
+        from .local_repo_host import is_local_pr_url
+
+        # A local change set is "the change", never a pull request (BOSSAPP-946).
+        what = "The change" if is_local_pr_url(_rec(decision).get("pull_request_url")) \
+            else "The pull request"
         return [
             _action("approve", "Approve and merge", "approve",
                     "Authorizes the merge; BOSS merges once its own checks pass."),
             _action("reject", "Keep blocked", "reject",
-                    "The pull request stays open and unmerged. To have BOSS change it, open "
+                    f"{what} stays open and unmerged. To have BOSS change it, open "
                     "the app in Factory and use Add a feature or Rebuild with a fresh spec, "
                     "saying what to change."),
             _delegate(),

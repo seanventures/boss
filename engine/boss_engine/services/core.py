@@ -368,6 +368,29 @@ def decision_reason_from_payload(recommendation: dict | None, fallback: str | No
     return text or None
 
 
+#: The answers a blocking decision was stored with before they followed its kind.
+_DEFAULT_OPTIONS = [{"action": "approve", "label": "Approve and retry"},
+                    {"action": "reject", "label": "Keep blocked"}]
+
+
+def _offered_options(question: str, rec: Any, risk_tier: Any) -> list[dict[str, str]]:
+    """THE STORED ANSWERS ARE THE OFFERED ONES (BOSSAPP-946): a merge question was stored with
+    "Approve and retry / Keep blocked" whatever it was, and every reader of `options` (the API,
+    MCP, an agent) saw a merge offered as a retry. They come from decision_actions — the list
+    every surface draws its buttons from — falling back to the old pair only when it gives none."""
+    try:
+        from .decision_actions import allowed_actions
+
+        acts = allowed_actions({"status": "pending", "question": question,
+                                "recommendation": rec if isinstance(rec, dict) else {},
+                                "risk_tier": risk_tier})
+        out = [{"action": a["action"], "label": a["label"]} for a in acts
+               if a.get("action") in ("approve", "reject")]
+        return out or list(_DEFAULT_OPTIONS)
+    except Exception:  # noqa: BLE001 — a decision is never refused for its button words
+        return list(_DEFAULT_OPTIONS)
+
+
 def create_blocking_decision(
     connection: Any,
     project_id: str,
@@ -515,12 +538,7 @@ def _create_blocking_decision_postgres(
             "task_id": task_id,
             "question": question,
             "recommendation": json.dumps(rec),
-            "options": json.dumps(
-                [
-                    {"action": "approve", "label": "Approve and retry"},
-                    {"action": "reject", "label": "Keep blocked"},
-                ]
-            ),
+            "options": json.dumps(_offered_options(question, rec, risk_tier)),
             "risk_tier": risk_tier,
             "cost_summary": json.dumps(cost_summary),
             "deadline_at": deadline_at,

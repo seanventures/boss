@@ -27,7 +27,7 @@ from sqlalchemy.engine import Connection
 
 from .new_work import issue_of
 from .titles import short_title
-from .common import (LIVE_RUN, age, agents, as_json, aware, face, href, iso, pr_number,
+from .common import (LIVE_RUN, age, agents, as_json, aware, face, href, is_local_project, iso, pr_number,
                      project_href, words)
 
 #: The station strip (contract §3 `stages`), with the capabilities that belong to each.
@@ -1013,7 +1013,28 @@ def everything(connection: Connection, project_id: str, *, limit: int = 60,
     found.sort(key=lambda w: w.get("last_attempt_at") or w.get("created_at") or "", reverse=True)
     # Planned work keeps Marshal's rank (never re-sorted by date): the order a drag saves.
     planned = _planned_items(connection, project_id, now, moving=found)
-    return found[:limit] + planned
+    out = found[:limit] + planned
+    if is_local_project(connection, project_id):
+        _in_local_words(out)
+    return out
+
+
+#: A LOCAL PROJECT'S PR STATION IS ITS CHANGE SET (BOSSAPP-946): no GitHub word on a project
+#: whose code is on this machine.
+LOCAL_PR_STATION = {"label": "CS", "name": "Change set"}
+
+
+def _in_local_words(found: list[dict[str, Any]]) -> None:
+    def fix(stages: Any) -> None:
+        for s in stages or []:
+            if isinstance(s, dict) and s.get("key") == "pr":
+                s.update(LOCAL_PR_STATION)
+
+    for w in found:
+        fix(w.get("stages"))
+        for a in w.get("attempts") or []:
+            if isinstance(a, dict):
+                fix(a.get("stages"))
 
 
 def matching(found: list[dict[str, Any]], *, state: Optional[str] = None,
