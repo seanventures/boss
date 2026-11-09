@@ -143,12 +143,26 @@ export type Recommendation = {
   card?: RecCard | null;
   /** The work it became (the run or build its artifact names), once started. */
   work_id?: string;
+  /** WHERE IT SITS in a repository shared by several apps (BOSSAPP-931): this app, another app
+   *  ("elsewhere"), or the whole repo ("Whole repo" label). Absent when the repo holds one app. */
+  scope?: RecScope | null;
+};
+export type RecScope = { where: "app" | "elsewhere" | "repo" | string; label: string; path: string | null; app: string | null };
+/** Another app's items in the same repository, grouped by app; `handTo` when a project owns it. */
+export type ElsewhereGroup = {
+  app: string; count: number; items: Recommendation[];
+  project: { id: string; name: string; href: string } | null;
+  handTo: { label: string; projectId: string } | null;
 };
 export type RecCard = {
   evidence: { label: string; icon: string }[]; detector: { label: string; icon: string } | null;
   does: string; cost_usd: number | null; cost_basis: string;
 };
-export type RoadmapView = { status: string; recommendations: Recommendation[]; counts: Record<string, number> };
+export type RoadmapView = {
+  status: string; recommendations: Recommendation[]; counts: Record<string, number>;
+  /** Other apps' items in the same repository (collapsed "Elsewhere in this repo · N"). */
+  elsewhere?: ElsewhereGroup[];
+};
 /** The drawer's text (GET /v1/ambient/roadmap/{id} → detail): only shown on ⓘ. */
 export type RecDetail = { why: string; evidence: Array<Evidence & { label: string }>; squad: string[] };
 
@@ -495,6 +509,21 @@ export const parseRec = (w: unknown): Recommendation => {
     cost_usd: typeof b.cost_usd === "number" ? b.cost_usd : null, squad: a(y.squad).map((q) => s(q)).filter(Boolean), why: s(y.why), subject: s(y.subject),
     card: parseCard(y.card),
     work_id: s(o(y.artifact).workflow_run_id || o(y.artifact).code_task_run_id) || undefined,
+    scope: y.scope && typeof y.scope === "object"
+      ? { where: s(o(y.scope).where, "app"), label: s(o(y.scope).label), path: sn(o(y.scope).path), app: sn(o(y.scope).app) }
+      : null,
+  };
+};
+
+const parseElsewhere = (w: unknown): ElsewhereGroup => {
+  const g = o(w);
+  const p = g.project && typeof g.project === "object" ? o(g.project) : null;
+  const h = g.hand_to && typeof g.hand_to === "object" ? o(g.hand_to) : null;
+  const items = a(g.items).map(parseRec);
+  return {
+    app: s(g.app, "Another app"), count: n(g.count, items.length), items,
+    project: p && s(p.id) ? { id: s(p.id), name: s(p.name, s(p.id)), href: s(p.href) } : null,
+    handTo: h && s(h.project_id) ? { label: s(h.label, "Hand to its project"), projectId: s(h.project_id) } : null,
   };
 };
 
@@ -502,7 +531,8 @@ export const parseRoadmap = (w: unknown): RoadmapView => {
   const x = o(w);
   const counts: Record<string, number> = {};
   for (const [k, v] of Object.entries(o(x.counts))) counts[k] = n(v);
-  return { status: s(x.status, "open"), recommendations: a(x.items).map(parseRec), counts };
+  return { status: s(x.status, "open"), recommendations: a(x.items).map(parseRec), counts,
+           elsewhere: a(x.elsewhere).map(parseElsewhere).filter((g) => g.items.length > 0) };
 };
 
 export const evidenceLabel = (e: { kind: string; ref: string; note?: string | null }): string =>
@@ -564,6 +594,9 @@ export const acceptRec = (projectId: string, id: string, as: AcceptAs, note = ""
   aaWrite(recWrite(id, "accept"), { project_id: projectId, as, ...(note ? { note } : {}) }, "Accept");
 export const rejectRec = (projectId: string, id: string, reason: string, category: RejectCategory = "other") =>
   aaWrite(recWrite(id, "reject"), { project_id: projectId, reason, category }, "Reject");
+/** Another app's item goes to the project that owns that app (same repository, BOSSAPP-931). */
+export const handRec = (projectId: string, id: string, toProject: string) =>
+  aaWrite(recWrite(id, "hand-to"), { project_id: projectId, to_project: toProject }, "Hand to");
 /** Not now: hidden until `until` (now + days, an ISO datetime; the engine allows ≤ 180 days). */
 export const snoozeRec = (projectId: string, id: string, days = 14, nowMs = Date.now(), reason = "") =>
   aaWrite(recWrite(id, "snooze"), { project_id: projectId, until: new Date(nowMs + days * 86_400_000).toISOString(), ...(reason ? { reason } : {}) }, "Not now");

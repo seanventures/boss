@@ -27,6 +27,8 @@ import { RateIt } from "./improve/rate-it";
 
 import type { Meeting, MeetingRole } from "../lib/meeting-rooms";
 import { Markdown } from "./markdown";
+import { PrdRecordView, PrdRepoLink } from "./prd-record";
+import { parsePrdRepo } from "../lib/prd-record";
 import { meetingCardTitle } from "../lib/meeting-title";
 import {
   conveneMeetingAction,
@@ -273,6 +275,10 @@ function Synthesis({ meeting }: { meeting: Meeting }) {
         <div className="rp-prd rp-prd-wide" data-testid="meeting-prd-full">
           <div className="rp-card-h">
             <b>PRD</b><span className="rp-spacer" />
+            {/* Where it lives in the repository (BOSSAPP-929): the build commits it with its PR. */}
+            {parsePrdRepo((meeting as { prd_repo?: unknown }).prd_repo) ? (
+              <PrdRepoLink repo={parsePrdRepo((meeting as { prd_repo?: unknown }).prd_repo)!} testid="meeting-prd-repo" />
+            ) : null}
             <button type="button" className="rp-link sm" onClick={() => setPrdOpen(false)}>Hide the PRD ↑</button>
           </div>
           <div className="rp-full"><Markdown text={meeting.prd_markdown} /></div>
@@ -1032,6 +1038,14 @@ export function MeetingCompact({ meetingId, projectId, buildState }: {
               );
             })}
           </div>
+        ) : null}
+        {/* THE BUILD'S PRD STEP SHOWS THE PRD (BOSSAPP-929): readable here, the full page and
+            the meeting one press away, and its file in the repository. */}
+        {!live && meeting.prd_markdown && !meeting.security_review?.run_id ? (
+          <PrdRecordView testid="meeting-compact-prd" prd={{
+            title: titleOf(meeting), markdown: meeting.prd_markdown, fullPage: full, meeting: null,
+            repo: parsePrdRepo((meeting as { prd_repo?: unknown }).prd_repo),
+          }} />
         ) : null}
         {meeting.status === "failed" && meeting.error ? (
           <div className="rp-cmp-err"><div className="rp-attn"><b>Why it stopped</b><span>{meeting.error}</span></div></div>

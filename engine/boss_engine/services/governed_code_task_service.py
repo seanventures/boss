@@ -5014,6 +5014,31 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _log_caught(logger)
             logger.warning("could not declare the preview app for %s: %s", run_id, exc)
 
+    def _commit_approved_prd() -> None:
+        """THE PRD LANDS WITH THE PR (BOSSAPP-929): the approved PRD this build came from, and
+        its meeting minutes, committed to the work branch as docs/prd/<slug>.md through the same
+        repo host the stages commit through (GitHub, or a local-first project's own repository).
+        Never raises and never blocks the PR: a build without its PRD file is the old delivery."""
+        try:
+            from . import prd_record
+
+            with _transaction(engine) as c:
+                prd = approved_prd_design.find_approved_prd(c, project_id, fctx or {})
+            if not prd or _push_held("prd_record"):
+                return
+            with _transaction(engine) as c:
+                record = prd_record.commit_to_branch(c, sf.github, project_id=project_id,
+                                                     decision_id=prd["decision_id"],
+                                                     branch=work_branch)
+                if record:
+                    emit_event(c, project_id, "code_task.prd_committed", "boss", "code_task_run",
+                               run_id, record)
+            if record:
+                accumulated[record["path"]] = prd["markdown"] + "\n"
+        except Exception as exc:  # noqa: BLE001 — the PRD file must never sink a finished build
+            _log_caught(logger)
+            logger.warning("could not commit the approved PRD for %s: %s", run_id, exc)
+
     _lease_owner_at_start: dict[str, Optional[str]] = {"v": None}
 
     def _lease_owner_now() -> Optional[str]:
@@ -9332,6 +9357,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 g for g in TEMPLATE_GATES if (_tpl_gates or {}).get(g) is not True]}
         _finish_vms(success=True)
         _declare_preview_app()
+        _commit_approved_prd()
         # ONE APPROVAL PER BUILD, not per slice. A decomposed build breaks a product into ordered
         # slices that all commit to the SAME lineage branch (via _commit_stage). Opening a PR +
         # human approval on every slice is what a customer never wants — 6 tasks, 6 PRs, 6 gates

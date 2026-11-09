@@ -3,6 +3,7 @@ import {
   type DecisionCard as ApiDecisionCard,
 } from "@boss/api-client";
 import { client, PROJECT_ID, resolveProjectId } from "./client";
+import { parsePrdRecord, type PrdRecord } from "./prd-record";
 
 export type DecisionFeedItem = {
   id: string;
@@ -45,6 +46,9 @@ export type DecisionFeedItem = {
   /** Where the card belongs, decided by the engine (decision_actions.attention) with the same
    *  rule the Command Center counts by. Absent from an older API: see decisionAttention. */
   attention?: DecisionAttention;
+  /** A meeting's PRD (engine prd_record.links, BOSSAPP-929): the document, the panel that argued
+   *  it, and its file in the repository. Absent for any other decision. */
+  prd?: PrdRecord | null;
 };
 
 export type DecisionAttention = "needs_action" | "expired" | "resolved";
@@ -218,6 +222,7 @@ function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
     createdAt: payload.created_at,
     updatedAt: payload.updated_at,
     ...contractOf(payload),
+    prd: parsePrdRecord((payload as { prd?: unknown }).prd),
   };
 }
 

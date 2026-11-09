@@ -19,7 +19,7 @@ import {
 import { GatedButton } from "../../components/gated";
 import {
   PX_PATHS, isPxDemo, parseKnowledge, pxHref, pxWrite, startOnboarding, usePxRead, writePxUrl,
-  type GraphNode, type Knowledge, type KnowledgeRepo, type StepState,
+  type GraphNode, type Knowledge, type KnowledgeRepo, type KnowledgeScope, type StepState,
 } from "../../lib/project-experience";
 import { FX_KNOWLEDGE } from "../../lib/project-experience-fixtures";
 import { UploadDocument, UploadPreview } from "../knowledge/kg-upload";
@@ -30,12 +30,37 @@ import { isLocalRepo, repoHref } from "../../lib/repo-links";
 import type { PxCtx } from "./project-page";
 import { AddRepoDrawer } from "./add-repo";
 
-const useKnowledge = (projectId: string, fast = false) =>
-  usePxRead<Knowledge>(PX_PATHS.knowledge(projectId), parseKnowledge, { everyMs: fast ? 5_000 : 60_000, demo: () => parseKnowledge(FX_KNOWLEDGE) });
+/** THIS APP OR THE WHOLE REPO (BOSSAPP-931): `?kscope=repo` on the page's URL, so the tab and its
+ *  drawers read the same scope; the engine's default is this app. */
+export const knowledgeScopeFromUrl = (search = typeof window === "undefined" ? "" : window.location.search): "app" | "repo" | undefined => {
+  const v = new URLSearchParams(search).get("kscope");
+  return v === "repo" ? "repo" : v === "app" ? "app" : undefined;
+};
+
+const useKnowledge = (projectId: string, fast = false, scope?: "app" | "repo") =>
+  usePxRead<Knowledge>(PX_PATHS.knowledge(projectId, scope), parseKnowledge, { everyMs: fast ? 5_000 : 60_000, demo: () => parseKnowledge(FX_KNOWLEDGE) });
+
+/** The switch: "This app · Whole repo". Shown only when the repository holds other apps. */
+export function ScopeSwitch({ scope, onPick }: { scope: KnowledgeScope; onPick: (key: "app" | "repo") => void }) {
+  if (!scope.scoped) return null;
+  return (
+    <div className="px-row px-wrap" data-testid="px-kn-scope">
+      <span className="px-filters" role="radiogroup" aria-label="Show" style={{ margin: 0 }}>
+        {scope.options.map((o) => (
+          <button key={o.key} type="button" className="px-filter" role="radio" aria-checked={scope.mode === o.key}
+                  data-testid={`px-kn-scope-${o.key}`} onClick={() => onPick(o.key)}>{o.label}</button>
+        ))}
+      </span>
+      {scope.mode === "app" && scope.label ? <small className="px-faint px-mono" data-testid="px-kn-scope-roots">{scope.label}</small> : null}
+    </div>
+  );
+}
 
 export function KnowledgeTab({ ctx }: { ctx: PxCtx }) {
   const [fast, setFast] = useState(false);
-  const read = useKnowledge(ctx.projectId, fast);
+  const [scope, setScope] = useState<"app" | "repo" | undefined>(() => knowledgeScopeFromUrl());
+  const read = useKnowledge(ctx.projectId, fast, scope);
+  const pick = (key: "app" | "repo") => { setScope(key); writePxUrl({ kscope: key === "app" ? null : key }, "replace"); };
   const building = read.data?.build?.state === "running";
   if (fast !== building) setFast(building);
   const graphHref = `?area=knowledge&project_id=${encodeURIComponent(ctx.projectId)}`;
@@ -52,6 +77,7 @@ export function KnowledgeTab({ ctx }: { ctx: PxCtx }) {
         {(k) => (
           <>
             <Repos ctx={ctx} repos={k.repos.length ? k.repos : []} onChecked={read.refresh} />
+            <ScopeSwitch scope={k.scope} onPick={pick} />
             <div className="px-split px-kn-split">
               <div className="px-stack">
                 <Dossier ctx={ctx} k={k} onStarted={read.refresh} />
@@ -505,7 +531,7 @@ function Learned({ k }: { k: Knowledge }) {
 
 /** `drawer=dossier` and `drawer=doc:<key>` (contract §10): prose lives here, not on the tab. */
 export function KnowledgeDrawer({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kind: string; id: string }; onClose: () => void }) {
-  const read = useKnowledge(ctx.projectId);
+  const read = useKnowledge(ctx.projectId, false, knowledgeScopeFromUrl());
   const k = read.data;
   if (drawer.kind === "doc" && drawer.id === "new") return <AddDocDrawer ctx={ctx} onClose={onClose} />;
   if (!k) return <Drawer title="Repo & knowledge" onClose={onClose} testid="px-drawer-knowledge"><p className="px-faint">Loading…</p></Drawer>;

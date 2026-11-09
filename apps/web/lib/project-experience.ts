@@ -13,6 +13,7 @@
  * `?px_demo=1` renders the contract's sample project (lib/project-experience-fixtures.ts) with a
  * "Sample data" banner; writes in that mode send nothing.
  */
+import { parsePrdRecord, type PrdRecord } from "./prd-record";
 import { parseDiagnosis, parseWaitReason, type Diagnosis, type WaitReason } from "./stuck-work";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -108,6 +109,8 @@ export type NeedsYou = {
   entries?: NeedsEntry[];
   /** An always-on card's question, on its own line; `detail` is then what was found so far. */
   question?: string;
+  /** A meeting's PRD to approve (BOSSAPP-929): the document, its meeting, its file in the repo. */
+  prd?: PrdRecord | null;
 };
 export type NeedsAnswer = { action: "approve" | "reject" | "revise"; label: string };
 export type NeedsEntry = { work_item_id: string; question: string; detail: string; answers: { key: string; label: string }[] };
@@ -274,7 +277,11 @@ export type Knowledge = {
   learned: { id: string; label: string; sub: string; state: string; href: string; detail: string; reused: number; agent: Agent | null }[];
   build: { label: string; href: string; state: string; progress: string; nodes: { label: string; state: StepState; sub: string }[] } | null;
   empty: { label: string; detail: string; href: string } | null;
+  /** THIS APP OR THE WHOLE REPO (BOSSAPP-931): a repository holding several apps shows this
+   *  project's part by default; `options` is empty for a repository with one app. */
+  scope: KnowledgeScope;
 };
+export type KnowledgeScope = { scoped: boolean; mode: "app" | "repo"; roots: string[]; label: string; options: { key: "app" | "repo"; label: string }[] };
 export type Environment = {
   key: string; label: string; url: string; health: Health; host: string; host_href: string; target_id: string; app: string; manage_href: string;
   /** The server's name for a title ("Staging server" when its name is only its address). */
@@ -552,6 +559,8 @@ export type WorkStory = {
   cost_parts: { label: string; usd: number }[]; preview: string; pr: { number: number; external_url: string } | null;
   stages: { key: string; name: string; state: StepState; sub: string; at: string; person: boolean;
             link: { label: string; href: string; external_url: string } | null }[];
+  /** The PRD this work was built from (BOSSAPP-929), with its meeting and repo file. */
+  prd?: PrdRecord | null;
 };
 export const parseWorkStory = (v: unknown): WorkStory => {
   const x = o(v); const pr = o(x.pr);
@@ -564,6 +573,7 @@ export const parseWorkStory = (v: unknown): WorkStory => {
       return { key: s(y.key), name: s(y.name), state: oneOf(y.state, STEP_STATES, "todo"), sub: s(y.sub), at: s(y.at), person: y.person === true,
                link: s(l.label) ? { label: s(l.label), href: s(l.href), external_url: s(l.external_url) } : null };
     }),
+    prd: parsePrdRecord(x.prd),
   };
 };
 
@@ -590,6 +600,7 @@ export const parseOverview = (v: unknown): Overview => {
                detail: s(y.detail), mini: mini(y.mini), release: parseRelease(y.release),
                diagnosis: parseDiagnosis(y.diagnosis),
                answers: parseAnswers(y.answers), entries: parseEntries(y.entries),
+               prd: parsePrdRecord(y.prd),
                ...(typeof y.question === "string" && y.question ? { question: y.question } : {}),
                action: act.label || act.href ? { label: s(act.label, "Open"), href: s(act.href), decision_id: s(act.decision_id) } : null };
     }),
@@ -669,7 +680,16 @@ export const parseKnowledge = (v: unknown): Knowledge => {
     build: Object.keys(b).length ? { label: s(b.label, "Build dossier now"), href: s(b.href), state: s(b.state), progress: s(b.progress),
                                      nodes: a(b.nodes).map((z) => ({ label: s(o(z).label), state: (s(o(z).state) || "todo") as StepState, sub: s(o(z).sub) })) } : null,
     empty: s(em.label) ? { label: s(em.label), detail: s(em.detail), href: s(em.href) } : null,
+    scope: parseKnowledgeScope(x.scope),
   };
+};
+
+export const parseKnowledgeScope = (v: unknown): KnowledgeScope => {
+  const x = o(v);
+  const options = a(x.options).map((z) => ({ key: (s(o(z).key) === "repo" ? "repo" : "app") as "app" | "repo", label: s(o(z).label) }))
+    .filter((z) => z.label);
+  return { scoped: x.scoped === true && options.length > 1, mode: s(x.mode) === "app" ? "app" : "repo",
+           roots: a(x.roots).map((z) => s(z)).filter(Boolean), label: s(x.label), options };
 };
 
 /** A deploy's status (stack_deployments) as the shared step state. */
@@ -853,7 +873,7 @@ export const PX_PATHS = {
   summaryAll: () => "/v1/projects/summary?include_archived=true",
   overview: (id: string) => `/v1/projects/${enc(id)}/overview`,
   work: (id: string, state = "", q = "") => `/v1/projects/${enc(id)}/work${state || q ? `?${new URLSearchParams({ ...(state ? { state } : {}), ...(q ? { q } : {}) })}` : ""}`,
-  knowledge: (id: string) => `/v1/projects/${enc(id)}/knowledge`,
+  knowledge: (id: string, scope?: "app" | "repo") => `/v1/projects/${enc(id)}/knowledge${scope ? `?scope=${scope}` : ""}`,
   deployments: (id: string) => `/v1/projects/${enc(id)}/deployments`,
   captain: (id: string) => `/v1/projects/${enc(id)}/captain`,
   /** Helm's plan for new work (screen 05): strip, estimates, the workflows "change" offers. */
@@ -1161,7 +1181,7 @@ export const WORK_WORDS: Record<WorkState, string> = { needs_you: "Needs you", s
 
 // ── the roadmap's writes (§6: the existing ambient routes), sample-mode safe ─────────────────
 
-import { acceptRec as aaAccept, rejectRec as aaReject, snoozeRec as aaSnooze, type AcceptAs, type RejectCategory } from "./ambient";
+import { acceptRec as aaAccept, handRec as aaHand, rejectRec as aaReject, snoozeRec as aaSnooze, type AcceptAs, type RejectCategory } from "./ambient";
 const demoOk = (): PxWrite => ({ ok: true, status: 200, body: {}, error: null, demo: true });
 const fromAa = (r: { ok: boolean; status: number; body: unknown; error: string | null }): PxWrite =>
   ({ ok: r.ok, status: r.status, body: o(r.body), error: r.error });
@@ -1169,6 +1189,8 @@ export const acceptRecommendation = async (projectId: string, id: string, as: Ac
   (isPxDemo() ? demoOk() : fromAa(await aaAccept(projectId, id, as)));
 export const rejectRecommendation = async (projectId: string, id: string, reason: string, category: RejectCategory) =>
   (isPxDemo() ? demoOk() : fromAa(await aaReject(projectId, id, reason, category)));
+export const handRecommendation = async (projectId: string, id: string, toProject: string) =>
+  (isPxDemo() ? demoOk() : fromAa(await aaHand(projectId, id, toProject)));
 export const snoozeRecommendation = async (projectId: string, id: string, days = 14, reason = "") =>
   (isPxDemo() ? demoOk() : fromAa(await aaSnooze(projectId, id, days, Date.now(), reason)));
 

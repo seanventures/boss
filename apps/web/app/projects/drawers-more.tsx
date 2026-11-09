@@ -18,7 +18,8 @@ import {
 import { GatedButton } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { IdentityError, idPost, refusalSentence } from "../../lib/identity/api";
-import { isPxDemo, workWhen } from "../../lib/project-experience";
+import { isPxDemo, pxHref, workWhen } from "../../lib/project-experience";
+import { PrdRecordView } from "../prd-record";
 import { notifyChanged } from "../changed";
 import {
   PX_PATHS, parseDeployments, parseWorkStory, startOnboarding, usePxRead, type Agent, type Deployments, type NeedsYou, type Node,
@@ -96,6 +97,7 @@ export function WorkStoryBody({ ctx, w, story }: { ctx: PxCtx; w: WorkItem; stor
           </div>
         </div>
       ) : null}
+      {story?.prd ? <PrdRecordView prd={story.prd} link={(h) => pxHref(h)} testid="px-drawer-work-prd" /> : null}
       {preview || parts.length ? (
         <div className="px-grid px-g2 px-wk-minis" data-testid="px-drawer-work-minis">
           <div className="px-card px-mini">
@@ -257,6 +259,8 @@ export function NeedsBody({ ctx, n }: { ctx: PxCtx; n: NeedsYou }) {
       {n.detail ? <p style={{ margin: 0, lineHeight: 1.5 }} className={n.question ? "px-muted" : undefined}
                      data-testid="px-drawer-needs-detail">{n.detail}</p> : null}
       {n.entries && n.entries.length > 1 ? <NeedsEntries ctx={ctx} n={n} /> : null}
+      {/* A MEETING'S PRD (BOSSAPP-929): read it here, with the meeting and its repo file. */}
+      {n.prd ? <PrdRecordView prd={n.prd} link={(h) => pxHref(h)} open testid="px-drawer-needs-prd" /> : null}
       {/* What the Shepherd found about the stuck or refused work this asks about (stuck_work). */}
       <DiagnosisFlow d={n.diagnosis} testId="px-drawer-needs-diagnosis" />
       <ReleaseList n={n} />

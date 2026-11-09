@@ -24,6 +24,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 
 from .meeting_brief import panel_title, split_brief
+from . import prd_record
 from .meeting_gist import room_gists
 from .meeting_service import (
     FACILITATOR_TITLE, load_role_map, meeting_title, meeting_type_of, normalize_meeting_type,
@@ -170,6 +171,11 @@ def meeting_room_items(connection, project_id: str, *, limit: int = 25, offset: 
             **prd_state_of(connection, run_status=r["status"], decision_id=r["decision_id"],
                            task_id=r["task_id"], pull_request_url=pr_url),
             "decision_id": r["decision_id"],
+            # WHERE THE PRD LIVES IN THE REPOSITORY (prd_record, BOSSAPP-929): docs/prd/<slug>.md,
+            # and once a build committed it, its branch and a link to the file.
+            "prd_repo": ((prd_record.for_decision_id(connection, r["decision_id"],
+                                                     with_meeting=False) or {}).get("repo")
+                         if r["decision_id"] else None),
             # A SECURITY REVIEW'S PANEL (security_review workflow) has no PRD to publish: its
             # document is the review's recommendations, drawn as the checklist that becomes the
             # decision (spec §4.6), so it does not say "publishing waits for your approval".

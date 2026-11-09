@@ -2819,6 +2819,10 @@ class DecisionCard(BaseModel):
     # needs_action, expired or resolved (decision_actions.attention). The inbox filters on it
     # and the Command Center counts with the same rule, so the two never disagree.
     attention: Optional[str] = None
+    # A meeting's PRD (services/prd_record.links): the document to read in place, the panel that
+    # argued it (agenda, positions, dissent) and the file in the repository. None for any other
+    # decision.
+    prd: Optional[dict[str, Any]] = None
 
 
 class DecisionInboxResponse(BaseModel):

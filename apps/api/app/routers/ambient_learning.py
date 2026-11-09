@@ -42,6 +42,10 @@ class RejectBody(Body):
     category: Optional[str] = Field(default=None, max_length=40)
 
 
+class HandToBody(Body):
+    to_project: str = Field(min_length=1, max_length=200)
+
+
 class SnoozeBody(Body):
     until: datetime
     reason: str = Field(default="", max_length=300)
@@ -116,6 +120,18 @@ def build_ambient_learning_router(*, engine, settings: Callable[[], Any],
             return _errors(lambda: roadmap.reject(
                 c, work_item_id, project_id=payload.project_id, actor=actor,
                 reason=payload.reason, category=payload.category))
+
+    @router.post("/v1/ambient/roadmap/{work_item_id}/hand-to")
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.of("work_item", path="work_item_id"))
+    def hand_to(work_item_id: str, payload: HandToBody) -> dict:
+        """Another app's item in a shared repository goes to the project that owns that app
+        (BOSSAPP-931). The person must be able to manage work in both projects."""
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "decision_resolve")
+            require_write_actor(c, payload.to_project, payload.actor, "decision_resolve")
+            return _errors(lambda: roadmap.hand_to(
+                c, work_item_id, project_id=payload.project_id, to_project=payload.to_project,
+                actor=actor))
 
     @router.post("/v1/ambient/roadmap/{work_item_id}/snooze")
     @permit(P.WORK_ITEM_MANAGE, scope=Scope.of("work_item", path="work_item_id"))

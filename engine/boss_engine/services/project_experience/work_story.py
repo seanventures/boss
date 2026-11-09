@@ -211,7 +211,24 @@ def story(connection: Connection, project_id: str, work_id: str) -> dict[str, An
             "cost_usd": item.get("cost_usd"), "cost_parts": _cost_parts(builds),
             "pr": {"number": number, "external_url": pr_url} if pr_url else None,
             "preview": (item.get("links") or {}).get("preview"),
+            # THE PRD THIS WORK WAS BUILT FROM (prd_record, BOSSAPP-929): readable in the drawer,
+            # with the meeting that argued it and its file in the repository.
+            "prd": _prd(connection, project_id, meeting, fctx),
             "stages": out_stages}
+
+
+def _prd(connection: Connection, project_id: str, meeting: dict, fctx: dict) -> Optional[dict]:
+    from .. import approved_prd_design, prd_record
+
+    decision_id = meeting.get("spec_decision_id")
+    if not decision_id and meeting.get("meeting_run_id"):
+        decision_id = connection.execute(text(
+            "SELECT decision_id FROM meeting_runs WHERE id = :m"),
+            {"m": str(meeting["meeting_run_id"])}).scalar()
+    if not decision_id:
+        decision_id = (approved_prd_design.find_approved_prd(connection, project_id, fctx or {})
+                       or {}).get("decision_id")
+    return prd_record.for_decision_id(connection, decision_id) if decision_id else None
 
 
 __all__ = ["NAMES", "story"]

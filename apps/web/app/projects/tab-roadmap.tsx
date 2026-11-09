@@ -16,9 +16,9 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { parseRec, parseRoadmap, recPath, roadmapPath, type Recommendation, type RejectCategory, type RoadmapView } from "../../lib/ambient";
+import { parseRec, parseRoadmap, recPath, roadmapPath, type ElsewhereGroup, type Recommendation, type RejectCategory, type RoadmapView } from "../../lib/ambient";
 import {
-  PX_PATHS, acceptRecommendation, movePlanItem, parsePlan, rejectRecommendation, runAccept, snoozeRecommendation, usePxRead,
+  PX_PATHS, acceptRecommendation, handRecommendation, movePlanItem, parsePlan, rejectRecommendation, runAccept, snoozeRecommendation, usePxRead,
   type Plan, type PlanCard, type PlanLane,
 } from "../../lib/project-experience";
 import { FX_ROADMAP } from "../../lib/project-experience-fixtures";
@@ -192,7 +192,7 @@ function Recommendations({ ctx, rm, status, onStatus, onChanged }: {
     <section aria-labelledby="px-rm-recs" className="px-stack" style={{ gap: 10 }} data-testid="px-rm-recs">
       <div className="px-row px-wrap">
         <Ico icon={Lightbulb} c="violet" /><h2 id="px-rm-recs" className="px-rm-h">Recommendations</h2>
-        <Tag tone="violet">{rm.counts.open ?? 0} new</Tag>
+        <Tag tone="violet">{Math.max(0, (rm.counts.open ?? 0) - (status === "open" ? (rm.elsewhere ?? []).reduce((t, g) => t + g.count, 0) : 0))} new</Tag>
         <span className="px-spacer" />
         <span className="px-filters" role="group" aria-label="Show recommendations" style={{ margin: 0 }}>
           {STATUS_WORDS.filter((f) => f.key !== "resolved_by_change" || (rm.counts[f.key] ?? 0) > 0).map((f) => (
@@ -209,7 +209,60 @@ function Recommendations({ ctx, rm, status, onStatus, onChanged }: {
                line={status === "open" ? `${captain} proposes work from incidents, hot code, test gaps and your PRDs.` : "No recommendation is in this state."}>
           <button type="button" className="px-btn" onClick={() => ctx.ask("What should we work on next?")}><ChatCircleDots size={13} /> Plan with {captain}</button></Empty></div>
       )}
+      {rm.elsewhere?.length ? <Elsewhere ctx={ctx} groups={rm.elsewhere} onChanged={onChanged} /> : null}
     </section>
+  );
+}
+
+/** OTHER APPS IN THIS REPOSITORY (BOSSAPP-931): their recommendations, collapsed, grouped by app,
+ *  each group with "Hand to <that project>" when a project owns the app. This project's own items
+ *  stay above; a repository with one app never shows this. */
+export function Elsewhere({ ctx, groups, onChanged }: { ctx: PxCtx; groups: ElsewhereGroup[]; onChanged: () => void }) {
+  const total = groups.reduce((t, g) => t + g.count, 0);
+  const [said, setSaid] = useState("");
+  const [gone, setGone] = useState<Record<string, boolean>>({});
+  const hand = async (g: ElsewhereGroup) => {
+    if (!g.handTo) return;
+    let moved = 0;
+    let error = "";
+    for (const r of g.items) {
+      const res = await handRecommendation(ctx.projectId, r.id, g.handTo.projectId);
+      if (res.ok) moved += 1; else error = res.error ?? "It didn't go through.";
+    }
+    setSaid(error || `${moved} handed to ${g.project?.name ?? "its project"}.`);
+    if (moved) { setGone((x) => ({ ...x, [g.app]: true })); onChanged(); }
+  };
+  return (
+    <details className="px-card px-rm-elsewhere" data-testid="px-rm-elsewhere">
+      <summary className="px-row" style={{ cursor: "pointer" }}>
+        <CaretRight size={12} aria-hidden /><b>Elsewhere in this repo · {total}</b>
+        <small className="px-faint px-hide-phone">other apps' ideas, kept apart from this project's</small>
+      </summary>
+      <div className="px-stack" style={{ gap: 10, marginTop: 8 }}>
+        {groups.filter((g) => !gone[g.app]).map((g) => (
+          <div key={g.app} className="px-stack" style={{ gap: 6 }} data-testid={`px-rm-elsewhere-${g.app}`}>
+            <div className="px-row px-wrap">
+              <span className="px-lbl">{g.project ? g.project.name : g.app}</span>
+              {g.project && g.app !== g.project.name ? <small className="px-faint px-mono">{g.app}</small> : null}
+              <Tag tone="idle">{g.count}</Tag>
+              <span className="px-spacer" />
+              {g.handTo ? (
+                <button type="button" className="px-chip" data-testid={`px-rm-hand-${g.app}`} onClick={() => void hand(g)}>
+                  <ArrowRight size={11} aria-hidden /> {g.handTo.label}</button>
+              ) : null}
+            </div>
+            {g.items.map((r) => (
+              <div key={r.id} className="px-rc" data-s="elsewhere" data-testid={`px-rec-elsewhere-${r.id}`}>
+                <span className="px-rank"><MapTrifold size={12} aria-hidden /></span>
+                <div style={{ minWidth: 0 }}><div className="px-rc-t">{r.title}</div>
+                  {r.scope?.path ? <small className="px-faint px-mono">{r.scope.path}</small> : null}</div>
+              </div>
+            ))}
+          </div>
+        ))}
+        <Said text={said} />
+      </div>
+    </details>
   );
 }
 
@@ -311,7 +364,8 @@ function RecCard({ ctx, r, i, state, onDone }: { ctx: PxCtx; r: Recommendation; 
     <div className="px-rc" data-s={rejecting ? "rejecting" : snoozing ? "snoozing" : undefined} data-testid={`px-rec-${r.id}`}>
       <span className="px-rank">{r.rank ?? i + 1}</span>
       <div style={{ minWidth: 0 }}>
-        <div className="px-rc-t">{r.title}</div>
+        <div className="px-rc-t">{r.title}{r.scope?.where === "repo" ? (
+          <> <span data-testid={`px-rec-whole-repo-${r.id}`}><Tag tone="idle" title="About the whole repository, not one app">{r.scope.label || "Whole repo"}</Tag></span></>) : null}</div>
         <Flow nodes={recFlow(r, ctx.overview.captain?.squad ?? [])} testid={`px-rec-flow-${r.id}`} />
         {rejecting ? (
           <form className="px-stack" style={{ gap: 8, marginTop: 8 }} onSubmit={(e) => { e.preventDefault(); reject(); }}>
