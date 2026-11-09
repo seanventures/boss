@@ -108,10 +108,10 @@ def test_the_preview_address_is_on_boss_public_origin_not_the_request_host(engin
     monkeypatch.setenv("BOSS_PREVIEW_PORT", "8443")
     body = _guide(client, world, operator, key, host="api:3001")
     assert body["boss_public_url"] == "https://boss.example.test"
-    assert body["preview"] == {"running": True, "url": "https://boss.example.test:8443/v1/previews/prv_pub/web",
+    assert body["preview"] == {"running": True, "url": "https://prv-pub.boss.example.test:8443/v1/previews/prv_pub/web",
                                "reach": "public"}
     g = body["guides"][0]
-    assert g["copy"]["redirect_uri"] == "https://boss.example.test:8443/v1/previews/prv_pub/web/auth/callback"
+    assert g["copy"]["redirect_uri"] == "https://prv-pub.boss.example.test:8443/v1/previews/prv_pub/web/auth/callback"
     assert "api:3001" not in json.dumps(body)
 
 

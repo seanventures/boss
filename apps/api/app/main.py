@@ -12111,7 +12111,7 @@ def _preview_served_elsewhere(request: Request, preview_id: str, path: str,
         return None
     from boss_engine.services.preview_service import preview_origin_for
     scheme = "https" if request.url.scheme == "https" else "http"
-    origin = preview_origin_for(request.headers.get("host"), scheme)
+    origin = preview_origin_for(request.headers.get("host"), scheme, preview_id)
     if not origin:
         return JSONResponse({"detail": "previews are served from the preview origin "
                              "(BOSS_PREVIEW_ORIGIN / BOSS_PREVIEW_PORT), not from the API"},

@@ -35,6 +35,12 @@ from boss_engine.templates.service import get_row, manifest_of, sync_builtins
 ROOT = Path(__file__).resolve().parents[3]
 NODE_STACK = ROOT / "templates" / "apps" / "login-oauth" / "stacks" / "node"
 PREVIEWS = "https://previews.example.test"
+
+
+def _page_origin(preview_id: str) -> str:
+    """The origin this one preview is served on. The listener host stays PREVIEWS."""
+    from boss_engine.services.preview_service import preview_host_label
+    return f"https://{preview_host_label(preview_id)}.previews.example.test"
 APP = "login demo"
 
 
@@ -122,9 +128,9 @@ def test_one_click_registers_the_client_and_binds_the_three_settings_for_preview
     assert out["connected"] is True and out["created"] is True and out["issuer"] == w.issuer
     client = _client(w)
     assert out["client"]["client_id"] == client["id"]
-    assert client["redirect_uris"] == [f"{PREVIEWS}/v1/previews/{pid}/web/auth/callback/boss",
+    assert client["redirect_uris"] == [f"{_page_origin(pid)}/v1/previews/{pid}/web/auth/callback/boss",
                                        "https://login.example.test/auth/callback/boss"]
-    assert client["post_logout_redirect_uris"] == [f"{PREVIEWS}/v1/previews/{pid}/web/",
+    assert client["post_logout_redirect_uris"] == [f"{_page_origin(pid)}/v1/previews/{pid}/web/",
                                                    "https://login.example.test/"]
     assert client["type"] == "confidential" and client["token_endpoint_auth_method"] == "client_secret_basic"
     assert not client["first_party"]                                     # the person consents
@@ -174,17 +180,17 @@ def test_preview_start_and_stop_keep_the_redirect_uris_in_step(w):
     second = f"prv_{uuid.uuid4().hex[:10]}"
     with begin() as db:            # what preview_service.launch hands the new preview
         env = app_sign_in.preview_environment(db, project_id=w.ids.project_a, run_id=w.run, preview_id=second)
-    assert env["APP_BASE_URL"] == f"{PREVIEWS}/v1/previews/{second}/web"
+    assert env["APP_BASE_URL"] == f"{_page_origin(second)}/v1/previews/{second}/web"
     assert env["OIDC_BOSS_CLIENT_ID"] == _client(w)["id"] and env["OIDC_BOSS_ISSUER"] == w.issuer
     assert len(env["SESSION_SECRET"]) >= 32                                 # the template's generated secret
-    assert f"{PREVIEWS}/v1/previews/{second}/web/auth/callback/boss" in _client(w)["redirect_uris"]
+    assert f"{_page_origin(second)}/v1/previews/{second}/web/auth/callback/boss" in _client(w)["redirect_uris"]
     with begin() as db:
         db.execute(text("UPDATE app_previews SET status = 'stopped' WHERE id = :i"), {"i": first})
         app_sign_in.preview_stopped(db, project_id=w.ids.project_a, run_id=w.run, preview_id=first)
     uris = _client(w)["redirect_uris"]
     assert not any(first in u for u in uris)
     # the second preview is not in app_previews yet (it is starting): the next sync keeps only what runs
-    assert uris == [f"{PREVIEWS}/v1/previews/{second}/web/auth/callback/boss"] or uris == [
+    assert uris == [f"{_page_origin(second)}/v1/previews/{second}/web/auth/callback/boss"] or uris == [
         f"{app_sign_in.local_base()}{app_sign_in.CALLBACK_PATH}"]
 
 
@@ -194,7 +200,7 @@ def test_with_no_address_yet_the_local_default_keeps_the_client_valid_until_a_pr
     pid = _preview(w)
     with begin() as db:
         app_sign_in.preview_environment(db, project_id=w.ids.project_a, run_id=w.run, preview_id=pid)
-    assert _client(w)["redirect_uris"] == [f"{PREVIEWS}/v1/previews/{pid}/web/auth/callback/boss"]
+    assert _client(w)["redirect_uris"] == [f"{_page_origin(pid)}/v1/previews/{pid}/web/auth/callback/boss"]
 
 
 def test_an_app_without_the_login_template_is_refused_in_words(w):
@@ -414,7 +420,9 @@ def test_the_login_template_node_app_signs_a_member_in_inside_a_preview(w, tmp_p
                             "VALUES (:i, :p, :r, 'acme/demo', 'main', :port, :u, 'running', 'process')"),
                        {"i": i, "p": w.ids.project_a, "r": run, "port": app_port, "u": f"http://127.0.0.1:{app_port}"})
     assert _connect(w).status_code == 200
-    base = f"{previews}/v1/previews/{pid}/web"
+    from boss_engine.services.preview_service import preview_host_label
+    own = f"http://{preview_host_label(pid)}.localhost:{preview_port}"
+    base = f"{own}/v1/previews/{pid}/web"
     assert f"{base}/auth/callback/boss" in _client(w)["redirect_uris"]
     with begin() as db:
         env = app_sign_in.preview_environment(db, project_id=w.ids.project_a, run_id=w.run, preview_id=pid)
@@ -432,7 +440,7 @@ def test_the_login_template_node_app_signs_a_member_in_inside_a_preview(w, tmp_p
                             env={"PATH": os.environ.get("PATH", ""), "PORT": str(app_port), **env})
     try:
         member = w.person("ada", role="viewer", project="a")
-        browser = TestClient(preview_only(main.app), base_url=previews, follow_redirects=False)
+        browser = TestClient(preview_only(main.app), base_url=own, follow_redirects=False)
         # A browser keeps a Secure cookie on http://localhost (preview_cookies.for_the_sandbox makes
         # the app's cookies SameSite=None; Secure there); httpx never sends one over http. This test
         # is the sign-in flow, so its "browser" is served as on plain http: the cookies as made.
@@ -466,16 +474,21 @@ def test_the_login_template_node_app_signs_a_member_in_inside_a_preview(w, tmp_p
         assert back.status_code == 303 and back.headers["location"].startswith(f"{base}/auth/callback/boss?code=")
 
         # 3. back through the preview: the app checks its state cookie, exchanges the code, signs in
-        done = browser.get(back.headers["location"].removeprefix(previews))
+        done = browser.get(back.headers["location"].removeprefix(own))
         assert done.status_code == 302, done.text
         assert done.headers["location"] == f"/v1/previews/{pid}/web/"
         assert browser.get(done.headers["location"]).text.startswith("Signed in as ada-")
         me = browser.get(f"/v1/previews/{pid}/web/api/me")
         assert me.status_code == 200 and me.json()["providers"] == ["boss"]
 
-        # the other preview (same process, same browser) is signed out: none of this one's cookies
-        assert browser.get(f"/v1/previews/{other}/web/").text == "Signed out"
-        assert browser.get(f"/v1/previews/{other}/web/api/me").status_code == 401
+        # the other preview is its own origin, so this browser's cookies are not its cookies
+        other_browser = TestClient(
+            preview_only(main.app),
+            base_url=f"http://{preview_host_label(other)}.localhost:{preview_port}",
+            follow_redirects=False,
+        )
+        assert other_browser.get(f"/v1/previews/{other}/web/").text == "Signed out"
+        assert other_browser.get(f"/v1/previews/{other}/web/api/me").status_code == 401
     finally:
         proc.terminate()
         try:

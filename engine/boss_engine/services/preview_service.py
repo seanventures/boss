@@ -349,25 +349,70 @@ def configured_preview_origin() -> str:
     return origin
 
 
-def preview_origin_for(host_header: Optional[str], scheme: str = "http") -> str:
+_PREVIEW_LABEL_ID = re.compile(r"[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*")
+
+
+def preview_host_label(preview_id: str) -> str:
+    """The DNS label for one preview. An underscore is not legal in a host, so it is written as a
+    hyphen (`prev_aaa` → `prev-aaa`). An id that already contains a hyphen has no label: it must
+    not collapse onto the underscored id."""
+    if not _PREVIEW_LABEL_ID.fullmatch(str(preview_id or "")):
+        return ""
+    label = str(preview_id).lower().replace("_", "-")
+    return label if 1 <= len(label) <= 63 else ""
+
+
+def _ipv4(host: str) -> bool:
+    parts = host.split(".")
+    return len(parts) == 4 and all(part.isdigit() and int(part) <= 255 for part in parts)
+
+
+def per_preview_origin(base: str, preview_id: str) -> str:
+    """`base` with this preview's label in front of the host, so two previews are two origins.
+    An IP address cannot take a label; the parent becomes localhost, which browsers resolve."""
+    label = preview_host_label(preview_id)
+    parts = urllib.parse.urlsplit(str(base or "").strip())
+    if not label or parts.scheme not in ("http", "https") or not parts.hostname:
+        return ""
+    host = parts.hostname.lower()
+    try:
+        port = parts.port
+    except ValueError:
+        return ""
+    parent = "localhost" if ":" in host or _ipv4(host) else host
+    netloc = f"{label}.{parent}" + (f":{port}" if port else "")
+    origin = f"{parts.scheme}://{netloc}"
+    return "" if is_boss_origin(origin) else origin
+
+
+def preview_origin_for(host_header: Optional[str], scheme: str = "http",
+                       preview_id: Optional[str] = None) -> str:
     """Where a browser that reached BOSS at `host_header` opens previews: BOSS_PREVIEW_ORIGIN, or
     the same host on BOSS_PREVIEW_PORT. "" when neither can be said (no port, no usable host) —
     and "" when the answer would be BOSS's own origin (BOSS_PREVIEW_PORT set to the console's
     port, BOSS_PREVIEW_ORIGIN naming the console): a preview page may keep its own cookies
-    (allow-same-origin) only because it never shares an origin with BOSS."""
+    (allow-same-origin) only because it never shares an origin with BOSS.
+
+    With a `preview_id`, the origin is that preview's own host (`<label>.localhost:3001`), never
+    the one host every preview used to share (BOSSAPP-947)."""
     configured = configured_preview_origin()
     if configured:
-        return "" if is_boss_origin(configured, host_header, scheme) else configured
-    port = preview_port()
-    if port is None:
+        origin = "" if is_boss_origin(configured, host_header, scheme) else configured
+    else:
+        port = preview_port()
+        if port is None:
+            return ""
+        # A Host header is `name[:port]` or `[v6][:port]`, nothing else: anything more is refused.
+        found = re.fullmatch(r"(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.\-]+)(?::\d{1,5})?", (host_header or "").strip())
+        if not found:
+            return ""
+        hostname = found.group(1)
+        origin = f"{'https' if scheme == 'https' else 'http'}://{hostname}:{port}"
+        if is_boss_origin(origin, host_header, scheme):
+            return ""
+    if not origin:
         return ""
-    # A Host header is `name[:port]` or `[v6][:port]`, nothing else: anything more is refused.
-    found = re.fullmatch(r"(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.\-]+)(?::\d{1,5})?", (host_header or "").strip())
-    if not found:
-        return ""
-    hostname = found.group(1)
-    origin = f"{'https' if scheme == 'https' else 'http'}://{hostname}:{port}"
-    return "" if is_boss_origin(origin, host_header, scheme) else origin
+    return per_preview_origin(origin, preview_id) if preview_id else origin
 
 
 def public_preview_url(preview_id: str, host_header: Optional[str] = None, scheme: str = "http",
@@ -379,7 +424,7 @@ def public_preview_url(preview_id: str, host_header: Optional[str] = None, schem
     from urllib.parse import quote
 
     path = f"/v1/previews/{quote(str(preview_id), safe='')}/web"
-    origin = preview_origin_for(host_header, scheme)
+    origin = preview_origin_for(host_header, scheme, preview_id)
     if origin:
         return origin + path
     base = _preview_public_base(None, settings=settings)
@@ -403,7 +448,9 @@ def operator_preview_open_url(
     # The preview origin first: it is a separate origin even on loopback (another port).
     preview_origin = configured_preview_origin() if public_base is None else ""
     if preview_origin:
-        return f"{preview_origin}{path}"
+        # The configured host is the listener. The page itself is this preview's host on it.
+        labeled = per_preview_origin(preview_origin, preview_id)
+        return f"{labeled}{path}" if labeled else path
     base = _preview_public_base(public_base, settings=settings)
     if base:
         return f"{base}{path}"

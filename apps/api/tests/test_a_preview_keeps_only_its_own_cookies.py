@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from apps.api.app.preview_origin import preview_only
+from boss_engine.services.preview_service import preview_host_label
 from boss_engine.services.preview_cookies import (
     cookie_path, cookie_tag, inbound_cookie_header, is_relayable_set_cookie, outbound_set_cookie,
 )
@@ -117,19 +118,22 @@ def test_only_the_previews_own_cookies_come_in_untagged():
 
 # ---- the gateway, end to end ----------------------------------------------------------------------
 
-def test_on_the_preview_origin_the_app_sees_only_its_own_cookies(two_previews):
+def _edge(preview_id: str) -> TestClient:
     from apps.api.app.main import app
 
+    return TestClient(preview_only(app), base_url=f"http://{preview_host_label(preview_id)}.localhost")
+
+
+def test_on_the_preview_origin_the_app_sees_only_its_own_cookies(two_previews):
     a, b = two_previews
-    edge = TestClient(preview_only(app))
     jar = _jar((a, "sid", "a-session"), (b, "sid", "b-session"))
-    got = edge.get(f"/v1/previews/{a}/web/api/me", headers={"cookie": jar})
+    got = _edge(a).get(f"/v1/previews/{a}/web/api/me", headers={"cookie": jar})
     assert got.status_code == 200, got.text
     assert got.json()["cookie"] == "sid=a-session"
-    got = edge.get(f"/v1/previews/{b}/web/api/me", headers={"cookie": jar})
+    got = _edge(b).get(f"/v1/previews/{b}/web/api/me", headers={"cookie": jar})
     assert got.json()["cookie"] == "sid=b-session"
     # BOSS's cookies only: the app gets no Cookie header at all
-    got = edge.get(f"/v1/previews/{a}/web/", headers={"cookie": _jar()})
+    got = _edge(a).get(f"/v1/previews/{a}/web/", headers={"cookie": _jar()})
     assert got.json()["cookie"] is None
     for seen in _App.seen:
         for name, value in BOSS_COOKIES.items():
@@ -137,8 +141,6 @@ def test_on_the_preview_origin_the_app_sees_only_its_own_cookies(two_previews):
 
 
 def test_a_preview_cannot_set_a_boss_cookie_or_another_previews(two_previews):
-    from apps.api.app.main import app
-
     a, b = two_previews
     _App.answer_cookies = [
         "sid=s1; Path=/; HttpOnly; SameSite=Lax",                 # its own: relayed, scoped
@@ -148,7 +150,7 @@ def test_a_preview_cannot_set_a_boss_cookie_or_another_previews(two_previews):
         f"{cookie_tag(b)}sid=planted; Path=/",                    # another preview's tag: stays A's
         "wide=1; Domain=localhost; Path=/api",                    # Domain removed, path scoped
     ]
-    answer = TestClient(preview_only(app)).get(f"/v1/previews/{a}/web/")
+    answer = _edge(a).get(f"/v1/previews/{a}/web/")
     set_cookies = answer.headers.get_list("set-cookie")
     assert set_cookies, "the app's own cookie reaches the browser"
     for c in set_cookies:
