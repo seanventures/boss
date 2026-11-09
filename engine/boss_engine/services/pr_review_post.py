@@ -141,6 +141,41 @@ def _inline(comments: list[dict]) -> list[dict]:
     return out
 
 
+def change_paths(github: Any, number: int) -> Optional[set[str]]:
+    """The paths the pull request (or local change set) changes; None when it cannot be read."""
+    files = getattr(github, "pull_request_files", None)
+    if not callable(files):
+        return None
+    try:
+        return {str(f.get("path") or f.get("filename") or "") for f in files(int(number)) or []}
+    except Exception:  # noqa: BLE001 — unread: the comments are posted as they were
+        return None
+
+
+def anchor_to_change(comments: list[dict], changed: Optional[set[str]]) -> list[dict]:
+    """REVIEW NOTES POINT AT THE CHANGE SET'S OWN PATHS (BOSSAPP-946). A reviewer reading the
+    app from its own folder writes `server/app.js` where the change holds
+    `helpdesk/server/app.js`: the local-first HelpDesk's notes pointed at paths that were not in
+    its change set. Each line comment is anchored to the changed file it names: the same path,
+    else the ONE changed file that ends with it. A path that names no changed file (or several)
+    is not anchored: it is said in the round's body (`off_change`), never on a file the change
+    does not have."""
+    if changed is None:
+        return comments
+    out = []
+    for c in comments:
+        path = str(c.get("path") or "").strip().lstrip("./") if c.get("path") else ""
+        if not path or not c.get("line") or path in changed:
+            out.append(c)
+            continue
+        ends = [p for p in changed if p.endswith("/" + path)]
+        if len(ends) == 1:
+            out.append({**c, "path": ends[0], "said_path": c.get("path")})
+        else:
+            out.append({**c, "off_change": True})
+    return out
+
+
 def _rounds_of(rounds: list[dict], comments: list[dict]) -> list[dict]:
     """Every round: those recorded, plus any a comment names that was not (older runs)."""
     by = {int(r.get("round") or 0): r for r in rounds if isinstance(r, dict)}
@@ -157,7 +192,8 @@ def post(github: Any, number: int, *, comments: list[dict], rounds: list[dict],
     {posted, reviews_created, reviews_updated, inline, replies, state, [reason], [url]}."""
     state = {"rounds": dict((state or {}).get("rounds") or {}),
              "replies": dict((state or {}).get("replies") or {})}
-    comments = [c for c in comments if isinstance(c, dict)]
+    comments = anchor_to_change([c for c in comments if isinstance(c, dict)],
+                                change_paths(github, number))
     ordered = _rounds_of(rounds, comments)
     if not ordered:
         return {"posted": False, "reason": "no review round to post", "state": state}
@@ -179,9 +215,11 @@ def post(github: Any, number: int, *, comments: list[dict], rounds: list[dict],
                 github.update_review_body(number, int(rec["review_id"]), body)
                 updated += 1
                 continue
-            anchored = [c for c in mine if c.get("path") and c.get("line")]
-            body = round_body(entry, mine, ordinal=i + 1, total=len(ordered),
-                              deferred=deferred, last=last)
+            anchored = [c for c in mine if c.get("path") and c.get("line")
+                        and not c.get("off_change")]
+            body = round_body(entry, mine,
+                              ordinal=i + 1, total=len(ordered), deferred=deferred, last=last,
+                              not_inline=[c for c in mine if c.get("off_change")])
             try:
                 result = github.create_review(number, body=body, event="COMMENT",
                                               comments=_inline(anchored) or None)
@@ -190,8 +228,10 @@ def post(github: Any, number: int, *, comments: list[dict], rounds: list[dict],
                 if permission_words(exc, repository) or not anchored:
                     raise
                 # 422: a line outside the diff. Post the round anyway, every finding in the body.
-                body = round_body(entry, mine, ordinal=i + 1, total=len(ordered),
-                                  deferred=deferred, last=last, not_inline=anchored)
+                off = [c for c in mine if c.get("off_change")]
+                body = round_body(entry, mine,
+                                  ordinal=i + 1, total=len(ordered), deferred=deferred,
+                                  last=last, not_inline=anchored + off)
                 result = github.create_review(number, body=body, event="COMMENT", comments=None)
                 placed = []
             created += 1

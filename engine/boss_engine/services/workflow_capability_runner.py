@@ -3334,11 +3334,32 @@ def _existing_code_note(run_input: dict) -> str:
     repo = str(run_input.get("repository") or "").strip()
     if not repo:
         return ""
-    return (f"The work happens in the repository {repo}. If it already holds an app, this is a "
-            "change to that EXISTING codebase: read its code first, then write and build this "
-            "feature only, in its folders, its stack and its conventions. Do not re-scaffold the "
-            "app, do not start a parallel app beside it, and do not redesign what exists. Its "
-            "existing behaviour and its existing tests must keep passing.")
+    return (f"The work happens in {repository_words(repo)}. If it already holds an app, this "
+            "is a change to that EXISTING codebase: read its code first, then write and build "
+            "this feature only, in its folders, its stack and its conventions. Do not "
+            "re-scaffold the app, do not start a parallel app beside it, and do not redesign "
+            "what exists. Its existing behaviour and its existing tests must keep passing. "
+            + ROOT_IS_THE_WORKING_DIRECTORY)
+
+
+#: WHERE THE APP GOES (BOSSAPP-946): the local-first HelpDesk was told "the repository
+#: local_helpdesk-laptop/helpdesk-laptop", read the name as a path, and wrote the whole app into
+#: local_helpdesk-laptop/helpdesk-laptop/ inside the repository.
+ROOT_IS_THE_WORKING_DIRECTORY = (
+    "The repository's root is your working directory. A new app goes at that root unless the "
+    "brief names its folder; never create a folder named after the repository or its owner.")
+
+
+def repository_words(full_name: str) -> str:
+    """A repository named for an agent so it never reads as a folder: GitHub's `owner/name`,
+    or, for a repository BOSS keeps on this machine (`local_<project>/<name>`), its own name."""
+    from .local_repo import is_local
+
+    name = str(full_name or "").strip()
+    if is_local(name):
+        return (f"this project's repository, '{name.split('/', 1)[-1]}' (kept on this machine "
+                "by BOSS)")
+    return f"the repository {name}"
 
 
 #: Tool-less capabilities that start work on the build's branch (extend_code_task): they take

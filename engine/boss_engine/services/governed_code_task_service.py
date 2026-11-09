@@ -91,7 +91,7 @@ from .pipeline_profiles import (
     sensitive_markers_in,
 )
 from .sandbox_provider import LocalSubprocessProvider, MicroVMProvider
-from .software_factory import SoftwareFactoryService
+from .software_factory import SoftwareFactoryService, commit_change
 from .workspace_perms import write_text as _ws_write
 
 _DEFAULT_TEST_CMD = "python3 -m unittest discover -v"
@@ -4970,8 +4970,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if _push_held("stage_commit"):
             return
         sf.github.ensure_branch(work_branch, base_branch)
+        # One commit per stage where the host can (software_factory.commit_change).
+        commit_change(sf.github, work_branch, [(fc.path, fc.content) for fc in files], message)
         for fc in files:
-            sf.github.upsert_file(work_branch, fc.path, fc.content, message)
             accumulated[fc.path] = fc.content
         guest_base = work_branch
         _record_work_branch("stage_commit")
@@ -5455,9 +5456,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return 0
         try:
             sf.github.ensure_branch(work_branch, base_branch)
+            # One commit per stage where the host can (software_factory.commit_change).
+            commit_change(sf.github, work_branch, [(fc.path, fc.content) for fc in files],
+                          f"governed: checkpoint after {label} — {title[:50]}")
             for fc in files:
-                sf.github.upsert_file(work_branch, fc.path, fc.content,
-                                      f"governed: checkpoint after {label} — {title[:50]}")
                 accumulated[fc.path] = fc.content
             with _transaction(engine) as c:
                 c.execute(sql(

@@ -61,6 +61,23 @@ def _accepts_kwarg(func: Any, name: str) -> bool:
     return any(p.name == name or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
 
 
+def commit_change(github: Any, branch: str, files: list[tuple[str, Any]], message: str,
+                  per_file: Optional[Any] = None) -> list[str]:
+    """ONE COMMIT PER STAGE where the repo host can (BOSSAPP-946). A host with a batch commit
+    (LocalGitAdapter.commit_files) writes every file of a stage as ONE commit with the stage's
+    message; the local-first HelpDesk's change set had 52 commits, one per file, each named
+    "BOSS proposal update: <file>". A host without one (GitHub's contents API) commits per file,
+    as before, with `per_file(path)` as each message when given. Returns the commit shas."""
+    files = [(str(p), c) for p, c in files]
+    if not files:
+        return []
+    batch = getattr(github, "commit_files", None)
+    if callable(batch):
+        return [batch(branch, dict(files), message)]
+    return [github.upsert_file(branch, path, content, per_file(path) if per_file else message)
+            for path, content in files]
+
+
 def review_packet_file_summaries(files: list[FileChange]) -> list[dict[str, Any]]:
     """Path + size + short preview. Never the full diff."""
     summaries: list[dict[str, Any]] = []
@@ -2022,15 +2039,10 @@ class SoftwareFactoryService:
                     connection, project_id, "software_factory.monitoring_kept",
                     "coding_worker", "receipt", pr_receipt["id"],
                     {"kept": monitoring_kept, "branch": branch_name})
-            commit_shas = [
-                self.github.upsert_file(
-                    branch_name,
-                    file.path,
-                    file.content,
-                    f"BOSS proposal update: {file.path}",
-                )
-                for file in files
-            ]
+            commit_shas = commit_change(
+                self.github, branch_name, [(file.path, file.content) for file in files],
+                f"BOSS: {title}"[:200],
+                per_file=lambda path: f"BOSS proposal update: {path}")
             pr_body = "\n\n".join(
                 [
                     summary,
