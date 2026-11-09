@@ -821,8 +821,18 @@ def use_for_staging(connection: Connection, project_id: str, *, host_id: Optiona
     """Onboarding's "Use for staging", done in place: the staging stack target on the offered
     host (the project's own, or a verified one its organisation shares), then the checklist row
     turns green and the run moves on. Raises StackDeployError / HostNotUsable in words."""
-    from ..stack_deploy import create_stack_target
+    from ..deploy_truth import project_targets
+    from ..stack_deploy import StackDeployError, create_stack_target
 
+    # ONE STAGING TARGET (BOSSAPP-930): a project that already has a staging target — made by
+    # an earlier press, or by its app's first deploy — never gets a second, repository-named
+    # one beside it ("boss-sandbox Staging :8006" next to the app's own :8007).
+    have = [t for t in project_targets(connection, project_id)
+            if str(t.get("environment") or "").lower() == "staging"]
+    if have:
+        raise StackDeployError(
+            f"This project already deploys to staging: {have[0]['app_name']!r} "
+            f"({have[0]['id']}).", "Use that target; Deployments shows it.", status_code=409)
     plan = staging_proposal(connection, project_id, host_id)
     target = create_stack_target(
         connection, project_id=project_id, host_id=plan["host_id"], app_name=plan["app_name"],

@@ -310,6 +310,7 @@ def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any
                      "p95_ms": staging["p95_ms"], "p95_source": staging.get("p95_source"),
                      "series": staging["series"]["latency"],
                      "label": staging["label"], "url": staging.get("url"),
+                     "deploy": staging.get("deploy"),
                      "href": project_href(project_id, tab="health")}
                     if staging else {"health": "unknown", "uptime_pct": None, "p95_ms": None,
                                      "series": [], "label": "Staging", "url": None,
@@ -486,6 +487,17 @@ CARDS = ("journey", "tile_work", "tile_running", "tile_staging", "tile_cost", "n
          "recent_work", "week", "captain", "next", "try_it")
 
 
+def _chip(told: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    """The header's deploy chip from deploy_truth.project_deploy: words, state and where."""
+    if not told:
+        return None
+    prog = told.get("progress") or {}
+    return {"state": told["state"], "word": told["word"], "target_id": told["target_id"],
+            "app": told.get("app"), "environment": told.get("environment"),
+            "reason": told.get("reason"), "index": prog.get("index"), "total": prog.get("total"),
+            "deployment_id": (told.get("attempt") or {}).get("id")}
+
+
 def view(connection: Connection, project_id: str, *, now: Optional[datetime] = None
          ) -> dict[str, Any]:
     """The Overview's one read — but EACH CARD LOADS OR FAILS ON ITS OWN (screen 04 states): a
@@ -525,6 +537,11 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                    [])
     the_repos = part(("journey",), lambda: repos(connection, project_id), [])
     url = live_url(envs) if envs else None
+    # THE DEPLOY IN MOTION (or the one that failed), for the header's chip: "Deploying · 2/7"
+    # (deploy_truth.project_deploy, the same truth as the Deployments card).
+    from ..deploy_truth import project_deploy
+
+    moving = part(("journey",), lambda: project_deploy(connection, project_id, now=now), None)
     logins = part(("try_it",), lambda: demo.listing(connection, project_id),
                   {"environments": [], "source": "none"})
     try_env = next((e for e in logins["environments"] if str(e["key"]).lower() in
@@ -541,6 +558,7 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
         "project": {"id": project["id"], "name": project["name"], "initials":
                     initials(project["name"]), "description": project["description"],
                     "stage": stage, "repos": the_repos, "live_url": url,
+                    "deploy": _chip(moving),
                     "health": worst(envs)[0], "health_reason": worst(envs)[1],
                     "status_label": STATUS_LABELS[stage],
                     "archived": project["archived_at"] is not None},

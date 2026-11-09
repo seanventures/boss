@@ -223,7 +223,9 @@ export type DemoLogin = { user: string; label: string; reveal: { href: string; r
 export type Overview = {
   project: { id: string; name: string; initials: string; stage: Stage; repos: Repo[]; live_url: string; status_label: string; health: Health;
     /** Why it is not healthy, in words (health.state_of): "SLO breached: 98.13% up, target 99.5%". */
-    health_reason?: string };
+    health_reason?: string;
+    /** The deploy moving now, or the last one that failed ("Deploying · 2/7"). */
+    deploy?: DeployChip | null };
   journey: Node[]; needs_you: NeedsYou[];
   /** Cards that could not load this time ({card: words}): each shows "Couldn't load · Retry". */
   errors?: Record<string, string>;
@@ -296,6 +298,47 @@ export type Environment = {
   hours: { at: string; n: number; ok: number; state: "healthy" | "degraded" | "down" | "none" }[];
   last_deploy: { commit: string; at: string; by: string; label: string; href: string; pr: number | null; pr_url: string } | null;
   demo_logins: DemoLogin[]; policy: "auto" | "person"; href: string;
+  /** Where the app will answer, as words (never a link): `url` is set only once a deploy there
+   *  succeeded (engine deploy_truth, BOSSAPP-930). */
+  address?: string;
+  /** The deploy's truth: its state in words, why the last one failed, and the running deploy's
+   *  seven phases (engine deploy_truth.truth). */
+  deploy?: TargetDeploy | null;
+};
+export type DeployPhaseRow = { key: string; label: string; status: "done" | "running" | "failed" | "pending" | "skipped";
+  started_at: string; ended_at: string; elapsed_s: number | null; log: string };
+export type DeployProgress = { phases: DeployPhaseRow[]; index: number; total: number; current: string; failed_phase: string };
+export type TargetDeployState = "not_deployed" | "setting_up" | "deploying" | "waiting" | "live" | "failed";
+export type TargetDeploy = {
+  state: TargetDeployState; word: string; live: boolean; reason: string;
+  attempt: { id: string; kind: string; status: string; commit: string; at: string } | null;
+  progress: DeployProgress | null;
+};
+const DEPLOY_STATES = ["not_deployed", "setting_up", "deploying", "waiting", "live", "failed"] as const;
+const PHASE_STATES = ["done", "running", "failed", "pending", "skipped"] as const;
+export const parseDeployProgress = (v: unknown): DeployProgress | null => {
+  const x = o(v);
+  if (!Array.isArray(x.phases)) return null;
+  return { phases: a(x.phases).map((p) => { const y = o(p); return { key: s(y.key), label: s(y.label, s(y.key)), status: oneOf(y.status, PHASE_STATES, "pending"),
+             started_at: s(y.started_at), ended_at: s(y.ended_at), elapsed_s: nn(y.elapsed_s), log: s(y.log) }; }),
+           index: n(x.index), total: n(x.total), current: s(x.current), failed_phase: s(x.failed_phase) };
+};
+export const parseTargetDeploy = (v: unknown): TargetDeploy | null => {
+  const x = o(v);
+  if (!x.state) return null;
+  const at = o(x.attempt);
+  return { state: oneOf(x.state, DEPLOY_STATES, "not_deployed"), word: s(x.word), live: x.live === true, reason: s(x.reason),
+           attempt: s(at.id) ? { id: s(at.id), kind: s(at.kind), status: s(at.status), commit: s(at.commit), at: s(at.at) } : null,
+           progress: parseDeployProgress(x.progress) };
+};
+/** The header's deploy chip (engine overview._chip): the deploy moving now, or the one that failed. */
+export type DeployChip = { state: TargetDeployState; word: string; target_id: string; app: string; environment: string; reason: string;
+  index: number | null; total: number | null; deployment_id: string };
+export const parseDeployChip = (v: unknown): DeployChip | null => {
+  const x = o(v);
+  if (!x.state) return null;
+  return { state: oneOf(x.state, DEPLOY_STATES, "deploying"), word: s(x.word), target_id: s(x.target_id), app: s(x.app),
+           environment: s(x.environment), reason: s(x.reason), index: nn(x.index), total: nn(x.total), deployment_id: s(x.deployment_id) };
 };
 export type Deployments = {
   environments: Environment[];
@@ -586,7 +629,8 @@ export const parseOverview = (v: unknown): Overview => {
   return {
     project: { id: s(p.id), name, initials: s(p.initials) || initialsOf(name), stage: oneOf(p.stage, STAGES, "onboarding"),
                repos: a(p.repos).map(parseRepo), live_url: s(p.live_url), status_label: s(p.status_label),
-               health: oneOf(p.health ?? st.health, HEALTHS, "unknown"), health_reason: s(p.health_reason) },
+               health: oneOf(p.health ?? st.health, HEALTHS, "unknown"), health_reason: s(p.health_reason),
+               deploy: parseDeployChip(p.deploy) },
     journey: a(x.journey).map(parseNode),
     roadmap_count: nn(x.roadmap_count),
     still_answerable: parseStillAnswerable(x.still_answerable),
@@ -701,7 +745,8 @@ export const parseDeployments = (v: unknown): Deployments => {
                  state: oneOf(z.state, ["healthy", "degraded", "down", "none"] as const, "none") }; }),
                last_deploy: Object.keys(ld).length ? { commit: s(ld.commit), at: s(ld.at), by: s(ld.by), pr: nn(ld.pr), pr_url: s(ld.pr_url),
                                                        label: s(ld.label) || (nn(ld.pr) ? `PR #${nn(ld.pr)}` : s(ld.commit)), href: s(ld.href) } : null,
-               demo_logins: a(y.demo_logins).map(parseLogin), policy: y.policy === "person" ? "person" : "auto", href: s(y.href) };
+               demo_logins: a(y.demo_logins).map(parseLogin), policy: y.policy === "person" ? "person" : "auto", href: s(y.href),
+               address: s(y.address), deploy: parseTargetDeploy(y.deploy) };
     }),
     production: { state: oneOf(pr.state, ["none", "needs_host", "ready"] as const, "none"),
                   action: act.label || act.href ? { label: s(act.label, "Set up"), href: s(act.href) } : null },
