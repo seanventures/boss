@@ -17,7 +17,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .common import web_url, as_json, href, iso, project_href, words
+from .common import as_json, href, iso, project_href, words
 
 #: The availability objective an environment is held to when nobody set one.
 DEFAULT_SLO = 99.5
@@ -175,9 +175,16 @@ def environments(connection: Connection, project_id: str, *,
     from ..deployment_health import health_view
     from ..obs_view import probe_window
 
+    from ..deploy_truth import project_targets, truth
+
     now = now or datetime.now(timezone.utc)
     view = health_view(connection, project_id, now=now, points=POINTS)
-    targets = view.get("targets") or []
+    # ONE SOURCE for the project's targets and whether each is live (deploy_truth): a
+    # superseded staging slot is not an environment, and an address is a live URL only after a
+    # deploy there succeeded — the header's chip reads `url` from here.
+    rows = project_targets(connection, project_id)
+    told = truth(connection, rows, now=now)
+    targets = [t for t in view.get("targets") or [] if t["target_id"] in told]
     ids = [t["target_id"] for t in targets]
     metrics = _metrics(connection, ids, now - timedelta(hours=24))
     # ONE SOURCE for uptime and p95 (15-03 / PX-09): BOSS's probes over the last 24 h, the same
@@ -203,7 +210,9 @@ def environments(connection: Connection, project_id: str, *,
         state, why = state_of(t["status"], uptime, fires.get(t["target_id"], []))
         out.append({
             "key": str(t["environment"]), "label": label, "app": t["app_name"],
-            "target_id": t["target_id"], "url": web_url(t.get("url")),
+            "target_id": t["target_id"], "url": told[t["target_id"]]["live_url"],
+            "address": told[t["target_id"]]["address"],
+            "deploy": {k: told[t["target_id"]][k] for k in ("state", "word", "live", "reason")},
             "health": state, "health_reason": why, "status": t["status"],
             "uptime_pct": uptime, "error_rate": m.get("error_rate"),
             "p95_ms": w.get("p95_ms"),

@@ -515,6 +515,7 @@ class DeployDetail(TypedDict, total=False):
     log_tail: Optional[str]            # ≤ 64 KB, last lines
     health_check_results: list[dict[str, Any]]
     promotion: Optional[dict[str, Any]]  # {phases:[{key,label,state}], id}
+    progress: Optional[dict[str, Any]]   # stack: deploy_truth.progress (seven phases)
     open_url: Optional[str]
     changeset_id: Optional[str]
     live: bool                         # poll every 3 s while true
@@ -1917,6 +1918,13 @@ def _app_url(value: Any) -> Optional[str]:
     return text_ if "://" in text_ else f"http://{text_}/"
 
 
+def _stack_progress(steps: Any, status: Any, log_tail: Any) -> dict[str, Any]:
+    from .deploy_truth import progress
+
+    return progress(steps if isinstance(steps, list) else [], status,
+                    log_tail=str(log_tail or ""))
+
+
 def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> DeployDetail:
     raw, row = _one_row(connection, settings, project_id, ref)
     kind, ident = _parse_ref(ref)
@@ -1948,6 +1956,9 @@ def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> 
             "plan": plan,
             "preflight": _preflight_findings(full["preflight"]),
             "log_tail": _tail(full["log_tail"]),
+            # THE SEVEN PHASES with elapsed time and each phase's own log tail
+            # (deploy_truth.progress): what the project's Deployments card shows live.
+            "progress": _stack_progress(steps_raw, raw["status"], full["log_tail"]),
             "health_check_results": [],
             "promotion": None,
             "open_url": full["open_url"],

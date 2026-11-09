@@ -20,12 +20,16 @@ import { deployTarget } from "../infra/infra-actions";
 import { EngineNotReady, Face, Flow, HEALTH_TONE, HEALTH_WORD, Ico, PxLink, ReadGate, Ring, Said, Tag } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
 import { ConfirmSheet } from "./confirm-sheet";
+import { DeployLive } from "./deploy-live";
 import { ItemAction } from "./staging-target-sheet";
 import { whenLocal } from "../../lib/local-time";
 import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import type { PxCtx } from "./project-page";
 
 const BEACON = { name: "Beacon", role_key: "sre" };
+/** A target's deploy state as a tag tone (engine deploy_truth): only a success is green. */
+const DEPLOY_TONE: Record<string, "green" | "amber" | "red" | "teal" | "idle"> = {
+  live: "green", deploying: "teal", waiting: "amber", setting_up: "teal", failed: "red", not_deployed: "idle" };
 /** A history row's state in a word, when the engine sent none (X-77: badge + colour + word). */
 const HIST_WORD: Record<string, string> = { failed: "Failed", waiting: "Needs you", now: "Deploying", skipped: "Not approved", todo: "Queued" };
 /** Where every p95 on the project pages comes from (one source, obs_view.probe_window), in words. */
@@ -168,7 +172,17 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
     <section className="px-card px-env" aria-labelledby={`px-env-${e.key}`} data-testid={`px-env-${e.key}`}>
       <div className="px-card-h"><Ico icon={Flask} c="green" />
         <h2 id={`px-env-${e.key}`}><button type="button" className="px-linkish" onClick={() => ctx.open("env", e.target_id || e.key)} data-testid={`px-env-open-${e.key}`}>{e.label}</button></h2>
-        <Tag tone={HEALTH_TONE[e.health]} title={e.health_reason || undefined}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
+        {/* HEALTH ONLY FOR WHAT IS LIVE (BOSSAPP-930): before a deploy succeeded the card says
+            where the deploy is ("Setting up · 3/7", "Last deploy failed", "Not deployed yet"),
+            never "Unknown". */}
+        {e.deploy && e.deploy.state !== "live" ? (
+          <Tag tone={DEPLOY_TONE[e.deploy.state]} title={e.deploy.reason || undefined}>
+            <span className="px-dot" data-s={e.deploy.state === "failed" ? "down" : "unknown"} data-round aria-hidden />
+            <span data-testid={`px-env-state-${e.key}`}>{e.deploy.word}</span></Tag>
+        ) : null}
+        {!e.deploy || e.deploy.live ? (
+          <Tag tone={HEALTH_TONE[e.health]} title={e.health_reason || undefined}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
+        ) : null}
         <span className="px-spacer" />
         {e.target_id && e.last_deploy ? (
           <GatedButton permission="deployment:create" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-env-redeploy-${e.key}`}
@@ -177,7 +191,11 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
         ) : null}
       </div>
       {url ? <a className="px-env-url" href={url} target="_blank" rel="noreferrer noopener" data-testid={`px-env-url-${e.key}`}>
-        <Globe size={12} aria-hidden />{url}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a> : null}
+        <Globe size={12} aria-hidden />{url}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a>
+        : e.address ? <span className="px-env-address" data-testid={`px-env-address-${e.key}`}
+                            title="Not live yet: this address answers once a deploy here succeeds">
+          <Globe size={12} aria-hidden />{e.deploy?.state === "failed" ? "Not live" : e.deploy?.state === "not_deployed" || !e.deploy ? "Not deployed yet" : "Setting up"} · will answer at {e.address.replace(/^https?:\/\//, "")}</span> : null}
+      <DeployLive e={e} projectId={ctx.projectId} actor={ctx.actor} onFix={(q) => ctx.ask(q)} onChanged={() => ctx.refreshWork()} />
       <div className="px-env-m">
         {e.uptime_pct !== null ? <Ring pct={e.uptime_pct} tone={e.health === "healthy" ? "green" : e.health === "down" ? "red" : "amber"} size="l" label={`Uptime ${e.uptime_pct}%`}>{Math.round(e.uptime_pct * 10) / 10}%</Ring> : null}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -202,9 +220,9 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
       </div>
       <div className="px-row px-wrap px-env-f">
         <Face agent={BEACON} size={20} />
-        {e.last_deploy ? <span>Last deploy {e.last_deploy.pr_url
+        {e.last_deploy ? <span>{e.deploy?.state === "failed" ? "Failed deploy" : e.deploy && !e.deploy.live ? "Deploy" : "Last deploy"} {e.last_deploy.pr_url
                   ? <a href={changeHref(e.last_deploy.pr_url)} {...linkTarget(changeHref(e.last_deploy.pr_url))} title={isLocalChangeUrl(e.last_deploy.pr_url) ? "Opens the change set" : "Opens the pull request"}><b>{e.last_deploy.label}</b></a>
-                  : <b>{e.last_deploy.label}</b>} · {agoWords(e.last_deploy.at) || whenLocal(e.last_deploy.at)}</span> : <span className="px-faint">Not deployed yet</span>}
+                  : <b>{e.last_deploy.label}</b>} · {agoWords(e.last_deploy.at) || whenLocal(e.last_deploy.at)}</span> : <span className="px-faint">{e.deploy?.word || "Not deployed yet"}</span>}
         {e.last_deploy?.commit ? <span className="px-mono px-faint">{e.last_deploy.commit}</span> : null}
         <span className="px-spacer" />
         {e.last_deploy?.href ? <PxLink href={e.last_deploy.href} testid={`px-env-logs-${e.key}`} title="This deploy and its log, in Infra"><TerminalWindow size={11} aria-hidden /> Logs</PxLink> : null}
