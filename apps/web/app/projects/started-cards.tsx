@@ -18,7 +18,9 @@
 import React, { useEffect, useState } from "react";
 import { Check, CursorClick, FileText, Hand, Plus, Sliders, Rocket } from "@phosphor-icons/react";
 
-import { enc, idGet } from "../../lib/identity/api";
+import { enc, idGet, idPost, IdentityError, refusalSentence } from "../../lib/identity/api";
+import { withConsent } from "../../lib/identity/consent";
+import { useGuardedCall } from "../../components/identity/identity-provider";
 import type { Brief } from "../../lib/add-project";
 import { consoleHref } from "../console-href";
 import { Face, Ico, Tag } from "./kit";
@@ -30,19 +32,29 @@ type Started = {
   seed: null | { kind: string; words: string; brief: Partial<Brief>; picks: Record<string, unknown>; created_at: string | null };
   run?: { id: string; status: string } | null; nodes?: Node[]; now?: { label: string; you: boolean; text: string } | null;
   workflow?: { key: string; name: string; steps: number; approvals: number } | null;
+  /** The PRD's own state (engine add_project.prd_state): the card's tag and its Approve. */
+  prd?: { state: "drafting" | "waiting" | "approved" | "returned"; decision_id: string | null } | null;
+  /** Made, not started (BOSSAPP-946): the start was refused after the project was kept. */
+  not_started?: { resumable: boolean; reason: string | null; words: string } | null;
+};
+
+const PRD_TAG: Record<string, { word: string; tone: "amber" | "blue" | "green" | "red" }> = {
+  drafting: { word: "drafting", tone: "blue" }, waiting: { word: "waiting for you", tone: "amber" },
+  approved: { word: "approved", tone: "green" }, returned: { word: "back with the panel", tone: "red" },
 };
 
 const LIVE = new Set(["queued", "validating", "running", "waiting", "paused", "blocked"]);
 
 export function StartedCards({ ctx }: { ctx: PxCtx }) {
   const [v, setV] = useState<Started | null>(null);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     let alive = true;
     const read = () => idGet<Started>(`/v1/projects/${enc(ctx.projectId)}/add-project/started`).then((s) => { if (alive) setV(s); }).catch(() => undefined);
     void read();
     const t = window.setInterval(() => { if (document.visibilityState === "visible") void read(); }, 15000);
     return () => { alive = false; window.clearInterval(t); };
-  }, [ctx.projectId]);
+  }, [ctx.projectId, tick]);
   if (!v?.seed || v.seed.kind !== "idea") return null;
   // Shown while the first run is under way (or waits on its PRD): the project's first stage.
   if (v.run && !LIVE.has(v.run.status)) return null;
@@ -52,10 +64,15 @@ export function StartedCards({ ctx }: { ctx: PxCtx }) {
   const staging = picks.staging as { host_id: string; host?: string; port: number | null; made?: boolean } | null | undefined;
   const notify = (picks.notify as { channel: string | null } | undefined)?.channel;
   const nodes = v.nodes ?? [];
-  const prdNow = nodes.some((n) => n.key === "approve" && n.state === "you");
+  // THE PRD'S OWN STATE (BOSSAPP-946): "waiting for you" only once the PRD exists and the panel is
+  // done; never back to "drafting" after the approval.
+  const prdState = v.prd?.state ?? (nodes.some((n) => n.key === "approve" && n.state === "you") ? "waiting" : "drafting");
+  const prdNow = prdState === "waiting";
+  const prdTag = PRD_TAG[prdState] ?? PRD_TAG.drafting;
   const decisions = consoleHref({ area: "decisions" });
   return (
     <div className="px-stack" data-testid="px-started">
+      {v.not_started && !v.run ? <NotStarted ctx={ctx} said={v.not_started} onStarted={() => { setTick((n) => n + 1); ctx.refreshWork(); }} /> : null}
       <section className="px-card" aria-labelledby="px-st-path">
         <div className="px-card-h"><Ico icon={CursorClick} c="teal" /><h2 id="px-st-path">Idea to PR</h2>
           <Tag tone="blue">2 clicks + your gates</Tag></div>
@@ -82,7 +99,7 @@ export function StartedCards({ ctx }: { ctx: PxCtx }) {
       <div className="px-grid px-g3">
         <section className="px-card" data-you={prdNow || undefined} aria-labelledby="px-st-prd" data-testid="px-started-prd">
           <div className="px-card-h"><Ico icon={FileText} c="amber" /><h2 id="px-st-prd">PRD</h2>
-            <Tag tone={prdNow ? "amber" : "blue"}>{prdNow ? "waiting for you" : "drafting"}</Tag></div>
+            <Tag tone={prdTag.tone}>{prdTag.word}</Tag></div>
           <ul className="px-st-list">
             <li data-ok={!!(b.problem || b.who_uses) || undefined}><b>Problem &amp; users</b><span>{b.who_uses || b.problem || "from your words"}</span></li>
             <li data-ok={!!b.must_haves?.length || undefined}><b>Must-haves</b><span>{(b.must_haves ?? []).slice(0, 3).join(" · ") || "from your words"}</span></li>
@@ -118,5 +135,35 @@ export function StartedCards({ ctx }: { ctx: PxCtx }) {
         </section>
       </div>
     </div>
+  );
+}
+
+/** MADE, NOT STARTED (BOSSAPP-946): one Start sends the kept start again; a consent still owed
+ *  opens the consent sheet, and once given the same Start goes once more. */
+function NotStarted({ ctx, said, onStarted }: { ctx: PxCtx; said: NonNullable<Started["not_started"]>; onStarted: () => void }) {
+  const guarded = useGuardedCall();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const start = async () => {
+    setBusy(true); setError("");
+    try {
+      await guarded("Start the project.", () => withConsent(() => idPost(`/v1/projects/${enc(ctx.projectId)}/add-project/start`, {})));
+      onStarted();
+    } catch (e) {
+      setError(e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not started: you cancelled the check."
+        : e instanceof IdentityError && e.body.error === "consent_required" ? "Not started: the agents need your consent first."
+        : refusalSentence(e));
+    } finally { setBusy(false); }
+  };
+  return (
+    <section className="px-card" data-you aria-labelledby="px-st-not" data-testid="px-started-not-started">
+      <div className="px-card-h"><Ico icon={Rocket} c="amber" /><h2 id="px-st-not">Not started yet</h2><Tag tone="amber">one press</Tag></div>
+      <p className="px-faint" style={{ margin: "0 0 10px" }} data-testid="px-started-not-started-words">{said.words}</p>
+      {said.resumable ? (
+        <button type="button" className="px-btn" data-kind="primary" disabled={busy} data-testid="px-started-start" onClick={() => void start()}>
+          <Rocket size={12} aria-hidden /> {busy ? "Starting…" : "Start"}</button>
+      ) : <button type="button" className="px-btn" onClick={() => ctx.tab("work", { compose: "1" })}>Start work from Work</button>}
+      {error ? <p role="alert" className="px-faint" style={{ margin: "8px 0 0" }} data-testid="px-started-start-error">{error}</p> : null}
+    </section>
   );
 }

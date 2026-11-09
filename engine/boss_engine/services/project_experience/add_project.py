@@ -597,6 +597,44 @@ def seed_of(connection: Connection, project_id: str) -> Optional[dict[str, Any]]
 
 # ── right after Create and start (c-after-create.html) ──────────────────────────────────────
 
+#: A meeting still under way (anything that is not finished).
+_MEETING_DONE = ("completed", "succeeded", "finalized", "done")
+
+
+def prd_state(connection: Connection, workflow_run_id: str) -> Optional[dict[str, Any]]:
+    """THE PRD OF A RUN, AS IT IS (BOSSAPP-946): {state, decision_id, meeting_id} or None when
+    the run has no meeting.
+
+      drafting   the panel is still meeting (no PRD decision yet, or the meeting not done)
+      waiting    the PRD exists, the meeting is done, its approval is pending: a person's move
+      approved   approved
+      returned   rejected (the panel drafts again)
+
+    Read from the meeting the run's step waits on (workflow_step_runs.output.await) and that
+    meeting's PRD decision — never from the step's own "waiting", which is the same step while
+    the panel argues and while the PRD waits for approval."""
+    row = connection.execute(text(
+        "SELECT m.id, m.status, m.decision_id, d.status AS decision_status "
+        "FROM workflow_step_runs s JOIN meeting_runs m ON m.id = s.output->'await'->>'id' "
+        "LEFT JOIN decisions d ON d.id = m.decision_id "
+        "WHERE s.workflow_run_id = :r AND s.output->'await'->>'kind' = 'meeting' "
+        "ORDER BY s.created_at DESC, s.iteration DESC LIMIT 1"),
+        {"r": workflow_run_id}).mappings().first()
+    if row is None:
+        return None
+    decided = str(row["decision_status"] or "")
+    if not row["decision_id"] or str(row["status"] or "") not in _MEETING_DONE:
+        state = "drafting"
+    elif decided == "approved" or decided == "executed":
+        state = "approved"
+    elif decided == "rejected":
+        state = "returned"
+    elif decided in ("pending", "delegated"):
+        state = "waiting"
+    else:
+        state = "drafting"
+    return {"state": state, "decision_id": row["decision_id"], "meeting_id": row["id"]}
+
 def started(connection: Connection, project_id: str) -> dict[str, Any]:
     """What the new project's Overview shows first: the seed (what was confirmed), the first
     run's stations with their state (done · now · you · todo) and the Now line. {seed: None}
@@ -617,8 +655,22 @@ def started(connection: Connection, project_id: str) -> dict[str, Any]:
                                   {"h": staging["host_id"]}).mappings().first()
         if host:
             seed["picks"]["staging"] = {**staging, "host": host["name"], "address": host["address"]}
-    out: dict[str, Any] = {"seed": seed, "run": None, "nodes": [], "now": None, "workflow": None}
+    out: dict[str, Any] = {"seed": seed, "run": None, "nodes": [], "now": None, "workflow": None,
+                           "prd": None}
     if not run:
+        # MADE, NOT STARTED (BOSSAPP-946): the start was refused after the project was kept —
+        # the agents' consent unanswered, a readiness check. One "Start" on the project page
+        # sends the same start again (POST …/add-project/start), from the request kept here.
+        if seed.get("kind") == "idea":
+            picks = seed.get("picks") or {}
+            refused = picks.get("start_refused") if isinstance(picks.get("start_refused"), dict) \
+                else {}
+            why = ("it waits for your consent to the agents"
+                   if refused.get("error") == "consent_required"
+                   else str(refused.get("message") or "").strip() or "its start was not finished")
+            out["not_started"] = {"resumable": bool(picks.get("start_request")),
+                                  "reason": refused.get("error") or None,
+                                  "words": f"Made, not started: {why}. Start sends it again."}
         return out
     spec = as_json(connection.execute(text("SELECT spec FROM workflow_versions WHERE id = :v"),
                                       {"v": run["workflow_version_id"]}).scalar(), {}) or {}
@@ -629,6 +681,8 @@ def started(connection: Connection, project_id: str) -> dict[str, Any]:
     steps = workflow_steps(connection, project_id, spec)
     out["workflow"] = {"key": run["workflow_key"], "name": run["name"], "steps": len(steps),
                        "approvals": sum(1 for s in steps if s["you"])}
+    prd = prd_state(connection, run["id"])
+    out["prd"] = prd
     nodes = []
     for node in strip(connection, project_id, spec):
         said = [states.get(sid, "") for sid in node.get("steps") or []]
@@ -640,6 +694,18 @@ def started(connection: Connection, project_id: str) -> dict[str, Any]:
             state = "failed"
         else:
             state = "todo"
+        if prd is not None and node["key"] in ("plan", "approve"):
+            # THE PRD'S OWN STATE DECIDES (BOSSAPP-946): the meeting step is both the panel and
+            # the PRD's hold, so its "waiting" read "You approve" while the panel still argued.
+            # The approval is the person's only once the PRD exists and the meeting is done.
+            if node["key"] == "plan":
+                state = "done" if prd["state"] in ("waiting", "approved") else state
+            elif prd["state"] == "waiting":
+                state = "you"
+            elif prd["state"] == "approved":
+                state = "done"
+            elif state == "you":
+                state = "todo"
         nodes.append({"key": node["key"], "label": node["label"], "type": node["type"],
                       "state": state, "agent": node.get("agent")})
     if run["status"] in ("running", "waiting", "queued", "validating") and not any(
