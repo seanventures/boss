@@ -501,8 +501,8 @@
 .cc-mono {
   height: 100%; display: grid; place-items: center;
   background:
-    radial-gradient(120% 120% at 20% 0%, var(--boss-c-3bcde99ce5) 70% 55% / .55), transparent 60%),
-    radial-gradient(120% 120% at 100% 100%, var(--boss-c-1034812e70) + 60) 70% 50% / .45), transparent 55%),
+    radial-gradient(120% 120% at 20% 0%, hsl(var(--h) 70% 55% / .55), transparent 60%),
+    radial-gradient(120% 120% at 100% 100%, hsl(calc(var(--h) + 60) 70% 50% / .45), transparent 55%),
     var(--boss-c-0e1730);
 }
 .cc-mono span { font: 700 1.78947rem var(--display); color: var(--boss-c-d0d52e0625); letter-spacing: 0; text-shadow: 0 4px 20px var(--boss-c-5c08c15447); }

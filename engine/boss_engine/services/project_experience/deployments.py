@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from . import demo_logins as demo
-from .common import href, iso, project_href, web_url
+from .common import href, iso, project_href
 from .health import env_label, health_word
 
 PRODUCTION = ("production", "prod")
@@ -207,15 +207,22 @@ def _who_name(connection: Connection, actor: Any) -> Optional[str]:
 
 
 def view(connection: Connection, project_id: str) -> dict[str, Any]:
+    from ..deploy_truth import project_targets, truth
     from ..deployment_health import health_view
 
-    targets = [dict(r) for r in connection.execute(text(
-        "SELECT t.id, t.app_name, t.environment, t.domains, t.public_url, t.auto_deploy, t.paused, "
-        "t.host_id, h.name AS host_name, h.address AS host_address, h.status AS host_status "
-        "FROM deployment_targets t LEFT JOIN deployment_hosts h ON h.id = t.host_id "
-        "WHERE t.project_id = :p AND t.status = 'active' ORDER BY "
-        "(lower(t.environment) IN ('production', 'prod')), t.environment, t.app_name"),
-        {"p": project_id}).mappings().all()]
+    # ONE SOURCE for the project's targets (deploy_truth.project_targets): the same rows the
+    # header, Health and the agents read, a superseded staging slot left out.
+    targets = project_targets(connection, project_id)
+    hosts_by_id = {str(r["id"]): dict(r) for r in connection.execute(text(
+        "SELECT id, name, address, status FROM deployment_hosts WHERE id = ANY(:h)"),
+        {"h": sorted({str(t["host_id"]) for t in targets if t.get("host_id")})}).mappings()}
+    for t in targets:
+        h = hosts_by_id.get(str(t.get("host_id") or "")) or {}
+        t.update(host_name=h.get("name"), host_address=h.get("address"),
+                 host_status=h.get("status"))
+    targets.sort(key=lambda t: (str(t["environment"] or "").lower() in PRODUCTION,
+                                str(t["environment"] or ""), str(t["app_name"] or "")))
+    told = truth(connection, targets)
     health = {t["target_id"]: t for t in health_view(connection, project_id).get("targets") or []}
     # ONE SOURCE for health, uptime and p95: the Health tab's environments (health.state_of,
     # obs_view.probe_window over 24 h), so the header, Overview, Health, Deployments and
@@ -239,16 +246,22 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         h = health.get(t["id"], {})
         one = same.get(t["id"], {})
         d = last.get(t["id"])
-        domains = t["domains"] if isinstance(t["domains"], list) else []
-        url = web_url((d or {}).get("open_url") or t.get("public_url")
-                      or (domains[0] if domains else None))
+        said = told[str(t["id"])]
+        # LIVE ONLY AFTER A DEPLOY SUCCEEDED (BOSSAPP-930): before that the address is words
+        # ("Setting up · will answer at …"), never a link, and never the header's live chip.
+        url = said["live_url"]
         label = env_label(t["environment"])
         if len(apps) > 1:
             label = f"{t['app_name']} {label}"
         is_prod = str(t["environment"] or "").lower() in PRODUCTION
         envs.append({
             "key": t["environment"], "label": label, "app": t["app_name"], "target_id": t["id"],
-            "url": url, "health": one.get("health") or health_word(h.get("status")),
+            "url": url, "address": said["address"],
+            # THE DEPLOY'S TRUTH (deploy_truth.truth): state + words, the failed reason, and
+            # the running deploy's seven phases for the live card.
+            "deploy": {k: said[k] for k in ("state", "word", "live", "reason", "attempt",
+                                            "progress")},
+            "health": one.get("health") or health_word(h.get("status")),
             "health_reason": one.get("health_reason"), "status": h.get("status"),
             "uptime_pct": one.get("uptime_pct") if one else h.get("uptime_24h"),
             "p95_ms": one.get("p95_ms") if one else None,
@@ -332,13 +345,22 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
     return out
 
 
+def _went_live(env: Optional[dict[str, Any]]) -> bool:
+    """A deploy to this environment SUCCEEDED (deploy_truth) — a failed or waiting attempt is a
+    last deploy, never a shipped one."""
+    if not env:
+        return False
+    told = env.get("deploy")
+    return bool(told.get("live")) if isinstance(told, dict) else bool(env.get("last_deploy"))
+
+
 def ship_path(envs: list[dict[str, Any]]) -> list[dict[str, str]]:
     """How code ships, as a strip (screen 8): merge → build → the first non-production
     environment (auto or a person, from its target's policy) → its health check → production,
     always a person's approval. States come from what the environments show today."""
     pre = next((e for e in envs if str(e["key"] or "").lower() not in PRODUCTION), None)
     prod = next((e for e in envs if str(e["key"] or "").lower() in PRODUCTION), None)
-    shipped = bool(pre and pre.get("last_deploy"))
+    shipped = _went_live(pre)
     nodes = [{"label": "PR merged", "state": "done" if shipped else "todo"},
              {"label": "Image built", "state": "done" if shipped else "todo"}]
     if pre is None:
@@ -351,7 +373,7 @@ def ship_path(envs: list[dict[str, Any]]) -> list[dict[str, str]]:
         nodes.append({"label": "Smoke test", "state": {"healthy": "done", "down": "failed"}.get(
             pre["health"], "todo") if shipped else "todo"})
     nodes.append({"label": "Prod · you approve",
-                  "state": "done" if prod and prod.get("last_deploy") else "waiting"})
+                  "state": "done" if _went_live(prod) else "waiting"})
     return nodes
 
 

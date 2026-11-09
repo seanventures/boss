@@ -238,15 +238,14 @@ describe("a repo: inline results, Helm's read, onboarding", () => {
     const calls = api((c) => (c.method === "POST" && c.path === "/v1/add-project"
       ? { body: { created: true, project_id: "web", name: "Web", kind: "repo", href: "?project_id=web&area=project&tab=onboarding", steps: [], started: { onboarding: { run_id: "onb_1" } } } } : undefined));
     const go = vi.fn();
-    await mountAs(<AddProjectSheet projectId="p1" homeId="p1" onClose={() => {}} onForm={() => {}} go={go} />);
+    await mountAs(<AddProjectSheet projectId="p1" homeId="p1" startKind="repo" onClose={() => {}} onForm={() => {}} go={go} />);
+    expect(tid("add-project")!.dataset.door).toBe("existing");
     await type(tid("ap-input"), "acme/web");
     expect(tid("add-project")!.dataset.kind).toBe("repo");
     expect(tid("ap-results")!.textContent).toContain("acme/web");
-    expect(tid("ap-results")!.textContent).toContain("Folders on hosts");
+    expect(tid("ap-results")!.textContent).toContain("Folders on servers");
     expect(tid("ap-repo-ghr_web")!.getAttribute("aria-selected")).toBe("true");
-    // acme/web is already in Acme Shop. Enter opens that project; a second project is the
-    // separate-project confirm, which is what picks the repo for Helm to read.
-    expect(tid("ap-detect-line")!.textContent).toContain("already in");
+    // acme/web is already in Acme Shop: ↵ would open it; a new project on it is said out loud.
     await click(tid("ap-repo-ghr_web-separate"));
     await click(tid("ap-repo-ghr_web-separate-yes"));
     expect(tid("ap-results")).toBeNull();
@@ -263,17 +262,26 @@ describe("a repo: inline results, Helm's read, onboarding", () => {
     expect(tid("ap-then")!.textContent).not.toMatch(/\d+ files/);
     await click(tid("ap-chip-rules"));
     await click(tid("ap-create"));
-    expect(calls.find((c) => c.path === "/v1/add-project")!.body).toMatchObject({ kind: "repo", repo_ids: ["ghr_web"], map_rules: true, name: "Web" });
+    expect(calls.find((c) => c.path === "/v1/add-project")!.body).toMatchObject({ kind: "repo", repo_ids: ["ghr_web"], map_rules: true, name: "Web", allow_shared_repo: true });
     expect(new URLSearchParams(String(go.mock.calls[0][0]).split("?")[1]).get("tab")).toBe("onboarding");
   });
 
-  it("the kind pill forces another reading", async () => {
+  it("two doors: a new app never guesses code, existing code reads repos and folders (BOSSAPP-916)", async () => {
     api();
-    await mountAs(<AddProjectSheet projectId="p1" homeId="p1" onClose={() => {}} onForm={() => {}} go={vi.fn()} />);
+    await mountAs(<AddProjectSheet projectId="p1" homeId="p1" startKind="choose" onClose={() => {}} onForm={() => {}} go={vi.fn()} />);
+    expect(tid("add-project")!.dataset.door).toBe("choose");
+    expect(tid("ap-create")).toBeNull();
+    await click(tid("ap-door-existing"));
     await type(tid("ap-input"), "helpdesk");
     expect(tid("add-project")!.dataset.kind).toBe("repo");
-    await click(tid("ap-kind-idea"));
+    await click(tid("ap-back"));
+    await click(tid("ap-door-new"));
+    await type(tid("ap-input"), "acme/web");
     expect(tid("add-project")!.dataset.kind).toBe("idea");
+    await click(tid("ap-looks-like-code"));
+    expect(tid("add-project")!.dataset.door).toBe("existing");
+    expect((tid("ap-input") as HTMLTextAreaElement).value).toBe("acme/web");
+    expect(tid("add-project")!.dataset.kind).toBe("repo");
   });
 });
 

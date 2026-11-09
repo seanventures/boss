@@ -97,7 +97,7 @@ class Station(TypedDict, total=False):
 
 BuildStateKey = Literal["cancelled", "failed", "needs_plan", "needs_waiver", "needs_person",
                         "budget_refused", "blocked", "budget_wait", "quiet", "queued", "building",
-                        "pr_open", "merged", "deployed", "done_no_pr"]
+                        "pr_open", "merged", "deployed", "done_no_pr", "github_wait"]
 #: Which Floor section each state is drawn in (needs-you states also have a Building row).
 SECTION_OF: dict[str, str] = {
     "cancelled": "stopped", "failed": "stopped",
@@ -105,6 +105,8 @@ SECTION_OF: dict[str, str] = {
     "budget_refused": "building",
     "blocked": "building", "budget_wait": "building", "quiet": "building", "queued": "building",
     "building": "building",
+    # BOSSAPP-922: finished here, the push waits for GitHub -- on the line, never Stopped.
+    "github_wait": "building",
     "pr_open": "shipped", "merged": "shipped", "deployed": "shipped", "done_no_pr": "shipped",
 }
 QUIET_AFTER_MINUTES = 20
@@ -148,7 +150,8 @@ class PreviewFlag(TypedDict, total=False):
 # ── GET /v1/factory/floor (§6.2) ────────────────────────────────────────────────────────────
 
 _BUILDING_ORDER = {"needs_plan": 0, "needs_waiver": 0, "needs_person": 0, "budget_refused": 0,
-                   "quiet": 1, "blocked": 1, "budget_wait": 2, "building": 2, "queued": 3}
+                   "quiet": 1, "blocked": 1, "budget_wait": 2, "github_wait": 2,
+                   "building": 2, "queued": 3}
 
 
 def _sort_building(rows: list[BuildRow], now: datetime) -> list[BuildRow]:
@@ -918,6 +921,12 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
     if status == "failed":
         return out("failed", f"Failed · {label}" if label else "Failed",
                    failure_line(fctx, run.get("error"))["line"], "Failed")
+    if status == "waiting_for_github":
+        # BOSSAPP-922: the build finished and its commits are safe on this machine; the push and
+        # the pull request wait for GitHub. Never "Failed", never "Done · no PR".
+        from .stuck_work import GITHUB_WAIT_WORDS
+
+        return out("github_wait", "Waiting for GitHub", GITHUB_WAIT_WORDS, "Waiting", "pr")
     if status == "waiting_on_person":
         # L2b (person_wait.py): paused on a person's reply, not stopped and not done -- it fell
         # through to the Finished branch below before this (ok_deploys/pull_request_url are both
@@ -1216,8 +1225,11 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
             # runs, and drawing the BOSS glyph first made the bay flip to QA's face (D15).
         # The state at the build's own station overrides what its act says.
         if at_here:
-            if state_key in ("budget_wait", "queued") and s["status"] in ("working", "pending"):
+            if state_key in ("budget_wait", "queued", "github_wait") and s["status"] in (
+                    "working", "pending", "failed", "stopped"):
                 s["status"] = "waiting"
+                if state_key == "github_wait":
+                    s["tip"] = st.get("tip")
             elif state_key == "quiet" and s["status"] in ("working", "pending"):
                 # STUCK, AND ONLY THIS: a live build whose station has had no activity for
                 # QUIET_AFTER_MINUTES. The tip says for how long.

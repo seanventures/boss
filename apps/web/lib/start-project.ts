@@ -26,6 +26,9 @@ export function stepFromParam(value: string | null | undefined): StartStep | nul
   if (value === null || value === undefined) return null;
   const v = value.trim().toLowerCase();
   if (v === "sample" || v === "import" || v === "idea") return v;
+  // The two doors by their own names (BOSSAPP-916): Start a new app · Bring existing code.
+  if (v === "new") return "idea";
+  if (v === "existing" || v === "repo" || v === "folder") return "import";
   return "choose";
 }
 
@@ -244,7 +247,8 @@ export const startProjectApi = {
 
 /** The slugs of the projects that exist (GET /v1/projects). */
 async function takenSlugs(): Promise<Set<string>> {
-  const r = await idGet<{ items?: { slug?: string; id?: string }[] }>("/v1/projects");
+  // Archived projects keep their slugs: a name is free only when no project, archived or not, has it.
+  const r = await idGet<{ items?: { slug?: string; id?: string }[] }>("/v1/projects?include_archived=true");
   return new Set((r.items ?? []).map((p) => String(p.slug ?? p.id ?? "")));
 }
 
@@ -257,15 +261,20 @@ export async function createFresh(name: string, opts: { description?: string; ty
   // refused creates (each was a 409 in the browser's console); a list that can't be read, or a
   // race, still falls back to the next number.
   const used = await taken().catch(() => new Set<string>());
-  const first = Array.from({ length: 20 }, (_, i) => i + 1).find((n) => !used.has(slugOf(n === 1 ? name : `${name} ${n}`))) ?? 1;
-  for (let n = first; n <= 20; n++) {
+  // THE NEXT FREE NAME, NO CAP (walk 2026-11-08: Try a sample refused after "Hello World 20").
+  // The list says which numbers are taken; a race (someone took it meanwhile) moves to the next.
+  const nameOf = (n: number) => (n === 1 ? name : `${name} ${n}`);
+  let n = 1;
+  while (used.has(slugOf(nameOf(n)))) n++;
+  // Bounded only by the races a press can lose, never by how many samples exist.
+  for (let tries = 0; tries < 50; tries++, n++) {
     try {
-      return await create(n === 1 ? name : `${name} ${n}`, opts);
+      return await create(nameOf(n), opts);
     } catch (e) {
       if ((e as { exists?: unknown }).exists === undefined) throw e;
     }
   }
-  throw new Error(`Every name from ${name} to ${name} 20 is taken. Choose another.`);
+  throw new Error(`${name}: every name tried was taken while creating it. Try again.`);
 }
 
 /** Where a project opens (its page), keeping the org. */

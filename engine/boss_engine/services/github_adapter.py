@@ -738,6 +738,142 @@ class GitHubAdapter:
         )
         return PullRequestResult(url=response["html_url"], number=response["number"])
 
+    def pull_request_state(self, pull_request_number: int) -> dict:
+        """{state: open|closed, merged, merge_commit_sha, head_sha} as GitHub has it now."""
+        pr = self._request(
+            "GET", f"/repos/{self.repository_full_name}/pulls/{int(pull_request_number)}") or {}
+        return {"state": str(pr.get("state") or ""),
+                "merged": bool(pr.get("merged") or pr.get("merged_at")),
+                "merge_commit_sha": str(pr.get("merge_commit_sha") or ""),
+                "head_sha": str((pr.get("head") or {}).get("sha") or "")}
+
+    def close_pull_request(self, pull_request_number: int, comment: str = "") -> None:
+        """Close a pull request without merging, saying why in a comment first."""
+        if comment:
+            self.create_issue_comment(int(pull_request_number), comment)
+        self._request("PATCH",
+                      f"/repos/{self.repository_full_name}/pulls/{int(pull_request_number)}",
+                      {"state": "closed"})
+
+    def changes_already_in(self, pull_request_number: int, base: Optional[str] = None) -> bool:
+        """Whether every file this pull request touches already reads, on `base` (default: the
+        default branch), exactly as on the pull request's head — a superseded duplicate whose
+        change was merged another way (a squash of an earlier PR from the same branch)."""
+        head = self.pull_request_state(pull_request_number).get("head_sha")
+        if not head:
+            return False
+        if not base:
+            base, _ = self.default_branch_sha()
+        files = self.pull_request_files(int(pull_request_number))
+        if not files:
+            return False
+        for f in files:
+            name = str(f.get("path") or f.get("filename") or "")
+            status = str(f.get("status") or "")
+            on_base = self.read_text_file(base, name)
+            if status == "removed":
+                if on_base is not None:
+                    return False
+                continue
+            if on_base is None or on_base != self.read_text_file(head, name):
+                return False
+        return True
+
+    def open_pull_request_for(self, branch_name: str) -> Optional[dict]:
+        """The open pull request whose head is this branch ({number, url, title}), or None."""
+        owner = self.repository_full_name.split("/")[0]
+        rows = self._request(
+            "GET", f"/repos/{self.repository_full_name}/pulls?state=open&head={owner}:"
+                   f"{quote(branch_name, safe='/')}") or []
+        if not rows:
+            return None
+        pr = rows[0]
+        return {"number": int(pr["number"]), "url": str(pr.get("html_url") or ""),
+                "title": str(pr.get("title") or "")}
+
+    def last_merged_pull_request(self, branch_name: str) -> Optional[dict]:
+        """The newest MERGED pull request from this branch ({number, url, head_sha, merged_at,
+        merge_commit_sha}), or None. A work branch outlives its first pull request: a retry
+        after the merge pushes to the same branch (pr_follow_up)."""
+        owner = self.repository_full_name.split("/")[0]
+        rows = self._request(
+            "GET", f"/repos/{self.repository_full_name}/pulls?state=closed&head={owner}:"
+                   f"{quote(branch_name, safe='/')}&sort=updated&direction=desc&per_page=20") or []
+        merged = [pr for pr in rows if pr.get("merged_at")]
+        if not merged:
+            return None
+        pr = max(merged, key=lambda p: str(p.get("merged_at") or ""))
+        return {"number": int(pr["number"]), "url": str(pr.get("html_url") or ""),
+                "head_sha": str((pr.get("head") or {}).get("sha") or ""),
+                "merged_at": pr.get("merged_at"),
+                "merge_commit_sha": str(pr.get("merge_commit_sha") or "")}
+
+    def restack_after_merge(self, branch_name: str, merged_head_sha: str, *,
+                            base: Optional[str] = None, number: Optional[int] = None) -> dict:
+        """PUT A WORK BRANCH BACK ON ITS BASE AFTER ITS PULL REQUEST MERGED.
+
+        A squash (or rebase) merge leaves the work branch's own commits off the base: the next
+        pull request from it re-proposes everything already merged and GitHub calls it
+        conflicting (paramg/boss-sandbox PR #237 after #236, 2026-11-08: 5,629 lines for a
+        five-line fix, then "405 Method Not Allowed" on the merge). The branch is reset to the
+        base's head (which holds the merged work) and only what changed AFTER the merged head
+        is written back, file by file. Returns {"restacked", "paths", "why"?}; refuses (and
+        changes nothing) when the merged head is not in the branch, a file was removed or
+        renamed, or a file is not text — those need an agent, not a git call."""
+        if not merged_head_sha:
+            return {"restacked": False, "paths": [], "why": "no merged head on record"}
+        base_name = base
+        if not base_name:
+            base_name, base_sha = self.default_branch_sha()
+        else:
+            base_sha = self._request(
+                "GET", f"/repos/{self.repository_full_name}/git/ref/heads/{base_name}"
+            )["object"]["sha"]
+        head_sha = self._request(
+            "GET", f"/repos/{self.repository_full_name}/git/ref/heads/{branch_name}"
+        )["object"]["sha"]
+        on_base = self.compare_commits(base_sha, head_sha)
+        if on_base["status"] in ("ahead", "identical"):
+            return {"restacked": False, "paths": [], "why": "already on its base"}
+        since = self.compare_commits(merged_head_sha, head_sha)
+        if since["status"] not in ("ahead", "identical"):
+            return {"restacked": False, "paths": [],
+                    "why": "the merged head is not in the branch"}
+        delta = self.compare_changed_files(merged_head_sha, head_sha) \
+            if since["status"] == "ahead" else []
+        if any(f["status"] in ("removed", "renamed") for f in delta):
+            return {"restacked": False, "paths": [],
+                    "why": "a file was removed or renamed after the merge"}
+        contents: dict[str, str] = {}
+        for f in delta:
+            try:
+                text = self.read_text_file(head_sha, f["filename"])
+            except UnicodeDecodeError:
+                return {"restacked": False, "paths": [], "why": f"{f['filename']} is not text"}
+            if text is None:
+                return {"restacked": False, "paths": [],
+                        "why": f"{f['filename']} could not be read"}
+            contents[f["filename"]] = text
+        # ONE move of the branch, never through its base: the restacked commit is built first
+        # (base tree + the newer files) and the ref jumps straight to it. Resetting the branch
+        # to the base and writing files one by one left the pull request with nothing in it for
+        # a moment, and GitHub closes an empty pull request on its own (PR #237, 2026-11-09).
+        after = f" after #{number}" if number else " after its merge"
+        repo = f"/repos/{self.repository_full_name}"
+        base_tree = self._request("GET", f"{repo}/git/commits/{base_sha}")["tree"]["sha"]
+        tree = self._request("POST", f"{repo}/git/trees", {
+            "base_tree": base_tree,
+            "tree": [{"path": path, "mode": "100644", "type": "blob", "content": text}
+                     for path, text in sorted(contents.items())]})
+        commit = self._request("POST", f"{repo}/git/commits", {
+            "message": f"BOSS follow-up{after}: {', '.join(sorted(contents))}",
+            "tree": tree["sha"], "parents": [base_sha]})
+        self._request(
+            "PATCH",
+            f"{repo}/git/refs/heads/{quote(branch_name, safe='')}",
+            {"sha": commit["sha"], "force": True})
+        return {"restacked": True, "paths": sorted(contents), "base": base_name}
+
     def add_labels(self, pull_request_number: int, labels: list[str]) -> None:
         """Add labels to a pull request (GitHub creates a label it does not have yet)."""
         self._request(

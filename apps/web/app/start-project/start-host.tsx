@@ -103,6 +103,8 @@ export function StartProjectHost({ projectId, homeId, step: forced, onStep: forc
   }
   // ADD A PROJECT v2 (new-project-v2): ONE screen for every door — an idea, a repo, a folder, the
   // sample in one press. The old three-tab sheet (start-sheet.tsx) stays for one release behind it.
-  const startKind = step === "import" ? "repo" : step === "sample" ? "sample" : "idea";
+  // TWO DOORS (BOSSAPP-916): an idea opens Start a new app, import opens Bring existing code; the
+  // plain link and the sample open the two doors (a handed-over brief is always a new app).
+  const startKind = step === "import" ? "repo" : step === "sample" ? "sample" : step === "idea" || prefill ? "idea" : "choose";
   return <AddProjectSheet key={step} startKind={startKind} initialText={prefill} onClose={close} onForm={() => setStep("form")} projectId={projectId} homeId={homeId} />;
 }

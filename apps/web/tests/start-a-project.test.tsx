@@ -115,7 +115,7 @@ describe("the URL opens the flow at a choice", () => {
     window.history.replaceState(null, "", "/?new_project=idea");
     stubFetch(() => undefined);
     await mountAs(<ProjectMenu projects={[{ id: "p1", name: "Acme Shop" }]} activeId="p1" homeId="p1" />);
-    expect(tid("ap-input")!.getAttribute("aria-label")).toBe("Your idea, a repo or a folder");
+    expect(tid("ap-input")!.getAttribute("aria-label")).toBe("Your idea");
     expect(tid("add-project")!.getAttribute("data-kind")).toBe("idea");
     expect(tid("new-project-form")).toBeNull();
     await click(tid("ap-more-ways"));

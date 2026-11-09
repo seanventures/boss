@@ -148,6 +148,66 @@ def create_repository(*, owner: str, name: str, private: bool = True, token: str
             own.close()
 
 
+def check_repository(*, owner: str, name: str, token: Optional[str], purpose: str = "create",
+                     api_base_url: str = "https://api.github.com", token_kind: str = "app",
+                     client: Optional[httpx.Client] = None) -> dict[str, Any]:
+    """BEFORE A PERSON PRESSES CREATE (BOSSAPP-917/921's sheets): can BOSS make `owner/name` (or,
+    `purpose="existing"`, publish into it)? Reads only — the same answers create_repository
+    gives, in the same words, so the sheet says them while the person is still choosing.
+
+    {ok, reason, words, exists, owner_type}; reason "" | no_github_credential | not_allowed |
+    personal_account | exists | not_found | failed."""
+    full = f"{owner}/{name}"
+    out: dict[str, Any] = {"ok": False, "full_name": full, "reason": "", "words": "",
+                           "exists": False, "owner_type": None}
+    if not _OWNER.match(owner or "") or not _NAME.match(name or ""):
+        return {**out, "reason": "not_allowed",
+                "words": "A GitHub owner is letters, digits and hyphens; a repository name is "
+                         "letters, digits, '.', '_' and '-'."}
+    if not token:
+        return {**out, "reason": "no_github_credential",
+                "words": "BOSS has no GitHub credential that can create repositories: connect the "
+                         "GitHub App with Administration: Read and write."}
+    base = api_base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+               "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "boss-publish"}
+    own = client or httpx.Client(timeout=15)
+    try:
+        found = own.get(f"{base}/repos/{full}", headers=headers)
+        if found.status_code == 200:
+            out["exists"] = True
+            if purpose == "existing":
+                return {**out, "ok": True, "words": f"{full} exists: BOSS publishes into it if it is empty."}
+            return {**out, "reason": "exists",
+                    "words": f"{full} already exists on GitHub: pick another name, or publish to it "
+                             "as an existing (empty) repository."}
+        if found.status_code >= 500:
+            return {**out, "reason": "failed", "words": f"GitHub did not answer ({found.status_code}); try again."}
+        if purpose == "existing":
+            return {**out, "reason": "not_found",
+                    "words": f"There is no {full} on GitHub that BOSS can see."}
+        account = own.get(f"{base}/users/{owner}", headers=headers)
+        if account.status_code == 404:
+            return {**out, "reason": "not_allowed", "words": f"There is no GitHub account {owner}."}
+        if account.status_code >= 400:
+            return {**out, "reason": "failed",
+                    "words": f"GitHub did not answer ({account.status_code}); try again."}
+        kind = str((account.json() or {}).get("type") or "")
+        out["owner_type"] = kind or None
+        if kind != "Organization" and token_kind != "user":
+            return {**out, "reason": "personal_account",
+                    "words": (f"{owner} is a personal GitHub account, and a GitHub App cannot create "
+                              f"repositories in one. Create {full} on GitHub (empty: no README, no "
+                              ".gitignore), then publish to it as an existing repository.")}
+        return {**out, "ok": True,
+                "words": f"{full} is free on GitHub."}
+    except httpx.HTTPError as error:
+        return {**out, "reason": "failed", "words": f"GitHub did not answer ({type(error).__name__}); try again."}
+    finally:
+        if client is None:
+            own.close()
+
+
 # ── how BOSS reaches GitHub for this project ─────────────────────────────────────────────────
 
 @dataclass
@@ -240,12 +300,18 @@ def publish(c: Any, settings: Any, project_id: str, *, owner: str, repo: str,
                            "machine.", 409, "local_repo_missing", "input")
     state = _state(path)
     target = f"{owner}/{repo}"
-    if state.get("target") and state["target"].lower() != target.lower() and state.get("step") != "switched":
+    # Another target while one is half done is refused once anything reached it (a push, pull
+    # requests). Before that — the first target was refused, or only made — the person may pick
+    # another repository (the Publish sheet: "it already holds other history" → a new name).
+    if state.get("target") and state["target"].lower() != target.lower() and \
+            state.get("step") not in (None, "repository", "switched"):
         raise PublishError(f"A publish to {state['target']} is in progress; finish it (publish "
                            f"to {state['target']} again) before choosing another repository.", 409,
                            "publish_in_progress", "input")
     reach = reach or default_reach(c, settings, project_id, actor=actor, owner=owner, repo=repo)
     steps: list[dict[str, Any]] = []
+    if state.get("target") and state["target"].lower() != target.lower() and state.get("step") == "repository":
+        state["step"] = None    # a new target starts at its own repository step
     state.update({"target": target, "private": bool(private), "by": actor})
     _save(path, state)
 
@@ -371,5 +437,5 @@ def publish(c: Any, settings: Any, project_id: str, *, owner: str, repo: str,
             "words": f"Published to {target}." if steps else f"Already published to {target}."}
 
 
-__all__ = ["CreateRepoResult", "GitHubReach", "PublishError", "create_repository",
+__all__ = ["CreateRepoResult", "GitHubReach", "PublishError", "check_repository", "create_repository",
            "default_reach", "publish"]

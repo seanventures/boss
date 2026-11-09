@@ -368,7 +368,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
           ) : null}
           {w.links.build && w.state !== "done" ? <PxLink href={w.links.build} title="Build page in Code Tasks" testid={`px-work-build-${w.id}`}><Code size={11} aria-hidden /> Build</PxLink> : null}
           {w.links.log && (w.state === "running" || w.state === "stalled" || (w.state === "needs_you" && !!w.why)) ? <PxLink href={w.links.log} title="This build's live log" testid={`px-work-log-${w.id}`}><TerminalWindow size={11} aria-hidden /> Live log</PxLink> : null}
-          {w.links.pr ? <PxLink href={changeHref(w.links.pr.external_url) ?? ""} title={isLocalChangeUrl(w.links.pr.external_url) ? "Change set in BOSS" : "Pull request on GitHub"} testid={`px-work-pr-${w.id}`}>{w.state === "done" ? <GitMerge size={11} aria-hidden /> : <GitPullRequest size={11} aria-hidden />} PR #{w.links.pr.number}</PxLink> : null}
+          {w.links.pr ? <PxLink href={changeHref(w.links.pr.external_url) ?? ""} title={isLocalChangeUrl(w.links.pr.external_url) ? "Change set in BOSS" : "Pull request on GitHub"} testid={`px-work-pr-${w.id}`}>{w.state === "done" ? <GitMerge size={11} aria-hidden /> : <GitPullRequest size={11} aria-hidden />} {isLocalChangeUrl(w.links.pr.external_url) ? `Change #${w.links.pr.number}` : `PR #${w.links.pr.number}`}</PxLink> : null}
           {w.links.preview ? <PxLink href={w.links.preview} title="The running preview"><Globe size={11} aria-hidden /> Preview</PxLink> : null}
           {w.links.deploy ? <PxLink href={w.links.deploy} title="Where it is deployed"><Globe size={11} aria-hidden /> Staging</PxLink> : null}
         </span>

@@ -249,6 +249,13 @@ class LocalFolderIn(BaseModel):
     keep_history: bool = True
 
 
+class NewRepoIn(BaseModel):
+    """BOSSAPP-917: a new GitHub repository BOSS makes for the app, at Create and start."""
+    owner: str = Field(..., max_length=39)
+    repo: str = Field(..., max_length=100)
+    private: bool = True
+
+
 class StagingIn(BaseModel):
     host_id: str = Field(..., max_length=120)
     port: Optional[int] = Field(default=None, ge=1, le=65535)
@@ -271,6 +278,12 @@ class CreateAndStartBody(BaseModel):
     code_location: Optional[str] = Field(default=None, max_length=10)
     #: BOSSAPP-923: import a folder on this machine as the project's local repository.
     local_folder: Optional[LocalFolderIn] = None
+    #: BOSSAPP-917: "New GitHub repo, made by BOSS". The app's code starts in a repository on this
+    #: machine (its first commit), which is then published to this new GitHub repository — made
+    #: when the PERSON presses Create (creating a repository in an org is a person's decision).
+    #: A refusal (no Administration permission, a personal account) leaves the project local,
+    #: said in words; Publish to GitHub finishes it later.
+    new_repo: Optional[NewRepoIn] = None
     captain: Optional[str] = Field(default=None, max_length=120)
     crew: Optional[list[str]] = Field(default=None, max_length=20)
     #: The stack adapter id (Stack box) and the language connectors are applied for.
@@ -343,6 +356,22 @@ def _need(request: Request, permission: str, step: str, project_id: Optional[str
         raise Refused(step, decision.status, body)
 
 
+def _people_only(request: Request, what: str) -> None:
+    """A person's decision (BOSSAPP-917: creating a GitHub repository): an agent's or a service's
+    credential is refused, in words — the same rule as Publish (routers/local_projects.py)."""
+    from apps.api.app import identity_guard
+
+    ctx = identity_guard.request_auth(request)
+    if ctx is None:
+        return
+    from boss_engine.identity.legacy import is_bridge_principal
+
+    if not getattr(ctx, "is_human_session", False) or is_bridge_principal(ctx.principal.id):
+        raise Refused("github", 403, {"error": "people_only", "message":
+                                      f"{what} is a person's decision: sign in and do it from "
+                                      "the console."})
+
+
 def _needs(body: "CreateAndStartBody", kind: str) -> list[tuple[str, str]]:
     """Every permission this Create and start will use, in the order its steps run."""
     out = []
@@ -350,7 +379,7 @@ def _needs(body: "CreateAndStartBody", kind: str) -> list[tuple[str, str]]:
         out.append((P.REPOSITORY_MANAGE.value, "add_the_repository"))
     if body.folder is not None:
         out.append((P.PROJECT_UPDATE.value, "add_the_folder"))
-    if body.code_location == "local" or body.local_folder is not None or (
+    if body.code_location == "local" or body.local_folder is not None or body.new_repo is not None or (
             body.folder is not None and body.folder.import_code):
         out.append((P.REPOSITORY_MANAGE.value, "keep_the_code_locally"))
     if body.captain and body.captain != "engineering_captain":
@@ -502,8 +531,14 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
     if body.code_location not in (None, "", "github", "local"):
         raise Refused("input", 422, {"error": "bad_code_location",
                                      "message": "Code location is github or local."})
-    local_code = body.code_location == "local" or body.local_folder is not None or bool(
-        body.folder is not None and body.folder.import_code)
+    if body.new_repo is not None and (kind != "idea" or body.local_folder is not None
+                                      or body.folder is not None):
+        raise Refused("input", 422, {"error": "new_repo_for_a_new_app", "message":
+                                     "A new GitHub repository is for a new app."})
+    if body.new_repo is not None:
+        _people_only(request, "Creating a GitHub repository")
+    local_code = body.code_location == "local" or body.local_folder is not None or \
+        body.new_repo is not None or bool(body.folder is not None and body.folder.import_code)
     if local_code and body.repo_ids:
         raise Refused("input", 422, {"error": "local_and_repo", "message":
                                      "Keep the code locally or pick a repository, not both."})
@@ -700,6 +735,27 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
                                 "error": "not_ready", "message": str(error),
                                 "readiness": error.readiness}) from None
 
+    # ── THE NEW GITHUB REPOSITORY (BOSSAPP-917): made now, the first commit published to it, the
+    #    project switched to it. Idempotent (a retry finds it published); a refusal keeps the
+    #    project local and comes back in words for the Publish sheet.
+    published: Optional[dict[str, Any]] = None
+    if body.new_repo is not None:
+        from boss_engine.services import local_publish
+
+        try:
+            with begin(_engine) as db:
+                done = local_publish.publish(db, _settings, pid, owner=body.new_repo.owner.strip(),
+                                             repo=body.new_repo.repo.strip(),
+                                             private=body.new_repo.private, create=True, actor=actor)
+            published = {"ok": True, **done}
+            steps.append({"key": "github", "ok": True, "label": f"GitHub repo {done['full_name']}"})
+            if run_input.get("repository"):
+                run_input["repository"] = done["full_name"]
+        except local_publish.PublishError as error:
+            published = {"ok": False, **error.body(), "owner": body.new_repo.owner,
+                         "repo": body.new_repo.repo, "private": body.new_repo.private}
+            steps.append({"key": "github", "ok": False, "label": str(error)})
+
     # ── PHASE 2: start it ───────────────────────────────────────────────────────────────────
     started: dict[str, Any] = {}
     if kind != "idea":
@@ -725,7 +781,8 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
         steps.append({"key": "start", "ok": True, "label": "Planning started"})
         href = project_href(pid, tab="overview")
     return {"created": True, "project_id": pid, "name": body.name.strip(), "kind": kind,
-            "href": href, "steps": steps, "started": started, "staging": staged}
+            "href": href, "steps": steps, "started": started, "staging": staged,
+            "publish": published}
 
 
 def _connector_plan_body(body: CreateAndStartBody, pid: str, run_input: dict[str, Any]) -> dict:

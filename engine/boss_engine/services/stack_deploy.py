@@ -995,6 +995,13 @@ def _iso(value: Any) -> Optional[str]:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
+def _progress_of(data: Mapping[str, Any]) -> dict[str, Any]:
+    from .deploy_truth import progress
+
+    return progress(_json(data.get("steps")) or [], data.get("status"),
+                    log_tail=str(data.get("log_tail") or ""))
+
+
 def serialize(row: Any) -> dict[str, Any]:
     """The `deployment` the API returns. No secret, no manifest text, no token."""
     if row is None:
@@ -1014,6 +1021,8 @@ def serialize(row: Any) -> dict[str, Any]:
         "decision_id": data.get("decision_id"),
         "changeset_id": data.get("changeset_id"),
         "steps": _json(data.get("steps")) or [],
+        # THE SEVEN PHASES (deploy_truth.progress): what the Deployments card shows live.
+        "progress": _progress_of(data),
         "log_tail": data.get("log_tail") or "",
         "open_url": data.get("open_url"),
         "error": _json(data.get("error")) or None,
@@ -1293,6 +1302,20 @@ def create_stack_target(connection: Connection, *, project_id: str, host_id: str
         raise StackDeployError(
             f"{name} already has a {environment} target ({clash['id']}, {clash['status']}).",
             "Use that target, or choose another name or environment.", status_code=409)
+    # ONE TARGET PER APP PER ENVIRONMENT, under any name: the app IS its manifest in its
+    # repository. A second target shipping the same boss.deploy.yaml is the same app twice.
+    same_app = connection.execute(
+        text("SELECT id, app_name FROM deployment_targets WHERE project_id = :p "
+             "AND status = 'active' AND lower(environment) = lower(:e) "
+             "AND lower(split_part(repo, '/', -1)) = lower(:r) "
+             "AND COALESCE(NULLIF(manifest_path, ''), :dm) = :m"),
+        {"p": project_id, "e": environment, "r": repo, "dm": DEFAULT_MANIFEST_PATH,
+         "m": path or DEFAULT_MANIFEST_PATH}).mappings().first()
+    if same_app:
+        raise StackDeployError(
+            f"{same_app['app_name']!r} ({same_app['id']}) already deploys "
+            f"{owner}/{repo}'s {path or DEFAULT_MANIFEST_PATH} to {environment}.",
+            "Use that target: one app has one target per environment.", status_code=409)
     target_id = make_id("deptgt")
     connection.execute(
         text("INSERT INTO deployment_targets "
@@ -1789,8 +1812,15 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
     with engine.begin() as connection:
         target = _target(connection, target_id)
         if not target or target.get("project_id") != project_id:
-            raise StackDeployError("No such deployment target in this project.",
-                                   "Pick a stack target in Infra.", status_code=404)
+            # SAY WHICH TARGET AND WHY (BOSSAPP-930): "No such deployment target in this
+            # project" beside a Deployments card showing that very target left the operator
+            # asking which of the two was lying.
+            from .deploy_truth import why_not_found
+
+            raise StackDeployError(
+                f"The deploy cannot use its target. {why_not_found(connection, target_id, project_id)}",
+                "Deploy again: BOSS makes the app's target on its first deploy. To pick one "
+                "yourself, choose a target of this project in Infra.", status_code=404)
         declared = str(manifest_path or "").strip().strip("/")
         if not is_stack_target(target) and not declared:
             raise StackDeployError(
@@ -2891,6 +2921,21 @@ def _declared_stack_target(connection: Connection, project_id: str,
             # container and no Postgres. The target is made here, on the step's host, by the
             # same governed create_deployment_target deploy_app uses; asked before the step runs
             # (the gate, the console) it is only named, never made.
+            # ONE STAGING TARGET PER APP (BOSSAPP-930): the project's unused staging slot
+            # (onboarding's "Use for staging", named after the repository before any build
+            # named the app) is the app's — adopted, never a second target beside it. On the
+            # laptop's Hello World the step made "Hello World REST API + sample" on :8007 beside
+            # "boss-sandbox" on :8006, and both showed as staging.
+            from .deploy_truth import adopt_slot, adoptable_slot
+
+            slot = adoptable_slot(connection, project_id, environment, repository)
+            if slot is not None and not (host_id and slot.get("host_id") != host_id):
+                if not create:
+                    return {**slot, "pending_create": True, "adopt": True,
+                            "app_name": app_name, "manifest_path": path}
+                target = adopt_slot(connection, slot, app_name=app_name, manifest_path=path,
+                                    actor="workflow_runner")
+                return {**target, "manifest_path": path}
             target = _first_target(connection, project_id, run, app_name, repository,
                                    environment, host_id, create=create)
     if target is not None and target.get("pending_create"):
@@ -3491,6 +3536,16 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
                 **({"manifest_text": manifest_text[:6000]} if manifest_text else {}),
                 **({"host_facts": exc.facts} if exc.facts else {})}
         return refused
+    # ONE STAGING TARGET PER APP: a never-deployed repository slot this app's target has taken
+    # over is retired now (every read already hides it, deploy_truth.superseded).
+    try:
+        from .deploy_truth import retire_superseded
+
+        with engine.begin() as connection:
+            retire_superseded(connection, project_id, actor=actor)
+    except Exception:  # noqa: BLE001 — tidying; the planned deploy stands without it
+        log.warning("stack deploy: superseded slots of %s not retired", project_id,
+                    exc_info=True)
     return {
         "capability": "deploy", "tool": None, "status": "awaiting",
         "await": {"kind": "stack_deployment", "id": deployment["id"]},

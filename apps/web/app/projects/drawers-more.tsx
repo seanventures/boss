@@ -8,7 +8,7 @@
  *                   from the reads the page has (onboarding, work, roadmap, deployments);
  *   NeedsBody       a Needs-you item: why it waits, its path, the work and the PR.
  */
-import { changeHref, isLocalChangeUrl } from "../../lib/repo-links";
+import { changeHref, isLocalChangeUrl, reviewChangeWords } from "../../lib/repo-links";
 import { DiagnosisFlow } from "../../components/stuck-work";
 import React from "react";
 import {
@@ -18,7 +18,8 @@ import {
 import { GatedButton } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { IdentityError, idPost, refusalSentence } from "../../lib/identity/api";
-import { isPxDemo, workWhen } from "../../lib/project-experience";
+import { isPxDemo, pxHref, workWhen } from "../../lib/project-experience";
+import { PrdRecordView } from "../prd-record";
 import { notifyChanged } from "../changed";
 import {
   PX_PATHS, parseDeployments, parseWorkStory, startOnboarding, usePxRead, type Agent, type Deployments, type NeedsYou, type Node,
@@ -96,6 +97,7 @@ export function WorkStoryBody({ ctx, w, story }: { ctx: PxCtx; w: WorkItem; stor
           </div>
         </div>
       ) : null}
+      {story?.prd ? <PrdRecordView prd={story.prd} link={(h) => pxHref(h)} testid="px-drawer-work-prd" /> : null}
       {preview || parts.length ? (
         <div className="px-grid px-g2 px-wk-minis" data-testid="px-drawer-work-minis">
           <div className="px-card px-mini">
@@ -257,6 +259,8 @@ export function NeedsBody({ ctx, n }: { ctx: PxCtx; n: NeedsYou }) {
       {n.detail ? <p style={{ margin: 0, lineHeight: 1.5 }} className={n.question ? "px-muted" : undefined}
                      data-testid="px-drawer-needs-detail">{n.detail}</p> : null}
       {n.entries && n.entries.length > 1 ? <NeedsEntries ctx={ctx} n={n} /> : null}
+      {/* A MEETING'S PRD (BOSSAPP-929): read it here, with the meeting and its repo file. */}
+      {n.prd ? <PrdRecordView prd={n.prd} link={(h) => pxHref(h)} open testid="px-drawer-needs-prd" /> : null}
       {/* What the Shepherd found about the stuck or refused work this asks about (stuck_work). */}
       <DiagnosisFlow d={n.diagnosis} testId="px-drawer-needs-diagnosis" />
       <ReleaseList n={n} />
@@ -435,7 +439,7 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
             {n.kind === "merge" ? <GitMerge size={12} aria-hidden /> : n.kind === "deploy" ? <RocketLaunch size={12} aria-hidden /> : <Check size={12} aria-hidden />} {actWord(n)}</GatedButton>
           <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-size="s" disabled={busy}
                        data-testid="px-drawer-needs-reject" onClick={() => setRejecting(true)}>Reject</GatedButton>
-          {review ? <PxLink href={changeHref(review) ?? ""} testid="px-drawer-needs-review">{isLocalChangeUrl(review) ? "Review the change set" : "Review on GitHub"}</PxLink> : null}
+          {review ? <PxLink href={changeHref(review) ?? ""} testid="px-drawer-needs-review">{isLocalChangeUrl(review) ? reviewChangeWords(review) ?? "Review the change set" : "Review on GitHub"}</PxLink> : null}
         </div>
       )}
       <Said text={said.text} tone={said.tone} />

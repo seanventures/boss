@@ -46,6 +46,7 @@ import { RateIt, ReasonChips, sendReasons } from "../improve/rate-it";
 import { ShareRunSheet } from "../improve/share-run";
 import { ActPopover, StationFaceView, areaHref, money, secondsWord, spanOf } from "./cockpit-util";
 import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
+import { isWaitingForGitHub } from "../../lib/github-wait";
 import { LogsDrawer, type LogTab } from "./logs-drawer";
 import { Outputs, defaultOpen, type OutputKey } from "./outputs";
 import { StationLine, bayWord } from "./station-line";
@@ -487,7 +488,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
       </header>
       {/* WAITING FOR WHAT, said under the header (never a bare "Queued"), and what the Shepherd
           found when it stopped moving (stuck_work). */}
-      {c.why && !c.diagnosis ? <div className="fx-why"><WhyLine why={c.why} testId="fx-why" /></div> : null}
+      {c.why && (!c.diagnosis || isWaitingForGitHub(c.why.code)) ? <div className="fx-why"><WhyLine why={c.why} testId="fx-why" /></div> : null}
       <DiagnosisFlow d={c.diagnosis} testId="fx-diagnosis" />
 
       {c.attention.length ? (

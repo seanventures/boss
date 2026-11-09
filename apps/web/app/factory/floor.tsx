@@ -38,7 +38,7 @@ export const STOPPED_SHOWN = 5;
 
 const RANK: Record<string, number> = {
   needs_plan: 0, needs_waiver: 0, budget_refused: 0, blocked: 1, quiet: 1,
-  building: 2, budget_wait: 2, queued: 3,
+  building: 2, budget_wait: 2, github_wait: 2, queued: 3,
 };
 
 /** Waiting on you → quiet or blocked → building → queued. Stable inside a rank (the server's order). */

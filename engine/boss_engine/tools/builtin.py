@@ -1067,8 +1067,15 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 ),
                 {"p": pid, "l": limit},
             ).mappings().all()
+            # THE SAME TARGETS AND TRUTH the Deployments tab shows (deploy_truth): which are
+            # live, which are setting up or failed and why — so an agent never calls an
+            # address live that the project page says is not.
+            from ..services.deploy_truth import targets_view
+
+            targets = targets_view(c, pid)
         return {"project_id": pid, "deployments": [_json_safe(dict(r)) for r in rows],
-                "stack_deployments": redact_for_agent([_json_safe(dict(r)) for r in stacks])}
+                "stack_deployments": redact_for_agent([_json_safe(dict(r)) for r in stacks]),
+                "targets": redact_for_agent([_json_safe(t) for t in targets])}
 
 
 def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends: str,

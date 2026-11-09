@@ -14,13 +14,15 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowSquareOut, ChatCircleDots, Check, ClipboardText, Compass, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
+  ArrowSquareOut, ChatCircleDots, CircleNotch, WarningCircle, Check, ClipboardText, Compass, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
   Plus, RocketLaunch, TreeStructure, GitMerge, CloudCheck, ListChecks, GithubLogo, HardDrives, type Icon,
 } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
 import { useAreaKeydown } from "../../lib/area-keys";
 import { isLocalRepo } from "../../lib/repo-links";
+import { notifyChanged } from "../changed";
+import { LocalPublishChip } from "./publish-sheet";
 import { openDockAbout } from "../../lib/dock-subject";
 import {
   PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, waitingSinceWords, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
@@ -297,10 +299,25 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
             <a className="px-hchip" href="#" data-testid="px-head-norepo" onClick={(e) => { e.preventDefault(); ctx.tab("settings", { section: "repos" }); }}>
               <Plus size={11} aria-hidden /> Add a repo</a>
           )}
+          {/* LOCAL FIRST (BOSSAPP-921): a project whose code is on this machine says so, quietly,
+              with Publish to GitHub one press away. */}
+          {!ctx.demo && repo && isLocalRepo(repo.full_name) ? <LocalPublishChip projectId={ctx.projectId} onPublished={() => notifyChanged("project.published")} /> : null}
           {p.live_url ? (
             <a className="px-hchip" href={p.live_url} target="_blank" rel="noreferrer noopener" data-testid="px-head-live"
                title={`${staging?.label ?? "Staging"} — opens the live app`}>
               <Globe size={11} aria-hidden />{(staging?.label ?? "staging").toLowerCase()} · {p.live_url.replace(/^https?:\/\//, "")}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a>
+          ) : null}
+          {/* THE DEPLOY CHIP (BOSSAPP-932): a deploy moving now ("Deploying · 2/7"), one waiting
+              for its approval, or the last one that failed — a link to the Deployments card
+              that shows its steps and log live. */}
+          {p.deploy && ["deploying", "waiting", "failed"].includes(p.deploy.state) ? (
+            <a className="px-hchip px-hchip-deploy" data-s={p.deploy.state} data-testid="px-head-deploy"
+               href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=deployments`)}
+               onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.tab("deployments"); }}
+               title={[`${p.deploy.app || "The app"} · ${p.deploy.environment || "staging"}`, p.deploy.reason].filter(Boolean).join(": ") + " — opens Deployments"}>
+              {p.deploy.state === "failed" ? <WarningCircle size={11} aria-hidden /> : <CircleNotch size={11} className="px-spin" aria-hidden />}
+              {p.deploy.state === "deploying" ? `Deploying${p.deploy.total ? ` · ${p.deploy.index}/${p.deploy.total}` : ""}`
+                : p.deploy.state === "waiting" ? "Deploy waiting for approval" : "Last deploy failed"}</a>
           ) : null}
           {/* THE HEALTH CHIP, ON EVERY TAB (12-24): a link to this project's Health tab — the
               environments' word, or "No health yet" before anything is deployed (Health's own

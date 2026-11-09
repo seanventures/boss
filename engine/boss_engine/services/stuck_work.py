@@ -68,6 +68,9 @@ ACTOR = "agent:shepherd"
 LIVE_STATUSES = ("running", "queued", "repairing")
 ENDED_STATUSES = ("failed", "blocked")
 WAITING_ON_PERSON = "waiting_on_person"
+#: A build that finished while GitHub was down (BOSSAPP-922), said the same on every surface.
+GITHUB_WAIT_WORDS = ("Waiting for GitHub · your work is saved here and will push when GitHub "
+                     "is back")
 
 # ───────────────────────────── small helpers ─────────────────────────────
 
@@ -291,14 +294,17 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
             pending = None
         detail = _clip(_as_dict(ctx.get("github_pending")).get("reason") or "", 300)
         eta = None
+        nxt = None
         if pending:
             nxt = _aware(pending["next_attempt_at"])
             eta = max(0, int((nxt - now).total_seconds() // 60)) if nxt else None
             detail = _clip(f"{pending['attempts']} push tries so far"
                            + (f"; last: {pending['last_error']}" if pending["last_error"] else ""), 300)
-        return out("github", "boss", "Waiting for GitHub: built and committed on this machine; "
-                   "BOSS pushes it and opens the pull request when GitHub answers",
-                   detail, run.get("updated_at"), eta)
+        # THE WORDS EVERY SURFACE SHOWS (BOSSAPP-922): waiting, never failed; the next try's
+        # time rides along (`next_at`) so a screen can say "next try 14:32".
+        said = out("github", "boss", GITHUB_WAIT_WORDS, detail, run.get("updated_at"), eta)
+        said["next_at"] = nxt.isoformat() if nxt else None
+        return said
     from .build_waits import why_waiting
 
     dec = _decision(connection, run.get("decision_id"))

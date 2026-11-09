@@ -3304,11 +3304,15 @@ def _delegation_person_name(delegation_id: str) -> Optional[str]:
     return principal_display_name(person) if person else None
 
 
-def decision_card_from_row(row) -> DecisionCard:
-    from boss_engine.services import decision_actions
+def decision_card_from_row(row, connection=None, project_id: Optional[str] = None) -> DecisionCard:
+    from boss_engine.services import decision_actions, prd_record
     from boss_engine.services.core import decision_reason_from_payload
 
     rec = row.get("recommendation") or {}
+    # A MEETING'S PRD carries its record (BOSSAPP-929): every surface reading this card shows
+    # the PRD, the panel that argued it and its file in the repository from one source.
+    prd = (prd_record.links(connection, {**dict(row), "project_id": row.get("project_id") or project_id})
+           if connection is not None else None)
     return DecisionCard(
         id=row["id"],
         task_id=row.get("task_id"),
@@ -3337,6 +3341,7 @@ def decision_card_from_row(row) -> DecisionCard:
         executed_at=row["executed_at"].isoformat() if row.get("executed_at") else None,
         resolution_note=row.get("resolution_note"),
         external_ref=row.get("external_ref"),
+        message=row.get("noop_message"),
         via_delegate=row.get("via_delegate"),
         via_delegate_name=(principal_display_name(row["via_delegate"])
                            if row.get("via_delegate") else None),
@@ -3346,6 +3351,7 @@ def decision_card_from_row(row) -> DecisionCard:
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
         **decision_actions.describe(row),
+        prd=prd,
     )
 
 
@@ -24096,7 +24102,7 @@ def decision_inbox(
         ).mappings().all()
         return DecisionInboxResponse(
             project_id=project_id,
-            items=[decision_card_from_row(row) for row in rows],
+            items=[decision_card_from_row(row, connection, project_id) for row in rows],
             limit=limit,
             offset=offset,
         )
@@ -24130,7 +24136,7 @@ def get_decision(decision_id: str, project_id: Optional[str] = None) -> Decision
         if not row:
             raise HTTPException(status_code=404, detail="Decision not found")
         require_project_reader(connection, row["project_id"])
-        return decision_card_from_row(row)
+        return decision_card_from_row(row, connection)
 
 
 @app.post("/v1/decisions/digests", response_model=DecisionDigestResponse, status_code=201)

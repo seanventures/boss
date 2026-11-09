@@ -3470,6 +3470,31 @@ def _perform_toolless(
     }
 
 
+def deploy_step_target(connection: Connection, engine: Any, project_id: str,
+                       inputs: dict[str, Any], *, default_owner: str = "") -> Optional[dict]:
+    """The stack target the Deploy step ships to, READY FOR THE PLANNER.
+
+    A declared app's first deploy makes (or adopts) its target here — COMMITTED, in its own
+    transaction, before the plan reads it. Made on the step's connection, the target was
+    invisible to plan_stack_deploy's own transaction: attempt 1 of every first deploy failed
+    "No such deployment target in this project" about the target it had just made, while the
+    Deployments tab (reading after the step's commit) showed it, address and all (Hello World,
+    wfr_0b799972, 2026-11-08; BOSSAPP-930)."""
+    from ..db import begin as _begin
+    from .stack_deploy import stack_target_for_deploy
+
+    target = stack_target_for_deploy(connection, project_id, inputs,
+                                     default_owner=default_owner)
+    if target is None or not target.get("pending_create"):
+        return target
+    if engine is None:      # a context with no engine of its own (unit harnesses): in place
+        return stack_target_for_deploy(connection, project_id, inputs,
+                                       default_owner=default_owner, create=True)
+    with _begin(engine) as made:
+        return stack_target_for_deploy(made, project_id, inputs, default_owner=default_owner,
+                                       create=True)
+
+
 def _perform_capability(
     connection: Connection,
     ctx: Any,
@@ -3659,14 +3684,12 @@ def _perform_capability(
         if waiting:
             return waiting
     if key == "deploy":
-        from .stack_deploy import plan_for_workflow_step, stack_target_for_deploy
+        from .stack_deploy import plan_for_workflow_step
 
-        stack_target = stack_target_for_deploy(
-            connection, project_id, inputs,
+        stack_target = deploy_step_target(
+            connection, getattr(ctx, "engine", None), project_id, inputs,
             default_owner=str(getattr(getattr(ctx, "settings", None), "target_github_owner", "")
-                              or ""),
-            # THE DEPLOY ITSELF: a declared app's first deploy makes its target here.
-            create=True)
+                              or ""))
         approved = bool(context.get("approval_decision_id"))
         waived_for = str(context.get(STACK_GATE_TARGET) or "")
         if waived_for and not approved and (

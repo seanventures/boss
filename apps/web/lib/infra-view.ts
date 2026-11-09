@@ -307,6 +307,9 @@ export type DeployDetail = {
   healthCheckResults: Record<string, unknown>[];
   promotion: { id: string; phases: { key: string; label: string; state: string }[] } | null;
   openUrl: string | null; changesetId: string | null; live: boolean;
+  /** A stack deploy's seven phases as the engine sent them (deploy_truth.progress); parse with
+   *  project-experience parseDeployProgress. */
+  progress?: unknown;
 };
 export function parseDeployDetail(w: unknown): DeployDetail {
   const o = obj(w);
@@ -323,6 +326,7 @@ export function parseDeployDetail(w: unknown): DeployDetail {
     healthCheckResults: arr(o.health_check_results).map(obj),
     promotion: pr ? { id: str(pr.id), phases: arr(pr.phases).map((p) => { const x = obj(p); return { key: str(x.key), label: str(x.label), state: str(x.state) }; }) } : null,
     openUrl: optStr(o.open_url), changesetId: optStr(o.changeset_id), live: o.live === true,
+    progress: o.progress ?? null,
   };
 }
 

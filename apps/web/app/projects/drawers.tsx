@@ -8,7 +8,7 @@
  *   env:<key>     an environment's full picture;  deploy:<id>  one deploy
  * Prose lives here, never on the page.
  */
-import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
+import { changeHref, isLocalChangeUrl, linkTarget, reviewChangeWords } from "../../lib/repo-links";
 import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
 import React, { useEffect, useState } from "react";
 import {
@@ -147,6 +147,8 @@ function AskBox({ ctx, about, placeholder }: { ctx: PxCtx; about: string; placeh
 
 function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () => void }) {
   const l = w.links;
+  // The PR a merge waits on: the engine's merge_pr; an older payload's "Merge" row its pr.
+  const mp = l.merge_pr ?? (w.action_label === "Merge" && l.pr ? { ...l.pr, follow_up_of: null, failed: "" } : null);
   const story = useWorkStory(ctx, w.id).data;
   const full = l.build || l.workflow_run;
   return (
@@ -160,12 +162,14 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
       {w.state === "needs_you" ? (
         <div className="px-ny" data-testid="px-drawer-work-needs">
           <span className="px-ny-ico" aria-hidden>!</span>
-          <b style={{ flex: 1 }}>{l.pr ? "Ready to merge" : w.why?.who === "you" ? w.why.words : "Waiting on you"}</b>
+          {/* "Ready to merge" only for a merge question, about ITS pull request (merge_pr):
+              never a merged PR, never a deploy gate's wait (pr_follow_up). */}
+          <b style={{ flex: 1 }} data-testid="px-drawer-work-needs-words">{mp ? (mp.failed ? `Merge failed: ${mp.failed}` : mp.follow_up_of ? `Follow-up fix after #${mp.follow_up_of} · ready to merge` : "Ready to merge") : w.why?.who === "you" ? w.why.words : "Waiting on you"}</b>
           {/* ONE ACTION (screen 05b): merging is approving the build's merge question in BOSS;
               with no question on record it opens the PR on GitHub. */}
-          {l.pr ? (l.decision
-            ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(l.decision)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> Merge PR #{l.pr.number}</a>
-            : <a className="px-btn" data-kind="amber" data-size="s" href={changeHref(l.pr.external_url) ?? undefined} {...linkTarget(l.pr.external_url)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> {isLocalChangeUrl(l.pr.external_url) ? `Open change set #${l.pr.number}` : `Merge PR #${l.pr.number} ↗`}</a>)
+          {mp ? (l.decision
+            ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(l.decision)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> Merge PR #{mp.number}</a>
+            : <a className="px-btn" data-kind="amber" data-size="s" href={changeHref(mp.external_url) ?? undefined} {...linkTarget(mp.external_url)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> {isLocalChangeUrl(mp.external_url) ? `Open change set #${mp.number}` : `Merge PR #${mp.number} ↗`}</a>)
             : l.decision ? <PxLink href={l.decision} className="px-btn" testid="px-drawer-work-decide">Decide</PxLink>
             : l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">Decide</PxLink> : null}
         </div>
@@ -191,7 +195,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
         <div className="px-row px-wrap" style={{ marginTop: 6 }} data-testid="px-drawer-work-links">
           {l.workflow_run ? <PxLink href={l.workflow_run} testid="px-drawer-link-run"><FlowArrow size={11} aria-hidden /> Workflow run</PxLink> : null}
           {l.build ? <PxLink href={l.build} testid="px-drawer-link-build"><Code size={11} aria-hidden /> Build in Code Tasks</PxLink> : null}
-          {l.pr ? <PxLink href={changeHref(l.pr.external_url) ?? ""} testid="px-drawer-link-pr"><GitPullRequest size={11} aria-hidden /> PR #{l.pr.number}</PxLink> : null}
+          {l.pr ? <PxLink href={changeHref(l.pr.external_url) ?? ""} testid="px-drawer-link-pr"><GitPullRequest size={11} aria-hidden /> {isLocalChangeUrl(l.pr.external_url) ? `Change #${l.pr.number}` : `PR #${l.pr.number}`}</PxLink> : null}
           {l.deploy ? <PxLink href={l.deploy}><RocketLaunch size={11} aria-hidden /> Deploy</PxLink> : null}
           {l.log ? <PxLink href={l.log} testid="px-drawer-link-log"><Terminal size={11} aria-hidden /> Live log</PxLink> : null}
           {/* THIS RUN'S OWN LESSONS (05b-16): what its agents learned, consulted and reused —

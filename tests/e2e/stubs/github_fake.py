@@ -177,6 +177,33 @@ class GitHubFake:
 
     # ------------------------------------------------------------------ dispatch
     def handle(self, method: str, path: str, query: str, body: Any) -> tuple[int, Any]:
+        # LOCAL-FIRST (BOSSAPP-917/921/922), opt-in through POST /github/_owners and
+        # /github/_outage, so every other suite sees the fake exactly as before:
+        #   * an OUTAGE answers every repository call 502 (and git 502), as GitHub down does;
+        #   * a FRESH owner's repositories do not exist until made: GET is 404, POST
+        #     /orgs/{owner}/repos (or /user/repos) makes an EMPTY one that a push fills.
+        if self.remotes.outage and path.startswith(("/repos/", "/orgs/", "/user/repos")):
+            return 502, {"message": "boss-e2e GitHub fake: GitHub is down (outage switched on)"}
+        m = re.match(r"^/users/([^/]+)$", path)
+        if m:
+            login = m.group(1)
+            kind = self.remotes.owner_types.get(login.lower(), "Organization" if login != "boss-e2e" else "User")
+            return 200, {"login": login, "id": 7, "type": kind}
+        m = re.match(r"^/orgs/([^/]+)/repos$", path) if method == "POST" else None
+        if m or (path == "/user/repos" and method == "POST"):
+            owner = m.group(1) if m else "boss-e2e"
+            name = str((body or {}).get("name") or "")
+            if not name:
+                return 422, {"message": "Validation Failed: name"}
+            if self.remotes.exists(owner, name):
+                return 422, {"message": "Repository creation failed.",
+                             "errors": [{"message": "name already exists on this account"}]}
+            self.remotes.ensure(owner, name, empty=True)
+            full = f"{owner}/{name}"
+            self.world.add("created_repos", {"full_name": full, "private": bool((body or {}).get("private", True))})
+            return 201, {"id": 2, "name": name, "full_name": full, "private": bool((body or {}).get("private", True)),
+                         "default_branch": "main", "owner": {"login": owner},
+                         "html_url": f"https://github.com/{full}", "clone_url": f"https://github.com/{full}.git"}
         if path in ("/", "/user"):
             return 200, {"login": "boss-e2e", "id": 1, "type": "User"}
         if path == "/rate_limit":
@@ -190,6 +217,8 @@ class GitHubFake:
         owner, repo, rest = m.group(1), m.group(2), m.group(3) or ""
         full = f"{owner}/{repo}"
         body = body if isinstance(body, dict) else {}
+        if self.remotes.is_fresh(owner) and not self.remotes.exists(owner, repo):
+            return 404, {"message": "Not Found"}
         with _LOCK:
             bare = self.remotes.ensure(owner, repo)
             try:

@@ -882,8 +882,11 @@ def start_local_first_suites(db_url: str, work: Path) -> Optional[Background]:
     env = {**os.environ, "DATABASE_URL": url, "BOSS_TEST_DATABASE_URL": url,
            "BOSS_SANDBOX_ISOLATION": "off",
            "PYTHONPATH": "/boss:/boss/engine:/boss/apps/api:/boss/apps/worker"}
+    # Run from /tmp, not /boss: Settings reads .env from the working directory, and /boss is
+    # the install itself, whose .env (live API keys) turned every fixture request into "Valid
+    # BOSS API key … required" (rc10.12 gate, 2026-11-09). Tests must never read it.
     return Background([sys.executable, str(Path(__file__).resolve()), "--local-first-suites"],
-                      env, "/boss", work / "local-first.log")
+                      env, "/tmp", work / "local-first.log")
 
 
 def run_local_first_suites() -> int:
@@ -891,7 +894,7 @@ def run_local_first_suites() -> int:
     import pytest
 
     return int(pytest.main(["-q", "-p", "no:cacheprovider", "-W", "ignore", "-rs",
-                            *LOCAL_FIRST_SUITES]))
+                            "--rootdir", "/boss", *[f"/boss/{n}" for n in LOCAL_FIRST_SUITES]]))
 
 
 @check("local-first: builds commit locally, a person merges, preview and deploy use local, "

@@ -43,6 +43,7 @@ class World:
         self.log: list[dict[str, Any]] = []
         self.mail: list[dict[str, Any]] = []
         self.prs: list[dict[str, Any]] = []
+        self.created_repos: list[dict[str, Any]] = []
         self.issues: list[dict[str, Any]] = []
         self.videos: list[dict[str, Any]] = []
         self.deploys: list[dict[str, Any]] = []
@@ -389,6 +390,27 @@ class Handler(BaseHTTPRequestHandler):
             with w.lock:
                 w.checks[key] = [dict(run) for run in body.get("check_runs") or []]
             return 200, {"ok": True, "key": key}, json_t
+        if path == "/github/_owners" and method == "POST" and isinstance(body, dict) and self.git is not None:
+            # LOCAL-FIRST: owners whose repositories exist only once made, and each one's type
+            # ("Organization" | "User"): {"owners": [{"login": "acme-new", "type": "Organization"}]}.
+            for item in body.get("owners") or []:
+                login = str(item.get("login") or "").lower()
+                if login:
+                    self.git.fresh_owners.add(login)
+                    self.git.owner_types[login] = str(item.get("type") or "Organization")
+            return 200, {"fresh": sorted(self.git.fresh_owners)}, json_t
+        if path == "/github/_outage" and method == "POST" and isinstance(body, dict) and self.git is not None:
+            # LOCAL-FIRST (BOSSAPP-922): GitHub down (every repository call and git answers 502).
+            self.git.outage = bool(body.get("on"))
+            return 200, {"outage": self.git.outage}, json_t
+        if path == "/github/_seed" and method == "POST" and isinstance(body, dict) and self.git is not None:
+            # A repository that already holds other history (Publish refuses it in words).
+            self.git.ensure(str(body.get("owner") or ""), str(body.get("repo") or ""))
+            return 200, {"ok": True}, json_t
+        if path == "/github/_prs":
+            return 200, {"prs": list(w.prs)}, json_t
+        if path == "/github/_created" and self.git is not None:
+            return 200, {"repos": list(getattr(self.world, "created_repos", []))}, json_t
         if path == "/github/_device" and method == "POST" and isinstance(body, dict) and self.device:
             # The test plays the person at github.com/login/device: approve, deny, expire, slow_down.
             return 200, self.device.control(body), json_t

@@ -1925,11 +1925,11 @@ function ConsoleShellInner({
                 <button type="button" className={`bx-palette-item${filtered.length ? "" : " active"}`}
                         data-testid="palette-new-build"
                         title={NEW_BUILD_TIP}
-                        onClick={() => { setPaletteOpen(false); openNewProject(); }}>
+                        onClick={() => { setPaletteOpen(false); openNewProject("1"); }}>
                   <Plus size={17} aria-hidden />
                   <span>
                     <span style={{ fontWeight: 600 }}>Add project</span>
-                    <span style={{ display: "block", fontSize: "0.78rem", color: "var(--muted)" }}>An idea, a repo or a folder</span>
+                    <span style={{ display: "block", fontSize: "0.78rem", color: "var(--muted)" }}>A new app, or code you have</span>
                   </span>
                 </button>
               ) : null}

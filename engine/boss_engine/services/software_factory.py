@@ -1215,6 +1215,63 @@ class SoftwareFactoryService:
             return self._finalize_plan_run(connection, run_id)
         return result
 
+    def _pull_request_settled(self, pull_request_number: int) -> Optional[dict]:
+        """{"state": "merged", "sha"} or {"state": "closed"} when the host already settled this
+        pull request, else None (open, or the host cannot say)."""
+        read = getattr(self.github, "pull_request_state", None)
+        if not callable(read):
+            return None
+        try:
+            pr = read(int(pull_request_number)) or {}
+        except Exception:  # noqa: BLE001 — unread: merge as before
+            return None
+        if pr.get("merged"):
+            return {"state": "merged",
+                    "sha": str(pr.get("merge_commit_sha") or pr.get("head_sha") or "merged")}
+        if str(pr.get("state") or "") == "closed":
+            return {"state": "closed"}
+        return None
+
+    def _after_merge_failure(self, connection: Any, project_id: str, decision_id: str,
+                             pull_request_number: int, pull_request_url: str,
+                             branch_name: Optional[str], receipt_id: str, message: str) -> dict:
+        """A failed merge, classified and acted on in words (merge_failures)."""
+        from . import merge_failures
+
+        return merge_failures.handle(self, connection, project_id, decision_id,
+                                     pull_request_number, pull_request_url, branch_name,
+                                     receipt_id, message)
+
+    def _merge_after_restack(self, connection: Any, project_id: str, pull_request_number: int,
+                             title: str, branch_name: Optional[str], receipt_id: str,
+                             pull_request_url: str) -> Any:
+        """Tier 1b of conflict recovery (pr_follow_up): the merge result, or None."""
+        merged_of = getattr(self.github, "last_merged_pull_request", None)
+        restack = getattr(self.github, "restack_after_merge", None)
+        if not branch_name or not callable(merged_of) or not callable(restack):
+            return None
+        try:
+            earlier = merged_of(branch_name)
+            if not earlier or int(earlier["number"]) == int(pull_request_number):
+                return None
+            done = restack(branch_name, str(earlier.get("head_sha") or ""),
+                           number=int(earlier["number"]))
+            if not done.get("restacked"):
+                return None
+            self.events.emit(
+                connection, project_id, "software_factory.pull_request_restacked",
+                "release_manager", "receipt", receipt_id,
+                {"pull_request_url": pull_request_url, "after": int(earlier["number"]),
+                 "paths": done.get("paths") or [],
+                 "why": f"its branch still carried #{earlier['number']}'s merged commits; put "
+                        "it back on its base with only the follow-up change, then merged"})
+            return self.github.merge_pull_request(pull_request_number, title)
+        except Exception:  # noqa: BLE001 — falls through to the failure path, in words
+            import logging
+
+            logging.getLogger(__name__).debug("merge_after_restack_failed", exc_info=True)
+            return None
+
     def _mark_merge_completed(
         self,
         connection: Any,
@@ -1928,8 +1985,27 @@ class SoftwareFactoryService:
         # Packet is optional commentary. A skipped model call has no provider ref.
         review_provider_ref = None
 
+        follow_up: Optional[dict] = None
         try:
             self.github.ensure_branch(branch_name)
+            # ONE PULL REQUEST PER PIECE OF WORK (pr_follow_up): an open PR on this branch is
+            # updated in place; after an earlier PR from it merged, this is a named follow-up
+            # on a branch put back on its base, so it shows only its own change.
+            from . import pr_follow_up
+
+            follow_up = pr_follow_up.prepare_branch(
+                self.github, branch_name, base=pr_base, paths=[f.path for f in files])
+            if follow_up:
+                reason = pr_follow_up.follow_up_reason(title, follow_up["after"],
+                                                       follow_up.get("paths") or [])
+                follow_up["reason"] = reason
+                title = pr_follow_up.follow_up_title(title, follow_up["after"])
+                summary = f"{reason}\n\n{summary}"
+                self.events.emit(
+                    connection, project_id, "software_factory.follow_up_after_merge",
+                    "coding_worker", "receipt", pr_receipt["id"],
+                    {k: follow_up.get(k) for k in ("after", "restacked", "paths", "why")}
+                    | {"branch": branch_name, "title": title})
             # A CHANGE NEVER SILENTLY DROPS MONITORING (monitoring_guard; PR #234): a manifest
             # that lost `alerts:` / `dashboard:` entries the change did not name gets them back
             # from the branch's own version before anything is written.
@@ -2286,7 +2362,10 @@ class SoftwareFactoryService:
             project_id,
             task_id,
             (f"Checks failing — decide the merge: {title} (PR #{pr.number})"
-             if checks_failing else f"Approve code change: {title} (PR #{pr.number})"),
+             if checks_failing else
+             f"Approve follow-up fix after #{follow_up['after']}: "
+             f"{pr_follow_up.work_name(title)} (PR #{pr.number})" if follow_up else
+             f"Approve code change: {title} (PR #{pr.number})"),
             {
                 # FIRST, so nothing it carries can replace the action below. Its keys are the
                 # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
@@ -2343,6 +2422,9 @@ class SoftwareFactoryService:
                 # The knowledge the card is "based on": facts matched to this change's symbols
                 # (knowledge/runtime.remember_written_files). Empty when none matched.
                 "cited_fact_ids": citations,
+                # A follow-up after the merge of #N (pr_follow_up): named, with its reason.
+                **({"follow_up_of": follow_up["after"],
+                    "follow_up_reason": follow_up.get("reason")} if follow_up else {}),
             },
             {},
             "merge_decision_required",
@@ -2621,8 +2703,34 @@ class SoftwareFactoryService:
                                            pull_request_number, merge_receipt["id"],
                                            pull_request_url=pull_request_url)
         recovered_from_stale_base = False
+        # MERGING TWICE IS A NO-OP (pr_follow_up): a pull request already merged — by an earlier
+        # job, a person in GitHub, or a second press — completes with GitHub's own merge sha and
+        # never asks GitHub to merge again; one closed unmerged says so and does nothing.
+        settled = self._pull_request_settled(pull_request_number)
+        if settled and settled.get("state") == "closed":
+            self.receipts.mark_failed(
+                connection, merge_receipt["id"],
+                {"message": f"PR #{pull_request_number} was closed without merging; nothing "
+                            "was merged."})
+            from .cleared_causes import on_pull_request_settled as _settled_hook
+
+            for _rid in connection.execute(
+                    sql("SELECT id FROM code_task_runs WHERE project_id = :p AND "
+                        "pull_request_url = :u"),
+                    {"p": project_id, "u": pull_request_url}).scalars().all():
+                _settled_hook(connection, str(_rid), "closed")
+            return {"status": "closed", "receipt_id": merge_receipt["id"],
+                    "decision_id": decision_id, "pull_request_url": pull_request_url,
+                    "message": f"PR #{pull_request_number} was closed without merging, so "
+                               "there is nothing to merge."}
         try:
-            merge = self.github.merge_pull_request(pull_request_number, title)
+            from .github_adapter import PullRequestMergeResult
+
+            merge = (PullRequestMergeResult(
+                sha=settled["sha"], merged=True,
+                message=f"PR #{pull_request_number} is already merged")
+                if settled and settled.get("state") == "merged" else
+                self.github.merge_pull_request(pull_request_number, title))
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
                 connection, merge_receipt["id"], {"message": str(error)}
@@ -2679,6 +2787,17 @@ class SoftwareFactoryService:
                 except Exception as retry_error:  # noqa: BLE001
                     _msg = f"{_msg} | retry after branch update: {retry_error}"
                     merge = None
+            if merge is None and ("405" in _msg or "not mergeable" in _msg.lower()):
+                # TIER 1b: the branch still carries an EARLIER pull request's commits that a
+                # squash merge left off the base (PR #237 after #236). Put it back on the base
+                # holding only what changed after that merge, then merge once more.
+                merge = self._merge_after_restack(connection, project_id, pull_request_number,
+                                                  title, branch_name, merge_receipt["id"],
+                                                  pull_request_url)
+                if merge is not None:
+                    recovered_from_stale_base = True
+                else:
+                    _msg = f"{_msg} | the branch could not be put back on its base"
 
             if merge is None:
                 self.receipts.mark_failed(
@@ -2697,11 +2816,12 @@ class SoftwareFactoryService:
                      "needs_conflict_resolution": ("405" in _msg
                                                    or "conflict" in _msg.lower())},
                 )
-                return {
-                    "status": "failed",
-                    "receipt_id": merge_receipt["id"],
-                    "message": str(error),
-                }
+                # A MERGE THAT FAILED IS NEVER SILENT (merge_failures): classified, said in
+                # words on the decision and the run, and acted on — superseded closes, a real
+                # conflict goes to the build agent, a moved head or a GitHub hiccup retries.
+                return self._after_merge_failure(
+                    connection, project_id, decision_id, pull_request_number,
+                    pull_request_url, branch_name, merge_receipt["id"], _msg)
 
         artifact_id = create_artifact(
             connection,
