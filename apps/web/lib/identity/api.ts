@@ -97,6 +97,7 @@ export const REFUSAL_WORDS: Readonly<Record<string, (body: Body) => string>> = {
   enrolment_expired: () => "That key expired — start again",
   enrolment_grant_required: () => "Ask an admin to reset your second factor",
   task_grants_end_with_their_run: () => "Ends with its run",
+  captain_authority_has_no_expiry: () => "This authority has no end date. Revoke it to end it.",
   revoked_is_terminal: () => "Already ended",
   too_long: (b) => (typeof b.max_days === "number" ? `At most ${b.max_days} days` : "Longer than policy allows"),
   expired: () => "Pick an expiry in the future",

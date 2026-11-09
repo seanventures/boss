@@ -15,6 +15,7 @@
  * On an engine without §9, projects and the actions still answer.
  */
 import { LOCAL } from "../../lib/local-time";
+import { useAreaKeydown } from "../../lib/area-keys";
 import { changeHref } from "../../lib/repo-links";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -108,34 +109,30 @@ export function JumpResults({ query, projectId, projects, onDone }: {
     if (sel >= 0) rows[sel]?.scrollIntoView?.({ block: "nearest" });
   });
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const rows = paletteRows(here.current);
-      if (!rows.length) return;
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        setSel((cur) => (e.key === "ArrowDown" ? Math.min(rows.length - 1, cur + 1) : Math.max(0, cur - 1)));
-        return;
-      }
-      if (e.key === "Enter") {
-        const target = rows[sel >= 0 ? sel : 0];
-        if (!target) return;
-        e.preventDefault(); e.stopPropagation();
-        const ext = target.getAttribute("data-external");
-        if ((e.metaKey || e.ctrlKey) && ext) { onDone(); window.open(ext, "_blank", "noopener,noreferrer"); return; }
-        target.click();
-        return;
-      }
-      // The Do row keys, once the person is choosing from the list (never while typing a query).
-      if (sel >= 0 && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "n" || e.key === "N" || e.key === "p" || e.key === "P")) {
-        const id = e.key.toLowerCase() === "n" ? "palette-jump-new-work" : "palette-jump-switch";
-        const b = here.current?.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`);
-        if (b) { e.preventDefault(); e.stopPropagation(); b.click(); }
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [sel, onDone]);
+  useAreaKeydown((e) => {
+    const rows = paletteRows(here.current);
+    if (!rows.length) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      setSel((cur) => (e.key === "ArrowDown" ? Math.min(rows.length - 1, cur + 1) : Math.max(0, cur - 1)));
+      return;
+    }
+    if (e.key === "Enter") {
+      const target = rows[sel >= 0 ? sel : 0];
+      if (!target) return;
+      e.preventDefault(); e.stopPropagation();
+      const ext = target.getAttribute("data-external");
+      if ((e.metaKey || e.ctrlKey) && ext) { onDone(); window.open(ext, "_blank", "noopener,noreferrer"); return; }
+      target.click();
+      return;
+    }
+    // The Do row keys, once the person is choosing from the list (never while typing a query).
+    if (sel >= 0 && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "n" || e.key === "N" || e.key === "p" || e.key === "P")) {
+      const id = e.key.toLowerCase() === "n" ? "palette-jump-new-work" : "palette-jump-switch";
+      const b = here.current?.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`);
+      if (b) { e.preventDefault(); e.stopPropagation(); b.click(); }
+    }
+  }, { target: "document", capture: true });
 
   const captain = items.find((i) => i.kind === "captain") ?? null;
   const local: JumpRow[] = projects.filter((p) => q && match(p.name, q) && !items.some((i) => i.kind === "project" && i.label === p.name))

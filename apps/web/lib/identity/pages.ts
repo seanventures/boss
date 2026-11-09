@@ -93,6 +93,7 @@ export const CONSOLE_PAGES: readonly IdentityPage[] = [
   { path: "/v2/infra", label: "Infra & Models", tip: "Hosts, deploys and models", access: area("delivery") },
   { path: "/v2/settings", label: "Settings", tip: "Repo and models", access: area("setup") },
   { path: "/github-app", label: "GitHub App", tip: "Hands the App's manifest to GitHub", access: area("setup") },
+  { path: "/changes/[id]/[id]", label: "Change set", tip: "A local project's pull request, kept on this machine", access: area("code_tasks") },
   ...PUBLIC_AUTH_PATHS.map(
     (path) => ({ path, label: "Sign in", tip: "Public: signing in needs no session", access: PUBLIC })),
 ];

@@ -122,7 +122,10 @@ describe("Infra › server (wireframe 14)", () => {
     expect(tid("inf-server-cpu")!.textContent).toContain("34%");
     expect(tid("inf-server-cpu")!.textContent).toContain("8 vCPU");
     expect(tid("inf-server-disk")!.querySelector("circle:nth-of-type(2)")!.getAttribute("stroke")).toBe("var(--amber)");
-    expect(tid("inf-server-ports")!.textContent).toBe("Ports used78001–8104");
+    // 8001–8104 holds 104 ports; 7 used leaves 97 free. That free count is the tile's headline.
+    expect(tid("inf-server-ports-free")!.textContent).toBe("97");
+    expect(tid("inf-server-ports")!.textContent).toContain("free · 7 used");
+    expect(tid("inf-server-ports")!.textContent).toContain("8001–8104");
     expect($$('[data-testid^="inf-host-project-"]:not([data-testid*="link"])').map((r) => r.querySelector("b")!.textContent))
       .toEqual(["HelpDesk AI Demo", "NorthPeak Retail"]);
     const link = new URLSearchParams(tid("inf-host-project-link-helpdesk-ai-demo")!.getAttribute("href")!.split("?")[1]);

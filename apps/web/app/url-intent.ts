@@ -54,7 +54,10 @@ export function readComposeIntent(search: string): ComposeIntent {
   const params = new URLSearchParams(search);
   const raw = params.get("compose");
   const legacy = params.get("new") === "1";
-  if (!raw && !legacy) return { open: false, mode: null, app: null, preview: null, nextSearch: search };
+  const command = raw === "add" || raw === "new" || raw === "template";
+  // `compose=1` is Project › New work (addFeaturePatch). It is not this composer, so it is
+  // not consumed and its `app` stays. Only the command values and the legacy `new=1` open here.
+  if (!command && !legacy) return { open: false, mode: null, app: null, preview: null, nextSearch: search };
   // `compose=template` (an old link to the retired tab) opens New app, where the ideas are.
   const mode = raw === "add" ? "add" : raw === "new" || raw === "template" ? "new" : null;
   const app = mode === "add" ? (params.get("app")?.trim() || null) : null;

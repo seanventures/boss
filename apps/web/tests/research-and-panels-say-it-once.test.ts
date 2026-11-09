@@ -119,12 +119,12 @@ describe("Build it opens the New project composer with the brief written in", ()
     const href = composerHref("?org=org_boss&area=discovery&run=drun_1", { title: "Lead triage inbox", brief: "Score it.\nWho it is for: agencies" });
     const q = new URLSearchParams(href.slice(1));
     expect(q.get("org")).toBe("org_boss");
-    expect(q.get("area")).toBe("delivery_workflows");
-    expect(q.get("compose")).toBe("new");
-    expect(q.get("new")).toBe("1");
-    // The Workflows area's New project tab (not Runs, where the composer used to stack).
-    expect(q.get("tab")).toBe("new");
+    // Add a project, one screen, with the brief written in. The research run is not carried.
+    expect(q.get("new_project")).toBe("idea");
+    expect(q.get("title")).toBe("Lead triage inbox");
+    expect(q.get("brief")).toContain("Score it.");
     expect(q.get("run")).toBeNull();
+    expect(q.get("compose")).toBeNull();
     expect(readComposerPrefill(href.slice(href.indexOf("?")))).toEqual({ title: "Lead triage inbox", directive: "Score it.\nWho it is for: agencies" });
     expect(readComposerPrefill("?area=delivery_workflows&new=1")).toBeNull();
   });

@@ -25,6 +25,7 @@ import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { useDetailsDismiss } from "../lib/details-dismiss";
 import { PresencePill } from "./agents/presence-pill";
 import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
+import { actorWords } from "../lib/actor-words";
 import { setConsoleLive } from "../lib/console-live";
 import { PAINTED_EVENT } from "../lib/area-painted";
 import { useAttention } from "../lib/agents-live";
@@ -1697,11 +1698,11 @@ function ConsoleShellInner({
             </AccountMenu>
           ) : (
             <MenuDetails className="idn-me bx-user-fallback">
-              <summary aria-label={`Signed in as ${scope.actor}`} title={scope.actor}>
-                <span className="bx-operator-avatar" aria-hidden>{scope.actor.slice(0, 1).toUpperCase()}</span>
+              <summary aria-label={`Signed in as ${actorWords(scope.actor)}`} title={actorWords(scope.actor)}>
+                <span className="bx-operator-avatar" aria-hidden>{actorWords(scope.actor).slice(0, 1).toUpperCase()}</span>
               </summary>
               <div className="idn-me-menu" role="menu">
-                <div className="idn-me-who"><b>{scope.actor}</b><small>Signed in</small></div>
+                <div className="idn-me-who"><b>{actorWords(scope.actor)}</b><small>Signed in</small></div>
                 <ShellMenuRows org={org} onSwitchOrg={switchOrg} edition={resolvedEdition}
                                budgetState={status.budgetState} tone={tone}
                              projects={projects} projectId={scope.projectId} />

@@ -19,6 +19,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
+import { useAreaKeydown } from "../../lib/area-keys";
 import { isLocalRepo } from "../../lib/repo-links";
 import { notifyChanged } from "../changed";
 import { LocalPublishChip } from "./publish-sheet";
@@ -164,19 +165,16 @@ export function ProjectPage({ projectId, actor, orgId, homeId }: { projectId: st
     writePxUrl({ compose: null, compose_text: null, compose_kind: null }, "replace");
   }, [url, newWork, startGate.allowed]);
   // N opens it, anywhere on the page but in a box or behind another dialog.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "n" && e.key !== "N") return;
-      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
-      const el = e.target as HTMLElement | null;
-      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
-      if (document.querySelector("[role='dialog'][aria-modal='true']")) return;
-      e.preventDefault();
-      newWork();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [newWork]);
+  // Only while this project is the area on screen, so a hidden project does not steal N.
+  useAreaKeydown((e) => {
+    if (e.key !== "n" && e.key !== "N") return;
+    if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+    const el = e.target as HTMLElement | null;
+    if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+    if (document.querySelector("[role='dialog'][aria-modal='true']")) return;
+    e.preventDefault();
+    newWork();
+  });
 
   if (!overview) {
     const failed = ov.state === "error" || (ov.state === "missing" && start.state === "error");
