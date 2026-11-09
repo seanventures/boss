@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -28,20 +28,24 @@ import {
  */
 
 const ROOT = process.cwd();
+const probeRoots: string[] = [];
 
-/** Keep scanner falsifiers outside the product tree that other parallel tests enumerate. */
+/** Each call gets its own directory, outside the product tree other scans walk. */
 function probeRefs(files: Record<string, string>) {
   const root = mkdtempSync(join(tmpdir(), "boss-action-probe-"));
+  probeRoots.push(root);
   try {
-    for (const dir of ["app/__probe_tmp", "lib", "components"]) {
+    mkdirSync(join(root, "app"), { recursive: true });
+    const probeDir = relative(root, mkdtempSync(join(root, "app", "__probe_")));
+    for (const dir of [probeDir, "lib", "components"]) {
       mkdirSync(join(root, dir), { recursive: true });
     }
     // Use the real action declarations, so a renamed/removed action still changes the scan.
     copyFileSync(join(ROOT, "app/actions.ts"), join(root, "app/actions.ts"));
     for (const [name, code] of Object.entries(files)) {
-      writeFileSync(join(root, "app/__probe_tmp", name), code);
+      writeFileSync(join(root, probeDir, name), code);
     }
-    return serverActionRefs(root).filter((r) => r.file.startsWith("app/__probe_tmp/"));
+    return serverActionRefs(root).filter((r) => r.file.startsWith(`${probeDir}/`));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -303,7 +307,7 @@ describe("every server action carries its press", () => {
     // import, and a directive-less file imported by a client component all slipped past.
     const scan = (files: Record<string, string>) => {
       return probeRefs(files)
-        .map((r) => [r.file.replace("app/__probe_tmp/", ""), r.ok, r.how]);
+        .map((r) => [r.file.replace(/^app\/__probe_[^/]+\//, ""), r.ok, r.how]);
     };
     const ns = scan({ "ns.tsx": '"use client";\nimport * as actions from "../actions";\n'
                               + "const go = () => actions.redeployAction('d');\n" });
@@ -331,6 +335,35 @@ describe("every server action carries its press", () => {
                  + "export const go = () => redeployAction('d');\n",
     });
     expect(serverOnly).toEqual([["helper.ts", true, "called while rendering on the server"]]);
+  });
+
+  it("two scanners do not share __probe_tmp", () => {
+    // One full run stated alias.tsx and panel.tsx while another test removed that shared
+    // directory (ENOENT). Private directories stay out of the product tree, so a scan cannot
+    // see the other test's fixtures and deleting one directory cannot ENOENT the other.
+    const start = probeRoots.length;
+    const client = (name: string) =>
+      `"use client";\nimport { redeployAction } from "@/app/actions";\nexport const ${name} = () => redeployAction('d');\n`;
+    const alias = probeRefs({ "alias.tsx": client("Alias") });
+    const panel = probeRefs({ "panel.tsx": client("Panel") });
+    const folder = (refs: { file: string }[]) => {
+      expect(refs.length).toBeGreaterThan(0);
+      return refs[0].file.slice(0, refs[0].file.lastIndexOf("/"));
+    };
+    const aliasDir = folder(alias);
+    const panelDir = folder(panel);
+    const mine = probeRoots.slice(start);
+    expect(aliasDir).not.toBe(panelDir);
+    expect(aliasDir.split("/")).not.toContain("__probe_tmp");
+    expect(panelDir.split("/")).not.toContain("__probe_tmp");
+    expect(new Set(mine).size).toBe(2);
+    for (const root of mine) {
+      expect(root.startsWith(ROOT)).toBe(false);
+      expect(existsSync(root)).toBe(false);
+    }
+    expect(alias.some((r) => r.file.endsWith("/panel.tsx"))).toBe(false);
+    expect(panel.some((r) => r.file.endsWith("/alias.tsx"))).toBe(false);
+    expect(readdirSync(join(ROOT, "app")).some((name) => name.startsWith("__probe"))).toBe(false);
   });
 });
 
