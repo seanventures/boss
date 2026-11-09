@@ -110,7 +110,7 @@ def _understand(project_id: str, payload: UnderstandBody, actor: str) -> dict[st
 
     with begin(_engine) as connection:
         catalogue = _catalogue(connection, _org(connection, project_id))
-        flows = add_project.workflows(connection, project_id)
+        flows = add_project.workflows(connection, project_id, for_a_new_project=True)
         return add_project.understand(
             connection, _settings, project_id, words=payload.words, hint=payload.hint or "",
             previous=payload.previous, pinned=payload.pinned, catalogue=catalogue,

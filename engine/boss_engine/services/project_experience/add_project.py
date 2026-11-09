@@ -421,17 +421,38 @@ def workflow_steps(connection: Connection, project_id: str, spec: Mapping[str, A
     return out
 
 
-def workflows(connection: Connection, project_id: str) -> list[dict[str, Any]]:
-    """The installed product workflows, each with its real steps and approvals and estimate."""
+def new_project_workflow_keys() -> frozenset[str]:
+    """THE WORKFLOWS A NEW PROJECT CAN RUN (BOSSAPP-946): the catalogue entries every project is
+    seeded with (bootstrap.seed_project_defaults → workflow_catalogue.seed). An entry gated on
+    something a fresh project does not have yet (a pack, a sample) is not among them, and
+    neither is a workflow another project built or installed for itself: Add project from
+    boss-dogfood pre-picked its "HelpDesk Delivery (D1)", and Create was refused
+    "No active workflow 'helpdesk_delivery_d1' to run"."""
+    from ..workflow_catalogue import CATALOGUE, _gated
+
+    return frozenset(e["key"] for e in CATALOGUE if not _gated(e))
+
+
+def workflows(connection: Connection, project_id: str, *,
+              for_a_new_project: bool = False) -> list[dict[str, Any]]:
+    """The installed product workflows, each with its real steps and approvals and estimate.
+
+    `for_a_new_project`: Add project reads them from the project open now, but runs the pick on
+    the project it creates — so only the ones that project will have (new_project_workflow_keys)
+    are offered, never this project's own."""
     from ..workflow_catalogue import CATALOGUE
     from .new_work import estimate
 
     classes = {e["key"]: e.get("work_class") for e in CATALOGUE}
     rows = connection.execute(text(
-        "SELECT d.workflow_key, d.name, d.description, v.spec FROM workflow_definitions d "
+        "SELECT d.workflow_key, d.name, d.description, d.is_catalogue, v.spec "
+        "FROM workflow_definitions d "
         "JOIN workflow_versions v ON v.id = d.active_version_id WHERE d.project_id = :p AND "
         "d.status = 'active' AND d.namespace = 'product' ORDER BY d.name"),
         {"p": project_id}).mappings().all()
+    if for_a_new_project:
+        runnable = new_project_workflow_keys()
+        rows = [r for r in rows if r["is_catalogue"] and str(r["workflow_key"]) in runnable]
     out = []
     for r in rows:
         spec = as_json(r["spec"], {}) or {}
@@ -525,10 +546,14 @@ def preview(connection: Connection, settings: Any, project_id: str, *, mode: str
     """Everything the six boxes are picked from, in one read."""
     from . import captain as captain_service
 
-    flows = workflows(connection, project_id)
+    flows = workflows(connection, project_id, for_a_new_project=True)
     default = default_workflow(connection, project_id, mode)
     if mode != "idea":
         default = "minor_feature" if any(w["key"] == "minor_feature" for w in flows) else default
+    if default and not any(w["key"] == default for w in flows):
+        # The open project's own default is not the new project's to run: its first path.
+        default = next((w["key"] for w in flows if w["path"]), None) or \
+            (flows[0]["key"] if flows else None)
     cap = captain_service.view(connection, project_id, with_last_said=False)
     return {"mode": mode, "workflows": flows, "default_workflow": default,
             "captain": {"role_key": cap.get("role_key"), "name": cap.get("name"),
