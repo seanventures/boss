@@ -9579,49 +9579,31 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             )
             if failover:
                 return failover
-            # Model capacity, an exhausted budget, or a rules 403: one inbox decision.
-            # This pipeline does not retry them. A run that already holds a decision
-            # does not get a second card (W2.5).
+            # Model TPM/credits/budget exhaustion: escalate to a Decision so capacity
+            # failures are visible in the inbox rather than silent DLQ churn (W2.5).
+            # Not gated on an existing decision_id: a later capacity failure still
+            # opens a card when the run already holds a plan-approval decision.
             decision_id = None
-            if (
-                not (run or {}).get("decision_id")
-                and fclass == "needs_human"
-                and rcode in {
-                    "model_rate_limit", "budget_exhausted", "rules_forbidden",
-                }
-            ):
+            if fclass == "needs_human" and rcode in {
+                "model_rate_limit", "budget_exhausted",
+            }:
                 try:
-                    if rcode == "rules_forbidden":
-                        _blocked_question = (
-                            "Egress or git refused this build with a rules 403 "
-                            "(the allow-list or the installation). A rules 403 is not "
-                            "a 5xx or a timeout, so this build is not retried. Allow "
-                            "the repository, or point the build at one the rules will clone."
-                        )
-                        _blocked_decision_action = "allow_repository_or_change_clone_target"
-                        _blocked_decision_reason = "rules_forbidden"
-                        _blocked_decision_event = "code_task.rules_forbidden_escalated"
-                    else:
-                        _blocked_question = (
+                    decision_id = create_blocking_decision(
+                        c, project_id, task_id,
+                        (
                             "Model capacity exhausted (TPM / rate limit / credits / budget). "
                             "Code task stopped — raise limits, wait for quota reset, or "
                             "requeue after capacity is available."
-                        )
-                        _blocked_decision_action = "restore_model_capacity_or_raise_budget"
-                        _blocked_decision_reason = "model_capacity_exhausted"
-                        _blocked_decision_event = "code_task.model_capacity_escalated"
-                    decision_id = create_blocking_decision(
-                        c, project_id, task_id,
-                        _blocked_question,
+                        ),
                         {
-                            "action": _blocked_decision_action,
+                            "action": "restore_model_capacity_or_raise_budget",
                             "run_id": run_id,
                             "reason_code": rcode,
                             "failure_class": fclass,
                             "failure_reason": reason[:500],
                         },
                         {},
-                        _blocked_decision_reason,
+                        "model_capacity_exhausted",
                     )
                     c.execute(
                         sql("UPDATE code_task_runs SET decision_id=:d, updated_at=now() "
@@ -9629,7 +9611,46 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         {"d": decision_id, "id": run_id},
                     )
                     emit_event(
-                        c, project_id, _blocked_decision_event, "boss",
+                        c, project_id, "code_task.model_capacity_escalated", "boss",
+                        "code_task_run", run_id,
+                        {"decision_id": decision_id, "reason_code": rcode},
+                    )
+                except Exception:  # noqa: BLE001 — never mask the original failure
+                    _log_caught(logger)
+                    pass
+            elif (
+                not (run or {}).get("decision_id")
+                and fclass == "needs_human"
+                and rcode == "rules_forbidden"
+            ):
+                # A rules 403 is not retried. Only this path skips a second card
+                # when the run already holds a decision.
+                try:
+                    decision_id = create_blocking_decision(
+                        c, project_id, task_id,
+                        (
+                            "Egress or git refused this build with a rules 403 "
+                            "(the allow-list or the installation). A rules 403 is not "
+                            "a 5xx or a timeout, so this build is not retried. Allow "
+                            "the repository, or point the build at one the rules will clone."
+                        ),
+                        {
+                            "action": "allow_repository_or_change_clone_target",
+                            "run_id": run_id,
+                            "reason_code": rcode,
+                            "failure_class": fclass,
+                            "failure_reason": reason[:500],
+                        },
+                        {},
+                        "rules_forbidden",
+                    )
+                    c.execute(
+                        sql("UPDATE code_task_runs SET decision_id=:d, updated_at=now() "
+                            "WHERE id=:id AND decision_id IS NULL"),
+                        {"d": decision_id, "id": run_id},
+                    )
+                    emit_event(
+                        c, project_id, "code_task.rules_forbidden_escalated", "boss",
                         "code_task_run", run_id,
                         {"decision_id": decision_id, "reason_code": rcode},
                     )

@@ -216,3 +216,16 @@ def test_an_exhausted_budget_still_opens_the_same_capacity_card(monkeypatch):
     assert opened[0]["recommendation"]["action"] == "restore_model_capacity_or_raise_budget"
     assert opened[0]["recommendation"]["reason_code"] == "budget_exhausted"
     assert _events(conn).count("code_task.model_capacity_escalated") == 1
+
+
+def test_a_later_capacity_failure_opens_a_card_when_a_decision_is_already_held(monkeypatch):
+    result, conn = _fail_build(
+        monkeypatch, "HTTP 429 rate limit exceeded", decision_id="dec_plan")
+    opened = _decisions(conn)
+    assert len(opened) == 1
+    assert opened[0]["question"] == MODEL_CAPACITY_QUESTION
+    assert opened[0]["recommendation"]["reason_code"] == "model_rate_limit"
+    assert _events(conn).count("code_task.model_capacity_escalated") == 1
+    assert "code_task.rules_forbidden_escalated" not in _events(conn)
+    assert result["decision_id"] == opened[0]["id"]
+    assert result["reason_code"] == "model_rate_limit"
