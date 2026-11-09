@@ -160,8 +160,8 @@ def test_an_unset_forwarded_knob_behaves_like_a_stock_install(service, monkeypat
     assert not wrong, "\n".join(wrong)
 
 
-def test_always_on_ships_off_through_compose(monkeypatch):
-    """Nothing set in .env → the forwarded values leave the agents off."""
+def test_always_on_ships_on_through_compose(monkeypatch):
+    """Nothing set in .env → the forwarded values leave the agents on (route), unpinned."""
     from boss_engine.config import Settings
     from boss_engine.services.ambient import policy
 
@@ -169,5 +169,5 @@ def test_always_on_ships_off_through_compose(monkeypatch):
         if AMBIENT_FAMILY.match(name) and _compose_default(raw) is not None:
             monkeypatch.setenv(name, _compose_default(raw))
     s = Settings(_env_file=None)
-    assert policy.cos_mode(s) == "off" and not policy.env_pins_mode(s)
-    assert not policy.signals_on(s) and not policy.learning_on(s)
+    assert policy.cos_mode(s) == "route" and not policy.env_pins_mode(s)
+    assert policy.signals_on(s) and policy.learning_on(s)
