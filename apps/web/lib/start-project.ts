@@ -247,7 +247,8 @@ export const startProjectApi = {
 
 /** The slugs of the projects that exist (GET /v1/projects). */
 async function takenSlugs(): Promise<Set<string>> {
-  const r = await idGet<{ items?: { slug?: string; id?: string }[] }>("/v1/projects");
+  // Archived projects keep their slugs: a name is free only when no project, archived or not, has it.
+  const r = await idGet<{ items?: { slug?: string; id?: string }[] }>("/v1/projects?include_archived=true");
   return new Set((r.items ?? []).map((p) => String(p.slug ?? p.id ?? "")));
 }
 

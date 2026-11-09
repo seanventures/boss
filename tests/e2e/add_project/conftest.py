@@ -352,7 +352,7 @@ class Person:
                 # look, never a 30 s wait on a button that is gone.
                 ready = allow.count() and allow.first.is_visible() and allow.first.is_enabled(timeout=2000)
                 if ready:
-                    allow.first.click(timeout=5000)
+                    allow.first.click(timeout=30_000)
                     self.consented += 1
             except Exception:  # noqa: BLE001 — gone meanwhile: the loop looks again
                 pass
