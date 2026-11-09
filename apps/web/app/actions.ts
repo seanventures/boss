@@ -3734,6 +3734,7 @@ declareAction(loadAgentWorkspaceAction, "assistant:chat");
 declareAction(loadAgentProgressAction, "assistant:chat");
 declareAction(loadRoleStartersAction, "agent:read");
 declareAction(loadThreadMessagesAction, "assistant:chat");
+declareAction(loadConversationMessagesAction, "assistant:chat");
 declareAction(loadTaskContextAction, "work_item:read");
 declareAction(tallyVotesAction, "meeting:convene");
 declareAction(sweepStalledMeetingsAction, "system:operate");

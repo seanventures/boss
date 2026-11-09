@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import { X } from "@phosphor-icons/react";
 
 import { loadConversationMessagesAction } from "../actions";
+import { callAction } from "../../lib/call-action";
 import { Markdown, type InlineText } from "../markdown";
 import { useIdentity } from "../../components/identity/identity-provider";
 import { identityOf, openAgent } from "../../lib/agent-world";
@@ -40,7 +41,7 @@ export function ConversationSheet({ projectId, actor, threadId, onClose }: {
   useEffect(() => {
     let live = true;
     setLoaded({ messages: null, error: null, knowledge: null });
-    void loadConversationMessagesAction(threadId, projectId, actor).then((r) => {
+    void callAction(loadConversationMessagesAction, undefined, "assistant:chat")(threadId, projectId, actor).then((r) => {
       if (!live) return;
       setLoaded((l) => r.ok ? { ...l, messages: parseMessages(r.data) }
         : { ...l, messages: [], error: /not found|404/i.test(String(r.error ?? ""))
