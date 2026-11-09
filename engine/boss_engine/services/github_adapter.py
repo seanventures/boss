@@ -854,13 +854,24 @@ class GitHubAdapter:
                 return {"restacked": False, "paths": [],
                         "why": f"{f['filename']} could not be read"}
             contents[f["filename"]] = text
+        # ONE move of the branch, never through its base: the restacked commit is built first
+        # (base tree + the newer files) and the ref jumps straight to it. Resetting the branch
+        # to the base and writing files one by one left the pull request with nothing in it for
+        # a moment, and GitHub closes an empty pull request on its own (PR #237, 2026-11-09).
+        after = f" after #{number}" if number else " after its merge"
+        repo = f"/repos/{self.repository_full_name}"
+        base_tree = self._request("GET", f"{repo}/git/commits/{base_sha}")["tree"]["sha"]
+        tree = self._request("POST", f"{repo}/git/trees", {
+            "base_tree": base_tree,
+            "tree": [{"path": path, "mode": "100644", "type": "blob", "content": text}
+                     for path, text in sorted(contents.items())]})
+        commit = self._request("POST", f"{repo}/git/commits", {
+            "message": f"BOSS follow-up{after}: {', '.join(sorted(contents))}",
+            "tree": tree["sha"], "parents": [base_sha]})
         self._request(
             "PATCH",
-            f"/repos/{self.repository_full_name}/git/refs/heads/{quote(branch_name, safe='')}",
-            {"sha": base_sha, "force": True})
-        after = f" after #{number}" if number else " after its merge"
-        for path, text in contents.items():
-            self.upsert_file(branch_name, path, text, f"BOSS follow-up{after}: {path}")
+            f"{repo}/git/refs/heads/{quote(branch_name, safe='')}",
+            {"sha": commit["sha"], "force": True})
         return {"restacked": True, "paths": sorted(contents), "base": base_name}
 
     def add_labels(self, pull_request_number: int, labels: list[str]) -> None:

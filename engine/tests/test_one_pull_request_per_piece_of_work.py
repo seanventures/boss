@@ -32,6 +32,12 @@ class FakeGitHub(GitHubAdapter):
             return {"default_branch": "main"}
         if "/git/ref/heads/" in path:
             return {"object": {"sha": self.refs[path.split("/git/ref/heads/")[1]]}}
+        if method == "GET" and "/git/commits/" in path:
+            return {"tree": {"sha": "tree_of_" + path.rsplit("/", 1)[1]}}
+        if method == "POST" and path.endswith("/git/trees"):
+            return {"sha": "restacked_tree"}
+        if method == "POST" and path.endswith("/git/commits"):
+            return {"sha": "restacked_commit"}
         if method == "PATCH" and "/git/refs/heads/" in path:
             self.refs[BRANCH] = json_body["sha"]
             return {"object": {"sha": json_body["sha"]}}
@@ -86,12 +92,18 @@ def test_a_fix_after_the_merge_is_a_named_follow_up_showing_only_its_own_change(
     gh = _diverged_after_merge()
     out = pr_follow_up.prepare_branch(gh, BRANCH, paths=["hello-api/serve_hello.py"])
     assert out["after"] == 236 and out["restacked"] is True
-    # The branch is back on main, and only what changed after #236 is written onto it.
-    assert gh.refs[BRANCH] == "main_sha"
+    # One commit on main holding only what changed after #236, and the branch moves to it in
+    # ONE step: it never sits on main, where its pull request would be empty and GitHub would
+    # close it (PR #237, 2026-11-09).
     force = [c for c in gh.calls if c[0] == "PATCH" and "/git/refs/heads/" in c[1]]
-    assert force and force[0][2] == {"sha": "main_sha", "force": True}
-    assert [(u[1], u[2]) for u in gh.upserts] == [
+    assert force == [("PATCH", force[0][1], {"sha": "restacked_commit", "force": True})]
+    assert gh.refs[BRANCH] == "restacked_commit" and not gh.upserts
+    tree = [c for c in gh.calls if c[0] == "POST" and c[1].endswith("/git/trees")][0][2]
+    assert tree["base_tree"] == "tree_of_main_sha"
+    assert [(e["path"], e["content"]) for e in tree["tree"]] == [
         ("hello-api/serve_hello.py", "print('fixed')\n"), ("runbooks/no-traffic.md", "# No traffic\n")]
+    commit = [c for c in gh.calls if c[0] == "POST" and c[1].endswith("/git/commits")][0][2]
+    assert commit["parents"] == ["main_sha"] and "after #236" in commit["message"]
     assert out["paths"] == ["hello-api/serve_hello.py", "runbooks/no-traffic.md"]
     title = pr_follow_up.follow_up_title("Hello World REST API + sample · retry 1", 236)
     assert title == "Fix: Hello World REST API + sample after #236"
