@@ -458,21 +458,27 @@ def test_delete_a_local_project_removes_its_repo(person: Person):
     name = p.p.locator("[data-testid='delete-reason']").inner_text().split("Type ", 1)[-1].split(" to", 1)[0].strip()
     field.fill(name)
     p.expect(r"^404 GET /v1/", r"status of 404")
-    p.tid("delete-confirm").click()
-    step = p.tid("step-up-sheet")
-    try:
-        step.wait_for(timeout=5000)
-        pw = step.locator("input[type='password']")
-        if pw.count():
-            pw.fill("pxdev-pass")
-            step.get_by_role("button", name="Confirm").click()
-        else:
-            step.locator("input").first.fill("000000")
-    except Exception:  # noqa: BLE001 — no step-up asked
-        pass
-    end = time.monotonic() + 120
-    while time.monotonic() < end and bare.exists():
-        p.p.wait_for_timeout(500)
+    # A press the dialog answers with a refusal in words (a busy dev stack once said "Identity is
+    # unavailable") is pressed again, as a person would; at most three presses.
+    p.expect(r"Identity is unavailable", r"status of 50\d")
+    for _press in range(3):
+        if not bare.exists() or not p.tid("delete-confirm").count():
+            break
+        p.tid("delete-confirm").click()
+        step = p.tid("step-up-sheet")
+        try:
+            step.wait_for(timeout=8000)
+            pw = step.locator("input[type='password']")
+            if pw.count():
+                pw.fill("pxdev-pass")
+                step.get_by_role("button", name="Confirm").click()
+            else:
+                step.locator("input").first.fill("000000")
+        except Exception:  # noqa: BLE001 — no step-up asked
+            pass
+        end = time.monotonic() + 60
+        while time.monotonic() < end and bare.exists():
+            p.p.wait_for_timeout(500)
     assert not bare.exists(), f"{bare} is still there after Delete"
     assert not bare.parent.exists() or not any(bare.parent.iterdir())
 

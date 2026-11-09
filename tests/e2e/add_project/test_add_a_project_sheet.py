@@ -37,7 +37,8 @@ def test_every_door_opens_the_one_sheet(person: Person):
     p = person
     # 1 the Projects page's button: the TWO DOORS (BOSSAPP-916), the first one focused
     p.go()
-    p.tid("px-add-project").click()
+    # The button pushes ?new_project=1 (no navigation to wait for).
+    p.tid("px-add-project").click(no_wait_after=True, timeout=90_000)
     p.sheet.wait_for()
     p.tid("ap-doors").wait_for()
     assert p.door() == "choose"

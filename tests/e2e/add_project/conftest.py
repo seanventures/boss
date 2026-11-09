@@ -347,9 +347,15 @@ class Person:
             # The first start asks the person to let the crew act for them (the consent sheet):
             # they allow it, once.
             allow = self.p.locator("[data-testid='consent-durations'] button, [data-testid='consent-mr-allow']")
-            if allow.count() and allow.first.is_visible() and allow.first.is_enabled():
-                self.consented += 1
-                allow.first.click()
+            try:
+                # The sheet can close between looking and pressing (the start went on): a short
+                # look, never a 30 s wait on a button that is gone.
+                ready = allow.count() and allow.first.is_visible() and allow.first.is_enabled(timeout=2000)
+                if ready:
+                    allow.first.click(timeout=5000)
+                    self.consented += 1
+            except Exception:  # noqa: BLE001 — gone meanwhile: the loop looks again
+                pass
             # What this dev install lacks (a mail server for an email channel …) is refused with
             # the readiness checklist: the person ticks each item and presses Start anyway.
             panel = self.tid("ap-readiness")
