@@ -273,7 +273,14 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
         detail = f"{detail} — {cause}" if detail else cause
     elif said:
         detail = f"{detail} — {said}" if detail else said
+    # HELD BY CI (BOSSAPP-946): a merge or deploy that CI still holds says so on its button
+    # ("Checks running…", disabled, with the gate's own words), never an Approve that is refused.
+    from .. import ci_gate
+
+    held = ci_gate.approval_hold(connection, project_id, rec) if kind in ("merge", "deploy") \
+        else None
     return {"id": decision["id"], "kind": kind, "label": label,
+            **({"held": held} if held else {}),
             "detail": detail, **({"question": question} if question else {}),
             **({"diagnosis": diagnosis} if diagnosis else {}),
             "work_id": (run or {}).get("id"),

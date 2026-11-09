@@ -14,6 +14,7 @@
  * "Sample data" banner; writes in that mode send nothing.
  */
 import { parsePrdRecord, type PrdRecord } from "./prd-record";
+import { parseCiHold, type CiHold } from "./ci-hold";
 import { parseDiagnosis, parseWaitReason, type Diagnosis, type WaitReason } from "./stuck-work";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -112,6 +113,9 @@ export type NeedsYou = {
   question?: string;
   /** A meeting's PRD to approve (BOSSAPP-929): the document, its meeting, its file in the repo. */
   prd?: PrdRecord | null;
+  /** A merge or deploy CI still holds (engine ci_gate.approval_hold): the button reads `label`,
+   *  disabled, with `reason` beside it. */
+  held?: CiHold | null;
 };
 export type GitHubWaitItem = { id: string; label: string; href: string; words: string; next_at: string | null };
 export type NeedsAnswer = { action: "approve" | "reject" | "revise"; label: string };
@@ -662,7 +666,7 @@ export const parseOverview = (v: unknown): Overview => {
                detail: s(y.detail), mini: mini(y.mini), release: parseRelease(y.release),
                diagnosis: parseDiagnosis(y.diagnosis),
                answers: parseAnswers(y.answers), entries: parseEntries(y.entries),
-               prd: parsePrdRecord(y.prd),
+               prd: parsePrdRecord(y.prd), held: parseCiHold(y.held),
                ...(typeof y.question === "string" && y.question ? { question: y.question } : {}),
                action: act.label || act.href ? { label: s(act.label, "Open"), href: s(act.href), decision_id: s(act.decision_id) } : null };
     }),

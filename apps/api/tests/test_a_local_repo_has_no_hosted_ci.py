@@ -205,3 +205,80 @@ def test_a_timed_out_wait_from_before_the_fix_clears_on_the_next_approve(engine,
     payload = events[0] if isinstance(events[0], dict) else json.loads(events[0])
     assert payload["was"] == "timed_out"
 
+
+# ── finding 6: a merge CI still holds is not offered as an Approve the gate refuses ─────────
+
+def _decision(engine, pid: str, rec: dict) -> str:
+    did = f"dec_lfci{uuid.uuid4().hex[:8]}"
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO decisions (id, project_id, question, recommendation, "
+                        "risk_tier, default_action, status) VALUES (:i, :p, 'Merge it?', "
+                        "CAST(:r AS JSONB), 2, 'hold', 'pending')"),
+                   {"i": did, "p": pid, "r": json.dumps(rec)})
+    return did
+
+
+def test_a_merge_waiting_on_ci_says_checks_running_everywhere_until_it_can_be_approved(
+        client, engine):
+    pid = _project(engine)
+    url, sha = "https://github.com/acme/shop/pull/7", "c" * 40
+    rec = {"action": "review_pull_request", "pull_request_url": url, "head_sha": sha}
+    did = _decision(engine, pid, rec)
+    with engine.begin() as db:
+        wait = ci_gate.start_wait(db, project_id=pid, repository="acme/shop", head_sha=sha,
+                                  pull_request_url=url, has_ci=True)
+    # The engine's answer, the gate's refusal and the cards agree.
+    with engine.begin() as db:
+        held = ci_gate.approval_hold(db, pid, rec)
+        with pytest.raises(ci_gate.CiGateRefused):
+            ci_gate.refuse_approval(db, {"project_id": pid, "recommendation": rec}, "a-person")
+    assert held and held["label"] == "Checks running…" and held["state"] == "waiting"
+    assert "CI is still running" in held["reason"]
+    from boss_engine.services.project_experience import needs
+
+    with engine.begin() as db:
+        row = db.execute(text("SELECT * FROM decisions WHERE id = :i"), {"i": did}).mappings().one()
+        card = needs.card(db, pid, dict(row))
+    assert card["kind"] == "merge" and card["held"]["label"] == "Checks running…"
+    inbox = client.get(f"/v1/decisions/inbox?project_id={pid}")
+    assert inbox.status_code == 200, inbox.text
+    item = next(i for i in inbox.json()["items"] if i["id"] == did)
+    assert item["held"]["label"] == "Checks running…"
+    assert client.get(f"/v1/decisions/{did}").json()["held"]["state"] == "waiting"
+    # CI passes: nothing holds it, and the approval goes through.
+    with engine.begin() as db:
+        db.execute(text("UPDATE ci_waits SET status = 'passed' WHERE id = :i"), {"i": wait["id"]})
+    with engine.begin() as db:
+        assert ci_gate.approval_hold(db, pid, rec) is None
+        ci_gate.refuse_approval(db, {"project_id": pid, "recommendation": rec}, "a-person")
+    item = next(i for i in client.get(f"/v1/decisions/inbox?project_id={pid}").json()["items"]
+                if i["id"] == did)
+    assert item["held"] is None
+
+
+def test_the_live_local_merge_card_is_ready_on_its_first_look_after_install(client, engine,
+                                                                            repo_root):
+    """dec_fe5e712c44f54a4d9954's shape: a pending merge of a local change set whose wait
+    timed out before the fix. The first read of its card settles the wait through the code."""
+    built = _built_change(engine, repo_root)
+    then = datetime.now(timezone.utc) - timedelta(hours=1)
+    with engine.begin() as db:
+        db.execute(text(
+            "INSERT INTO ci_waits (id, project_id, repository, head_sha, pull_request_url, "
+            "status, has_ci, summary, timeout_seconds, deadline_at, next_poll_at, finished_at, "
+            "created_at, updated_at) VALUES (:id, :p, :r, :s, :u, 'timed_out', true, 'CI did not "
+            "finish in 30 min', 1800, :t, :t, :t, :t, :t)"),
+            {"id": f"ciw_lfci{uuid.uuid4().hex[:8]}", "p": built.pid, "r": built.repository,
+             "s": built.sha, "u": built.url, "t": then})
+    rec = {"action": "review_pull_request", "pull_request_url": built.url,
+           "head_sha": built.sha}
+    did = _decision(engine, built.pid, rec)
+    got = client.get(f"/v1/decisions/{did}")
+    assert got.status_code == 200, got.text
+    assert got.json()["held"] is None
+    change = client.get(f"/v1/projects/{built.pid}/local-changes/{built.number}")
+    assert change.status_code == 200, change.text
+    assert change.json()["merge"]["held"] is None
+    with engine.begin() as db:
+        assert ci_gate.latest_wait(db, built.pid, pull_request_url=built.url)["status"] == "no_ci"
+

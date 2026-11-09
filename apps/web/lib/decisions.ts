@@ -4,6 +4,7 @@ import {
 } from "@boss/api-client";
 import { client, PROJECT_ID, resolveProjectId } from "./client";
 import { parsePrdRecord, type PrdRecord } from "./prd-record";
+import { parseCiHold, type CiHold } from "./ci-hold";
 
 export type DecisionFeedItem = {
   id: string;
@@ -49,6 +50,9 @@ export type DecisionFeedItem = {
   /** A meeting's PRD (engine prd_record.links, BOSSAPP-929): the document, the panel that argued
    *  it, and its file in the repository. Absent for any other decision. */
   prd?: PrdRecord | null;
+  /** A merge or deploy CI still holds (engine ci_gate.approval_hold, BOSSAPP-946): Approve reads
+   *  `label` ("Checks running…"), disabled, with `reason`. Absent when CI does not hold it. */
+  held?: CiHold | null;
 };
 
 export type DecisionAttention = "needs_action" | "expired" | "resolved";
@@ -225,6 +229,7 @@ function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
     updatedAt: payload.updated_at,
     ...contractOf(payload),
     prd: parsePrdRecord((payload as { prd?: unknown }).prd),
+    held: parseCiHold((payload as { held?: unknown }).held),
   };
 }
 

@@ -353,12 +353,14 @@ function Decide({ cs, projectId, number, reread }: { cs: ChangeSet; projectId: s
         <p className="cs-merging" role="status" data-testid="change-set-merging"><CircleNotch size={14} className="cs-spin" aria-hidden /> Approved · BOSS is merging…</p>
       ) : cs.merge ? (
         <>
-          <button type="button" className="cs-primary" data-testid="change-set-merge" disabled={!!busy} aria-busy={!!busy || undefined}
+          <button type="button" className="cs-primary" data-testid="change-set-merge" disabled={!!busy || !!cs.merge.held} aria-busy={!!busy || undefined}
+                  title={cs.merge.held?.reason || undefined} data-held={cs.merge.held?.state || undefined}
                   onClick={() => void merge()}>
             {busy ? <CircleNotch size={15} className="cs-spin" aria-hidden /> : <GitMerge size={15} weight="bold" aria-hidden />}
-            Merge into {cs.base_branch}
+            {cs.merge.held ? cs.merge.held.label : `Merge into ${cs.base_branch}`}
           </button>
-          <p className="cs-faint cs-small">A person merges · BOSS runs the governed merge</p>
+          <p className="cs-faint cs-small" data-testid={cs.merge.held ? "change-set-held" : undefined}>
+            {cs.merge.held ? cs.merge.held.reason : "A person merges · BOSS runs the governed merge"}</p>
         </>
       ) : cs.state === "open" ? <p className="cs-faint cs-small">Merge opens once the review asks for a decision.</p> : null}
       {said ? <p className="cs-error" role="alert">{said}</p> : null}

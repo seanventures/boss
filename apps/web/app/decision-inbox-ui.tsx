@@ -1300,18 +1300,28 @@ export function DecisionActions({ decision, projectId, actorId }: {
           </SubmitButton>
         </div>
       ) : null}
-      {direct.map((offer) => (
-        <SubmitButton permission="decision:approve"
-          key={offer.action}
-          className={`dq-btn ${offer.tone === "neutral" ? "neutral" : offer.tone}`}
-          name="action"
-          value={offer.action}
-          title={offer.effect || undefined}
-          data-testid={`decision-${offer.action}`}
-        >
-          {offer.label}
-        </SubmitButton>
-      ))}
+      {direct.map((offer) => {
+        // HELD BY CI (BOSSAPP-946): an approve CI still holds reads "Checks running…",
+        // disabled, with the gate's words — never a press the gate refuses.
+        const held = offer.action === "approve" ? decision.held ?? null : null;
+        return (
+          <SubmitButton permission="decision:approve"
+            key={offer.action}
+            className={`dq-btn ${offer.tone === "neutral" ? "neutral" : offer.tone}`}
+            name="action"
+            value={offer.action}
+            disabled={held ? true : undefined}
+            title={held ? held.reason : offer.effect || undefined}
+            data-testid={`decision-${offer.action}`}
+            data-held={held ? held.state : undefined}
+          >
+            {held ? held.label : offer.label}
+          </SubmitButton>
+        );
+      })}
+      {decision.held && direct.some((a) => a.action === "approve") ? (
+        <span className="dq-held" data-testid="decision-held">{decision.held.reason}</span>
+      ) : null}
       {direct.some((a) => a.action === "reject") && !dismiss ? (
         <details className="dq-more dq-why" data-testid="decision-why">
           <summary title="Optional: tell BOSS why, before you reject">Why no?</summary>

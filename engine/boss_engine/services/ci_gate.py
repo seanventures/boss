@@ -1285,6 +1285,67 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
                         ci_status=wait["status"], failing_url=wait.get("failing_url"))
 
 
+#: What a held merge/deploy button says while CI keeps it from being approved (BOSSAPP-946).
+HOLD_WORDS = {"waiting": "Checks running…", "failed": "Checks failed",
+              "timed_out": "Checks didn't finish", "unreadable": "Checks not read"}
+
+
+def _settle_hostless(connection: Any, project_id: str, wait: dict[str, Any]) -> dict[str, Any]:
+    """A wait on a repository whose host has no CI, answered by the host (poll_wait's first
+    branch) — so a wait recorded before BOSS knew (a local build's 30-minute `timed_out`) clears
+    on the first look at its question. Its own savepoint; any failure keeps the wait as it was.
+    Only local repositories are read here: no network on a page load."""
+    from .local_repo import is_local
+
+    if wait["status"] in CLEARED or not is_local(wait.get("repository")):
+        return wait
+    try:
+        from ..config import get_settings
+
+        point = connection.begin_nested()
+        try:
+            reader = reader_for_project(connection, get_settings(), project_id,
+                                        wait.get("repository"))
+            got = (poll_wait(connection, wait["id"], reader, force=True, rearm=False)
+                   if not hosted_ci(reader) else wait)
+        except Exception:
+            point.rollback()
+            raise
+        point.commit()
+        return got
+    except Exception:  # noqa: BLE001 — unread: the wait stands
+        return wait
+
+
+def approval_hold(connection: Any, project_id: str, rec: Mapping[str, Any]
+                  ) -> Optional[dict[str, Any]]:
+    """WHY A MERGE OR DEPLOY CANNOT BE APPROVED YET, before anyone presses it (BOSSAPP-946: the
+    merge card offered "Merge PR #1" while CI was still running, and the press was refused).
+    {state, label, reason} — the label is the held button's ("Checks running…"), the reason the
+    gate's own words — or None when CI does not hold it (cleared, or no wait recorded). The same
+    wait `refuse_approval` reads, so the card and the gate never disagree."""
+    action = str((rec or {}).get("action") or "")
+    if action not in DEPLOY_ACTIONS | MERGE_ACTIONS:
+        return None
+    wait = latest_wait(connection, project_id, pull_request_url=rec.get("pull_request_url"),
+                       shas=_shas(rec))
+    if wait is None:
+        return None
+    wait = _settle_hostless(connection, project_id, wait)
+    if wait["status"] in CLEARED or wait["status"] == "cancelled":
+        return None
+    what = "deploy" if action in DEPLOY_ACTIONS else "merge"
+    if wait["status"] == "waiting":
+        reason = (f"CI is still running on this change; the {what} can be approved when it "
+                  f"passes. {wait.get('summary') or ''}").strip()
+    else:
+        reason = f"{wait.get('summary') or 'CI has not passed'}. The {what} can be approved " \
+                 "once CI passes."
+    return {"state": wait["status"], "label": HOLD_WORDS.get(wait["status"], "Checks not passed"),
+            "reason": reason.replace("..", "."), "ci_wait_id": wait["id"],
+            "failing_url": wait.get("failing_url")}
+
+
 def recheck(connection: Any, project_id: str, wait: dict[str, Any]) -> dict[str, Any]:
     """Read CI once more for a red or unread wait before refusing on it, so pressing Approve after
     re-running the failed job on GitHub is enough. Any failure to read keeps the old answer:

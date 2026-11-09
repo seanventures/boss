@@ -2827,6 +2827,10 @@ class DecisionCard(BaseModel):
     # argued it (agenda, positions, dissent) and the file in the repository. None for any other
     # decision.
     prd: Optional[dict[str, Any]] = None
+    # A merge or deploy CI still holds (ci_gate.approval_hold): {state, label, reason}. The card
+    # shows its Approve as `label` ("Checks running…"), disabled, with `reason` — never a press
+    # the gate refuses (BOSSAPP-946).
+    held: Optional[dict[str, Any]] = None
 
 
 class DecisionInboxResponse(BaseModel):

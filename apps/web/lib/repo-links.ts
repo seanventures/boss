@@ -9,6 +9,7 @@
  */
 
 import { repoUrl } from "./github-urls";
+import { parseCiHold, type CiHold } from "./ci-hold";
 
 const LOCAL_OWNER_PREFIX = "local_";
 const LOCAL_PR_HOST = "boss-local";
@@ -110,7 +111,7 @@ export type ChangeSet = {
   files: ChangeSetFile[]; diff: string; diff_error: string | null; commits: { sha: string; message: string }[];
   review: ChangeSetNote[];
   checks: { where: string; run_status: string | null; tests_passed: string | null; gates?: unknown } | null;
-  merge: { how: string; decision_id: string } | null;
+  merge: { how: string; decision_id: string; held?: CiHold | null } | null;
   /** The review decision whose approval merges it (pending while it is open). */
   decision: { id: string; status: string; question: string } | null;
   draft: boolean; labels: string[]; pending_push: boolean; run_id: string | null; head_sha: string | null;
@@ -147,7 +148,7 @@ export function parseChangeSet(raw: unknown): ChangeSet {
     checks: checks ? { where: str(checks.where, "BOSS's sandbox"), run_status: str(checks.run_status) || null,
                        tests_passed: checks.tests_passed == null ? null : str(checks.tests_passed),
                        ...(checks.gates !== undefined ? { gates: checks.gates } : {}) } : null,
-    merge: merge && str(merge.decision_id) ? { how: str(merge.how), decision_id: str(merge.decision_id) } : null,
+    merge: merge && str(merge.decision_id) ? { how: str(merge.how), decision_id: str(merge.decision_id), held: parseCiHold(merge.held) } : null,
     decision: decision && str(decision.id) ? { id: str(decision.id), status: str(decision.status, "pending"), question: str(decision.question) } : null,
     draft: r.draft === true, labels: Array.isArray(r.labels) ? r.labels.map((l) => str(l)).filter(Boolean) : [],
     pending_push: r.pending_push === true, run_id: str(r.run_id) || null, head_sha: str(r.head_sha) || null,
