@@ -544,9 +544,159 @@ def reconsider_merge_questions(connection: Any, settings: Any,
                                     {"i": did}).scalar()
         if status == "withdrawn":
             out.append(did)
+    out.extend(reconsider_follow_ups(connection, settings, project_id, actor=actor, now=now))
+    retry_stranded_merges(connection, settings, project_id, actor=actor)
     return out
 
 
-__all__ = ["DEPLOY_QUESTIONS", "reconsider_merge_questions", "EFFECT_FAILURE_CAUSES", "PULL_REQUEST_QUESTIONS", "STUCK_QUESTIONS",
+def retry_stranded_merges(connection: Any, settings: Any, project_id: Optional[str] = None, *,
+                          actor: str = "boss") -> list[str]:
+    """AN APPROVED MERGE THAT DIED SILENTLY IS TRIED ONCE MORE (merge_failures).
+
+    Before merge failures were handled, a 405 dead-lettered the merge job and left the question
+    "approved" with its pull request open (PR #237, 2026-11-09). Each such question — approved,
+    nothing merged, no merge job alive, its merge receipt failed, and no failure said on it yet —
+    gets one new merge job, which now recovers or says what failed. Marked so it is never
+    queued twice. Returns the decision ids queued."""
+    import json as _j
+
+    scope = "AND d.project_id = :p" if project_id else ""
+    rows = connection.execute(text(
+        "SELECT d.* FROM decisions d WHERE d.status = 'approved' "
+        "AND d.recommendation->>'action' = 'review_pull_request' "
+        "AND d.recommendation->'merge_failed' IS NULL "
+        "AND d.recommendation->'merge_retried' IS NULL "
+        # Recent approvals only: an approval weeks old is a person's to renew, not BOSS's.
+        "AND d.approved_at > now() - interval '7 days' "
+        f"{scope} "
+        "AND EXISTS (SELECT 1 FROM receipts r WHERE r.project_id = d.project_id "
+        "  AND r.dedupe_key = 'approved-pr-merge-' || d.id AND r.status = 'failed') "
+        "AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.kind = 'github.pull_request.merge' "
+        "  AND j.payload->>'decision_id' = d.id "
+        "  AND j.status NOT IN ('succeeded', 'deadlettered', 'cancelled', 'failed')) "
+        "ORDER BY d.created_at LIMIT 10"),
+        {**({"p": project_id} if project_id else {})}).mappings().all()
+    out: list[str] = []
+    if not rows:
+        return out
+    from .decisions import DecisionService
+
+    service = DecisionService(settings)
+    for row in (dict(r) for r in rows):
+        if _merged_on_record(connection, str(row["project_id"]), decision_id=str(row["id"])):
+            continue
+        try:
+            with connection.begin_nested():
+                connection.execute(text(
+                    "UPDATE decisions SET recommendation = recommendation || "
+                    "CAST(:m AS JSONB), updated_at = now() WHERE id = :d"),
+                    {"m": _j.dumps({"merge_retried": True}), "d": row["id"]})
+                service._queue_merge_job_from_review(  # noqa: SLF001 — the one merge queue
+                    connection, row, actor, _json(row.get("recommendation")))
+            out.append(str(row["id"]))
+        except Exception:  # noqa: BLE001
+            log.exception("retry stranded merge: %s", row["id"])
+    return out
+
+
+#: The statuses a follow-up merge question is relabelled in: unanswered, or approved with no
+#: merge yet (its merge job may be retried, and should say what it merges).
+_FOLLOW_UP_STATUSES = ("pending", "delegated", "expired", "revision_requested", "approved")
+
+
+def reconsider_follow_ups(connection: Any, settings: Any, project_id: Optional[str] = None, *,
+                          actor: str = "boss", now: Optional[float] = None,
+                          reader: Any = None) -> list[str]:
+    """A MERGE QUESTION FOR A SECOND PULL REQUEST OF ALREADY-MERGED WORK (pr_follow_up).
+
+    When an earlier pull request from the same work branch is merged on record, this one is
+    either a duplicate — nothing changed after the merged head: it withdraws itself, "PR #237
+    repeats #236, which is merged" — or a real follow-up: its title and question are renamed
+    "Fix: <work> after #236" with the files it changes as its reason. GitHub is read once per
+    question (the compare); unreadable leaves it as it is. Returns the ids withdrawn."""
+    import time
+
+    from . import pr_follow_up
+
+    clock = time.monotonic() if now is None else now
+    scope = "AND project_id = :p" if project_id else ""
+    rows = connection.execute(text(
+        "SELECT id, project_id, status, recommendation, created_at FROM decisions WHERE "
+        "status = ANY(:st) AND recommendation->>'action' = 'review_pull_request' "
+        "AND recommendation->>'follow_up_of' IS NULL "
+        f"AND COALESCE(recommendation->>'branch_name', '') <> '' {scope} ORDER BY created_at"),
+        {"st": list(_FOLLOW_UP_STATUSES), **({"p": project_id} if project_id else {})}
+    ).mappings().all()
+    out: list[str] = []
+    read = 0
+    for decision in (dict(r) for r in rows):
+        did = str(decision["id"])
+        key = f"follow_up:{did}"
+        last = _last_read.get(key)
+        if read >= RECHECK_PER_SWEEP or (last is not None
+                                         and clock - last < RECHECK_EVERY_SECONDS):
+            continue
+        rec = _json(decision.get("recommendation"))
+        try:
+            with connection.begin_nested():
+                if _merged_on_record(connection, str(decision["project_id"]),
+                                     url=str(rec.get("pull_request_url") or "") or None,
+                                     decision_id=did):
+                    continue
+                earlier = pr_follow_up.merged_before(connection, decision)
+                if not earlier or not earlier.get("number"):
+                    continue
+                _last_read[key] = clock
+                read += 1
+                paths = _changed_after(connection, settings, decision, earlier, reader)
+                if paths is None:
+                    continue    # GitHub could not be asked: the question stands as it is
+                number = _pr_label(rec)
+                if not paths and decision["status"] != "approved":
+                    note = (f"{number} repeats #{earlier['number']}, which is merged: it changes "
+                            "nothing after that merge, so there is nothing left to approve.")
+                    if _withdraw(connection, decision, note,
+                                 {"kind": "duplicate_of_merged",
+                                  "merged_pull_request": earlier["number"]}, actor):
+                        out.append(did)
+                elif paths:
+                    pr_follow_up.relabel(
+                        connection, decision, int(earlier["number"]),
+                        pr_follow_up.follow_up_reason(rec.get("title"), int(earlier["number"]),
+                                                      paths), actor=actor)
+        except Exception:  # noqa: BLE001 — one unreadable question never stops the sweep
+            log.exception("reconsider follow-up: %s", did)
+    return out
+
+
+def _changed_after(connection: Any, settings: Any, decision: Mapping[str, Any],
+                   earlier: Mapping[str, Any], reader: Any = None) -> Optional[list[str]]:
+    """The files this decision's pull request changes after the earlier merged head, or None
+    when GitHub cannot say."""
+    from .ci_gate import parse_pr_url, reader_for_project
+
+    rec = _json(decision.get("recommendation"))
+    parsed = parse_pr_url(str(rec.get("pull_request_url") or "")) or (None, None)
+    base = str(earlier.get("head_sha") or "")
+    if not base or not parsed[1]:
+        return None
+    try:
+        if reader is None:
+            reader = reader_for_project(connection, settings, str(decision["project_id"]),
+                                        parsed[0])
+        if not callable(getattr(reader, "changed_files", None)):
+            return None
+        head = str(((reader.pull_request(int(parsed[1])) or {}).get("head") or {}).get("sha")
+                   or rec.get("head_sha") or "")
+        if not head:
+            return None
+        return sorted({f["filename"] for f in reader.changed_files(base, head)
+                       if f.get("filename")})
+    except Exception:  # noqa: BLE001
+        log.debug("follow-up compare unread", exc_info=True)
+        return None
+
+
+__all__ = ["DEPLOY_QUESTIONS", "reconsider_follow_ups", "reconsider_merge_questions", "retry_stranded_merges", "EFFECT_FAILURE_CAUSES", "PULL_REQUEST_QUESTIONS", "STUCK_QUESTIONS",
            "failed_effect_cause", "on_deploy_healthy", "on_effect_succeeded",
            "on_pull_request_settled", "withdraw_cleared"]

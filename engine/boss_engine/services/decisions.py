@@ -401,6 +401,67 @@ class DecisionService:
             lines.append("")
         return "\n".join(lines).strip()
 
+    def _merge_already_settled(self, connection: Connection, row: dict[str, Any],
+                               actor: str) -> Optional[dict]:
+        """The decision row with a `noop_message` when approving this merge question would do
+        nothing new — its pull request is merged (on record or in GitHub) or closed, or it was
+        already approved — else None (approve as usual). Same check as the tick's
+        reconsider_merge_questions, made at the moment a person presses the button."""
+        rec = row.get("recommendation")
+        if isinstance(rec, str):
+            try:
+                rec = json.loads(rec)
+            except ValueError:
+                rec = {}
+        rec = rec if isinstance(rec, dict) else {}
+        if rec.get("action") != "review_pull_request":
+            return None
+        from . import cleared_causes, pr_merge
+
+        url = str(rec.get("pull_request_url") or "")
+        number = self._pull_request_number(rec)
+        label = f"PR #{number}" if number else "Its pull request"
+        status = str(row.get("status") or "")
+        unanswered = status in decision_actions.ATTENTION_CANDIDATE_STATUSES
+        merged = (cleared_causes._merged_on_record(  # noqa: SLF001 — the one merged rule
+            connection, str(row["project_id"]), url=url or None, decision_id=str(row["id"]))
+            or pr_merge.merged_shas(connection, str(row["project_id"]), [str(row["id"])]))
+        state = pr_merge.MERGED if merged else None
+        if state is None and (unanswered or status == "withdrawn"):
+            build = cleared_causes._build_of(connection, row)  # noqa: SLF001
+            if build:
+                seen = pr_merge.observe(connection, self.settings, str(row["project_id"]),
+                                        str(build))
+                if seen.get("state") in (pr_merge.MERGED, pr_merge.CLOSED):
+                    state = seen["state"]
+        if state is None and status not in {"approved", "executed", "merged"}:
+            return None
+        if state == pr_merge.MERGED:
+            words = f"{label} is already merged, so there is nothing left to approve."
+        elif state == pr_merge.CLOSED:
+            words = f"{label} was closed without merging, so there is nothing left to approve."
+        else:
+            live = connection.execute(text(
+                "SELECT count(*) FROM jobs WHERE kind = 'github.pull_request.merge' AND "
+                "payload->>'decision_id' = :d AND status NOT IN "
+                "('succeeded', 'deadlettered', 'cancelled', 'failed')"),
+                {"d": row["id"]}).scalar()
+            if not live and status == "approved":
+                # Approved, and its merge job ended without merging (a conflict, GitHub down):
+                # pressing again is the one retry — never a second job beside a live one.
+                self._queue_merge_job_from_review(connection, row, actor, rec)
+                words = f"{label} was already approved; its merge is being tried again."
+            else:
+                words = (f"{label} was already approved; its merge is under way."
+                         if live else f"{label} was already approved.")
+        if unanswered and state is not None:
+            cleared_causes._withdraw(  # noqa: SLF001
+                connection, row, words, {"kind": f"pull_request_{state}", "via": "approve"},
+                actor)
+        emit_event(connection, row["project_id"], "decision.approve_noop", actor, "decision",
+                   row["id"], {"why": words, "status": status, "pull_request": number})
+        return {**self.get_row(connection, row["id"]), "noop_message": words}
+
     def transition(
         self,
         connection: Connection,
@@ -496,6 +557,13 @@ class DecisionService:
                 delegate_to=delegate_to,
                 delegated_to=row.get("delegated_to"),
             )
+
+        # APPROVING A MERGE TWICE, OR A MERGE THAT ALREADY HAPPENED, IS A NO-OP IN WORDS
+        # (pr_follow_up): "PR #236 is already merged". Never an error, never a second merge job.
+        if action == "approve":
+            settled = self._merge_already_settled(connection, row, actor)
+            if settled is not None:
+                return settled
 
         # THE BUTTONS THE CONSOLE DRAWS ARE THE ONLY ONES THAT WORK. A budget refusal approved
         # from the chat agent, or a workflow gate sent back for "changes" the runner never reads,

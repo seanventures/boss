@@ -1687,6 +1687,8 @@ class PullRequestMergeResponse(BaseModel):
     branch_name: Optional[str] = None
     merged_sha: Optional[str] = None
     message: Optional[str] = None
+    # A failed merge the worker should try again (a moved head, a GitHub hiccup).
+    retryable: Optional[bool] = None
 
 
 class SandboxDeploymentResponse(BaseModel):
@@ -2811,6 +2813,8 @@ class DecisionCard(BaseModel):
     via_for_name: Optional[str] = None      # the person the delegate answered for, by name
     created_at: str
     updated_at: str
+    # Set when the action did nothing new ("PR #236 is already merged"): a no-op in words.
+    message: Optional[str] = None
     # What a person can do with it, decided by the engine (services/decision_actions.py) so the
     # console draws only buttons that work. Defaults keep older payloads valid.
     kind: str = "general"

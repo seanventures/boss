@@ -56,6 +56,13 @@ def _builds(connection: Connection, project_id: str, item: Mapping[str, Any]) ->
     return [dict(r) for r in rows]
 
 
+def _merge_of(build: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    """A build's merge on record (finalize_ctx.merge), or {}."""
+    fctx = as_json((build or {}).get("finalize_ctx"), {}) or {}
+    merge = fctx.get("merge") if isinstance(fctx, dict) else None
+    return merge if isinstance(merge, dict) else {}
+
+
 def _steps(connection: Connection, run_id: str) -> dict[str, dict[str, Any]]:
     rows = connection.execute(text(
         "SELECT DISTINCT ON (step_id) step_id, status, output, decision_id, started_at, "
@@ -123,7 +130,13 @@ def story(connection: Connection, project_id: str, work_id: str) -> dict[str, An
         (_decision(connection, s["decision_id"]) for s in steps.values()
          if s.get("decision_id") and s["output"].get("capability") in ("spec_review",
                                                                         "architecture")), None)
-    merge = fctx.get("merge") if isinstance(fctx.get("merge"), dict) else {}
+    # THE MERGE ON RECORD, WHICHEVER ATTEMPT MADE IT (pr_merge): a retry or follow-up after
+    # the merge is the newest build, and reading only it said "Only a person merges" about a
+    # pull request BOSS had merged (Hello World #236, 2026-11-08).
+    merged_build = next((b for b in reversed(builds)
+                         if _merge_of(b).get("sha")), None)
+    merge = _merge_of(merged_build or latest)
+    merge_pr = (item.get("links") or {}).get("merge_pr") or None
     deploy = next((o for o in outputs if o.get("stack_deployment_id")
                    and o.get("deployment_status") == "healthy"), None) or next(
         (o for o in outputs if o.get("stack_deployment_id")), None)
@@ -170,13 +183,22 @@ def story(connection: Connection, project_id: str, work_id: str) -> dict[str, An
     # WHO APPROVED, WHEREVER A PERSON DID (05b-09): the merge (the build's own pull-request
     # decision) and a deploy a person approved read "<who> approved", with the moment, beside
     # the person's face — as the plan's approval does.
-    merge_dec = _decision(connection, latest.get("decision_id"))
+    merge_dec = _decision(connection, (merged_build or latest).get("decision_id"))
     merger = _who(connection, (merge_dec or {}).get("approved_by")) if merge.get("sha") else None
-    rows["pr"] = {"sub": (f"{merger} approved · merged" if merger else "Merged")
-                  if merge.get("sha") else "Only a person merges",
+    merged_url = (merged_build or {}).get("pull_request_url")
+    merged_number = ((merged_build or {}).get("pull_request_number") or pr_number(merged_url)
+                     if merged_url else None)
+    pr_sub = ((f"{merger} approved · merged" if merger else "Merged")
+              if merge.get("sha") else "Only a person merges")
+    if merge.get("sha") and merge_pr and str(merge_pr.get("external_url")) != str(merged_url):
+        # A follow-up after the merge waits on a person: said beside the merge, never instead.
+        pr_sub += f" · follow-up PR #{merge_pr.get('number')} waits on you"
+    link_url, link_n = (merged_url, merged_number) if merged_url else (pr_url, number)
+    rows["pr"] = {"sub": pr_sub,
                   "at": iso(merge.get("at") or merge.get("merged_at")
                             or (merge_dec or {}).get("approved_at")), "person": True,
-                  "link": ({"label": f"PR #{number}", "external_url": pr_url} if pr_url else None)}
+                  "link": ({"label": f"PR #{link_n}", "external_url": link_url}
+                           if link_url else None)}
     deploy_dec = next((d for d in (_decision(connection, st.get("decision_id"))
                                    for st in steps.values() if st.get("decision_id")
                                    and (st["output"].get("stack_deployment_id")

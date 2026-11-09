@@ -781,6 +781,12 @@ class HttpCiReader:
     def pull_request(self, number: int) -> dict:
         return self._get(self._url(f"/pulls/{number}"), self.token) or {}
 
+    def changed_files(self, base: str, head: str) -> list[dict]:
+        """[{filename, status}] that `head` changes over `base` (GitHub's compare)."""
+        payload = self._get(self._url(f"/compare/{base}...{head}"), self.token) or {}
+        return [{"filename": str(f.get("filename") or ""), "status": str(f.get("status") or "")}
+                for f in (payload.get("files") or [])]
+
 
 class AdapterCiReader:
     """Reads CI through a GitHubAdapter (the build's own repository and credential)."""

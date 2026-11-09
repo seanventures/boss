@@ -3337,6 +3337,7 @@ def decision_card_from_row(row) -> DecisionCard:
         executed_at=row["executed_at"].isoformat() if row.get("executed_at") else None,
         resolution_note=row.get("resolution_note"),
         external_ref=row.get("external_ref"),
+        message=row.get("noop_message"),
         via_delegate=row.get("via_delegate"),
         via_delegate_name=(principal_display_name(row["via_delegate"])
                            if row.get("via_delegate") else None),

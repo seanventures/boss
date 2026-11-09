@@ -155,7 +155,12 @@ export type WorkItem = {
   list_usd?: number | null;
   links: { workflow_run: string; build: string; pr: { number: number; external_url: string } | null; deploy: string; preview: string; decision: string;
     /** Its build's own live log: the build page with Logs open on that run (`logs=build`). */
-    log?: string };
+    log?: string;
+    /** The pull request the open merge question is about; `follow_up_of`: the merged PR it
+     *  follows. Null when nothing waits on a merge (a merged PR never asks again). */
+    merge_pr?: { number: number; external_url: string; follow_up_of?: number | null; failed?: string } | null;
+    /** The newest pull request merged on record. */
+    merged_pr?: { number: number; external_url: string } | null };
   detail: string; href: string; source: string;
   /** What its build waits for, in words (stuck_work.wait_reason), and what the Shepherd found. */
   why?: WaitReason | null; diagnosis?: Diagnosis | null;
@@ -431,14 +436,16 @@ export function logOfBuild(build: string): string {
   return `${path}?${q.toString()}`;
 }
 export const parseWorkItem = (v: unknown): WorkItem => {
-  const x = o(v); const l = o(x.links); const pr = o(l.pr);
+  const x = o(v); const l = o(x.links); const pr = o(l.pr); const mp = o(l.merge_pr); const md = o(l.merged_pr);
   return {
     id: s(x.id), label: s(x.label), kind: s(x.kind, "feature"), state: oneOf(x.state, WORK_STATES, "planned"), age: s(x.age),
     stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo") })),
     agents: agents(x.agents), cost_usd: nn(x.cost_usd), list_usd: nn(x.list_usd),
     links: { workflow_run: s(l.workflow_run), build: s(l.build), deploy: s(l.deploy), preview: s(l.preview), decision: s(l.decision),
              log: s(l.log) || (s(l.build) ? logOfBuild(s(l.build)) : ""),
-             pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null },
+             pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
+             merge_pr: mp.number || mp.external_url ? { number: n(mp.number), external_url: s(mp.external_url), follow_up_of: nn(mp.follow_up_of), failed: s(mp.failed) } : null,
+             merged_pr: md.number || md.external_url ? { number: n(md.number), external_url: s(md.external_url) } : null },
     detail: s(x.detail), href: s(x.href), source: s(x.source),
     why: parseWaitReason(x.why), diagnosis: parseDiagnosis(x.diagnosis),
     source_label: s(x.source_label) || SOURCE_WORDS[s(x.source)] || "",
