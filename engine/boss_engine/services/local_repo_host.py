@@ -97,6 +97,13 @@ class LocalGitAdapter:
 
     # -- identity ---------------------------------------------------------------------------
     @property
+    def has_hosted_ci(self) -> bool:
+        """THE HOST CAPABILITY ci_gate decides by (BOSSAPP-946): a repository on this machine has
+        no hosted CI; BOSS's sandbox checks are its CI. A GitHub repository's MIRROR during an
+        outage is still a GitHub repository: its CI runs after the push, so it is hosted."""
+        return bool(self.pending_push)
+
+    @property
     def repository_full_name(self) -> str:
         return f"{self.owner}/{self.repo}"
 

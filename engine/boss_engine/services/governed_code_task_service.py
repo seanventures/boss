@@ -2740,7 +2740,15 @@ def _wait_for_ci(engine, settings, sf, proposal: dict, project_id: str, run_id: 
             return _ci_unreadable(engine, project_id, run_id, repository, url, "",
                                   "the pull request's head commit is unknown")
         has_ci = ci_gate._safe_has_workflows(reader, sha)  # noqa: SLF001
-        if not has_ci and not ci_gate.workflow_paths(
+        if not ci_gate.hosted_ci(reader):
+            # BOSSAPP-946: a local repository has no hosted CI; BOSS's sandbox checks are its CI.
+            out = {"status": "no_ci",
+                   "summary": ci_gate.NO_HOSTED_CI_SUMMARY.format(repository=repository)}
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.ci_waited", "boss", "code_task_run",
+                           run_id, {"pull_request_url": url, **out})
+            return out
+        if has_ci is False and not ci_gate.workflow_paths(
                 (proposal.get("files_changed") or [])):
             out = {"status": "no_ci", "summary": f"No CI is configured for {repository} (no "
                                                  ".github/workflows), so BOSS did not wait."}
@@ -2751,7 +2759,10 @@ def _wait_for_ci(engine, settings, sf, proposal: dict, project_id: str, run_id: 
         with _transaction(engine) as c:
             wait = ci_gate.start_wait(
                 c, project_id=project_id, repository=repository, head_sha=sha,
-                pull_request_url=url, has_ci=True, code_task_run_id=run_id,
+                pull_request_url=url, code_task_run_id=run_id,
+                # True: workflows found or added; None: unknown, never read as "has CI".
+                has_ci=(True if has_ci or ci_gate.workflow_paths(
+                    proposal.get("files_changed") or []) else None),
                 timeout_seconds=int(settings.ci_wait_timeout_seconds))
         got = ci_gate.run_blocking(lambda: _transaction(engine), wait["id"], reader, sleep=sleep)
         out = {"id": got["id"], "status": got["status"], "summary": got["summary"],
