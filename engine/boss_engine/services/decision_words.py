@@ -41,6 +41,7 @@ _BY_REFUSAL: dict[str, tuple[str, str]] = {
     "autoscale": ("Budget held back new workers", "Budget"),
     "deferred": ("Budget deferred a job", "Budget"),
     "capacity": ("A model ran out of capacity", "Models"),
+    "rules_forbidden": ("Egress refused the clone", "Factory"),
 }
 
 #: What a spend guard's "Missing active reservation for <thing>" was about.

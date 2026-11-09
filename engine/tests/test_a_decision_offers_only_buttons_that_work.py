@@ -66,7 +66,7 @@ def test_a_spending_refusal_is_a_notice_with_one_dismiss_and_a_way_to_fix_it(rea
     hint = da.guidance(card)
     assert hint and hint["area"] in {"budget", "setup"}
     assert "Approving this card would not" in hint["what_to_do"]
-    if da.REFUSALS[reason] in {"capacity", "budget", "tier2_frozen"}:
+    if da.REFUSALS[reason] in {"capacity", "budget", "tier2_frozen", "rules_forbidden"}:
         assert "Retry" in hint["what_to_do"]
     else:
         assert "Nothing is needed" in hint["what_to_do"]

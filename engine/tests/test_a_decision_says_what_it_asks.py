@@ -40,6 +40,8 @@ def test_known_producers_have_their_words():
         {"title": "Budget refused work", "source": "Budget"}
     assert words.headline(_d("Out of credit", "restore_model_capacity_or_raise_budget"))[
         "source"] == "Models"
+    assert words.headline(_d("Egress refused", "allow_repository_or_change_clone_target")) == \
+        {"title": "Egress refused the clone", "source": "Factory"}
 
 
 def test_an_unknown_code_is_humanized_and_a_sentence_is_left_alone():

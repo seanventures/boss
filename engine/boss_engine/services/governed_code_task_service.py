@@ -9579,29 +9579,49 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             )
             if failover:
                 return failover
-            # Model TPM/credits/budget exhaustion: escalate to a Decision so capacity
-            # failures are visible in the inbox rather than silent DLQ churn (W2.5).
+            # Model capacity, an exhausted budget, or a rules 403: one inbox decision.
+            # This pipeline does not retry them. A run that already holds a decision
+            # does not get a second card (W2.5).
             decision_id = None
-            if fclass == "needs_human" and rcode in {
-                "model_rate_limit", "budget_exhausted",
-            }:
+            if (
+                not (run or {}).get("decision_id")
+                and fclass == "needs_human"
+                and rcode in {
+                    "model_rate_limit", "budget_exhausted", "rules_forbidden",
+                }
+            ):
                 try:
-                    decision_id = create_blocking_decision(
-                        c, project_id, task_id,
-                        (
+                    if rcode == "rules_forbidden":
+                        _blocked_question = (
+                            "Egress or git refused this build with a rules 403 "
+                            "(the allow-list or the installation). A rules 403 is not "
+                            "a 5xx or a timeout, so this build is not retried. Allow "
+                            "the repository, or point the build at one the rules will clone."
+                        )
+                        _blocked_decision_action = "allow_repository_or_change_clone_target"
+                        _blocked_decision_reason = "rules_forbidden"
+                        _blocked_decision_event = "code_task.rules_forbidden_escalated"
+                    else:
+                        _blocked_question = (
                             "Model capacity exhausted (TPM / rate limit / credits / budget). "
                             "Code task stopped — raise limits, wait for quota reset, or "
                             "requeue after capacity is available."
-                        ),
+                        )
+                        _blocked_decision_action = "restore_model_capacity_or_raise_budget"
+                        _blocked_decision_reason = "model_capacity_exhausted"
+                        _blocked_decision_event = "code_task.model_capacity_escalated"
+                    decision_id = create_blocking_decision(
+                        c, project_id, task_id,
+                        _blocked_question,
                         {
-                            "action": "restore_model_capacity_or_raise_budget",
+                            "action": _blocked_decision_action,
                             "run_id": run_id,
                             "reason_code": rcode,
                             "failure_class": fclass,
                             "failure_reason": reason[:500],
                         },
                         {},
-                        "model_capacity_exhausted",
+                        _blocked_decision_reason,
                     )
                     c.execute(
                         sql("UPDATE code_task_runs SET decision_id=:d, updated_at=now() "
@@ -9609,7 +9629,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         {"d": decision_id, "id": run_id},
                     )
                     emit_event(
-                        c, project_id, "code_task.model_capacity_escalated", "boss",
+                        c, project_id, _blocked_decision_event, "boss",
                         "code_task_run", run_id,
                         {"decision_id": decision_id, "reason_code": rcode},
                     )

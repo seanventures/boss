@@ -57,6 +57,10 @@ REFUSALS: dict[str, str] = {
     # or credit. On a real install this is the refusal BOSS raises most often.
     "restore_model_capacity_or_raise_budget": "capacity",
     "model_capacity_exhausted": "capacity",
+    # governed_code_task_service: egress or git refused the clone with a rules 403.
+    # The build already stopped and is not retried; approving the card changes nothing.
+    "allow_repository_or_change_clone_target": "rules_forbidden",
+    "rules_forbidden": "rules_forbidden",
     # resource_plane autoscaler: the budget state stopped BOSS adding workers.
     "increase_budget_or_defer_work": "autoscale",
     "approve_budget_increase_or_accept_degraded_mode": "autoscale",
@@ -382,6 +386,16 @@ _REFUSAL_GUIDANCE: dict[str, dict[str, str]] = {
             "Approving this card would not run it."),
         "area": "budget",
         "link_label": "Open Govern",
+    },
+    "rules_forbidden": {
+        "what_happened": (
+            "Egress or git refused this build with a rules 403 (the allow-list or the "
+            "installation). That is an answer, not an outage, so BOSS did not retry it."),
+        "what_to_do": (
+            "Allow the repository, or point the build at one the rules will clone. "
+            "Then Retry the build. Approving this card would not retry it."),
+        "area": "setup",
+        "link_label": "Open Repo and models",
     },
 }
 
