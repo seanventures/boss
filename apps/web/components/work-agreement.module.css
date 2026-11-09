@@ -1,6 +1,6 @@
 /* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
-:root {
+:global(:root) {
   --font-outlier: "JetBrains Mono", ui-monospace, monospace;
 }
 .backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: 24px; background: var(--boss-c-448a2cc399); }
