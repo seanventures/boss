@@ -18,7 +18,7 @@ A technical founder who will run BOSS on a server they administer. You should be
 
 <div class="boss-path" markdown="1">
 
-1. [Install](QUICKSTART.md#install) <span class="boss-path__note">Pin v1.0-rc10.11 on a machine you administer.</span>
+1. [Install](QUICKSTART.md#install) <span class="boss-path__note">Pin v1.0-rc10.12 on a machine you administer.</span>
 2. [Claim](QUICKSTART.md#claim-the-install) <span class="boss-path__note">Open the one-hour link and become the Owner.</span>
 3. [Repository](QUICKSTART.md#connect-a-repository) <span class="boss-path__note">Connect one GitHub repository you may change.</span>
 4. [Model](QUICKSTART.md#connect-a-model) <span class="boss-path__note">Connect one model. A coding subscription signs in inside BOSS.</span>
@@ -43,7 +43,7 @@ The [quickstart](QUICKSTART.md) is that path. [Your hostname](hostname.md) is wh
 
 ## Limits
 
-This is a release candidate, not a promise that every path is qualified. The bounded installed checks behind this candidate are an owned Linux arm64 machine that already had Docker. A clean-host install and useful provider work are separate checks. The [v1.0-rc10.11 notes](RELEASE_NOTES_v1.0-rc10.11.md) and the [RC9 validation record](RC9_VALIDATION.md) say what has been checked, and what has not.
+This is a release candidate, not a promise that every path is qualified. The bounded installed checks behind this candidate are an owned Linux arm64 machine that already had Docker. A clean-host install and useful provider work are separate checks. The [v1.0-rc10.12 notes](RELEASE_NOTES_v1.0-rc10.12.md) and the [RC9 validation record](RC9_VALIDATION.md) say what has been checked, and what has not.
 
 Credentials stay on the install. A hosted model receives the authentication and the task data for the calls you authorize. No telemetry collector is set, so nothing is sent until you set one. "Improve BOSS" is off unless you turn it on. `BOSS_TELEMETRY=off` or `DO_NOT_TRACK=1` sends nothing. [What a payload can contain](https://github.com/seanventures/boss/blob/main/docs/product/RUN_SCORECARDS.md).
 
@@ -52,7 +52,7 @@ Credentials stay on the install. A hosted model receives the authentication and 
 - [Do the work](FIRST_USEFUL_CHANGE.md), then [review a result](RESULT_REVIEW.md) and [return to it](RETURNING_TO_WORK.md)
 - [People](PEOPLE_AND_ACCESS.md), [spend and approvals](ARCHITECTURE_GOVERNANCE.md)
 - [GitHub](CONNECT_GITHUB.md), [models](MODEL_CONNECTIONS.md), [terminal](terminal.md), [MCP](MCP.md), [CLI](cli.md)
-- [Features](FEATURES.md) and the [release notes](RELEASE_NOTES_v1.0-rc10.11.md)
+- [Features](FEATURES.md) and the [release notes](RELEASE_NOTES_v1.0-rc10.12.md)
 - The [fifteen example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md). Installing an example does not start work.
 - [Contributing](https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md) and the [Apache License 2.0](https://github.com/seanventures/boss/blob/main/LICENSE)
 - [Report a problem](FEEDBACK_LOOP.md). Security reports go to the address in the [security policy](https://github.com/seanventures/boss/blob/main/SECURITY.md), not a public issue.
