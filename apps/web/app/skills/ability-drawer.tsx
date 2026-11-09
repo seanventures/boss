@@ -2,7 +2,7 @@
 
 /**
  * The ability drawer (spec §5.3): right, 420px; a bottom sheet under 720px. Header (icon, label,
- * the one status, provenance, ⋯), then five sections with the shared green SectionLabel and an (i) tooltip —
+ * the one status, provenance, ⋯), then five sections with the shared green SectionLabel and an (i) tooltip , 
  * Connection, Tools, Agents, Used in, Try it. No paragraphs: every write is immediate and toasted.
  */
 import { GatedButton } from "../../components/gated";

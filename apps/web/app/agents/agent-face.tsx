@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * A face, a stack of faces, and a state said in a glyph and a word — for the Agents area.
+ * A face, a stack of faces, and a state said in a glyph and a word, for the Agents area.
  *
  * ONE FACE EVERYWHERE (spec §2.1, test 11). `AgFace` is the kit's <AgentAvatar>, under the name
  * the Agents area already calls it by: it resolves through the same identity store and draws the

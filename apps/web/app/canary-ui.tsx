@@ -28,24 +28,24 @@ export function CanaryCard({ projectId, run }: { projectId: string; run: CanaryR
         </ActionForm>
       </div>
       <p className="detail">
-        Smokes that prove the non-negotiables — exactly-once effects, no-drop comms, durable
+        Smokes that prove the non-negotiables, exactly-once effects, no-drop comms, durable
         execution, and budget gating.
       </p>
       {!run ? (
-        <p className="detail">No canary runs yet — click “Run canaries”.</p>
+        <p className="detail">No canary runs yet, click “Run canaries”.</p>
       ) : (
         <>
           <p className="detail" style={{ marginBottom: 8 }}>
             Latest:{" "}
-            <b style={{ color: tone(run.status) }}>{run.status.toUpperCase()}</b> — {run.passed} pass
-            · {run.failed} fail · {run.skipped} skip
+            <b style={{ color: tone(run.status) }}>{run.status.toUpperCase()}</b>, {run.passed} pass
+           , {run.failed} fail, {run.skipped} skip
           </p>
           <div style={{ display: "grid", gap: 5 }}>
             {run.results.map((r) => (
               <div key={r.canary} style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
                 <span style={{ color: tone(r.status) }}>●</span>{" "}
                 <b style={{ color: "var(--ink)" }}>{r.canary}</b>{" "}
-                <span style={{ color: "var(--muted)" }}>— {r.detail}</span>
+                <span style={{ color: "var(--muted)" }}>,  {r.detail}</span>
               </div>
             ))}
           </div>

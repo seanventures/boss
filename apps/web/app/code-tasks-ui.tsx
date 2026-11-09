@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * Factory (factory spec §4.1): the area shell — the tabs, the header, the URL.
+ * Factory (factory spec §4.1): the area shell, the tabs, the header, the URL.
  *
- *   Factory  [● Floor] [Apps 12]  ·  3 building · 2 need you  ·  [Find a build] [+ New build ▾]
+ *   Factory  [● Floor] [Apps 12], 3 building, 2 need you, [Find a build] [+ New build ▾]
  *
  * `?area=code_tasks` opens on the Floor (the Builds tab); `view=apps` is the Apps tab; `view=lab`
  * the lab projects (01-06: Builds, Apps, Lab); `view=repositories` the
@@ -300,7 +300,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
     writeUrl({ build: null, run: null, tab: null, logs: null }, "push");
     setUrl((u) => ({ ...u, build: null, logs: null }));
     const back = opener.current ?? (url.build ? { runId: url.build, el: null } : null);
-    // FOCUS GOES BACK TO WHAT OPENED IT (walk D17) — the same element if it survived, else the
+    // FOCUS GOES BACK TO WHAT OPENED IT (walk D17), the same element if it survived, else the
     // row now drawing that build (a Building row, a Stopped row, its card), once the Floor has
     // painted again. Tried over a few frames: the Floor re-renders after the URL changes.
     const target = (): HTMLElement | null => {
@@ -378,7 +378,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
         {counts ? (
           <span className="fx-head-counts" data-testid="fx-head-counts">
             <span>{counts.building} building</span>
-            {needs ? <><span aria-hidden> · </span><span className="fx-needs">{needs === 1 ? "1 needs you" : `${needs} need you`}</span></> : null}
+            {needs ? <><span aria-hidden>, </span><span className="fx-needs">{needs === 1 ? "1 needs you" : `${needs} need you`}</span></> : null}
           </span>
         ) : null}
         {/* WHAT THE OLD LIST SAID ABOUT ITSELF: that it is a window onto the newest builds, where
@@ -389,7 +389,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
           </span>
         ) : null}
         <span className="fx-muted fx-head-gh" data-testid="fx-github-plane" title={githubTip(githubPlane, githubPlaneLabel, githubRepository)}>
-          GitHub · {githubRepository ? <span data-user-text>{githubRepository}</span> : githubUnconfigured ? "unconfigured" : "Repository unknown"}
+          GitHub, {githubRepository ? <span data-user-text>{githubRepository}</span> : githubUnconfigured ? "unconfigured" : "Repository unknown"}
         </span>
         {previewBlockedReason ? (
           <span className="fx-err" role="status" data-testid="fx-preview-list-error" title={previewBlockedReason}>Previews unavailable</span>

@@ -15,7 +15,7 @@ const ORG_KEY = "boss.org";
 
 /** Shown instead of the org picker when the URL names an org but the control plane
  * didn't answer. Falling back to the picker on a transient API blip silently threw
- * the operator out of their session (the "console resets" bug) — this keeps the URL
+ * the operator out of their session (the "console resets" bug), this keeps the URL
  * (org/area/deep links intact) and retries until the API answers again. */
 export function OrgReconnect({ orgId, reason }: { orgId: string; reason?: string }) {
   const refresh = useConsoleRefresh();
@@ -34,7 +34,7 @@ export function OrgReconnect({ orgId, reason }: { orgId: string; reason?: string
         <h1 className="org-gate-title">Reconnecting to the control plane…</h1>
         <p className="org-gate-sub">
           The API didn&apos;t answer just now{reason ? ` (${reason})` : ""}. Your session for{" "}
-          <span className="mono">{orgId}</span> is preserved — this page retries automatically
+          <span className="mono">{orgId}</span> is preserved, this page retries automatically
           and will drop you back exactly where you were.
         </p>
       </div>
@@ -45,8 +45,8 @@ export function OrgReconnect({ orgId, reason }: { orgId: string; reason?: string
 /**
  * A FULL PAGE LOAD INTO THE CONSOLE, NOT A CLIENT TRANSITION.
  *
- * `router.push` keeps the picker on screen until the whole console has rendered client-side —
- * the URL does not even change until then — so pressing Enter looked like nothing happening for
+ * `router.push` keeps the picker on screen until the whole console has rendered client-side , 
+ * the URL does not even change until then, so pressing Enter looked like nothing happening for
  * a long time, then the console appeared. Measured on a fresh install: a full load of
  * /?org=org_boss is ~1.5s with the console's loading screen from the first moment; the
  * transition from the picker had not finished after 55s in a background tab. A hard navigation
@@ -132,7 +132,7 @@ export function OrgGate({ orgs, canOnboard }: {
               <span className="org-card-body">
                 <span className="org-card-name">{o.org_name}</span>
                 <span className="org-card-meta">
-                  {o.task_count} task{o.task_count === 1 ? "" : "s"} · {o.meeting_count} meeting{o.meeting_count === 1 ? "" : "s"}
+                  {o.task_count} task{o.task_count === 1 ? "" : "s"}, {o.meeting_count} meeting{o.meeting_count === 1 ? "" : "s"}
                 </span>
                 <span className="org-card-proj mono">{o.project_slug}</span>
               </span>
@@ -145,7 +145,7 @@ export function OrgGate({ orgs, canOnboard }: {
               <span className="org-card-mark add">＋</span>
               <span className="org-card-body">
                 <span className="org-card-name">Onboard a new organization</span>
-                <span className="org-card-meta">Admin · creates a fresh workspace with the common setup</span>
+                <span className="org-card-meta">Admin, creates a fresh workspace with the common setup</span>
               </span>
             </button>
           ) : null}

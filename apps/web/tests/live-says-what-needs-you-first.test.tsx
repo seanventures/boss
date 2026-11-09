@@ -66,7 +66,7 @@ describe("the attention card", () => {
     expect(buttons[0].title).toBe("Releases the step and the workflow continues from it.");
   });
 
-  it("decide_inline false: only Review ↗, into Approvals", async () => {
+  it("decide_inline false: only Review, into Approvals", async () => {
     await mount(view(board({ attention: [prReview()] })));
     const c = card("dec_pr");
     expect(c.querySelector('[data-testid="ag-att-approve"]')).toBeNull();
@@ -86,7 +86,7 @@ describe("the attention card", () => {
       decision_id: "dec_gate", action: "approve", actor: "ceo", project_id: "p1", content_hash: "h1",
       workflow_run_id: "wfr_video",
     });
-    expect(toasts).toContain("Approved · Weekly video continues");
+    expect(toasts).toContain("Approved, Weekly video continues");
     expect(card("dec_gate").dataset.leaving).toBe("true");
   });
 
@@ -98,7 +98,7 @@ describe("the attention card", () => {
     expect($('[data-testid="ag-att-confirm"]')?.textContent).toContain("Reject this?");
     await click($('[data-testid="ag-att-confirm-reject"]'));
     expect(decide.mock.calls[0][0].get("action")).toBe("reject");
-    expect(toasts).toContain("Rejected · step failed");
+    expect(toasts).toContain("Rejected, step failed");
   });
 
   it("a refusal (409) shows the server's sentence on the card", async () => {
@@ -126,7 +126,7 @@ describe("the attention card", () => {
     const dts = [...card("dec_gate").querySelectorAll(".ag-att-details dt")].map((d) => d.textContent);
     expect(dts).toEqual(["Why", "If approved", "If rejected", "Blocks", "Preview", "Risk", "Approvals"]);
     expect(card("dec_gate").textContent).toContain("Tier 2");
-    expect(card("dec_gate").textContent).toContain("Open in Approvals ↗");
+    expect(card("dec_gate").textContent).toContain("Open in Approvals");
   });
 
   it("past four cards, +n more opens the rest in place", async () => {

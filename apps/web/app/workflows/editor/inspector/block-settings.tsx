@@ -53,13 +53,13 @@ export function FieldError({ problems, field }: { problems: Problem[]; field: st
       {/* NO DEAD END: the gap names where it is closed (a deploy step with no target opens Infra
           with the App target sheet). A new tab, so the unsaved workflow is not lost. */}
       {hit.fix_href ? (
-        <> · <a href={hit.fix_href} target="_blank" rel="noreferrer" data-testid="wf-problem-fix">{hit.fix_label ?? "Set it up"}</a></>
+        <>, <a href={hit.fix_href} target="_blank" rel="noreferrer" data-testid="wf-problem-fix">{hit.fix_label ?? "Set it up"}</a></>
       ) : null}
     </span>
   );
 }
 
-/** The step fields BlockSettings draws a control for — and so where a problem on one shows. */
+/** The step fields BlockSettings draws a control for, and so where a problem on one shows. */
 export function blockFieldKeys(view: StepView, block: BlockDef | undefined): string[] {
   if (view.type === "condition") return ["expression", "on_true", "on_false"];
   if (view.type === "parallel") return ["branches", "join"];
@@ -73,7 +73,7 @@ export function blockFieldKeys(view: StepView, block: BlockDef | undefined): str
 }
 
 /**
- * The settings of a Flow block — Approval gate, Wait, Run another workflow — rendered from the
+ * The settings of a Flow block, Approval gate, Wait, Run another workflow, rendered from the
  * block's own `configure` list, so a field the server requires is a field the inspector offers;
  * the labels are the copy guide's, not the server's. A branch block (If / else, Parallel, Join,
  * Repeat) draws its own settings (structure-settings.tsx).
@@ -168,7 +168,7 @@ export function BlockSettings({ step, view, block, palette, projectId, workflowK
                     <option key={w.definition_id} value={w.active_version_id ?? ""}
                             disabled={!w.active_version_id}
                             title={w.active_version_id ? undefined : "Not published yet"}>
-                      {w.name}{w.is_catalogue ? " · Standard" : ""}
+                      {w.name}{w.is_catalogue ? ", Standard" : ""}
                     </option>
                   ))}
                 </select>
@@ -195,7 +195,7 @@ export function BlockSettings({ step, view, block, palette, projectId, workflowK
   );
 }
 
-/** `A person` first — a gate exists so that a person looks — then the project's agents. */
+/** `A person` first, a gate exists so that a person looks, then the project's agents. */
 export function ApproverSelect({ value, palette, onChange, testId }: {
   value: string; palette: Palette; onChange(v: string): void; testId?: string;
 }) {

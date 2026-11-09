@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Observability › Connect an app (BOSSAPP-598, PRD §6.1): one question — how does it talk?
+ * Observability › Connect an app (BOSSAPP-598, PRD §6.1): one question, how does it talk?
  *
  *   How does it talk?   ( ) BOSS builds it  (•) OpenTelemetry  ( ) A collector  ( ) Prometheus (remote write)
  *                       ( ) It has /metrics ( ) Just a URL     ( ) It already alerts elsewhere [ Alertmanager ▾ ]
@@ -54,7 +54,7 @@ function LiveCheck({ projectId, serviceId, since }: { projectId: string; service
   }, [projectId, serviceId, since]);
   return (
     <div className="obs-zone" data-testid="obs-connect-live" aria-live="polite">
-      <span className="obs-rlabel">LIVE CHECK</span>
+      <span className="obs-rlabel">Live check</span>
       {live?.arrived ? (
         <span className="obs-line" data-testid="obs-connect-arrived">
           <span className="obs-adot" data-tone="green" aria-hidden />
@@ -79,7 +79,7 @@ function PasteBlock({ c }: { c: Connected }) {
   if (!c.paste || (!c.paste.values.length && !c.paste.block)) return null;
   return (
     <div className="obs-zone" data-testid="obs-connect-paste">
-      <span className="obs-rlabel">PASTE THESE</span>
+      <span className="obs-rlabel">Paste these</span>
       {c.shownOnce ? (
         <span className="obs-chip" data-tone="amber" data-testid="obs-connect-once"
               title="BOSS keeps only a hash of the token. Lost it? Rotate it in Sources.">

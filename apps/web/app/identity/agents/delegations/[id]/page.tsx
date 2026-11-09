@@ -14,7 +14,7 @@ type Props = { params: Promise<{ id: string }> };
 /**
  * Identity › Agents › a delegation (mockup d): the narrowing chain, its tokens and egress, revoke.
  *
- * GET /v1/identity/delegations/{id} answers the one grant — in the shape the lists answer — to the
+ * GET /v1/identity/delegations/{id} answers the one grant, in the shape the lists answer, to the
  * person who granted it or a reader of every grant, and 404 to anyone else (another org's grant
  * and an unknown id read the same). The chain, tokens and egress are not served yet: they render
  * empty, honestly (detail.ts).

@@ -2,7 +2,7 @@
 
 /**
  * The pulse (spec §4.2.4): the server's histogram of lines per bucket, stacked by level, above
- * the list. Every bar is a real count with its own tooltip (`18:00–18:15 · 412 lines · 3
+ * the list. Every bar is a real count with its own tooltip (`18:00, 18:15, 412 lines, 3
  * errors`); heights are on a square-root scale so one error storm does not flatten the rest; a
  * bucket with errors carries a 2px red cap so it shows at any height.
  *
@@ -21,7 +21,7 @@ export function pulseTip(b: ActivityHistogram["buckets"][number], seconds: numbe
   const lines = b.error + b.warn + b.info + b.verbose;
   const parts = [spanLabel(b.t, seconds), `${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}`];
   if (b.error) parts.push(`${b.error} error${b.error === 1 ? "" : "s"}`);
-  return parts.join(" · ");
+  return parts.join(", ");
 }
 
 export function PulseStrip({ histogram, loading, onZoom, onReset }: {

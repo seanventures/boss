@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * BUILD SPEED — how many parallel sub-agents a build's writing stages may use (engine
+ * BUILD SPEED, how many parallel sub-agents a build's writing stages may use (engine
  * project_settings.build_parallelism). Balanced (the default) asks for 3, Fastest for 6; the
  * machine caps either at half its cores and what free memory carries. Speed is bought with more
  * tokens at once: the model and every check stay the same. Owner/Admin (settings:update).
@@ -55,7 +55,7 @@ export function BuildSpeedRow() {
           ))}
           <span className="su-faint" data-testid="su-build-speed-now">
             {speed.parallelism} sub-agent{speed.parallelism === 1 ? "" : "s"} at once
-            {capped ? ` · this machine allows ${speed.machine}` : ""}
+            {capped ? `, this machine allows ${speed.machine}` : ""}
           </span>
         </div>
       </div>

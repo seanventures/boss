@@ -6,7 +6,7 @@
  *   ┌─ Fixing BOSS ⓘ ───────────────────────────────────────────────────────────┐
  *   │ ✓ Found  ✓ Reproduced  ● Fixing  ○ Checks  ○ Review  ○ You  ○ Install  ○ Resume │
  *   │ Mender: the new test fails on BOSS as it is (as expected). Making it pass.       │
- *   │ stack_deploy.py · 1 test added · $1.84 of $10 · 6 min                            │
+ *   │ stack_deploy.py, 1 test added, $1.84 of $10, 6 min                            │
  *   │ [ Open self-fix ]  [ Stop ]                                                      │
  *   └──────────────────────────────────────────────────────────────────────────────────┘
  *
@@ -31,7 +31,7 @@ export function stepSelfFixOf(output: Record<string, unknown> | null | undefined
   return v && typeof v === "object" && typeof (v as StepSelfFix).id === "string" ? (v as StepSelfFix) : null;
 }
 
-/** The facts line: files · tests added · spent of budget · minutes. */
+/** The facts line: files, tests added, spent of budget, minutes. */
 export function factsLine(f: StepSelfFix["facts"]): string {
   if (!f) return "";
   const files = (f.files ?? []).map((p) => p.split("/").pop() || p);
@@ -40,7 +40,7 @@ export function factsLine(f: StepSelfFix["facts"]): string {
   if (f.tests_added) parts.push(`${f.tests_added} test${f.tests_added === 1 ? "" : "s"} added`);
   if (typeof f.cost_usd === "number") parts.push(f.budget_usd ? `${usd(f.cost_usd)} of ${usd(f.budget_usd)}` : usd(f.cost_usd));
   if (typeof f.minutes === "number" && f.minutes > 0) parts.push(`${Math.round(f.minutes)} min`);
-  return parts.join(" · ");
+  return parts.join(", ");
 }
 
 const MARK = { done: "✓", now: "●", next: "○" } as const;

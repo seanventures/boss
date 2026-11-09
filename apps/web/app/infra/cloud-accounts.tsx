@@ -2,7 +2,7 @@
 
 /**
  * Infra › Cloud › Accounts (spec §4.8; parity P-S-06..P-S-15, P-S-23): the accounts table, the
- * account drawer (IMPACT · CREDENTIALS · POLICY · ROTATE · REVOKE · AUDIT, today's AccountDrawer
+ * account drawer (IMPACT, CREDENTIALS, POLICY, ROTATE, REVOKE, AUDIT, today's AccountDrawer
  * restyled) and the `+ Account` sheet (the provider catalog with each adapter's categories and
  * skills, `Paste key`, `Use secret ref`). A credential is write-only: a reference is never drawn,
  * a pasted key is cleared the moment it is sent, and `Revoke…` asks for the account's name.
@@ -57,7 +57,7 @@ export function CloudAccounts(p: CloudViewProps) {
                     <span className="inf-trunc" data-copy="data" title={a.label}>{a.label}</span></button></td>
                   <td>{a.providerName}</td>
                   <td><StateWord w={a.state} /></td>
-                  <td title="Write-only references; never shown">{a.slots.length} {a.slots.length === 1 ? "slot" : "slots"} · v{a.credentialVersion}</td>
+                  <td title="Write-only references; never shown">{a.slots.length} {a.slots.length === 1 ? "slot" : "slots"}, v{a.credentialVersion}</td>
                   <td title={a.lastTestAt ? localTime(a.lastTestAt) : "Never tested"}>
                     <StateWord w={a.lastTest} />{a.lastTestAt ? <span className="inf-faint"> {ago(a.lastTestAt, now)}</span> : null}
                   </td>
@@ -136,7 +136,7 @@ function AccountDrawer({ account: a, catalog, projectId, actor, canWrite, poll, 
   return (
     <Drawer label={`${a.label} account`} testId="inf-account-drawer" onClose={onClose}
             head={<><strong className="inf-trunc" data-copy="data" title={a.label}>{a.label}</strong><StateWord w={a.state} /></>}>
-      <span className="inf-muted">{a.providerName}{a.owner ? <> · <span data-copy="data">{a.owner}</span></> : null}</span>
+      <span className="inf-muted">{a.providerName}{a.owner ? <>, <span data-copy="data">{a.owner}</span></> : null}</span>
       {a.lastError ? <ErrorLine error={a.lastError} testId="inf-account-last-error" /> : null}
       <ErrorLine error={error} testId="inf-account-error" />
 
@@ -237,10 +237,10 @@ function AccountDrawer({ account: a, catalog, projectId, actor, canWrite, poll, 
         {a.events.length + a.receipts.length === 0 ? <Empty>Nothing recorded</Empty> : (
           <ul className="cloud-list">
             {a.events.map((e) => (
-              <li key={e.id}><span data-copy="data">{e.kind}</span><span className="inf-faint" data-copy="data">{e.actor} · {ago(e.at, now)}</span></li>
+              <li key={e.id}><span data-copy="data">{e.kind}</span><span className="inf-faint" data-copy="data">{e.actor}, {ago(e.at, now)}</span></li>
             ))}
             {a.receipts.map((r) => (
-              <li key={r.id}><span data-copy="data">{r.action}</span><span className="inf-faint">{r.status} · {ago(r.at, now)}</span></li>
+              <li key={r.id}><span data-copy="data">{r.action}</span><span className="inf-faint">{r.status}, {ago(r.at, now)}</span></li>
             ))}
           </ul>
         )}
@@ -344,7 +344,7 @@ function AddAccountSheet({ catalog, projectId, actor, poll, onClose }: CloudView
                     title={c.adapterStatus === "available" ? "Adapter ready" : "Adapter planned; nothing connects yet"}>
                 <span data-copy="data">{c.adapter || c.adapterStatus}</span>
               </span>
-              <span className="inf-faint" data-copy="data">{c.categories.slice(0, 3).join(" · ") || c.category}</span>
+              <span className="inf-faint" data-copy="data">{c.categories.slice(0, 3).join(", ") || c.category}</span>
               <span className="inf-faint">{c.skillCount} skills</span>
             </span>
           </button>
@@ -394,7 +394,7 @@ function AddAccountSheet({ catalog, projectId, actor, poll, onClose }: CloudView
             </div>
             {(auth?.slots ?? []).map((s) => (
               <label key={s.key} className="inf-field" title="A secret reference, not the secret">
-                <span data-copy="data">{s.key}{s.required ? "" : " · optional"}</span>
+                <span data-copy="data">{s.key}{s.required ? "" : ", optional"}</span>
                 <input type="password" autoComplete="new-password" value={refs[s.key] ?? ""} placeholder="Secret reference"
                        disabled={!available} data-testid={`inf-ref-slot-${s.key}`} onChange={(e) => setRefs({ ...refs, [s.key]: e.target.value })} />
               </label>

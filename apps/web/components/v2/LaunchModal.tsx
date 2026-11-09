@@ -1,7 +1,7 @@
 "use client";
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import { GatedButton } from "../gated";
 import React, { useState } from "react";
 import { apiWrite } from "../../lib/api-write";
@@ -11,7 +11,7 @@ import { apiWrite } from "../../lib/api-write";
  *
  * SAYS WHAT WILL HAPPEN, THEN SAYS WHAT DID
  * -----------------------------------------
- * An operator once clicked an idea, watched "Working", and nothing else ever happened — the
+ * An operator once clicked an idea, watched "Working", and nothing else ever happened, the
  * task really was created and really did sit at `open` forever, because the path it used ran
  * one planning job and stopped, and nothing downstream consumes a plan. The button was honest
  * about starting something and silent about what.
@@ -93,8 +93,7 @@ export function LaunchModal({
                 href={`/?area=meetings${q ? `&${q.slice(1)}` : ""}#${encodeURIComponent(String(meetingId))}`}
                 data-testid="v2-launch-link"
               >
-                Watch the panel →
-              </a>
+                Watch the panel</a>
             ) : (
               // Started, but we cannot say where to look. Better than implying we can.
               <p className="v2-row-meta-dim" data-testid="v2-launch-noid">

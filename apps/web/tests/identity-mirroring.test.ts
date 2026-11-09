@@ -47,6 +47,7 @@ const HELPERS: Record<string, string[]> = {
   "app/infra/infra-actions.ts": ["apiSentence", "send", "read", "afterWrite"], // Infra's transport
   "app/infra/deploy-actions.ts": ["goConsole"], // navigation, no API call
   "app/agents/org-actions.ts": ["orgActions"], // factory over lib/kit-api and lib/agents calls
+  "app/agents/outside-agents-actions.ts": ["afterOutsideAgentWrite", "hostOf"], // UI refresh and a host label; neither calls a route
 };
 
 describe("(a) every action declares a permission", () => {

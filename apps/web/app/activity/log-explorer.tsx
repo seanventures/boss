@@ -3,11 +3,11 @@
 /**
  * The Activity log: one fast explorer over everything BOSS wrote (activity-govern spec §4.2).
  *
- *   header   `Activity log · 47,210 lines in 24h · ● Live`, the range, Export
+ *   header   `Activity log, 47,210 lines in 24h, ● Live`, the range, Export
  *   bar      every filter as a token; the URL carries all of it
- *   views    All · Errors · Model calls · Deploys · Govern changes · Refusals
+ *   views    All, Errors, Model calls, Deploys, Govern changes, Refusals
  *   pulse    lines per bucket, stacked by level; drag to zoom
- *   rail     LEVEL · STREAM · AGENT · RUN · PROCESS · STATUS with server counts
+ *   rail     LEVEL, STREAM, AGENT, RUN, PROCESS, STATUS with server counts
  *   list     windowed lines, newest first; `n new ↑` never moves a line under the reader
  *   drawer   one line, its facts, links, the lines around it
  *
@@ -320,7 +320,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
           {exportOpen ? (
             <span className="lx-menu" role="menu">
               <button type="button" role="menuitem" data-testid="lx-export-csv" onClick={() => void download("csv")}>CSV</button>
-              <button type="button" role="menuitem" data-testid="lx-export-ndjson" onClick={() => void download("ndjson")}>NDJSON</button>
+              <button type="button" role="menuitem" data-testid="lx-export-ndjson" onClick={() => void download("ndjson")}><abbr>NDJSON</abbr></button>
             </span>
           ) : null}
         </span>

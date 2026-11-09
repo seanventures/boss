@@ -262,6 +262,7 @@ _HUMAN_ATTRIBUTED_CONFIRMATIONS = {
     ("POST", "/v1/decisions/{decision_id}/delegate"): "decision_resolve",
     ("POST", "/v1/decisions/{decision_id}/execute"): "decision_resolve",
     ("POST", "/v1/decisions/{decision_id}/approve"): "decision_resolve",
+    ("POST", "/v1/decisions/{decision_id}/settle"): "decision_resolve",
     ("POST", "/v1/previews/{preview_id}/approve"): "decision_resolve",
     ("POST", "/v1/console/v2/autonomy"): "decision_resolve",
     ("POST", "/v1/console/v2/autonomy/apply"): "decision_resolve",

@@ -58,7 +58,7 @@ function AddMember({ group, people, onClose }: { group: Group; people: Person[];
         <label htmlFor="am-person">Person</label>
         <select id="am-person" className="idn-input" value={pick} onChange={(e) => setPick(e.target.value)} data-autofocus>
           <option value="">Choose a person</option>
-          {candidates.map((p) => <option key={p.id} value={p.id}>{p.display_name} · {p.email}</option>)}
+          {candidates.map((p) => <option key={p.id} value={p.id}>{p.display_name}, {p.email}</option>)}
         </select>
       </div>
       <div className="idn-mf">
@@ -169,7 +169,7 @@ export function GroupDetail({ group, people, roles = [], projects = null }: {
           {group.bindings.map((b) => (
             <div key={b.id} className="idn-bind" data-testid={`group-binding-${b.id}`}>
               <RoleChip roleKey={b.role_key} name={b.role_name} scope={b.scope} />
-              <span className="idn-src" data-copy="data">granted by {grantedByWords(b)}{b.expires_at ? ` · ends ${b.expires_at.slice(0, 10)}` : ""}</span>
+              <span className="idn-src" data-copy="data">granted by {grantedByWords(b)}{b.expires_at ? `, ends ${b.expires_at.slice(0, 10)}` : ""}</span>
               <span className="idn-row">
                 <a className="idn-btn sm ghost" href={`/identity/roles/${b.role_id}`}>Open</a>
                 <CanButton permission="role_binding:assign" className="idn-btn sm" tip="Members lose this role" data-testid={`group-unbind-${b.id}`}

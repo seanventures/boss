@@ -7,7 +7,7 @@
  * on a ten-step run is a reading task rather than a glance. Shape is faster than text for
  * exactly this: you learn the deploy is the rocket once and never read that node again.
  *
- * Chosen so that no two steps share a glyph — the point is telling them apart, and a shared
+ * Chosen so that no two steps share a glyph, the point is telling them apart, and a shared
  * icon would be worse than none, since it would assert a similarity that does not exist. Only
  * names this codebase already imports elsewhere, so the set cannot drift from what is installed.
  */
@@ -63,7 +63,7 @@ const STEP_ICONS: Record<string, IconType> = {
   agents: Ticket,                      // who is on it
 };
 
-/** The icon for a step kind, or nothing — a step BOSS has no glyph for gets its number. */
+/** The icon for a step kind, or nothing, a step BOSS has no glyph for gets its number. */
 export function StepIcon({ capability, size = 13 }: { capability?: string; size?: number }) {
   const Icon = capability ? STEP_ICONS[capability] : undefined;
   if (!Icon) return null;

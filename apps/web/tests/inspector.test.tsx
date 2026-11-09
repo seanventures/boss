@@ -118,7 +118,7 @@ describe("approval", () => {
     const sw = q<HTMLButtonElement>(el, "wf-approval-switch")!;
     expect(sw.disabled).toBe(true);
     expect(sw.getAttribute("aria-checked")).toBe("true");
-    expect(sw.title).toBe("Risk 3 — always needs a person, whatever the environment's deploy policy");
+    expect(sw.title).toBe("Risk 3, always needs a person, whatever the environment's deploy policy");
   });
 
   it("a deploy says whether its environment's policy may answer, and the box sets it in one PATCH", async () => {

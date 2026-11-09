@@ -28,7 +28,7 @@ describe("the Studio knows abilities", () => {
     expect($('[data-testid="wf-scope-abilities-mcp"]')).not.toBeNull();
     expect($('[data-testid="wf-scope-ability-mcp-library_docs"]')!.textContent).toContain("Library docs");
     const setUp = $('[data-testid="wf-scope-ability-setup-library_docs"]')!;
-    expect(setUp.textContent).toBe("Not set up · Set up ↗");
+    expect(setUp.textContent).toBe("Not set up, Set up ");
     expect(setUp.getAttribute("href")).toBe("?area=skills&ability=library_docs");
     expect($('[data-testid="wf-scope-ability-setup-web_research"]')).toBeNull();
   });
@@ -46,7 +46,7 @@ describe("the Studio knows abilities", () => {
   it("a build step's Uses row shows Open pull requests, not set up, with Set up ↗", async () => {
     installKitApi();
     await render(<StepAbility step={{ id: "build", kind: "capability", binding: { capability: "build" } } as never} projectId="p-scope3" />);
-    expect($('[data-testid="wf-step-ability"]')!.textContent).toBe("Open pull requests · Not set up");
+    expect($('[data-testid="wf-step-ability"]')!.textContent).toBe("Open pull requests, Not set up");
     expect($('[data-testid="wf-step-ability-setup"]')!.getAttribute("href")).toBe("?area=skills&ability=open_prs");
   });
 });

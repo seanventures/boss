@@ -30,8 +30,12 @@ abandoned at the budget whatever the adapter does. When the budget is hit, or th
 the operator still gets an answer: what the record itself says, the checker's suggestion marked
 as unverified, and the list of what was not checked — never "still working".
 
-The long operate loop runs only when the operator asks for it — the dock's "Investigate
-further" and "Do the fix" (`depth="investigate"` on the wire) — never automatically.
+The long operate loop runs when the operator asks for it — the dock's "Investigate
+further" and "Do the fix" (`depth="investigate"` on the wire) — when they instruct an
+action, when they ask for a live read of the machine, or when the stored record does not
+hold the cause. A question whose record already holds the cause is answered here, including
+when the turn was decided "investigate": re-opening the loop on a known failure is the
+240-second turn.
 
 Pinned by engine/tests/test_an_ask_about_this_answers_first_in_one_call.py.
 """
@@ -95,24 +99,59 @@ def answer_seconds(settings: Any) -> float:
     return value if value > 0 else DEFAULT_ANSWER_SECONDS
 
 
+#: Facts that already say why a deploy failed. A quiet step's "workflow run status" does not.
+_CAUSE_FACTS = (
+    "deployment failure",
+    "deploy refused before anything ran",
+    "automatic fixes",
+)
+
+
+def context_holds_the_cause(evidence: Any) -> bool:
+    """Does this record already say what went wrong?
+
+    An error, a finding, a log tail, or a recorded deployment failure does. A step that is
+    only "running", with none of those, does not — asking about it has to look further.
+    A stand-in that is not a resolved subject is left to the other gates.
+    """
+    if not isinstance(evidence, SubjectEvidence):
+        return True
+    if not evidence.found:
+        return False
+    if str(evidence.error or "").strip():
+        return True
+    if evidence.findings:
+        return True
+    if str(evidence.log_tail or "").strip():
+        return True
+    facts = evidence.facts or {}
+    return any(facts.get(key) not in (None, "", [], {}) for key in _CAUSE_FACTS)
+
+
 def wants_first_answer(message: str, evidence: Optional[SubjectEvidence],
                        depth: Optional[str], *, has_images: bool = False,
                        looking_only: bool = True, live_look: bool = False) -> bool:
     """Is this turn answered by the one-call first answer?
 
-    Only a QUESTION about a record BOSS found. An instruction ("retry it", "do the fix") needs
-    the loop — it acts — and so does an explicit "Investigate further". A screenshot goes to the
-    loop too: the first call is text, and an image read as text is an empty question.
+    Only a QUESTION about a record BOSS found, and only when that record holds the cause.
+    An instruction ("retry it", "do the fix") needs the loop — it acts — and so does an
+    explicit "Investigate further". A screenshot goes to the loop too: the first call is
+    text, and an image read as text is an empty question. A question about the live machine
+    (logs, docker, what is running now) goes to the loop, which has those tools.
 
-    `looking_only` and `live_look` are the turn's DECISION (agent_decision, in route_turn): the
-    model read whether this asks for a change and whether it needs a live look at the machine.
-    The words are not re-read here.
+    `looking_only` and `live_look` are the turn's DECISION (agent_decision, in route_turn):
+    the model read whether this asks for a change and whether it needs a live look. The
+    words of the question are not re-read here, except the live-machine check above.
     """
     if depth == INVESTIGATE or has_images:
         return False
     if evidence is None or not evidence.found:
         return False
+    if asks_for_a_live_read(message):
+        return False
     if live_look:
+        return False
+    if isinstance(evidence, SubjectEvidence) and not context_holds_the_cause(evidence):
         return False
     return bool(looking_only)
 

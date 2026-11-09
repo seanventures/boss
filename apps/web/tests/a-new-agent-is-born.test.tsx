@@ -94,7 +94,7 @@ describe("Blank: born with a face and a voice", () => {
     await click(birth);
     window.removeEventListener("boss:converse", onOpen);
     expect(onCreated).toHaveBeenCalledWith("release_auditor");
-    expect(toasts).toContain("Tally is born · agt_newb…");
+    expect(toasts).toContain("Tally is born, agt_newb…");
     // The agent introduces itself: its 1:1 talk opens, in its own voice.
     expect(opened).toEqual([expect.objectContaining({ kind: "talk", roleKey: "release_auditor" })]);
   });

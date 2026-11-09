@@ -36,9 +36,9 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
     setBusy(true); setError(null);
     const r = await mcpApi.addFromCatalogue(projectId, actor, entry.key, entry.auth === "none" ? null : token);
     setBusy(false);
-    if (!r.ok) { setError({ field: r.field ?? "token", message: r.error }); showToast("error", `Test failed · ${shortError(r.error)}`); return; }
+    if (!r.ok) { setError({ field: r.field ?? "token", message: r.error }); showToast("error", `Test failed, ${shortError(r.error)}`); return; }
     const count = r.data.test?.tools?.length ?? r.data.server?.tools?.length ?? 0;
-    showToast("success", `Added ${entry.label} · ${plural(count, "tool")}`);
+    showToast("success", `Added ${entry.label}, ${plural(count, "tool")}`);
     onAdded(r.data.server.id);
   };
 
@@ -51,14 +51,14 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
       setBusy(false);
       const message = t.ok ? String(t.data.error ?? "Can't reach server") : t.error;
       setError({ field: form.secret ? "secret" : "url", message });
-      showToast("error", `Test failed · ${shortError(message)}`);
+      showToast("error", `Test failed, ${shortError(message)}`);
       return;
     }
     const r = await mcpApi.register(projectId, actor, { name: form.name.trim(), url: form.url.trim(), risk_tier: form.risk,
                                                         auth, provenance: { source: "custom" } });
     setBusy(false);
     if (!r.ok) { setError({ field: r.field ?? "name", message: r.error }); showToast("error", shortError(r.error)); return; }
-    showToast("success", `Added ${form.name.trim()} · ${plural(t.data.tools.length, "tool")}`);
+    showToast("success", `Added ${form.name.trim()}, ${plural(t.data.tools.length, "tool")}`);
     onAdded(r.data.id);
   };
 

@@ -8,6 +8,7 @@
  * `secret_ref_id` is ever sent here.
  */
 import { apiWrite, type Press } from "../../lib/api-write";
+import { declareAction } from "../../lib/identity/guarded-action";
 import { notifyChanged } from "../changed";
 
 const enc = encodeURIComponent;
@@ -98,3 +99,12 @@ export function afterOutsideAgentWrite(reload?: () => void): void {
 export function hostOf(endpoint: string): string {
   try { return new URL(endpoint).host; } catch { return endpoint; }
 }
+
+// THE PERMISSION EACH ACTION DECLARES. The API's @permit is the decision
+// (routers/external_agents.py, POST /v1/secrets). This is the console mirror.
+declareAction(listOutsideAgents, "agent:read");
+declareAction(registerOutsideAgent, "agent:create");
+declareAction(testOutsideAgent, "agent:test");
+declareAction(suspendOutsideAgent, "agent:lifecycle");
+declareAction(removeOutsideAgent, "agent:lifecycle");
+declareAction(putOutsideAgentSecret, "secret:manage");

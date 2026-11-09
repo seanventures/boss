@@ -223,7 +223,7 @@ const CONSEQUENCES: Record<Exclude<SheetKind, "add" | "resetlink">, { title: str
 
 /**
  * THE ADMIN RESET LINK (FX-C P1-17). Without email, /reset tells a person "an admin can issue you a
- * link" — this is that control: a 30-minute, single-use link shown ONCE to the admin, to hand over
+ * link", this is that control: a 30-minute, single-use link shown ONCE to the admin, to hand over
  * out of band. It never bypasses their second factor.
  */
 function ResetLinkSheet({ person, onClose }: { person: Person; onClose: () => void }) {
@@ -292,7 +292,7 @@ function ConfirmSheet({ person, kind, onClose }: { person: Person; kind: Exclude
       <div className="idn-who-s"><Face name={person.display_name} tone={person.hue} size={34} /><span><b>{person.display_name}</b><small>{person.email}</small></span></div>
       {done ? (
         <ul className="idn-cascade-list" aria-label="What happened">
-          {done.items.map((i, n) => <li key={`${i.kind}-${n}`}><Check size={14} className="idn-ok" aria-hidden /> <span data-copy="data">{i.label} · {i.detail}</span> <b>{i.count}</b></li>)}
+          {done.items.map((i, n) => <li key={`${i.kind}-${n}`}><Check size={14} className="idn-ok" aria-hidden /> <span data-copy="data">{i.label}, {i.detail}</span> <b>{i.count}</b></li>)}
         </ul>
       ) : (
         <ul className="idn-cascade-list" aria-label="What this does">
@@ -332,7 +332,7 @@ function Bindings({ person }: { person: Person }) {
     <section className="idn-card" aria-labelledby="idn-bind-h">
       <div className="idn-card-h">
         <h2 id="idn-bind-h">Access roles</h2>
-        <span className="idn-sub" title="Each role adds access; none takes any away">{person.bindings.length} {person.bindings.length === 1 ? "role" : "roles"} · they add up</span>
+        <span className="idn-sub" title="Each role adds access; none takes any away">{person.bindings.length} {person.bindings.length === 1 ? "role" : "roles"}, they add up</span>
       </div>
       {person.bindings.map((b) => (
         <div key={b.id} className="idn-bind" data-testid={`binding-${b.id}`}>
@@ -340,8 +340,8 @@ function Bindings({ person }: { person: Person }) {
             <RoleChip roleKey={b.role_key} name={b.role_name} scope={b.scope} />
             <span className="idn-src" data-copy="data">
               {b.via_group
-                ? `Via group ${b.via_group.name} · ${b.via_group.source === "manual" ? "managed in BOSS" : `synced from ${b.via_group.source.toUpperCase()}`}`
-                : `Direct · granted by ${grantedByWords(b)}, ${shortDate(b.granted_at)}`}
+                ? `Via group ${b.via_group.name}, ${b.via_group.source === "manual" ? "managed in BOSS" : `synced from ${b.via_group.source.toUpperCase()}`}`
+                : `Direct, granted by ${grantedByWords(b)}, ${shortDate(b.granted_at)}`}
             </span>
           </span>
           <span className="idn-src">{b.expires_at ? `expires ${shortDate(b.expires_at)}` : ""}</span>
@@ -361,7 +361,7 @@ function Bindings({ person }: { person: Person }) {
           )}
         </div>
       ))}
-      {!person.bindings.length ? <div className="idn-empty">No access roles yet · use Add access</div> : null}
+      {!person.bindings.length ? <div className="idn-empty">No access roles yet, use Add access</div> : null}
     </section>
   );
 }
@@ -409,7 +409,7 @@ function PermRow({ r }: { r: Row }) {
             {meta.stepUp ? <span className="idn-dim" title="Needs a fresh second factor when used"><Key size={12} className="idn-warn" aria-hidden /> step-up</span> : null}
           </>
         ) : (
-          <><X size={13} aria-label="not held" /> not held{r.held_by ? ` · ${r.held_by}` : ""}</>
+          <><X size={13} aria-label="not held" /> not held{r.held_by ? `, ${r.held_by}` : ""}</>
         )}
       </span>
     </div>
@@ -422,7 +422,7 @@ function Category({ name, rows, open, filtering }: { name: string; rows: Row[]; 
   const tenths = Math.round((held / Math.max(rows.length, 1)) * 10);
   const ordered = [...rows].sort((a, b) => Number(b.held) - Number(a.held));
   // Collapsed, a category leads with what most needs explaining: critical permissions, ones
-  // held through more than one role, ones held only in a project, then step-up — and one it lacks.
+  // held through more than one role, ones held only in a project, then step-up, and one it lacks.
   const interest = (r: Row) => (PERMISSION_META[r.permission].critical ? 4 : 0)
     + (new Set(r.why.map((w) => w.role_key)).size > 1 ? 3 : 0) + (r.onlyIn.length ? 1 : 0) + (PERMISSION_META[r.permission].stepUp ? 1 : 0);
   const top = ordered.filter((r) => r.held).map((r, i) => ({ r, i })).sort((a, b) => interest(b.r) - interest(a.r) || a.i - b.i)
@@ -457,12 +457,12 @@ function Effective({ eff, projects }: { eff: EffectiveAccess; projects: Effectiv
   const defaults = byCat.filter((c) => c.rows.some((r) => r.held)).slice(0, 4).map((c) => c.name);
   const hidden = byCat.filter((c) => !defaults.includes(c.name));
   const heldTotal = rows.filter((r) => r.held).length;
-  const projectLine = projects.map((p) => `${p.held} in ${p.scope.replace(/^project:/, "")}`).join(" · ");
+  const projectLine = projects.map((p) => `${p.held} in ${p.scope.replace(/^project:/, "")}`).join(", ");
   return (
     <section className="idn-card" aria-labelledby="idn-eff-h">
       <div className="idn-card-h">
         <h2 id="idn-eff-h">Effective access, and why</h2>
-        <span className="idn-sub" data-copy="data">{eff.held} of {eff.total} at org{projectLine ? ` · ${projectLine}` : ""}</span>
+        <span className="idn-sub" data-copy="data">{eff.held} of {eff.total} at org{projectLine ? `, ${projectLine}` : ""}</span>
         <span className="idn-spacer" />
         <label className="idn-find">
           <MagnifyingGlass size={13} aria-hidden />
@@ -507,7 +507,7 @@ function Factors({ person, factors }: { person: Person; factors: Factor[] }) {
       {factors.map((f) => (
         <div key={f.id} className="idn-fac" data-testid={`factor-${f.id}`}>
           <span className="idn-d" data-kind={f.kind}>{FACTOR_ICON[f.kind]}</span>
-          <span><b>{f.name}</b><small data-copy="data">{f.detail}{f.last_used_at ? <> · used <Ago iso={f.last_used_at} /></> : ""}</small></span>
+          <span><b>{f.name}</b><small data-copy="data">{f.detail}{f.last_used_at ? <>, used <Ago iso={f.last_used_at} /></> : ""}</small></span>
           <span className="idn-dim">{(f.note ?? "").replace(/\b\d{4}-\d{2}-\d{2}\b/g, (d) => shortDate(`${d}T12:00:00Z`))}</span>
         </div>
       ))}
@@ -536,7 +536,7 @@ function Sessions({ person, sessions, full = false }: { person: Person; sessions
           <span className="idn-d">{s.device === "phone" ? <DeviceMobile size={16} aria-hidden /> : <Desktop size={16} aria-hidden />}</span>
           <span>
             <b>{s.client}</b> {s.current ? <span className="idn-pill info">this one</span> : null}
-            <small data-copy="data">{[s.location, s.methods.map(methodWords).join(" + "), full ? publicAddress(s.ip) : null].filter(Boolean).join(" · ")} · <Ago iso={s.started_at} /></small>
+            <small data-copy="data">{[s.location, s.methods.map(methodWords).join(" + "), full ? publicAddress(s.ip) : null].filter(Boolean).join(", ")}, <Ago iso={s.started_at} /></small>
           </span>
           {s.current ? <span /> : (
             <CanButton permission="session:revoke" className="idn-btn sm" tip="End this session now" data-testid={`end-${s.id}`}
@@ -556,7 +556,7 @@ function grantLine(d: Delegation, now: number): string {
   const parts = [d.kind === "task" ? "this build only" : d.expires_at ? `${left !== null && left > 0 ? `${left} days left` : "expired"}` : "until revoked"];
   if (d.subdelegation.allowed) parts.push(`sub-delegation → ${d.subdelegation.to.join(", ")}`);
   if (d.last_used_run) parts.push("used by a build");
-  return parts.join(" · ");
+  return parts.join(", ");
 }
 
 function Grants({ person, delegations, full = false }: { person: Person; delegations: Delegation[]; full?: boolean }) {
@@ -582,7 +582,7 @@ function Grants({ person, delegations, full = false }: { person: Person; delegat
           <div className="idn-perms">
             {d.permissions.slice(0, full ? 99 : 4).map((p) => <Perm key={p} p={p} sm />)}
             {!full && d.permissions.length > 4 ? <span className="idn-chip">+{d.permissions.length - 4}</span> : null}
-            {d.github ? <span className="idn-chip"><GithubLogo size={12} aria-hidden /> {d.github.repos[0]} · {[d.github.contents ? "contents" : null, d.github.pull_requests ? "PRs" : null].filter(Boolean).join(", ")}</span> : null}
+            {d.github ? <span className="idn-chip"><GithubLogo size={12} aria-hidden /> {d.github.repos[0]}, {[d.github.contents ? "contents" : null, d.github.pull_requests ? "PRs" : null].filter(Boolean).join(", ")}</span> : null}
           </div>
           {full && d.status === "active" ? (
             <div className="idn-row idn-dg-acts">
@@ -615,7 +615,7 @@ function RevokeGrant({ grant, onClose }: { grant: Delegation; onClose: () => voi
       <p className="idn-lede2" data-copy="prose">Authority leaves every agent in the chain within 5 seconds. Work stops where it is.</p>
       {preview === null ? <div className="idn-dim">Checking what stops…</div> : (
         <ul className="idn-cascade-list">
-          {preview.items.map((i, n) => <li key={`${i.kind}-${n}`}><span data-copy="data">{i.label} · {i.detail}</span> <b>{i.count}</b></li>)}
+          {preview.items.map((i, n) => <li key={`${i.kind}-${n}`}><span data-copy="data">{i.label}, {i.detail}</span> <b>{i.count}</b></li>)}
         </ul>
       )}
       <div className="idn-mf">
@@ -645,7 +645,7 @@ function Activity({ events, full = false }: { events: AuditEvent[]; full?: boole
       {events.slice(0, full ? 100 : 5).map((e) => (
         <a key={e.id} className="idn-mini-ev" href={`/identity/audit?event=${e.id}`}>
           <span className="idn-dim idn-mono">{clock(e.at).slice(0, 5)}</span>
-          <span data-copy="data">{e.headline}{full ? <> · <span className="idn-dim" title={e.event_type}>{eventWords(e.event_type)}</span></> : null}</span>
+          <span data-copy="data">{e.headline}{full ? <>, <span className="idn-dim" title={e.event_type}>{eventWords(e.event_type)}</span></> : null}</span>
           <span className={e.outcome === "ok" ? "idn-ok" : e.outcome === "denied" || e.outcome === "failed" ? "idn-bad" : "idn-warn"}>{outcomeWord(e.outcome)}</span>
         </a>
       ))}
@@ -699,10 +699,10 @@ function OverviewTab({ person }: { person: Person }) {
         <dl className="idn-kv">
           <dt>Email</dt><dd data-copy="data">{p.email}</dd>
           <dt>Status</dt><dd>{statusPill(p)}</dd>
-          <dt>Source</dt><dd>{p.source === "local" ? "Local account" : p.source === "sso" ? "SSO" : "SCIM"}{p.self_signed_up ? " · self sign-up" : ""}</dd>
+          <dt>Source</dt><dd>{p.source === "local" ? "Local account" : p.source === "sso" ? "SSO" : "SCIM"}{p.self_signed_up ? ", self sign-up" : ""}</dd>
           <dt>Sign-in</dt><dd><SignIn s={p.sign_in} />{p.sign_in.password ? <span className="idn-chip">password</span> : null}</dd>
           <dt>SSO links</dt><dd>{p.sign_in.sso ?? "none"}</dd>
-          <dt>Last sign-in</dt><dd><Ago iso={p.last_seen_at} />{p.last_seen_from ? ` · ${p.last_seen_from}` : ""}</dd>
+          <dt>Last sign-in</dt><dd><Ago iso={p.last_seen_at} />{p.last_seen_from ? `, ${p.last_seen_from}` : ""}</dd>
           <dt>Joined</dt><dd>{shortDate(p.joined_at)}{p.joined_by ? ` by ${p.joined_by}` : ""}</dd>
           <dt>Approval seat</dt><dd>{p.seat ? seatName(p.seat) : "none"}</dd>
         </dl>

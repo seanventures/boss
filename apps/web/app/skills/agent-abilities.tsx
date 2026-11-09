@@ -4,7 +4,7 @@
  * The Passport's Loadout › Skills and MCP rows (agent-loadout spec §3.2): what this agent may
  * run, with ONE place per grant.
  *
- * Before this the Passport showed a grant three times — the Kit's ability chips, a skill list
+ * Before this the Passport showed a grant three times, the Kit's ability chips, a skill list
  * with its own `<select>`, and an MCP list with a comma-separated tools box. Now each held thing
  * appears exactly once (`partitionLoadout`): an ability whose tools are all MCP goes in MCP,
  * every other ability in Skills; a held skill or server no held ability covers is a plain chip
@@ -69,7 +69,7 @@ export function partitionLoadout(abilities: Ability[], roleKey: string, skills: 
 
 /** `+ Add › From Library`: the role's own skills (its spec's `allowed_skills`, and those of
  *  abilities recommended for it) first, then the rest. A skill its spec forbids is never
- *  offered — offering it and refusing it later is a control that lies about itself. */
+ *  offered, offering it and refusing it later is a control that lies about itself. */
 export function offerSkills(available: HeldSkill[], allowed: string[], forbidden: string[],
                             abilities: Ability[], roleKey: string) {
   const forbiddenSet = new Set(forbidden);
@@ -181,7 +181,7 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
   const skillChip = (s: HeldSkill) => {
     const guide = s.behaviour_kind === "guide";
     const off = !s.enabled || s.missing;
-    const tip = off ? `Off · ${s.missing ? "not in this project" : "turned off"}` : (s.summary || s.label);
+    const tip = off ? `Off, ${s.missing ? "not in this project" : "turned off"}` : (s.summary || s.label);
     return (
       <span className="ld-chip" key={`s:${s.skill_id}`} data-held>
         <span className="kit-chip ld-plain" data-off={off || undefined} data-tip={tip} data-testid={`agent-skill-${s.skill_id}`}
@@ -207,14 +207,14 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
   };
 
   const serverChip = (m: HeldServer) => {
-    const label = `${m.server} · ${m.tools.length ? `${m.tools.length} tool${m.tools.length === 1 ? "" : "s"}` : "all tools"}`;
+    const label = `${m.server}, ${m.tools.length ? `${m.tools.length} tool${m.tools.length === 1 ? "" : "s"}` : "all tools"}`;
     return (
       <span className="ld-chip" key={`m:${m.mcp_server_id}`} data-held>
         <span className="kit-chip ld-plain" data-off={!m.enabled || undefined}
               role={canEdit ? "button" : undefined} tabIndex={canEdit ? 0 : undefined}
               onClick={canEdit ? (e) => openMenuOf(e.currentTarget) : undefined}
               onKeyDown={canEdit ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openMenuOf(e.currentTarget); } } : undefined}
-              data-tip={!m.enabled ? "Off · turned off in Skills & MCP" : (m.tools.length ? m.tools.join(", ") : m.description || m.server)}
+              data-tip={!m.enabled ? "Off, turned off in Skills & MCP" : (m.tools.length ? m.tools.join(", ") : m.description || m.server)}
               data-testid={`agent-mcp-${m.mcp_server_id}`}>
           {label}
           {(m.risk_tier ?? 0) >= 2 ? <span className="ld-dot" aria-label={LOADOUT_TIPS.asks} data-tip={LOADOUT_TIPS.asks} /> : null}
@@ -283,7 +283,7 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
                           data-tip={m.description || undefined} disabled={busy === `m:${m.mcp_server_id}`}
                           onClick={() => { close(); void write(`m:${m.mcp_server_id}`, m.server, true,
                             () => grantMcp(projectId, actor, roleKey, m.mcp_server_id)); }}>
-                    {m.server}{m.enabled ? "" : " · off"}
+                    {m.server}{m.enabled ? "" : ", off"}
                   </GatedButton>
                 )) : <span className="kit-faint ld-pop-empty">None left</span>}
                 <a href="?area=skills&tab=library&lib=mcp&add=1" role="menuitem" data-testid="loadout-mcp-new">Add new ↗</a>

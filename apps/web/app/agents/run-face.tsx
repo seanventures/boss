@@ -33,12 +33,12 @@ export type FaceName = { name: string; role: string; callsign?: string; tagline?
 
 /**
  * How an agent is named on these surfaces: its callsign beside its role when it has one
- * ("Vera" · "QA Lead"), its role otherwise. Callsigns are shown next to the role, never instead.
+ * ("Vera", "QA Lead"), its role otherwise. Callsigns are shown next to the role, never instead.
  */
 export function nameOf(roleKey: string | null, variant: AvatarVariant = "agent", personId?: string,
                        personName?: string): FaceName {
   // A NAME THE STEP ALREADY KNOWS wins over a guess from the key: BOSS's own no-model steps
-  // ("BOSS · no model") and a bank's own agent (its `ext_…` key is not a name).
+  // ("BOSS, no model") and a bank's own agent (its `ext_…` key is not a name).
   if (personName && (variant === "boss" || variant === "auto"
       || (variant === "agent" && (!roleKey || /^(ext_|outside:)/.test(roleKey))))) {
     return { name: personName, role: personName };

@@ -2,8 +2,8 @@
 
 /**
  * THE PUBLIC URL BOSS USES (the API's H2 fix). Sign-in cookies, passkeys and every emailed link
- * (invitations, magic links, password resets) are bound to one public URL — BOSS_PUBLIC_URL, or
- * the address the install was claimed at — never to whatever Host a request names. Unset, the
+ * (invitations, magic links, password resets) are bound to one public URL, BOSS_PUBLIC_URL, or
+ * the address the install was claimed at, never to whatever Host a request names. Unset, the
  * API refuses to send those emails (`409 public_origin_unset`), so Setup says which URL is in use
  * and, when none is, exactly how to set it. Read from GET /v1/auth/options.
  */

@@ -131,13 +131,13 @@ describe("D1 Skip asks why, and sends it", () => {
 });
 
 describe("D3 a reject fails the step", () => {
-  it("says Rejected · step failed", async () => {
+  it("says Rejected, step failed", async () => {
     decide.mockResolvedValue({ ok: true, message: "Rejected." });
     await mount(view(board({ attention: [gate()] })));
     await click($('[data-testid="ag-att-reject"]'));
     await click($('[data-testid="ag-att-confirm-reject"]'));
     await act(async () => { await new Promise((r) => setTimeout(r, 250)); });
-    expect(toasts).toEqual(["Rejected · step failed"]);
+    expect(toasts).toEqual(["Rejected, step failed"]);
   });
 });
 
@@ -147,7 +147,7 @@ describe("D2 the number is decisions; setup is a line, not a card", () => {
     expect($('[data-testid="ag-live-needs-h-count"]')?.textContent).toBe("1");
     expect($('[data-testid="ag-live-needs-h-extra"]')?.textContent).toBe("· 1 stopped");
     expect($$("[data-att-card]").map((c) => c.dataset.attId)).toEqual(["run:wfr_ship:build", "dec_gate"]);
-    expect($('[data-testid="ag-live-setup-ready:github"]')?.textContent).toBe("Setup: Connect a repository ↗");
+    expect($('[data-testid="ag-live-setup-ready:github"]')?.textContent).toBe("Setup: Connect a repository");
   });
 
   it("setup alone is not 'needs you'", async () => {

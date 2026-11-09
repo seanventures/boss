@@ -664,7 +664,7 @@ describe("the designer follows what the engine records and refuses", () => {
     const took = run({ output: { error_path_taken: "tell", reason: "step_timeout" } });
     expect(errorPathTaken(took)).toBe("tell");
     expect(stoppedForYou(took)).toBe(false);
-    expect(laneStateOf(took)).toMatchObject({ phase: "failed", meta: "timed out — took its error path", errorPath: true });
+    expect(laneStateOf(took)).toMatchObject({ phase: "failed", meta: "timed out, took its error path", errorPath: true });
     const plain = run({});
     expect(errorPathTaken(plain)).toBeNull();
     expect(laneStateOf(plain).errorPath).toBeUndefined();

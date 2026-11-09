@@ -2,8 +2,8 @@
 
 /**
  * ROUTING (spec §4.10; was System Configuration › AI Capacity › Model route decisions): which
- * source each model call was routed to, or why it was refused. Four dropdown chips — Provider,
- * Budget, Boundary, Outcome — replace the old GET form; their options come from the view. With
+ * source each model call was routed to, or why it was refused. Four dropdown chips, Provider,
+ * Budget, Boundary, Outcome, replace the old GET form; their options come from the view. With
  * no filter the view's own 8 rows show; a filter (or `Show all`, a sheet that pages) reads
  * GET /v1/model-route-decisions with the same four filters.
  */

@@ -340,6 +340,60 @@ describe("GitHub Mission Control", async () => {
     expect(html).toContain("role=\"alert\"");
   });
 
+  it("does not show a repo as active or passed when the allow-list says not_allowed", () => {
+    const feed = {
+      ...emptyGitHubOperationsFeed(undefined, "boss-dogfood"),
+      apiReachable: true,
+      connections: [
+        {
+          id: "conn_1",
+          project_id: "boss-dogfood",
+          connection_label: "BOSS GitHub App",
+          auth_method: "github_app" as const,
+          credential_configured: true,
+          api_base_url: "https://api.github.com",
+          status: "active" as const,
+          required_permissions: [],
+          granted_permissions: [],
+          missing_permissions: [],
+          metadata: {},
+          last_test_status: "passed",
+          created_by: "ceo",
+          created_at: "2026-07-26T00:00:00Z",
+          updated_at: "2026-07-26T00:00:00Z",
+        },
+      ],
+      bindings: [
+        {
+          id: "bind_1",
+          project_id: "boss-dogfood",
+          connection_id: "conn_1",
+          owner: "example-org",
+          name: "boss",
+          full_name: "example-org/boss",
+          role: "primary" as const,
+          archived: false,
+          status: "not_allowed" as const,
+          permissions: {},
+          capabilities: [],
+          metadata: {},
+          created_by: "ceo",
+          created_at: "2026-07-26T00:00:00Z",
+          updated_at: "2026-07-26T00:00:00Z",
+          allow_list_warning: "example-org/boss: not allowed by the org allow-list. Egress will refuse the clone (repo_not_allowed).",
+          clone_allowed: false,
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <GitHubOperations feed={feed} actor="ceo" canManage={false} />,
+    );
+    expect(html).toContain("not allowed");
+    expect(html).toContain("repo_not_allowed");
+    expect(html).not.toContain(">passed<");
+    expect(html).not.toContain(">active<");
+  });
+
   it("surfaces easy connect CTA when the project has no GitHub connection", () => {
     const feed = {
       ...emptyGitHubOperationsFeed(undefined, "boss-dogfood"),

@@ -21,12 +21,12 @@ export function PlansCard({ projectId, plans }: { projectId: string; plans: Plan
               <div>
                 <h4>{p.title}</h4>
                 <p className="detail">
-                  {p.status} · {p.phaseCount} phase{p.phaseCount === 1 ? "" : "s"}
-                  {p.objective ? ` · ${p.objective}` : ""}
+                  {p.status}, {p.phaseCount} phase{p.phaseCount === 1 ? "" : "s"}
+                  {p.objective ? `, ${p.objective}` : ""}
                 </p>
               </div>
               {p.status === "dispatched" ? (
-                <span className="detail" style={{ color: "#3fb950" }}>dispatched ✓</span>
+                <span className="detail" style={{ color: "var(--boss-c-3fb950)" }}>dispatched ✓</span>
               ) : (
                 <ActionForm permission="work_item:manage" action={dispatchPlanAction}>
                   <input type="hidden" name="project_id" value={projectId} />

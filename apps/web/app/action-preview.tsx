@@ -4,7 +4,7 @@ import React from "react";
  * WHAT APPROVING WILL DO, drawn as the thing itself.
  *
  * Found running the bundled examples live: a gate on "Email the newsletter" showed a workflow
- * key, a run id and "staging" — not who the email went to or what it said. The engine now
+ * key, a run id and "staging", not who the email went to or what it said. The engine now
  * resolves the step's real inputs when the gate opens and stores a typed preview on the decision
  * (engine/boss_engine/services/action_preview.py). This draws it: an email as an email, tickets
  * as a list, a publish as a small card, anything else as labelled fields. Labels and tooltips,
@@ -85,7 +85,7 @@ function EmailCard({ p }: { p: EmailPreview }) {
       <div className="ap-body" data-testid="ap-body" tabIndex={0}
            title="The full text that will be sent">
         {p.body || "(empty)"}
-        {p.body_truncated ? <span className="ap-more"> — shortened here</span> : null}
+        {p.body_truncated ? <span className="ap-more">, shortened here</span> : null}
       </div>
     </div>
   );

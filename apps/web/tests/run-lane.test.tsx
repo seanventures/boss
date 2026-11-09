@@ -100,7 +100,7 @@ describe("each step says where the work has got to", () => {
   it("a step that failed while the run went on says so in words, and the line carries on past it", () => {
     const n = nodeOf(html, "review");
     expect(n).toContain('data-phase="failed"');
-    expect(n).toContain("failed — went on");
+    expect(n).toContain("failed, went on");
     expect(flowInto("failed", "needs_you")).toBe("moving");
   });
 

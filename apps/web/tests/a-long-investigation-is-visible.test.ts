@@ -38,7 +38,7 @@ describe("what it says while it works", () => {
   });
 
   it("and the fallback says what a debugging session actually is", () => {
-    expect(UI).toContain("Debugging — reading the code, the database and the host");
+    expect(UI).toContain("Debugging, reading the code, the database and the host");
     expect(UI).toContain("This takes a few minutes");
   });
 

@@ -27,7 +27,7 @@ export function Reset({ host, smtp, email: initialEmail, minPassword = 12 }: { h
   const [error, setError] = useState<string | null>(null);
 
   // Read ONCE: the fragment is cleared right after, so a second run of this effect (React's
-  // development double-invoke) must not overwrite the token with "" — the link would read as
+  // development double-invoke) must not overwrite the token with "", the link would read as
   // "Forgot your password?" (seen on the hotfix walk).
   const once = useRef(false);
   useEffect(() => {
@@ -51,7 +51,7 @@ export function Reset({ host, smtp, email: initialEmail, minPassword = 12 }: { h
         <div className="idn-sent">
           <div className="idn-env" aria-hidden><ShieldCheck size={22} /></div>
           <h1>Password changed</h1>
-          <p className="idn-s" data-copy="prose">You were signed out everywhere else. Sign in with the new password — your second factor is still needed.</p>
+          <p className="idn-s" data-copy="prose">You were signed out everywhere else. Sign in with the new password, your second factor is still needed.</p>
         </div>
         <a className="idn-big p" href="/login">Sign in</a>
       </AuthStage>

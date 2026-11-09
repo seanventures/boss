@@ -48,7 +48,7 @@ def test_each_sample_is_classified_as_its_kind(kind):
 @pytest.mark.parametrize("kind", da.KINDS)
 def test_every_offered_action_is_one_the_transition_accepts(kind):
     """A button whose action the server rejects is the Escalate bug in another shape."""
-    supported = {"approve", "reject", "revise", "delegate", "execute"}
+    supported = {"approve", "reject", "revise", "delegate", "execute", "settle"}
     for offered in da.allowed_actions(SAMPLES[kind]):
         assert offered["action"] in supported
         assert offered["label"] and offered["effect"]
@@ -66,7 +66,7 @@ def test_a_spending_refusal_is_a_notice_with_one_dismiss_and_a_way_to_fix_it(rea
     hint = da.guidance(card)
     assert hint and hint["area"] in {"budget", "setup"}
     assert "Approving this card would not" in hint["what_to_do"]
-    if da.REFUSALS[reason] in {"capacity", "budget", "tier2_frozen"}:
+    if da.REFUSALS[reason] in {"capacity", "budget", "tier2_frozen", "rules_forbidden"}:
         assert "Retry" in hint["what_to_do"]
     else:
         assert "Nothing is needed" in hint["what_to_do"]

@@ -160,12 +160,12 @@ describe("a node says what it is and who does it", () => {
     const spec = linear(10, (i) => (i === 2 ? { binding: { agent_work: true, skills: ["sk_trim"] } } : {}));
     const h = render(<FlowLane spec={spec} palette={PALETTE} mode="design" />);
     expect(nodes(h)[3].querySelector<HTMLElement>('[data-testid="wf-badge-inputs"]')!.dataset.tip)
-      .toBe("1 input · 1 not connected");
+      .toBe("1 input, 1 not connected");
     expect(nodes(h)[2].querySelector<HTMLElement>('[data-testid="wf-badge-skills"]')!.dataset.tip)
       .toBe("Limited to: trim");
     const deploy = nodes(h)[9];
     expect(deploy.querySelector<HTMLElement>('[data-testid="wf-badge-approval"]')!.dataset.tip)
-      .toBe("Risk 3 — always needs a person.");
+      .toBe("Risk 3, always needs a person.");
   });
 
   it("selects on click and rings the selected node", () => {

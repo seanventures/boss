@@ -9,7 +9,7 @@
  *
  * NEVER A GUESS. A face is the act's role (`face: "agent"`), a hollow face only when the server
  * says the role is certain (`hollow`, never ringed), the BOSS glyph for machinery, `You` for a
- * person's press — else an empty slot. Quiet, budget-wait and blocked faces never move: motion
+ * person's press, else an empty slot. Quiet, budget-wait and blocked faces never move: motion
  * would claim work that is not happening.
  */
 import { Hourglass } from "@phosphor-icons/react";
@@ -39,7 +39,7 @@ function actOf(s: Station): Act {
     actId: s.actId ?? "", roleKey: s.roleKey, kind: "stage", status: ACT_STATUS[s.status],
     rootActId: s.actId ?? "", handedBy: { kind: "boss" }, how: "next_stage",
     edgeLabel: s.edgeLabel ?? "", considered: [], scope: { skills: [], mcp: [] }, accountable: "",
-    label: `${s.label} · ${s.word}`, links: {}, artifacts: [], tokensIn: 0, tokensOut: 0, costUsd: 0,
+    label: `${s.label}, ${s.word}`, links: {}, artifacts: [], tokensIn: 0, tokensOut: 0, costUsd: 0,
     reconstructed: false, startedAt: s.startedAt ?? "", endedAt: s.endedAt,
   };
 }
@@ -85,10 +85,10 @@ export function bayHasClock(s: Station): boolean {
 
 /** THE WORD UNDER A BAY, everywhere a station is listed (the header line and the cockpit's
  *  vertical list at phone width): the server's word, then how long, by the one clock rule. The
- *  tooltip is the station's tip — a Failed station's reason. */
+ *  tooltip is the station's tip, a Failed station's reason. */
 export function bayWord(s: Station, now: number | null): { text: string; tip?: string } {
   const secs = bayHasClock(s) ? seconds(s, now) : null;
-  return { text: secs !== null ? `${s.word} · ${span(secs)}` : s.word, tip: s.tip || undefined };
+  return { text: secs !== null ? `${s.word}, ${span(secs)}` : s.word, tip: s.tip || undefined };
 }
 
 /** BOSS waiting on a worker or on budget: an hourglass, never a face that claims work (walk D22). */
@@ -105,7 +105,7 @@ function Face({ s, size, still, viewer }: { s: Station; size: 16 | 24 | 32; stil
   const state = still && (s.status === "working" || s.status === "needs_you") ? "idle" : AVATAR[s.status];
   if (s.status === "waiting" && s.face !== "agent") return <WaitGlyph size={size} tip={s.tip} />;
   if (s.key === "review" && s.seats.length > 1) {
-    // One face per seat, each in its own state — two seats of one role are two faces.
+    // One face per seat, each in its own state, two seats of one role are two faces.
     const seats = s.seats.filter((x) => x.roleKey);
     const shown = seats.slice(0, 3);
     const seatState = (x: Station["seats"][number]): AvatarState =>
@@ -132,7 +132,7 @@ function Face({ s, size, still, viewer }: { s: Station; size: 16 | 24 | 32; stil
   }
   if (s.face === "hollow" && s.hollowRole) {
     return (
-      <span className="fx-hollow" title={`Next: ${nameOf(s.hollowRole).name} · ${s.label}`}>
+      <span className="fx-hollow" title={`Next: ${nameOf(s.hollowRole).name}, ${s.label}`}>
         <RunFace roleKey={s.hollowRole} size={size} state="idle" standalone />
       </span>
     );
@@ -218,7 +218,7 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
               data-role={s.face === "agent" ? s.roleKey ?? undefined : undefined}
               data-selected={selected === s.key || undefined} aria-label={ariaLabel}
               data-not-reached={s.notReached || undefined}
-              title={!header ? [`${s.label} · ${s.word}`, who, s.tip].filter(Boolean).join(" · ") : undefined}>
+              title={!header ? [`${s.label}, ${s.word}`, who, s.tip].filter(Boolean).join(", ") : undefined}>
             {i > 0 ? (
               <span className="ag-chain-edge fx-edge" data-new={fresh.has(s.key) ? "true" : undefined}
                     title={s.edgeLabel || undefined} aria-hidden>
@@ -235,7 +235,7 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
                   {s.loopWith && s.rounds > 1 ? (
                     <span className="fx-loop" aria-label={`${who} and ${nameOf(s.loopWith).name}, ${plural(s.rounds, "round")}`}>
                       <Face s={s} size={32} still={still} viewer={viewer} />
-                      <span className="ag-chain-swap" aria-hidden>↔</span>
+                      <span className="ag-chain-swap" aria-hidden>Link</span>
                       <RunFace roleKey={s.loopWith} size={24} state="done" standalone />
                     </span>
                   ) : <Face s={s} size={32} still={still} viewer={viewer} />}

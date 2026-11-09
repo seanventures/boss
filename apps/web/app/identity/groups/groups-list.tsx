@@ -20,13 +20,13 @@ export function sourceWord(g: Group): string {
   return g.provider ?? (g.source === "scim" ? "SCIM" : "IdP");
 }
 
-/** "4 groups · 2 synced from Okta" — the synced part only when there are any. */
+/** "4 groups, 2 synced from Okta", the synced part only when there are any. */
 export function groupsSub(groups: Group[]): string {
   const synced = groups.filter((g) => g.source !== "manual");
   const head = `${groups.length} ${groups.length === 1 ? "group" : "groups"}`;
   if (!synced.length) return head;
   const providers = [...new Set(synced.map((g) => g.provider).filter(Boolean))];
-  return `${head} · ${synced.length} synced from ${providers.length === 1 ? providers[0] : "your identity provider"}`;
+  return `${head}, ${synced.length} synced from ${providers.length === 1 ? providers[0] : "your identity provider"}`;
 }
 
 export function GroupsList({ groups, failure = null }: { groups: Group[]; failure?: ReadFailure | null }) {

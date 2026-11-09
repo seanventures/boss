@@ -31,14 +31,14 @@ export function CloudCapacity(p: CloudViewProps) {
     <section className="cloud-sec" aria-labelledby="inf-cloud-capacity">
       <div className="cloud-lines">
         <span className="cloud-line inf-num" data-testid="inf-capacity-queue" title="Work waiting, held and running now">
-          {head.queue ? <><span>Queue {head.queue.depth}</span><span aria-hidden> · </span><span>Leased {head.queue.leased}</span>
-            <span aria-hidden> · </span><span>Running {head.queue.running}</span></> : "Queue —"}
+          {head.queue ? <><span>Queue {head.queue.depth}</span><span aria-hidden>, </span><span>Leased {head.queue.leased}</span>
+            <span aria-hidden>, </span><span>Running {head.queue.running}</span></> : "Queue —"}
           {head.queue?.realProvision ? <span className="cloud-chip" title="Scaling creates real machines">Real provision</span> : null}
         </span>
         <span className="cloud-line inf-num inf-muted" data-testid="inf-capacity-counts"
-              title={head.fabric ? Object.entries(head.fabric.byKind).map(([k, n]) => `${k} ${n}`).join(" · ") || undefined : undefined}>
-          {head.fabric ? <><span>Pools {head.fabric.pools}</span><span aria-hidden> · </span><span>Instances {head.fabric.instances}</span>
-            <span aria-hidden> · </span><span title="Changes made on real hosts">Host effects {head.fabric.realHostEffects}</span></>
+              title={head.fabric ? Object.entries(head.fabric.byKind).map(([k, n]) => `${k} ${n}`).join(", ") || undefined : undefined}>
+          {head.fabric ? <><span>Pools {head.fabric.pools}</span><span aria-hidden>, </span><span>Instances {head.fabric.instances}</span>
+            <span aria-hidden>, </span><span title="Changes made on real hosts">Host effects {head.fabric.realHostEffects}</span></>
             : <>Pools {rows.length}</>}
         </span>
       </div>
@@ -46,7 +46,7 @@ export function CloudCapacity(p: CloudViewProps) {
         <span className="ag-zone-label">API health</span>
         {head.apiHealth.length === 0 ? <span className="inf-muted">No checks yet</span> : head.apiHealth.map((h) => (
           <span key={h.provider} role="listitem" className="cloud-health-item"
-                title={`API ${h.api} · limit ${h.rateLimit} · cap ${h.usageCap}${h.checkedAt ? ` · ${localTime(h.checkedAt)}` : ""}`} data-copy="data">
+                title={`API ${h.api}, limit ${h.rateLimit}, cap ${h.usageCap}${h.checkedAt ? `, ${localTime(h.checkedAt)}` : ""}`} data-copy="data">
             <Dot tone={h.state.tone} label={`${h.provider} ${h.state.word}`} />
             <span data-copy="data">{h.provider}</span><span className="inf-faint">{h.state.word}</span>
           </span>
@@ -66,7 +66,7 @@ export function CloudCapacity(p: CloudViewProps) {
           <table className="inf-table" data-testid="inf-cloud-table">
             <thead><tr>
               <th scope="col">Pool</th><th scope="col">Kind</th><th scope="col">Desired</th><th scope="col">Actual</th>
-              <th scope="col">Min–Max</th><th scope="col">Queue/worker</th><th scope="col">$/hour</th><th scope="col">Plan</th>
+              <th scope="col">Min, Max</th><th scope="col">Queue/worker</th><th scope="col">$/hour</th><th scope="col">Plan</th>
             </tr></thead>
             <tbody>
               {shown.map((r) => (
@@ -77,11 +77,11 @@ export function CloudCapacity(p: CloudViewProps) {
                   <td>{r.kind}</td>
                   <td className="inf-num">{r.desired}</td>
                   <td className="inf-num" title={r.actual < r.desired ? "Fewer running than wanted" : undefined}>{r.actual}</td>
-                  <td className="inf-num">{r.min}–{r.max}</td>
+                  <td className="inf-num">{r.min}, {r.max}</td>
                   <td className="inf-num">{r.queuePerWorker ?? "—"}</td>
                   <td className="inf-num">{r.costHour}</td>
-                  <td data-testid="inf-capacity-plan" title={r.plan ? `${r.plan.summary}${r.plan.at ? ` · ${localTime(r.plan.at)}` : ""}` : "No plan yet"}>
-                    {r.plan ? <StateWord w={{ word: r.plan.word, tone: r.plan.tone }} /> : <span className="inf-faint">—</span>}
+                  <td data-testid="inf-capacity-plan" title={r.plan ? `${r.plan.summary}${r.plan.at ? `, ${localTime(r.plan.at)}` : ""}` : "No plan yet"}>
+                    {r.plan ? <StateWord w={{ word: r.plan.word, tone: r.plan.tone }} /> : <span className="inf-faint">{"—"}</span>}
                   </td>
                 </tr>
               ))}
@@ -104,7 +104,7 @@ function PoolDrawer({ pool, now, onClose }: { pool: CloudPool; now: number | nul
       <DrawerSection label="FACTS" testId="inf-pool-facts">
         <dl className="inf-facts">
           <dt>Kind</dt><dd>{pool.kind}</dd>
-          <dt>Min–Max</dt><dd className="inf-num">{pool.min}–{pool.max}</dd>
+          <dt>Min, Max</dt><dd className="inf-num">{pool.min}, {pool.max}</dd>
           <dt>Queue/worker</dt><dd className="inf-num">{pool.queuePerWorker ?? "—"}</dd>
           <dt>$/hour</dt><dd className="inf-num">{pool.costHour}</dd>
         </dl>

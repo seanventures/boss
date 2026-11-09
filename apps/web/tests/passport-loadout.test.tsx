@@ -376,12 +376,13 @@ describe("W5 · Setup's green label on the Passport and the Kit", () => {
     for (const label of ["Edit this agent", "Delete this agent"]) expect(level2, label).toContain(label);
   });
 
-  it("no other rule re-colours .eyebrow, and the Kit's grey label is gone", () => {
+  it("no other rule re-colours .area-name, and the Kit's grey label is gone", () => {
     const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
-    const eyebrow = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
-      .filter(([, sel]) => sel.split(",").some((s) => /(^|\s)\.eyebrow\b/.test(s.trim()) || s.trim() === ".eyebrow"))
+    const areaName = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .filter(([, sel]) => sel.split(",").some((s) => /(^|\s)\.area-name\b/.test(s.trim()) || s.trim() === ".area-name"))
       .filter(([, , body]) => /(^|;|\s)color\s*:/.test(body));
-    for (const [, sel, body] of eyebrow) {
+    expect(areaName.length).toBeGreaterThan(0);
+    for (const [, sel, body] of areaName) {
       expect(body, sel).toContain("var(--accent-text");
     }
     const kit = readFileSync(join(__dirname, "..", "app", "skills", "kit.css"), "utf8");

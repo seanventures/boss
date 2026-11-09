@@ -40,7 +40,7 @@ describe("App ▸ Links", () => {
                             onClose={() => {}} />);
     await settle();
     const row = $("[data-testid='fx-link-BANK']")!;
-    expect(row.querySelector(".fx-link-words")!.textContent).toBe("BANK → Banking · preview · test users · active");
+    expect(row.querySelector(".fx-link-words")!.textContent).toBe("BANK → Banking, preview, test users, active");
     // THE APP-FACING ADDRESS (tester P2): the env var the app reads, never the gateway's
     // internal host, which a person cannot open and which means nothing to them.
     expect(row.textContent).toContain("BOSS_LINK_BANK_URL");
@@ -75,7 +75,7 @@ describe("App ▸ Links", () => {
     expect(parseLinks(null)).toEqual([]);
     expect(parseLinks({ links: [{ nope: 1 }] })).toEqual([]);
     expect(linkWords({ ...LINKS.links[0], env: "deploy", credentials: "none" } as never))
-      .toBe("BANK → Banking · deployed · active");
+      .toBe("BANK → Banking, deployed, active");
   });
 
   it("revoke asks first, and only the second press revokes", async () => {

@@ -1,16 +1,16 @@
 "use client";
 
 /**
- * Observability › Apps (spec §4.9): THE PULSE — one 24-hour strip per app, real probe results,
+ * Observability › Apps (spec §4.9): THE PULSE, one 24-hour strip per app, real probe results,
  * deploy pins dropped where each deploy landed; NOT WATCHED (scraped, no health target); the app
  * drawer (app-drawer.tsx) over `app=<target_id>`; and the header's `Ask BOSS` (ObsAskBoss).
  *
- *   PULSE · 24H                 00:00      06:00      12:00      18:00      now
- *   ● Down  api · prod   edge-2  ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▼▯▯▯▯▯   91.3%  down 1h 4m  ↗
+ *   PULSE, 24H                 00:00      06:00      12:00      18:00      now
+ *   ● Down  api, prod   edge-2  ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▼▯▯▯▯▯   91.3%  down 1h 4m  
  *
  * Ordering is the server's (Down, Slow, No signal, Up, Not deployed; then name). The strip's
  * density is the server's too: narrow layouts ask for `cells=48`/`24` (obs-home) and the server
- * re-buckets. `?watch=<app>|<env>` — the workflow "Set up monitoring" step's link — opens that
+ * re-buckets. `?watch=<app>|<env>`, the workflow "Set up monitoring" step's link, opens that
  * app's drawer, or Find with its name when no row matches.
  */
 import { Heartbeat } from "@phosphor-icons/react";
@@ -37,7 +37,7 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
 }) {
   const lt = useLocalTime();
   const [table, setTable] = useState(false);
-  const name = `${row.app} · ${row.env}`;
+  const name = `${row.app}, ${row.env}`;
   const notDeployed = row.state === "not_deployed";
   const sinceMs = row.since ? Date.parse(row.since) : NaN;
   const right = row.state === "down" && Number.isFinite(sinceMs) && now !== null
@@ -45,7 +45,7 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
     : row.p95Ms !== null
       // THE SAME p95 the project pages show (obs_view.probe_window): BOSS's probes over the window.
       ? <span title={`p95 of BOSS's health probes that answered, last ${SPAN[pulse.window.win] ?? pulse.window.win}`}>p95 {ms(row.p95Ms)}</span>
-      : notDeployed ? <span className="inf-faint">—</span>
+      : notDeployed ? <span className="inf-faint">{"—"}</span>
         : <span className="inf-faint" title={row.state === "unknown" ? "No probes in this window" : "No latency recorded"}>
             {row.state === "unknown" ? "no probes" : "—"}</span>;
   return (
@@ -53,14 +53,14 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
       <span className="obs-prow-state"><StateWord w={{ word: row.word, tone: row.tone }} changed={changed} /></span>
       <button type="button" className="obs-prow-name" title={`Open ${name}`} onClick={() => onOpen(row.targetId)}>
         <span className="inf-trunc" data-copy="data" data-user-text>{row.app}</span>
-        <span className="inf-faint" aria-hidden> · </span>
+        <span className="inf-faint" aria-hidden>, </span>
         <span className="inf-muted" data-copy="data" data-user-text>{row.env}</span>
       </button>
       <span className="obs-prow-host">
         {row.host ? (
           <a className="inf-link inf-trunc" href={hostHref(row.host.id)} title={`${row.host.name} in Infra`} data-copy="data"
              onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(hostHref(row.host!.id)); } }}>{row.host.name}</a>
-        ) : <span className="inf-faint">—</span>}
+        ) : <span className="inf-faint">{"—"}</span>}
       </span>
       <span className="obs-prow-strip">
         {notDeployed ? (
@@ -86,11 +86,11 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
                   onClick={() => setTable((v) => !v)}>{table ? "▥" : "▤"}</button>
         ) : null}
         <button type="button" className="ag-link obs-go" aria-label={`Open ${name}`} data-testid="obs-app-open-row"
-                onClick={() => onOpen(row.targetId)}>↗</button>
+                onClick={() => onOpen(row.targetId)}>Open</button>
         {/* ONE PROJECT'S HEALTH LIVES ON ITS PROJECT PAGE (BOSSAPP-914 screen 15); this view keeps
             the cross-app comparison and links each app there (Project › Health links back). */}
         <a className="obs-chip obs-project-health" href={projectHealthHref()} data-testid="obs-app-project-health"
-           title={`Project › Health — ${row.app}'s alerts, incidents and monitoring`} aria-label={`Project health for ${name}`}>
+           title={`Project › Health, ${row.app}'s alerts, incidents and monitoring`} aria-label={`Project health for ${name}`}>
           <Heartbeat size={12} aria-hidden /><span className="obs-project-health-word">Project › Health</span></a>
       </span>
       {table ? (
@@ -169,7 +169,7 @@ export function AppsTab(props: ObsTabProps & { all?: Polled<AppsAll> }) {
   }
   if (pulse.loading && !data) return <Skeleton testId="obs-apps-loading" />;
   // UNREACHABLE IS ONE STATE, NOT THREE. With no answer the tab said "Nothing deployed yet" and
-  // "Every scraped app is watched" under the header's "Can't reach BOSS" — two claims about apps
+  // "Every scraped app is watched" under the header's "Can't reach BOSS", two claims about apps
   // nobody had read. The header line is the whole answer until the view answers.
   if (!data && pulse.error) return null;
   const rows = (data?.rows ?? []).filter((r) => {
@@ -229,7 +229,7 @@ function NotWatchedZone({ data }: { data: Pulse | null }) {
         <ul className="obs-list">
           {data.notWatched.map((n) => (
             <li key={`${n.app}|${n.env}`} className="obs-line">
-              <span className="obs-strong" data-copy="data" data-user-text>{n.app} · {n.env}</span>
+              <span className="obs-strong" data-copy="data" data-user-text>{n.app}, {n.env}</span>
               {n.scrapeUrl ? <span className="inf-mono inf-trunc inf-faint" title={n.scrapeUrl} data-copy="data">{n.scrapeUrl}</span> : null}
               <span className="ag-spacer" />
               {n.dashboardUrl ? (

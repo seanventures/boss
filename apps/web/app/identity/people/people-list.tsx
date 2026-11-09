@@ -93,7 +93,7 @@ export function PeopleList({ people, roles, groups: allGroups = [], invited: inv
 
   return (
     <>
-      <ListHeader title="People" sub={!failure ? `${active} active · ${invited} invited` : null} empty={!people.length && !failure && !filtered} create={invite}>
+      <ListHeader title="People" sub={!failure ? `${active} active, ${invited} invited` : null} empty={!people.length && !failure && !filtered} create={invite}>
         {!failure && people.length ? <ExportCsvButton people={shown} /> : null}
         <CanButton permission="user:invite" className="idn-btn sm" onClick={() => setImporting(true)} tip="Invite many people from a CSV file" data-testid="people-import">
           <FileArrowUp size={14} aria-hidden /> Import
@@ -156,7 +156,7 @@ export function PeopleList({ people, roles, groups: allGroups = [], invited: inv
             </tbody>
           </table>
         </div>
-        {!shown.length && filtered ? <div className="idn-empty">No one matches · <button type="button" className="idn-link" onClick={() => setF(NONE)}>Clear filters</button></div> : null}
+        {!shown.length && filtered ? <div className="idn-empty">No one matches, <button type="button" className="idn-link" onClick={() => setF(NONE)}>Clear filters</button></div> : null}
         {!people.length && !filtered ? (
           <EmptyState icon={<UserPlus size={20} />} title="No people yet" testId="people-empty"
             action={invite}>

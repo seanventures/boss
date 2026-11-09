@@ -1,4 +1,5 @@
-.brief { margin: 0 0 22px; border-block: 1px solid var(--border, #343b4a); padding: 12px 0; color: var(--text, #e8edf5); }
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+.brief { margin: 0 0 22px; border-block: 1px solid var(--border, var(--boss-c-343b4a)); padding: 12px 0; color: var(--text, var(--boss-c-e8edf5)); }
 .brief summary { cursor: pointer; font-weight: 600; }
 .brief summary span { margin-inline-start: 12px; font-size: 0.63158rem; font-weight: 400; }
 .brief p { font-size: 0.68421rem; line-height: 1.5; margin: 12px 0; }

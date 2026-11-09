@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * THE PULSE (cc v2): the team's last 14 weeks and its latest moves — both served by the API
+ * THE PULSE (cc v2): the team's last 14 weeks and its latest moves, both served by the API
  * (`view.pulse`, aggregated in SQL from the acts ledger), never counted here.
  *
  *   Left: a day-by-day heatmap of finished agent steps (Monday-first columns), the totals line
- *   (steps · PRs open · busiest day) and the five most active agents.
- *   Right: the seven latest moves, one per app — "Atlas planned Interview Scorecard".
+ *   (steps, PRs open, busiest day) and the five most active agents.
+ *   Right: the seven latest moves, one per app, "Atlas planned Interview Scorecard".
  *
  * A chart only where there is data: no steps in 14 weeks is one quiet line, not an empty grid.
  */
@@ -77,7 +77,7 @@ export function Heatmap({ pulse }: { pulse: Pulse }) {
   );
 }
 
-/** The same move said once (re-check): one line per who · what · which. */
+/** The same move said once (re-check): one line per who, what, which. */
 export function uniqueEvents(events: PulseEvent[]): PulseEvent[] {
   const seen = new Set<string>();
   return events.filter((e) => {
@@ -88,7 +88,7 @@ export function uniqueEvents(events: PulseEvent[]): PulseEvent[] {
   });
 }
 
-const VERDICT: Record<string, string> = { approved: " — approved", changes_asked: " — asked for changes" };
+const VERDICT: Record<string, string> = { approved: ", approved", changes_asked: ", asked for changes" };
 
 function Event({ e, now, orgId }: { e: PulseEvent; now: number | null; orgId?: string | null }) {
   useIdentityVersion(); // names and faces re-resolve when the install's identities load
@@ -100,7 +100,7 @@ function Event({ e, now, orgId }: { e: PulseEvent; now: number | null; orgId?: s
       <span className="cc-ev-face"><AgentAvatar agent={e.roleKey} size={30} aiBadge={false} /></span>
       <span className="cc-ev-text">
         <span><b>{who.name}</b> {e.verb} <b data-user-text>{e.subject}</b>{e.verdict ? VERDICT[e.verdict] : ""}</span>
-        <span className="cc-ev-sub">{[when && `${when} ago`, role].filter(Boolean).join(" · ")}</span>
+        <span className="cc-ev-sub">{[when && `${when} ago`, role].filter(Boolean).join(", ")}</span>
       </span>
     </>
   );
@@ -131,7 +131,7 @@ const big = (v: number) => (v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : 
 export function weekLine(w: Week): string {
   return [n(w.runs, "run", "runs") + ` (${w.passed} passed)`, `${n(w.builds, "build", "builds")} (${w.buildsPassed} passed)`,
           n(w.prsOpened, "PR opened", "PRs opened"), n(w.jobs, "job", "jobs"), n(w.deployments, "deploy", "deploys"),
-          `${big(w.tokens)} tokens`, `${w.modelHours.toFixed(1)} model hours`].join(" · ");
+          `${big(w.tokens)} tokens`, `${w.modelHours.toFixed(1)} model hours`].join(", ");
 }
 
 export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
@@ -158,7 +158,7 @@ export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
             <div className="cc-heat-foot" data-testid="cc-heat-foot">
               <span><b>{pulse.total.toLocaleString("en-US")}</b>agent steps</span>
               {prsOpen !== null ? <span><b>{prsOpen}</b>PRs open</span> : null}
-              {pulse.busiest ? <span>Busiest <b className="cc-busy">{dayWord(pulse.busiest.date)} · {pulse.busiest.n} steps</b></span> : null}
+              {pulse.busiest ? <span>Busiest <b className="cc-busy">{dayWord(pulse.busiest.date)}, {pulse.busiest.n} steps</b></span> : null}
 
               <span className="cc-heat-legend" aria-hidden>Less <i className="l0" /><i className="l1" /><i className="l2" /><i className="l3" /><i className="l4" /> More</span>
             </div>
@@ -167,10 +167,10 @@ export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
               <details className="cc-week" data-testid="cc-week">
                 <summary>
                   This week: <b>{week.passed}</b> finished
-                  {week.failed ? <> · <b className="cc-failed">{week.failed}</b> failed</> : null}
+                  {week.failed ? <>, <b className="cc-failed">{week.failed}</b> failed</> : null}
                 </summary>
                 <p data-testid="cc-week-line" aria-label={weekLine(week)}>
-                  {weekLine(week).split(" · ").map((part) => <span key={part}>{part}</span>)}
+                  {weekLine(week).split(", ").map((part) => <span key={part}>{part}</span>)}
                 </p>
               </details>
             ) : null}
@@ -182,7 +182,7 @@ export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
                     const who = nameOf(t.roleKey);
                     return (
                       <Go key={t.roleKey} className="cc-top-row" patch={{ area: "workforce", role: t.roleKey, view: null }}
-                          orgId={orgId} title={`${whoLine(t.roleKey)} · ${t.n} steps`}>
+                          orgId={orgId} title={`${whoLine(t.roleKey)}, ${t.n} steps`}>
                         <span className="cc-ev-face"><AgentAvatar agent={t.roleKey} size={30} aiBadge={false} /></span>
                         <span className="cc-top-name">{who.name}{who.role.toLowerCase() !== who.name.toLowerCase() ? <small>{who.role}</small> : null}</span>
                         <span className="cc-bar" aria-hidden><i style={{ width: `${Math.max(2, (100 * t.n) / most)}%` }} /></span>

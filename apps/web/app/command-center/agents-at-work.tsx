@@ -2,7 +2,7 @@
 
 /**
  * AGENTS AT WORK on Command Center (design §11.3, §11.5): what agents are doing on their own,
- * as three small diagrams — Needs you · Running · Resolved today — each the newest item's flow
+ * as three small diagrams, Needs you, Running, Resolved today, each the newest item's flow
  * strip, each a link into Agents at work. Hidden until this install has ambient work at all.
  *
  * NEEDS YOU STAYS ONE QUEUE: an ambient item waiting on a person is a row in the existing Needs
@@ -46,7 +46,7 @@ function Cell({ k, n, label, top, href }: { k: string; n: number; label: string;
   return (
     <a className="aa-cc-cell" data-k={k} href={href} data-testid={`aaw-${k}`} title={top ? `${label}: ${top.title}` : label}>
       <span className="aa-cc-n">{n}<small>{label}</small></span>
-      {top ? <FlowThumb strip={top.strip} live={k !== "resolved"} size={18} /> : <span className="aa-sub">—</span>}
+      {top ? <FlowThumb strip={top.strip} live={k !== "resolved"} size={18} /> : <span className="aa-sub">{"—"}</span>}
       {top?.why && k !== "resolved" ? <WhyLine why={top.why} testId={`aaw-${k}-why`} compact /> : null}
     </a>
   );
@@ -95,7 +95,7 @@ export function AmbientNeedRows({ view, listedDecisionIds }: { view: ListView | 
               <div className="cc-need-text">
                 <b data-user-text title={i.title}>{i.title}</b>
                 {i.why ? <WhyLine why={i.why} testId={`cc-need-why-${i.id}`} compact />
-                  : <span>{i.badges.problem_type} · agents want your answer</span>}
+                  : <span>{i.badges.problem_type}, agents want your answer</span>}
               </div>
               <a className="cc-btn sm primary" href={flowHref({ item: i.id })} data-testid="cc-need-ambient-open">Open</a>
             </div>

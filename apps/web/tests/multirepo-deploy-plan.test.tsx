@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /**
  * Multi-repo screen 8, the deploy plan (app/multirepo/deploy-plan.tsx) in Infra › Deploys:
- *   - the mockup: crumb, the sentence, "Target: production · eu-west-1", "Deploy all 3", the waves
+ *   - the mockup: crumb, the sentence, "Target: production, eu-west-1", "Deploy all 3", the waves
  *     (order, component, repo, from → to, steps, rollback), One rollback in reverse order, the
  *     notes Automatic rollback and Merged together;
  *   - Deploy all POSTs deploy (deployment:create); a plan that is not ready says its problem and
@@ -43,10 +43,10 @@ describe("the deploy plan (screen 8)", () => {
     const calls = api();
     await mount();
     expect(calls[0]).toMatchObject({ path: "/v1/change-sets/rcs_1/deploy-plan", search: "?project_id=p1" });
-    expect(tid("mr-deploy-plan")?.textContent).toContain("Storefront · Add saved carts");
+    expect(tid("mr-deploy-plan")?.textContent).toContain("Storefront, Add saved carts");
     expect(tid("mr-dp-lead")?.textContent).toBe(
       "Three components ship as one release, in order. If any step fails, everything goes back to what is live now.");
-    expect(tid("mr-dp-target")?.textContent).toBe("Target: production · eu-west-1");
+    expect(tid("mr-dp-target")?.textContent).toBe("Target: production, eu-west-1");
     expect(tid("mr-dp-deploy")?.textContent).toBe("Deploy all 3");
     expect((tid("mr-dp-deploy") as HTMLButtonElement).disabled).toBe(false);
     expect($$(".mr-wave").map((w) => w.dataset.testid)).toEqual(["mr-wave-1", "mr-wave-2", "mr-wave-3"]);
@@ -148,7 +148,7 @@ describe("Deploys lists the change-set releases", () => {
     expect(new URLSearchParams(list.search).get("state")).toBe("merged,deploying,live,rolled_back");
     expect(new URLSearchParams(list.search).get("mode")).toBe("multi");
     expect(tid("mr-release-rcs_1")?.textContent).toContain("Merged");
-    expect(tid("mr-release-rcs_1")?.textContent).toContain("contracts · api · web");
+    expect(tid("mr-release-rcs_1")?.textContent).toContain("contracts, api, web");
     expect(tid("mr-release-rcs_0")?.textContent).toContain("Live");
     await click(tid("mr-release-rcs_1"));
     expect(onOpen).toHaveBeenCalledWith("rcs_1");

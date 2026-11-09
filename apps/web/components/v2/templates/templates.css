@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* App templates (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.8): the gallery, its card sheet, App ▸ Setup
    and Kit ▸ Templates. tpl- prefixed; only the console's own tokens. */
 
@@ -5,12 +10,12 @@
 .tpl-scrim { position: fixed; inset: 0; z-index: 85; background: color-mix(in srgb, var(--bg) 62%, transparent); }
 .tpl-sheet {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 86; display: flex; flex-direction: column;
-  width: min(560px, 100vw); background: var(--surface); border-left: 1px solid var(--border-strong);
+  width: min(560px, 100%); background: var(--surface); border-left: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg); animation: tpl-in 140ms ease-out both;
 }
-.tpl-sheet[data-wide] { width: min(760px, 100vw); }
+.tpl-sheet[data-wide] { width: min(760px, 100%); }
 .tpl-sheet[data-page] { width: min(var(--page-max, 1120px), 96vw); }
-@keyframes tpl-in { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+@keyframes tpl-in { from { opacity: 0; transform: translateX(18px);} to { opacity: 1; transform: none;} }
 @media (prefers-reduced-motion: reduce) { .tpl-sheet { animation: none; } }
 .tpl-sheet-head { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .tpl-sheet-head h2 { margin: 0; font-size: 1rem; color: var(--ink); display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
@@ -24,7 +29,7 @@
 
 /* ── Bits ───────────────────────────────────────────────────────────────────────────────── */
 .tpl-sec { display: flex; flex-direction: column; gap: 6px; }
-.tpl-sec > h3 { margin: 0; font: 600 0.7rem var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+.tpl-sec > h3 { margin: 0; font: 600 0.7rem var(--mono); letter-spacing: 0; text-transform: uppercase; color: var(--faint); }
 .tpl-muted { color: var(--muted); font-size: 0.8rem; }
 .tpl-faint { color: var(--faint); font-size: 0.78rem; }
 .tpl-err { color: var(--red); font-size: 0.82rem; overflow-wrap: anywhere; }
@@ -66,7 +71,7 @@ details.tpl-fold[open] > summary { margin-bottom: 6px; }
   display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; text-align: left; font: inherit;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--bg-tint); color: var(--ink); cursor: pointer;
 }
-.tpl-card:hover, .tpl-card:focus-visible { border-color: var(--accent-line); }
+.tpl-card:hover, .tpl-card:focus-visible { border-color: var(--accent-line); outline: 2px solid currentColor; outline-offset: 2px;}
 .tpl-card-name { font-weight: 600; font-size: 0.92rem; overflow-wrap: anywhere; }
 .tpl-card-sum { color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
 .tpl-card-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: auto; }
@@ -108,7 +113,7 @@ details.tpl-fold[open] > summary { margin-bottom: 6px; }
   /* Three jobs in the composer's mode switch: they share the row, words wrap inside each. */
   .np-mode { flex-wrap: nowrap; }
   .np-mode button { flex: 1 1 0; min-width: 0; white-space: normal; line-height: 1.2; text-align: center; }
-  .tpl-sheet { width: 100vw; border-left: 0; }
+  .tpl-sheet { width: 100%; border-left: 0; }
   .tpl-grid { grid-template-columns: minmax(0, 1fr); }
   .tpl-sheet-foot .ag-btn, .tpl-sheet-foot button { min-height: 44px; }
   .tpl-row-acts button, .tpl-copy-b { min-height: 40px; }
@@ -146,7 +151,7 @@ details.tpl-fold[open] > summary { margin-bottom: 6px; }
 .tpl-where-cell + .tpl-where-cell::before { content: "/"; margin-right: 8px; color: var(--quiet); }
 .tpl-prov-table { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r); min-width: 0; }
 .tpl-prov-head, .tpl-prov { display: grid; grid-template-columns: 7rem 9.5rem minmax(0, 1fr); gap: 10px; padding: 10px 12px; align-items: start; }
-.tpl-prov-head { font: 600 0.68rem var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); padding-block: 8px; }
+.tpl-prov-head { font: 600 0.68rem var(--mono); letter-spacing: 0; text-transform: none; color: var(--faint); padding-block: 8px; }
 .tpl-prov { border-top: 1px solid var(--border); }
 .tpl-prov-name { color: var(--ink); font-size: 0.86rem; font-weight: 600; overflow-wrap: anywhere; }
 .tpl-prov-do { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: 0.82rem; }
@@ -166,10 +171,10 @@ details.tpl-fold[open] > summary { margin-bottom: 6px; }
   background: var(--base); border: 1px solid var(--border-strong); border-radius: 8px;
 }
 .tpl-conn .tpl-input::placeholder, .tpl-set-group .tpl-input::placeholder { color: var(--quiet); }
-.tpl-conn .tpl-input:focus, .tpl-set-group .tpl-input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(46, 197, 197, 0.18); }
+.tpl-conn .tpl-input:focus, .tpl-set-group .tpl-input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px var(--boss-c-d5eb8b4f4f); }
 .tpl-setup .cap-btn { min-height: 40px; }
 .tpl-setup .cap-btn:focus-visible, .tpl-tab:focus-visible, .tpl-setup summary:focus-visible, .tpl-copy-b:focus-visible {
-  outline: none; box-shadow: 0 0 0 3px rgba(46, 197, 197, 0.35);
+  outline: none; box-shadow: 0 0 0 3px var(--boss-c-eaf90b2494);
 }
 .tpl-setup .cap-btn[aria-disabled="true"], .tpl-setup .cap-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .tpl-history { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; }

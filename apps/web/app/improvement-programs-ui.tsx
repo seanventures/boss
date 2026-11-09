@@ -7,7 +7,7 @@ import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
 
 const PROMOTE_BADGE =
-  "Promote is an enterprise SIM step — Community records trials only.";
+  "Promote is an enterprise SIM step, Community records trials only.";
 
 export function ImprovementProgramsPanel({
   programs,
@@ -123,8 +123,8 @@ export function ImprovementProgramsPanel({
           style={{
             display: "inline-block",
             fontSize: 10.5,
-            color: "#d29922",
-            border: "1px solid #d29922",
+            color: "var(--boss-c-d29922)",
+            border: "1px solid var(--boss-c-d29922)",
             padding: "1px 8px",
             borderRadius: 999,
             marginBottom: 8,

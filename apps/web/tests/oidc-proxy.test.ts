@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { NextRequest } from "next/server";
 import { describe, expect, it } from "vitest";
 
-import { forwardOidc, isOidcPath, oidcRequestHeaders, sessionCookieOnly } from "../lib/oidc-proxy";
+import { forwardOidc, isOidcPath, OIDC_BODY_CAP, oidcRequestHeaders, sessionCookieOnly } from "../lib/oidc-proxy";
 
 describe("the OIDC provider on the public origin (F6)", () => {
   it("matches the issuer's endpoints exactly", () => {
@@ -62,12 +62,37 @@ describe("the OIDC provider on the public origin (F6)", () => {
     expect(called).toBe(false);
   });
 
+  it("stops a chunked token POST at the cap and does not read the rest", async () => {
+    let called = false;
+    const fetchImpl = (async () => { called = true; return new Response("{}"); }) as typeof fetch;
+    let pulled = 0;
+    const chunk = new Uint8Array(16 * 1024).fill(120);
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= 200 * 1024) { controller.close(); return; }
+        pulled += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    });
+    const req = new Request("https://boss.test/oidc/o/token", {
+      method: "POST", body: stream, duplex: "half",
+    } as RequestInit);
+    const res = await forwardOidc(req, { apiUrl: "http://api", fetchImpl });
+    expect(res.status).toBe(413);
+    expect(called).toBe(false);
+    expect(pulled).toBeLessThanOrEqual(OIDC_BODY_CAP + 32 * 1024);
+  });
+
   it("forwards a 127.0.0.1 redirect_uri exactly as the app sent it (P1-1)", async () => {
-    // NextRequest.url rewrites the first loopback address in the URL to `localhost`; when the host
-    // is not localhost (a container name, a proxied host) that first match is the redirect_uri.
+    // NextRequest.url used to rewrite the first loopback address anywhere in the URL to
+    // `localhost`. Next 16.4.1 no longer does that, so the rewritten view is pinned on the
+    // instance. rawRequestUrl reads Request's own url; a forwarder that reads req.url sends
+    // the rewritten redirect_uri and this fails.
     const sent = "http://web:3000/oidc/o/authorize?client_id=c&redirect_uri=http%3A%2F%2F127.0.0.1%3A59999%2Fcb&x=%5B%3A%3A1%5D";
     const req = new NextRequest(sent);
-    expect(req.url).not.toBe(sent);                  // the normalisation this guards against
+    const rewritten = sent.replace("127.0.0.1", "localhost");
+    Object.defineProperty(req, "url", { configurable: true, get: () => rewritten });
+    expect(req.url).toBe(rewritten);
     let upstream = "";
     const fetchImpl = (async (u: string) => { upstream = u; return new Response(null, { status: 200 }); }) as unknown as typeof fetch;
     await forwardOidc(req, { apiUrl: "http://api", fetchImpl });

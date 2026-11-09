@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * SEND TO THE BOSS TEAM (docs/product/BOSS_FIXES_ITSELF.md §7.1–7.4, §10.4). Nothing has been
+ * SEND TO THE BOSS TEAM (docs/product/BOSS_FIXES_ITSELF.md §7.1, 7.4, §10.4). Nothing has been
  * sent; this is exactly what will be. Opening it asks BOSS to build the preview and store its
  * exact bytes; Send sends those bytes.
  *
- *   TITLE · LABELS · DIFF (not editable, View) · BODY and EVIDENCE (editable, scrubbed: n masked)
- *   TRAILERS · Similar: (dedupe) · where it goes (a PR from your fork / evidence on #n / the
- *   collector / a patch) · the check (a private name, address or secret in the diff BLOCKS it)
+ *   TITLE, LABELS, DIFF (not editable, View), BODY and EVIDENCE (editable, scrubbed: n masked)
+ *   TRAILERS, Similar: (dedupe), where it goes (a PR from your fork / evidence on #n / the
+ *   collector / a patch), the check (a private name, address or secret in the diff BLOCKS it)
  *   ☐ I checked this for private content     [ Send ] [ Export patch ] [ Cancel ]
  *
  * Editing the body or evidence resets the tick, and Send waits until the edit is saved (the
@@ -23,7 +23,7 @@ import {
 } from "../../lib/self-fix";
 
 const DEDUPE: Record<Send["dedupe"]["state"], string> = {
-  none: "none open · none merged", merged: "already merged upstream", open_pr: "an open pull request",
+  none: "none open, none merged", merged: "already merged upstream", open_pr: "an open pull request",
   closed_pr: "a closed pull request", open_issue: "an open issue", skipped: "not checked",
 };
 
@@ -131,7 +131,7 @@ export function SendSheet({ projectId, actor, selfFixId, onClose, onSent }: {
           <div className="sfx-send-similar" data-testid="sfx-send-similar" title={send.dedupe?.why || "Searched by the fix's class signature"}>
             Similar: {DEDUPE[send.dedupe?.state ?? "skipped"]}
             {send.dedupe?.match ? (
-              <> · <a className="ag-link" href={send.dedupe.match.url} target="_blank" rel="noreferrer"
+              <>, <a className="ag-link" href={send.dedupe.match.url} target="_blank" rel="noreferrer"
                       title={send.dedupe.match.title}>#{send.dedupe.match.number}</a></>
             ) : null}
           </div>
@@ -143,7 +143,7 @@ export function SendSheet({ projectId, actor, selfFixId, onClose, onSent }: {
             </dd>
             <dt>Diff</dt>
             <dd data-testid="sfx-send-diff">
-              {fileCount(send.diff_stat)} file(s) · +{send.diff_stat?.added ?? 0} −{send.diff_stat?.removed ?? 0}{" "}
+              {fileCount(send.diff_stat)} file(s), +{send.diff_stat?.added ?? 0} −{send.diff_stat?.removed ?? 0}{" "}
               <button type="button" className="ag-link" data-testid="sfx-send-view-diff" aria-expanded={showDiff}
                       title="Not editable: to change the code, request changes on the fix"
                       onClick={() => setShowDiff((v) => !v)}>View</button>
@@ -194,7 +194,7 @@ export function SendSheet({ projectId, actor, selfFixId, onClose, onSent }: {
           ) : null}
           {send.status === "sent" ? (
             <div className="sfx-ok" data-testid="sfx-send-sent">
-              Sent{send.result?.url ? <> · <a className="ag-link" href={send.result.url} target="_blank" rel="noreferrer">Open ↗</a></> : null}
+              Sent{send.result?.url ? <>, <a className="ag-link" href={send.result.url} target="_blank" rel="noreferrer">Open </a></> : null}
             </div>
           ) : null}
           {send.result?.error ? <div role="alert" data-testid="sfx-send-result-error">{send.result.error}</div> : null}

@@ -355,7 +355,7 @@ describe("a new app", () => {
     expect($('[data-testid="np-ready"]')?.textContent).toContain("Models ready");
     // No history: no price is guessed.
     expect($('[data-testid="np-cost"]')?.textContent).not.toContain("cost");
-    expect($('[data-testid="np-cost"]')?.textContent).toContain("10 steps · you approve 2 times");
+    expect($('[data-testid="np-cost"]')?.textContent).toContain("10 steps, you approve 2 times");
     expect($('[data-testid="np-deploy-note"]')?.textContent).toBe("Nothing deploys without your approval.");
   });
 
@@ -422,7 +422,7 @@ describe("adding a feature to an app that exists", () => {
     await settle(); await settle();
     const ctx = $('[data-testid="np-app-context"]');
     expect(ctx).not.toBeNull();
-    expect($('[data-testid="np-ctx-live"]')!.textContent).toContain("Live · staging on box-1");
+    expect($('[data-testid="np-ctx-live"]')!.textContent).toContain("Live, staging on box-1");
     // DEMO_PASSWORD and ALLOW_DEMO_SEED, plus the generated SESSION_SECRET: by name, never a value.
     expect($('[data-testid="np-ctx-settings"]')!.textContent).toContain("ALLOW_DEMO_SEED");
     expect($('[data-testid="np-ctx-settings"]')!.textContent).toContain("SESSION_SECRET");
@@ -430,7 +430,7 @@ describe("adding a feature to an app that exists", () => {
     expect($('[data-testid="np-ctx-deploy"]')!.textContent).toContain("Health check passed");
     expect($('[data-testid="np-ctx-settings"]')!.textContent).toContain("DEMO_PASSWORD");
     expect($('[data-testid="np-ctx-templates"]')!.textContent).toContain("Login with Google, GitHub or BOSS v1.0.0");
-    expect($('[data-testid="np-ctx-code"]')!.textContent).toContain("acme/sandbox · PR #186 (open)");
+    expect($('[data-testid="np-ctx-code"]')!.textContent).toContain("acme/sandbox, PR #186 (open)");
   });
 
   it("a link's app is chosen; the plan says what it builds on and how it lands", async () => {
@@ -443,7 +443,7 @@ describe("adding a feature to an app that exists", () => {
     expect($('[data-testid="np-apps"]')).toBeNull();
     const on = $('[data-testid="np-builds-on"]')!.textContent!;
     expect(on).toContain("Lead-Triage Inbox");
-    expect(on).toContain("acme/sandbox · PR #186 branch · 2 builds so far");
+    expect(on).toContain("acme/sandbox, PR #186 branch, 2 builds so far");
     // It has a live preview: it is working today. Its PR is open, so the build updates it.
     expect(on).toContain("Working today — the change is added, nothing is rebuilt");
     expect($('[data-testid="np-lands"]')?.textContent).toContain("Updates PR #186");

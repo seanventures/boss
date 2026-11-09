@@ -2,7 +2,7 @@
 
 /**
  * ① Repository: where BOSS writes code. Paste a token, pick a repository from the token's own
- * list, and three real checks run — Read, Write, Pull requests — before anything says Working.
+ * list, and three real checks run, Read, Write, Pull requests, before anything says Working.
  */
 import { GatedButton, useGate } from "../../components/gated";
 import React, { forwardRef, useCallback, useEffect, useRef, useState } from "react";
@@ -94,7 +94,7 @@ function SigninPicker({ onDone, makeDefault }: { onDone?: () => void; makeDefaul
       }, { label: "Connect" });
       apply(next);
       const row = next.repository.repos.find((r) => r.full_name === fullName);
-      if (row?.pill.tone === "green") toast("Connected · Working");
+      if (row?.pill.tone === "green") toast("Connected, Working");
       onDone?.();
     } catch (error) { setRefusal(refusalOf(error)); } finally { setBusy(false); }
   };
@@ -251,7 +251,7 @@ export function PasteTokenForm({ connectionId, onDone, makeDefault = true, onFou
       }, { label: "Connect" });
       apply(next);
       const row = next.repository.repos.find((r) => r.full_name === fullName);
-      if (row?.pill.tone === "green") toast("Connected · Working");
+      if (row?.pill.tone === "green") toast("Connected, Working");
       onDone?.();
     } catch (error) {
       setRefusal(refusalOf(error));
@@ -292,7 +292,7 @@ export function PasteTokenForm({ connectionId, onDone, makeDefault = true, onFou
           <GatedButton permission="github:connect" type="button" className="su-btn su-btn-primary" onClick={useApp} disabled={phase === "checking"}
                   data-testid="su-use-app" title="No token: the App's short-lived tokens, for its repos."
                   data-tip="No token: the App's short-lived tokens, for its repos.">
-            Use the GitHub App{appAccount ? ` · @${appAccount}` : ""}
+            Use the GitHub App{appAccount ? `, @${appAccount}` : ""}
           </GatedButton>
           <span className="su-faint">or paste a token</span>
         </div>

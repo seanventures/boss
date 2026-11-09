@@ -2047,6 +2047,11 @@ export type DecisionActionRequest = {
   force?: boolean;
 };
 
+export type LegacyExposureSettleRequest = {
+  actor?: string;
+  settle_at: "zero" | "estimate";
+};
+
 export type DecisionDigestRequest = {
   project_id: string;
   channel?: string;
@@ -3081,7 +3086,7 @@ export type GitHubRepositoryBindingSummary = {
   default_branch?: string;
   visibility?: string;
   archived: boolean;
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "not_allowed";
   permissions: Record<string, boolean>;
   capabilities: string[];
   metadata: Record<string, unknown>;
@@ -3089,8 +3094,10 @@ export type GitHubRepositoryBindingSummary = {
   created_by: string;
   created_at: string;
   updated_at: string;
-  /** Set when this binding looks active/passed and the org allow-list says not_allowed. */
+  /** Allow-list decision when egress will refuse this repository. */
   allow_list_warning?: string | null;
+  /** `repo_not_allowed` when the org allow-list says not_allowed. */
+  deny_reason?: string | null;
   clone_allowed?: boolean | null;
 };
 
@@ -8936,6 +8943,13 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<DecisionCard>(
         "POST",
         `/v1/decisions/${encodeURIComponent(decisionId)}/execute`,
+        { body: payload },
+      );
+    },
+    settleDecision(decisionId: string, payload: LegacyExposureSettleRequest) {
+      return request<DecisionCard>(
+        "POST",
+        `/v1/decisions/${encodeURIComponent(decisionId)}/settle`,
         { body: payload },
       );
     },

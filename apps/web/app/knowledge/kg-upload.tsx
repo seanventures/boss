@@ -2,8 +2,8 @@
 
 /**
  * KNOWLEDGE GRAPH › DOCUMENTS › UPLOAD (rulebook source G3). "Upload a document (PDF)" reads the
- * file on the server, which proposes its sections — one per heading and per rule card, each with
- * its page — and shows them here as a PREVIEW. Nothing is in the Knowledge Graph until the person
+ * file on the server, which proposes its sections, one per heading and per rule card, each with
+ * its page, and shows them here as a PREVIEW. Nothing is in the Knowledge Graph until the person
  * presses "Add the document": they may first drop a section, merge one with the next, or split
  * one at a line (operator decision 2026-11-01). A preview an agent proposed waits here too.
  *
@@ -31,7 +31,7 @@ const KIND_WORDS: Record<KgUploadSection["kind"], string> = {
 
 export function pagesWords(page: number | null | undefined, end: number | null | undefined): string {
   if (!page) return "";
-  return end && end !== page ? `pp. ${page}–${end}` : `p. ${page}`;
+  return end && end !== page ? `pp. ${page}, ${end}` : `p. ${page}`;
 }
 
 function countsWords(p: KgUploadPreview): string {
@@ -105,7 +105,7 @@ export function ExtractRules({ w, documentId, title, disabledWhy, archived, orgI
         <span className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-extract-msg">
           {msg.text}
           {msg.ok && msg.run ? <> <a className="inf-link" href={kgRunHref({ workflow_run_id: msg.run }, orgId) ?? undefined}>Open the run</a></> : null}
-          {msg.ok ? <> · <a className="inf-link" href={kgRulesHref({}, orgId)}>Rules review</a></> : null}
+          {msg.ok ? <>, <a className="inf-link" href={kgRulesHref({}, orgId)}>Rules review</a></> : null}
         </span>
       ) : null}
       {refusal ? <StartRefusal refusal={refusal} projectId={w.projectId} busy={busy} onDismiss={() => setRefusal(null)} /> : null}
@@ -202,12 +202,12 @@ export function UploadPreview({ w, preview: initial, archived, onDone }: {
   return (
     <section className="kg-up" data-testid="kg-upload-preview" aria-label={`Preview of ${preview.title}`}>
       <div className="kg-up-head">
-        <span className="kg-eyebrow">Check the sections before they are added</span>
+        <span className="kg-area-name">Check the sections before they are added</span>
         <label className="kg-field kg-up-name"><span>Title</span>
           <input className="input" value={title} disabled={archived || busy !== null} data-testid="kg-upload-title"
                  onChange={(e) => setTitle(e.target.value)} /></label>
         <p className="kg-quiet" data-testid="kg-upload-counts">
-          <span data-user-text>{preview.filename}</span> · {preview.pages} {preview.pages === 1 ? "page" : "pages"} · {countsWords(preview)}
+          <span data-user-text>{preview.filename}</span>, {preview.pages} {preview.pages === 1 ? "page" : "pages"}, {countsWords(preview)}
         </p>
         <p className="kg-quiet" data-testid="kg-upload-note">
           {preview.proposed_by_kind === "agent" ? "An agent proposed this split. " : ""}

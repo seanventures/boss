@@ -4,7 +4,7 @@
  * Agents (spec §5.3 3): who holds this ability, as faces, with a toggle each. A toggle writes ALL
  * of the ability's skill and MCP grants for that agent in one call (PUT holders, the whole new
  * set). Agents whose role recommends it carry a star. An ability that is not set up cannot be
- * given — only taken away.
+ * given, only taken away.
  */
 import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
@@ -85,7 +85,7 @@ export function AgentsSection({ ability, crew, projectId, actor, onChanged }: {
           return (
             <li key={c.role_key} className="kit-agent" data-on={on} data-testid={`kit-agent-${c.role_key}`}>
               <AgentAvatar agent={c.role_key} size={24} aiBadge={false} />
-              <span className="kit-agent-name" data-tip={`${name} · ${c.display_name ?? c.role_key} · AI agent`}>
+              <span className="kit-agent-name" data-tip={`${name}, ${c.display_name ?? c.role_key}, AI agent`}>
                 {name}
               </span>
               {recommended.has(c.role_key) ? (

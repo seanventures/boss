@@ -4,10 +4,10 @@
  * Govern › Self-fix (docs/product/BOSS_FIXES_ITSELF.md §8.3, §8.4, §8.7, §10.5).
  *
  *   Self-fix                                                     [ On ] ⓘ
- *   Per fix $10 · Per month $50 · Time 60 min · Confidence medium ▾ · Health 10 min · Tries 2
+ *   Per fix $10, Per month $50, Time 60 min, Confidence medium ▾, Health 10 min, Tries 2
  *   Install without asking   Off  (only on a one-person dev box) ⓘ
  *   Installed fixes   2 on the stack                       [ Remove all local fixes ]
- *   Self-installer    watching · last seen 08:12
+ *   Self-installer    watching, last seen 08:12
  *
  * The switch is the kill switch: off cancels every fix still being built and installs nothing
  * new; what is installed stays (Remove all is the uninstall). `BOSS_SELF_FIX=off` beats it and
@@ -133,7 +133,7 @@ export function SelfFixTab({ projectId, actor, paused }: { projectId: string; ac
         <span>{v.stack.length} on the stack</span>
         {v.stack.map((s) => (
           <a key={s.self_fix_id} className="ag-link" href={selfFixAreaHref(s.self_fix_id)}
-             title={`${s.title ?? s.class_signature} · ${shortSha(s.commit_sha)}`}>#{s.position}</a>
+             title={`${s.title ?? s.class_signature}, ${shortSha(s.commit_sha)}`}>#{s.position}</a>
         ))}
         {v.stack.length ? (
           confirmAll ? (
@@ -159,7 +159,7 @@ export function SelfFixTab({ projectId, actor, paused }: { projectId: string; ac
         </span>
         <span title={v.installer.watching ? "It installs approved fixes by itself" : "Run `boss self-fix watch` on the host, or the command on each card"}>
           {v.installer.watching ? "watching" : "not watching"}
-          {v.installer.last_seen_at ? ` · last seen ${localWith(v.installer.last_seen_at, { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" })}` : ""}
+          {v.installer.last_seen_at ? `, last seen ${localWith(v.installer.last_seen_at, { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" })}` : ""}
         </span>
       </div>
     </div>

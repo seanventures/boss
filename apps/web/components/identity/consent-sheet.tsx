@@ -2,7 +2,7 @@
 
 /**
  * JUST-IN-TIME CONSENT (IDENTITY.md §7.3 2): work a person starts needs more than their standing
- * grants cover. The sheet names the agents, the abilities and the repos, and creates a grant —
+ * grants cover. The sheet names the agents, the abilities and the repos, and creates a grant , 
  * task-bound ("for this build only", ends with the run) or standing (the policy's default days, as
  * the API offers them). Never more than
  * the person holds: the API intersects with their live permissions and each agent's ceiling.
@@ -10,8 +10,8 @@
  * Opened by `openConsent(detail)` from anywhere (the seam S3's build start uses when the API
  * answers `409 consent_required`), and rendered once by <ConsentHost/> in the shell.
  *
- * A MULTI-REPO APP'S FIRST BUILD (the 409 carries `multirepo`) asks a different question —
- * "Which repositories may the agents touch?" — with exactly the app's repositories and their
+ * A MULTI-REPO APP'S FIRST BUILD (the 409 carries `multirepo`) asks a different question , 
+ * "Which repositories may the agents touch?", with exactly the app's repositories and their
  * access, the ones the run cannot reach, who uses it and how the token works (mockup 09).
  * "Remember for <app>" picks the standing grant; unticked, the grant ends with the run.
  */
@@ -39,7 +39,7 @@ function names(list: { name: string }[]): string {
 
 /**
  * WHY A GRANT WAS REFUSED, IN WORDS (round 3: the sheet said only "That didn't work" when the API
- * answered 403 github_access_lacking — a person with no GitHub access of their own granting an
+ * answered 403 github_access_lacking, a person with no GitHub access of their own granting an
  * agent push on a repo). The one identity fallback (lib/identity/api.ts refusalSentence): the
  * API's own sentence when it wrote one, else the refusal's words, which name the repo, the
  * project and the permissions from its body.
@@ -94,7 +94,7 @@ function PlainConsentSheet({ request, onClose }: { request: ConsentRequest; onCl
       <div className="idn-need">
         {known.map((p) => <Perm key={p} p={p} sm />)}
         {other.map((p) => <Perm key={p} p={p} sm />)}
-        {request.github ? <span className="idn-chip"><GithubLogo size={13} aria-hidden /> {request.github.repos.join(", ") || request.github.repo} · {request.github.summary}</span> : null}
+        {request.github ? <span className="idn-chip"><GithubLogo size={13} aria-hidden /> {request.github.repos.join(", ") || request.github.repo}, {request.github.summary}</span> : null}
       </div>
       <div className="idn-opts" data-testid="consent-durations">
         {durations.map((d, i) => (
@@ -151,15 +151,15 @@ function MultiRepoConsentSheet({ request, onClose }: { request: ConsentRequest; 
   return (
     <Sheet side wide onClose={cancel} testId="consent-sheet"
            title={<>
-             <span className="mr-cs-eyebrow mr-ui-eyebrow" data-testid="consent-mr-eyebrow"><ShieldCheck size={13} aria-hidden />Before the build starts</span>
+             <span className="mr-cs-area-name mr-ui-area-name" data-testid="consent-mr-eyebrow"><ShieldCheck size={13} aria-hidden />Before the build starts</span>
              <span className="mr-cs-title">Which repositories may the agents touch?</span>
            </>}>
       <p className="mr-cs-subtitle" data-testid="consent-mr-subtitle">
-        Run {mr.run_label || request.task} · <span data-user-text>{mr.app_name}</span> · exactly the app&apos;s repositories
+        Run {mr.run_label || request.task}, <span data-user-text>{mr.app_name}</span>, exactly the app&apos;s repositories
       </p>
       <div className="mr-cs-body" data-testid="consent-multirepo">
         <div>
-          <div className="mr-ui-eyebrow">Allowed for this run</div>
+          <div className="mr-ui-area-name">Allowed for this run</div>
           <div className="mr-cs-list">
             {mr.repos.map((r) => (
               <div key={r.full_name} className="mr-cs-grant" data-access={r.access} data-testid={`consent-mr-repo-${r.full_name}`}>
@@ -168,7 +168,7 @@ function MultiRepoConsentSheet({ request, onClose }: { request: ConsentRequest; 
                 </span>
                 <div>
                   <b data-user-text>{r.full_name}</b>
-                  <small>{r.words || (r.access === "read" ? "Read only" : "Read · Write on boss/* · Pull requests")}</small>
+                  <small>{r.words || (r.access === "read" ? "Read only" : "Read, Write on boss/*, Pull requests")}</small>
                 </div>
                 <span className="mr-ui-pill" data-tone={r.access === "write" ? "ok" : "muted"}>{r.access === "write" ? "Write" : "Read"}</span>
               </div>
@@ -177,7 +177,7 @@ function MultiRepoConsentSheet({ request, onClose }: { request: ConsentRequest; 
         </div>
         {mr.unreachable.length ? (
           <div data-testid="consent-mr-unreachable">
-            <div className="mr-ui-eyebrow">Not reachable <span>{mr.unreachable.length} other {mr.unreachable.length === 1 ? "repository" : "repositories"}{org ? ` in ${org}` : ""}</span></div>
+            <div className="mr-ui-area-name">Not reachable <span>{mr.unreachable.length} other {mr.unreachable.length === 1 ? "repository" : "repositories"}{org ? ` in ${org}` : ""}</span></div>
             <div className="mr-cs-chips">
               {shown.map((u) => (
                 <span key={u} className="mr-ui-chip static unreachable" title="This run's token cannot reach it" data-user-text>
@@ -192,7 +192,7 @@ function MultiRepoConsentSheet({ request, onClose }: { request: ConsentRequest; 
         ) : null}
         {request.agents.length ? (
           <div>
-            <div className="mr-ui-eyebrow">Who uses it</div>
+            <div className="mr-ui-area-name">Who uses it</div>
             <div className="mr-cs-who" data-testid="consent-mr-who">
               {request.agents.map((a) => (
                 <span key={a.id} className="mr-cs-agent" title={a.name}>

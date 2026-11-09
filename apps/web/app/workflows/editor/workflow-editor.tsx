@@ -204,8 +204,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   const views = useMemo(() => new Map(spec.steps.map((s) => [s.id, viewOf(s, palette)] as [string, StepView])),
     [spec.steps, palette]);
 
-  /* ── Pipeline tab (design §4.7): the numbered stage diagram — who runs each stage, what it
-   *  reads and writes, how it went on the last run — and a stage's captain switched to a
+  /* ── Pipeline tab (design §4.7): the numbered stage diagram, who runs each stage, what it
+   *  reads and writes, how it went on the last run, and a stage's captain switched to a
    *  connected outside agent (KG P6b). Built from the spec on screen, so an edit shows at once. ── */
   const [lastRun, setLastRun] = useState<RunContext | null>(null);
   useEffect(() => {
@@ -334,13 +334,13 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     // A block's head takes its whole block with it; anything else refused says why.
     if (canRemove(spec, id)) {
       dispatch({ type: "REMOVE", id });
-      show("Step removed · Undo", true);
+      show("Step removed, Undo", true);
       return;
     }
     const block = blockOfHead(spec.steps.find((s) => s.id === id));
     if (block && canRemoveBlock(spec, id)) {
       dispatch({ type: "REMOVE", id });
-      show(`${BLOCK_REMOVED[block]} · Undo`, true);
+      show(`${BLOCK_REMOVED[block]}, Undo`, true);
       return;
     }
     show(removeRefusal(spec, id));
@@ -370,7 +370,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     // Checked against the flow as it was: an edit since then means the answer is about another flow.
     if (specRef.current !== before) { show("The flow changed while that link was checked: try again"); return; }
     dispatch({ type: "REWIRE", link, target });
-    show("Link changed · Undo", true);
+    show("Link changed, Undo", true);
   }, [readOnly, spec, meta, projectId, palette, state.checkedSpec, state.problems, show, dispatch]);
 
   const openSettings = useCallback(() => { dispatch({ type: "SELECT", id: null }); setSettingsOpen(true); }, [dispatch]);
@@ -683,7 +683,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
 
       {note ? (
         <div className="wf-toast" role="status" data-testid="wf-toast" key={note.id}>
-          <span>{note.message.replace(/ · Undo$/, "")}</span>
+          <span>{note.message.replace(/, Undo$/, "")}</span>
           {note.undo ? (
             <button type="button" className="wf-link" data-testid="wf-toast-undo"
                     onClick={() => { dispatch({ type: "UNDO" }); setNote(null); }}>Undo</button>

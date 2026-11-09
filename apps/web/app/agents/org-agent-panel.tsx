@@ -3,7 +3,7 @@
 /**
  * The Agent focus panel (org-view spec §4.4): one agent, from Teams or Flow. A right drawer
  * (a bottom sheet under 720px) with what it is doing, what waits with it, who it works with,
- * its window's numbers, the steps that name it, what it is missing — and the actions, each where
+ * its window's numbers, the steps that name it, what it is missing, and the actions, each where
  * its fact is: Talk, Passport, Give, Change in workflow, Move to….
  *
  * Rebalancing is never automated: next to the busiest agent's steps it says so, and the action
@@ -98,18 +98,18 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
             <dt title={`The last ${windowWords(days)}`}>{windowWords(days)}</dt>
             <dd className="ag-org-agent-window">
               {w && (w.done || w.failed) ? (
-                <span>{[w.done ? `Done ${w.done}` : "", w.failed ? `Failed ${w.failed}` : ""].filter(Boolean).join(" · ")}</span>
+                <span>{[w.done ? `Done ${w.done}` : "", w.failed ? `Failed ${w.failed}` : ""].filter(Boolean).join(", ")}</span>
               ) : null}
               {agent.busySeconds ? <span title="Time with work open in this window">Busy {busyWords(agent.busySeconds)}</span> : null}
               {board.totals.spendOk && (agent.spend.meteredUsd || agent.spend.planCalls) ? (
                 <span>
                   {[agent.spend.meteredUsd ? `${usdWords(agent.spend.meteredUsd)} metered` : "",
-                    agent.spend.planCalls ? `${agent.spend.planCalls} on plan` : ""].filter(Boolean).join(" · ")}
+                    agent.spend.planCalls ? `${agent.spend.planCalls} on plan` : ""].filter(Boolean).join(", ")}
                 </span>
               ) : null}
               {board.totals.spendOk && agent.models.length ? (
                 <span title={`Models it called.${agent.configuredModel ? ` Configured: ${agent.configuredModel}.` : ""}`}>
-                  {agent.models.slice(0, 2).map((m) => `${m.model} ${m.calls}`).join(" · ")}
+                  {agent.models.slice(0, 2).map((m) => `${m.model} ${m.calls}`).join(", ")}
                 </span>
               ) : null}
               {!(w && (w.done || w.failed)) && !agent.busySeconds && !agent.spend.meteredUsd && !agent.spend.planCalls

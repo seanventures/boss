@@ -5,7 +5,7 @@
  *
  * An ego graph, observed by default: the agent in the middle, whoever handed it work on the left
  * (people, other agents, BOSS), whoever it handed work to on the right. An edge is as thick as the
- * work that moved along it in the window and is labelled with how it mostly moved — the API's
+ * work that moved along it in the window and is labelled with how it mostly moved, the API's
  * label (`Picked by BOSS ×14`), never one composed here. Rebuilt history is dashed and says
  * `Reconstructed`. Declared shows the planned lines instead: who made it, who it reports to.
  * Pressing an edge lists the last ten pieces of work that crossed it.
@@ -199,7 +199,7 @@ export function PassportLineage({ projectId, actor, roleKey }: { projectId: stri
                     style={{ left: `${(((e.a.x + e.b.x) / 2) / W) * 100}%`, top: (e.a.y + e.b.y) / 2 }}
                     title={e.reconstructed ? "Rebuilt from older records; the handoff order may be approximate." : undefined}
                     onClick={() => void pick(e)}>
-              {e.label}{e.reconstructed ? " · Reconstructed" : ""}
+              {e.label}{e.reconstructed ? ", Reconstructed" : ""}
             </button>
           ))}
         </div>

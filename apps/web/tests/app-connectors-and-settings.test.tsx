@@ -283,7 +283,7 @@ describe("the Apps row's chip", () => {
     await press('[data-testid="fx-app-setup-chip-crun_1"]');
     expect($('[data-testid="tpl-setup-sheet"]')).toBeTruthy();
     expect($('[data-testid="tpl-tab-connectors"]').getAttribute("aria-selected")).toBe("true");
-    expect($('[data-testid="tpl-where-login-oauth"]').textContent).toContain("Staging · needs keys");
+    expect($('[data-testid="tpl-where-login-oauth"]').textContent).toContain("Staging, needs keys");
   });
 });
 

@@ -6,7 +6,7 @@
  *
  *   p95 as the line, avg as a faint line (both labelled inline, no legend box), a red tick on the
  *   baseline for every bucket with a failed probe, each deploy as a vertical rule, each incident
- *   as a shaded band, y in ms, x in local time. A bucket with no probes breaks the lines — a gap
+ *   as a shaded band, y in ms, x in local time. A bucket with no probes breaks the lines, a gap
  *   is drawn as a gap. Hover or arrow keys move a crosshair whose tooltip says the bucket's truth;
  *   `View as table` lists every bucket (§7). Charts redraw; they never animate.
  */
@@ -95,7 +95,7 @@ export function LatencyChart({ series, pins, incidents, fromIso, toIso, testId =
       setHover((v) => Math.min(series.length - 1, Math.max(0, (v ?? (d > 0 ? -1 : series.length)) + d)));
     } else if (e.key === "Escape") setHover(null);
   };
-  const tip = h ? `${dayhm(Date.parse(h.at), geo.long)} · ${h.n ? `${h.ok} of ${h.n} ok` : "No probes"}${h.p95 !== null ? ` · p95 ${ms(h.p95)}` : ""}${h.avg !== null ? ` · avg ${ms(h.avg)}` : ""}` : "";
+  const tip = h ? `${dayhm(Date.parse(h.at), geo.long)}, ${h.n ? `${h.ok} of ${h.n} ok` : "No probes"}${h.p95 !== null ? `, p95 ${ms(h.p95)}` : ""}${h.avg !== null ? `, avg ${ms(h.avg)}` : ""}` : "";
   const tipW = Math.max(120, tip.length * 5.6);
   const tipX = hover === null ? 0 : Math.min(W - tipW - 2, Math.max(L, geo.xs[hover] - tipW / 2));
 
@@ -127,7 +127,7 @@ export function LatencyChart({ series, pins, incidents, fromIso, toIso, testId =
             if (!Number.isFinite(s)) return null;
             const x0 = geo.x(s);
             const x1 = Math.max(x0 + 2, geo.x(e));
-            return <rect key={`inc-${i}`} className="obs-chart-incident" data-ongoing={inc.end ? undefined : "1"} x={x0} y={T} width={x1 - x0} height={PH}><title>{inc.end ? `Incident · ${hhmm(s)}–${hhmm(e)}` : `Ongoing since ${hhmm(s)}`}</title></rect>;
+            return <rect key={`inc-${i}`} className="obs-chart-incident" data-ongoing={inc.end ? undefined : "1"} x={x0} y={T} width={x1 - x0} height={PH}><title>{inc.end ? `Incident, ${hhmm(s)}, ${hhmm(e)}` : `Ongoing since ${hhmm(s)}`}</title></rect>;
           })}
           {/* grid + y axis */}
           {yTicks.map((v) => (
@@ -144,7 +144,7 @@ export function LatencyChart({ series, pins, incidents, fromIso, toIso, testId =
           {pins.map((p, i) => {
             const t = Date.parse(p.at);
             if (!Number.isFinite(t)) return null;
-            return <line key={`pin-${i}`} className="obs-chart-pin" data-tone={p.tone} x1={geo.x(t)} x2={geo.x(t)} y1={T} y2={T + PH}><title>{`Deployed ${p.sha7 ?? "—"} · ${hhmm(t)} · ${p.word}`}</title></line>;
+            return <line key={`pin-${i}`} className="obs-chart-pin" data-tone={p.tone} x1={geo.x(t)} x2={geo.x(t)} y1={T} y2={T + PH}><title>{`Deployed ${p.sha7 ?? "—"}, ${hhmm(t)}, ${p.word}`}</title></line>;
           })}
           {/* the lines */}
           <path className="obs-chart-avg" d={linePath(geo.xs, avg)} />

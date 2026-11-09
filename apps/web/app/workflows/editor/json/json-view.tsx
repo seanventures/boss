@@ -51,12 +51,12 @@ export function lineOfProblem(text: string, p: Problem): number | null {
 }
 
 /**
- * The workflow as JSON — editable, for every workflow, standards included.
+ * The workflow as JSON, editable, for every workflow, standards included.
  *
  * Top: the whole flow, compact, as a live preview whose nodes select steps. Below: the text,
  * with a line-number gutter and a red dot on each problem's line. The text is the store's
  * (`SET_JSON_TEXT` parses it; broken JSON never touches the spec); when the spec changes from
- * anywhere else — the inspector, undo — the text is re-serialised and the caret stays on the
+ * anywhere else, the inspector, undo, the text is re-serialised and the caret stays on the
  * same step.
  */
 export function JsonView({ state, palette, dispatch, changes, onChanges }: {
@@ -95,7 +95,7 @@ export function JsonView({ state, palette, dispatch, changes, onChanges }: {
     return out;
   }, [state.problems, text]);
 
-  /* ── caret ↔ selection ─────────────────────────────────────────────────────────── */
+  /* ── caret  selection ─────────────────────────────────────────────────────────── */
 
   /** The selection the caret itself made, so the effect below does not move the caret back. */
   const caretPick = useRef<string | null>(null);
@@ -310,7 +310,7 @@ export function JsonView({ state, palette, dispatch, changes, onChanges }: {
                 <button type="button" className="wf-json-problem" title={p.message}
                         disabled={line === null}
                         onClick={() => { if (line !== null) placeCaret(line, true); if (p.step_id) dispatch({ type: "SELECT", id: p.step_id }); }}>
-                  {line !== null ? `Line ${line} · ` : ""}{p.step_id ? `${p.step_id} · ` : ""}{p.message}
+                  {line !== null ? `Line ${line}, ` : ""}{p.step_id ? `${p.step_id}, ` : ""}{p.message}
                 </button>
               </li>
             );

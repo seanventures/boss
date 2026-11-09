@@ -35,7 +35,8 @@ def test_status_empty_board(client):
     lock = body["v1_lock"]
     assert set(lock) == {"in", "out", "cloud"}
     assert lock["in"] >= 65
-    assert lock["out"] >= 14
+    # 13, not 14: V1-OUT-010 is not in docs/product/V1_FEATURE_LOCK.md.
+    assert lock["out"] >= 13
     assert lock["cloud"] == 12
 
 
@@ -312,7 +313,8 @@ def test_release_planning_http_e2e_and_v1_lock_summary(client):
     body = lock.json()
     assert set(body) == {"in", "out", "cloud"}
     assert body["in"] >= 65
-    assert body["out"] >= 14
+    # 13, not 14: V1-OUT-010 is not in docs/product/V1_FEATURE_LOCK.md.
+    assert body["out"] >= 13
     assert body["cloud"] == 12
 
     status = client.get(

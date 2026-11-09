@@ -105,9 +105,9 @@ describe("the Context card", () => {
     expect(facts.map((f) => f.k)).toEqual(["Step", "Run", "Agent", "Workflow", "Policy", "Fingerprint", "When"]);
     expect(facts.find((f) => f.k === "Agent")?.v).toBe("Lane agent");
     expect(contextFacts({ ...CARD, agent: { name: "BOSS", kind: "deterministic", role: null, fingerprint: "deterministic" }, fingerprint: "deterministic" })
-      .find((f) => f.k === "Agent")?.v).toBe("BOSS · a deterministic step (no model)");
+      .find((f) => f.k === "Agent")?.v).toBe("BOSS, a deterministic step (no model)");
     expect(contextFacts({ ...CARD, agent: { name: "Acme screening agent", kind: "outside", role: null, fingerprint: null } })
-      .find((f) => f.k === "Agent")?.v).toBe("Acme screening agent · an outside agent");
+      .find((f) => f.k === "Agent")?.v).toBe("Acme screening agent, an outside agent");
     for (const f of facts) expect(f.v).not.toMatch(/\b(kgn|wfr|wfv)_/);
   });
 

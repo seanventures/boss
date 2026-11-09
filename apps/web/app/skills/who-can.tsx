@@ -31,7 +31,7 @@ const CREW_GROUP: Record<string, number> = {
 const GROUP_NAMES = ["Build", "Review", "Product", "Ops", "Others"];
 
 /**
- * ONE PRESS, ONE UNDOABLE ACTION, recorded as what it ADDED and REMOVED per ability — never as a
+ * ONE PRESS, ONE UNDOABLE ACTION, recorded as what it ADDED and REMOVED per ability, never as a
  * snapshot. Undo puts back exactly that against the holders as they are NOW: re-adds what the
  * action removed, removes what it added, and leaves every other holder alone. (A snapshot Undo
  * after Apply recommended restored a stale holder set and silently took Email from three agents.)
@@ -147,7 +147,7 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
       record({ label: "Apply recommended",
                deltas: [...byAbility].map(([ability, added]) => ({ ability, added, removed: [] })) });
     }
-    showToast("success", `Applied recommended · ${plural(r.data.granted.length, "grant")}`);
+    showToast("success", `Applied recommended, ${plural(r.data.granted.length, "grant")}`);
     setReloading(true);
     onReload();
   };
@@ -156,8 +156,8 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
     const holds = a.holders.includes(role);
     const rec = a.recommended.includes(role);
     const off = blocked(a);
-    const tip = off ? (holds ? "Held · not set up" : `Set up ${a.label} first`)
-      : `${agentName(role)} · ${a.label}${rec ? " · Recommended" : ""}`;
+    const tip = off ? (holds ? "Held, not set up" : `Set up ${a.label} first`)
+      : `${agentName(role)}, ${a.label}${rec ? ", Recommended" : ""}`;
     return (
       <GatedButton permission="agent_ability:assign" type="button" className="kit-cell" aria-pressed={holds} disabled={busy || (off && !holds)}
               data-held={holds || undefined} data-rec={(rec && !holds) || undefined} data-off={off || undefined}
@@ -196,7 +196,7 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
               <th aria-label="Agent" />
               {abilities.map((a) => (
                 <th key={a.key} scope="col">
-                  <button type="button" className="kit-col" data-tip={`${GROUP_LABEL[a.group] ?? a.group} · ${a.tip}`}
+                  <button type="button" className="kit-col" data-tip={`${GROUP_LABEL[a.group] ?? a.group}, ${a.tip}`}
                           data-testid={`kit-col-${a.key}`} onClick={() => onOpenAbility(a.key)}>
                     <AbilityIcon name={a.icon} size={16} />
                     <span className="kit-col-label">{a.label}</span>
@@ -215,7 +215,7 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
                   <tr data-testid={`kit-row-${row.role_key}`} data-focus={focusRole === row.role_key || undefined}>
                     <th scope="row">
                       <a className="kit-rowhead" href={`?area=workforce&role=${encodeURIComponent(row.role_key)}&tab=skills`}
-                         data-tip={`${row.display_name ?? row.role_key} · AI agent`}>
+                         data-tip={`${row.display_name ?? row.role_key}, AI agent`}>
                         <AgentAvatar agent={row.role_key} size={20} aiBadge={false} />
                         <span>{agentName(row.role_key)}</span>
                       </a>
@@ -230,7 +230,7 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
       </div>
       {more ? (
         <button type="button" className="kit-matrix-more" data-testid="kit-matrix-more"
-                onClick={() => wrap.current?.scrollBy?.({ left: 320, behavior: "smooth" })}>More →</button>
+                onClick={() => wrap.current?.scrollBy?.({ left: 320, behavior: "smooth" })}>More</button>
       ) : null}
       </div>
 

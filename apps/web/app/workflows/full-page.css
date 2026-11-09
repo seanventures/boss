@@ -1,3 +1,4 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* FULL PAGE (app/workflows/full-page.ts): one workflow, or one run, with the whole window.
    The console's sidebar, top bar and project strip step aside; the area's panel loses its
    frame so the flow, the stage table and the editor reach the window's edges. Tokens only. */
@@ -14,13 +15,13 @@
 /* ── The workflow ── */
 .dw-full { display: flex; flex-direction: column; min-height: calc(100vh - 60px); }
 .dw-full > .wf-editor { flex: 1; }
-.wf-editor[data-full-page="true"] .wf-topbar { position: sticky; top: 0; z-index: 6; background: var(--surface); }
+.wf-editor[data-full-page="true"] .wf-topbar { position: sticky; inset-block-start: 0; z-index: 6; background: var(--surface); }
 .wf-editor[data-full-page="true"] .wf-body { min-height: calc(100vh - 220px); }
 
 /* ── The run ── */
 .dw-run-full { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .dw-full-head {
-  position: sticky; top: 0; z-index: 6;
+  position: sticky; inset-block-start: 0; z-index: 6;
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
   padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--r-xl);
   background: var(--surface); box-shadow: var(--shadow-sm);

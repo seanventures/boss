@@ -35,7 +35,7 @@ export function PeoplePick({ people, chosen, onChange, label, single = false, te
           <span className="idn-sr">{label}</span>
           <select value="" onChange={(e) => { const v = e.target.value; if (v) onChange(single ? [v] : [...chosen, v]); }} data-testid={testId ? `${testId}-add` : undefined}>
             <option value="">{single ? (chosen.length ? "Change…" : "Choose…") : "+ Add"}</option>
-            {rest.map((p) => <option key={p.id} value={p.id}>{p.name}{p.email ? ` · ${p.email}` : ""}</option>)}
+            {rest.map((p) => <option key={p.id} value={p.id}>{p.name}{p.email ? `, ${p.email}` : ""}</option>)}
           </select>
         </label>
       ) : null}

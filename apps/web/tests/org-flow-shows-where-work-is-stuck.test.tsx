@@ -117,7 +117,7 @@ describe("D3 Flow shows where work is stuck", () => {
   it("nodes say Waiting and Failed; gates are `You ⏸`; Stuck now lists the waits and failures", async () => {
     await render(orgWire(STUCK));
     const node = $('[data-testid="ag-flow-node-quality"]')!;
-    expect(node.textContent).toContain("Waiting 1 · oldest 19m");
+    expect(node.textContent).toContain("Waiting 1, oldest 19m");
     expect(node.textContent).toContain("Failed 1");
     expect($('[data-testid="ag-flow-gate"]')!.textContent).toContain("1 waiting");
     expect($('path.ag-flow-edge[data-edge="quality>gate"]')!.dataset.gate).toBe("true");
@@ -134,7 +134,7 @@ describe("D3 Flow shows where work is stuck", () => {
   it("D5 every drawn edge says its volume, and its opacity follows it", async () => {
     await render(orgWire());
     const labels = $$(".ag-flow-edge-label").map((l) => l.textContent);
-    expect(labels).toEqual(expect.arrayContaining(["×31 · 2 failed ✕ · 1 waiting ⏸", "×19", "×6"]));
+    expect(labels).toEqual(expect.arrayContaining(["×31, 2 failed ✕, 1 waiting ", "×19", "×6"]));
     const op = (k: string) => Number($(`path.ag-flow-edge[data-edge="${k}"]`)!.style.strokeOpacity);
     expect(op("engineering>quality")).toBeGreaterThan(op("engineering>operations"));
   });
@@ -189,7 +189,7 @@ describe("D6 an ability that must be set up first", () => {
       step_gaps: [], missing_roles: 0, kit_ok: true, kit_reason: null } } } }), "/?area=workforce&view=org");
     await act(async () => { $('[data-testid="ag-orgteam-give-engineering"]')!.click(); });
     const link = $('[data-testid="ag-orgteam-setup-deploy-software_engineer"]')!;
-    expect(link.textContent).toContain("Set up first ↗");
+    expect(link.textContent).toContain("Set up first");
     expect(link.getAttribute("href")).toContain("area=skills");
     expect(link.getAttribute("href")).toContain("ability=deploy");
     expect($('[data-testid="ag-orgteam-give-deploy-software_engineer"]')).toBeNull();

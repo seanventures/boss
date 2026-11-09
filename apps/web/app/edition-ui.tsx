@@ -1,6 +1,6 @@
 /**
  * Presentational edition honesty chrome for Mission Control.
- * Pure UI — classification lives in `lib/edition.ts`.
+ * Pure UI, classification lives in `lib/edition.ts`.
  */
 
 import React, { type CSSProperties, type ReactNode } from "react";
@@ -38,7 +38,7 @@ export function EditionChip({ editionId }: { editionId?: string | null }) {
       style={
         community
           ? undefined
-          : { borderColor: "var(--amber, #d29922)", color: "var(--amber, #d29922)" }
+          : { borderColor: "var(--amber, var(--boss-c-d29922))", color: "var(--amber, var(--boss-c-d29922))" }
       }
     >
       <b>{name}</b>

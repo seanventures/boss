@@ -304,7 +304,7 @@ export function Library(props: LibraryProps) {
     } catch { /* non-browser */ }
   };
 
-  // `/` finds, `N` starts a new workflow — only while this area is the one on screen and the
+  // `/` finds, `N` starts a new workflow, only while this area is the one on screen and the
   // operator is not typing somewhere.
   useAreaKeydown((e: KeyboardEvent) => {
     if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
@@ -620,13 +620,13 @@ function LibraryCard(p: CardProps) {
           </span>
         ) : null}
         {schedules.length ? (
-          <span title={schedules.map((s) => s.describes + (s.enabled ? "" : " (paused)")).join(" · ")}
+          <span title={schedules.map((s) => s.describes + (s.enabled ? "" : " (paused)")).join(", ")}
                 data-testid={`wf-card-scheduled-${w.workflow_key}`}>
             <CalendarBlank size={14} aria-hidden />
           </span>
         ) : null}
         {w.last_run ? (
-          <span title={`Last run ${w.last_run.status} · ${formatDateTime(w.last_run.at)}`}>
+          <span title={`Last run ${w.last_run.status}, ${formatDateTime(w.last_run.at)}`}>
             <Clock size={14} aria-hidden /> {ageOf(w.last_run.at, p.now)}
           </span>
         ) : null}
@@ -780,12 +780,12 @@ function SchedulePopover({ workflow, schedules, projectId, busy, inputSchema, on
           {schedules.map((s) => (
             <li key={s.id} data-enabled={s.enabled}>
               <span title={s.last_missing?.length
-                // NOT STARTED, AND WHY — each missing item with its fix, as the schedule kept it.
+                // NOT STARTED, AND WHY, each missing item with its fix, as the schedule kept it.
                 ? `Not started last time. Missing: ${s.last_missing.map((m) =>
                     `${m.label}${m.fix ? ` (${m.fix})` : ""}`).join("; ")}`
                 : s.last_error ? `Last run failed: ${s.last_error}`
                 : s.next_run_at ? `Next ${formatDateTime(s.next_run_at)}` : undefined}>
-                <span data-user-text>{s.describes}</span>{s.enabled ? "" : " · paused"}
+                <span data-user-text>{s.describes}</span>{s.enabled ? "" : ", paused"}
                 {s.last_missing?.length || s.last_error ? (
                   <Warning size={12} aria-label="Did not start" data-testid={`wf-sched-refused-${s.id}`} />
                 ) : null}
@@ -882,7 +882,7 @@ function StepsTable({ projectId, customSteps, riskFloor, busy, onRemoveStep, onS
                   <td>
                     <span className="wf-risk" data-risk={risk}
                           title={!c.usable ? (c.unusable_reason ?? "Cannot run")
-                            : c.approval_forced_manual ? `Risk ${c.risk_tier} — always needs a person`
+                            : c.approval_forced_manual ? `Risk ${c.risk_tier}, always needs a person`
                             : `Risk ${c.risk_tier}`} />
                   </td>
                   <td className="wf-libsteps-used" title="Workflows that place this step">Used in {n}</td>
@@ -894,7 +894,7 @@ function StepsTable({ projectId, customSteps, riskFloor, busy, onRemoveStep, onS
                     </GatedButton>
                     <GatedButton permission="workflow:create" type="button" className="wf-btn wf-btn-sm wf-btn-icon" aria-label={`Remove ${c.label}`}
                             disabled={!!busy || n > 0}
-                            title={n > 0 ? "In use — take it out of those workflows first" : undefined}
+                            title={n > 0 ? "In use, take it out of those workflows first" : undefined}
                             data-testid={`wf-step-remove-${c.step_key}`}
                             onClick={() => onRemoveStep(c.step_key)}>
                       <Trash size={14} aria-hidden />

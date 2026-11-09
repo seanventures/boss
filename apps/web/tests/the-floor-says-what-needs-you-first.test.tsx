@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /**
  * The Floor says what needs you first (factory spec §4.2): NEEDS YOU, BUILDING, SHIPPED,
- * STOPPED, in that order. A PR card never merges in place (`Review ↗`, plus `Open PR ↗`); a
+ * STOPPED, in that order. A PR card never merges in place (`Review`, plus `Open PR ↗`); a
  * checks-failed card offers `Retry` and `Waive…`; the waiver sheet cannot waive `App starts`,
  * says why, and will not send without a reason.
  */
@@ -58,13 +58,13 @@ describe("the cards", () => {
     expect($$("[data-att-card]")[0]?.getAttribute("data-att-id")).toBe("build:crun_cf:gates");
   });
 
-  it("a PR card is Review ↗, never merged in place, and opens the PR", async () => {
+  it("a PR card is Review, never merged in place, and opens the PR", async () => {
     await mount(view());
     const card = $("[data-testid='ag-att-dec_pr842']")!;
-    expect(card.querySelector("[data-testid=ag-att-review]")?.textContent).toContain("Review ↗");
+    expect(card.querySelector("[data-testid=ag-att-review]")?.textContent).toContain("Review");
     expect(card.querySelector("[data-testid=ag-att-approve]")).toBeNull();
     expect(card.querySelector("[data-testid=ag-att-open-pr]")?.getAttribute("href")).toBe("https://github.com/acme/app/pull/842");
-    expect(card.querySelector("[data-testid=ag-att-build]")?.textContent).toBe("Invoice export · PR open");
+    expect(card.querySelector("[data-testid=ag-att-build]")?.textContent).toBe("Invoice export, PR open");
   });
 
   it("a plan card shows the architect's face and approves in place", async () => {
@@ -74,14 +74,14 @@ describe("the cards", () => {
     expect(card.querySelector("[data-role-key=chief_architect]")).not.toBeNull();
     expect(card.querySelector("[data-testid=ag-att-approve]")).not.toBeNull();
     await click(card.querySelector("[data-testid=ag-att-details]"));
-    expect(card.querySelector("[data-testid=ag-att-open-plan]")?.textContent).toContain("Open plan ↗");
+    expect(card.querySelector("[data-testid=ag-att-open-plan]")?.textContent).toContain("Open plan");
   });
 
   it("a checks-failed card offers Retry and Waive…", async () => {
     await mount(view());
     const card = $("[data-testid='ag-att-build:crun_cf:gates']")!;
     expect(card.querySelector(".ag-att-title")?.textContent).toBe("2 checks failed");
-    expect(card.querySelector("[data-testid=ag-att-build]")?.textContent).toBe("Team inbox · Review · round 2");
+    expect(card.querySelector("[data-testid=ag-att-build]")?.textContent).toBe("Team inbox, Review · round 2");
     expect(card.querySelector("[data-testid=ag-att-retry]")?.textContent).toBe("Retry");
     expect(card.querySelector("[data-testid=ag-att-waive]")?.textContent).toBe("Waive…");
     expect(card.querySelector("[data-testid=ag-att-waive]")?.getAttribute("title")).toBe("Open the PR anyway. The merge still needs you.");
@@ -112,10 +112,10 @@ describe("the cards", () => {
     const sent = waive.mock.calls[0][0];
     expect(sent.getAll("gate")).toEqual(["code_review_passed", "security_clean"]);
     expect(sent.get("reason")).toBe("Reviewed by hand");
-    expect(toasts).toContain("2 checks waived · opening PR");
+    expect(toasts).toContain("2 checks waived, opening PR");
   });
 
-  it("a budget card offers Raise budget ↗ and Retry, with the BOSS glyph", async () => {
+  it("a budget card offers Raise budget and Retry, with the BOSS glyph", async () => {
     const { attentionBudget } = await import("./_helpers/factory-fixtures");
     await mount(view(floor({ attention: [attentionBudget()] })));
     const card = $("[data-testid='ag-att-build:crun_br:budget']")!;

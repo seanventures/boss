@@ -25,11 +25,11 @@ describe("the Models numbers", () => {
   it("the stat strip says the totals, each with its sparkline", async () => {
     await openObs("?view=models");
     expect(stat("calls")).toBe("1,284");
-    expect(stat("tokens")).toBe("4.1M in · 610k out");
+    expect(stat("tokens")).toBe("4.1M in, 610k out");
     expect(stat("spend")).toBe("$3.12 est.");
     expect($("[data-testid='obs-stat-spend-value'] [title]")?.getAttribute("title")).toBe("Some prices were estimated, not billed");
     expect(stat("p95")).toBe("18 s");
-    expect(stat("errors")).toBe("2.1% · 27");
+    expect(stat("errors")).toBe("2.1%, 27");
     for (const id of ["calls", "tokens", "spend", "p95", "errors"]) {
       expect($(`[data-testid='obs-spark-${id}'] path.obs-spark-line`)).not.toBeNull();
     }
@@ -134,7 +134,7 @@ describe("the Models numbers", () => {
     const rec = await openObs("?view=models");
     expect($$("[data-testid='obs-failed-row']")).toHaveLength(2);
     // Two of the 27 failed calls are listed: the head says so, and links to all of them.
-    expect($("[data-testid='obs-failed-logs']")?.textContent?.trim()).toBe("2 of 27 · All ↗");
+    expect($("[data-testid='obs-failed-logs']")?.textContent?.trim()).toBe("2 of 27, All");
     expect($("[data-testid='obs-failed-head-count']")).toBeNull();
     expect($$("[data-testid='obs-route-row']")).toHaveLength(8);
     const sel = $("[data-testid='obs-route-outcome']") as HTMLSelectElement;

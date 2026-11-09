@@ -3,10 +3,10 @@
 /**
  * THE ROLE EDITOR (mockup c, IDENTITY.md §6.10, §6.11, §9.4).
  *
- *   left   — name, description, where it can be bound, what it was cloned from, its versions;
- *   centre — the permission matrix: category → resource → one toggle per action. Critical keys
+ *   left  , name, description, where it can be bound, what it was cloned from, its versions;
+ *   centre, the permission matrix: category → resource → one toggle per action. Critical keys
  *            are red, step-up keys carry a key, keys you do not hold are dashed and locked;
- *   right  — the diff and the impact preview the API computes (who, which pages, how many API
+ *   right , the diff and the impact preview the API computes (who, which pages, how many API
  *            operations and MCP tools, which agents' grants change).
  *
  * Saving a critical addition needs the role's name typed back; the save itself asks for a fresh
@@ -38,7 +38,7 @@ function Toggle({ p, cell, readOnly, why, onFlip }: { p: Permission; cell: Cell;
   const meta = PERMISSION_META[p];
   const off = readOnly || cell.locked;
   const tip = cell.error ? `You don't hold “${meta.title}”` : cell.locked ? "You don't hold this" : readOnly ? why
-    : `${meta.title}${meta.critical ? " · critical" : ""}${meta.stepUp ? " · step-up at use" : ""}`;
+    : `${meta.title}${meta.critical ? ", critical" : ""}${meta.stepUp ? ", step-up at use" : ""}`;
   return (
     <button type="button" className="idn-tg" aria-pressed={cell.on} aria-disabled={off || undefined}
       data-crit={meta.critical || undefined} data-locked={cell.locked || undefined} data-change={cell.change ?? undefined}
@@ -53,7 +53,7 @@ function Toggle({ p, cell, readOnly, why, onFlip }: { p: Permission; cell: Cell;
   );
 }
 
-/** "2 direct, 1 through Builders and 3 through Release" — every group by name, with its count. */
+/** "2 direct, 1 through Builders and 3 through Release", every group by name, with its count. */
 export function impactSplit(direct: number, viaGroups: { group: string; count: number }[]): string {
   const parts = [`${direct} direct`, ...viaGroups.map((g) => `${g.count} through ${g.group}`)];
   return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
@@ -135,7 +135,7 @@ function DeleteRole({ role, roles, onClose }: { role: AccessRole; roles: AccessR
               {targets.map((r) => {
                 const reach = grantReach(held, r);
                 return <option key={r.id} value={r.id} disabled={!reach.ok} title={reach.ok ? undefined : reach.reason}>
-                  {reach.ok ? r.name : `${r.name} · ${reach.reason}`}
+                  {reach.ok ? r.name : `${r.name}, ${reach.reason}`}
                 </option>;
               })}
             </select>
@@ -183,7 +183,7 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
   const versionsRef = useRef<HTMLDivElement>(null);
 
   const readOnly = role.builtin || !manage.allowed;
-  const readOnlyWhy = role.builtin ? "Built-in roles are read-only · clone it" : manage.reason;
+  const readOnlyWhy = role.builtin ? "Built-in roles are read-only, clone it" : manage.reason;
   const held = mirrored ? org?.permissions ?? new Set<Permission>() : null;
   const base = useMemo(() => new Set(role.permissions), [role.permissions]);
   const added = useMemo(() => ROLE_PERMS.filter((p) => draft.has(p) && !base.has(p)), [draft, base]);
@@ -286,7 +286,7 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
           <h1>
             {role.name}
             <span className="idn-tag">{role.builtin ? "built-in" : "custom"}</span>
-            {dirty ? <span className="idn-tag warn" data-testid="unsaved">unsaved · v{role.version} → v{role.version + 1}</span> : <span className="idn-tag">v{role.version}</span>}
+            {dirty ? <span className="idn-tag warn" data-testid="unsaved">unsaved, v{role.version} → v{role.version + 1}</span> : <span className="idn-tag">v{role.version}</span>}
           </h1>
         </div>
         <span className="idn-spacer" />
@@ -346,7 +346,7 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
           {role.cloned_from ? (
             <div className="idn-field">
               <span className="idn-label">Started from</span>
-              <span className="idn-chip"><CopySimple size={12} aria-hidden /> {role.cloned_from.name}{role.cloned_from.at ? ` · ${shortDate(role.cloned_from.at)}` : ""}</span>
+              <span className="idn-chip"><CopySimple size={12} aria-hidden /> {role.cloned_from.name}{role.cloned_from.at ? `, ${shortDate(role.cloned_from.at)}` : ""}</span>
             </div>
           ) : null}
           <div className="idn-hr" />
@@ -357,13 +357,13 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
                 <button key={v.version} type="button" onClick={() => loadVersion(v)} disabled={readOnly}
                   title={readOnly ? readOnlyWhy : `Load v${v.version} as a new draft`}>
                   <b>v{v.version}</b>
-                  <span>{nameMap.get(v.by)?.name ?? v.by} · {shortDate(v.at)} · <span data-copy="data" title={v.summary}>{plainText(v.summary)}</span></span>
+                  <span>{nameMap.get(v.by)?.name ?? v.by}, {shortDate(v.at)}, <span data-copy="data" title={v.summary}>{plainText(v.summary)}</span></span>
                 </button>
-              )) : <span className="idn-dim">v1 · built in</span>}
+              )) : <span className="idn-dim">v1, built in</span>}
             </div>
           </div>
           <div className="idn-hr" />
-          <p className="idn-tipline" data-copy="prose">You can only add permissions you hold yourself. <LockSimple size={11} aria-hidden /> marks ones you don't.</p>
+          <p className="idn-tooltipline" data-copy="prose">You can only add permissions you hold yourself. <LockSimple size={11} aria-hidden /> marks ones you don't.</p>
         </aside>
 
         <section className="idn-mx" aria-label="Permissions">
@@ -440,14 +440,14 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
           </section> : null}
 
           <section className="idn-imp" aria-labelledby="idn-impact-h" aria-live="polite" data-testid="impact">
-            <span className="idn-eyebrow" id="idn-impact-h">Impact preview</span>
+            <span className="idn-area-name" id="idn-impact-h">Impact preview</span>
             {preview ? (
               <>
                 <div className="idn-bigt">Affects <span>{preview.affected.people.length} {preview.affected.people.length === 1 ? "person" : "people"}</span></div>
                 <div className="idn-dim idn-small" data-testid="impact-split">
                   {impactSplit(preview.affected.direct, preview.affected.via_groups)}
                   {preview.counts && (preview.counts.service_accounts || preview.counts.agents)
-                    ? ` · ${preview.counts.service_accounts} service ${preview.counts.service_accounts === 1 ? "account" : "accounts"} · ${preview.counts.agents} ${preview.counts.agents === 1 ? "agent" : "agents"}`
+                    ? `, ${preview.counts.service_accounts} service ${preview.counts.service_accounts === 1 ? "account" : "accounts"}, ${preview.counts.agents} ${preview.counts.agents === 1 ? "agent" : "agents"}`
                     : ""}
                 </div>
                 <div className="idn-row idn-imp-people">
@@ -465,7 +465,7 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
                 {preview.affected.agents.map((a) => (
                   <div key={a.id} className="idn-ip">
                     <AgentAvatar agent={a.id.replace(/^agt_/, "")} size={24} tip={a.name} />
-                    <span>{a.name} · {a.grants} {a.grants === 1 ? "grant" : "grants"}</span>
+                    <span>{a.name}, {a.grants} {a.grants === 1 ? "grant" : "grants"}</span>
                     <span className={`idn-r ${a.change ? "idn-bad" : "idn-ok"}`} data-copy="data">{a.change ? changeWords(a.change) : "unchanged"}</span>
                   </div>
                 ))}

@@ -38,7 +38,7 @@ describe("live coordination", () => {
           stage: "coding", area: "code_tasks", createdAt: "2026-09-24T11:00:00Z",
           active: true }] }} />);
     expect(html).toContain("area=work&amp;task=tsk_456");
-    expect(html).toContain("coding · running");
+    expect(html).toContain("coding, running");
     expect(html).toContain("started 2026-09-24 11:00 UTC");
   });
 

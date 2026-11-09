@@ -3,7 +3,7 @@
 /**
  * THE IDENTITY SCREENS' TWO NON-HAPPY STATES, one definition each:
  *
- *   - ErrorState: a read failed. It says so in words, with Try again — never an empty list that
+ *   - ErrorState: a read failed. It says so in words, with Try again, never an empty list that
  *     pretends there is nothing, and never a raw code (lib/identity/words.ts).
  *   - EmptyState: there really is nothing. It says what this is for and offers the next step.
  */
@@ -54,7 +54,7 @@ export function EmptyState({ icon, title, children, action, compact = false, tes
 
 /**
  * A page whose access could not be checked (the identity API is unreachable): calm, says what
- * happened, offers Retry — and the page itself is not drawn (fail closed).
+ * happened, offers Retry, and the page itself is not drawn (fail closed).
  */
 export function AccessUnchecked({ page }: { page: string }) {
   const refresh = useConsoleRefresh();

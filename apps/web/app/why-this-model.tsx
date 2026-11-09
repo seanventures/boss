@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * "Why this model" (docs/product/MODEL_ROUTER.md): one route the model router chose — the tier
- * as a chip, the source · model, and on demand the reasons in the order they applied. Shared by
+ * "Why this model" (docs/product/MODEL_ROUTER.md): one route the model router chose, the tier
+ * as a chip, the source, model, and on demand the reasons in the order they applied. Shared by
  * the build cockpit and a workflow step, so both say it the same way.
  */
 import React, { useEffect, useId, useState } from "react";

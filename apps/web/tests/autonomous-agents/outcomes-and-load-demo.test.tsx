@@ -91,7 +91,7 @@ describe("Load demo", () => {
     expect(writes(calls, "/v1/ambient/demo/load").map((c) => c.body)).toEqual([{ project_id: "p1" }]);
     expect(calls.filter((c) => c.path === "/v1/ambient/work-items").length).toBeGreaterThan(lists);
     expect(calls.filter((c) => c.path === "/v1/ambient/scorecard").length).toBeGreaterThan(cards);
-    expect(toasts.join(" ")).toContain("Demo loaded: 3 · skipped CVE squad");
+    expect(toasts.join(" ")).toContain("Demo loaded: 3, skipped CVE squad");
   });
 
   it("says why when the API refuses", async () => {

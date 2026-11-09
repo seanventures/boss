@@ -3,13 +3,13 @@
 /**
  * ONE CARD TO SAY YES TO A BOSS SELF-FIX (docs/product/BOSS_FIXES_ITSELF.md §10.2).
  *
- *   Install a BOSS self-fix?                                Tier 3 · host effect ⓘ
+ *   Install a BOSS self-fix?                                Tier 3, host effect ⓘ
  *   fix(deploy): a release that leaves the resources' project retires its app there
- *   WHAT BROKE · WHY (and the rejected first guess) · CONFIDENCE
- *   CHANGE   files +58 −1 [View diff] · host effect
- *   TESTS    ✗→✓ NEW test_…py · 41 affected · P0 tier · no test weakened
+ *   WHAT BROKE, WHY (and the rejected first guess), CONFIDENCE
+ *   CHANGE   files +58 −1 [View diff], host effect
+ *   TESTS    ✗→✓ NEW test_…py, 41 affected, P0 tier, no test weakened
  *   REVIEW   code ✓ security ✓ (other engine) regression ✓ consistency ✓
- *   COST     $3.12 · 14 min · engine
+ *   COST     $3.12, 14 min, engine
  *   ON APPROVE  Installs on this one-box and resumes the step.   UNDO …
  *
  * Drawn inside its Approvals row for `recommendation.action === "self_fix.install"`; the answer
@@ -58,7 +58,7 @@ export function SelfFixCard({ card, projectId, selfFixId }: { card: Card; projec
   return (
     <div className="sfx-card" data-testid="sfx-card">
       <div className="sfx-card-head">
-        <span className="sfx-card-eyebrow" title="BOSS found a bug in its own code, fixed it and tested it. It installs only if you approve.">
+        <span className="sfx-card-area-name" title="BOSS found a bug in its own code, fixed it and tested it. It installs only if you approve.">
           Install a BOSS self-fix?
         </span>
         <span className="cap-badge tone-amber" data-testid="sfx-card-tier"
@@ -81,13 +81,13 @@ export function SelfFixCard({ card, projectId, selfFixId }: { card: Card; projec
           {card.why || "—"}
           {rejected.length ? (
             <span className="sfx-rejected" data-testid="sfx-card-rejected"
-                  title={rejected.map((r) => `${r.hypothesis ?? ""}${r.why ? ` — ${r.why}` : ""}`).join("\n")}>
+                  title={rejected.map((r) => `${r.hypothesis ?? ""}${r.why ? `, ${r.why}` : ""}`).join("\n")}>
               {" "}First guess rejected ⓘ
             </span>
           ) : null}
         </dd>
         <dt>Confidence</dt>
-        <dd data-testid="sfx-card-confidence" title={(card.confidence?.reasons ?? []).join(" · ")}>
+        <dd data-testid="sfx-card-confidence" title={(card.confidence?.reasons ?? []).join(", ")}>
           {card.confidence?.level ?? "—"}
         </dd>
         <dt>Change</dt>
@@ -129,7 +129,7 @@ export function SelfFixCard({ card, projectId, selfFixId }: { card: Card; projec
         </dd>
         <dt>Cost</dt>
         <dd data-testid="sfx-card-cost">
-          {usd(card.cost_usd)}{card.minutes ? ` · ${Math.round(card.minutes)} min` : ""}{card.engine ? ` · ${card.engine}` : ""}
+          {usd(card.cost_usd)}{card.minutes ? `, ${Math.round(card.minutes)} min` : ""}{card.engine ? `, ${card.engine}` : ""}
         </dd>
         <dt>On approve</dt>
         <dd data-testid="sfx-card-on-approve" title={card.on_approve}>Installs on this one-box and resumes the step</dd>

@@ -108,6 +108,6 @@ describe("cloud accounts (was the provider configuration workspace)", () => {
     const route = { match: /^\/v1\/infra\/cloud$/, etag: true, reply: () => ({ ...cloudFixture("accounts"), partial: ["costs"] }) };
     m = await mountCloud("?area=infra&view=cloud", [route]);
     await settle(() => !!$("inf-cloud-partial"), "partial");
-    expect($("inf-cloud-partial")?.textContent).toBe("Some data missing · costs");
+    expect($("inf-cloud-partial")?.textContent).toBe("Some data missing, costs");
   });
 });

@@ -67,7 +67,7 @@ describe("the first build agreement", () => {
     await open();
     expect(calls.map((c) => c.url)).toEqual(["/api/builds/preview"]);
     expect($("[role=dialog]")?.textContent).toContain(BRIEF);
-    expect($("[role=dialog]")?.textContent).toContain("Bounded software change · version 3");
+    expect($("[role=dialog]")?.textContent).toContain("Bounded software change, version 3");
     expect($("[role=dialog]")?.textContent).toContain("A person must release this step");
     expect($("[role=dialog]")?.textContent).toContain("Not recorded yet");
     await click($("[data-testid=work-agreement-confirm]"));

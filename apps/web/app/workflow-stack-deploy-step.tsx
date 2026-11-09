@@ -4,13 +4,13 @@
  * A workflow's deploy step, when the run's repository ships to a STACK target.
  *
  * Observed on boss-1 (wfr_79c63a78b34546a3b927): the deploy step of a repository with an active
- * stack target was rendered as the per-app container flow — "Where it ships · needs you first",
- * a host picker and Set target, then "Approve the release" — a path Community has paused, and
+ * stack target was rendered as the per-app container flow, "Where it ships, needs you first",
+ * a host picker and Set target, then "Approve the release", a path Community has paused, and
  * the stack deployment only appeared after that first approval, asking for a second.
  *
  * Now there is ONE approval: the stack deployment's own decision is the step's gate (the engine
- * no longer holds the step first). So this renders that deployment — its plan, the Approve /
- * Reject its server-decided `actions` offer, live progress, Open app, Roll back — through the
+ * no longer holds the step first). So this renders that deployment, its plan, the Approve /
+ * Reject its server-decided `actions` offer, live progress, Open app, Roll back, through the
  * same view and the same decision API Infra uses. Nothing here decides which buttons exist.
  */
 import React, { useRef } from "react";
@@ -37,10 +37,10 @@ export function stackDeployOf(step: { stack_deploy?: unknown }): StepStackDeploy
 export function StackDeployStep({ stack, actor, onChanged }: {
   stack: StepStackDeploy; actor: string; onChanged?: () => void;
 }) {
-  const where = [stack.target_name, stack.environment].filter(Boolean).join(" · ");
+  const where = [stack.target_name, stack.environment].filter(Boolean).join(", ");
   const host = stack.host ? `${stack.host}${stack.host_address ? ` (${stack.host_address})` : ""}` : "";
   const deploymentId = stack.stack_deployment_id || stack.deployment?.id || "";
-  // Re-read the run only when the deployment's STATUS moves — the view polls every few seconds
+  // Re-read the run only when the deployment's STATUS moves, the view polls every few seconds
   // while it is live, and re-reading every run on each poll would be a page of requests a tick.
   const lastStatus = useRef<string>(String(stack.deployment?.status ?? ""));
   return (
@@ -49,7 +49,7 @@ export function StackDeployStep({ stack, actor, onChanged }: {
         Ships to stack target <strong>{where || stack.target_id || "this repository's target"}</strong>
         {host ? <> on <strong>{host}</strong></> : null}, as its <code>boss.deploy.yaml</code> declares.
         {deploymentId
-          ? " Approving this deployment is the release approval — there is no other."
+          ? " Approving this deployment is the release approval, there is no other."
           : " BOSS plans the deployment from the build's pull request as soon as this step runs; "
             + "its approval is the release approval."}
       </p>

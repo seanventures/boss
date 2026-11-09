@@ -2,8 +2,8 @@
 
 /**
  * FACTORY › REPOSITORIES (multi-repo screen 2): which of the org's allowed repositories this
- * project uses, each with a role hint for planning (Contracts · Backend · Frontend · Deploy
- * config …), and the project's mode — One repo (every app builds in one repository, today's
+ * project uses, each with a role hint for planning (Contracts, Backend, Frontend, Deploy
+ * config …), and the project's mode, One repo (every app builds in one repository, today's
  * behaviour) or Several repos (each app maps its components to repositories).
  *
  * Remove is refused while an app uses the repository (409 in_use: its message names the apps);
@@ -154,7 +154,7 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
                         </td>
                         <td className="mr-ui-mut mr-hide-narrow" data-user-text>{used.length ? used.map((a) => a.app_name).join(", ") : "—"}</td>
                         <td className="mr-ui-mono mr-ui-dim mr-hide-narrow">
-                          {r.base_branch || "main"}{r.is_default ? <span className="mr-ui-dim" title="The project's default repository"> · default</span> : null}
+                          {r.base_branch || "main"}{r.is_default ? <span className="mr-ui-dim" title="The project's default repository">, default</span> : null}
                         </td>
                         <td><StatePill state={r.state} /></td>
                         <td className="end">
@@ -197,12 +197,12 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
                     }}>
               <option value="">{view.addable.length ? "Add a repository…" : "Nothing more to add"}</option>
               {view.addable.map((a) => (
-                <option key={a.id} value={a.id}>{a.full_name}{a.language ? ` · ${a.language}` : ""}</option>
+                <option key={a.id} value={a.id}>{a.full_name}{a.language ? `, ${a.language}` : ""}</option>
               ))}
             </select>
             <span className="mr-ui-sub" data-testid="mr-prj-add-tip">
               Lists only repositories allowed in <a className="mr-ui-link" href={registryLink}>Repo and models</a>
-              {notAllowed ? <> · {notAllowed} more there {notAllowed === 1 ? "is" : "are"} not allowed.</> : "."}
+              {notAllowed ? <>, {notAllowed} more there {notAllowed === 1 ? "is" : "are"} not allowed.</> : "."}
             </span>
           </div>
           {/* SAID FROM THE SAME FACTS AS THE ROWS. With no allow-list (a project on a GitHub token)
@@ -226,7 +226,7 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
             <div><b>Access follows the app.</b> A run gets a GitHub grant for exactly its app&apos;s repositories, never the whole project or organization.</div>
           </div>
           <div className="mr-ui-card" style={{ padding: 14 }}>
-            <div className="mr-ui-eyebrow" style={{ marginBottom: 6 }}>Apps in this project</div>
+            <div className="mr-ui-area-name" style={{ marginBottom: 6 }}>Apps in this project</div>
             {apps.length ? (
               <div data-testid="mr-prj-apps">
                 {apps.map((a) => (
@@ -235,7 +235,7 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
                     <div>
                       <b data-user-text>{a.app_name}</b>
                       <small>{[a.chain || (multi ? "No components yet" : "One repository"),
-                               a.deploys_with ? `deploys with ${a.deploys_with}` : ""].filter(Boolean).join(" · ")}</small>
+                               a.deploys_with ? `deploys with ${a.deploys_with}` : ""].filter(Boolean).join(", ")}</small>
                     </div>
                     <a className="mr-ui-link" href={areaHref(MULTIREPO_PLACES.components(a.app_key))}
                        title={`${a.app_name}'s components`}>Open</a>

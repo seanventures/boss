@@ -289,7 +289,7 @@ describe("(g) the Passport's certificate explains itself", () => {
       expect(tip.split(/\s+/).length, tip).toBeLessThanOrEqual(14);
     }
     expect(Object.keys(CERT_TIPS)).toHaveLength(8);
-    expect($('[data-testid="ag-cert-identity"]')?.textContent).toBe("Local · tokens coming");
+    expect($('[data-testid="ag-cert-identity"]')?.textContent).toBe("Local, tokens coming");
     await act(async () => { $('[data-testid="ag-copy-id"]')!.click(); });
     await act(async () => { $('[data-testid="ag-copy-version"]')!.click(); });
     expect(writes[0]).toBe(PASSPORT.agent_id);

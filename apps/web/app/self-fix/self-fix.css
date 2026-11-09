@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* ── BOSS fixes itself (docs/product/BOSS_FIXES_ITSELF.md §10) ──
    sfx- classes only; design-system tokens only. The strip on a parked step, the approval card, the
    Self-fixes page with its lineage, the Send sheet and Govern › Self-fix. Page width from the
@@ -18,10 +23,10 @@
 
 .sfx-card { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; min-width: 0; }
 .sfx-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.sfx-card-eyebrow { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.sfx-card-area-name { font-size: 0.72rem; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--faint); font-family: inherit;}
 .sfx-card-title { margin: 0; }
 .sfx-card-grid { display: grid; grid-template-columns: minmax(5rem, max-content) minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 0.85rem; }
-.sfx-card-grid dt { color: var(--faint); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding-top: 2px; }
+.sfx-card-grid dt { color: var(--faint); font-size: 0.72rem; font-weight: 700; letter-spacing: 0; text-transform: none; padding-top: 2px; }
 .sfx-card-grid dd { margin: 0; color: var(--ink-soft); min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
 .sfx-card-foot { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
 .sfx-plus { color: var(--green); font-variant-numeric: tabular-nums; }
@@ -38,7 +43,7 @@
 .sfx-spark-bar { width: 5px; border-radius: 1px; background: var(--accent); }
 .sfx-spark-bar[data-empty] { background: var(--surface-3); }
 .sfx-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-.sfx-table th { text-align: left; color: var(--faint); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.sfx-table th { text-align: left; color: var(--faint); font-size: 0.72rem; font-weight: 700; letter-spacing: 0; text-transform: none; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .sfx-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: baseline; }
 .sfx-table td .ag-btn { margin-left: 8px; }
 .sfx-row-open { text-align: left; }
@@ -50,7 +55,7 @@
 .sfx-one-title { margin: 0; font-size: 1rem; color: var(--ink); }
 .sfx-lineage { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .sfx-lineage-step { display: grid; grid-template-columns: 7rem minmax(0, 1fr) auto; gap: 12px; padding: 6px 0; border-bottom: 1px dotted var(--border); font-size: 0.85rem; }
-.sfx-lineage-label { color: var(--faint); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.sfx-lineage-label { color: var(--faint); font-size: 0.74rem; font-weight: 700; letter-spacing: 0; text-transform: none; }
 .sfx-lineage-detail { color: var(--ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sfx-lineage-step[data-state="done"] .sfx-lineage-label { color: var(--green); }
 .sfx-lineage-step[data-state="now"] .sfx-lineage-label { color: var(--accent-text); }

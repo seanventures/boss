@@ -39,7 +39,7 @@ describe("Model routing", () => {
     const meter = body.querySelector('[role="meter"]')!;
     expect(meter.getAttribute("aria-valuenow")).toBe("8");
     expect(q(body, "mr-headroom-state-claude_code")?.textContent).toContain("Near limit");
-    expect(q(body, "mr-jev")?.textContent).toBe("Jev · paused");
+    expect(q(body, "mr-jev")?.textContent).toBe("Jev, paused");
     expect(q(body, "mr-week")?.textContent).toContain("112");
     expect(body.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain("Fast 34%");
   });

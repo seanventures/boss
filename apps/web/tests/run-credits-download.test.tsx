@@ -70,14 +70,14 @@ describe("Run Credits", () => {
     const person = el.querySelector('[data-testid="ag-credits-cast"] li[data-role-key=""]')!;
     expect(person.querySelector(".ag-credits-name strong")?.textContent).toBe("A person");
     expect(person.querySelector(".ag-face")?.getAttribute("data-variant")).toBe("person");
-    expect(creditsText(theirs, "ceo", "Ship it")).toContain("• A person — Approved deploy");
+    expect(creditsText(theirs, "ceo", "Ship it")).toContain("• A person, Approved deploy");
     expect(creditsText(theirs, "ceo", "Ship it")).not.toMatch(/• You/);
     expect(creditsCard(theirs, "Ship it").faces.find((f) => !f.roleKey)?.name).toBe("A person");
     // The credit can name its person outright, and then that decides.
     const named = toChain({ ...shipItChain(), credits: [{ role_key: null, person_id: "ceo", line: "Approved deploy" }] });
-    expect(creditsText({ ...named, accountable: "cto" }, "ceo", "Ship it")).toContain("• You — Approved deploy");
+    expect(creditsText({ ...named, accountable: "cto" }, "ceo", "Ship it")).toContain("• You, Approved deploy");
     // The viewer's own run still says You.
-    expect(creditsText(CHAIN, "ceo", "Ship it")).toContain("• You — Approved deploy");
+    expect(creditsText(CHAIN, "ceo", "Ship it")).toContain("• You, Approved deploy");
   });
 
   it("downloads a PNG of this run's credits", async () => {
@@ -105,8 +105,8 @@ describe("Run Credits", () => {
     await act(async () => (el.querySelector('[data-testid="ag-credits-copy-text"]') as HTMLButtonElement).click());
     await settle();
     expect(wrote[0]).toBe(creditsText(CHAIN, "ceo", "Ship it"));
-    expect(wrote[0].split("\n")[0]).toBe("Ship it — made by 7 agents");
-    expect(wrote[0]).toContain("Built with BOSS · open source");
+    expect(wrote[0].split("\n")[0]).toBe("Ship it, made by 7 agents");
+    expect(wrote[0]).toContain("Built with BOSS, open source");
   });
 
   it("opens by itself once, when a run you are watching finishes", () => {
@@ -135,7 +135,7 @@ describe("Run Credits", () => {
 
   it("puts `Made by n agents` under the PR and opens the same credits", () => {
     const el = render(<PrMadeBy chain={CHAIN} runId="wfr_1" projectId="p1" viewer="ceo" title="Ship it" />);
-    expect(el.querySelector('[data-testid="ag-pr-made-by"]')?.textContent).toContain("Made by 7 agents · accountable: you");
+    expect(el.querySelector('[data-testid="ag-pr-made-by"]')?.textContent).toContain("Made by 7 agents, accountable: you");
     act(() => (el.querySelector('[data-testid="ag-pr-credits"]') as HTMLButtonElement).click());
     expect(document.querySelector('[data-testid="ag-credits"]')).not.toBeNull();
   });

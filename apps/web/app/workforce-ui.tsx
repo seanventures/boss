@@ -29,7 +29,7 @@ import { openRoom } from "../lib/agent-converse";
 import { useAreaKeydown } from "../lib/area-keys";
 
 /**
- * The Agents area: Live, Organization, Directory, Activity (and Panels when there is one) —
+ * The Agents area: Live, Organization, Directory, Activity (and Panels when there is one) , 
  * agents-home spec §3.
  *
  * Live is the default: what needs you, what is moving, what got done, who is idle. Directory is
@@ -91,7 +91,7 @@ function areaIsAgents(): boolean {
 }
 
 /**
- * Agents: every agent, keyed by `role_key` — the thing a workflow step's `captain` names, so
+ * Agents: every agent, keyed by `role_key`, the thing a workflow step's `captain` names, so
  * the roster, the team, a step's agent picker and an agent's "Used in" all count the same.
  * One "+ New agent" makes an agent wherever it is pressed.
  */
@@ -101,7 +101,7 @@ export function WorkforceArea(
     chart?: OrgChart;
     /** The Studio catalog: Profiles, Panels, and orphan definitions offered as templates. */
     studio?: AgentStudioFeed;
-    /** The signed-in actor every agent write is made as — never a literal. */
+    /** The signed-in actor every agent write is made as, never a literal. */
     actor: string;
     /** The view before the URL is read (a server render has no URL): Live unless told. */
     initialView?: AgentsView;
@@ -206,12 +206,12 @@ export function WorkforceArea(
   const all = useMemo(
     () => (workforce.roster ?? workforce.agents ?? []).filter((a) => !deleted.has(a.id)),
     [workforce.roster, workforce.agents, deleted]);
-  const retired = useMemo(() => all.filter((a) => identityOf(a.id, a.name).lifecycle === "retired"), [all, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
+  const retired = useMemo(() => all.filter((a) => identityOf(a.id, a.name).lifecycle === "retired"), [all, identities]); // eslint-disable-line react-hooks/exhaustive-deps, the store version
   const everyone = useMemo(() => all.filter((a) => !retired.includes(a)), [all, retired]);
   const panels = studio?.panels ?? [];
   const orphans = useMemo(() => studio ? orphanProfiles(studio, everyone.map((a) => a.id)) : [],
                           [studio, everyone]);
-  const matches = useMemo(() => matchAgents(everyone, search), [everyone, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
+  const matches = useMemo(() => matchAgents(everyone, search), [everyone, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps, the store version
   // Activity filters by one agent: the one the search names exactly, or the only match.
   const searchedRole = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -219,7 +219,7 @@ export function WorkforceArea(
     const exact = matches.find((a) => a.id === q || a.name.toLowerCase() === q
       || (identityOf(a.id, a.name).callsign ?? "").toLowerCase() === q);
     return exact?.id ?? (matches.length === 1 ? matches[0].id : null);
-  }, [matches, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps -- the store version
+  }, [matches, search, identities]); // eslint-disable-line react-hooks/exhaustive-deps, the store version
 
   // THE SAME COUNTS AS THE PILL: working agents from presence, needs-you from attention items.
   const working = useMemo(() => [...live.values()].filter((p) => isLive(p) && p.state !== "needs_you").length, [live]);
@@ -302,14 +302,14 @@ export function WorkforceArea(
                   onClick={() => setView("directory")}>{everyone.length} agents</button>
           {working ? (
             <>
-              <span aria-hidden> · </span>
+              <span aria-hidden>, </span>
               <button type="button" className="ag-home-count" data-tone="accent" title="See the work in Live"
                       onClick={() => goLiveSection("ag-live-work")}>{working} working</button>
             </>
           ) : null}
           {needs ? (
             <>
-              <span aria-hidden> · </span>
+              <span aria-hidden>, </span>
               <button type="button" className="ag-home-count" data-tone="amber" data-testid="ag-home-needs"
                       title="Go to the first thing that needs you"
                       onClick={() => goLiveSection("ag-live-needs", true)}>
@@ -420,7 +420,7 @@ export function WorkforceArea(
 /**
  * THE ORG CHART, EDITABLE.
  *
- * It was derived entirely from observed handoffs — who passed work to whom in the last week.
+ * It was derived entirely from observed handoffs, who passed work to whom in the last week.
  * Honest, useful, and completely unchangeable: nobody could say "the QA lead reports to the
  * captain" or add a seat that has not been filled yet. A measurement nobody can act on is a
  * report, and this one had no effect anywhere else in the product.
@@ -564,7 +564,7 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
 
   if (!chartNow.apiReachable) {
     return <p className="detail" role="alert">
-      The team is unavailable{chartNow.blockedReason ? ` — ${chartNow.blockedReason}` : ""}.
+      The team is unavailable{chartNow.blockedReason ? `, ${chartNow.blockedReason}` : ""}.
     </p>;
   }
 
@@ -706,7 +706,7 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
                         data-testid={`org-bench-work-${n.id}`}>Work</button>
                 {/* ONLY ROLES IN THE PLAN. This listed chartNow.tree, which falls back to the
                     observed tree when nothing is planned, so a role could be told to report to
-                    somebody the plan did not contain — and then rendered at the top level with
+                    somebody the plan did not contain, and then rendered at the top level with
                     a parent named beside it. */}
                 <select aria-label={`Reports to for ${displayName(n)}`}
                         value={placementTargets[n.id] ?? ""}

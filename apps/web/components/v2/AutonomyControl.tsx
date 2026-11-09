@@ -1,14 +1,14 @@
 "use client";
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import { GatedButton } from "../gated";
 import React, { useState } from "react";
 import { apiWrite } from "../../lib/api-write";
 import { actorWords } from "../../lib/actor-words";
 
 /**
- * The autonomy switch — Supervised or Full auto.
+ * The autonomy switch, Supervised or Full auto.
  *
  * This is the one control in the console that reduces human oversight, so it behaves
  * differently from every other:

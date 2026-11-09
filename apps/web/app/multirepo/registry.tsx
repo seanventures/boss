@@ -3,9 +3,9 @@
 /**
  * REPO AND MODELS › REPOSITORIES (multi-repo screen 1): every repository the GitHub App can
  * reach, as GitHub lists it. A tick is "BOSS may use it"; projects then choose from the ticked
- * ones. Ticks are kept here until "Save · N allowed" sends the whole set (PUT
- * /v1/github/repos/allowed), and the server runs the three checks (Read · Write · PRs) on each
- * newly allowed row — nothing says Working until all three pass. Archived repositories cannot be
+ * ones. Ticks are kept here until "Save, N allowed" sends the whole set (PUT
+ * /v1/github/repos/allowed), and the server runs the three checks (Read, Write, PRs) on each
+ * newly allowed row, nothing says Working until all three pass. Archived repositories cannot be
  * ticked. Unticking removes a repository from every project; running work keeps its grant until
  * it ends.
  *
@@ -133,16 +133,16 @@ export function RepositoryRegistry({ projectId }: { projectId: string }) {
     <section ref={ref} className="mr-reg" id="su-repositories" data-testid="mr-registry" data-focused={focused || undefined}
              aria-label="Repositories">
       <div>
-        <div className="mr-ui-eyebrow">Repositories</div>
+        <div className="mr-ui-area-name">Repositories</div>
         <p className="mr-ui-lead">Every repository the GitHub App can reach. Tick the ones BOSS may use; projects then choose from these.</p>
       </div>
       <div className="mr-ui-card">
         <div className="mr-ui-card-h">
           <span className="mr-ui-gh" aria-hidden><GithubLogo size={18} weight="bold" /></span>
           <div>
-            <h3 data-testid="mr-reg-title">{account ? `${kindWord} · ${account}` : kindWord}</h3>
+            <h3 data-testid="mr-reg-title">{account ? `${kindWord}, ${account}` : kindWord}</h3>
             <div className="mr-ui-sub" data-testid="mr-reg-sub">
-              {account ? <>Installed on <b data-user-text>{account}</b>{conn?.account_type === "User" ? "" : " organization"} · </> : null}
+              {account ? <>Installed on <b data-user-text>{account}</b>{conn?.account_type === "User" ? "" : " organization"}, </> : null}
               reaches {items.length} {items.length === 1 ? "repository" : "repositories"}
               <TipQ tip="The list comes from GitHub, not from BOSS. To reach more repositories, change the installation in GitHub, then Refresh." />
             </div>
@@ -264,7 +264,7 @@ export function RepositoryRegistry({ projectId }: { projectId: string }) {
             )}
             <div className="mr-ui-foot">
               <span className="mr-ui-sub" data-testid="mr-reg-foot">
-                {ticked.size} allowed · ticking runs the three checks first · unticking removes it from every project;
+                {ticked.size} allowed, ticking runs the three checks first, unticking removes it from every project;
                 work already running keeps its grant until it ends.
               </span>
               {changed ? (
@@ -274,7 +274,7 @@ export function RepositoryRegistry({ projectId }: { projectId: string }) {
               <GatedButton permission="repository:register" className="ag-btn ag-btn-primary" data-testid="mr-reg-save"
                            disabled={!changed || !!busy} title={changed ? "Save which repositories BOSS may use" : "Nothing changed"}
                            onClick={() => void save()}>
-                {busy === "save" ? "Saving…" : `Save · ${ticked.size} allowed`}
+                {busy === "save" ? "Saving…" : `Save, ${ticked.size} allowed`}
               </GatedButton>
             </div>
           </>

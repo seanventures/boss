@@ -14,7 +14,7 @@ export function WorkAgreement({ agreement }: { agreement: Agreement }) {
     <p className={styles.lead}>This starts planning from your brief. The workflow below governs the next steps.</p>
     <h3>Your brief</h3><p className={styles.brief}>{a.input.directive}</p>
     <dl className={styles.facts}>
-      <dt>Workflow</dt><dd>{a.workflow_name} · version {a.workflow_version}</dd>
+      <dt>Workflow</dt><dd>{a.workflow_name}, version {a.workflow_version}</dd>
       <dt>Repository</dt><dd>{a.repository?.full_name ?? "No unambiguous repository target recorded"}</dd>
       <dt>Base branch</dt><dd>{a.repository?.base_branch ?? "Not recorded yet"}</dd>
       <dt>Base commit</dt><dd>{a.repository?.base_revision ?? "Not read yet"}</dd>
@@ -28,7 +28,7 @@ export function WorkAgreement({ agreement }: { agreement: Agreement }) {
     <p className={styles.note}>Starts at: {a.steps.find((s) => s.id === a.entry_step)?.label ?? a.entry_step}</p>
     <ol className={styles.steps}>{a.steps.map((s) => <li key={s.id}><strong>{s.label}</strong>
       {s.does ? <p>{s.does}</p> : null}
-      {s.runs ? <p className={styles.note}>Runs: {s.runs}{s.agent ? ` · responsible agent: ${s.agent}` : ""}</p> : null}
+      {s.runs ? <p className={styles.note}>Runs: {s.runs}{s.agent ? `, responsible agent: ${s.agent}` : ""}</p> : null}
       {s.approval_note ? <p className={styles.note}>{s.approval_note}</p> : null}
       {s.next.length ? <p className={styles.note}>Then: {s.next.map((id) => a.steps.find((step) => step.id === id)?.label ?? id).join(", ")}</p> : <p className={styles.note}>End of this path</p>}
       {s.produces?.length ? <p className={styles.note}>Produces: {s.produces.join(", ")}</p> : null}
@@ -40,7 +40,7 @@ export function WorkAgreement({ agreement }: { agreement: Agreement }) {
       <dt>Reservation</dt><dd>{dollars(a.financial.reservation_usd_micros)}</dd>
       <dt>New authorized limit</dt><dd>{dollars(a.financial.authorized_limit_usd_micros)}</dd>
     </dl>
-    {a.financial.history ? <p className={styles.note}>Prior completed runs ({a.financial.history.runs}): ${a.financial.history.low_usd.toFixed(2)}–${a.financial.history.high_usd.toFixed(2)} API-equivalent value. {a.financial.history_basis} This is historical usage, not a quote, cash charge, reservation or spending cap.</p> : <p className={styles.note}>No completed-run cost history recorded.</p>}
+    {a.financial.history ? <p className={styles.note}>Prior completed runs ({a.financial.history.runs}): ${a.financial.history.low_usd.toFixed(2)}, ${a.financial.history.high_usd.toFixed(2)} API-equivalent value. {a.financial.history_basis} This is historical usage, not a quote, cash charge, reservation or spending cap.</p> : <p className={styles.note}>No completed-run cost history recorded.</p>}
     <h3>Bounds</h3><ul>{a.bounds.map((x) => <li key={x}>{x}</li>)}</ul>
     <h3>Still unknown</h3><ul>{a.unknowns.map((x) => <li key={x}>{x}</li>)}</ul>
     {a.start_anyway.length ? <p>Readiness exceptions you chose: {a.start_anyway.join(", ")}</p> : null}

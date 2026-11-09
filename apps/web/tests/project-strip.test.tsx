@@ -35,7 +35,7 @@ describe("the strip never claims an empty company", () => {
 
   it("shows the REASON it failed, not a shrug", () => {
     // "Could not load" sends the operator to the API to discover what this line already knows.
-    expect(SRC).toContain("Could not load software projects — {error}");
+    expect(SRC).toContain("Could not load software projects, {error}");
   });
 
   it("distinguishes 'no projects' from 'the filter is hiding them'", () => {

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * WHO IS SIGNED IN, AND WHAT THEY HOLD — mirrored for the console's UX (IDENTITY.md §6.5).
+ * WHO IS SIGNED IN, AND WHAT THEY HOLD, mirrored for the console's UX (IDENTITY.md §6.5).
  *
  * The provider holds the frozen contract's answers (/v1/identity/me and /me/permissions at the
  * org and the active project) and exposes them through can(): every area, page and action asks
@@ -54,7 +54,7 @@ export type IdentityProviderProps = {
   projectId?: string | null;
   stub?: boolean;
   /**
-   * The identity API could not answer (503 identity_unavailable — before S1 lands, or an
+   * The identity API could not answer (503 identity_unavailable, before S1 lands, or an
    * outage). The console then does not mirror: every control stays usable, a banner says so,
    * and the API decides each call exactly as it always does.
    */
@@ -130,8 +130,8 @@ export function IdentityProvider({ me: initialMe, org: initialOrg, project: init
     mirrored ? checkWith(org, project, pid === undefined ? projectId : pid, permission) : UNMIRRORED.check(permission, pid),
   [org, project, projectId, mirrored]);
 
-  // THE SHEET IS FOR A PRESS, NEVER FOR A PAGE VIEW (lib/user-gesture.ts). Every step-up path —
-  // apiWrite, callAction, useGuardedCall, the client forms — asks through here, so this is the
+  // THE SHEET IS FOR A PRESS, NEVER FOR A PAGE VIEW (lib/user-gesture.ts). Every step-up path , 
+  // apiWrite, callAction, useGuardedCall, the client forms, asks through here, so this is the
   // one place that decides: a write the person did not start in the last few seconds (an
   // effect, a timer, a background sync) is answered "not confirmed" at once and its caller
   // shows its own inline state. "Confirm it's you" no longer appears on a plain refresh.

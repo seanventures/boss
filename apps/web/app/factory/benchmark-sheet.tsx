@@ -2,7 +2,7 @@
 
 /**
  * `+ New build ▾ › From a benchmark` (factory spec §4.1, walk D12): the pinned example apps as
- * Factory rows — a name, `Build`, and `Open ↗` once one exists. The words follow the Factory's
+ * Factory rows, a name, `Build`, and `Open ` once one exists. The words follow the Factory's
  * copy rules (labels of three words or fewer; the long sentences live in tooltips), where the
  * old catalogue spoke in paragraphs about "governed projects".
  */
@@ -58,7 +58,7 @@ export function BenchmarkSheetBody({ benchmarks, builtIds, projectId, actor, own
         const builtRun = got?.run_id ?? b.built?.run_id ?? null;
         const built = !!builtRun || builtIds.has(b.id);
         const preview = b.built?.preview_id ? previewWebHref(b.built.preview_id) : null;
-        const about = [b.tagline, b.summary, b.focus.length ? `Exercises ${b.focus.join(", ")}` : ""].filter(Boolean).join(" · ");
+        const about = [b.tagline, b.summary, b.focus.length ? `Exercises ${b.focus.join(", ")}` : ""].filter(Boolean).join(", ");
         return (
           <li key={b.id} className="fx-bench-row" data-testid={`fx-bench-${b.id}`}>
             <span className="fx-bench-name ag-trunc" title={about} data-user-text>{b.name}</span>

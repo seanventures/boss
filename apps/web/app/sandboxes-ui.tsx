@@ -5,7 +5,7 @@ import type { SandboxSummary, SandboxExecResult, SandboxStats, SandboxHost } fro
 import { apiWrite } from "../lib/api-write";
 import { GatedButton, useGate } from "../components/gated";
 
-// Same-origin proxies (Next route handlers) — the browser never calls the
+// Same-origin proxies (Next route handlers), the browser never calls the
 // control-plane API directly (avoids CORS + keeps the API off the browser).
 async function apiTree(id: string): Promise<{ tree: string[] }> {
   const r = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/tree`);
@@ -73,14 +73,14 @@ function Console({ sandboxId }: { sandboxId: string }) {
   const run = useCallback(async () => {
     if (!cmd.trim() || busy) return;
     if (breakGlass && !reason.trim()) {
-      setLog((l) => [{ cmd, out: "⚠ break-glass requires a reason.", bg: true }, ...l]);
+      setLog((l) => [{ cmd, out: " break-glass requires a reason.", bg: true }, ...l]);
       return;
     }
     setBusy(true);
     try {
       const r: SandboxExecResult = await apiExec(sandboxId, cmd, breakGlass, reason || undefined);
       const out = r.blocked
-        ? `🔒 ${r.detail}`
+        ? ` ${r.detail}`
         : `${r.stdout ?? ""}${r.stderr ? "\n" + r.stderr : ""}`.trim() || `(exit ${r.exit_code})`;
       setLog((l) => [{ cmd, out, bg: breakGlass }, ...l]);
     } catch (e: unknown) {
@@ -95,19 +95,19 @@ function Console({ sandboxId }: { sandboxId: string }) {
       <div className="sbx-console-bar">
         <input className="sbx-cmd" value={cmd} onChange={(e) => setCmd(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && execGate.allowed && run()}
-          placeholder="git status · ls · mvn -q test · cat <file>" spellCheck={false} />
+          placeholder="git status, ls, mvn -q test, cat <file>" spellCheck={false} />
         <GatedButton permission="sandbox:exec" className="cap-btn primary" onClick={run} disabled={busy}>{busy ? "…" : "Run"}</GatedButton>
       </div>
       <label className="sbx-bg-toggle">
         <input type="checkbox" checked={breakGlass} onChange={(e) => setBreakGlass(e.target.checked)} />
-        Break-glass (raw shell — audited)
+        Break-glass (raw shell, audited)
       </label>
       {breakGlass ? (
         <input className="sbx-reason" value={reason} onChange={(e) => setReason(e.target.value)}
-          placeholder="Reason (required — recorded in the audit log)" />
+          placeholder="Reason (required, recorded in the audit log)" />
       ) : null}
       <p className="detail">
-        Helper commands run freely. A raw shell needs break-glass + a reason and emits an elevated audit event.{" "}
+        Helper commands run freely. A raw shell needs break-glass + a reason and emits a privileged audit event.{" "}
         <button type="button" className="sbx-helpers-toggle" onClick={() => setShowHelpers((v) => !v)}>
           {showHelpers ? "Hide" : "Show"} allowed commands{helpers ? ` (${helpers.commands.length})` : ""}
         </button>
@@ -141,7 +141,7 @@ function Console({ sandboxId }: { sandboxId: string }) {
       <div className="sbx-console-out">
         {log.map((e, i) => (
           <div key={i} className="sbx-out-entry">
-            <div className={`sbx-out-cmd${e.bg ? " bg" : ""}`}>{e.bg ? "⚠ " : "$ "}{e.cmd}</div>
+            <div className={`sbx-out-cmd${e.bg ? " bg" : ""}`}>{e.bg ? "Warning" : "$ "}{e.cmd}</div>
             <pre className="sbx-out-text">{e.out}</pre>
           </div>
         ))}
@@ -161,7 +161,7 @@ function Telemetry({ sandboxId }: { sandboxId: string }) {
   return (
     <div className="sbx-telemetry">
       <div className="sbx-tel-head">
-        <span className="sbx-block-title">Resources <span className="detail">— is it CPU/memory-bound?</span></span>
+        <span className="sbx-block-title">Resources <span className="detail">,  is it CPU/memory-bound?</span></span>
         <button className="cap-btn" onClick={load} disabled={busy}>{busy ? "…" : "↻ Refresh"}</button>
       </div>
       {s ? (
@@ -170,8 +170,8 @@ function Telemetry({ sandboxId }: { sandboxId: string }) {
           <span><b>Memory</b> {s.mem_usage ?? "—"} {s.mem_pct ? `(${s.mem_pct})` : ""}</span>
           <span><b>PIDs</b> {s.pids ?? "—"}</span>
           <span><b>Block I/O</b> {s.block_io ?? "—"}</span>
-          <span className={s.oom_killed ? "sbx-tel-alert" : ""}><b>OOM-killed</b> {s.oom_killed ? "YES ⚠" : "no"}</span>
-          <span><b>Container</b> {s.container_status ?? "—"}{s.exit_code != null ? ` · exit ${s.exit_code}` : ""}</span>
+          <span className={s.oom_killed ? "sbx-tel-alert" : ""}><b>OOM-killed</b> {s.oom_killed ? "YES " : "no"}</span>
+          <span><b>Container</b> {s.container_status ?? "—"}{s.exit_code != null ? `, exit ${s.exit_code}` : ""}</span>
         </div>
       ) : <p className="detail">loading telemetry…</p>}
     </div>
@@ -195,7 +195,7 @@ function LogsPanel({ sandboxId }: { sandboxId: string }) {
         <button className={`cap-btn${tab === "serial" ? " primary" : ""}`} onClick={() => setTab("serial")}>Guest console</button>
         <button className="cap-btn" onClick={load} disabled={busy} style={{ marginLeft: "auto" }}>{busy ? "…" : "↻"}</button>
       </div>
-      {logs?.unavailable ? <p className="detail" style={{ color: "#f85149" }}>⚠ {logs.unavailable}</p> : null}
+      {logs?.unavailable ? <p className="detail" style={{ color: "var(--boss-c-f85149)" }}> {logs.unavailable}</p> : null}
       <pre className="sbx-out-text" style={{ maxHeight: 340, overflow: "auto", whiteSpace: "pre-wrap" }}>
         {text || (busy ? "loading…" : "(empty)")}
       </pre>
@@ -222,7 +222,7 @@ function SandboxDetail({ sb, onBack }: {
       <div className="sbx-detail-head">
         <div>
           <h3>{sb.title || sb.repo}</h3>
-          <p className="detail"><code>{sb.sandbox_id}</code> · {sb.tenant_id} · {sb.repo}</p>
+          <p className="detail"><code>{sb.sandbox_id}</code>, {sb.tenant_id}, {sb.repo}</p>
         </div>
         <div className="sbx-detail-actions">
           <span className={`cap-badge tone-${statusTone(sb.status)}`}>{sb.status}</span>
@@ -237,8 +237,8 @@ function SandboxDetail({ sb, onBack }: {
 
       <div className="sbx-meta">
         <span><b>Engine</b> {sb.meta?.engine ?? "—"}</span>
-        <span><b>Diff</b> {ds ? `${ds.files_changed} files · +${ds.additions}/−${ds.deletions}` : "—"}</span>
-        <span><b>Tests</b> <span className={`cap-badge tone-${sb.meta?.tests_passed ? "green" : "muted"}`}>{sb.meta?.tests_passed ? "passed" : "failed / —"}</span></span>
+        <span><b>Diff</b> {ds ? `${ds.files_changed} files, +${ds.additions}/−${ds.deletions}` : "—"}</span>
+        <span><b>Tests</b> <span className={`cap-badge tone-${sb.meta?.tests_passed ? "green" : "muted"}`}>{sb.meta?.tests_passed ? "passed" : "failed / , "}</span></span>
         <span><b>Age</b> {Math.round(sb.age_seconds / 60)}m</span>
       </div>
 
@@ -262,7 +262,7 @@ function SandboxDetail({ sb, onBack }: {
         </div>
       </div>
 
-      <div className="sbx-block-title">Logs <span className="detail">— code‑agent log + guest boot console from the retained VM</span></div>
+      <div className="sbx-block-title">Logs <span className="detail">,  code‑agent log + guest boot console from the retained VM</span></div>
       <LogsPanel sandboxId={sb.sandbox_id} />
     </div>
   );
@@ -275,7 +275,7 @@ export function SandboxesHome({ sandboxes, apiReachable, unavailable, host }: {
   host?: SandboxHost;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
-  if (!apiReachable) return <p className="detail">Execution plane unavailable — API unreachable.</p>;
+  if (!apiReachable) return <p className="detail">Execution plane unavailable, API unreachable.</p>;
 
   if (!host?.connected) {
     return (
@@ -290,7 +290,7 @@ export function SandboxesHome({ sandboxes, apiReachable, unavailable, host }: {
     );
   }
 
-  // Connected micro-VM host — show it as proof + live capacity/running.
+  // Connected micro-VM host, show it as proof + live capacity/running.
   const hostBanner = (
     <div className="panel" style={{ padding: 16, display: "grid", gap: 8, marginBottom: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -304,7 +304,7 @@ export function SandboxesHome({ sandboxes, apiReachable, unavailable, host }: {
         <span><b style={{ color: "var(--ink)" }}>{host?.capacity ?? "—"}</b> capacity</span>
       </div>
       <p className="detail" style={{ margin: 0 }}>
-        Projects run <b>inside single‑tenant Firecracker micro‑VMs</b> here — jailed, cgroup‑capped,
+        Projects run <b>inside single‑tenant Firecracker micro‑VMs</b> here, jailed, cgroup‑capped,
         internet‑only egress, destroyed after each task. VMs are ephemeral &amp; isolated by design (not
         browsable); the <b>running</b> count rises while a project executes.
       </p>
@@ -332,7 +332,7 @@ export function SandboxesHome({ sandboxes, apiReachable, unavailable, host }: {
                 <span className="detail">{Math.round(s.age_seconds / 60)}m</span>
               </div>
               <div className="sbx-card-title">{s.title || s.repo}</div>
-              <div className="sbx-card-repo">{s.tenant_id} · {s.repo}</div>
+              <div className="sbx-card-repo">{s.tenant_id}, {s.repo}</div>
               <div className="detail">{s.meta?.engine ?? ""} {s.meta?.diff_summary ? `· ${s.meta.diff_summary.files_changed} files` : ""}</div>
             </button>
           ))}

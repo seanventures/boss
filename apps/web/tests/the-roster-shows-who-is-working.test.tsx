@@ -165,10 +165,10 @@ describe("the presence pill and the crew", () => {
       { role_key: "release_manager", state: "working", line: "checklist" },
       { role_key: "pm", state: "idle", line: "Last: PRD" },
     ] });
-    expect(pillWords(crewOf(l))).toBe("2 working · 1 needs you");
+    expect(pillWords(crewOf(l))).toBe("2 working, 1 needs you");
     await render(<PresencePill projectId="p1" live={l} />);
     const pill = $('[data-testid="ag-presence-pill"]');
-    expect(pill?.textContent).toContain("2 working · 1 needs you");
+    expect(pill?.textContent).toContain("2 working, 1 needs you");
     expect(pill?.getAttribute("title")).toBe("Agents working now");
   });
 

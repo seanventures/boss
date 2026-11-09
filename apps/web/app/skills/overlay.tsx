@@ -41,7 +41,7 @@ const STACK: object[] = [];
 let closedAt = 0;
 
 /** True for a moment after an overlay closed: a page that closes itself on Esc (the agent
- *  Passport) must not take a second, quick Esc — or the closing one's echo — as its own. */
+ *  Passport) must not take a second, quick Esc, or the closing one's echo, as its own. */
 export function overlayJustClosed(within = 400): boolean {
   return STACK.length > 0 || Date.now() - closedAt < within;
 }
@@ -81,7 +81,7 @@ function useOverlayFocus(ref: React.RefObject<HTMLElement | null>, onClose: () =
       const back = opener.current as HTMLElement | null;
       if (back && typeof back.focus === "function" && back.isConnected) back.focus({ preventScroll: true });
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once per open
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps, once per open
   useIsoLayoutEffect(() => {
     const el = ref.current;
     const target = el?.querySelector<HTMLElement>("[data-autofocus]") ?? el?.querySelector<HTMLElement>("h3") ?? el;
@@ -90,7 +90,7 @@ function useOverlayFocus(ref: React.RefObject<HTMLElement | null>, onClose: () =
       target.setAttribute("tabindex", "-1");
     }
     target.focus?.({ preventScroll: true });
-  }, [where]); // eslint-disable-line react-hooks/exhaustive-deps -- on open and on a move
+  }, [where]); // eslint-disable-line react-hooks/exhaustive-deps, on open and on a move
   useEffect(() => {
     // Esc closes THIS overlay (the top one) and nothing under it: the agent Passport closes
     // itself on an Esc nobody handled, so an unmarked one took the whole page down with it.
@@ -105,7 +105,7 @@ function useOverlayFocus(ref: React.RefObject<HTMLElement | null>, onClose: () =
     };
     document.addEventListener("keydown", key);
     return () => document.removeEventListener("keydown", key);
-  }, [trap]); // eslint-disable-line react-hooks/exhaustive-deps -- ref is stable
+  }, [trap]); // eslint-disable-line react-hooks/exhaustive-deps, ref is stable
 }
 
 /** A drawer: a column beside the content when wide, a bottom/side sheet over it when not.

@@ -461,7 +461,7 @@ describe("a phase that was restarted says so", () => {
     // thirty minutes of work thrown away when a lease expired. That is how a 46-minute build
     // became a forensic exercise instead of a legible one.
     expect(CT_SRC).toContain('data-testid={g.replayed ? "ct-phase-replayed" : undefined}');
-    expect(CT_SRC).toContain("restarted — the previous attempt was interrupted");
+    expect(CT_SRC).toContain("restarted, the previous attempt was interrupted");
   });
 
   it("only marks the SECOND appearance of a phase", () => {
@@ -560,7 +560,7 @@ describe("managing runs, not just watching them", () => {
     // REWRITTEN: the button no longer calls the worker-only pump (403 on authed installs); it
     // re-checks each unfinished run. The protected behaviour is the same — it says what it did.
     expect(DW2).toContain(
-      "Nothing could move yet — each run is waiting on a person or on work in flight.");
+      "Nothing could move yet, each run is waiting on a person or on work in flight.");
     expect(DW2).toContain("Put ${requeued} step");
   });
 

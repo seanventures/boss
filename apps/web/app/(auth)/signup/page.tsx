@@ -2,7 +2,7 @@ import { loadAuthOptions } from "../auth-options";
 import { SignUp } from "./signup";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Create account · BOSS" };
+export const metadata = { title: "Create account, BOSS" };
 
 export default async function SignUpPage() {
   const options = await loadAuthOptions();

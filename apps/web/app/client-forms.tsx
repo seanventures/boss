@@ -156,7 +156,7 @@ function ActionFormPending(): React.ReactElement | null {
  * boundary exists, so the page crashed), a refused request the action never checked looked
  * exactly like success, and a success changed the page somewhere below the fold with no word
  * that it had. This renders the action's ActionResult: pending while it runs, then a toast and
- * an inline line — the sentence from the server on failure, with what to do about it.
+ * an inline line, the sentence from the server on failure, with what to do about it.
  *
  * tests/server-actions-return-results.test.ts fails on any `<form action={xAction}>` that does
  * not come through here.

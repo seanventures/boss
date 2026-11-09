@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* ── Graph area (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5) ──
    kg- classes only. The kind colours below are the ONLY literal colours the area may use (§5.3,
    §6.4): the canvas reads them from these custom properties, everything else is console tokens.
@@ -5,61 +10,61 @@
 
 .kg, .kg-strip, .kg-life {
   /* Kind colours (operator decisions, binding). */
-  --kg-interface: #7dd3fc;
-  --kg-class: #5b9dff;
-  --kg-method: #94a3c8;
-  --kg-rule: #f0a43a;
-  --kg-incident: #ff7a6b;
-  --kg-root-cause: #c4a1ff;
-  --kg-fix: #4ade80;
-  --kg-precedent: #e879f9;
+  --kg-interface: var(--boss-c-7dd3fc);
+  --kg-class: var(--boss-c-5b9dff);
+  --kg-method: var(--boss-c-94a3c8);
+  --kg-rule: var(--boss-c-f0a43a);
+  --kg-incident: var(--boss-c-ff7a6b);
+  --kg-root-cause: var(--boss-c-c4a1ff);
+  --kg-fix: var(--boss-c-4ade80);
+  --kg-precedent: var(--boss-c-e879f9);
   /* Proposed in §5.3 and adopted (operator, §7: "spec's proposed colours stand"). */
   /* Colour distinguishes kind (operator's rule): enums and records are not another blue. */
-  --kg-enum: #e2e8f0;
-  --kg-record: #e2e8f0;
-  --kg-file: #d6b48a;
+  --kg-enum: var(--boss-c-e2e8f0);
+  --kg-record: var(--boss-c-e2e8f0);
+  --kg-file: var(--boss-c-d6b48a);
   /* The "N more areas" bubble: a code bubble, quieter. */
-  --kg-more: #3b5b94;
-  --kg-function: #94a3c8;
+  --kg-more: var(--boss-c-3b5b94);
+  --kg-function: var(--boss-c-94a3c8);
   --kg-endpoint: var(--teal);
-  --kg-table: #facc15;
-  --kg-investigation: #f9a8d4;
-  --kg-test-failure: #fb923c;
-  --kg-workaround: #a3e635;
-  --kg-review-finding: #fcd34d;
-  --kg-decision: #fda4af;
-  --kg-anchor: #a5b4fc;
-  --kg-fact: #d8b4fe;
+  --kg-table: var(--boss-c-facc15);
+  --kg-investigation: var(--boss-c-f9a8d4);
+  --kg-test-failure: var(--boss-c-fb923c);
+  --kg-workaround: var(--boss-c-a3e635);
+  --kg-review-finding: var(--boss-c-fcd34d);
+  --kg-decision: var(--boss-c-fda4af);
+  --kg-anchor: var(--boss-c-a5b4fc);
+  --kg-fact: var(--boss-c-d8b4fe);
   /* KG P5b: the banking-regulatory instance's two additive ontology kinds. */
-  --kg-compliance-case: #fb7185;
-  --kg-remediation-package: #22c55e;
+  --kg-compliance-case: var(--boss-c-fb7185);
+  --kg-remediation-package: var(--boss-c-22c55e);
   /* Case study 4: the banking-aml pack's kinds (packages/specpack/ontology/banking-aml.yaml). */
-  --kg-customer: #0ea5e9;
-  --kg-account: #38bdf8;
-  --kg-counterparty: #f59e0b;
-  --kg-transaction: #94a3b8;
-  --kg-typology: #a855f7;
-  --kg-kyc-profile: #14b8a6;
-  --kg-alert: #ef4444;
-  --kg-aml-case: #f97316;
+  --kg-customer: var(--boss-c-0ea5e9);
+  --kg-account: var(--boss-c-38bdf8);
+  --kg-counterparty: var(--boss-c-f59e0b);
+  --kg-transaction: var(--boss-c-94a3b8);
+  --kg-typology: var(--boss-c-a855f7);
+  --kg-kyc-profile: var(--boss-c-14b8a6);
+  --kg-alert: var(--boss-c-ef4444);
+  --kg-aml-case: var(--boss-c-f97316);
   /* The two graphs (design §4.2): the Domain layer (a pack's reference kinds) and the Context
      Graph (what agents did and decided). A pack's own colours arrive as --kg-kind-<kind>. */
-  --kg-agent-decision: #38bdf8;
-  --kg-coverage-gap: #fbbf24;
-  --kg-clause: #8a6bff;
-  --kg-document: #6d4aff;
-  --kg-layer-domain: #8a6bff;
-  --kg-layer-context: #2dd4bf;
+  --kg-agent-decision: var(--boss-c-38bdf8);
+  --kg-coverage-gap: var(--boss-c-fbbf24);
+  --kg-clause: var(--boss-c-8a6bff);
+  --kg-document: var(--boss-c-6d4aff);
+  --kg-layer-domain: var(--boss-c-8a6bff);
+  --kg-layer-context: var(--boss-c-2dd4bf);
   /* Whole-repo bubbles and layer badges. */
-  --kg-layer-code: #5b9dff;
-  --kg-layer-rules: #f0a43a;
-  --kg-layer-learning: #c4a1ff;
+  --kg-layer-code: var(--boss-c-5b9dff);
+  --kg-layer-rules: var(--boss-c-f0a43a);
+  --kg-layer-learning: var(--boss-c-c4a1ff);
   /* The learning loop's edges (lib/kg-layout LEARNING_EDGES): reuse takes the console accent. */
-  --kg-edge-produced: #c4a1ff;
-  --kg-edge-reused: var(--accent-text, #2EC5C5);
-  --kg-edge-cited: #fcd34d;
-  --kg-edge-consulted: #a5b4fc;
-  --kg-edge-about: #94a3c8;
+  --kg-edge-produced: var(--boss-c-c4a1ff);
+  --kg-edge-reused: var(--accent-text, var(--boss-c-2ec5c5));
+  --kg-edge-cited: var(--boss-c-fcd34d);
+  --kg-edge-consulted: var(--boss-c-a5b4fc);
+  --kg-edge-about: var(--boss-c-94a3c8);
 }
 
 .kg { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; }
@@ -76,7 +81,7 @@
 .kg-dot[data-layer="learning"] { background: var(--kg-layer-learning); }
 .kg-dot[data-layer="domain"] { background: var(--kg-layer-domain); }
 .kg-dot[data-layer="context"] { background: var(--kg-layer-context); }
-.kg-eyebrow { margin: 0 0 8px; font-size: 0.7rem; font-weight: 650; letter-spacing: 0; text-transform: none; color: var(--faint); }
+.kg-area-name { margin: 0 0 8px; font-size: 0.7rem; font-weight: 650; letter-spacing: 0; text-transform: none; color: var(--faint); font-family: inherit;}
 .kg-quiet { margin: 0; font-size: 0.8rem; line-height: 1.45; color: var(--muted); }
 .kg-ok { margin: 0; font-size: 0.8rem; color: var(--green); }
 .kg-inline-err { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; font-size: 0.8rem; color: var(--red); }
@@ -105,8 +110,8 @@
   background: linear-gradient(100deg, var(--graph) 30%, color-mix(in srgb, var(--surface-3) 55%, var(--graph)) 50%, var(--graph) 70%);
   background-size: 220% 100%; animation: kg-shimmer 1.6s linear infinite;
 }
-@keyframes kg-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
-@keyframes kg-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+@keyframes kg-pulse { 0%, 100% { opacity: 0.55;} 50% { opacity: 1;} }
+@keyframes kg-shimmer { from { background-position: 120% 0;} to { background-position: -120% 0;} }
 @media (prefers-reduced-motion: reduce) {
   .kg-skel-row, .kg-shimmer, .kg-live-dot { animation: none; }
 }
@@ -123,7 +128,7 @@
   border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow);
 }
 .kg-stage[data-tone="amber"] .kg-empty { border-color: color-mix(in srgb, var(--amber) 40%, var(--border-strong)); }
-.kg-empty-eyebrow { font-size: 0.74rem; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--faint); }
+.kg-empty-area-name { font-size: 0.74rem; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--faint); font-family: inherit;}
 .kg-empty-title { margin: 0; font-family: var(--display); font-size: 1.15rem; font-weight: 600; color: var(--ink); }
 .kg-empty-body { margin: 0; font-size: 0.9rem; line-height: 1.5; color: var(--ink-soft); }
 .kg-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
@@ -134,7 +139,7 @@
 .kg-index-row { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 4px 10px; font-size: 0.84rem; }
 .kg-index-what { color: var(--ink-soft); }
 .kg-bar { grid-column: 1 / -1; display: block; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
-.kg-bar i { display: block; height: 100%; background: var(--accent-text); transition: width 400ms ease; }
+.kg-bar i { display: block; height: 100%; background: var(--accent-text); transition: none; }
 
 /* ── the Graph tab: toolbar, sub-bar, three columns ───────────────────────────────────────── */
 .kg-graph {
@@ -202,7 +207,7 @@
 .kg-refreshing { position: absolute; top: 10px; right: 12px; font-size: 0.74rem; color: var(--muted); }
 
 .kg-drop {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; width: min(480px, calc(100vw - 32px)); max-height: 440px; overflow-y: auto;
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; width: min(480px, calc(100% - 32px)); max-height: 440px; overflow-y: auto;
   padding: 4px; border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-lg);
 }
 .kg-hit { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
@@ -258,7 +263,7 @@
    what does not fit scrolls sideways inside the gutter, never under it. */
 .kg-legend .kg-legend-list { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; margin: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .kg-legend .kg-legend-item { flex: none; }
-.kg-legend-toggle { flex: none; white-space: nowrap; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.74rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; }
+.kg-legend-toggle { flex: none; white-space: nowrap; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.74rem; font-weight: 650; letter-spacing: 0; text-transform: none; cursor: pointer; }
 .kg-legend-list { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0 2px; padding: 0; list-style: none; }
 .kg-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--ink-soft); white-space: nowrap; }
 .kg-table-wrap { position: absolute; inset: 0; overflow: auto; padding: 12px; background: var(--surface); display: flex; flex-direction: column; gap: 16px; }
@@ -325,7 +330,7 @@
 .kg-ctx-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .kg-ctx-facts .kg-ctx-mono { font-family: var(--mono, ui-monospace, monospace); font-size: 0.78rem; }
 .kg-ctx-links { display: flex; flex-direction: column; gap: 8px; }
-.kg-ctx-link-head { margin: 0 0 2px; font-size: 0.7rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.kg-ctx-link-head { margin: 0 0 2px; font-size: 0.7rem; font-weight: 650; letter-spacing: 0; text-transform: none; color: var(--faint); }
 .kg-map-err { max-width: 560px; }
 .kg-statement p { margin: 0; font-size: 0.9rem; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; }
 /* A long method name never leaves its box (tester round 2). */
@@ -407,7 +412,7 @@
 .kg-strip { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); min-width: 0; }
 .kg-strip[data-live] { border-color: color-mix(in srgb, var(--accent-text) 35%, var(--border)); }
 .kg-strip-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
-.kg-strip-head .kg-eyebrow { margin: 0; }
+.kg-strip-head .kg-area-name { margin: 0; font-family: inherit;}
 .kg-strip-count { font-size: 0.78rem; color: var(--muted); }
 .kg-strip-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; min-width: 0; }
 .kg-strip-list li { min-width: 0; max-width: 100%; }
@@ -420,7 +425,7 @@
 .kg-strip-how { flex: none; font-size: 0.72rem; color: var(--faint); }
 .kg-strip-title { min-width: 0; max-width: 42ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
 .kg-strip-when { flex: none; font-size: 0.72rem; color: var(--faint); font-variant-numeric: tabular-nums; }
-@keyframes kg-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes kg-in { from { opacity: 0; transform: translateY(3px);} to { opacity: 1; transform: none;} }
 @media (prefers-reduced-motion: reduce) { .kg-strip-item { animation: none; } }
 
 /* ── widths, by the GRAPH's own width, not the window's (tester round 1 P0-2: the rail counts) ──
@@ -551,7 +556,7 @@
   color: var(--accent-text); font-size: 1rem; line-height: 1;
 }
 .kg-setup-row[data-state="done"] .kg-setup-num { color: var(--green); }
-.kg-setup-state { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
+.kg-setup-state { font-size: 0.7rem; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--faint); }
 .kg-setup-state[data-state="current"], .kg-setup-state[data-state="ready"] { color: var(--accent-text); }
 .kg-setup-state[data-state="working"] { color: var(--accent-text); }
 .kg-setup-state[data-state="done"] { color: var(--green); }
@@ -563,9 +568,9 @@
 .kg-setup-aside { display: flex; align-items: center; gap: 6px; min-height: 28px; }
 .kg-setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .kg-setup-select { min-width: 0; max-width: 100%; flex: 1 1 260px; }
-.kg-setup-sub { margin: 0; font-size: 0.76rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
+.kg-setup-sub { margin: 0; font-size: 0.76rem; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--faint); }
 .kg-spin { animation: kg-spin 1.1s linear infinite; }
-@keyframes kg-spin { to { transform: rotate(360deg); } }
+@keyframes kg-spin { to { transform: rotate(360deg);} }
 @media (prefers-reduced-motion: reduce) { .kg-spin { animation: none; } }
 
 .kg-team-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
@@ -595,7 +600,7 @@
 }
 .kg-area[data-on] { border-color: var(--accent-line); background: var(--accent-soft); }
 .kg-area input { accent-color: var(--accent); margin: 0; }
-.kg-area-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.86rem; color: var(--ink); font-weight: 600; }
+.kg-area-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.86rem; color: var(--ink); font-weight: 600; font-family: inherit;}
 .kg-area small { grid-column: 3; font-size: 0.74rem; color: var(--muted); }
 .kg-setup-counts { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 0; }
 .kg-setup-counts div { display: flex; flex-direction: column; gap: 2px; }
@@ -688,7 +693,7 @@
 .kg-up { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border: 1px solid var(--border-strong);
   border-radius: var(--r-lg); background: var(--surface); box-shadow: inset 3px 0 0 var(--kg-clause); }
 .kg-up-head { display: flex; flex-direction: column; gap: 6px; }
-.kg-up-head .kg-eyebrow { margin: 0; }
+.kg-up-head .kg-area-name { margin: 0; font-family: inherit;}
 .kg-up-name { max-width: 560px; }
 .kg-up-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px;
   max-height: 440px; overflow-y: auto; overscroll-behavior: contain; }
@@ -727,11 +732,11 @@
 .kg-ev-quote { margin: 0; padding: 4px 10px; border-left: 2px solid var(--kg-clause); font-size: 0.8rem; line-height: 1.45; color: var(--ink-soft); flex-basis: 100%; }
 
 /* ── By words and by meaning, side by side (rulebook source G9) ──────────────────────────────── */
-.kg-cmp { position: absolute; top: calc(100% + 4px); left: 0; z-index: 31; width: min(760px, calc(100vw - 32px));
+.kg-cmp { position: absolute; top: calc(100% + 4px); left: 0; z-index: 31; width: min(760px, calc(100% - 32px));
   max-height: 70vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px;
   border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-lg); }
 .kg-cmp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.kg-cmp-head .kg-eyebrow { margin: 0; text-transform: none; letter-spacing: 0; font-size: 0.8rem; color: var(--muted); }
+.kg-cmp-head .kg-area-name { margin: 0; text-transform: none; letter-spacing: 0; font-size: 0.8rem; color: var(--muted); font-family: inherit;}
 .kg-cmp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .kg-cmp-col { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .kg-cmp-title { margin: 0; font-size: 0.82rem; font-weight: 650; color: var(--ink); }

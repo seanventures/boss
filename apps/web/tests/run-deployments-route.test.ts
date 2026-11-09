@@ -48,21 +48,29 @@ describe("deployment lookup batch route", () => {
 
   it("returns partial errors by the deadline when shared slots stay busy", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    const pending: Array<() => void> = [];
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
+      pending.push(() => resolve(Response.json({ deployments: [] })));
+    }));
     vi.stubGlobal("fetch", fetchMock);
     const replies = Array.from({ length: 9 }, (_, batch) =>
       GET(request(Array.from({ length: 4 }, (_, i) => `blocked-${batch}-${i}`))),
     );
-    await vi.advanceTimersByTimeAsync(12_000);
-    const responses = await Promise.all(replies);
+    try {
+      await vi.advanceTimersByTimeAsync(12_000);
+      const responses = await Promise.all(replies);
 
-    expect(fetchMock.mock.calls.length).toBeLessThan(36);
-    for (const response of responses) {
-      expect(response.status).toBe(200);
-      const body = await response.json();
-      expect(Object.keys(body.runs)).toHaveLength(4);
-      expect(Object.values(body.runs).every((item) =>
-        Boolean((item as { error?: string }).error))).toBe(true);
+      expect(fetchMock.mock.calls.length).toBeLessThan(36);
+      for (const response of responses) {
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(Object.keys(body.runs)).toHaveLength(4);
+        expect(Object.values(body.runs).every((item) =>
+          Boolean((item as { error?: string }).error))).toBe(true);
+      }
+    } finally {
+      pending.splice(0).forEach((finish) => finish());
+      await vi.advanceTimersByTimeAsync(0);
     }
   });
 
@@ -110,7 +118,11 @@ describe("deployment lookup batch route", () => {
     vi.stubGlobal("fetch", vi.fn((input: string, options: RequestInit) => {
       if (input.includes("/slow/")) {
         signals.push(options.signal as AbortSignal);
-        return new Promise<Response>(() => {});
+        return new Promise<Response>((resolve) => {
+          options.signal?.addEventListener("abort", () => {
+            resolve(Response.json({ deployments: [] }));
+          });
+        });
       }
       return Promise.resolve(Response.json({ deployments: [{ id: "deployed" }] }));
     }));
@@ -127,23 +139,70 @@ describe("deployment lookup batch route", () => {
     expect(signals[0].aborted).toBe(true);
   });
 
+  it("does not open another upstream read while a hung one ignores abort", async () => {
+    vi.useFakeTimers();
+    let active = 0;
+    let peak = 0;
+    const pending: Array<() => void> = [];
+    const fetchMock = vi.fn((_input: string, options: RequestInit) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      return new Promise<Response>((resolve) => {
+        pending.push(() => {
+          active -= 1;
+          resolve(Response.json({ deployments: [] }));
+        });
+        options.signal?.addEventListener("abort", () => {
+          // The API thread keeps its pool connection after the client aborts.
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ids = Array.from({ length: 60 }, (_, i) => `run-${i}`);
+    const reply = GET(request(ids));
+    try {
+      await vi.advanceTimersByTimeAsync(12_000);
+      const response = await reply;
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(peak).toBe(4);
+      expect(fetchMock.mock.calls.length).toBe(4);
+      expect(Object.keys(body.runs)).toHaveLength(60);
+      expect(body.runs["run-0"]).toEqual({ error: "deployment lookup timed out" });
+      expect(body.runs["run-59"]).toEqual({ error: "deployment lookup budget exhausted" });
+      for (const id of ids) expect(body.runs[id].error).toEqual(expect.any(String));
+    } finally {
+      pending.splice(0).forEach((finish) => finish());
+      await vi.advanceTimersByTimeAsync(0);
+    }
+  });
+
   it("returns explicit errors for queued runs at the outer deadline", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    const pending: Array<() => void> = [];
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
+      pending.push(() => resolve(Response.json({ deployments: [] })));
+    }));
     vi.stubGlobal("fetch", fetchMock);
     const ids = Array.from({ length: 60 }, (_, i) => `run-${i}`);
 
     const reply = GET(request(ids));
-    await vi.advanceTimersByTimeAsync(12_000);
-    const response = await reply;
-    const body = await response.json();
+    try {
+      await vi.advanceTimersByTimeAsync(12_000);
+      const response = await reply;
+      const body = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(Object.keys(body.runs)).toHaveLength(60);
-    expect(fetchMock.mock.calls.length).toBeGreaterThan(4);
-    expect(fetchMock.mock.calls.length).toBeLessThan(60);
-    expect(body.runs["run-59"]).toEqual({ error: "deployment lookup budget exhausted" });
-    expect(body.runs["run-0"]).toEqual({ error: "deployment lookup timed out" });
+      expect(response.status).toBe(200);
+      expect(Object.keys(body.runs)).toHaveLength(60);
+      expect(fetchMock.mock.calls.length).toBe(4);
+      expect(body.runs["run-59"]).toEqual({ error: "deployment lookup budget exhausted" });
+      expect(body.runs["run-0"]).toEqual({ error: "deployment lookup timed out" });
+    } finally {
+      pending.splice(0).forEach((finish) => finish());
+      await vi.advanceTimersByTimeAsync(0);
+    }
   });
 
   it("keeps per-run upstream failures visible without failing other cards", async () => {

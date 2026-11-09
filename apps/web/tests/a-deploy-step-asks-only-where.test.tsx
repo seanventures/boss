@@ -32,7 +32,7 @@ describe("a deploy step asks only where", () => {
       { id: "dh_3", name: "vm-c", status: "registered" },
     ]);
     const select = host.querySelector("[data-testid=wf-deploy-where]") as HTMLSelectElement;
-    expect([...select.options].map((o) => o.textContent)).toEqual(["Ask me at deploy time", "vm-a · 10.0.0.1", "vm-b · 10.0.0.2"]);
+    expect([...select.options].map((o) => o.textContent)).toEqual(["Ask me at deploy time", "vm-a, 10.0.0.1", "vm-b, 10.0.0.2"]);
     await act(async () => { select.value = "dh_2"; select.dispatchEvent(new Event("change", { bubbles: true })); });
     expect(onPatch).toHaveBeenCalledWith({ input: { name: "host_id", source: { value: "dh_2" } } });
     expect(host.textContent).not.toMatch(/manifest|port|target/i);

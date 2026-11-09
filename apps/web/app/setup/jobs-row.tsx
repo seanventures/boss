@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Who does what: four jobs, one picker each — `Auto · <source>` first, then every working
+ * Who does what: four jobs, one picker each, `Auto, <source>` first, then every working
  * source × its models. Engine and model are saved together in one request; the cost chip says
  * whether the job spends money.
  */
@@ -64,7 +64,7 @@ function AddKey({ onDone }: { onDone: () => void }) {
                   apply(await setupWrite<SetupView>(projectId, "decision_key", {
                     api_key: sent, accept_database_fallback: needs ? consent : undefined },
                     { label: "Connect" }));
-                  toast("Connected · Working");
+                  toast("Connected, Working");
                   onDone();
                 } catch (error) {
                   toast((error as SetupFailure).message || "Key rejected", "error");
@@ -109,7 +109,7 @@ export function JobLine({ job }: { job: Job }) {
       }, { label: job.label });
       apply(next);
       const saved = next.jobs.find((j) => j.job === job.job);
-      toast(`Saved · ${job.label} → ${saved?.resolved?.label ?? "Auto"}`);
+      toast(`Saved, ${job.label} → ${saved?.resolved?.label ?? "Auto"}`);
     } catch (error) {
       toast((error as SetupFailure).refusal?.headline ?? "Not saved", "error");
     } finally { setBusy(false); }
@@ -130,7 +130,7 @@ export function JobLine({ job }: { job: Job }) {
           ) : null}
           {menu.map((m) => (
             m.needs_key ? (
-              <option key="add-key" value="add-key">{m.label} · Add key</option>
+              <option key="add-key" value="add-key">{m.label}, Add key</option>
             ) : (
               <option key={encode(m.engine, m.bare)} value={encode(m.engine, m.bare)}>{m.label}</option>
             )

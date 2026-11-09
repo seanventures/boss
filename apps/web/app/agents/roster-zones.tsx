@@ -3,12 +3,12 @@
 /**
  * Agents › Roster, grouped by what each agent is doing (spec §3.2, the Floor inside the roster).
  *
- * Four zones in a fixed order — NEEDS YOU first, always — and an empty zone is not drawn. The
+ * Four zones in a fixed order, NEEDS YOU first, always, and an empty zone is not drawn. The
  * zone comes from presence (`/v1/agents/live`, derived from open acts), never from a model, and
  * falls back to the workforce feed's status for an API from before acts, so a card is in the
  * same zone the pill and the crew view say. When an agent's state changes its card GLIDES to
- * its new zone (FLIP, 240ms) — the moment that makes a roster read as a floor of people at work
- * — and jumps there instantly under reduced motion. Idle faces only breathe and blink, slowly.
+ * its new zone (FLIP, 240ms), the moment that makes a roster read as a floor of people at work
+ *, and jumps there instantly under reduced motion. Idle faces only breathe and blink, slowly.
  */
 import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChatCircleDots, CheckCircle, ShieldCheck } from "@phosphor-icons/react";
@@ -22,19 +22,19 @@ import { AgFace, AgState } from "./agent-face";
 import { TEAM_ORDER, teamOfAgent } from "../../lib/agents-live-board";
 
 /** The feed's status, as presence, for when the live endpoint has nothing to say. */
-/** The workforce wire's word for a failed step: `<action> — failed`. */
-const FAILED_TASK = /\s+—\s+failed$/;
+/** The workforce wire's word for a failed step: action, an em dash, then "failed". */
+const FAILED_TASK = /\s+\u2014\s+failed$/;
 
 export function presenceFromStatus(a: V2Agent): LivePresence {
   const last = a.last_touched
     || (a.task === "No work in this window." ? "No recent work" : (a.task || "").replace(/^last: /, "Last: "));
-  // A COUNT IS NOT WORK. An older API's idle line was "last: <stage> · N calls in 30d" — a
+  // A COUNT IS NOT WORK. An older API's idle line was "last: <stage>, N calls in 30d", a
   // volume, not what the agent did (agents-home spec §3.3). Never shown: the server's
-  // `Last: <verb> · <label> · 2h` replaces it, and until then the card says it has none.
+  // `Last: <verb>, <label>, 2h` replaces it, and until then the card says it has none.
   if (a.status === "IDLE" && /\bcalls? in \d+d\b/i.test(last)) return { state: "idle", line: "No work yet" };
   if (a.status === "AT GATE") return { state: "needs_you", line: a.task || "Waiting on you" };
   // STUCK covers two things on this wire (console_v2_workforce._status_of): a step that FAILED
-  // ("<action> — failed") and one running with no progress. Only the second is stuck.
+  // (action, an em dash, then "failed") and one running with no progress. Only the second is stuck.
   if (a.status === "STUCK" && FAILED_TASK.test(a.task || "")) {
     return { state: "failed", line: (a.task || "").replace(FAILED_TASK, "") || "Failed" };
   }
@@ -91,7 +91,7 @@ function useGlide(container: React.RefObject<HTMLElement | null>, signature: str
 }
 
 /** The roster shows everyone. Only a very large roster folds its idle tail behind one quiet
- *  `Show n more` — live agents (needs you, working, in a panel) are never folded away.
+ *  `Show n more`, live agents (needs you, working, in a panel) are never folded away.
  *  Presence grouping only: Directory groups by team and shows every agent. */
 export const ROSTER_FOLD_AT = 30;
 
@@ -216,8 +216,8 @@ function PresenceZones({ placed, host, unfolded, onUnfold, onOpen, onAsk, onRegi
 /**
  * One agent. THE WHOLE CARD OPENS ITS PASSPORT: the name is the card's one link-like control
  * (a real button, so Tab and Enter reach it) and a press anywhere on the card that is not
- * another control lands there too. Talk and Register sit in the card's own footer row — never
- * over the text — and are always visible, so a keyboard and a touch screen get them as well.
+ * another control lands there too. Talk and Register sit in the card's own footer row, never
+ * over the text, and are always visible, so a keyboard and a touch screen get them as well.
  *
  * The callsign is never cut: it wraps if it must. The role and the tagline are the parts that
  * give way, each with its full text as a tooltip.

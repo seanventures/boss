@@ -2,8 +2,8 @@
 
 /**
  * Infra › Previews (spec §4.7): what previews are running, where, and until when. LIVE, FAILED ·
- * 24H and ENDED · 24H; each row says its state, app · branch, substrate, port, host, when it
- * started and — while it runs — how long it has left (a bar of the time remaining out of the
+ * 24H and ENDED, 24H; each row says its state, app, branch, substrate, port, host, when it
+ * started and, while it runs, how long it has left (a bar of the time remaining out of the
  * time it was given; amber in its last five minutes). `Open ↗`, `Log` (the drawer streams while
  * live), `Restart`, `Stop` and `Build ↗`, each only where the row's `can` allows. One poll
  * (`usePreviews`, 10 s); the bar moves only when the poll lands.
@@ -71,8 +71,8 @@ function PreviewRowView({ row, projectId, actor, now, onLog, onChanged, live }: 
   return (
     <li className="inf-pv-row" data-testid="inf-preview-row" data-id={row.id} data-tone={row.tone}>
       <StateWord w={{ word: row.word, tone: row.tone }} />
-      <span className="inf-pv-name inf-trunc" data-copy="data" title={`${row.app}${row.branch ? ` · ${row.branch}` : ""}`}>
-        {row.app}{row.branch ? <span className="inf-faint"> · {row.branch}</span> : null}
+      <span className="inf-pv-name inf-trunc" data-copy="data" title={`${row.app}${row.branch ? `, ${row.branch}` : ""}`}>
+        {row.app}{row.branch ? <span className="inf-faint">, {row.branch}</span> : null}
       </span>
       <span className="inf-pvchip" title="Where it runs">{row.substrate}</span>
       <span className="inf-mono inf-faint">{row.port !== null ? `:${row.port}` : ""}</span>
@@ -136,13 +136,13 @@ export function PreviewsTab({ projectId, actor, url, go, query }: InfraTabProps)
             ) : <Empty testId="inf-previews-none">Nothing running</Empty>}
           </section>
           <section aria-labelledby="inf-pv-failed">
-            <ZoneHead id="inf-pv-failed" label="FAILED · 24H" count={d.counts.failed24h} />
+            <ZoneHead id="inf-pv-failed" label="FAILED, 24H" count={d.counts.failed24h} />
             {d.failed24h.filter(keep).length ? (
               <ul className="inf-pv-rows">{d.failed24h.filter(keep).map((r) => <PreviewRowView key={r.id} row={r} live={false} {...rowProps} />)}</ul>
             ) : <Empty>None failed</Empty>}
           </section>
           <section aria-labelledby="inf-pv-ended">
-            <ZoneHead id="inf-pv-ended" label="ENDED · 24H" count={d.counts.ended24h}>
+            <ZoneHead id="inf-pv-ended" label="ENDED, 24H" count={d.counts.ended24h}>
               {d.ended24h.length ? (
                 <button type="button" className="inf-link" aria-expanded={showEnded} data-testid="inf-previews-show-ended"
                         onClick={() => setShowEnded((v) => !v)}>{showEnded ? "Hide" : "Show"}</button>

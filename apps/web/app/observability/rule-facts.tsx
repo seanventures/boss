@@ -5,7 +5,7 @@
  * when it fires, each a short label with the meaning in its tooltip:
  *
  *   sum(rate(http_requests_total{…,status=~"5.."}[5m])) / … > 0.05
- *   Every 1 min · Window 5m · For 2 min · Keep firing none · Threshold > 5 · Min req 20 · ▲ SEV2 · Routes to Console
+ *   Every 1 min, Window 5m, For 2 min, Keep firing none, Threshold > 5, Min req 20, ▲ SEV2, Routes to Console
  */
 import React from "react";
 

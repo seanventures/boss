@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* ── Govern (activity-govern spec §4.4, §5.2-§5.3) ──
    gv- classes only; design-system tokens only. A 1120px column like Factory. Motion only on a
    real change (the meter's fill, a saved value, a focused row), each with a reduced-motion still. */
@@ -14,7 +19,7 @@
 /* The meter. */
 .gv-meter { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
 .gv-meter-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; min-width: 0; }
-.gv-meter-period { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; color: var(--faint); }
+.gv-meter-period { font-size: 0.72rem; font-weight: 700; letter-spacing: 0; color: var(--faint); }
 .gv-meter-amount { font-size: 1.3rem; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
 .gv-of { font-size: 0.85rem; font-weight: 500; color: var(--muted); }
 .gv-state { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; font-weight: 650; color: var(--muted); }
@@ -30,7 +35,7 @@
 .gv-meta { display: inline-flex; gap: 12px; font-size: 0.78rem; color: var(--muted); }
 .gv-bar { position: relative; height: 12px; border-radius: 999px; background: var(--surface-3); overflow: visible; }
 .gv-bar[data-thin] { height: 6px; }
-.gv-bar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: var(--accent); transition: width 400ms ease-out; }
+.gv-bar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: var(--accent); transition: none; }
 .gv-meter[data-state="yellow"] .gv-bar-fill, .gv-meter[data-state="orange"] .gv-bar-fill { background: var(--amber); }
 .gv-meter[data-state="red"] .gv-bar-fill { background: var(--red); }
 .gv-bar-held {
@@ -50,7 +55,7 @@
 /* The board. */
 .gv-board { display: flex; flex-direction: column; gap: 18px; }
 .gv-sec { display: flex; flex-direction: column; gap: 6px; }
-.gv-sec-head { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; color: var(--faint); }
+.gv-sec-head { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 0.72rem; font-weight: 700; letter-spacing: 0; color: var(--faint); }
 .gv-badge { padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-size: 0.7rem; letter-spacing: 0; font-weight: 650; }
 .gv-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
 .gv-row {
@@ -60,14 +65,14 @@
 .gv-row:last-child { border-bottom: 0; }
 .gv-row[data-advisory] { color: var(--muted); }
 .gv-row[data-focused] { box-shadow: inset 0 0 0 2px var(--amber); animation: gv-ring 600ms ease-out 1; border-radius: var(--r-xl); }
-@keyframes gv-ring { from { box-shadow: inset 0 0 0 6px var(--amber-soft); } to { box-shadow: inset 0 0 0 2px var(--amber); } }
+@keyframes gv-ring { from { box-shadow: inset 0 0 0 6px var(--amber-soft);} to { box-shadow: inset 0 0 0 2px var(--amber);} }
 .gv-name { color: var(--ink); font-weight: 600; }
 .gv-row[data-advisory] .gv-name { color: var(--ink-soft); }
 .gv-value { display: flex; flex-direction: column; min-width: 0; }
 .gv-value-main { font-size: 1rem; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gv-row[data-advisory] .gv-value-main { font-size: 0.86rem; font-weight: 600; color: var(--ink-soft); white-space: normal; }
 .gv-value[data-pulsed] .gv-value-main { animation: gv-pulse 200ms ease-out 1; }
-@keyframes gv-pulse { from { color: var(--accent-text); } to { color: var(--ink); } }
+@keyframes gv-pulse { from { color: var(--accent-text);} to { color: var(--ink);} }
 .gv-value-note { font-size: 0.74rem; color: var(--amber); }
 .gv-source { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 0.8rem; color: var(--muted); }
 .gv-enforced { font-size: 0.8rem; color: var(--ink-soft); }
@@ -109,7 +114,7 @@
 .gv-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .gv-chip { padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--ink-soft); font-size: 0.8rem; }
 .gv-chip[data-passed] { border-color: var(--amber); box-shadow: 0 0 0 2px var(--amber-soft); animation: gv-chip 300ms ease-out 1; }
-@keyframes gv-chip { from { box-shadow: 0 0 0 0 var(--amber-soft); } to { box-shadow: 0 0 0 2px var(--amber-soft); } }
+@keyframes gv-chip { from { box-shadow: 0 0 0 0 var(--amber-soft);} to { box-shadow: 0 0 0 2px var(--amber-soft);} }
 .gv-links { display: inline-flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.84rem; }
 .gv-elsewhere .gv-sec-head { margin-bottom: 2px; }
 
@@ -122,9 +127,9 @@
 .gv-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(12.63158rem, 1fr)); gap: 14px; }
 .gv-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(15.78947rem, 1fr)); gap: 14px; }
 .gv-spend-rows li > :not(:first-child) { flex: 0 0 72px; text-align: right; font-variant-numeric: tabular-nums; }
-.gv-spend-head { min-height: 24px !important; font-size: 0.72rem !important; color: var(--faint) !important; text-transform: uppercase; letter-spacing: 0.04em; }
+.gv-spend-head { min-height: 24px !important; font-size: 0.72rem !important; color: var(--faint) !important; text-transform: none; letter-spacing: 0; }
 .gv-tile { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); font-size: 0.84rem; color: var(--ink-soft); }
-.gv-tile-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; color: var(--faint); }
+.gv-tile-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0; color: var(--faint); }
 .gv-tile-sub { font-size: 0.78rem; color: var(--muted); }
 .gv-low { align-self: flex-start; padding: 1px 8px; border-radius: 999px; background: var(--red-soft); color: var(--red); font-size: 0.74rem; font-weight: 650; }
 .gv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
@@ -172,7 +177,7 @@
 .gv-hero-sub { display: flex; flex-wrap: wrap; gap: 4px 0; font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .gv-hero-sub > span + span::before { content: "·"; margin: 0 8px; color: var(--faint); }
 .gv-chart-bar[data-today] { fill: var(--accent-text); }
-.gv-hero-scope { font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; color: var(--faint); text-transform: uppercase; }
+.gv-hero-scope { font-size: 0.74rem; font-weight: 700; letter-spacing: 0; color: var(--faint); text-transform: none; }
 .gv-hero-break { flex-basis: 100%; height: 0; }
 .gv-axis { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--faint); font-variant-numeric: tabular-nums; }
 .gv-hbars li[data-mine] .gv-hbar-name { font-weight: 700; }

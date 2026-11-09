@@ -88,7 +88,7 @@ const LEGACY: Record<string, number> = {
   "app/workflows/inspector.css": 49,
   "app/workflows/library.css": 29,
   "app/workflows/pipeline.css": 53,
-  "components/v2/shell.css": 129,
+  "components/v2/shell.css": 131, // main 410dde5c7 restyled it; the ratchet takes that count
   "components/v2/templates/templates.css": 47,
   "components/v2/tokens.css": 2,
 };

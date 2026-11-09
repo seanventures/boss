@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Share this run (docs/product/RUN_SCORECARDS.md): a button, not a setting. The run's bundle —
- * steps, agent turns, errors, log tails — after the redaction gate, in a box the person can edit.
+ * Share this run (docs/product/RUN_SCORECARDS.md): a button, not a setting. The run's bundle , 
+ * steps, agent turns, errors, log tails, after the redaction gate, in a box the person can edit.
  * Sent ONCE, with a note, only when they press Send. Separate from the Improve BOSS switch, and the
  * only way content ever reaches the BOSS project.
  */
@@ -123,7 +123,7 @@ export function ShareRunSheet({ projectId, actor, unitKind, unitId, onClose, loc
         <span className="im-check" role="note" data-testid="share-run-check">
           <b>Check for anything private</b>
           <span className="im-muted" title="Secrets, emails, hosts, URLs, file paths, repositories and names are masked. Edit anything else out.">
-            {masked ? `${masked} masked` : "Nothing masked"} · edit below
+            {masked ? `${masked} masked` : "Nothing masked"}, edit below
           </span>
         </span>
         {bundle === null && !error ? <span className="im-muted" aria-busy="true">Loading…</span> : null}
@@ -131,7 +131,7 @@ export function ShareRunSheet({ projectId, actor, unitKind, unitId, onClose, loc
           <textarea value={bundle} maxLength={400_000} onChange={(e) => { setPrepared({ scope, text: e.target.value }); setInspected(false); }} aria-label={localOnly ? "Diagnostic report to save" : "What will be sent"}
                     data-testid="share-run-bundle" spellCheck={false} />
         ) : null}
-        {localOnly ? <span className="im-muted">Selected run · redacted, bounded snapshot · saved locally. Inspect it before sharing.</span> :
+        {localOnly ? <span className="im-muted">Selected run, redacted, bounded snapshot, saved locally. Inspect it before sharing.</span> :
           <textarea className="im-share-note" value={note} onChange={(e) => setNote(e.target.value)}
                     aria-label="A note for the BOSS project" placeholder="What went wrong?" data-testid="share-run-note" />}
         <label className="im-check">

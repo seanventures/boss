@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * CAN THIS WORKFLOW RUN HERE — shown before Start, with the fix for each thing missing.
+ * CAN THIS WORKFLOW RUN HERE, shown before Start, with the fix for each thing missing.
  *
  * Every catalogue template but one ends in a deploy, and a project with no deployment host
  * started them anyway: research, a panel, a build and a launch-readiness repair were paid for,
@@ -9,7 +9,7 @@
  * email examples did the same at an approved send on an install with no mail server. The
  * engine now answers "what does this need and is it here" (`workflow_readiness.py`) and Start
  * refuses until it is answered; this draws that answer in the start form, so the operator sees
- * the list — and the place to fix each item — before pressing anything.
+ * the list, and the place to fix each item, before pressing anything.
  *
  * Kept in its own module so the start form, and anything else that starts work, draws the same
  * checklist rather than each wording it differently.
@@ -52,7 +52,7 @@ export type ReadinessNeed = {
   after_a_person: boolean;
 };
 
-/** Something worth knowing before Start that does not stop it — the budget at orange or
+/** Something worth knowing before Start that does not stop it, the budget at orange or
  *  yellow (workflow_readiness._budget_readiness). Red is a need, not a note. */
 export type ReadinessNote = { key: string; level: string; text: string; area?: string | null };
 
@@ -77,7 +77,7 @@ function ReadinessNotes({ notes }: { notes?: ReadinessNote[] }) {
   );
 }
 
-/** The fields the New project wizard collects on its own steps — the brief, its name, the
+/** The fields the New project wizard collects on its own steps, the brief, its name, the
  *  repository, the criteria and the links. A catalogue template declares them too (so an agent
  *  or an API caller can see what it reads), and drawing them again as declared inputs would ask
  *  the operator for the same thing twice. */
@@ -86,13 +86,13 @@ export const WIZARD_COLLECTS: ReadonlySet<string> = new Set([
 ]);
 
 /** Missing needs the operator has not chosen to start without. Start stays blocked while this
- *  is non-empty — the API would refuse anyway, and the form is where to find out. */
+ *  is non-empty, the API would refuse anyway, and the form is where to find out. */
 export function unaccepted(readiness: Readiness | null, accepted: readonly string[]) {
   return (readiness?.missing ?? []).filter((m) => !accepted.includes(m.key));
 }
 
 /** The readiness of one workflow for this project, refreshed when what is typed changes the
- *  answer (a notify channel). `null` while unknown — the form does not block on a fetch. */
+ *  answer (a notify channel). `null` while unknown, the form does not block on a fetch. */
 export function useWorkflowReadiness(
   projectId: string, workflowKey: string, inputs: Record<string, string>,
 ): Readiness | null {
@@ -183,7 +183,7 @@ export function ReadinessPanel({ readiness, accepted, onAccept }: {
         <input type="checkbox" data-testid="dw-readiness-start-anyway"
                checked={open.length === 0}
                onChange={(e) => onAccept(e.target.checked ? missing.map((m) => m.key) : [])} />
-        {" "}Start anyway — I will add {missing.length === 1 ? "this" : "these"} before the
+        {" "}Start anyway, I will add {missing.length === 1 ? "this" : "these"} before the
         step that needs {missing.length === 1 ? "it" : "them"}.
       </label>
     </section>
@@ -199,7 +199,7 @@ export function asReadiness(value: unknown): Readiness | null {
 
 /** A start that was refused for what the project lacks, waiting for the operator's answer. */
 export type PendingRefusal = {
-  /** What was being started — "Build", "Re-run" — said in the heading and the button. */
+  /** What was being started, "Build", "Re-run", said in the heading and the button. */
   label: string;
   message: string;
   readiness: Readiness;
@@ -228,7 +228,7 @@ export function StartRefusal({ refusal, projectId = "", busy = false, onDismiss 
       {/* ONE SHORT LINE; the list below names each thing and its fix. The API's whole sentence
           stays one hover away. */}
       <p className="dw-new-error" title={refusal.message}>
-        {refusal.label} — not started.{" "}
+        {refusal.label}, not started.{" "}
         {refusal.readiness.missing.length
           ? `${refusal.readiness.missing.length} ${refusal.readiness.missing.length === 1 ? "thing" : "things"} missing.`
           : refusal.message}

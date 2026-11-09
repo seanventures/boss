@@ -53,7 +53,7 @@ describe("a local control plane is called out", () => {
   });
 
   it("says the word 'local', not only a colour", () => {
-    expect(SHELL).toContain("`local · ${host}`");
+    expect(SHELL).toContain("`local, ${host}`");
   });
 
   it("styles it as a warning, since it wears production's chrome", () => {

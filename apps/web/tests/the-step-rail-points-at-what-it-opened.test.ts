@@ -141,7 +141,7 @@ describe("the opened step reads as one region", () => {
 
   it("tints rather than recolours, so the text is not re-read against a new background", () => {
     const at = CSS.indexOf(".dw-detail {");
-    expect(CSS.slice(at, at + 900)).toMatch(/var\(--accent[^)]*\) 7%/);
+    expect(CSS.slice(at, at + 900)).toMatch(/var\(--accent(?:,\s*var\(--boss-c-[0-9a-f]+\))?\) 7%/);
   });
 
   it("separates that region from whatever follows it", () => {

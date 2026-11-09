@@ -66,7 +66,7 @@ describe("Observability › Alerts covers every app and BOSS itself, and says so
     expect(chip("alrt_theirs")?.getAttribute("href")).toContain("project_id=p2");
     expect(text(chip("alrt_boss"))).toBe("BOSS");
     const opts = $$("[data-testid='obs-alerts-app'] option").map((o) => text(o));
-    expect(opts).toContain("checkout · prod · NorthPeak");
+    expect(opts).toContain("checkout, prod, NorthPeak");
   });
 
   it("acks each row in its own project", async () => {

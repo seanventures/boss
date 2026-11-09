@@ -46,7 +46,7 @@ export function DecisionBars({ card }: { card: Scorecard }) {
     <div className="aa-tile aa-tile-wide" data-testid="aa-score-decisions" title="Decisions per day by autonomy level">
       <span className="aa-bars" aria-hidden>
         {rows.map((r) => (
-          <span key={r.day} className="aa-bar" title={`${r.day}: ${r.total} decisions · A0 ${r.a0} · A1 ${r.a1} · A2 ${r.a2} · A3 ${r.a3}`}
+          <span key={r.day} className="aa-bar" title={`${r.day}: ${r.total} decisions, A0 ${r.a0}, A1 ${r.a1}, A2 ${r.a2}, A3 ${r.a3}`}
                 data-testid="aa-bar">
             {LEVELS.map((l) => r[l] ? <span key={l} className="aa-seg" data-level={l} style={{ height: `${(r[l] / max) * 100}%` }} /> : null)}
           </span>
@@ -67,11 +67,11 @@ export function OutcomeTiles({ out, days }: { out: Outcomes | null; days: number
   return (
     <>
       <Big value={String(out.merged)} label="Merged" testId="aa-score-merged"
-           tip={`Agent changes merged over ${days} days · ${out.reverted} reverted or caused an incident.`} />
+           tip={`Agent changes merged over ${days} days, ${out.reverted} reverted or caused an incident.`} />
       <Ring pct={out.revert_pct} label="Reverted" good="low" testId="aa-score-reverted"
             tip={`Merged agent changes later reverted or tied to an incident (${out.reverted} of ${out.merged + out.reverted}). Lower is better.`} />
       <Ring pct={r.acceptance_pct} label="Roadmap taken" good="high" testId="aa-score-roadmap"
-            tip={`Recommendations a person accepted: ${r.accepted} accepted · ${r.rejected} rejected · ${r.ignored} ignored · ${r.recurred} recurred after acceptance.`} />
+            tip={`Recommendations a person accepted: ${r.accepted} accepted, ${r.rejected} rejected, ${r.ignored} ignored, ${r.recurred} recurred after acceptance.`} />
       <Ring pct={out.boss_started.pct} label="BOSS-started" good="none" testId="aa-score-boss-started"
             tip={`Work items BOSS opened itself: ${out.boss_started.boss} of ${out.boss_started.all}.`} />
     </>

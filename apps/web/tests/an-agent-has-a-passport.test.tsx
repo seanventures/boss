@@ -6,7 +6,7 @@
  * operator sees and what the page SENDS:
  *   - every passport field is the API's value, not a plausible one computed here;
  *   - lifecycle buttons respect the sponsor, and the server's refusal is said in its words;
- *   - a voice saved is a new version, said as `Saved · v5 · applies to new work`, and a field the
+ *   - a voice saved is a new version, said as `Saved, v5, applies to new work`, and a field the
  *     server refuses is marked at that field;
  *   - Test streams the reply and shows the judge's line;
  *   - Work and Lineage draw the API's own edge labels, verbatim, for every way work moves.
@@ -80,7 +80,7 @@ describe("the passport says what the API says", () => {
     expect($('[data-testid="ag-cert-from"]')?.textContent).toBe("BOSS pack v1.4");
     expect($('[data-testid="ag-cert-sponsor"]')?.textContent).toBe("You");
     expect($('[data-testid="ag-cert-version"]')?.textContent).toBe("v4 · 9f3a·c21e");
-    expect($('[data-testid="ag-cert"]')?.textContent).toContain("Local · tokens coming");
+    expect($('[data-testid="ag-cert"]')?.textContent).toContain("Local, tokens coming");
     expect($('[data-testid="ag-lifecycle"]')?.textContent).toBe("Active");
     expect($('[data-testid="ag-about"]')?.textContent).toBe(PASSPORT.persona.about_me);
     const vitals = $('[data-testid="ag-vitals"]')?.textContent ?? "";
@@ -121,7 +121,7 @@ describe("lifecycle respects the sponsor", () => {
     expect(post).toHaveLength(1);
     expect(post[0].body).toMatchObject({ project_id: "p1", actor: "ceo", state: "paused" });
     expect($('[data-testid="ag-lifecycle"]')?.textContent).toBe("Paused");
-    expect(toasts).toContain("Vera paused · skipped by Auto");
+    expect(toasts).toContain("Vera paused, skipped by Auto");
   });
 
   it("anyone else sees the buttons, disabled, and why", async () => {
@@ -165,7 +165,7 @@ describe("a voice saved is a new version", () => {
     expect((persona.voice as Record<string, number>).blunt).toBe(4);
     expect(persona.callsign).toBe("Vera");
     expect(patch[0].body?.actor).toBe("ceo");
-    expect(toasts).toContain("Saved · v5 · applies to new work");
+    expect(toasts).toContain("Saved, v5, applies to new work");
     expect($('[data-testid="ag-cert-version"]')?.textContent).toBe("v5 · abcd·1234");
   });
 
@@ -203,7 +203,7 @@ describe("Test is a real call, streamed", () => {
     await mount();
     await click($('[data-testid="ag-probe-intro"]'));
     expect($('[data-testid="ag-test-reply"]')?.textContent).toBe("I'm Vera, an AI agent. Show me the test.");
-    expect($('[data-testid="ag-test-result"]')?.textContent).toBe("Voice 4/5 · Stays in remit ✓ · Says it's AI ✓");
+    expect($('[data-testid="ag-test-result"]')?.textContent).toBe("Voice 4/5, Stays in remit ✓, Says it's AI ✓");
     expect(sent(calls, "POST", "/v1/agents/qa/test")[0].body).toMatchObject({ probe: "intro", actor: "ceo" });
   });
 
@@ -260,7 +260,7 @@ describe("Work and Lineage use the API's words", () => {
     expect($('[data-testid="ag-ln-edge-boss-qa"]')?.textContent).toBe("Picked by BOSS ×14");
     expect($('[data-testid="ag-ln-edge-qa-release_manager"]')?.textContent).toBe("Next stage ×5");
     const rec = $('[data-testid="ag-ln-edge-ceo-qa"]');
-    expect(rec?.textContent).toBe("Seated on panel ×2 · Reconstructed");
+    expect(rec?.textContent).toBe("Seated on panel ×2, Reconstructed");
     expect(rec?.hasAttribute("data-reconstructed")).toBe(true);
   });
 });

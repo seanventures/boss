@@ -4,7 +4,7 @@
  * CAN BOSS BUILD WHAT THIS ASKS FOR? Asked while the person types (GET /v1/stacks, debounced),
  * shown before Start: "This brief asks for Go, which BOSS cannot build. BOSS builds Python
  * (FastAPI, …) …". The API refuses the same start with `stack_unsupported` unless the person ticks
- * "Start anyway", which sends `allow_unsupported_stack` — the brief is then kept as a plan, and
+ * "Start anyway", which sends `allow_unsupported_stack`, the brief is then kept as a plan, and
  * the build refuses it again before anything is spent.
  */
 import React, { useEffect, useState } from "react";
@@ -49,10 +49,10 @@ export function adapterLanguage(a: StackAdapter): string {
   return a.primary;
 }
 
-/** "Node · React + Vite, Express, PostgreSQL": the language first, unless the label says it. */
+/** "Node, React + Vite, Express, PostgreSQL": the language first, unless the label says it. */
 export function adapterWord(a: StackAdapter): string {
   const lang = stackLabel(adapterLanguage(a));
-  return !lang || a.label.toLowerCase().startsWith(lang.toLowerCase()) ? a.label : `${lang} · ${a.label}`;
+  return !lang || a.label.toLowerCase().startsWith(lang.toLowerCase()) ? a.label : `${lang}, ${a.label}`;
 }
 
 /** WHAT BOSS BUILDS, with how sure it is of each (services/stacks.py ADAPTERS), said in a tooltip. */
@@ -87,7 +87,7 @@ export function StackSelect({ adapters, value, onChange, id, testId = "np-stack"
       <option value="">BOSS picks from the brief</option>
       {shown.map((a) => (
         <option key={a.id} value={a.id} disabled={!a.ready}>
-          {adapterWord(a)}{a.level === "best_effort" ? " · best effort" : ""}{a.ready ? "" : " · off here"}
+          {adapterWord(a)}{a.level === "best_effort" ? ", best effort" : ""}{a.ready ? "" : ", off here"}
         </option>
       ))}
     </select>

@@ -19,8 +19,8 @@ function Pill({ text, color }: { text: string; color: string }) {
         color,
         border: `1px solid ${color}55`,
         background: `${color}18`,
-        textTransform: "uppercase",
-        letterSpacing: "0.04em",
+        textTransform: "none",
+        letterSpacing: "0",
         whiteSpace: "nowrap",
       }}
     >
@@ -67,7 +67,7 @@ export function AiSreHome({ feed }: { feed: AiSreFeed }) {
         <h3 style={{ margin: 0 }}>AI SRE capability ledger</h3>
         <p className="detail">
           awesome-ai-sre categories mapped onto BOSS. Missing stays missing.
-          This is a coverage ledger, not a live scoreboard — no invented
+          This is a coverage ledger, not a live scoreboard, no invented
           incident counts or RCA confidence.
         </p>
         {!feed.apiReachable || !ledger ? (
@@ -89,9 +89,9 @@ export function AiSreHome({ feed }: { feed: AiSreFeed }) {
               <Pill text={ledger.public_ga ? "public GA" : "not public GA"} color={ledger.public_ga ? "#3fb950" : "#8b949e"} />
               <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
                 shipped <b style={{ color: "var(--ink)" }}>{counts?.shipped ?? 0}</b>
-                {" · "}
+                {", "}
                 partial <b style={{ color: "var(--ink)" }}>{counts?.partial ?? 0}</b>
-                {" · "}
+                {", "}
                 missing <b style={{ color: "var(--ink)" }}>{counts?.missing ?? 0}</b>
               </span>
             </div>
@@ -110,8 +110,8 @@ export function AiSreHome({ feed }: { feed: AiSreFeed }) {
                       textAlign: "left",
                       color: "var(--muted)",
                       fontSize: 11,
-                      letterSpacing: "0.04em",
-                      textTransform: "uppercase",
+                      letterSpacing: "0",
+                      textTransform: "none",
                     }}
                   >
                     <th style={{ padding: "6px 10px", fontWeight: 600 }}>Category</th>

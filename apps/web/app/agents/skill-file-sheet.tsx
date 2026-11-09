@@ -4,7 +4,7 @@
  * `New skill from file` (agent-loadout spec §4.6): a SKILL.md-style playbook becomes a `guide`
  * skill in the Library and is given to this agent in the same step. Unlike instructions, a guide
  * is not in every prompt: the agent always sees `What it does` and reads the body only when it
- * calls it. It can't act — the risk is always `Reads`.
+ * calls it. It can't act, the risk is always `Reads`.
  */
 import { GatedButton } from "../../components/gated";
 import { X } from "@phosphor-icons/react";

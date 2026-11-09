@@ -8,7 +8,7 @@ import { TOAST_EVENT } from "../../../../lib/api-write";
 import { grantSkill } from "../../captain-can-run-it";
 
 /**
- * `⚠ Lacks <skill> [Grant]` — one line per skill the named agent does not hold.
+ * ` Lacks <skill> [Grant]`, one line per skill the named agent does not hold.
  *
  * The CaptainCanRunIt check as a row: the same grant write (`grantSkill`), said in three words
  * instead of a sentence. Which skills are lacking is the caller's, from `stepView`, so this row

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * THE HERO (cc v2): the one question — what should your team build next? — beside the team
+ * THE HERO (cc v2): the one question, what should your team build next?, beside the team
  * that will answer it. Left: the systems word and when work last happened, the headline, the
  * composer (AskBossHero, laid out as `hero`), and the proof row. Right: the nine teams as tiles
  * of real faces; a face that waits on you wears an amber ring, a working one glows.
@@ -64,7 +64,7 @@ export function systemSentence(d: SystemDot): string {
   return said[key] ?? `${d.word} ${d.state.toLowerCase()}`;
 }
 
-/** The eyebrow's systems words: what the Systems dots say, as a sentence. */
+/** The area-name's systems words: what the Systems dots say, as a sentence. */
 export function systemsWord(systems: SystemDot[], reachable: boolean): { text: string; tone: "green" | "amber" | "red" | "grey" } {
   if (!reachable) return { text: "Can't reach BOSS", tone: "grey" };
   const red = systems.filter((s) => s.tone === "red");
@@ -74,11 +74,11 @@ export function systemsWord(systems: SystemDot[], reachable: boolean): { text: s
   return { text: "All systems OK", tone: "green" };
 }
 
-/** "Juno · Product Manager", or just the name when the agent has no callsign (never twice). */
+/** "Juno, Product Manager", or just the name when the agent has no callsign (never twice). */
 export function whoLine(roleKey: string, name?: string): string {
   const who = nameOf(roleKey);
   const role = name || who.role;
-  return who.name && role && who.name.toLowerCase() !== role.toLowerCase() ? `${who.name} · ${role}` : (who.name || role);
+  return who.name && role && who.name.toLowerCase() !== role.toLowerCase() ? `${who.name}, ${role}` : (who.name || role);
 }
 
 export type ProofNumbers = { apps: number; prs: number; agents: number; teams: number; spent: number } | null;
@@ -97,7 +97,7 @@ export function Proof({ n, orgId }: { n: ProofNumbers; orgId?: string | null }) 
       </Go>
       <Go patch={{ area: "workforce", view: "directory", role: null }} orgId={orgId}
           title="Your agents, in their teams. Opens Agent Studio." testId="cc-proof-agents">
-        <b>{n ? n.agents : dash}</b><span>agents · {n ? n.teams : dash} teams</span>
+        <b>{n ? n.agents : dash}</b><span>agents, {n ? n.teams : dash} teams</span>
       </Go>
       <Go patch={{ area: "budget", view: null, role: null }} orgId={orgId}
           title="Metered model spend over every build. Subscription calls are free." testId="cc-proof-spent">
@@ -132,7 +132,7 @@ export function TeamGrid({ teams, agents, waiting, working: live, orgId, still }
   const byKey = new Map(agents.map((a) => [a.roleKey, a]));
   const [open, setOpen] = useState<{ key: string; at: DOMRect } | null>(null);
   // ONE SOURCE (re-check R6): the board's own agent state, which the server sets from open
-  // work AND the running missions' working hops — what In flight and the pill read too.
+  // work AND the running missions' working hops, what In flight and the pill read too.
   void live;
   const isWorkingAgent = (a: BoardAgent) => a.state === "working" || a.state === "in_panel";
   const working = agents.filter((a) => isWorkingAgent(a) && !waiting.has(a.roleKey)).length;
@@ -155,15 +155,15 @@ export function TeamGrid({ teams, agents, waiting, working: live, orgId, still }
           const members = t.members.map((k) => byKey.get(k)).filter((a): a is BoardAgent => !!a);
           return (
             <div key={t.key} className="cc-tile" data-testid={`cc-tile-${t.key}`}
-                 style={{ ["--hue" as string]: TEAM_HUE[t.key] ?? "#5B8CFF" }}>
+                 style={{ ["--hue" as string]: TEAM_HUE[t.key] ?? "var(--boss-c-5b8cff)" }}>
               <span className="cc-tile-faces">
                 {members.slice(0, 8).map((a) => {
                   const isWorking = isWorkingAgent(a);
                   const isWaiting = waiting.has(a.roleKey);
                   const word = isWaiting ? "waiting on you" : isWorking ? "working" : a.state === "stuck" ? "stuck" : a.state === "failed" ? "failed" : "ready";
-                  const label = `${whoLine(a.roleKey, a.name)} · ${word}`;
+                  const label = `${whoLine(a.roleKey, a.name)}, ${word}`;
                   // A FACE OPENS ITS AGENT'S LIVE LINE (parity d): what it is doing, Talk, and
-                  // its page — the old Floor card, on tap or hover.
+                  // its page, the old Floor card, on tap or hover.
                   return (
                     <span key={a.roleKey} className="cc-face-wrap">
                       <button type="button" className="cc-face" title={label} aria-label={label}
@@ -237,7 +237,7 @@ function FaceCard({ agent, word, orgId, at, onClose }: {
       <b>{whoLine(agent.roleKey, agent.name)}</b>
       <span className="cc-facecard-line">{agent.line && agent.line !== "No work yet" ? agent.line : word === "ready" ? "Ready for work" : word}</span>
       <span className="cc-facecard-acts">
-        {/* TALK OPENS THE DOCK (re-check), which makes room for itself — not an overlay. */}
+        {/* TALK OPENS THE DOCK (re-check), which makes room for itself, not an overlay. */}
         <button type="button" className="cc-btn sm primary" data-testid="cc-face-talk"
                 onClick={() => { onClose(); openDockAbout({ subject: null, question: "", role: agent.name, roleKey: agent.roleKey, history: "push" }); }}>
           Talk

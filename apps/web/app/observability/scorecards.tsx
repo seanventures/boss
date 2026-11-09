@@ -4,9 +4,9 @@
  * Observability › Scorecards (docs/product/RUN_SCORECARDS.md, "See it", "Compare variants").
  *
  *   [Scores | Experiments]  [Builds Runs Steps Panels Research]  [Role Workflow Harness Model]  [7d 30d 90d]
- *   UNITS 42 · AVG SCORE 0.71 · DONE 88% · MERGED 64% · COST $31.20
- *   BY ROLE   key · n · score (mean, spread) · done · merged · cost · turns · steers
- *   WHAT'S COSTING YOU   lowest scores, most steers, most review rounds — each opens the run
+ *   UNITS 42, AVG SCORE 0.71, DONE 88%, MERGED 64%, COST $31.20
+ *   BY ROLE   key, n, score (mean, spread), done, merged, cost, turns, steers
+ *   WHAT'S COSTING YOU   lowest scores, most steers, most review rounds, each opens the run
  *
  *   Experiments: each A/B with both arms' n, mean ± sd, cost against its cap, the 95% interval of
  *   B − A, "Too close to call" until it clears zero, and Promote (one press, in Govern's log).
@@ -76,7 +76,7 @@ function Seg({ items, value, onPick, label, testId }: {
 
 /** Mean as a mark, ± one standard deviation as a band, on 0..1. SVG: no inline styles. */
 function ScoreBar({ score, sd }: { score: number | null; sd: number | null }) {
-  if (score === null) return <span className="im-score"><span className="im-score-v">—</span></span>;
+  if (score === null) return <span className="im-score"><span className="im-score-v">{"—"}</span></span>;
   const lo = Math.max(0, score - (sd ?? 0));
   const hi = Math.min(1, score + (sd ?? 0));
   return (
@@ -161,9 +161,9 @@ function Scores({ projectId, actor, u }: { projectId: string; actor: string; u: 
                 {v.costing.map((c) => (
                   <li key={c.unit_id} className="im-cost-row" data-testid="sc-cost-row">
                     <span className="im-why" data-why={c.why} title={WHY[c.why]?.tip}>{WHY[c.why]?.word ?? c.why}</span>
-                    <a href={c.href} data-user-text="" title={`${c.title} · ${c.state}${c.error_class ? ` · ${c.error_class}` : ""}`}>{c.title}</a>
+                    <a href={c.href} data-user-text="" title={`${c.title}, ${c.state}${c.error_class ? `, ${c.error_class}` : ""}`}>{c.title}</a>
                     <span title="Score">{num(c.score)}</span>
-                    <span title={`${c.steers} steers · ${c.rounds} review rounds`}>{usd(c.cost_usd)}</span>
+                    <span title={`${c.steers} steers, ${c.rounds} review rounds`}>{usd(c.cost_usd)}</span>
                   </li>
                 ))}
               </ul>
@@ -219,7 +219,7 @@ function PromoteSheet({ e, arm, projectId, actor, onClose, onDone }: {
           <b>{plan?.label ?? e.knob_label}</b>
           <span data-user-text="">{String(plan?.from ?? "default")} → {String(plan?.to ?? "")}</span>
         </span>
-        <span className="im-muted">This project&apos;s setting · in Govern changes</span>
+        <span className="im-muted">This project&apos;s setting, in Govern changes</span>
         {plan && !plan.enough ? (
           <>
             <span className="im-err" role="status" data-testid="sc-promote-short" title={plan.why_not}>Not enough evidence</span>
@@ -270,7 +270,7 @@ function ExperimentCard({ e, projectId, actor, onChange }: { e: Experiment; proj
           const winner = e.compare.verdict === arm || e.promoted_arm === arm;
           return (
             <div key={arm} className="im-arm" data-winner={winner ? "" : undefined} data-testid={`sc-arm-${arm}`}>
-              <span className="im-arm-k">ARM {arm.toUpperCase()}{arm === "b" ? ` · ${Math.round(e.split_b * 100)}%` : ""}</span>
+              <span className="im-arm-k">ARM {arm.toUpperCase()}{arm === "b" ? `, ${Math.round(e.split_b * 100)}%` : ""}</span>
               <span className="im-arm-v" title={e.knob_label}>{(arm === "a" ? e.arm_a_label : e.arm_b_label) ?? String(arm === "a" ? e.arm_a : e.arm_b)}</span>
               <span className="im-arm-facts">
                 <span title="Finished units">n {a.n}</span>

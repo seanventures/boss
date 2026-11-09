@@ -3,7 +3,7 @@
 /**
  * A PANEL THE VIEWER MAY NOT READ IS LOCKED, NEVER AN ERROR (round 2, R2-WEB). When the read gate
  * (lib/identity/read-gates.ts) refuses a panel's read, the panel renders this: a lock, a short
- * label, and why in the words useCan gives ("Needs “Read hosts” · ask an Admin"), in the tooltip
+ * label, and why in the words useCan gives ("Needs “Read hosts”, ask an Admin"), in the tooltip
  * and to a screen reader. Inline (a row's body) or as a card.
  */
 import React from "react";
@@ -29,9 +29,9 @@ export function LockedPanel({ label = "Locked", reason, inline = false, testId }
 export async function lockedReason(response: Response): Promise<string> {
   try {
     const body = (await response.clone().json()) as { reason?: unknown };
-    return typeof body.reason === "string" && body.reason ? body.reason : "You can't read this · ask an Admin";
+    return typeof body.reason === "string" && body.reason ? body.reason : "You can't read this, ask an Admin";
   } catch {
-    return "You can't read this · ask an Admin";
+    return "You can't read this, ask an Admin";
   }
 }
 
@@ -49,7 +49,7 @@ export function ReadFailure({ problem, onRetry, testId, retryTestId, className =
   problem: ReadProblem; onRetry?: () => void; testId?: string; retryTestId?: string; className?: string;
 }) {
   const kind = readFailureLabel(problem.status);
-  if (kind === "locked") return <LockedPanel reason={problem.text || "You can't read this · ask an Admin"} testId={testId} />;
+  if (kind === "locked") return <LockedPanel reason={problem.text || "You can't read this, ask an Admin"} testId={testId} />;
   return (
     <div className={className} role="alert" data-testid={testId}>
       <span data-tip={problem.text || undefined} title={problem.text || undefined}>

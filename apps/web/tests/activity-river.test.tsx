@@ -121,8 +121,8 @@ describe("Activity: the river", () => {
     await act(async () => { tools.click(); });
     await settle();
     const list = $('[data-testid="ag-river-toollist-a_parent"]')!;
-    expect(list.textContent).toContain("read_file · ok · 340ms");
-    expect(list.textContent).toContain("run_tests · failed · 1200ms");
+    expect(list.textContent).toContain("read_file, ok, 340ms");
+    expect(list.textContent).toContain("run_tests, failed, 1200ms");
     expect(list.textContent).not.toContain("SECRET");
     const log = $('[data-testid="ag-river-log-a_parent"]')!;
     // THE BROKEN LINK, FIXED AS A CLASS. This sent `workflow_run_id=`, which the Log never

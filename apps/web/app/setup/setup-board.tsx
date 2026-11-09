@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Repo and models — one board, one state.
+ * Repo and models, one board, one state.
  *
  * WHY THIS REPLACED setup-ui.tsx. The old page was forms that performed actions, so its state was
  * whatever the last form said: eight GETs on load, five verdicts that disagreed, a paragraph per
  * patch. This renders ONE server view (GET /v1/setup) and replaces it whole after every write; the
- * server decides every pill. While setup is unfinished the board runs as a stepper —
- * 1 GitHub (the one "Sign in with GitHub"), 2 Repos, 3 Model, 4 Try it — and after the first pull
+ * server decides every pill. While setup is unfinished the board runs as a stepper , 
+ * 1 GitHub (the one "Sign in with GitHub"), 2 Repos, 3 Model, 4 Try it, and after the first pull
  * request it is a board. Everything else (the org's own GitHub App, the multi-repo registry, CI
  * permission, build database, toolchains, routing, budget, public URL) folds under ADVANCED,
  * each with one plain line; a deep link to any of them opens the fold on it. The model sources
@@ -128,8 +128,8 @@ function navigate(area: "welcome" | "setup"): void {
 
 /**
  * Three layouts over one server view (BOSSAPP-808):
- *  - `"setup"` (area=setup, "Repo and models"): the 1 GitHub · 2 Repos · 3 Model stepper while a
- *    repository or a model is missing, then the board — GitHub accounts, Repositories, Models —
+ *  - `"setup"` (area=setup, "Repo and models"): the 1 GitHub, 2 Repos, 3 Model stepper while a
+ *    repository or a model is missing, then the board, GitHub accounts, Repositories, Models , 
  *    with every earlier row and setting under Advanced settings. Never the Welcome.
  *  - `"welcome"` (area=welcome, "Get started"): the 3-step Welcome. Its steps deep-link into Setup.
  *  - `"classic"` (the default): the board as it was, row for row.
@@ -339,7 +339,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   const focus = params.focus;
   const ref = (row: RowKey) => (el: HTMLElement | null) => { refs.current[row] = el; };
   // With "Sign in with GitHub" shown as ①, the stepper's rows move down one: ② Repos ③ Model ④ Try it.
-  // Not offered on this install: no ① row at all — ② Repos' "Connect GitHub" is the way in
+  // Not offered on this install: no ① row at all, ② Repos' "Connect GitHub" is the way in
   // (BOSSAPP-815), never a pill saying "This install uses the advanced path".
   const signinShown = signin?.configured ? signin : null;
   const shift = (n: number | null) => (n && signinShown ? n + 1 : n);
@@ -356,7 +356,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
           <div className="su-adv-item" ref={ref("build_speed")}><Why id="build_speed" /><BuildSpeedRow /></div>
           <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
-          {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
+          {/* Model routing, where "Who does what" lived; its rows are "Pin a job" inside. */}
           <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>
           {/* BUDGET LIVES IN GOVERN (operator, 2026-11-05: "The Budget things should move to
               Governance"): one place to set it, Govern › Limits; here, a link to it. */}
@@ -414,7 +414,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
             Test all
           </GatedButton>
         </header>
-        {/* ① GitHub — the one sign-in (absent on an API without it: then Repos is step ①). */}
+        {/* ① GitHub, the one sign-in (absent on an API without it: then Repos is step ①). */}
         {signinShown ? <GitHubSigninRow ref={ref("github")} status={signinShown} focused={focus === "github"}
                          step={stepNumber(view, "repository") ? 1 : null}
                          mode={view.next === "repository" && !view.repository.repos.length
@@ -459,7 +459,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
     );
   }
 
-  // THE STEPPER while a repository or a model is missing (1 GitHub · 2 Repos · 3 Model).
+  // THE STEPPER while a repository or a model is missing (1 GitHub, 2 Repos, 3 Model).
   const stepper = view.next === "repository" || view.next === "model";
   if (layout === "setup" && !stepper) {
     const openAdvanced = (row?: string) => {
@@ -505,7 +505,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                          key={blockOpen ?? "none"} />
           </div>
           {/* ONE MODELS SECTION (operator, 2026-11-05: "We have two areas to add model"): the
-              full list — each model's status, its one fix, Details and ⋯, Claude's "pays with" —
+              full list, each model's status, its one fix, Details and ⋯, Claude's "pays with" , 
               then the org's embedding model and who does what. Nothing about models is repeated
               under Advanced settings. */}
           <ModelsRow block ref={ref("models")} mode="done" step={null}

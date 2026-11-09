@@ -7,7 +7,7 @@
  * narrow visibly left to right (what a hop dropped is struck through), over a funnel whose width
  * is each hop's count. Below: the grant, the tokens minted and the egress calls made, and the
  * revoke card, which first shows the cascade S3's dry run reports (runs halted, tokens revoked,
- * the GitHub token, child grants, schedules) — revoking is terminal, so it is never a surprise.
+ * the GitHub token, child grants, schedules), revoking is terminal, so it is never a surprise.
  */
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -116,10 +116,10 @@ function statusPill(d: Delegation, now: number) {
   if (d.status === "revoked") return <Pill tone="bad">revoked</Pill>;
   if (d.status === "expired") return <Pill tone="mute">expired</Pill>;
   if (d.status === "paused") return <Pill tone="warn">paused</Pill>;
-  if (d.kind === "task") return <Pill tone="ok"><CheckCircle size={12} aria-hidden /> active · this build only</Pill>;
-  if (!d.expires_at) return <Pill tone="warn">active · until revoked</Pill>;
+  if (d.kind === "task") return <Pill tone="ok"><CheckCircle size={12} aria-hidden /> active, this build only</Pill>;
+  if (!d.expires_at) return <Pill tone="warn">active, until revoked</Pill>;
   const days = daysUntil(d.expires_at, now) ?? 0;
-  return <Pill tone={days <= 3 ? "warn" : "ok"}><CheckCircle size={12} aria-hidden /> active · {days} days left</Pill>;
+  return <Pill tone={days <= 3 ? "warn" : "ok"}><CheckCircle size={12} aria-hidden /> active, {days} days left</Pill>;
 }
 
 const CASCADE_ICON: Record<CascadePreview["items"][number]["kind"], React.ReactNode> = {
@@ -182,7 +182,7 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
   const canRevokeAny = useCan("delegation:revoke_any");
   const meId = useIdentity().me?.principal_id ?? null;
   // THE GRANTOR may narrow and revoke their own grant (the API allows it on /me), and only the
-  // grantor may extend — a standing grant only: a task grant ends with its run (409).
+  // grantor may extend, a standing grant only: a task grant ends with its run (409).
   const grantor = meId !== null && meId === d.user.id;
   const canRevoke = grantor ? { allowed: true, reason: "", needsStepUp: false } : canRevokeAny;
   const canExtend = grantor && d.kind !== "task";
@@ -286,9 +286,9 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
 
       <section className="idn-chainwrap" aria-labelledby="idn-chain-h">
         <div className="idn-ch-h">
-          <div className="idn-eyebrow" id="idn-chain-h">
+          <div className="idn-area-name" id="idn-chain-h">
             <span className="idn-dot" aria-hidden />
-            <span title={d.run ? `Run ${d.run.id}` : undefined}>Live chain{d.run ? ` · ${d.run.title}` : ""}</span>
+            <span title={d.run ? `Run ${d.run.id}` : undefined}>Live chain{d.run ? `, ${d.run.title}` : ""}</span>
           </div>
           <span className="idn-spacer" />
           <span className="idn-dim idn-chain-rule" data-copy="prose">Agents get only what {d.user.name} holds, this grant allows, each agent's limit allows and this build needs.</span>
@@ -324,14 +324,14 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
                 <dt>GitHub</dt>
                 <dd data-copy="data">
                   <code className="idn-mono">{d.github.repos.join(", ")}</code>
-                  {[d.github.contents ? `contents ${d.github.contents}` : null, d.github.pull_requests ? `pull requests ${d.github.pull_requests}` : null].filter(Boolean).join(" · ")}
-                  {d.github.ref_rule ? <> · push only to <code className="idn-mono">{d.github.ref_rule}</code></> : null}
+                  {[d.github.contents ? `contents ${d.github.contents}` : null, d.github.pull_requests ? `pull requests ${d.github.pull_requests}` : null].filter(Boolean).join(", ")}
+                  {d.github.ref_rule ? <>, push only to <code className="idn-mono">{d.github.ref_rule}</code></> : null}
                 </dd>
               </>
             ) : null}
             <dt>Sub-agents</dt>
-            <dd data-copy="data">{d.subdelegation.allowed ? `may start ${d.subdelegation.to.join(", ")} · depth ≤ ${d.max_depth}` : "none"}</dd>
-            <dt>Expires</dt><dd>{d.kind === "task" ? "with the run" : d.expires_at ? `${shortDate(d.expires_at)} · reminder ${shortDate(new Date(Date.parse(d.expires_at) - 3 * 86_400_000).toISOString())}` : "until revoked"}</dd>
+            <dd data-copy="data">{d.subdelegation.allowed ? `may start ${d.subdelegation.to.join(", ")}, depth ≤ ${d.max_depth}` : "none"}</dd>
+            <dt>Expires</dt><dd>{d.kind === "task" ? "with the run" : d.expires_at ? `${shortDate(d.expires_at)}, reminder ${shortDate(new Date(Date.parse(d.expires_at) - 3 * 86_400_000).toISOString())}` : "until revoked"}</dd>
             {d.purpose ? <><dt>Purpose</dt><dd data-copy="data">“{d.purpose}”</dd></> : null}
             {d.checked ? <><dt>Checked</dt><dd data-copy="data"><CheckCircle size={13} className="idn-ok" aria-hidden /> {d.checked}</dd></> : null}
           </dl>
@@ -364,7 +364,7 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
               <div key={`${e.method}-${e.path}`} className="idn-eg" role="listitem">
                 <span className="idn-m">{e.method}</span>
                 <span className="idn-p" title={e.path} data-copy="data">{e.path}</span>
-                <span className={e.status < 300 ? "idn-ok" : "idn-bad"} title={`HTTP ${e.status}`}>{egressWords(e.status)}{e.note ? ` · ${e.note}` : ""}</span>
+                <span className={e.status < 300 ? "idn-ok" : "idn-bad"} title={`HTTP ${e.status}`}>{egressWords(e.status)}{e.note ? `, ${e.note}` : ""}</span>
               </div>
             ))}
             {!d.egress.length ? <EmptyState compact title="No outside calls yet" testId="egress-empty">Calls the agents make to GitHub and other services appear here.</EmptyState> : null}

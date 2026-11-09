@@ -2,7 +2,7 @@
 
 /**
  * Deploys `⋯ › CI config` (spec §4.6; parity P-I-54..56): the old CICDPipelinesPanel's whole
- * capability — whether the API answered, the vendor cards, Generate (a dry run: nothing is
+ * capability, whether the API answered, the vendor cards, Generate (a dry run: nothing is
  * written to any repository), Validate, the YAML editor, and BOSS's own record of pipeline runs.
  */
 import { GatedButton } from "../../components/gated";
@@ -113,7 +113,7 @@ export function CiSheet({ projectId, onClose }: { projectId: string; onClose: ()
 
       <div className="inf-table-wrap">
         <table className="inf-table" data-testid="inf-ci-runs">
-          <caption className="inf-caption">Pipeline runs{ci?.total !== null && ci?.total !== undefined ? ` · ${ci.total}` : ""}</caption>
+          <caption className="inf-caption">Pipeline runs{ci?.total !== null && ci?.total !== undefined ? `, ${ci.total}` : ""}</caption>
           <thead><tr><th scope="col">Vendor</th><th scope="col">Status</th><th scope="col">Repo / ref</th><th scope="col">External</th><th scope="col">Recorded</th></tr></thead>
           <tbody>
             {(ci?.runs ?? []).length === 0 ? <tr><td colSpan={5} className="inf-muted">No runs recorded</td></tr> : null}

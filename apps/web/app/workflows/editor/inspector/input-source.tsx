@@ -16,7 +16,7 @@ const encode = (source: InputSource | null): string => {
 /**
  * Where one input's value comes from: `Start form`, `<Step> ▸ field`, `Fixed`, or `Not set`.
  *
- * A native select styled as a pill — one decision, keyboard and screen-reader complete — with
+ * A native select styled as a pill, one decision, keyboard and screen-reader complete, with
  * at most one small box beside it for the part a list cannot hold: the start-form field name,
  * the fixed value, or a field an earlier step returns but does not declare.
  */

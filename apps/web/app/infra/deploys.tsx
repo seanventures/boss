@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * Infra › Deploys (spec §4.6): every deploy, newest first — stack, registry and delivery in one
+ * Infra › Deploys (spec §4.6): every deploy, newest first, stack, registry and delivery in one
  * rail, grouped by day, each row saying its state, what it shipped, where, who approved it, its
- * steps and the one thing you can do to it. The URL is the state: `state=` (All · Needs you ·
- * Live · Failed), `app=`, `env=`, `deploy=<ref>` (the drawer). One poll (`useDeploys`: 8 s while
+ * steps and the one thing you can do to it. The URL is the state: `state=` (All, Needs you ·
+ * Live, Failed), `app=`, `env=`, `deploy=<ref>` (the drawer). One poll (`useDeploys`: 8 s while
  * anything moves, 30 s otherwise); `Show older` pages by the server's cursor. `+ Deploy` is the
  * one way to plan a deploy; `⋯` holds Rules, CI config and Secrets. The approval card itself is
  * the home's NEEDS YOU (one card, every screen), so it is not drawn twice here.

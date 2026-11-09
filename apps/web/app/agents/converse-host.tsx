@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Where every conversation opens. Mounted once by the console shell; every door — a Passport's
- * Talk, a roster card, a run step, the palette, the presence pill — calls `openTalk`, `openPlan`
+ * Where every conversation opens. Mounted once by the console shell; every door, a Passport's
+ * Talk, a roster card, a run step, the palette, the presence pill, calls `openTalk`, `openPlan`
  * or `openRoom` (lib/agent-converse.ts), which this hears.
  *
  * A talk reopens the operator's open talk with that agent unless the door asks for a fresh one
@@ -157,7 +157,7 @@ function Picker({ mode, agents, presets, onPick, onClose }: {
             {presets.map((p) => (
               <button key={p.key} type="button" className="ag-preset" disabled={p.missing.length > 0}
                       data-testid={`ag-preset-${p.key}`}
-                      data-tip={p.missing.length ? `Needs ${p.missing.join(", ")}` : p.seats.join(" · ")}
+                      data-tip={p.missing.length ? `Needs ${p.missing.join(", ")}` : p.seats.join(", ")}
                       title={p.missing.length ? `Needs ${p.missing.join(", ")}` : undefined}
                       onClick={() => setSeats(p.seats)}>
                 <span className="ag-stack">{p.seats.map((k) => <ConverseFace key={k} roleKey={k} size={24} />)}</span>

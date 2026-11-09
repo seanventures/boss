@@ -138,7 +138,7 @@ describe("SEV1–SEV4 and status at a glance", () => {
     expect(status("alrt_ack").getAttribute("data-tone")).toBe("amber");
     expect(status("alrt_ack").getAttribute("title")).toMatch(/Acknowledged by Param/);
     expect(row("alrt_ack").getAttribute("data-attention")).toBeNull();
-    expect(text(status("alrt_lat"))).toMatch(/^Resolved .+ · 6 min$/);
+    expect(text(status("alrt_lat"))).toMatch(/^Resolved .+, 6 min$/);
     expect(status("alrt_lat").getAttribute("data-tone")).toBe("green");
     expect(row("alrt_lat").getAttribute("data-open")).toBe("0");
     expect(row("alrt_lat").querySelector("[data-testid='obs-alert-fired']")).not.toBeNull();
@@ -225,7 +225,7 @@ describe("Notify", () => {
     expect($("[data-testid='obs-tab-notify']")?.getAttribute("title")).toBe("Who is told, how, and when");
     expect($("[data-testid='obs-cp-cp_mail'] [data-testid='obs-cp-unverified']")?.getAttribute("title")).toMatch(/high-urgency/);
     expect(text($("[data-testid='obs-policy-pol_co']"))).toContain('service="checkout"');
-    expect(text($("[data-testid='obs-policy-pol_co']"))).toContain("quiet 22:00–07:00");
+    expect(text($("[data-testid='obs-policy-pol_co']"))).toContain("quiet 22:00, 07:00");
     await click($("[data-testid='obs-route-go']"));
     expect(text($("[data-testid='obs-route-word']"))).toBe("Goes to Checkout after 30 s");
     expect(text($("[data-testid='obs-route-cp']"))).toBe("On-call: skipped, not verified");

@@ -1,17 +1,17 @@
 "use client";
 
 /**
- * AGENTS AT WORK (design §11.3, spec §9 stream 906) — what BOSS's agents noticed, how they worked
+ * AGENTS AT WORK (design §11.3, spec §9 stream 906), what BOSS's agents noticed, how they worked
  * it out together, and how it ended, as diagrams.
  *
  *   Agents at work   ● On          [Work | Roadmap]          [Check now] [Ask BOSS]
  *   ( 86% accepted )( 13% noise )( 4m MTTR )( $0.63/item )( 38m you answer )( ▁▃▅▇ decisions/day )
  *   [Needs you 1] [Running 2] [Resolved by agents 2] [Overridden 1] [Failed 1]
  *   ┌ 🔔 → (CoS) → (SRE) → ◇ → ✓ ┐  ┌ 🔔 → (SRE) → ◇ → ! ┐   ← each item a small diagram
- *   │ order-api 5xx · Incident · Resolved by agents · A2 · $1.84 │
+ *   │ order-api 5xx, Incident, Resolved by agents, A2, $1.84 │
  *
  *   ?item=<id> opens one item as the full flow chart (left → right), with Take over / Dismiss and
- *   "What did you do and why?" for Ask BOSS; a node opens the drawer — the only place text lives.
+ *   "What did you do and why?" for Ask BOSS; a node opens the drawer, the only place text lives.
  *   ?act=<id> (an Ask BOSS citation) opens the item that decision belongs to, on that decision.
  *
  * The acceptance test (§11.0 rule 6): a stranger says what happened, who did it and how it ended
@@ -67,7 +67,7 @@ function writePlace(p: Place): void {
   } catch { /* in-memory state still moves */ }
 }
 
-/** "What did you do and why?" — Ask BOSS answers from the ledger with [act:…] citations (907). */
+/** "What did you do and why?", Ask BOSS answers from the ledger with [act:…] citations (907). */
 export function askAboutItem(item: { title: string; id: string } | null): void {
   openDockAbout({
     // No `work_item` dock subject yet (it needs an engine resolver, stream 907): the item's id
@@ -100,7 +100,7 @@ function StopPill({ projectId }: { projectId: string }) {
   const href = `/?${new URLSearchParams({ area: "budget", tab: "autonomy" }).toString()}`;
   return (
     <a className="aa-pill" href={href} data-tone={stop.stopped ? "red" : "green"} data-testid="aa-stop-pill"
-       title={stop.stopped ? `Stopped${stop.by ? ` by ${stop.by}` : ""}${stop.reason ? ` · ${stop.reason}` : ""}. Open Autonomy & safety.` : "Agents may act within their levels. Open Autonomy & safety."}>
+       title={stop.stopped ? `Stopped${stop.by ? ` by ${stop.by}` : ""}${stop.reason ? `, ${stop.reason}` : ""}. Open Autonomy & safety.` : "Agents may act within their levels. Open Autonomy & safety."}>
       <span className="aa-dot-live" aria-hidden />{stop.stopped ? "Stopped" : "On"}
     </a>
   );
@@ -126,7 +126,7 @@ export function LoadDemoButton({ projectId, onLoaded }: { projectId: string; onL
     if (!r.ok) { showToast("error", `Not loaded: ${r.error}`); return; }
     const d = parseDemoLoad(r.body);
     const skipped = Object.keys(d.skipped);
-    showToast("success", `Demo loaded: ${d.loaded.length}${skipped.length ? ` · skipped ${skipped.map((k) => LOADER_WORDS[k] ?? k).join(", ")}` : ""}`);
+    showToast("success", `Demo loaded: ${d.loaded.length}${skipped.length ? `, skipped ${skipped.map((k) => LOADER_WORDS[k] ?? k).join(", ")}` : ""}`);
     onLoaded();
   };
   return (
@@ -165,13 +165,13 @@ function ItemView({ projectId, orgId, id, focusAct, onBack }: { projectId: strin
         </div>
         {g ? <ItemBadgeRow b={g.badges} /> : null}
         <span className="aa-spacer" />
-        <button type="button" className="ag-btn" data-testid="aa-ask-why" title="Ask BOSS what the agents did and why — answered from the decision ledger"
+        <button type="button" className="ag-btn" data-testid="aa-ask-why" title="Ask BOSS what the agents did and why, answered from the decision ledger"
                 onClick={() => askAboutItem(g ? { id, title: g.item.title } : null)}>Why?</button>
         {!closed ? (
           <>
             <GatedButton permission="work_item:manage" projectId={projectId} className="ag-btn" data-testid="aa-take-over"
                          title="Take it from the agents; they stop at once"
-                         onClick={() => void takeOver(projectId, id).then((r) => { showToast(r.ok ? "success" : "error", r.ok ? "It's yours — agents stopped on it" : `Not taken: ${r.error}`); reload(); })}>
+                         onClick={() => void takeOver(projectId, id).then((r) => { showToast(r.ok ? "success" : "error", r.ok ? "It's yours, agents stopped on it" : `Not taken: ${r.error}`); reload(); })}>
               Take over
             </GatedButton>
             <GatedButton permission="work_item:manage" projectId={projectId} className="ag-btn" data-testid="aa-dismiss"
@@ -274,7 +274,7 @@ export function AgentOpsHome({ projectId, orgId }: { projectId: string; actor?: 
         <LoadDemoButton projectId={projectId} onLoaded={afterDemo} />
         <GatedButton permission="work_item:manage" projectId={projectId} className="ag-btn" data-testid="aa-check-now"
                      title="Look for new problems now"
-                     onClick={() => void sweepNow(projectId).then((r) => { showToast(r.ok ? "success" : "error", r.ok ? "Checked — new problems appear here" : `Not checked: ${r.error}`); list.reload(); })}>
+                     onClick={() => void sweepNow(projectId).then((r) => { showToast(r.ok ? "success" : "error", r.ok ? "Checked, new problems appear here" : `Not checked: ${r.error}`); list.reload(); })}>
           Check now
         </GatedButton>
         <button type="button" className="ag-btn" data-testid="aa-ask" title="Ask BOSS what the agents did and why" onClick={() => askAboutItem(null)}>Ask BOSS</button>

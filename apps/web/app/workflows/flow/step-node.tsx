@@ -61,7 +61,7 @@ function RanBy({ view, ran }: { view: StepView["agent"]; ran: LaneAgent }) {
   const named = nameOf(ran.roleKey, ran.variant, ran.personId, ran.name);
   const morph = view.kind === "auto" && ran.variant === "agent";
   // A callsign is shown beside its role, never instead of it: the tooltip says both.
-  const who = named.callsign && named.role !== named.name ? `${named.name} · ${named.role}` : named.name;
+  const who = named.callsign && named.role !== named.name ? `${named.name}, ${named.role}` : named.name;
   const tip = [who, ran.edgeLabel || (morph ? view.label : "")].filter(Boolean).join("\n");
   return (
     <span className="wf-node-agent" data-kind={ran.variant === "agent" ? "named" : ran.variant}
@@ -182,12 +182,12 @@ export function StepNode(p: {
   const phase = run?.phase ?? "future";
   const Mark = mode === "run" ? PHASE_MARK[phase] : undefined;
   // ON A RUN, THE NAME THE PANEL AND THE CHAIN USE: a named agent's callsign ("Beacon"), its
-  // role leading the tooltip's second line — not "Site Reliability En…" here and "Beacon" once
+  // role leading the tooltip's second line, not "Site Reliability En…" here and "Beacon" once
   // it has run.
   const callsign = mode === "run" && view.agent.kind === "named" && view.agent.role_key
     ? nameOf(view.agent.role_key) : null;
   const shown = callsign && callsign.name !== view.agent.label
-    ? { ...view.agent, label: callsign.name, tip: [view.agent.label, view.agent.tip].filter(Boolean).join(" · ") }
+    ? { ...view.agent, label: callsign.name, tip: [view.agent.label, view.agent.tip].filter(Boolean).join(", ") }
     : view.agent;
   const shape = nodeShape(view);
   return (
@@ -234,7 +234,7 @@ export function StepNode(p: {
                   data-tip={b.byPolicy
                     ? "Asks a person unless this environment's deploy policy ships without asking."
                     : b.forced
-                    ? `${detail?.risk != null ? `Risk ${detail.risk}` : "Risk"} — always needs a person.`
+                    ? `${detail?.risk != null ? `Risk ${detail.risk}` : "Risk"}, always needs a person.`
                     : "Needs approval before it continues."}
                   aria-label={b.byPolicy ? "Asks unless the deploy policy decides"
                     : b.forced ? "Always needs a person" : "Needs approval"}>
@@ -244,7 +244,7 @@ export function StepNode(p: {
           {b.inputs > 0 ? (
             <span className="wf-badge" data-kind={unwired ? "unwired" : "inputs"} data-testid="wf-badge-inputs"
                   data-tip={unwired
-                    ? `${plural(b.inputs, "input")} · ${unwired} not connected`
+                    ? `${plural(b.inputs, "input")}, ${unwired} not connected`
                     : plural(b.inputs, "input")}
                   aria-label={unwired ? `${b.inputs} inputs, ${unwired} not connected` : `${b.inputs} inputs`}>
               <Plug size={12} weight="bold" aria-hidden /><span className="wf-badge-n">{b.inputs}</span>

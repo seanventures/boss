@@ -2,7 +2,7 @@
 
 /**
  * GRAPH › SETTINGS (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.1): what was Reliability › Knowledge
- * settings, moved here whole — what agents get, each repository's code graph with Index now,
+ * settings, moved here whole, what agents get, each repository's code graph with Index now,
  * retention, the embedding model and vector index, budget, sources, the case study and its cost.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";

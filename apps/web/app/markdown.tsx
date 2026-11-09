@@ -7,7 +7,7 @@ import React from "react";
 
 /**
  * The only hrefs this renderer will make: http(s), and same-origin paths and anchors. Whatever
- * a pre-pass did, the renderer is safe on its own — text an operator uploaded (an agent's
+ * a pre-pass did, the renderer is safe on its own, text an operator uploaded (an agent's
  * instructions) or a model wrote is rendered here, and `[x](javascript:…)` is a script.
  */
 export function safeHref(href: string): boolean {
@@ -25,7 +25,7 @@ function renderInline(text: string, keyPrefix: string, hook?: InlineText): React
   const nodes: React.ReactNode[] = [];
   const plain = (t: string, k: string) => nodes.push(hook ? <React.Fragment key={k}>{hook(t, k)}</React.Fragment> : t);
   // UNDERSCORES INSIDE A WORD ARE NOT EMPHASIS (CommonMark's rule). Without the lookarounds
-  // `BOSS_AGENT_HOST_SHELL` rendered as "BOSSAGENTHOSTSHELL" and `run_on_host` as "runonhost" —
+  // `BOSS_AGENT_HOST_SHELL` rendered as "BOSSAGENTHOSTSHELL" and `run_on_host` as "runonhost" , 
   // an operator was told to set a setting whose name the console had just destroyed.
   const pattern =
     /(`[^`]+`)|(\*\*[^*]+\*\*|(?<![A-Za-z0-9_])__[^_]+__(?![A-Za-z0-9_]))|(\*[^*\s][^*]*\*|(?<![A-Za-z0-9_])_[^_\s][^_]*_(?![A-Za-z0-9_]))|(\[[^\]]+\]\([^)\s]+\))/g;

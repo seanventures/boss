@@ -58,6 +58,10 @@ REFUSALS: dict[str, str] = {
     # or credit. On a real install this is the refusal BOSS raises most often.
     "restore_model_capacity_or_raise_budget": "capacity",
     "model_capacity_exhausted": "capacity",
+    # governed_code_task_service: egress or git refused the clone with a rules 403.
+    # The build already stopped and is not retried; approving the card changes nothing.
+    "allow_repository_or_change_clone_target": "rules_forbidden",
+    "rules_forbidden": "rules_forbidden",
     # resource_plane autoscaler: the budget state stopped BOSS adding workers.
     "increase_budget_or_defer_work": "autoscale",
     "approve_budget_increase_or_accept_degraded_mode": "autoscale",
@@ -405,6 +409,16 @@ _REFUSAL_GUIDANCE: dict[str, dict[str, str]] = {
         "area": "budget",
         "link_label": "Open Govern",
     },
+    "rules_forbidden": {
+        "what_happened": (
+            "Egress or git refused this build with a rules 403 (the allow-list or the "
+            "installation). That is an answer, not an outage, so BOSS did not retry it."),
+        "what_to_do": (
+            "Allow the repository, or point the build at one the rules will clone. "
+            "Then Retry the build. Approving this card would not retry it."),
+        "area": "setup",
+        "link_label": "Open Repo and models",
+    },
 }
 
 
@@ -478,6 +492,22 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
             "Records what was carried out and where, for the audit trail.", needs="note")]
     if status not in _OPEN and not reopenable(decision):
         return []
+    if _action_of(decision) in (
+            "reconcile_legacy_model_exposure", "reconcile_legacy_provider_exposure"):
+        # Approving recorded a go-ahead and started nothing, so the hold stayed open.
+        # These two settles are what BudgetGovernor.resolve_legacy_exposure does.
+        return [
+            {**_action(
+                "settle", "Settle at $0 (provider refused)", "approve",
+                "Records that the provider refused the call, so nothing was spent, "
+                "and closes this hold."),
+             "settle_at": "zero"},
+            {**_action(
+                "settle", "Settle at the estimate", "neutral",
+                "Records the original estimate as the cost, because the outcome could "
+                "not be confirmed, and closes this hold."),
+             "settle_at": "estimate"},
+        ]
     kind = kind_of(decision)
     from .release_scope import needs_reason as _release_needs_reason
 

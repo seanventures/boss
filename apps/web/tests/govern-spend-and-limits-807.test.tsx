@@ -120,11 +120,11 @@ describe("Screen A — Govern › Spend is the landing", () => {
     expect($("[data-testid=gv-tab-overview]")!.getAttribute("aria-selected")).toBe("true");
     expect(t("[data-testid=gv-hero-amount]")).toBe("$412");
     expect(t("[data-testid=gv-hero-of]")).toBe("of $1,000 this month");
-    expect(t("[data-testid=gv-hero-badge]")).toBe("On track · forecast $860");
+    expect(t("[data-testid=gv-hero-badge]")).toBe("On track, forecast $860");
     expect($("[data-testid=gv-hero-badge]")!.getAttribute("data-state")).toBe("green");
     expect($("[data-testid=gv-hero-fill]")!.getAttribute("style")).toContain("41.20%");
     expect($("[data-testid=gv-hero-forecast]")).not.toBeNull();
-    expect(t("[data-testid=gv-hero-sub]")).toBe("$38.00 today of $100" + "1,240 subscription calls — included, $0" + "Resets Dec 1");
+    expect(t("[data-testid=gv-hero-sub]")).toBe("$38.00 today of $100" + "1,240 subscription calls, included, $0" + "Resets Dec 1");
     // Two reads open it — the limits view and this month's spend — and nothing is written.
     expect(g.calls.map((c) => `${c.method} ${c.url}`)).toEqual([
       "GET /api/govern?project_id=p1&view=limits", "GET /api/govern?project_id=p1&view=spend&window=month"]);
@@ -157,7 +157,7 @@ describe("Screen A — Govern › Spend is the landing", () => {
     const other = $$("[data-testid=gv-home-models-row]").find((li) => li.children[0].textContent === "Other spend")!;
     expect(other.children[0].getAttribute("title")).toBe("Money no model call explains: tools, provider charges, unattributed");
     expect(rows("gv-home-projects")).toEqual([["HelpDesk AI", "$412"], ["Billing", "$172"]]);
-    expect(t("[data-testid=gv-hero-scope]")).toBe("This project · HelpDesk AI");
+    expect(t("[data-testid=gv-hero-scope]")).toBe("This project, HelpDesk AI");
     await click($("[data-testid=gv-where]"));
     expect($("[data-testid=gv-spend]")).not.toBeNull();
     expect($("[data-testid=gv-by-agent]")).not.toBeNull();
@@ -190,7 +190,7 @@ describe("Screen A — Govern › Spend is the landing", () => {
     expect(`$${models / M}`).toBe(hero);
     expect(t("[data-testid=gv-hero-held-line]")).toBe("$40.00 held");
     await click($("[data-testid=gv-tab-limits]"));
-    expect(t("[data-testid=gv-hint-month]")).toBe(`Used ${hero} · resets Dec 1`);
+    expect(t("[data-testid=gv-hint-month]")).toBe(`Used ${hero}, resets Dec 1`);
     expect($("[data-testid=gv-proj-p1]")!.textContent).toContain(`${hero} used`);
   });
 
@@ -199,9 +199,9 @@ describe("Screen A — Govern › Spend is the landing", () => {
     const month = v.meter.periods[1];
     expect(badgeOf(v.meter, { ...month, forecast_usd_micros: 1200 * M }, "pause")).toEqual({ tone: "yellow", text: "Near the cap" });
     const at = { ...v.meter, periods: [v.meter.periods[0], { ...month, actual_usd_micros: 1000 * M, spent_usd_micros: 1000 * M }] };
-    expect(badgeOf(at, at.periods[1], "pause").text).toBe("At the cap — new work paused");
-    expect(badgeOf(at, at.periods[1], "cheaper").text).toBe("At the cap — cheaper models");
-    expect(badgeOf(at, at.periods[1], "stop")).toEqual({ tone: "red", text: "At the cap — stopped" });
+    expect(badgeOf(at, at.periods[1], "pause").text).toBe("At the cap, new work paused");
+    expect(badgeOf(at, at.periods[1], "cheaper").text).toBe("At the cap, cheaper models");
+    expect(badgeOf(at, at.periods[1], "stop")).toEqual({ tone: "red", text: "At the cap, stopped" });
   });
 
   it("keeps every old Govern place one click away under More", async () => {
@@ -237,7 +237,7 @@ describe("Screen B — Govern › Limits", () => {
     await openLimits();
     const value = (id: string) => ($(`[data-testid=${id}]`) as HTMLInputElement).value;
     expect([value("gv-input-month"), value("gv-input-day"), value("gv-input-burst")]).toEqual(["1000", "100", "2"]);
-    expect(t("[data-testid=gv-hint-month]")).toBe("Used $412 · resets Dec 1");
+    expect(t("[data-testid=gv-hint-month]")).toBe("Used $412, resets Dec 1");
     expect(t("[data-testid=gv-hint-day]")).toBe("Used $38.00 today");
     expect(t("[data-testid=gv-hint-burst]")).toBe("Stops a runaway loop fast");
     expect(($("[data-testid=gv-atlimit-pause]") as HTMLInputElement).checked).toBe(true);
@@ -278,7 +278,7 @@ describe("Screen B — Govern › Limits", () => {
       slider.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await wait(400);
-    expect(t("[data-testid=gv-limits-pace-sets]")).toBe("Sets $5,040/month · $252/day · $5.25/min burst · 11 jobs · 15 workers");
+    expect(t("[data-testid=gv-limits-pace-sets]")).toBe("Sets $5,040/month, $252/day, $5.25/min burst, 11 jobs, 15 workers");
     const value = (id: string) => ($(`[data-testid=${id}]`) as HTMLInputElement).value;
     expect([value("gv-input-month"), value("gv-input-day"), value("gv-input-burst")]).toEqual(["5040", "252", "5.25"]);
     // The 30-day replay follows the caps Pace set.

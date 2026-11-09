@@ -211,7 +211,7 @@ describe("a step that failed while the run went on", () => {
   it("reads as failed, not as 'not run'", () => {
     // Saying "not run" about work that ran and died hides something worth fixing.
     expect(DW).toContain("function failedButContinued");
-    expect(DW).toContain("failed — went on");
+    expect(DW).toContain("failed, went on");
     expect(DW).toContain('"dw-step-failed-on"');
   });
 
@@ -224,7 +224,7 @@ describe("a step that failed while the run went on", () => {
     const research = { ...base, step_id: "research", status: "failed",
                        output: { recorded_as: "failed_continued" } } as RunStep;
     const build = { ...base, step_id: "build", status: "running", output: {} } as RunStep;
-    expect(laneStateOf(research)).toMatchObject({ phase: "failed", meta: "failed — went on" });
+    expect(laneStateOf(research)).toMatchObject({ phase: "failed", meta: "failed, went on" });
     expect(laneStateOf(build).phase).toBe("moving");
     expect(codeOnly("app/workflows/flow/flow-lane.tsx"))
       .toContain('previous === "skipped" || previous === "failed"');

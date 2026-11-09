@@ -10,7 +10,7 @@
  * allowed only when the server says `decide_inline` (a gate at risk tier ≤ 2 with nothing to
  * type and its preview's hash in hand); anything else is `Review ↗`, into Approvals. The press
  * goes through the same server action the Approvals inbox posts, with the same content hash,
- * so the engine refuses here exactly what it refuses there — and its sentence is shown.
+ * so the engine refuses here exactly what it refuses there, and its sentence is shown.
  *
  * NEVER A GUESSED FACE. The attributed agent's face, or the BOSS glyph (setup, refusals) or
  * `You` (a gate on a run you started) when the server attributes none.
@@ -60,7 +60,7 @@ export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind"> & { 
   return KIND_WORD[item.decisionKind ?? ""] ?? "Decision";
 }
 
-/** Who a card is about: the attributed agent, else the BOSS glyph — never a guess, and never
+/** Who a card is about: the attributed agent, else the BOSS glyph, never a guess, and never
  *  the person glyph: the card is asking you, it is not by you (walk D16). */
 export function cardWho(item: Pick<AttentionItem, "roleKey" | "kind" | "decisionKind" | "id">):
     { roleKey: string | null; variant: "agent" | "boss" } {
@@ -149,7 +149,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   const [waiving, setWaiving] = useState(false);
   // A system-health option that stops something a person started asks first, like Stop.
   const [confirmingOpt, setConfirmingOpt] = useState<AttentionAnswer | null>(null);
-  // What the option did, said in place ("Freed 1.2 GB · pressure 12% → 1%").
+  // What the option did, said in place ("Freed 1.2 GB, pressure 12% → 1%").
   const [done, setDone] = useState("");
   // Why it is a no (optional chips, sent with the reject): the same reasons as a build's rating.
   const [why, setWhy] = useState<string[]>([]);
@@ -199,8 +199,8 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
                            rejectKind(item.decisionKind, run?.stepId, item.build?.where));
         }
         finish(action.action === "approve"
-          ? (run ? `Approved · ${subject} continues` : "Approved")
-          : (run ? "Rejected · step failed" : "Rejected"));
+          ? (run ? `Approved, ${subject} continues` : "Approved")
+          : (run ? "Rejected, step failed" : "Rejected"));
       } else {
         setError(result.error ?? "");
         onRefresh?.();
@@ -367,17 +367,17 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           <a className="ag-att-run" href={buildHref} data-testid="ag-att-build"
              onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(buildPatch(build.runId)); } }}>
             <span data-user-text>{build.app}</span>
-            {build.where ? <span className="ag-att-step"> · {build.where}</span> : null}
+            {build.where ? <span className="ag-att-step">, {build.where}</span> : null}
           </a>
         ) : run?.id ? (
           <a className="ag-att-run" href={runHref}
              onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(runPatch(run.id)); } }}>
             <span data-user-text>{subject}</span>
-            {k && run.stepCount ? <span className="ag-att-step"> · step {k} of {run.stepCount}</span> : null}
+            {k && run.stepCount ? <span className="ag-att-step">, step {k} of {run.stepCount}</span> : null}
           </a>
         ) : <span className="ag-att-kind">{kindWord(item)}</span>}
-        {run?.id && item.kind === "failed_step" ? <span className="ag-att-failed"> · Failed</span> : null}
-        {run?.id && item.kind === "approval" ? <span className="ag-att-kind"> · {kindWord(item)}</span> : null}
+        {run?.id && item.kind === "failed_step" ? <span className="ag-att-failed">, Failed</span> : null}
+        {run?.id && item.kind === "approval" ? <span className="ag-att-kind">, {kindWord(item)}</span> : null}
       </div>
 
       {density === "row" && item.detail ? (
@@ -538,12 +538,12 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
               <a href={runHref} onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(runPatch(run.id)); } }}>
                 <span data-user-text>{subject}</span>
               </a>
-              {k && run.stepCount ? <span> · step {k} of {run.stepCount}</span> : null}
+              {k && run.stepCount ? <span>, step {k} of {run.stepCount}</span> : null}
             </dd></>
           ) : null}
           {item.preview ? <><dt>Preview</dt><dd data-user-text>{item.preview}</dd></> : null}
           {build && build.failing.length ? (
-            <><dt>Failed</dt><dd>{build.failing.map((g) => g.label).join(" · ")}</dd></>
+            <><dt>Failed</dt><dd>{build.failing.map((g) => g.label).join(", ")}</dd></>
           ) : null}
           {build && item.kind === "approval" && item.decisionKind !== "pull_request" ? (
             <><dt className="ag-sr">Plan</dt><dd>

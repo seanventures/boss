@@ -31,7 +31,7 @@ export function ChaosCard({ projectId, runs }: { projectId: string; runs: ChaosR
                 <h4 style={{ margin: 0 }}>{r.scenario}</h4>
                 <p className="detail">{r.detail}</p>
               </div>
-              <span className="pill" style={{ color: r.recovered ? "#3fb950" : "#f85149" }}>
+              <span className="pill" style={{ color: r.recovered ? "var(--boss-c-3fb950)" : "var(--boss-c-f85149)" }}>
                 {r.recovered ? "recovered" : "failed"}
               </span>
             </div>

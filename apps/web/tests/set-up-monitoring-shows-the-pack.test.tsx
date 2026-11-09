@@ -57,7 +57,7 @@ describe("Set up monitoring's pack", () => {
     expect(pay.querySelector("[data-testid='mp-rule-runbook']")?.textContent).toBe("Runbook: Payments are failing");
     expect(pay.querySelector("[data-testid='mp-rule-expr']")?.textContent).toContain("payment_failures_total");
     expect($("[data-testid='mp-tuned']")?.textContent).toContain("Tuned 1 rule");
-    expect($("[data-testid='mp-foot']")?.textContent).toContain("2 rules · 2 runbooks · 1 dashboard panel");
+    expect($("[data-testid='mp-foot']")?.textContent).toContain("2 rules, 2 runbooks, 1 dashboard panel");
     expect($("[data-testid='mp-rules-link']")?.getAttribute("href")).toContain("atab=alerts");
     expect($("[data-testid='mp-dashboard-link']")?.getAttribute("href")).toContain("boss-order-api");
   });

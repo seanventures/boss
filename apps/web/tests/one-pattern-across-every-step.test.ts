@@ -29,8 +29,8 @@ describe("every step follows the same rule", () => {
 
   it("a decided gate keeps its headline and moves the elaboration", () => {
     // "Approved — starting." is news. The paragraph after it is not.
-    expect(UI).toContain("<strong>Approved — starting.</strong>");
-    const at = UI.indexOf("<strong>Approved — starting.</strong>");
+    expect(UI).toContain("<strong>Approved, starting.</strong>");
+    const at = UI.indexOf("<strong>Approved, starting.</strong>");
     expect(UI.slice(at, at + 300)).toContain("<Explain");
   });
 

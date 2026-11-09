@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Skills & MCP — what your crew can do (skills-mcp spec §5).
+ * Skills & MCP, what your crew can do (skills-mcp spec §5).
  *
  * THREE TABS, ONE HOME PER JOB. `Kit` (default) is the abilities, grouped by outcome, each with
  * one status and one button, and on a fresh install the Essentials strip that takes it to "my
@@ -89,9 +89,9 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
     setTesting((t) => new Set(t).add(key));
     const r = await kitApi.test(projectId, actor, key);
     setTesting((t) => { const n = new Set(t); n.delete(key); return n; });
-    if (!r.ok) { showToast("error", `Test failed · ${shortError(r.error)}`); return; }
-    if (r.data.ok) showToast("success", `Test passed · ${r.data.fact ?? ""}`.trim());
-    else showToast("error", `Test failed · ${shortError(r.data.error)}`);
+    if (!r.ok) { showToast("error", `Test failed, ${shortError(r.error)}`); return; }
+    if (r.data.ok) showToast("success", `Test passed, ${r.data.fact ?? ""}`.trim());
+    else showToast("error", `Test failed, ${shortError(r.data.error)}`);
     replace(r.data.ability);
   }, [projectId, actor, replace, testGate.allowed, testGate.reason]);
 
@@ -116,14 +116,14 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
     setTesting(new Set());
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
     const failed = Object.values(r.data.tests).filter((t) => !t.ok).length;
-    showToast(failed ? "error" : "success", failed ? `Test failed · ${plural(failed, "ability", "abilities")}` : "Test passed · all");
+    showToast(failed ? "error" : "success", failed ? `Test failed, ${plural(failed, "ability", "abilities")}` : "Test passed, all");
     setKit(r.data.kit);
   };
 
   const applyRecommended = async () => {
     const r = await kitApi.recommended(projectId, actor);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", `Applied recommended · ${plural(r.data.granted.length, "grant")}`);
+    showToast("success", `Applied recommended, ${plural(r.data.granted.length, "grant")}`);
     void load("none");
   };
 

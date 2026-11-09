@@ -256,7 +256,7 @@ describe("the re-check of f923b20c", () => {
     const options = [...host!.querySelectorAll('[data-testid="meeting-task-select"] option')].map((o) => o.textContent);
     expect(options[1]).toMatch(/^Small internal status page that lists/);
     for (const w of SCAFFOLD_WORDS) expect(options[1]).not.toContain(w);
-    expect(host!.querySelector('[data-testid="panels-counts"]')!.textContent).toContain("140 panels · 96 became PRDs");
+    expect(host!.querySelector('[data-testid="panels-counts"]')!.textContent).toContain("140 panels, 96 became PRDs");
     act(() => (host!.querySelector('[data-testid="maint-vote"]') as HTMLButtonElement).click());
     expect(host!.querySelector('[data-testid="maint-vote-none"]')!.textContent).toContain("nothing to vote on");
   });

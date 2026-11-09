@@ -1,16 +1,16 @@
 "use client";
 
 /**
- * RESEARCH — cited dossiers (area `discovery`).
+ * RESEARCH, cited dossiers (area `discovery`).
  *
  * Not a sidebar page: the usual way in is a workflow run's research step, whose panel shows
  * `DossierCompact` and links here for the full view. The Command Center's Build split, the
  * Factory and old links still land on this area. The look is the approved mockup
  * (boss-research-panels-mockup: research-home, dossier); styles in research/research.css.
  *
- *   Research home — hero (ask, context, Deep, Research →), totals, dossier cards with verdict
+ *   Research home, hero (ask, context, Deep, Research →), totals, dossier cards with verdict
  *                   filters and search.
- *   Dossier       — hero with the phase stepper (live while running) and the verdict card;
+ *   Dossier      , hero with the phase stepper (live while running) and the verdict card;
  *                   candidate outcomes, cited signals, the critic, market and research brief.
  */
 import React, { useActionState, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -87,8 +87,7 @@ function PromoteOutcome({ runId, idx, promotedTaskId, promotedMeetingId, small =
     const href = consoleHref(search, meeting ? { area: "meetings", meeting } : { area: "meetings", task: taskId });
     return (
       <a className={`rp-btn${small ? " sm" : ""}`} href={href} data-testid="dossier-panel-open">
-        Open the panel →
-      </a>
+        Open the panel</a>
     );
   }
   return (
@@ -111,8 +110,7 @@ function DeepenButton({ runId, small = false, primary = false }: { runId: string
     return (
       <a className={`rp-btn${small ? " sm" : ""}`} data-testid="dossier-deeper-started"
          href={consoleHref(search, { area: "discovery", run: state.runId })}>
-        Deeper pass started →
-      </a>
+        Deeper pass started</a>
     );
   }
   return (
@@ -128,12 +126,12 @@ function DeepenButton({ runId, small = false, primary = false }: { runId: string
   );
 }
 
-/** Research the same seed again — a failed dossier's way forward. */
+/** Research the same seed again, a failed dossier's way forward. */
 function ResearchAgain({ projectId, seed, context }: { projectId: string; seed: string; context?: string | null }) {
   const search = useSearch();
   const [state, action, pending] = useActionState(callAction(startDiscoveryAction, undefined, "discovery:create"), null);
   if (state?.runId) {
-    return <a className="rp-btn" href={consoleHref(search, { area: "discovery", run: state.runId })}>Researching again →</a>;
+    return <a className="rp-btn" href={consoleHref(search, { area: "discovery", run: state.runId })}>Researching again</a>;
   }
   return (
     <form action={action}>
@@ -168,18 +166,18 @@ function ResearchHero({ projectId, researchAvailable, discoveries, totals, onSta
     <section className="rp-hero" data-testid="research-hero">
       <div className="rp-aurora" aria-hidden />
       <div className="rp-hero-l">
-        <div className="rp-eyebrow"><span className="rp-dot" aria-hidden />Research · cited dossiers in about 4 minutes</div>
-        <h2 className="rp-h2">What should your team <em>find out?</em></h2>
+        <div className="rp-area-name"><span className="rp-dot" aria-hidden />Research, cited dossiers in about 4 minutes</div>
+        <h2 className="rp-h2">What should your team find out?</h2>
         {researchAvailable ? (
           <form action={action} className="rp-composer" data-testid="research-form">
             <input type="hidden" name="project_id" value={projectId} />
             <label className="rp-sr" htmlFor="rp-seed">The idea, problem or market to research</label>
             <textarea id="rp-seed" name="seed" required rows={2} data-testid="research-seed"
-                      placeholder="An idea, a problem or a market — e.g. “Would small agencies pay for a tool that drafts replies to inbound leads?”" />
+                      placeholder="An idea, a problem or a market, e.g. “Would small agencies pay for a tool that drafts replies to inbound leads?”" />
             <div className="rp-c-row">
               <label className="rp-sr" htmlFor="rp-context">Context</label>
               <input id="rp-context" name="context" className="rp-ctx"
-                     placeholder="Context (optional) — who you sell to, constraints" />
+                     placeholder="Context (optional), who you sell to, constraints" />
               <label className="rp-toggle" title="A multi-source scout sweep: richer, more cited, slower">
                 <input type="checkbox" name="deep" data-testid="research-deep" /><i aria-hidden />Deep
               </label>
@@ -245,12 +243,12 @@ function DossierCard({ d, onOpen }: { d: DiscoveryListItem; onOpen: () => void }
           <Ring value={sum?.confidence ?? 0} size={40} />
           <span className="rp-dnums">
             <span><b>{sum?.findings ?? 0}</b> cited signals</span>
-            <span><b>{sum?.outcomes ?? 0}</b> outcome{sum?.outcomes === 1 ? "" : "s"}{d.usage?.cost_usd_micros != null ? ` · ${usd(d.usage.cost_usd_micros)}` : ""}</span>
+            <span><b>{sum?.outcomes ?? 0}</b> outcome{sum?.outcomes === 1 ? "" : "s"}{d.usage?.cost_usd_micros != null ? `, ${usd(d.usage.cost_usd_micros)}` : ""}</span>
           </span>
         </span>
       )}
       {d.attention && d.status !== "failed" ? (
-        <span className="rp-card-note" data-tone="wait" data-testid="discovery-row-attention">⏳ {d.attention.headline}</span>
+        <span className="rp-card-note" data-tone="wait" data-testid="discovery-row-attention"> {d.attention.headline}</span>
       ) : null}
     </button>
   );
@@ -269,7 +267,7 @@ export function DiscoveriesHome({
   totals?: DiscoveryTotals | null;
   apiReachable: boolean;
   researchAvailable?: boolean;
-  /** A dossier named in the URL — `?area=discovery&run=drun_…`, which is what the workflow's
+  /** A dossier named in the URL, `?area=discovery&run=drun_…`, which is what the workflow's
    *  research step links to. Without this the id in the link was ignored and every "open the
    *  research" arrived at the list of every discovery the project had ever run. */
   initialDiscoveryId?: string | null;
@@ -278,7 +276,7 @@ export function DiscoveriesHome({
   // THE PROP IS READ ON EVERY NAVIGATION, NOT ONLY THE FIRST MOUNT.
   //
   // The console renders all fifty areas at once and shows one, so this component has ALREADY
-  // mounted — with no dossier in the URL — long before the operator clicks "open the research"
+  // mounted, with no dossier in the URL, long before the operator clicks "open the research"
   // on a workflow step. `useState(initialDiscoveryId)` captures its argument once, so the id
   // arriving in the URL changed the prop and nothing else.
   useEffect(() => {
@@ -371,9 +369,9 @@ export function DiscoveriesHome({
             Dossiers will show here once it is back.</div>
         ) : discoveries.length === 0 ? (
           <div className="rp-empty" data-testid="research-empty"><b>No dossiers yet.</b>
-            {researchAvailable ? "Ask a question above — or run a workflow, whose first step researches it."
+            {researchAvailable ? "Ask a question above, or run a workflow, whose first step researches it."
               : "Saved dossiers appear here."}
-            <AreaLink area="delivery_workflows" className="rp-link">Start a workflow →</AreaLink></div>
+            <AreaLink area="delivery_workflows" className="rp-link">Start a workflow</AreaLink></div>
         ) : shown.length === 0 ? (
           <div className="rp-empty"><b>Nothing matches.</b>
             <button type="button" className="rp-link" onClick={() => { setFilter("all"); setQuery(""); }}>Show all</button></div>
@@ -436,9 +434,9 @@ function VerdictCard({ run, projectId, researchAvailable }: {
       <Verdict tone={v.tone} big>{v.tone === "good" ? "◆ " : ""}{v.label}</Verdict>
       <Ring value={gate?.confidence ?? 0} size={92} big color="var(--rp-mint)" />
       <div className="rp-vsub">
-        confidence{gate?.thesis_confidence != null ? ` · thesis ${pct(gate.thesis_confidence)}%` : ""}
-        {gate?.best_outcome_confidence != null ? ` · best outcome ${pct(gate.best_outcome_confidence)}%` : ""}
-        {gate?.cited_sources != null ? ` · ${gate.cited_sources} sources` : ""}
+        confidence{gate?.thesis_confidence != null ? `, thesis ${pct(gate.thesis_confidence)}%` : ""}
+        {gate?.best_outcome_confidence != null ? `, best outcome ${pct(gate.best_outcome_confidence)}%` : ""}
+        {gate?.cited_sources != null ? `, ${gate.cited_sources} sources` : ""}
       </div>
       {gate?.checks && Object.keys(gate.checks).length ? (
         <ul className="rp-checks" aria-label="Evidence gate">
@@ -479,7 +477,7 @@ function OutcomeCard({ o, index, rank, run, title }: {
       <div className="rp-o-head" data-open={open ? "true" : undefined}>
         <Ring value={o.confidence_0_1 ?? 0} size={54} color={best ? "var(--rp-mint)" : "var(--rp-periwinkle)"} />
         <div>
-          <span className="rp-o-k">Outcome {rank + 1}{best ? " · strongest" : ""}</span>
+          <span className="rp-o-k">Outcome {rank + 1}{best ? ", strongest" : ""}</span>
           <b title={o.outcome}>{o.outcome ?? "An outcome"}</b>
         </div>
       </div>
@@ -524,7 +522,7 @@ function SignalCard({ f, full }: { f: DiscoveryFinding; full: boolean }) {
       {full && f.evidence ? <p className="rp-evidence">{f.evidence}</p> : null}
       {f.citation_url ? (
         <a className="rp-dom" href={f.citation_url} target="_blank" rel="noreferrer" title={f.citation_url}>
-          ↗ {domainOf(f.citation_url)}
+           {domainOf(f.citation_url)}
         </a>
       ) : null}
     </article>
@@ -560,7 +558,7 @@ function CriticCard({ critique }: { critique: NonNullable<DiscoveryRun["state"][
   return (
     <div className="rp-card rp-critic" data-testid="dossier-critic">
       <div className="rp-card-h">
-        <span className="rp-cr-ic" aria-hidden>⚔</span><b>The critic</b><span className="rp-spacer" />
+        <span className="rp-cr-ic" aria-hidden>Versus</span><b>The critic</b><span className="rp-spacer" />
         {critique.overall_confidence_0_1 != null ? (
           <span className="rp-n" data-tone="bad" title="The critic's confidence in the thesis">{pct(critique.overall_confidence_0_1)}%</span>
         ) : null}
@@ -576,11 +574,11 @@ function CriticCard({ critique }: { critique: NonNullable<DiscoveryRun["state"][
       ) : null}
       {claims.length || dis.length > 3 || (critique.biggest_risk ?? "").length > 220 ? (
         <details className="rp-fold">
-          <summary>Everything the critic said{claims.length ? ` · ${claims.length} claims` : ""}</summary>
+          <summary>Everything the critic said{claims.length ? `, ${claims.length} claims` : ""}</summary>
           <div className="rp-claims">
             {critique.biggest_risk ? <p><b>Biggest risk:</b> {critique.biggest_risk}</p> : null}
             {claims.map((c, i) => (
-              <p key={i}><span className="rp-claim-v" data-v={c.verdict}>{c.verdict}</span>{c.claim}{c.reason ? ` — ${c.reason}` : ""}</p>
+              <p key={i}><span className="rp-claim-v" data-v={c.verdict}>{c.verdict}</span>{c.claim}{c.reason ? `, ${c.reason}` : ""}</p>
             ))}
             {dis.map((x, i) => <p key={`d${i}`}>• {x}</p>)}
           </div>
@@ -593,7 +591,7 @@ function CriticCard({ critique }: { critique: NonNullable<DiscoveryRun["state"][
 function MarketCard({ market }: { market: Record<string, unknown> }) {
   const problem = (market.problem ?? {}) as Record<string, unknown>;
   const problemLine = [problem.is_real === true ? "Real" : problem.is_real === false ? "Unproven" : "",
-                       str(problem.frequency)].filter(Boolean).join(" · ");
+                       str(problem.frequency)].filter(Boolean).join(", ");
   const rows: Array<[string, string]> = [
     ["Problem", problemLine || clip(str(problem.statement), 110)],
     ["Segment", clip(str(market.target_segment), 110)],
@@ -619,14 +617,14 @@ function BriefCard({ brief }: { brief: NonNullable<DiscoveryRun["state"]["resear
     <div className="rp-card" data-testid="dossier-brief">
       <div className="rp-card-h"><b>Research brief</b></div>
       {brief.hypothesis ? <p className="rp-hyp" title={brief.hypothesis}>{clip(brief.hypothesis, 200)}</p> : null}
-      <span className="rp-sub">{qs.length} question{qs.length === 1 ? "" : "s"} · {sources.length} source{sources.length === 1 ? "" : "s"} consulted</span>
+      <span className="rp-sub">{qs.length} question{qs.length === 1 ? "" : "s"}, {sources.length} source{sources.length === 1 ? "" : "s"} consulted</span>
       {qs.length || sources.length || (brief.hypothesis ?? "").length > 200 ? (
         <details className="rp-fold">
           <summary>The brief</summary>
           <div className="rp-qs">
             {(brief.hypothesis ?? "").length > 200 ? <p><b>Hypothesis:</b> {brief.hypothesis}</p> : null}
             {qs.length ? <ol>{qs.map((q, i) => <li key={i}>{q}</li>)}</ol> : null}
-            {sources.length ? <p><b>Sources:</b> {sources.map((s) => domainOf(s) || s).join(" · ")}</p> : null}
+            {sources.length ? <p><b>Sources:</b> {sources.map((s) => domainOf(s) || s).join(", ")}</p> : null}
           </div>
         </details>
       ) : null}
@@ -635,7 +633,7 @@ function BriefCard({ brief }: { brief: NonNullable<DiscoveryRun["state"]["resear
 }
 
 /** One dossier. The row from the list paints the hero at once; the dossier itself is fetched
- *  here, by id — so a link to one older than the list still opens it — and re-read while live. */
+ *  here, by id, so a link to one older than the list still opens it, and re-read while live. */
 function DiscoveryDetail({ id, row, projectId, actor = "", researchAvailable, onBack }: {
   id: string;
   row: DiscoveryListItem | null;
@@ -672,11 +670,11 @@ function DiscoveryDetail({ id, row, projectId, actor = "", researchAvailable, on
       <button type="button" className="rp-back" onClick={onBack}>← All dossiers</button>
       <section className="rp-dhero">
         <div className="rp-dh-l">
-          <div className="rp-eyebrow">
+          <div className="rp-area-name">
             <span className="rp-dot" data-tone={live ? undefined : run.status === "failed" ? "bad" : "idle"} aria-hidden />
-            Dossier<Ago iso={run.created_at} prefix=" · " />
-            {run.usage?.cost_usd_micros != null ? ` · ${usd(run.usage.cost_usd_micros)}` : ""}
-            {deep ? " · Deep" : ""}
+            Dossier<Ago iso={run.created_at} prefix=", " />
+            {run.usage?.cost_usd_micros != null ? `, ${usd(run.usage.cost_usd_micros)}` : ""}
+            {deep ? ", Deep" : ""}
           </div>
           <h2 className="rp-dh-t">{title}</h2>
           {line ? <p className="rp-dh-s">{line}</p> : null}
@@ -721,7 +719,7 @@ function DiscoveryDetail({ id, row, projectId, actor = "", researchAvailable, on
                   {signals.length > 6 || signals.some((f) => f.evidence) ? (
                     <button type="button" className="rp-link" aria-expanded={allSignals}
                             onClick={() => setAllSignals((x) => !x)} data-testid="dossier-all-signals">
-                      {allSignals ? "Fewer" : `All ${signals.length} ↗`}
+                      {allSignals ? "Fewer" : `All ${signals.length} `}
                     </button>
                   ) : null}
                 </div>
@@ -786,7 +784,7 @@ export function DossierCompact({ discoveryId, researchAvailable = true }: {
                 : [gate?.cited_sources != null ? `${gate.cited_sources} sources` : signals ? `${signals} signals` : "",
                    `${outcomes.length} outcome${outcomes.length === 1 ? "" : "s"}`,
                    d.critique?.overall_confidence_0_1 != null ? `critic ${pct(d.critique.overall_confidence_0_1)}%` : "",
-                   run.usage?.cost_usd_micros != null ? usd(run.usage.cost_usd_micros) : ""].filter(Boolean).join(" · ")}
+                   run.usage?.cost_usd_micros != null ? usd(run.usage.cost_usd_micros) : ""].filter(Boolean).join(", ")}
             </span>
           </div>
           <b className="rp-cmp-title">{dossierTitle(run)}</b>
@@ -824,10 +822,10 @@ function AttentionBanner({ attention }: { attention: ModelAttention }) {
   return (
     <div className="rp-attn" data-tone={waiting ? "wait" : undefined} role="status"
          data-testid="discovery-attention" data-kind={attention.kind}>
-      <b>{waiting ? "⏳" : "⚠"} {attention.headline}</b>
+      <b>{waiting ? "Waiting" : "Warning"} {attention.headline}</b>
       <span>
         {attention.action}
-        {attention.href ? <> <a href={attention.href}>Open →</a></> : null}
+        {attention.href ? <> <a href={attention.href}>Open</a></> : null}
       </span>
       {attention.detail ? <span>{attention.detail}</span> : null}
     </div>

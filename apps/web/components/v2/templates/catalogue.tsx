@@ -124,7 +124,7 @@ export function connectorBlock(card: TemplateCard, selected: TemplateCard[], inA
  * sheet, two to six through one build (the compose sheet). A card the server would refuse is
  * greyed with the reason (already in the app, the limit, no shared stack); conflicts between
  * the ones added are the sheet's to list. Each card is a toggle button (aria-pressed), so Tab
- * and Space/Enter pick and unpick; its state says its place in the build ("Added ✓ · 2 of 3")
+ * and Space/Enter pick and unpick; its state says its place in the build ("Added ✓, 2 of 3")
  * and the live note says how many are added.
  */
 export function ConnectorCards({ cards, stack, selected, inApp = [], appName, onSelect, testId = "np-connectors", heading = "Connectors",
@@ -167,7 +167,7 @@ export function ConnectorCards({ cards, stack, selected, inApp = [], appName, on
                     onClick={() => { if (!why) onSelect(on ? selected.filter((s) => s.key !== c.key) : [...selected, c]); }}>
               <span className="np-conn-top">
                 <span className="np-conn-icon"><Icon size={22} aria-hidden /></span>
-                <span className="np-conn-state">{there ? "Already in the app" : on ? (chosen.length > 1 ? `Added ✓ · ${at} of ${chosen.length}` : "Added ✓") : "+ Add"}</span>
+                <span className="np-conn-state">{there ? "Already in the app" : on ? (chosen.length > 1 ? `Added ✓, ${at} of ${chosen.length}` : "Added ✓") : "+ Add"}</span>
               </span>
               <b>{c.name}</b>
               <span className="np-conn-line">{there ? "Added in an earlier build." : c.summary}</span>
@@ -177,7 +177,7 @@ export function ConnectorCards({ cards, stack, selected, inApp = [], appName, on
       </div>
       <span className="np-conn-note" data-testid={`${testId}-note`} role="status" aria-live="polite"
             title={`Pick up to ${MAX_CONNECTORS}. Two or more are added in one build, wired in the order picked; a connector another needs goes first. Each keeps its own tests as a gate.`}>
-        {chosen.length > 1 ? `${chosen.length} added · one build` : `Up to ${MAX_CONNECTORS} in one build`}
+        {chosen.length > 1 ? `${chosen.length} added, one build` : `Up to ${MAX_CONNECTORS} in one build`}
       </span>
     </section>
   );

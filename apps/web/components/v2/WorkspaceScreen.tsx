@@ -3,7 +3,7 @@
 import { changeHref, linkTarget } from "../../lib/repo-links";
 import Link from "next/link";
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import React from "react";
 
 import type { V2Deployment, V2Evidence, V2Gate, V2Provenance, V2Run, V2Step, Workspace }
@@ -18,8 +18,8 @@ import { DeployControls } from "./DeployControls";
  * ---------------------------------------
  * "no such app", "this app has no runs" and "the control plane did not answer" all render as
  * an empty page, and they call for completely different reactions. Conflating them is a
- * recurring defect in this console — an outage read as an empty company, a deployed app read
- * as never deployed — so each one says which it is.
+ * recurring defect in this console, an outage read as an empty company, a deployed app read
+ * as never deployed, so each one says which it is.
  *
  * WHY EVERY ATTEMPT IS LISTED
  * ---------------------------
@@ -40,7 +40,7 @@ export function WorkspaceScreen({
   workspace: Workspace;
   orgId?: string;
   /** Who is acting. NEVER invented: defaulting to "operator" got the API's refusal
-   *  "Authenticated principal 'ceo' is not allowed to act as 'operator'", which was right —
+   *  "Authenticated principal 'ceo' is not allowed to act as 'operator'", which was right , 
    *  claiming a principal you are not is impersonation whether or not it was meant. */
   actor?: string;
 }) {
@@ -52,7 +52,7 @@ export function WorkspaceScreen({
         <BackLink q={q} />
         <p className="v2-empty">
           Could not reach the control plane ({workspace.blockedReason}). Nothing here is a
-          statement about this app — it will appear once the API answers.
+          statement about this app, it will appear once the API answers.
         </p>
       </section>
     );
@@ -83,7 +83,7 @@ export function WorkspaceScreen({
         <p className="v2-screen-sub">{workspace.description}</p>
 
         {/* The contract this work was accepted against. Collapsed, because it is reference
-            material you consult rather than read -- but present, because without it the
+            material you consult rather than read, but present, because without it the
             quality checks below are marks with no exam paper. */}
         <Contract criteria={workspace.criteria} verification={workspace.verification} />
 
@@ -128,7 +128,7 @@ export function WorkspaceScreen({
       >
         {workspace.deployable
           ? "Reviewed and ready to ship."
-          : `Cannot ship yet — ${workspace.deployable_reason}`}
+          : `Cannot ship yet, ${workspace.deployable_reason}`}
       </p>
 
       {/* The four controls, on the app rather than buried in a list of runs. They issue the
@@ -136,7 +136,7 @@ export function WorkspaceScreen({
           Server-Action path, and reusing them is what lets the parity check report MOVED
           instead of MISSING. */}
       {/* WHERE IT IS RUNNING. The operator asked why the console could not load this when the
-          app was plainly deployed — the state was never missing, v2 just never read
+          app was plainly deployed, the state was never missing, v2 just never read
           deployment_targets.domains or the deploy runs beside them. */}
       {workspace.deployment ? <Deployment d={workspace.deployment} /> : null}
 
@@ -182,10 +182,10 @@ function Deployment({ d }: { d: V2Deployment }) {
     <div className="v2-deployment" data-testid="v2-deployment">
       <span className="v2-deploy-env v2-mono" data-status={d.status}>
         {d.environment || "deployed"}
-        {d.status && d.status !== "active" ? ` · ${d.status}` : ""}
+        {d.status && d.status !== "active" ? `, ${d.status}` : ""}
       </span>
 
-      {/* The link the operator was looking for. Only when there is an address — a bound target
+      {/* The link the operator was looking for. Only when there is an address, a bound target
           with no domain is not a link, and a broken link is worse than none. */}
       {d.url ? (
         <a className="v2-deploy-url v2-mono" href={d.url} target="_blank" rel="noreferrer"
@@ -202,9 +202,9 @@ function Deployment({ d }: { d: V2Deployment }) {
         <span className="v2-deploy-last v2-mono" data-status={last.status}
               data-testid="v2-deploy-last">
           last deploy {last.status}
-          {last.commit ? ` · ${last.commit}` : ""}
+          {last.commit ? `, ${last.commit}` : ""}
           {/* Why it failed, on the screen. Otherwise "failed" is another dead end. */}
-          {last.failure_reason ? ` — ${last.failure_reason}` : ""}
+          {last.failure_reason ? `, ${last.failure_reason}` : ""}
         </span>
       ) : (
         <span className="v2-row-meta-dim v2-mono">never deployed</span>
@@ -252,12 +252,12 @@ function RunRow({ run }: { run: V2Run }) {
       <span className="v2-row-main">
         <span className="v2-row-title v2-mono">
           attempt {run.attempt}
-          <span className="v2-row-meta-dim"> · {run.id}</span>
+          <span className="v2-row-meta-dim">, {run.id}</span>
         </span>
 
         {/* WHAT THIS ATTEMPT WAS DOING, in sentences.
             "blocked" plus a list of stage names tells someone who already knows the pipeline
-            what happened and tells everyone else nothing — and it reads as a failure even when
+            what happened and tells everyone else nothing, and it reads as a failure even when
             the pipeline is simply holding for an approval. */}
         {run.narrative ? (
           <span className="v2-narrative" data-waiting={run.narrative.waiting}
@@ -278,8 +278,8 @@ function RunRow({ run }: { run: V2Run }) {
           </span>
         ) : null}
 
-        {/* THE STEPS THIS ATTEMPT RAN — which stage, which model, how long, what it cost.
-            "attempt 3 — failed" and nothing else leaves reading logs as the only next move. */}
+        {/* THE STEPS THIS ATTEMPT RAN, which stage, which model, how long, what it cost.
+            "attempt 3, failed" and nothing else leaves reading logs as the only next move. */}
         {run.steps.length > 0 ? (
           <ol className="v2-steps" data-testid={`v2-run-steps-${run.id}`}>
             {run.steps.map((s, i) => (
@@ -345,7 +345,7 @@ function fmtDuration(ms: number): string {
 /**
  * What the governed pipeline checked, who checked it, and what they wrote.
  *
- * v1 showed all of this and v2 showed none of it -- the columns were being SELECTed and thrown
+ * v1 showed all of this and v2 showed none of it, the columns were being SELECTed and thrown
  * away, so an attempt rendered as "attempt 1 - completed" and the only move left was to go and
  * read logs. The operator asked for the v1 content back, and it is the content that makes a
  * green tick mean something.
@@ -381,7 +381,7 @@ function RunEvidence({ run }: { run: V2Run }) {
       {/* A green header above a red row is unreadable unless you say which one won. */}
       {run.advisory ? (
         <p className="v2-gate-advisory" data-testid={`v2-gate-advisory-${run.id}`}>
-          First-pass build: the checks below are advisory — a ✗ did not block the PR. Shipped so
+          First-pass build: the checks below are advisory, a ✗ did not block the PR. Shipped so
           you can preview now; retry to clear it.
         </p>
       ) : null}
@@ -425,7 +425,7 @@ function RunEvidence({ run }: { run: V2Run }) {
   );
 }
 
-/** One check. Three states, never two — see the engine's _gate_rows for why the third matters. */
+/** One check. Three states, never two, see the engine's _gate_rows for why the third matters. */
 function GateRow({ g, runId }: { g: V2Gate; runId: string }) {
   const mark = g.skipped ? "–" : g.ok ? "✓" : "✗";
   const tone = g.skipped ? "skip" : g.ok ? "good" : "bad";
@@ -437,7 +437,7 @@ function GateRow({ g, runId }: { g: V2Gate; runId: string }) {
     >
       <span className="v2-gate-mark" aria-hidden>{mark}</span>
       <span className="v2-gate-label">{g.label}</span>
-      {/* "not run" is stated, never left blank — a blank reads as a pass. */}
+      {/* "not run" is stated, never left blank, a blank reads as a pass. */}
       <span className="v2-gate-note">{g.note ?? (g.skipped ? "not run" : "")}</span>
     </li>
   );
@@ -448,22 +448,22 @@ function Provenance({ p, runId }: { p: V2Provenance; runId: string }) {
     <div className="v2-provenance" data-testid={`v2-provenance-${runId}`}>
       <p className="v2-provenance-line">
         Independent reviewer: <b>{p.reviewer_independent ? "yes" : "no"}</b>
-        {" · "}Independent test author: <b>{p.test_author_independent ? "yes" : "no"}</b>
-        {p.profile ? <> · profile: <b>{p.profile}</b></> : null}
-        {p.risk_tier != null ? <> · risk tier <b>{p.risk_tier}</b></> : null}
+        {", "}Independent test author: <b>{p.test_author_independent ? "yes" : "no"}</b>
+        {p.profile ? <>, profile: <b>{p.profile}</b></> : null}
+        {p.risk_tier != null ? <>, risk tier <b>{p.risk_tier}</b></> : null}
       </p>
       {p.build_engine || p.review_engine ? (
         <p className="v2-provenance-line">
           Builder: <b>{p.build_engine ?? "—"}</b>
           {p.build_model ? ` (${p.build_model})` : ""}
-          {" · "}Adversary: <b>{p.review_engine ?? "—"}</b>
+          {", "}Adversary: <b>{p.review_engine ?? "—"}</b>
           {p.review_model ? ` (${p.review_model})` : ""}
           {/* Stated either way. A model grading its own work is the single fact that most
               changes how much a green review is worth. */}
           <span className="v2-provenance-note" data-testid={`v2-cross-model-${runId}`}>
             {p.cross_model
-              ? " — cross-model review (no self-grading)"
-              : " — same model builds + reviews"}
+              ? ", cross-model review (no self-grading)"
+              : ", same model builds + reviews"}
           </span>
         </p>
       ) : null}
@@ -479,7 +479,7 @@ function Evidence({ e, runId }: { e: V2Evidence; runId: string }) {
       <div className="v2-evidence-text">
         <Markdown text={e.text} />
         {e.truncated ? (
-          <p className="v2-turn-clipped v2-mono">summary continues — clipped for this view</p>
+          <p className="v2-turn-clipped v2-mono">summary continues, clipped for this view</p>
         ) : null}
       </div>
     </details>
@@ -490,7 +490,7 @@ function Evidence({ e, runId }: { e: V2Evidence; runId: string }) {
 /**
  * One step of an attempt.
  *
- * Latency is shown because it is what separates a slow model from a slow pipeline — a run that
+ * Latency is shown because it is what separates a slow model from a slow pipeline, a run that
  * took ten minutes with nine seconds of model time was not waiting on the model.
  */
 function RunStep({ s, runId, index }: { s: V2Step; runId: string; index: number }) {
@@ -502,7 +502,7 @@ function RunStep({ s, runId, index }: { s: V2Step; runId: string; index: number 
     >
       <span className="v2-step-name">{s.stage}</span>
       {/* WHICH AGENT owns this stage, so the work maps onto the org chart. From the same map
-          BOSS uses at write time to attribute spend — not a second one invented here. */}
+          BOSS uses at write time to attribute spend, not a second one invented here. */}
       {s.agent ? (
         <span className="v2-step-agent" data-registered={s.agent.registered}
               data-testid={`v2-step-agent-${runId}-${index}`}>
@@ -525,10 +525,10 @@ function RunStep({ s, runId, index }: { s: V2Step; runId: string; index: number 
       ) : null}
       {s.model ? <span className="v2-step-role">{s.model}</span> : null}
       <span className="v2-step-timing">
-        {s.turns > 0 ? `${s.turns} turn${s.turns === 1 ? "" : "s"} · ` : ""}
+        {s.turns > 0 ? `${s.turns} turn${s.turns === 1 ? "" : "s"}, ` : ""}
         {fmtDuration(s.latency_ms)}
-        {s.spend_usd > 0 ? ` · $${s.spend_usd.toFixed(3)}` : ""}
-        {s.retries > 0 ? ` · ${s.retries} retr${s.retries === 1 ? "y" : "ies"}` : ""}
+        {s.spend_usd > 0 ? `, $${s.spend_usd.toFixed(3)}` : ""}
+        {s.retries > 0 ? `, ${s.retries} retr${s.retries === 1 ? "y" : "ies"}` : ""}
       </span>
       {/* A run that failed at one step and succeeded at nine others is a different story from
           one that failed everywhere. The error text is the whole reason to open a failed

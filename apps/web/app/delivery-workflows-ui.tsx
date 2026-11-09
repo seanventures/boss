@@ -80,7 +80,7 @@ export { CaptainCanRunIt, DefineStepForm };
  *
  * Three things an operator does here, in the order they do them:
  *   1. Pick a workflow from the twelve BOSS ships, and apply it to a class of work.
- *   2. Watch what is running — which step, waiting on whom, and what each step produced.
+ *   2. Watch what is running, which step, waiting on whom, and what each step produced.
  *   3. Fork one and change it, by dragging steps around.
  *
  * The screen never invents a capability, a risk tier or an approval rule. Everything it draws
@@ -108,7 +108,7 @@ type Capability = {
 };
 
 /** A step this customer defined, bound to one of their own skills or MCP tools. The risk
- *  tier is RESOLVED from whatever it binds — it is never something the customer typed. */
+ *  tier is RESOLVED from whatever it binds, it is never something the customer typed. */
 export type CustomStep = {
   step_key: string;
   label: string;
@@ -151,7 +151,7 @@ export type CatalogueEntry = {
   step_count: number;
   steps: { id: string; capability: string }[];
   gates: string[];
-  /** Approvals answered without a person — the PRD approval, by the panel's own decision. */
+  /** Approvals answered without a person, the PRD approval, by the panel's own decision. */
   automatic_approvals?: string[];
   /** Deploy steps the environment's policy decides (approval.follows_policy): no one's gate
    *  until a project's policy is read (GET /v1/delivery-workflows/asks). */
@@ -159,7 +159,7 @@ export type CatalogueEntry = {
   requires_project: string[];
   /** Everything it needs from a project, in the start preflight's words. */
   needs?: { key: string; label: string }[];
-  /** What it spends beyond its minutes — PLRR is a second build pass. */
+  /** What it spends beyond its minutes, PLRR is a second build pass. */
   cost_notes?: { step: string; note: string }[];
   estimated_minutes: number;
   input_schema?: unknown;
@@ -183,7 +183,7 @@ export type Installed = {
   /** WHICH steps, not just how many. "Steps 4" says how big a workflow is and nothing about
    *  what it does, so the only way to find out was to open the editor. */
   steps?: { id: string; label: string; kind: string; mine: boolean; approval: string;
-            /** WHO RUNS IT. Empty means different things by kind — see the card. */
+            /** WHO RUNS IT. Empty means different things by kind, see the card. */
             captain?: string; agent_work?: boolean; capability?: string | null;
             /** A Deploy step's words and the environment whose policy ships it unasked
              *  (approval "policy"), from deploy_policy.step_answer. */
@@ -210,7 +210,7 @@ export type RunStep = {
   timeout_applied: string | null;
   attempt: number;
   // The API has returned these since the runs endpoint was written; the type omitted them, so
-  // the one question every operator asks of a pipeline — how long did this take — could not be
+  // the one question every operator asks of a pipeline, how long did this take, could not be
   // answered from data already on the page.
   started_at: string | null;
   completed_at: string | null;
@@ -221,13 +221,13 @@ export type RunStep = {
    *  worker picks the answer up, so an approved gate looked identical to an unanswered one. */
   decision_status?: string | null;
   decision_approved_at?: string | null;
-  /** What approving this step's gate will do — the email, tickets or video — resolved from
+  /** What approving this step's gate will do, the email, tickets or video, resolved from
    *  its real inputs (action-preview.tsx). Present only while the step waits. */
   action_preview?: Record<string, unknown> | null;
   /** Whether this step's RECORDED blocker still holds, re-tested when the run was read. */
   blocker?: { cleared?: boolean; checkable?: boolean; reason?: string; missing?: string } | null;
   /** Set only on a deploy step that ships to a STACK target: that deployment (and where it
-   *  goes). Its decision is the step's only approval — see workflow-stack-deploy-step.tsx. */
+   *  goes). Its decision is the step's only approval, see workflow-stack-deploy-step.tsx. */
   stack_deploy?: StepStackDeploy | null;
   /** The preview running RIGHT NOW for this run's build, resolved when the runs are read.
    *  The one recorded in `output` was live when the step ran, and previews expire. The whole
@@ -235,7 +235,7 @@ export type RunStep = {
   live_preview?: {
     id: string; status: string; url: string | null;
     /** The build actually serving it, and whether that is THIS step's build. A live preview
-     *  of a later build of the same app is worth linking to — but only if we say so. */
+     *  of a later build of the same app is worth linking to, but only if we say so. */
     build_id?: string; same_build?: boolean;
   } | null;
 };
@@ -259,10 +259,10 @@ type Run = {
   blocked_reason: string | null;
   error: string | null;
   updated_at: string | null;
-  /** What the run was started with — `title` is the project it is delivering. */
+  /** What the run was started with, `title` is the project it is delivering. */
   input?: Record<string, unknown> | null;
   created_at?: string | null;
-  /** What the operator may do to this run, decided by the SERVER from its real state — see
+  /** What the operator may do to this run, decided by the SERVER from its real state, see
    *  `RunAction`. Absent only from an API older than the field, which then offers nothing. */
   actions?: RunAction[];
   /** The run is over (the engine's FINISHED_RUN_STATES), so what it was assigned is history.
@@ -271,7 +271,7 @@ type Run = {
   finished?: boolean;
   /** Where the run stands, decided by the SERVER (`workflow_run_actions.standing`): `active`,
    *  `stopped` (at a failed step, waiting for the operator), `closed` or `compensating`. This
-   *  file kept three lists of its own — LIVE, a closed list and ACTIVE_RUN_STATES — none held
+   *  file kept three lists of its own, LIVE, a closed list and ACTIVE_RUN_STATES, none held
    *  to the engine's; LIVE left out `paused` and `compensating`, so a paused run the server
    *  offers Stop on was filed under "Done" (review of 0fd6c45). */
   standing?: RunStanding;
@@ -279,7 +279,7 @@ type Run = {
 
 export type RunStanding = "active" | "stopped" | "closed" | "compensating";
 
-/** Is anything about this run still moving — work in flight, or an undo in progress? */
+/** Is anything about this run still moving, work in flight, or an undo in progress? */
 export function runIsLive(run: { standing?: RunStanding }): boolean {
   return run.standing === "active" || run.standing === "compensating";
 }
@@ -291,14 +291,14 @@ export function runIsLive(run: { standing?: RunStanding }): boolean {
  *  offered "Build on this research →" because this file kept its own copy of the rule ("a
  *  succeeded step with a discovery id") and an old research step that had failed was recorded
  *  as exactly that. Stop, Run again, Remove, Re-check, Try again and Skip were each decided the
- *  same way — private conditions on `run.status` that disagreed with what the engine would
+ *  same way, private conditions on `run.status` that disagreed with what the engine would
  *  actually do. Now the API sends the list and this renders it: present means offered, absent
  *  means it does not apply, and `enabled: false` carries the sentence saying why not. */
 export type RunAction = {
   key: RunActionKey;
   label: string;
   enabled: boolean;
-  /** Why it cannot be taken right now — shown as the button's help. Null when enabled. */
+  /** Why it cannot be taken right now, shown as the button's help. Null when enabled. */
   reason: string | null;
   /** Set on a per-step action (Try again, Skip and proceed): the step it acts on. */
   step_id?: string;
@@ -328,7 +328,7 @@ export function stepActions(run: Pick<Run, "actions">, stepId: string):
 
 /** The sentence's second half on a stopped run's card: the answers the server OFFERS for the
  *  step, and only those. It said "Try it again, or skip it and carry on." whatever the run
- *  offered — Skip included on an approval, where the server sends none. */
+ *  offered, Skip included on an approval, where the server sends none. */
 export function stoppedAnswers(actions: { retry?: RunAction; skip?: RunAction }): string {
   const retry = actions.retry?.enabled;
   const skip = actions.skip?.enabled;
@@ -342,8 +342,8 @@ export function stoppedAnswers(actions: { retry?: RunAction; skip?: RunAction })
  *  identical rows unless the thing being delivered is on the row. */
 function runSubject(run: Run): string | null {
   // THROUGH THE NAMER, WHATEVER THE SOURCE. `input.title` is usually the directive already
-  // truncated for display — "Build an incident timeline builder.\nWho it is for: an on-call
-  // enginee…", ellipsis and all — so showing it verbatim put a broken sentence at the top of
+  // truncated for display, "Build an incident timeline builder.\nWho it is for: an on-call
+  // enginee…", ellipsis and all, so showing it verbatim put a broken sentence at the top of
   // the run while the report below it, which does run the namer, called the same thing
   // "Incident Timeline Builder". Two names for one app on one screen.
   const title = (run.input ?? {})["title"];
@@ -362,34 +362,34 @@ function observedGates(step: RunStep, runAppName = ""): string | null {
   };
   if (out.status !== "observed") return null;
   // The monitoring step reports targets rather than gates: which apps are under health probing
-  // and whether a probe has run yet. "2 watched · app (production)" answers the question the
+  // and whether a probe has run yet. "2 watched, app (production)" answers the question the
   // step exists to answer.
-  // Findings the build shipped with. Not a failure — the pipeline's own policy said surface
-  // and continue — but not a clean pass either, and the two must not look the same.
+  // Findings the build shipped with. Not a failure, the pipeline's own policy said surface
+  // and continue, but not a clean pass either, and the two must not look the same.
   if (Array.isArray((out as { findings?: unknown }).findings)) {
     const found = ((out as { findings: unknown[] }).findings).map(String);
-    if (found.length) return `findings: ${found.join(" · ")}`;
+    if (found.length) return `findings: ${found.join(", ")}`;
   }
   if (Array.isArray(out.targets)) {
     const names = targetsForThisApp(out.targets, runAppName)
-      .map((t) => [t.app_name, t.environment].filter(Boolean).join(" · "))
+      .map((t) => [t.app_name, t.environment].filter(Boolean).join(", "))
       .filter(Boolean);
     return names.length ? `watching ${names.join(", ")}` : null;
   }
   const gates = Array.isArray(out.gates_passed) ? out.gates_passed.map(String) : [];
-  return gates.length ? gates.join(" · ") : null;
+  return gates.length ? gates.join(", ") : null;
 }
 
 /** A step whose work FAILED and whose run carried on regardless.
  *
- *  HISTORY ONLY. The runner no longer does this — a failed step now stops its run until the
+ *  HISTORY ONLY. The runner no longer does this, a failed step now stops its run until the
  *  operator retries or skips it (the run's `actions`). Runs recorded before that change still carry
  *  `failed_continued` outputs, and they must keep reading as failed rather than as green. */
 function failedButContinued(step: RunStep): boolean {
   // KEYED ON WHAT THE ROW WAS RECORDED AS. The schema rewrite (db/schema.sql) turned every
   // legacy row into status `failed` with output.status `failed` and `recorded_as:
   // failed_continued`, so a check on output.status alone could no longer match anything and
-  // "failed — went on" had become dead code (review of c8de36b).
+  // "failed, went on" had become dead code (review of c8de36b).
   const out = (step.output ?? {}) as { status?: string; recorded_as?: string };
   return out.recorded_as === "failed_continued" || out.status === "failed_continued";
 }
@@ -398,7 +398,7 @@ function failedButContinued(step: RunStep): boolean {
  *  performs, records an honest `status: recorded` no-op.
  *
  *  NOT A ✓. "Publish to a channel" showed a green tick when nothing was published, while the
- *  engine's own test said it "must not read as work done" — the test checked the engine and
+ *  engine's own test said it "must not read as work done", the test checked the engine and
  *  not what the operator sees (review of c8de36b). Its own state, saying what to do: bind a
  *  skill or a custom step that does the work.
  *
@@ -410,13 +410,13 @@ export function didNothing(step: RunStep): boolean {
   return step.status === "succeeded" && out.status === "recorded";
 }
 
-/** Why a step did not apply — the sentence the capability recorded when it stood aside. */
+/** Why a step did not apply, the sentence the capability recorded when it stood aside. */
 function skipReason(step: RunStep): string {
   const out = (step.output ?? {}) as { note?: unknown; reason?: unknown };
   return String(out.note ?? out.reason ?? "").slice(0, 220);
 }
 
-/** The step states a run STOPS at for the operator — the engine's `STOPPED_STEP_STATES`, which
+/** The step states a run STOPS at for the operator, the engine's `STOPPED_STEP_STATES`, which
  *  a test holds this list to. */
 export const STOPPED_STEP_STATUSES: readonly string[] = ["failed", "deadlettered"];
 
@@ -425,7 +425,7 @@ export const STOPPED_STEP_STATUSES: readonly string[] = ["failed", "deadlettered
  *
  *  A STOPPED RUN NEEDS SOMEBODY. When a failed step started stopping its run (boss-1,
  *  2026-10-02), the run landed under "Stopped" beside runs that were cancelled on purpose, the
- *  page did not open on it, and the card said nothing about why — the Try again and Skip
+ *  page did not open on it, and the card said nothing about why, the Try again and Skip
  *  buttons were two clicks deep. Read that way it is "something broke"; it is actually "research
  *  failed, decide: try again or skip". So a stopped step counts as needing the operator
  *  everywhere the console triages runs (`runNeedsYou`), exactly as an open approval does.
@@ -446,12 +446,12 @@ export function stoppedForYou(step: RunStep): boolean {
 export function stoppedStep(run: { status: string; standing?: RunStanding;
                                    steps?: RunStep[] | null;
                                    actions?: Run["actions"] }): RunStep | null {
-  // A run somebody stopped, or one that finished, is history — nothing there waits on anybody.
+  // A run somebody stopped, or one that finished, is history, nothing there waits on anybody.
   // The SERVER says which runs are closed; this used to be a hand copy of the engine's list.
   if (run.standing === "closed") return null;
   // AN APPROVED STEP THAT THEN FAILED STILL WAITS ON YOU. `stoppedForYou` reads a decision id
   // as "a person's no", but a deploy approved and then refused by its own check carries the
-  // approval's id too — and the card said "Try it again" with no button. When the server
+  // approval's id too, and the card said "Try it again" with no button. When the server
   // offers Retry or Skip on a stopped step, that step is the operator's, whatever it carries.
   return (run.steps ?? []).find((step) => stoppedForYou(step)
     || (STOPPED_STEP_STATUSES.includes(step.status)
@@ -460,7 +460,7 @@ export function stoppedStep(run: { status: string; standing?: RunStanding;
     ?? null;
 }
 
-/** Does this run need a person right now — an open approval, or a step it stopped at? The ONE
+/** Does this run need a person right now, an open approval, or a step it stopped at? The ONE
  *  rule the bucket, the page's opening run and the run card all read, so they cannot disagree. */
 export function runNeedsYou(run: { status: string; standing?: RunStanding;
                                    steps?: RunStep[] | null }): boolean {
@@ -475,15 +475,15 @@ export function bucketOf(run: { status: string; standing?: RunStanding;
     "needs_you" | "running" | "blocked" | "done" {
   if (runNeedsYou(run)) return "needs_you";
   // "Stopped" holds runs that stopped without finishing: stopped at a step, held up
-  // (`blocked`), or stopped by somebody (`cancelled`). Everything else that is still moving —
-  // paused and compensating included — is "Running".
+  // (`blocked`), or stopped by somebody (`cancelled`). Everything else that is still moving , 
+  // paused and compensating included, is "Running".
   if (run.standing === "stopped" || run.status === "blocked" || run.status === "cancelled") {
     return "blocked";
   }
   return runIsLive(run) ? "running" : "done";
 }
 
-/** Who skipped a step and why, when an OPERATOR skipped it — "" for a branch never taken.
+/** Who skipped a step and why, when an OPERATOR skipped it, "" for a branch never taken.
  *  The two read the same on the rail otherwise, and they mean opposite things: one is a
  *  decision somebody made about this step, the other is a path the run did not go down. */
 export function skippedBy(step: RunStep): string {
@@ -505,7 +505,7 @@ function notApplicable(step: RunStep): boolean {
 
 /** Live runs first, newest first within each group. Sorting by `updated_at` alone floats a
  *  blocked run from last week above the project that started a minute ago, purely because
- *  something touched it more recently — which is how the page came to show an expired run
+ *  something touched it more recently, which is how the page came to show an expired run
  *  while a build was in flight. */
 /** "Sep 2, 3:42 AM" in the viewer's zone, hydration-safe (lib/local-time localWith): the server
  *  and the first browser render paint the same UTC text, the viewer's own zone after mount. */
@@ -534,11 +534,11 @@ function summarise(value: unknown): string {
   if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? "" : "s"}`;
   if (typeof value === "object") {
     const keys = Object.keys(value as Record<string, unknown>);
-    // Prefer an id or a url if the object carries one — that is the thing an operator wants
+    // Prefer an id or a url if the object carries one, that is the thing an operator wants
     // to click, and it is buried one level down often enough to be worth looking for.
     const useful = keys.find((k) => /(^|_)(id|url)$/.test(k));
     if (useful) return String((value as Record<string, unknown>)[useful]).slice(0, 60);
-    // THE CONTENT, NOT THE SHAPE. This printed the KEY NAMES — a deploy's result showed as
+    // THE CONTENT, NOT THE SHAPE. This printed the KEY NAMES, a deploy's result showed as
     // "{health, status, applied}" under a heading reading DETAIL, which tells an operator
     // that three facts exist and none of what they say. Scalars are what fit on a line, so
     // show those as key=value and keep the key list only for an object made entirely of
@@ -550,7 +550,7 @@ function summarise(value: unknown): string {
       })
       .slice(0, 3)
       .map((k) => `${k}=${String((value as Record<string, unknown>)[k]).slice(0, 24)}`);
-    if (scalars.length) return scalars.join(" · ").slice(0, 90);
+    if (scalars.length) return scalars.join(", ").slice(0, 90);
     return keys.length ? `{${keys.slice(0, 3).join(", ")}}` : "{}";
   }
   return String(value).slice(0, 60);
@@ -566,12 +566,12 @@ function tone(status: string): string {
 }
 
 /** The operator's presses on this panel: one at a time, the one running named by `busy`.
- *  ONLY presses. The automatic recheck below is not one — when it shared this scope, of several
+ *  ONLY presses. The automatic recheck below is not one, when it shared this scope, of several
  *  runs ready to continue only the first was put back, and a Retry pressed during it vanished. */
 const PANEL_PRESSES = "delivery-workflows-panel";
 
 /**
- * A run's own answer, taken from ANOTHER screen — the Command Center's Retry.
+ * A run's own answer, taken from ANOTHER screen, the Command Center's Retry.
  *
  * Run actions leave the console from this module only (a-runs-buttons-come-from-its-actions
  * scans for any other sender). The console-a stream's Command Center posted `retry_step` with a
@@ -595,7 +595,7 @@ export async function sendRunAnswer(projectId: string, actor: string, runId: str
   }, key));
 }
 
-/** The Workflows area's three tabs (operator, 2026-10-13): New project · Runs · Library. The
+/** The Workflows area's three tabs (operator, 2026-10-13): New project, Runs, Library. The
  *  composer is its own tab, never stacked over the runs ("where are my runs?"). The editor is not
  *  a tab: `&wf=` replaces all three, full width. */
 export type AreaTab = "new" | "runs" | "library";
@@ -740,7 +740,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     return () => { alive = false; };
   }, [projectId]);
 
-  /* RE-READ AFTER BINDING — the reason "Set target" looked like it had done nothing.
+  /* RE-READ AFTER BINDING, the reason "Set target" looked like it had done nothing.
    *
    * This list was fetched once per project and never again. So the operator pressed Set target,
    * the target really was created, and the step went on rendering the same empty form, because
@@ -762,7 +762,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     // TWO INDEPENDENT LOADS, AND THEY MUST STAY INDEPENDENT.
     //
     // These were two try/catch blocks in ONE async function, each ending `if (!res.ok) return;`
-    // — and `return` leaves the whole function. So when /api/deployment-targets answered 503,
+    //, and `return` leaves the whole function. So when /api/deployment-targets answered 503,
     // the hosts fetch NEVER RAN, and the deploy step said "this project has no verified host"
     // while Infra showed one verified. One endpoint being down must not silence the other.
     const loadTargets = async () => {
@@ -811,7 +811,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [justStarted, setJustStarted] = useState<string | null>(null);
   /** The workflow Start chose, so the composer opens on it rather than on a blank question. */
   const [startWith, setStartWith] = useState<string | undefined>(undefined);
-  /** "Try example" — the standard's own example brief, filled in for the operator to read. */
+  /** "Try example", the standard's own example brief, filled in for the operator to read. */
   const [startExample, setStartExample] =
     useState<{ title?: string; directive?: string } | null>(null);
   /** What a compose link asked for: the mode, the app, and a running preview of it. */
@@ -842,7 +842,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     ]);
     // SCHEDULES ARE NOT LOAD-BEARING. An install whose schedule table predates this feature
     // must still show its workflows, so a failure here empties the list rather than failing
-    // the screen — unlike the five above it, without which there is nothing to draw.
+    // the screen, unlike the five above it, without which there is nothing to draw.
     const failure = [caps, cat, inst, live, mine].find((r) => "error" in r) as { error: string } | undefined;
     if (failure) {
       setState("failed");
@@ -891,7 +891,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       const moved = results.reduce((n, r) => n + (
         (r.ok ? ((r.data as { requeued?: unknown[] })?.requeued ?? []).length : 0)), 0);
       if (moved) {
-        setNotice(`${moved} step${moved === 1 ? "" : "s"} put back — what stopped ` +
+        setNotice(`${moved} step${moved === 1 ? "" : "s"} put back, what stopped ` +
                   `${moved === 1 ? "it" : "them"} has been dealt with since.`);
         await load();
       }
@@ -901,7 +901,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // KEEP ASKING, EVEN WHEN NOTHING IS RUNNING. A console cannot know that work has STARTED
   // without asking: a project kicked off from the Command Center, the Factory form, or by
   // approving a PRD creates its run somewhere else. Fast while something is in flight, slower
-  // when idle — idle still means "watch for work appearing".
+  // when idle, idle still means "watch for work appearing".
   const anyLive = runs.some(runIsLive);
   // OFF SCREEN, NOTHING (lib/area-shown.ts): this list polled every 8-15 s from a hidden area
   // for as long as the console was open. Back on screen it reads at once.
@@ -950,7 +950,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         window.history.replaceState(null, "",
           `${window.location.pathname}?${next}${window.location.hash}`);
         setEditing(null);
-      } catch { /* non-browser — the composer is on screen either way */ }
+      } catch { /* non-browser, the composer is on screen either way */ }
     };
     read();
     window.addEventListener("popstate", read);
@@ -973,7 +973,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         for (const key of ["compose", "brief", "title", "new", "wfr"]) next.delete(key);
         next.set("tab", "new");
         window.history.replaceState(null, "", `${window.location.pathname}?${next}${window.location.hash}`);
-      } catch { /* non-browser — the composer is on screen either way */ }
+      } catch { /* non-browser, the composer is on screen either way */ }
     };
     read();
     window.addEventListener("popstate", read);
@@ -1028,7 +1028,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       }), []);
 
   // `dedupeFromPress`: a start that must be a NEW run per press, and the same run for its
-  // duplicates, gets `dedupe_key: <prefix>:<press key>` — minted from the press INSIDE it, so
+  // duplicates, gets `dedupe_key: <prefix>:<press key>`, minted from the press INSIDE it, so
   // it is not part of what the press is recognised by (review of 6ca9119).
   const actRef = useRef<((label: string, action: string, payload: Record<string, unknown>,
                           dedupeFromPress?: string) => Promise<unknown>) | null>(null);
@@ -1055,8 +1055,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       // the engine says what happens next (start_preview), say that instead of "done".
       const next = result.ok && action === "start_preview"
         ? (result.data as { message?: unknown } | undefined)?.message : undefined;
-      setNotice(result.ok ? (typeof next === "string" && next ? `${label}: ${next}` : `${label} — done.`)
-                          : `${label} — ${result.error}`);
+      setNotice(result.ok ? (typeof next === "string" && next ? `${label}: ${next}` : `${label}, done.`)
+                          : `${label}, ${result.error}`);
       // The Factory card, the deployment panels and the Library render what this just changed.
       if (result.ok) notifyChanged("workflows", { action });
       // RELOAD WHILE STILL BUSY, so the button does not snap back before the screen updates.
@@ -1115,7 +1115,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   if (state === "failed") {
     return (
       <p className="detail" style={{ color: "var(--red)" }} data-testid="dw-error">
-        Could not load workflows — {error}
+        Could not load workflows, {error}
       </p>
     );
   }
@@ -1127,7 +1127,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     <div className="wf-tabs" role="tablist" aria-label="Workflows">
       {AREA_TABS.map((key, i) => (
         // ONE TAB STOP: the selected tab is the stop, the arrows move along (and select), Home
-        // and End go to the ends — Infra's AreaHead, the console's tablist.
+        // and End go to the ends, Infra's AreaHead, the console's tablist.
         <button key={key} type="button" role="tab" aria-selected={shownTab === key} className="wf-tab"
                 id={`dw-tab-${key}`} aria-controls={`dw-panel-${key}`}
                 tabIndex={shownTab === key ? 0 : -1} ref={(el) => { tabRefs.current[i] = el; }}
@@ -1204,7 +1204,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               "schedule",
               {
                 workflow_key: draft.workflowKey,
-                name: existing?.name ?? `${draft.name} — weekly`,
+                name: existing?.name ?? `${draft.name}, weekly`,
                 cadence: existing?.cadence ?? "weekly",
                 weekday: existing?.weekday ?? 0,
                 hour: existing?.hour ?? 8,
@@ -1273,7 +1273,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               key={`${startWith ?? "blank"}:${startExample ? "example" : "own"}:${compose?.n ?? 0}`}
               // Cancel goes back to the runs; with no runs yet there is nothing to go back to.
               onCancel={runs.length ? () => { closeComposer(); setTab("runs"); } : undefined}
-              // STARTED: to Runs, on the new run — opened, highlighted and scrolled into view.
+              // STARTED: to Runs, on the new run, opened, highlighted and scrolled into view.
               onStarted={(runId) => {
                 closeComposer();
                 if (runId) { setOpenRun(runId); setJustStarted(runId); }
@@ -1325,13 +1325,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                 else requeued += ((r.data as { requeued?: unknown[] })?.requeued ?? []).length;
               }
               const checked = `Checked ${open.length} live run${open.length === 1 ? "" : "s"}. `;
-              setNotice(failed.length ? `${checked}Check again — ${failed[0]}`
+              setNotice(failed.length ? `${checked}Check again, ${failed[0]}`
                 : !open.length ? "No run is live, so there is nothing to check. To revive a "
                   + "failed run, open it and use Re-check on that run."
                 : requeued ? `${checked}Put ${requeued} step${requeued === 1 ? "" : "s"} `
                   + "back in the queue; they run on the next tick."
                 : checked
-                  + "Nothing could move yet — each run is waiting on a person or on work in flight.");
+                  + "Nothing could move yet, each run is waiting on a person or on work in flight.");
               await load();
             })}
             onRetryStep={(runId, stepId, note) =>
@@ -1365,8 +1365,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               // ASKED, BECAUSE IT CANNOT BE UNDONE.
               if (!window.confirm(
                 `Remove this ${run.workflow_name} run for good?\n\n`
-                + "Its steps and history go with it. Anything it produced — files, issues, "
-                + "anything published — is untouched. This cannot be undone.")) return;
+                + "Its steps and history go with it. Anything it produced, files, issues, "
+                + "anything published, is untouched. This cannot be undone.")) return;
               await pressOn("Remove", run.id, async (key) => {
                 setNotice(null);
                 const query = new URLSearchParams({
@@ -1377,7 +1377,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                 const body = await response.json().catch(() => ({}));
                 setNotice(response.ok
                   ? "Removed."
-                  : `Remove — ${(body as { error?: string }).error ?? response.status}`);
+                  : `Remove, ${(body as { error?: string }).error ?? response.status}`);
                 if (response.ok) { setOpenRun(null); await load(); }
               });
             }}
@@ -1387,7 +1387,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               rerun_of: run.id,
               // One fresh run per press; a retried or doubled request returns the same run.
             }, `again:${run.id}`)}
-            // STOP, THEN START — as ONE request, checked before anything is stopped
+            // STOP, THEN START, as ONE request, checked before anything is stopped
             // (`replaces_run`): a refusal leaves the original running and draws the checklist.
             onStopAndRerun={async (run) => {
               await act("Stop and run again", "start", {
@@ -1428,7 +1428,7 @@ function stepDuration(step: RunStep): string {
  */
 /** The targets a step reports that belong to THIS run's app.
  *
- * The capability now scopes itself, but a run that already completed has its output frozen —
+ * The capability now scopes itself, but a run that already completed has its output frozen , 
  * the Meeting cost meter run on screen lists all three of the project's apps and always will.
  * So the display filters too, which also means an older run stops claiming to watch its
  * neighbours the moment this ships rather than only after it is re-run.
@@ -1443,14 +1443,14 @@ export function targetsForThisApp(
   if (!wanted) return rows;
   const mine = rows.filter((t) => identityKey(String(t.app_name ?? "")) === wanted);
   // A run whose app matches nothing in the list is the case where the filter would blank a
-  // step that does have something to say — an adopted run, a renamed app. Better to show what
+  // step that does have something to say, an adopted run, a renamed app. Better to show what
   // was recorded than to hide it on a guess.
   return mine.length ? mine : rows;
 }
 
 function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ label: string; href: string; external?: boolean }> {
   const out: Array<{ label: string; href: string; external?: boolean }> = [];
-  // KEEP WHO YOU ARE. These hrefs were built from scratch — `?area=code_tasks&run=…` — which
+  // KEEP WHO YOU ARE. These hrefs were built from scratch, `?area=code_tasks&run=…`, which
   // dropped `?org=`, and the console gates on that: no org means the organisation picker. So
   // every one of these links threw the operator onto "Select your organization" and read as
   // the session expiring mid-run.
@@ -1466,11 +1466,11 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
     // ITS LOG IS THE STEP'S, not the build's: the panel's Activity section links straight to
     // this step's own rows and the work it started (`?area=activity&wfr=…&step=…`).
     // NOT "Ask BOSS" AGAIN. Every step already carries an "Ask BOSS about this step" button,
-    // which opens the dock with the step's own state prefilled — strictly more than this link
+    // which opens the dock with the step's own state prefilled, strictly more than this link
     // did. Two controls with the same name, one worse, is a choice nobody should be asked to
     // make.
   }
-  // THE PANEL, not the list of panels. This linked to `?area=meetings` — the landing page —
+  // THE PANEL, not the list of panels. This linked to `?area=meetings`, the landing page , 
   // so "open the panel" meant "go and find it", on a screen listing every meeting the project
   // has ever held. The meeting room reads `?meeting=`, and the step knows which one it adopted.
   const meeting = str("meeting_run_id") || (awaited.kind === "meeting" ? awaited.id ?? "" : "");
@@ -1478,7 +1478,7 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
     out.push({ label: "open the panel", href: link({ area: "meetings", meeting }) });
   }
   // THE APP IT IS WATCHING, not the monitoring landing page. "Set up monitoring" said
-  // "watching Meeting cost meter · staging" and offered nowhere to go — the operator had to
+  // "watching Meeting cost meter, staging" and offered nowhere to go, the operator had to
   // find the Monitoring area and then find that app in it, for a step whose whole subject is
   // that one app. `?watch=` names it, and the monitoring panel scrolls to it and marks it.
   if (Array.isArray(output.targets)) {
@@ -1504,13 +1504,13 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
     out.push({ label: `pull request #${number}`, href: pr, external: true });
   }
   // START_PREVIEW NESTS ITS RESULT. The tool returns `{preview: {url, id, ...}}`, and this
-  // looked only for a flat `preview_url` — so the one link an operator most wants, to the app
+  // looked only for a flat `preview_url`, so the one link an operator most wants, to the app
   // they just built, was the one that never appeared.
   //
   // THE LINK FACTORY WOULD BUILD, not a second attempt at one.
   //
   // Three times this was wrong, three different ways: no link at all, then a link to a preview
-  // that had expired, then a link to 127.0.0.1:42543 — where the app really is listening, on
+  // that had expired, then a link to 127.0.0.1:42543, where the app really is listening, on
   // the host, which is not reachable from a browser anywhere else. `operatorPreviewOpenHref`
   // already encodes the whole rule (refuse expired, refuse loopback, else the API's own
   // /v1/previews/<id>/web/ proxy) and Factory has used it all along. Using it here is the fix;
@@ -1522,7 +1522,7 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
   // handed a fabricated "running" every time. start_preview records `{preview: {status:
   // "failed", failure_kind: "port_timeout", ...}}` for a preview that never served, and the
   // step still rendered a confident "Open preview" button pointing at a dead
-  // /v1/previews/<id>/web/ — the only thing on screen claiming to know how the preview went.
+  // /v1/previews/<id>/web/, the only thing on screen claiming to know how the preview went.
   const record = previewRecordFromStepOutput(output);
   const href = record ? operatorPreviewOpenHref(record) : null;
   if (href) {
@@ -1536,13 +1536,13 @@ function stepLinks(output: Record<string, unknown>, runAppName = ""): Array<{ la
 /**
  * The input a RE-RUN should start from.
  *
- * "Run this workflow again" copied the previous run's input whole — including the `adopt_*`
+ * "Run this workflow again" copied the previous run's input whole, including the `adopt_*`
  * keys that tell the runtime "this work already happened, go and watch it". So re-running a
  * project adopted the same finished build: research recorded as not-run, the old panel and the
  * old approval adopted, and `build` green in seconds against code written yesterday. That is a
  * re-observation, not a re-run, and it is the opposite of what somebody pressing it wants.
  *
- * The directive, the title, the repository and the deploy target are kept — they are what the
+ * The directive, the title, the repository and the deploy target are kept, they are what the
  * work IS and where it ships. What is dropped is every claim about work that has already
  * happened, so the new run does its own research, convenes its own panel, and builds.
  */
@@ -1560,7 +1560,7 @@ export function inputForRerun(input: Record<string, unknown> | null | undefined)
  *  about WHERE, not just whether. */
 type DeployTarget = {
   id: string; app_name: string; environment: string; status?: string;
-  /** "host:port" for each address the deployer published. The app's actual URL lives here —
+  /** "host:port" for each address the deployer published. The app's actual URL lives here , 
    *  a deploy step that cannot reach this can report success and still show no way in. */
   domains?: string[];
   /** The machine it is bound to. Absent means unbound, which is why a deploy would refuse. */
@@ -1649,7 +1649,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   onSetTarget: (runId: string, targetId: string) => void;
   onPrepareTarget: (runId: string, hostId: string) => void;
   onRunPreview: (buildRunId: string) => void;
-  /** Re-read the runs — used after a binding lands so the step shows it. */
+  /** Re-read the runs, used after a binding lands so the step shows it. */
   onBound: () => void;
   /** The build whose preview was just asked for and has not appeared yet. */
   previewStarting?: string;
@@ -1694,18 +1694,18 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   }
   /** Why this run stopped, or was refused, said on its card (and on its full page). */
   const noticeFor = (run: Run) => {
-    // The step this run stopped at for the operator, if any — see `stoppedStep`.
+    // The step this run stopped at for the operator, if any, see `stoppedStep`.
     const stopped = stoppedStep(run);
     const stoppedCapability = stopped
       ? capabilities.find((c) => c.key === stopped.capability) : undefined;
     return (
             stopped ? (
-              // STOPPED, AND WAITING ON YOU — SAID ON THE CARD, WITH BOTH ANSWERS.
+              // STOPPED, AND WAITING ON YOU, SAID ON THE CARD, WITH BOTH ANSWERS.
               //
               // A run that stopped at a failed step showed no reason here (the runtime wrote
               // `error`, this rendered only `blocked_reason`), sat under "Stopped" beside runs
               // somebody cancelled, and offered "Run this workflow again" and "Remove this run"
-              // — both of which throw the run away. The two answers that keep it were inside the
+              //, both of which throw the run away. The two answers that keep it were inside the
               // run, on the step, two clicks deep. The runtime now writes the sentence
               // ("Stopped at Research: … Try it again, or skip it and carry on.") and the card
               // carries it with the buttons, so the decision is visible without opening anything.
@@ -1725,19 +1725,19 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
               </div>
             ) : run.blocked_reason ? (
               // A DENIED RELEASE IS A DECISION, NOT A FAULT. "step 'deploy' was rejected"
-              // rendered in the same red as a crash, with no hint of what happens next — so a
+              // rendered in the same red as a crash, with no hint of what happens next, so a
               // deliberate no looked like a failure the operator had to debug.
               <p className="dw-blocked" data-denied={DENIED.test(run.blocked_reason)}
                  data-testid="dw-blocked">
                 {DENIED.test(run.blocked_reason)
-                  ? `You denied ${run.blocked_reason.replace(DENIED, "$1")}. Nothing shipped — `
+                  ? `You denied ${run.blocked_reason.replace(DENIED, "$1")}. Nothing shipped, `
                     + "reopen it with “Try … again”, or leave the run as it is."
                   : run.blocked_reason}
               </p>
             ) : null
     );
   };
-  /** The run's path — its chain, lane, the picked step and its actions — in the row, or with the
+  /** The run's path, its chain, lane, the picked step and its actions, in the row, or with the
    *  whole window (`full`). One element, so the two can never offer different things. */
   const pathFor = (run: Run, full = false) => (
             <StepPath run={run} onOpenWorkflow={onOpenWorkflow} fullPage={full}
@@ -1787,7 +1787,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
           <span className="dw-badge" data-tone={tone(fullRun.status)}>{fullRun.status}</span>
           <h2 className="dw-full-title" data-testid="run-full-title">
             {runSubject(fullRun) ?? fullRun.workflow_name}
-            <em className="dw-run-wf">{fullRun.workflow_name} v{fullRun.version}</em>
+            {fullRun.workflow_name} v{fullRun.version}
           </h2>
           <span className="dw-run-progress">
             {fullRun.steps_done} of {fullRun.step_count}
@@ -1823,7 +1823,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   // a person looked like a run making progress. These are the four states an operator acts on
   // differently: one needs them, one needs nothing, one needs a decision about a failure, and
   // one is history. A run that stopped at a failed step is the third kind and goes under
-  // "Needs you" — see `bucketOf` and `runNeedsYou`.
+  // "Needs you", see `bucketOf` and `runNeedsYou`.
   const counts = BUCKETS.reduce((acc, b) => {
     acc[b] = runs.filter((r) => bucketOf(r) === b).length;
     return acc;
@@ -1872,7 +1872,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
         return (
           // OPEN IS A STATE THE CARD SHOULD LOOK LIKE.
           //
-          // "It's hard to differentiate between different workflows — I don't see a good
+          // "It's hard to differentiate between different workflows, I don't see a good
           // boundary, the left side border is just not enough." Correct: every card had the same
           // 1px border and the same background, so an OPEN card's content ran into the next
           // card's header with nothing but 10px of gap between them. A 3px status stripe down
@@ -1911,7 +1911,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                 </i>
               </span>
               {/* WHICH OF THE TWO IS THIS. "Run this workflow again" leaves the earlier run
-                  alone, by design — so the list showed two rows with the same title, the same
+                  alone, by design, so the list showed two rows with the same title, the same
                   "5 of 8" and the same "waiting on release_manager", and nothing an operator
                   could use to tell which was today's. The start time is the distinguishing
                   fact, so it is on the row rather than hidden in the expanded detail. */}
@@ -1949,8 +1949,8 @@ function hasFindings(step: RunStep): boolean {
 
 export function phaseOf(step: RunStep):
     "done" | "now" | "ahead" | "skipped" | "failed" | "findings" | "failed_on" | "nothing" {
-  // FAILED, AND THE WORK WENT ON. Research that died is not "not run" — that hides something
-  // worth fixing — and it is not a stopped run either, because the project carried on without
+  // FAILED, AND THE WORK WENT ON. Research that died is not "not run", that hides something
+  // worth fixing, and it is not a stopped run either, because the project carried on without
   // it. Its own state, so neither reading is offered.
   if (failedButContinued(step)) return "failed_on";
   if (notApplicable(step) || step.status === "skipped") return "skipped";
@@ -1965,12 +1965,12 @@ export function phaseOf(step: RunStep):
 
 /** What a step that did nothing says, wherever it is shown. */
 export const DID_NOTHING =
-  "nothing was done — no skill or custom step does this work; bind one to this step";
+  "nothing was done, no skill or custom step does this work; bind one to this step";
 
 /** The run the page should open on.
  *
- *  Not simply the newest. This page answers two questions — "what is happening" and "what
- *  needs me" — and the second is the one somebody came here for. A run waiting on a decision
+ *  Not simply the newest. This page answers two questions, "what is happening" and "what
+ *  needs me", and the second is the one somebody came here for. A run waiting on a decision
  *  is the only thing on the page that will not move until a person acts, so it opens first
  *  even when something newer is running.
  *
@@ -1979,19 +1979,19 @@ export const DID_NOTHING =
  */
 export function runToOpen(runs: Run[]): string | null {
   if (!runs.length) return null;
-  // An open approval OR a step the run stopped at — the same rule the "Needs you" bucket reads.
+  // An open approval OR a step the run stopped at, the same rule the "Needs you" bucket reads.
   const needsMe = runs.find(runNeedsYou);
   if (needsMe) return needsMe.id;
   const live = runs.find(runIsLive);
   return (live ?? runs[0]).id;
 }
 
-/** What a rail node says under its name — or nothing, when nothing is worth saying.
+/** What a rail node says under its name, or nothing, when nothing is worth saying.
  *
  *  Ten nodes wrapped to two rows, and half their second lines read "0s" or "succeeded". A step
  *  that took no measurable time has no duration worth printing, and "succeeded" is the tick
  *  beside it said twice. Dropping both halves the rail's height and loses nothing: the
- *  durations that matter — 4m 20s of research, 18m 22s of build — are exactly the ones kept.
+ *  durations that matter, 4m 20s of research, 18m 22s of build, are exactly the ones kept.
  *
  *  Deliberately NOT the anonymous-dots version some redesigns reach for. The rail is the only
  *  place a run's timing is visible, and that is most of what it is for.
@@ -2032,13 +2032,13 @@ export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?:
       return { phase: "skipped", meta: "skipped", tip: skipReason(step) || "this step did not apply to this run" };
     }
     case "failed": if (errorPathTaken(step)) {
-      return { phase: "failed", meta: timedOut(step) ? "timed out — took its error path" : "failed — took its error path",
+      return { phase: "failed", meta: timedOut(step) ? "timed out, took its error path" : "failed, took its error path",
                tip: "It failed, and the run went on at its error path", errorPath: true };
     }
     return timedOut(step)
       ? { phase: "failed", meta: "timed out", tip: "A try ran longer than the step's time limit" }
       : { phase: "failed", meta: railMeta(step) || "failed" };
-    case "failed_on": return { phase: "failed", meta: "failed — went on",
+    case "failed_on": return { phase: "failed", meta: "failed, went on",
                                tip: "It failed, and the run went on without it" };
     case "findings": return { phase: "done", meta: railMeta(step) || "findings", tip: "Finished with findings" };
     case "done": return { phase: "done", meta: railMeta(step) };
@@ -2071,14 +2071,14 @@ export function decidedButNotMoved(step: RunStep): string {
 /**
  * THE WORKFLOW AS A PATH, not a list of rows.
  *
- * A pipeline is a shape — research, then a panel, then a build, then a preview — and an
+ * A pipeline is a shape, research, then a panel, then a build, then a preview, and an
  * operator reads "where has this got to" off that shape in one glance. Rendering it as nine
  * stacked rows of identical text made them read nine statuses and assemble the shape in their
  * head, every time.
  *
  * The rail carries the state: finished segments are solid, the one in flight animates, what is
  * ahead is dim, and a phase that never happened is dashed rather than green. Clicking a node
- * opens everything known about that step below it — duration, error, what it produced, and the
+ * opens everything known about that step below it, duration, error, what it produced, and the
  * doors to the pages where it can be debugged.
  */
 function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, onRerun, onStop,
@@ -2101,7 +2101,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   onSkipStep: (stepId: string, reason: string) => void;
   /** Run again from one step (#512): offered on a finished run, for the step picked. */
   onRerunFrom?: (stepId: string) => void;
-  /** Stop a live run — the work it started, not only its bookkeeping. */
+  /** Stop a live run, the work it started, not only its bookkeeping. */
   onStop: () => void;
   onDelete: () => void;
   /** Stop it and start the same workflow again from the beginning, in that order. */
@@ -2109,7 +2109,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   onBuildOnThis: () => void;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
   onRunPreview: (buildRunId: string) => void;
-  /** Re-read the runs — used after a binding lands so the step shows it. */
+  /** Re-read the runs, used after a binding lands so the step shows it. */
   onBound: () => void;
   previewStarting?: string;
   busy: string | null;
@@ -2133,9 +2133,9 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   const byKey = new Map(capabilities.map((c) => [c.key, c]));
   const steps = run.steps;
   // A FINISHED RUN'S ASSIGNMENT IS HISTORY. Offering "+ Assign" on a completed workflow invites
-  // a change that cannot affect anything — the work is done and the gates it would have
+  // a change that cannot affect anything, the work is done and the gates it would have
   // governed are already answered. Shown, not editable.
-  // The SERVER's fact (`finished`), not a list kept here — the list this replaced had already
+  // The SERVER's fact (`finished`), not a list kept here, the list this replaced had already
   // left out `compensated`.
   const terminal = run.finished === true;
   // Open on the step that wants attention, then the one in flight, then the first. Landing on
@@ -2170,7 +2170,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
     return () => window.removeEventListener("popstate", onPop);
   }, [steps, run.id]);
   const current = steps.find((s) => s.step_id === picked) ?? initial;
-  // A LINK TO ONE STEP LANDS ON THAT STEP (`?wfr=<this run>&step=<id>` — the Log's Step ↗, a
+  // A LINK TO ONE STEP LANDS ON THAT STEP (`?wfr=<this run>&step=<id>`, the Log's Step , a
   // step panel's link). It opened on the run's own choice above, so every such link showed
   // the first step that wanted attention instead. Read after mount (the URL is the client's).
   const stepIds = steps.map((s) => s.step_id).join("|");
@@ -2203,7 +2203,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
     return [s.step_id, agent ? { ...laneStateOf(s), agent } : laneStateOf(s)];
   })), [steps, chain, actor]);
 
-  // WHO WORKS THIS RUN is a property of the app, not a stage of its delivery — so it is a chip
+  // WHO WORKS THIS RUN is a property of the app, not a stage of its delivery, so it is a chip
   // on the run's bar, not a node in the lane the runtime never runs.
   const [showAgents, setShowAgents] = useState(false);
   // ON THE FULL PAGE THE WHOLE FLOW FITS FIRST: a 21-step run with loops and lanes is read as a
@@ -2267,7 +2267,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
     <div className="dw-path" data-testid="dw-path" data-full-page={fullPage ? "true" : undefined}>
       <div className="wf-run-bar">
         {/* A FINISHED RUN IS READ FOR WHAT WAS DONE: its report, every section open, is the
-            first thing on its bar — not a collapsed panel below the lane. */}
+            first thing on its bar, not a collapsed panel below the lane. */}
         {terminal && runHasReport(run.steps) ? (
           <OpenRunReportButton runId={run.id} projectId={projectId} className="rr-open rr-open-top"
                                researchAction={(run.actions ?? []).find((a) => a.key === "build_on_research")} />
@@ -2386,7 +2386,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
                           (a) => a.key === "build_on_research")} />
       ) : null}
 
-      {/* WORKFLOW MANAGEMENT — exactly the actions the server sent for this run, in its order.
+      {/* WORKFLOW MANAGEMENT, exactly the actions the server sent for this run, in its order.
           Which of Re-check, Stop, Stop and run again, Run again, Remove and Build on this
           research a run has is decided by the engine from the run's real state
           (workflow_run_actions.py); see `RunAction`. Nothing here looks at `run.status`. */}
@@ -2402,23 +2402,23 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
 
 type RunLevelKey = typeof RUN_ACTION_KEYS[number];
 
-/** How each run-level action LOOKS and what it SAYS — never whether it is there.
+/** How each run-level action LOOKS and what it SAYS, never whether it is there.
  *
  *  The history of each, kept with the action it explains:
  *
- *  - recheck — ONE BUTTON, FOR THE WHOLE RUN. The screen re-tests the recorded blockers by
+ *  - recheck, ONE BUTTON, FOR THE WHOLE RUN. The screen re-tests the recorded blockers by
  *    itself on arrival; this is for the operator who has just changed something outside BOSS.
- *  - stop — THE ADVICE NOW EXISTS AS A BUTTON. The screen told an operator to "cancel this run
+ *  - stop, THE ADVICE NOW EXISTS AS A BUTTON. The screen told an operator to "cancel this run
  *    first" and offered no way to, so three runs piled up on one project.
- *  - stop_and_rerun — ONE PRESS, NOT TWO. Running again while this one is live makes a SECOND
+ *  - stop_and_rerun, ONE PRESS, NOT TWO. Running again while this one is live makes a SECOND
  *    workflow on the same project rather than retrying this one.
- *  - rerun — NOT WHILE IT IS STILL GOING. Offered on a run mid-flight it started a duplicate:
+ *  - rerun, NOT WHILE IT IS STILL GOING. Offered on a run mid-flight it started a duplicate:
  *    two workflows for one project, both at step 6.
- *  - remove — there was no way to remove a run at all; building one workflow left eighteen on
+ *  - remove, there was no way to remove a run at all; building one workflow left eighteen on
  *    this screen. Never on a run still going: deleting the record while the work carries on is
  *    the failure that once cost a production database.
- *  - build_on_research — "I don't want to pay for that research twice." Only where a finished
- *    run's research actually succeeded and left a dossier with findings — the rule whose
+ *  - build_on_research, "I don't want to pay for that research twice." Only where a finished
+ *    run's research actually succeeded and left a dossier with findings, the rule whose
  *    console-side copy offered it on a cancelled run whose research had failed.
  *
  *  A test holds these keys equal to the engine's, so a new action cannot reach the screen
@@ -2438,7 +2438,7 @@ const RUN_ACTION_VIEW: Record<RunLevelKey, {
     testId: "dw-stop", tone: "stop", busyWhen: ["Stop"], busyText: "Stopping…",
     explainLabel: "What stopping does",
     explain: () => "Stops the work, not just the record: every pending step is cancelled and so "
-      + "is anything this run started — including a build that is still going in its own "
+      + "is anything this run started, including a build that is still going in its own "
       + "sandbox. It cannot be resumed; start it again to try afresh.",
   },
   stop_and_rerun: {
@@ -2448,14 +2448,14 @@ const RUN_ACTION_VIEW: Record<RunLevelKey, {
       Stops this run and starts {run.workflow_name} again from the beginning on the same
       directive. Starting it again WITHOUT stopping would leave two workflows running on one
       project, which is why it happens in that order. For one step that needs another go, use
-      &ldquo;Try … again&rdquo; on the step instead — that keeps everything already done.
+      &ldquo;Try … again&rdquo; on the step instead, that keeps everything already done.
     </>,
   },
   rerun: {
     testId: "dw-rerun", busyWhen: ["Re-run"], busyText: "Starting…",
     explainLabel: "What running it again does",
     explain: (run) => <>
-      Starts {run.workflow_name} again on the same directive — its own research, its own
+      Starts {run.workflow_name} again on the same directive, its own research, its own
       panel, its own build. The existing run is left as it is.
     </>,
   },
@@ -2463,7 +2463,7 @@ const RUN_ACTION_VIEW: Record<RunLevelKey, {
     testId: "dw-delete-run", tone: "stop", busyWhen: ["Remove"], busyText: "Removing…",
     explainLabel: "What removing does",
     explain: () => "Takes this run off the screen for good, with its steps and its history. "
-      + "Nothing it produced is touched — files it wrote, issues it opened and anything it "
+      + "Nothing it produced is touched, files it wrote, issues it opened and anything it "
       + "published stay exactly where they are. It cannot be undone.",
   },
   build_on_research: {
@@ -2471,7 +2471,7 @@ const RUN_ACTION_VIEW: Record<RunLevelKey, {
     busyText: "Starting…", explainLabel: "What building on this research does",
     explain: () => <>
       Starts Standard Product Delivery on the same directive and hands it this
-      run&rsquo;s dossier. The research step adopts what is already there — it does not
+      run&rsquo;s dossier. The research step adopts what is already there, it does not
       run again, and it does not cost anything a second time. The panel that follows argues
       from those findings.
     </>,
@@ -2480,7 +2480,7 @@ const RUN_ACTION_VIEW: Record<RunLevelKey, {
 
 /** The run's workflow-management row: one button per run-level action the server sent.
  *
- *  A ROW OF ACTIONS, NOT A COLUMN OF ESSAYS — each sentence sits on the dot beside its own
+ *  A ROW OF ACTIONS, NOT A COLUMN OF ESSAYS, each sentence sits on the dot beside its own
  *  button. A DISABLED ACTION SAYS WHY, on the button (`title`) and in its dot, because a greyed
  *  button with no reason reads as broken. */
 export function RunActionsBar({ run, busy, handlers }: {
@@ -2519,11 +2519,11 @@ export function RunActionsBar({ run, busy, handlers }: {
 }
 
 /**
- * WHERE THIS SHIPS — the half of the release decision that was missing.
+ * WHERE THIS SHIPS, the half of the release decision that was missing.
  *
  * `deploy_app` refuses unless an ACTIVE target exists for the environment, and it never creates
  * one: it does not make infrastructure. So a project built for the first time had nowhere to
- * go, and the gate could only offer targets belonging to OTHER apps — picking one would have
+ * go, and the gate could only offer targets belonging to OTHER apps, picking one would have
  * shipped this app over somebody else's.
  *
  * Choosing a HOST is the act that was missing. A target is that host plus this app's name, its
@@ -2532,7 +2532,7 @@ export function RunActionsBar({ run, busy, handlers }: {
 function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostName, live,
                       onSetTarget, onPrepareTarget, onBound }: {
   targets: DeployTarget[]; hosts: DeployHost[]; runInput: Record<string, unknown>;
-  /** The code task whose build is being shipped — the app the target binds to. */
+  /** The code task whose build is being shipped, the app the target binds to. */
   buildRunId: string;
   busy: string | null;
   /** The target this app is ALREADY bound to, resolved by app identity. Settled, not a form. */
@@ -2554,7 +2554,7 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
   const chosen = targets.find((t) => t.id === chosenId);
   // THE APP'S NAME, NOT THE BRIEF IT WAS BUILT FROM.
   //
-  // This was the raw title — the operator's whole directive — and it is the DEFAULT VALUE of
+  // This was the raw title, the operator's whole directive, and it is the DEFAULT VALUE of
   // the "Set target" form, so pressing that button created a deployment target called
   // "Build a lead triage inbox.Who it is for: a small team drowning in in…". Target resolution
   // matches on app identity, so the app then had no target it could recognise, and the deploy
@@ -2579,13 +2579,13 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
     // The address once: on a host already named by it, only the port is new information.
     const domain = (settled.domains ?? []).find((d: string) => !!d) ?? "";
     const [domainHost, port] = domain.replace(/^https?:\/\//, "").split("/")[0].split(":");
-    const where = !domain ? "" : hostName && hostName.split(" · ").includes(domainHost)
+    const where = !domain ? "" : hostName && hostName.split(", ").includes(domainHost)
       ? (port ? `port ${port}` : "") : domain;
     return (
       <div className="dw-bound" data-testid="dw-deploy-bound">
         <span className="dw-bound-ok" aria-hidden>✓</span>
         <span>
-          Ships to <strong>{settled.app_name}</strong> · {settled.environment}
+          Ships to <strong>{settled.app_name}</strong>, {settled.environment}
           {/* The address once: when the step already says "Live at http://host:port", the host
               and port here repeated it. */}
           {hostName && !live ? <> on <strong>{hostName}</strong></> : null}
@@ -2607,7 +2607,7 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
                 onChange={(e) => { if (e.target.value) onSetTarget(e.target.value); }}>
           <option value="">Choose a target…</option>
           {mine.map((t) => (
-            <option key={t.id} value={t.id}>{t.app_name} · {t.environment}</option>
+            <option key={t.id} value={t.id}>{t.app_name}, {t.environment}</option>
           ))}
         </select>
       </label>
@@ -2631,7 +2631,7 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
   return (
     <p className="dw-target-set detail" data-testid="dw-deploy-nowhere">
       Nowhere to ship: this project has no verified host. Add one under Infra and Models, then
-      come back — approving now would fail at the first connection.
+      come back, approving now would fail at the first connection.
     </p>
   );
 }
@@ -2639,7 +2639,7 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
 /** Everything known about one step, in the order an operator asks for it. */
 /** Is this the deploy step?
  *
- *  `step.capability` IS NULL on the wire — the runs endpoint does not populate it — so
+ *  `step.capability` IS NULL on the wire, the runs endpoint does not populate it, so
  *  `step.capability === "deploy"` was false every time, and the target picker never rendered
  *  in ANY of the three versions shipped. Three fixes to a control whose only real problem was
  *  that its condition could not be true.
@@ -2651,7 +2651,7 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
 /** PLAN A DEPLOYMENT, FROM THE STEP WHOSE JOB IS SHIPPING.
  *
  *  A deploy step marked SUCCEEDED whose own detail read `status=blocked`, on an app that
- *  answers "not found" — and no control anywhere to try again. The operator set the target
+ *  answers "not found", and no control anywhere to try again. The operator set the target
  *  repeatedly, which was never the problem: binding says WHERE it would go, and nothing said
  *  GO. The gate only appears while a run is waiting at it, so once the step had been recorded
  *  as done there was no way to ship at all, from any screen.
@@ -2705,7 +2705,7 @@ function ShipNow({ projectId, buildRunId, target, again, onDone }: {
     <div className="dw-ship" data-testid="dw-ship">
       <GatedButton permission="deployment:create" type="button" className={`cap-btn${again ? "" : " primary"}`}
               disabled={state !== "idle"} onClick={ship} data-testid="dw-ship-now"
-              title={`Asks for approval, then ships ${target.app_name} · ${target.environment}${
+              title={`Asks for approval, then ships ${target.app_name}, ${target.environment}${
                 target.domains?.[0] ? ` to ${target.domains[0]}` : ""}`}>
         {state === "planning" ? "Asking…" : again ? "Deploy again" : "Deploy"}
       </GatedButton>
@@ -2776,7 +2776,7 @@ export function DeployStatusLine({ deploy, stepSucceeded }: { deploy: NewestDepl
       </span>
       {deploy.openUrl ? (
         <a className={`cap-btn${earlier ? "" : " primary"}`} href={deploy.openUrl} target="_blank"
-           rel="noreferrer" data-testid="dw-open-app">Open the app ↗</a>
+           rel="noreferrer" data-testid="dw-open-app">Open the app </a>
       ) : null}
       {href ? <a className="cap-btn" href={href} data-testid="dw-open-deploy"
                  title="This deploy's steps, log and health check">Deploy details</a> : null}
@@ -2788,7 +2788,7 @@ export function DeployStatusLine({ deploy, stepSucceeded }: { deploy: NewestDepl
  *
  *  An operator reading a step that refuses to ship should not have to copy the error, find the
  *  Agents area and retype the context. The dock already exists at the shell level and is
- *  driven by two search params — this is the same handoff the Infra panel uses, so the
+ *  driven by two search params, this is the same handoff the Infra panel uses, so the
  *  workflow view gains the agent without growing a second chat surface of its own.
  *
  *  `agent` carries the RUN, so the conversation resolves what it is about server-side rather
@@ -2796,8 +2796,8 @@ export function DeployStatusLine({ deploy, stepSucceeded }: { deploy: NewestDepl
  */
 /** WHO ANSWERS FOR THIS STEP: the workflow's choice, else the capability's default.
  *
- *  Two steps can run the same capability against different accounts — "publish to our channel"
- *  and "publish to a client's" are one step kind and two agents — so the workflow has to be
+ *  Two steps can run the same capability against different accounts, "publish to our channel"
+ *  and "publish to a client's" are one step kind and two agents, so the workflow has to be
  *  able to say. One function, because a resolver used in two places with two orders is a bug
  *  waiting for the second caller.
  */
@@ -2813,14 +2813,14 @@ function roleLabel(roleKey: string): string {
 /** Open the dock about `subject`, addressed to the step's captain.
  *
  *  ADDRESSED, NOT BROADCAST: the captain answers from that role's own record rather than as
- *  BOSS-in-general with a name in the banner. And ABOUT THE THING, NOT A PARAPHRASE OF IT — see
+ *  BOSS-in-general with a name in the banner. And ABOUT THE THING, NOT A PARAPHRASE OF IT, see
  *  lib/dock-subject.ts for boss-1, where a paraphrase of a Preview step was answered as a
  *  question about deployments. */
 function askBossAbout(subject: DockSubject | null, question: string, captain?: string): void {
   openDockAbout({ subject, question, role: captain ? roleLabel(captain) : null });
 }
 
-/** What the operator is asking about a step, in their words — and nothing else.
+/** What the operator is asking about a step, in their words, and nothing else.
  *
  *  This used to be "On the Preview step (status failed), BOSS says: \"<error cut at 400
  *  characters>\". Why is it in this state, and what is the fix? Check the app's code and the
@@ -2857,7 +2857,7 @@ export function stepQuestion(step: Pick<RunStep, "step_id" | "status">, label?: 
 
 /** ANSWER THE GATE WHERE THE DECISION CAN BE READ.
  *
- *  Two buttons on the step answered a release without showing what was being released — no
+ *  Two buttons on the step answered a release without showing what was being released, no
  *  recommendation, no cost, no risk tier, no note, and no record of who else is waiting on the
  *  same call. Approving a deployment off a step badge is a decision made blind. The Approvals
  *  page is where that context lives, so this goes there with the decision already selected.
@@ -2874,28 +2874,27 @@ function ReviewAndDecide({ step }: { step: RunStep }) {
       <div className="dw-step-decide" data-testid="dw-step-merge">
         <a className="cap-btn primary dw-decide-btn" href={changeHref(merge.pull_request_url)}
            {...linkTarget(merge.pull_request_url)} data-testid="dw-step-merge-link">
-          {isLocalChangeUrl(merge.pull_request_url) ? `Merge change set #${merge.pull_request_number} in BOSS →` : `Merge PR #${merge.pull_request_number} in GitHub →`}
+          {isLocalChangeUrl(merge.pull_request_url) ? `Merge change set #${merge.pull_request_number} in BOSS` : `Merge PR #${merge.pull_request_number} in GitHub`}
         </a>
         <span className="detail">This step deploys by itself once it is merged.</span>
       </div>
     );
   }
   // WHAT IT WILL DO, ON THE STEP TOO. The decision card has the buttons; the step at least
-  // shows what is waiting on them, so "Email the newsletter — needs you" says which email.
+  // shows what is waiting on them, so "Email the newsletter, needs you" says which email.
   const preview = actionPreviewOf(step.action_preview);
   return (
     <>
     {preview ? <ActionPreview preview={preview} /> : null}
     <div className="dw-step-decide" data-testid="dw-step-decide">
-      {/* PRIMARY AGAIN, because it is now only rendered when it can actually be pressed — the
+      {/* PRIMARY AGAIN, because it is now only rendered when it can actually be pressed, the
           blocked case does not draw a button at all rather than a quieter one. */}
       <a className="cap-btn primary dw-decide-btn"
          data-testid="dw-step-review"
          href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
                            { area: "decisions", decision_filter: "needs_action",
                              decision: step.decision_id })}>
-        Review and decide →
-      </a>
+        Review and decide</a>
       {/* NOT THE ROLE AGAIN. The step header says "needs release_manager"; repeating it here
           is the fourth time that name appears on one screen. When there is no role to name,
           the sentence still earns its place by saying what the link opens. */}
@@ -2912,9 +2911,9 @@ function ReviewAndDecide({ step }: { step: RunStep }) {
 /** BIND THIS APP TO A HOST, ON THE STEP WHERE SHIPPING IS DECIDED.
  *
  *  Asked for repeatedly, and what shipped each time was less than what was asked for: a bare
- *  host dropdown that fired on change. That is not a binding, it is a guess — it picks the
+ *  host dropdown that fired on change. That is not a binding, it is a guess, it picks the
  *  name and the port for you and gives you nothing to confirm. The project card has had the
- *  real control all along (host · name · port · Set target), and the deploy step, which is
+ *  real control all along (host, name, port, Set target), and the deploy step, which is
  *  exactly where an operator is deciding where this build goes, had a lesser version.
  *
  *  Same three fields, same explicit button, same endpoint the project card posts to. The
@@ -2955,7 +2954,7 @@ function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget, onBound
             });
             const d = await r.json().catch(() => ({}));
             setMsg(r.ok
-              ? `bound to ${d?.host ?? "the host"} — approve the release below to ship it`
+              ? `bound to ${d?.host ?? "the host"}, approve the release below to ship it`
               : (d?.error ?? `could not set the target (HTTP ${r.status})`));
             // WITHOUT THIS THE SCREEN DOES NOT MOVE. The write succeeded and the step went on
             // showing the same empty form, which reads exactly like a button that did nothing.
@@ -2975,7 +2974,7 @@ function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget, onBound
               aria-label="Host to deploy this app to" defaultValue={hosts[0]?.id ?? ""}>
         {hosts.map((h) => (
           <option key={h.id} value={h.id}>
-            {h.name}{h.address ? ` · ${h.address}` : ""}
+            {h.name}{h.address ? `, ${h.address}` : ""}
           </option>
         ))}
       </select>
@@ -2984,7 +2983,7 @@ function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget, onBound
       <input name="app_name" defaultValue={appName} data-testid="dw-deploy-appname"
              aria-label="App name on the host" style={{ width: 150, fontSize: 12 }} />
       <input name="app_port" placeholder="port (auto)" data-testid="dw-deploy-port"
-             aria-label="App port — blank lets BOSS pick a free one"
+             aria-label="App port, blank lets BOSS pick a free one"
              style={{ width: 96, fontSize: 12 }} />
       <GatedButton permission="deployment_target:manage" className="cap-btn" type="submit" disabled={saving || !!busy}
               data-testid="dw-deploy-settarget">
@@ -2998,7 +2997,7 @@ function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget, onBound
 /** The hosts an operator can actually ship to, out of whatever the endpoint answered.
  *
  *  `hosts`, not `items`. GET /v1/deployment-hosts answers {"hosts": [...]} while the TARGETS
- *  endpoint answers {"items": [...]}, and this read `items` from the hosts response — got
+ *  endpoint answers {"items": [...]}, and this read `items` from the hosts response, got
  *  undefined, filtered an empty list, and told the operator "this project has no verified
  *  host. Add one under Infra and Models" while Infra showed hetzner-ci-01 VERIFIED and READY
  *  TO DEPLOY. Extracted so the shape is asserted by a test rather than by a screenshot.
@@ -3069,8 +3068,8 @@ function Explain({ children, label = "What this does" }: {
 /**
  * Teaching copy, shown until it has taught.
  *
- * Every sentence on the deploy step was added to fix a real confusion — "the user might click
- * Review and decide without setting the target", "he may click Set target multiple times" — and
+ * Every sentence on the deploy step was added to fix a real confusion, "the user might click
+ * Review and decide without setting the target", "he may click Set target multiple times", and
  * each one is correct. What none of them accounted for is the twentieth reading. Eight lines of
  * prose around three controls is right once and noise thereafter, and the feedback was exactly
  * that: good information, reads as distraction.
@@ -3096,17 +3095,17 @@ function useLearned(topic: string): [boolean, () => void] {
 
 /** "Try … again" and "Skip and proceed" for a step whose work failed.
  *
- *  BACK IN THE QUEUE. A step that failed for a reason since dealt with — a target that did not
- *  exist, a service that was down — had no way back: the run sat stopped and the only recourse
+ *  BACK IN THE QUEUE. A step that failed for a reason since dealt with, a target that did not
+ *  exist, a service that was down, had no way back: the run sat stopped and the only recourse
  *  was to start the whole workflow again and repeat everything before it.
  *
- *  OR GO ON WITHOUT IT. A failed step stops its run — every kind of step, since research that
+ *  OR GO ON WITHOUT IT. A failed step stops its run, every kind of step, since research that
  *  died was shown green and the run walked on into a panel and a build (boss-1, 2026-10-02).
  *  Whether the run proceeds without it is the operator's call, so both choices sit together.
  *  Skip is not offered on an approval: a refused gate is somebody's "no", and skipping it would
  *  turn that into a yes.
  *
- *  ONE COMPONENT, TWO PLACES. The step's own detail, and the run card itself — where a stopped
+ *  ONE COMPONENT, TWO PLACES. The step's own detail, and the run card itself, where a stopped
  *  run says why it stopped and offers both answers without being opened first. `idPrefix`
  *  keeps the two sets of test ids distinct when both are on screen. */
 /** The longest retry note the API accepts (WorkflowRetryStepBody.note). */
@@ -3117,7 +3116,7 @@ export function retryExample(capability: string): string {
   const kind = String(capability || "").toLowerCase();
   if (kind.includes("deploy")) return "e.g. deploy on port 8080";
   if (kind.includes("build") || kind.includes("test") || kind.includes("fix")) {
-    return "e.g. the login test fails — read DEMO_PASSWORD from the environment";
+    return "e.g. the login test fails, read DEMO_PASSWORD from the environment";
   }
   if (kind.includes("preview")) return "e.g. start the app with npm run dev";
   return "e.g. what to do differently this time";
@@ -3131,11 +3130,11 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
   actions: { retry?: RunAction; skip?: RunAction };
   onRetry: (note?: string) => void; onSkip: (reason: string) => void; idPrefix?: string;
 }) {
-  // RETRY WITH A NOTE. Try again opens one optional field first — what should change — and the
+  // RETRY WITH A NOTE. Try again opens one optional field first, what should change, and the
   // note goes with the retry; a retried build hands it to the builder, verbatim.
   const [retryOpen, setRetryOpen] = useState(false);
   const [retryNote, setRetryNote] = useState("");
-  // The reason box for "Skip and proceed" — open only after the operator asks to skip, so the
+  // The reason box for "Skip and proceed", open only after the operator asks to skip, so the
   // decision is two deliberate acts: choose to skip, then say why.
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipWhy, setSkipWhy] = useState("");
@@ -3158,7 +3157,7 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
           </GatedButton>
           <Explain label="What retrying this step does">
             {retry.enabled ? "Runs this step only; everything before it stays done. "
-              + "You can say what should change — a build gets your note."
+              + "You can say what should change, a build gets your note."
               : `Not available: ${retry.reason}.`}
           </Explain>
         </>
@@ -3174,7 +3173,7 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
         <Explain label="What skipping this step does">
           {skip.enabled
             ? "Marks it skipped with your reason and carries on. Steps that use what it would "
-              + "have produced are told it was skipped — never handed a made-up value."
+              + "have produced are told it was skipped, never handed a made-up value."
             : `Not available: ${skip.reason}.`}
         </Explain>
       ) : null}
@@ -3242,8 +3241,8 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
 /**
  * THE STEP'S OWN WORK, IN THE STEP. A research step's dossier and a panel step's meeting are
  * what an operator clicked the step to see; they used to be a link to another area ("open the
- * research", "open the panel"). The step panel now shows them inline — the verdict or outcome
- * first, live progress while the step runs — with the full view one press away.
+ * research", "open the panel"). The step panel now shows them inline, the verdict or outcome
+ * first, live progress while the step runs, with the full view one press away.
  */
 export function stepWorkOf(step: Pick<RunStep, "capability" | "output">):
   { kind: "discovery" | "meeting" | "architecture"; id: string } | null {
@@ -3268,7 +3267,7 @@ export function stepWorkOf(step: Pick<RunStep, "capability" | "output">):
 }
 
 /**
- * The step's links, less the ones something else on the step already offers — ONE way in to
+ * The step's links, less the ones something else on the step already offers, ONE way in to
  * each thing. The preview block has its own "Open preview"; a research step's dossier and a
  * panel step's meeting are on the step with "Open full view", and the panel's compact view
  * carries "Open the PR".
@@ -3304,13 +3303,13 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   spend?: StepSpend | null;
   /** The run's build step, as the panel step's "Build" stage shows it. */
   panelBuild?: "done" | "now" | "todo" | "stopped" | "skipped";
-  /** Who is acting — what a stack deployment's Approve/Reject is recorded as. */
+  /** Who is acting, what a stack deployment's Approve/Reject is recorded as. */
   actor?: string;
-  /** The workflow run this step belongs to — what "Ask about this step" is about. */
+  /** The workflow run this step belongs to, what "Ask about this step" is about. */
   workflowRunId?: string;
   /** The signed work for this step, once recorded: who did it and how it reached them. */
   act?: Act | null;
-  /** Who the workflow assigns this step to — the lane node's own view, so they agree. */
+  /** Who the workflow assigns this step to, the lane node's own view, so they agree. */
   planned?: StepView["agent"];
   /** The person's answer to this step's gate, when there was one. */
   approval?: Act | null;
@@ -3324,10 +3323,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   /** Skip this failed step and let the run proceed. Never offered on an approval gate. */
   onSkip: (reason: string) => void;
   onPrepareTarget: (hostId: string) => void;
-  /** The code task this run built — what a preview is started FOR. */
+  /** The code task this run built, what a preview is started FOR. */
   buildRunId: string | null;
   onRunPreview: (buildRunId: string) => void;
-  /** Re-read the runs — used after a binding lands so the step shows it. */
+  /** Re-read the runs, used after a binding lands so the step shows it. */
   onBound: () => void;
   /** The build whose preview was asked for and has not arrived yet. */
   previewStarting?: string;
@@ -3339,14 +3338,14 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // approval, so none of the per-app container flow below applies to it: no Set target, no
   // "Approve the release", no Ship now.
   const stackDeploy = isDeployStep(step, capability) ? stackDeployOf(step) : null;
-  // HAS ANYONE SHIPPED FROM THIS PROJECT? — not "has this browser".
+  // HAS ANYONE SHIPPED FROM THIS PROJECT?, not "has this browser".
   //
   // Keying only on localStorage was wrong in the one case that matters: an operator who has
   // bound targets and shipped for weeks has no flag, so they got the full first-run lecture and
   // not even the `?` to close it. They looked at the new build and correctly saw no change.
   //
   // An existing deployment target is proof somebody has done this. The browser flag still
-  // counts — it is set the moment a target is bound, which covers the operator whose first act
+  // counts, it is set the moment a target is bound, which covers the operator whose first act
   // is the one being explained.
   const [flaggedDeploy, markDeployLearned] = useLearned("deploy_step");
   const learnedDeploy = flaggedDeploy || targets.length > 0;
@@ -3354,20 +3353,20 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const showHelp = helpOpen || !learnedDeploy;
   // THE ADDRESS OF THE THING THAT WAS JUST SHIPPED.
   //
-  // Only on a deploy that SUCCEEDED, and only from the target this run is actually bound to —
+  // Only on a deploy that SUCCEEDED, and only from the target this run is actually bound to , 
   // `domains` holds "host:port", which is what the deployer published. Linking on anything
   // less than success would repeat the mistake this view keeps making: reporting a state the
   // system is not in.
   //
-  // WHICH TARGET, ASKED OF THE DEPLOY THAT RAN — then of the run, then of the app's name.
+  // WHICH TARGET, ASKED OF THE DEPLOY THAT RAN, then of the run, then of the app's name.
   //
   // This asked the run's input for a `target_id` and otherwise compared `t.app_name` to the raw
   // TITLE, which is the operator's whole directive. So the app whose title is literally its name
   // ("Change Calendar") got its link and every other app got nothing: Lead-Triage Inbox shipped
   // successfully to deptgt_33af7f on 192.0.2.202:3014 and the step showed no link at all.
   //
-  // The step's own output is the authority here — it records the target this deployment
-  // actually used — and the name comparison is by app identity, which is how the rest of the
+  // The step's own output is the authority here, it records the target this deployment
+  // actually used, and the name comparison is by app identity, which is how the rest of the
   // console decides two names are one app. ("Lead‐Triage Inbox", as stored, carries a U+2010
   // hyphen; string equality would not have matched it even against the right name.)
   const shippedTo = (() => {
@@ -3389,11 +3388,11 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
     const hostId = String(shippedTo?.host_id ?? "");
     const host = hosts.find((h) => h.id === hostId);
     if (!host) return "";
-    // Said once: a host named by its address read "192.0.2.202 · 192.0.2.202".
-    return host.address && host.address !== host.name ? `${host.name} · ${host.address}` : host.name;
+    // Said once: a host named by its address read "192.0.2.202, 192.0.2.202".
+    return host.address && host.address !== host.name ? `${host.name}, ${host.address}` : host.name;
   })();
   // THE TARGET CONTROL, MADE ONCE AND PLACED WHEREVER THE LAYOUT PUTS IT. It renders the bound
-  // target as a fact with Change, or the form to set one — and `onBound` is also what records
+  // target as a fact with Change, or the form to set one, and `onBound` is also what records
   // that this operator has now done it, which is what quietens the step's teaching copy.
   const name = appIdentity(runInput as AppRun).name;
   const lastDeploy = useNewestDeploy(isDeployStep(step, capability) && !stackDeploy ? buildRunId : null, name);
@@ -3404,7 +3403,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                  onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget}
                  onBound={() => { markDeployLearned(); onBound(); }} />
   );
-  // WHETHER SOMETHING IS ACTUALLY SHIPPED THERE — asked of the deployments, not of the step.
+  // WHETHER SOMETHING IS ACTUALLY SHIPPED THERE, asked of the deployments, not of the step.
   //
   // This first used the step's own status, and the step is exactly what cannot be trusted
   // here: HookWatch's deploy step reads SUCCEEDED because of a blocked run recorded before
@@ -3419,7 +3418,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // target control, which uses it.)
   const blocker = step.blocker ?? null;
   // The live preview is resolved per-step by the API and lives ON the step, not in the output
-  // the runtime recorded — merged here so the link builder sees one object.
+  // the runtime recorded, merged here so the link builder sees one object.
   const merged = { ...(step.output || {}),
                    ...(step.live_preview ? { live_preview: step.live_preview } : {}) };
   const runAppTitle = typeof runInput.title === "string" ? runInput.title : "";
@@ -3430,9 +3429,9 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const work = stepWorkOf(step);
   const visibleLinks = visibleStepLinks(links, work);
   // Asked for on THIS build and not yet serving. The URL is the finish line; a POST returning
-  // is not — which is why the old busy flag cleared a second after the click.
+  // is not, which is why the old busy flag cleared a second after the click.
   // A FRESH ONE IS ON ITS WAY UNTIL A DIFFERENT LINK ARRIVES. This used to require "no link
-  // yet", so "Start a fresh one" — pressed exactly when a link already exists — ended its own
+  // yet", so "Start a fresh one", pressed exactly when a link already exists, ended its own
   // starting state the moment it began: no "Starting…", the old link unchanged, and a click
   // that looked dead for the minute the new preview took (boss-1, 2026-10-03).
   const [freshFrom, setFreshFrom] = useState<string | null | undefined>(undefined);
@@ -3441,10 +3440,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const starting = asked && (freshFrom !== undefined ? previewHref === freshFrom : !previewHref);
   const approval = step.approval as { mode?: string; approver_role?: string; follows_policy?: boolean };
   // A manual gate that has not been answered. The one condition under which "waiting" and
-  // "gate · <role>" are the same sentence twice.
+  // "gate, <role>" are the same sentence twice.
   const gateWaiting = approval?.mode === "manual" && step.status === "waiting";
   // WHAT THE STEP MADE, FOR A PERSON: an allow-list of human outputs (the PR, the branch, the
-  // decision, the note), with every machine field — awaits, run ids, verdicts — under one
+  // decision, the note), with every machine field, awaits, run ids, verdicts, under one
   // Details disclosure, each text once and never "null" (stepOutput, app/workflows/step-run).
   const output = stepOutput(step.output as Record<string, unknown>,
                             { noteShownAbove: step.status !== "succeeded" || phase === "skipped",
@@ -3479,9 +3478,9 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
     <section className="dw-detail" data-phase={phase} data-testid="dw-detail">
       <header className="dw-detail-head">
         {/* ONE CHIP, NOT TWO THAT EACH SAY HALF.
-            A gated step showed `waiting` AND `gate · release_manager`, while the run header
+            A gated step showed `waiting` AND `gate, release_manager`, while the run header
             above said "waiting on release_manager" and the button below said "release_manager
-            signs this off" — the same fact four times on one screen. A gate that is waiting IS
+            signs this off", the same fact four times on one screen. A gate that is waiting IS
             "needs <role>", so it is said once, here. */}
         {gateWaiting ? null : (
           <span className="dw-badge"
@@ -3491,11 +3490,11 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                 data-testid={phase === "failed_on" ? "dw-step-failed-on"
                   : phase === "nothing" ? "dw-step-did-nothing"
                   : phase === "skipped" ? "dw-step-na" : undefined}>
-            {phase === "failed_on" ? "failed — went on"
+            {phase === "failed_on" ? "failed, went on"
               : phase === "nothing" ? DID_NOTHING
               // Same wording as the chain node, for the same reason: this step chose to stand
               // aside and said why. The sentence renders directly below as the note. An
-              // operator's skip says who skipped it, as the rail does — "skipped" alone read
+              // operator's skip says who skipped it, as the rail does, "skipped" alone read
               // the same as a branch the run never took.
               : phase === "skipped" ? (skippedBy(step) || "skipped") : step.status}
           </span>
@@ -3519,7 +3518,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             label and read "historical_pattern" / "bank_review" (2026-11-01). */}
         <h4>{capability?.label ?? (step as { title?: string }).title
           ?? String(step.capability ?? step.step_id).replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}</h4>
-        {/* WHAT THIS STEP IS, ON A DOT. This was a permanent line under every step header —
+        {/* WHAT THIS STEP IS, ON A DOT. This was a permanent line under every step header , 
             "The whole inner pipeline: implement, adversarial review, security check, run the
             tests, open a gated pull request. Succeeds when a PR exists." Correct, and read
             once. It is the same class of sentence as everything else that moved. */}
@@ -3542,8 +3541,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                   : "Requires a person"}>
             {gateWaiting
               ? `needs ${approval.approver_role || "a person"}`
-              : approval.follows_policy ? "gate · or by policy"
-              : `gate${approval.approver_role ? ` · ${approval.approver_role}` : ""}`}
+              : approval.follows_policy ? "gate, or by policy"
+              : `gate${approval.approver_role ? `, ${approval.approver_role}` : ""}`}
           </span>
         ) : null}
         {step.due_at ? (
@@ -3577,10 +3576,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           `note` is written by whichever attempt last wrote one, and a step that was refused
           and then went on to succeed keeps the refusal. So a Deploy marked SUCCEEDED, whose
           app was up and answering 200, displayed "no preview is running for this app right
-          now … Start a fresh preview, then deploy" in red — an instruction to redo work that
+          now … Start a fresh preview, then deploy" in red, an instruction to redo work that
           had already been done. On a succeeded step the note is history: kept, because it
           explains the delay, but not dressed as a problem you still have. */}
-      {/* WHAT STOPPED IT — AND WHETHER THAT IS STILL TRUE.
+      {/* WHAT STOPPED IT, AND WHETHER THAT IS STILL TRUE.
           This rendered a past attempt's error as a statement about now, so after the missing
           deployment target was created the step went on insisting, in red, that the app had
           nowhere to ship to. The read path re-tests the recorded blocker; when it has cleared,
@@ -3599,7 +3598,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         </>
       ) : null}
       {/* HISTORY GOES ON THE DOT; A LIVE REASON STAYS ON THE PAGE.
-          "Earlier: this app is already previewable — adopted the running preview" is how a
+          "Earlier: this app is already previewable, adopted the running preview" is how a
           succeeded step explains why it took no time. Worth keeping and not worth a line. On a
           step that did NOT succeed the same field is the reason it is sitting there, so it
           stays where it cannot be missed. */}
@@ -3630,16 +3629,16 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
 
       {/* WHERE THE THING IS. The point of a deploy is an address somebody can open, and the
           step said everything except that: the target it shipped to, the run id, the health
-          key names — and no link. The address is on the target it is bound to. */}
+          key names, and no link. The address is on the target it is bound to. */}
       {/* NOT AFTER IT HAS BEEN APPROVED.
-          The gate is signed off and a worker is about to ship it — the panel says so, two lines
-          below — and "Deploy now" was still offered beside that sentence. Pressing it would
+          The gate is signed off and a worker is about to ship it, the panel says so, two lines
+          below, and "Deploy now" was still offered beside that sentence. Pressing it would
           start a SECOND deploy of the same build while the first was being picked up. An
           approved gate is a decision already taken; the button that takes it does not belong
           on screen any more. */}
       {/* AND NOT WHILE THE GATE IS STILL OPEN.
           This step is gated on release_manager and unanswered, and a blue "Redeploy" sat above
-          the gate — pressing it POSTs the deploy directly, with no decision, which is the one
+          the gate, pressing it POSTs the deploy directly, with no decision, which is the one
           thing a manual gate exists to prevent. It also read as proof the step was done: two
           primary buttons saying the app is deployed, above a line asking for approval to
           deploy it. While there is an answerable gate, the gate IS the way to ship; the button
@@ -3659,10 +3658,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
 
       {/* WHOSE DEPLOYMENT IS THAT, THOUGH.
           An address answering does not mean THIS run shipped. This app had a deployment from a
-          run five days earlier, so a step still waiting for approval led with "Open the app —
+          run five days earlier, so a step still waiting for approval led with "Open the app , 
           shipped and answering": true about the app, false about the step, and read top-down it
           says the deploy is done and then asks to approve the deploy. When this step has not
-          succeeded the same fact is stated as what it is — the previous release — and does not
+          succeeded the same fact is stated as what it is, the previous release, and does not
           take the primary button off the gate. */}
       {observedGates(step, runAppTitle) ? (
         <p className="dw-step-gates" data-testid="dw-step-gates">
@@ -3672,13 +3671,13 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
 
       {/* CHOOSE WHERE IT SHIPS BEFORE IT ASKS TO SHIP.
           This picker existed only inside the approval block, so it appeared for a few seconds
-          at the gate and not before — and if the run was not sitting at the gate there was no
+          at the gate and not before, and if the run was not sitting at the gate there was no
           way to set a target at all. The operator reported exactly that: no option on the
           deploy step to point it at a host. It belongs to the step for its whole life, from
           the moment you can see the step until it has shipped. */}
       {/* ALWAYS ON THE DEPLOY STEP. NO CONDITIONS.
           This was gated on `!succeeded && !needsYou`, which hid it on precisely the step the
-          operator was looking at — a deploy that had already reported succeeded. They asked
+          operator was looking at, a deploy that had already reported succeeded. They asked
           for this control repeatedly and it was never once on screen, because each version of
           the condition excluded the state their run happened to be in.
 
@@ -3692,7 +3691,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           setting the target, or he may click set target multiple times". Both are the layout's
           fault. Numbering them, marking the one that is done, and saying what the second one
           releases is the whole fix. */}
-      {/* ONE PICKER, PLACED TWICE — never two pickers. `DeployWhere` already renders either the
+      {/* ONE PICKER, PLACED TWICE, never two pickers. `DeployWhere` already renders either the
           bound target as a fact with Change, or the form; what changes between the two layouts
           below is the scaffolding around it, so the control itself is created once. Two call
           sites would be one edit away from rendering both, which is the reported bug
@@ -3701,13 +3700,13 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           Taken from the Gemini sketch, which is right about this: with a target already bound
           there is exactly ONE thing an operator can do here, and a two-item numbered plan around
           one button is scaffolding left standing after the building is up. Before that, the
-          numbers are the whole point — the reported bug was pressing Review and decide without
-          setting a target — so they stay until they have done their job. */}
+          numbers are the whole point, the reported bug was pressing Review and decide without
+          setting a target, so they stay until they have done their job. */}
       {stackDeploy ? (
         <>
           <StackDeployStep stack={stackDeploy} actor={actor} onChanged={onBound} />
           {/* A gate opened before stack deploys stopped being gated (a run already waiting at
-              it when BOSS was upgraded) is still answerable — through the Approvals page, the
+              it when BOSS was upgraded) is still answerable, through the Approvals page, the
               way it was raised. New runs never have one. */}
           {needsYou(step) ? <ReviewAndDecide step={step} /> : null}
         </>
@@ -3729,7 +3728,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
       ) : isDeployStep(step, capability) ? (
         <ol className="dw-ship-plan" data-testid="dw-step-target">
           {/* ACTIVE IS THE ONE THAT CAN BE ACTED ON, AND IT WAS THE OTHER ONE.
-              `data-blocked` went on step 2 exactly when step 1 was unfinished — and the CSS
+              `data-blocked` went on step 2 exactly when step 1 was unfinished, and the CSS
               drew that as the highlight, with the primary button inside it. So the screen boxed
               the step it was simultaneously telling you would fail ("there is nowhere to put the
               container until step 1 is done") while leaving the step that actually needed doing
@@ -3776,21 +3775,21 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                       ? <>The press that ships it: BOSS builds a container from this app and runs
                           it on {boundHostName || "the bound host"}. Nothing is sent until it is
                           approved.</>
-                      : <>Approving now would fail at the deploy — there is nowhere to put the
+                      : <>Approving now would fail at the deploy, there is nowhere to put the
                           container until step 1 is done.</>}
                   </Explain>
                 ) : null}
                 <span className="dw-ship-state">
                   {/* "WAITING ON YOU" WAS THE OTHER HALF OF THE SAME LIE. It is waiting on
-                      step 1 — and saying it wants the operator, in amber, beside a button that
+                      step 1, and saying it wants the operator, in amber, beside a button that
                       would fail, is three signals all pointing at the wrong step. */}
                   {!shippedTo ? "after step 1"
                     : step.status === "waiting" ? "waiting on you" : step.status}
                 </span>
               </div>
               {/* A STEP THAT CANNOT RUN DOES NOT NEED A PARAGRAPH.
-                  Blocked, this was four lines — an explanation, a button that would fail and a
-                  note about who signs it off — taking the same footprint as the step that
+                  Blocked, this was four lines, an explanation, a button that would fail and a
+                  note about who signs it off, taking the same footprint as the step that
                   actually wanted doing. "after step 1" beside the title already says it; the
                   rest is available under `?` for whoever wants it. */}
               {shippedTo && showHelp ? (
@@ -3802,7 +3801,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                 </p>
               ) : !shippedTo && showHelp ? (
                 <p className="detail dw-ship-hint" data-testid="dw-help-approve">
-                  Approving now would fail at the deploy — there is nowhere to put the container
+                  Approving now would fail at the deploy, there is nowhere to put the container
                   until step 1 is done.
                 </p>
               ) : null}
@@ -3815,8 +3814,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         </ol>
       ) : null}
 
-      {/* Try again / Skip and proceed — see FailedStepActions for why both sit together. */}
-      {/* WHICH OF THE TWO, IF EITHER, IS THE SERVER'S CALL — `actions` is this step's slice of
+      {/* Try again / Skip and proceed, see FailedStepActions for why both sit together. */}
+      {/* WHICH OF THE TWO, IF EITHER, IS THE SERVER'S CALL, `actions` is this step's slice of
           the run's list, and FailedStepActions renders nothing when it is empty.
           KEYED BY THE STEP, so a reason half-typed for one step is not still open, pre-filled,
           when the operator clicks a different failed step in the rail. */}
@@ -3833,15 +3832,15 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
       {needsYou(step) && !isDeployStep(step, capability) ? <ReviewAndDecide step={step} /> : null}
 
       {/* THE CLICK LANDED. SAY SO.
-          An operator approved a deploy, came back here, and saw the identical "waiting · gate ·
-          Review and decide" they had left — because the step stays `waiting` until a worker
+          An operator approved a deploy, came back here, and saw the identical "waiting, gate ·
+          Review and decide" they had left, because the step stays `waiting` until a worker
           picks the answer up, and this view read only the step. Their reasonable conclusion was
           that the approval had not worked. It had. */}
       {decidedButNotMoved(step) ? (
         <div className="dw-step-decided" data-testid="dw-step-decided">
           {decidedButNotMoved(step) === "approved" ? (
             <>
-              <strong>Approved — starting.</strong>{" "}
+              <strong>Approved, starting.</strong>{" "}
               <Explain label="What happens next">
                 The gate is signed off; the step moves as soon as a worker picks it up, usually
                 within a minute. This view refreshes on its own.
@@ -3851,14 +3850,13 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             <>
               <strong>The gate expired before anyone answered it.</strong>{" "}
               <Explain label="What an expired gate means">
-                Nothing was applied — the default was to hold — so this step is waiting on a
+                Nothing was applied, the default was to hold, so this step is waiting on a
                 question that can still be answered. Opening it reopens the decision.
               </Explain>{" "}
               <a className="cap-btn dw-decide-btn" data-testid="dw-step-reopen"
                  href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
                                    { area: "decisions", decision: step.decision_id })}>
-                Answer it now →
-              </a>
+                Answer it now</a>
             </>
           ) : (
             <>
@@ -3869,8 +3867,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
               <a className="cap-btn dw-decide-btn"
                  href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
                                    { area: "decisions", decision: step.decision_id })}>
-                Open the decision →
-              </a>
+                Open the decision</a>
             </>
           )}
         </div>
@@ -3881,7 +3878,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                    empty={finished ? "Nothing recorded" : "No output yet"}>
         {hasOutput ? (<>
         {/* RUN IT, OR OPEN IT. The preview step reported what it had recorded and offered no way
-            to do anything: no button to start one, and — once the recorded preview expired — no
+            to do anything: no button to start one, and, once the recorded preview expired, no
             link either. Factory has had "Open preview" and a way to start one all along; this is
             the same two controls, on the step whose whole subject is the preview. */}
         {isPreviewStep(step) ? (
@@ -3902,19 +3899,19 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
               </button>
             ) : null}
             {/* WHAT STAYS VISIBLE AND WHAT MOVES TO THE DOT.
-                Not everything grey is an explanation. Progress — "starting a preview, this takes
-                up to a minute" — is the whole reason a minute of silence does not read as a click
+                Not everything grey is an explanation. Progress, "starting a preview, this takes
+                up to a minute", is the whole reason a minute of silence does not read as a click
                 that did nothing, and a build MISMATCH is a warning: the link opens a different
                 build than the one on screen. Both stay. The two sentences that merely describe
                 what a preview is go on the dot. */}
             {starting ? (
               <span className="detail" data-testid="dw-preview-hint">
-                Starting a preview — this takes up to a minute. It will appear here on its own.
+                Starting a preview, this takes up to a minute. It will appear here on its own.
               </span>
             ) : previewHref && step.live_preview?.same_build === false ? (
               <>
                 {/* A WARNING SHOULD BE SHORT AND LOUD, WHICH IS NOT WHAT I SHIPPED.
-                    I argued this had to stay visible — correct — and then left it as two lines of
+                    I argued this had to stay visible, correct, and then left it as two lines of
                     prose, which is the thing being complained about. Six words carry it; the
                     explanation goes where every other explanation went. */}
                 <span className="dw-preview-warn" data-testid="dw-preview-hint">
@@ -3942,7 +3939,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             {visibleLinks.map((l) => (
               l.external ? (
                 <a key={l.label} href={l.href} target="_blank" rel="noreferrer"
-                   className="dw-step-link">{l.label} ↗</a>
+                   className="dw-step-link">{l.label} </a>
               ) : (
                 <a key={l.label} href={l.href} className="dw-step-link">{l.label}</a>
               )
@@ -3952,7 +3949,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
 
         {/* THE DOCUMENT, ON THE STEP THAT WROTE IT. `GET /v1/artifacts/{id}` has existed all
             along and nothing called it, so even a Document step that produced something had
-            nowhere to show it — an id in the output grid is not a document. */}
+            nowhere to show it, an id in the output grid is not a document. */}
         {typeof (step.output || {}).document_id === "string" ? (
           <ChangeRecord documentId={String((step.output as Record<string, unknown>).document_id)} />
         ) : null}
@@ -3985,7 +3982,7 @@ function ChangeRecord({ documentId }: { documentId: string }) {
     setState({ kind: "loading" });
     try {
       // /v1, THROUGH THE CONSOLE'S PROXY. This was /api/artifacts, which no route handler
-      // serves, so every record read "Could not read it — HTTP 404" and every PDF link 404'd.
+      // serves, so every record read "Could not read it, HTTP 404" and every PDF link 404'd.
       // tests/every-client-fetch-has-a-route enumerates these paths now.
       const r = await fetch(`/v1/artifacts/${encodeURIComponent(documentId)}`,
                             { cache: "no-store" });
@@ -4013,14 +4010,14 @@ function ChangeRecord({ documentId }: { documentId: string }) {
       {state.kind === "loading" ? <p className="detail">Reading…</p> : null}
       {state.kind === "failed" ? (
         <p className="detail" data-testid="dw-change-record-failed">
-          Could not read it — {state.why}.
+          Could not read it, {state.why}.
         </p>
       ) : null}
       {state.kind === "text" ? (
         <>
           <div className="dw-record-acts">
             {/* A DOCUMENT SOMEBODY CAN OPEN. Markdown in a <pre> is the right storage format
-                shown in the wrong delivery format — "I dont think anyone will be able to read
+                shown in the wrong delivery format, "I dont think anyone will be able to read
                 that". Rendered server-side on demand, so a record written before the PDF
                 existed still downloads. */}
             <a className="cap-btn" href={`/v1/artifacts/${encodeURIComponent(documentId)}/pdf`}

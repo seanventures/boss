@@ -76,9 +76,9 @@ export function MyKeys({ keys: initial }: { keys: ApiKey[] }) {
             <tbody>
               {keys.map((k) => (
                 <tr key={k.id} data-status={k.status}>
-                  <td><span data-copy="data" title={`Key ${k.id}`}>{k.name}</span>{k.projects?.length || k.networks ? <small className="idn-block idn-dim" data-copy="data">{[k.projects?.length ? k.projects.join(", ") : null, k.networks].filter(Boolean).join(" · ")}</small> : null}</td>
+                  <td><span data-copy="data" title={`Key ${k.id}`}>{k.name}</span>{k.projects?.length || k.networks ? <small className="idn-block idn-dim" data-copy="data">{[k.projects?.length ? k.projects.join(", ") : null, k.networks].filter(Boolean).join(", ")}</small> : null}</td>
                   <td><span className="idn-scopes">{k.scopes.slice(0, 4).map((p) => <Perm key={p} p={p} sm />)}{k.scopes.length > 4 ? <span className="idn-chip">+{k.scopes.length - 4}</span> : null}</span></td>
-                  <td className="idn-mut" data-copy="data">{k.last_used_at ? <><Ago iso={k.last_used_at} />{k.last_used_client ? ` · ${k.last_used_client}` : ""}</> : "never"}</td>
+                  <td className="idn-mut" data-copy="data">{k.last_used_at ? <><Ago iso={k.last_used_at} />{k.last_used_client ? `, ${k.last_used_client}` : ""}</> : "never"}</td>
                   <td>{keyStatus(k, now)}</td>
                   <td>{k.status === "active" ? (
                     <span className="idn-row idn-nowrap">
@@ -173,7 +173,7 @@ function NewKeySheet({ onClose, onIssued }: { onClose: () => void; onIssued: (i:
           </div>
         </div>
         <div className="idn-field idn-full">
-          <span className="idn-label">Scopes · {scopes.length} of yours {held.length}</span>
+          <span className="idn-label">Scopes, {scopes.length} of yours {held.length}</span>
           {preset === "custom" ? (
             <>
               <div className="idn-fb"><span className="idn-q"><MagnifyingGlass size={14} aria-hidden />
@@ -201,7 +201,7 @@ function NewKeySheet({ onClose, onIssued }: { onClose: () => void; onIssued: (i:
         </div>
         <div className="idn-field">
           <label htmlFor="key-nets" title="IP ranges in CIDR form, e.g. 10.0.0.0/8">Allowed networks</label>
-          <input id="key-nets" className="idn-input" value={networks} onChange={(e) => setNetworks(e.target.value)} placeholder="any · or CIDRs" data-testid="key-networks" />
+          <input id="key-nets" className="idn-input" value={networks} onChange={(e) => setNetworks(e.target.value)} placeholder="any, or CIDRs" data-testid="key-networks" />
         </div>
         <div className="idn-field">
           <span className="idn-label" id="key-exp">Expires</span>

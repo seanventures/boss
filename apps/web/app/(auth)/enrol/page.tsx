@@ -9,7 +9,7 @@ import { Enrol } from "./enrol";
 import { passwordMin } from "../../../lib/identity/types-account";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Protect your account · BOSS" };
+export const metadata = { title: "Protect your account, BOSS" };
 
 type Props = { searchParams: Promise<{ next?: string }> };
 

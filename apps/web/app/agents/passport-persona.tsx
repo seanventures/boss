@@ -3,7 +3,7 @@
 /**
  * Profile › Voice and Face (spec §3.4 › Profile › Persona).
  *
- * How the agent speaks — never what it may do. Everything here is compiled into every prompt the
+ * How the agent speaks, never what it may do. Everything here is compiled into every prompt the
  * agent gets (L3 voice, the persona compiler), so a slider moved here is heard in the dock, in
  * a panel and in Test. The server lints it: a voice that tries to grant itself a tool or override
  * its prompt is refused with `Persona can't change what the agent may do`, and the field it
@@ -118,7 +118,7 @@ export function PassportPersona({ projectId, actor, roleKey, passport, onSaved, 
     }
     setWarnings(r.data.warnings);
     onSaved(r.data.version, r.data.fingerprint, compactPersona(p));
-    toast("success", `Saved · v${r.data.version} · applies to new work`);
+    toast("success", `Saved, v${r.data.version}, applies to new work`);
   };
 
   const err = (k: string) => (errors[k] ? <span className="ag-bad" role="alert">{errors[k]}</span> : null);
@@ -133,7 +133,7 @@ export function PassportPersona({ projectId, actor, roleKey, passport, onSaved, 
             return (
               <button key={k} type="button" role="radio" aria-checked={p.archetype === k}
                       className="ag-arch" data-testid={`ag-arch-${k}`}
-                      title={`Inspired by a way of thinking${a.tagline ? ` · ${a.tagline}` : ""}`}
+                      title={`Inspired by a way of thinking${a.tagline ? `, ${a.tagline}` : ""}`}
                       onClick={() => set("archetype", k)}>
                 <AgFace roleKey={k} identity={a} size={ARCH_FACE_PX} decorative aiBadge={false} />
                 <span className="ag-arch-name" data-user-text>{a.callsign || a.name}</span>

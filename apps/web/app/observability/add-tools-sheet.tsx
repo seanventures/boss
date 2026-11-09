@@ -2,8 +2,8 @@
 
 /**
  * `Add tools…` (spec §4.13; was the Observability suite's "Recommended OSS stack" and
- * "Recommend for workload"): pick a workload, `Recommend` names the components for it — which
- * the BOSS stack already covers (`In BOSS stack`) and what to add alongside — and the whole OSS
+ * "Recommend for workload"): pick a workload, `Recommend` names the components for it, which
+ * the BOSS stack already covers (`In BOSS stack`) and what to add alongside, and the whole OSS
  * catalogue sits below in the same sheet. Reads GET /v1/observability-suite/catalog; Recommend
  * is POST /v1/observability-suite/recommend (it changes nothing).
  */

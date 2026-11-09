@@ -88,7 +88,7 @@ describe("the pipeline's design status column", () => {
     expect(head).toContain("Last run");
     expect(by("row-design-monitoring")!.textContent).toBe("Locked");
     expect(by("row-design-monitoring")!.getAttribute("data-design")).toBe("locked");
-    expect(by("row-reference-monitoring")!.textContent).toBe("Design v0.1 · under revision");
+    expect(by("row-reference-monitoring")!.textContent).toBe("Design v0.1, under revision");
     expect(by("row-design-context_enrichment")!.textContent).toBe("In review");
     expect(by("row-design-rca")!.textContent).toBe("Not yet reviewed");
     expect(by("row-reference-rca")!.textContent).toBe("—");
@@ -130,10 +130,10 @@ describe("the agent's steps", () => {
     expect(by("step-1")!.textContent).toContain("Read the group");
     expect(by("step-9")!.textContent).toContain("Write trace,");
     expect(by("steps-to")!.textContent).toContain("To Context");
-    expect(by("band-kg")!.textContent).toBe("Knowledge Graph v3 · read only");
-    expect(by("band-cg")!.textContent).toBe("Context Graph v3 · read and write");
-    expect(by("band-mcp")!.textContent).toBe("External systems · via MCP");
-    expect(by("band-steps")!.textContent).toBe("Sentinel Agent · steps");
+    expect(by("band-kg")!.textContent).toBe("Knowledge Graph v3, read only");
+    expect(by("band-cg")!.textContent).toBe("Context Graph v3, read and write");
+    expect(by("band-mcp")!.textContent).toBe("External systems, via MCP");
+    expect(by("band-steps")!.textContent).toBe("Sentinel Agent, steps");
   });
 
   it("P0 colours Knowledge Graph kinds by their domain and draws Context Graph kinds as hexagons", () => {
@@ -158,7 +158,7 @@ describe("the agent's steps", () => {
     expect(by("line-read-1-agent")!.getAttribute("data-on")).toBe("false");
     expect(by("map-node-dataqualityrule")!.getAttribute("data-on")).toBe("true");
     expect(by("map-node-system")!.getAttribute("data-on")).toBe("false");
-    expect(by("step-detail")!.textContent).toContain("Step 7 · Open or attach");
+    expect(by("step-detail")!.textContent).toContain("Step 7, Open or attach");
     expect(by("step-detail")!.textContent).toContain("Service desk (create ticket)");
     click(by("step-7"));
     expect(by("step-detail")).toBeNull();
@@ -194,7 +194,7 @@ describe("the agent's steps", () => {
     view("rca");
     expect(by("agent-steps-map")).toBeNull();
     expect(by("contract-map")).not.toBeNull();
-    expect(host!.textContent).toContain("Knowledge Graph v3 · read only");
+    expect(host!.textContent).toContain("Knowledge Graph v3, read only");
   });
 });
 
@@ -205,7 +205,7 @@ describe("the design cards", () => {
     const titles = [...cards.querySelectorAll(".pl-design-card-title")].map((t) => t.textContent);
     expect(titles).toEqual(["Under revision", "Trigger", "Handoff", "Human review", "Applied in KG v3 / CG v3",
                             "Policy", "Open questions", "Decisions"]);
-    expect(by("decision-notes")!.textContent).toBe("MON-1 severity only moves up · MON-2 link facts only");
+    expect(by("decision-notes")!.textContent).toBe("MON-1 severity only moves up, MON-2 link facts only");
     expect(by("decision-notes")!.querySelector('[title="MON-1: severity only moves up"]')).not.toBeNull();
     expect(by("policy-notes")!.textContent).toContain("MON-P1 severity ladder");
     expect(by("card-applied-in")!.textContent).toContain("linkType on CORRELATED_WITH");

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ANSWER THE AGENT (BOSSAPP-598): when the on-call agent is not sure enough to act, it asks —
+ * ANSWER THE AGENT (BOSSAPP-598): when the on-call agent is not sure enough to act, it asks , 
  * and the person answers here, with one button per option it offered. The answer runs the same
  * path as the agent deciding (POST …/triage/answer → app_alerts.answer_triage): an incident is
  * opened or joined, and Respond automatically starts exactly as if the agent had decided.
@@ -31,7 +31,7 @@ export function AnswerAgent({ question, options, projectId, actor, targetId, ale
       { scope: `obs:answer:${alertId}`, label: o.label });
     setBusy(null);
     if (r.ok) {
-      showToast("success", [o.label, r.body?.response?.word].filter(Boolean).join(" · "));
+      showToast("success", [o.label, r.body?.response?.word].filter(Boolean).join(", "));
       notifyChanged("observability", { alert_id: alertId });
       onDone?.();
     } else showToast("error", r.error ?? "Not answered");

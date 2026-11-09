@@ -39,7 +39,7 @@ describe("Not tested", () => {
     expect($('[data-testid="kit-progress"]')!.textContent).toBe(`${kit.ready} of 12 ready`);
     await click('[data-testid="kit-action-watch_health"]');
     expect(calls.some((c) => c.body?.action === "test" && c.body?.ability === "watch_health")).toBe(true);
-    expect(said).toContain("Test passed · ok");
+    expect(said).toContain("Test passed, ok");
   });
 
   it("Turn on says so", async () => {

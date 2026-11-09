@@ -2,7 +2,7 @@
 
 /**
  * THE TEMPLATES GALLERY (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.8): one card per approved template
- * — name, one-line summary, stack chips (greyed when this install's toolchain for it is off, the
+ *, name, one-line summary, stack chips (greyed when this install's toolchain for it is off, the
  * tooltip says how to turn it on), labels (`Insecure by design` in amber) and the trial's
  * "Tested ✓ java, node". A card opens its side sheet (template-sheet.tsx). Used by the composer's
  * "From a template" and by "+ Template" in "Add to an existing app" (filtered to the app's stack).
@@ -57,7 +57,7 @@ export function StackChips({ stacks, installed, levels = {} }: { stacks: string[
         return (
           <span key={s} className="tpl-chip" data-off={off || undefined} data-level={levels[s] || undefined}
                 title={stackTip(s, installed) + (levels[s] ? ` Support: ${levelWord(levels[s])}.` : "")}>
-            {stackLabel(s)}{levels[s] ? ` · ${levelWord(levels[s])}` : ""}{off ? " · off" : ""}
+            {stackLabel(s)}{levels[s] ? `, ${levelWord(levels[s])}` : ""}{off ? ", off" : ""}
           </span>
         );
       })}

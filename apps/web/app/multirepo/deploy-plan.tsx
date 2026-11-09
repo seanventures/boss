@@ -55,7 +55,7 @@ export function ChangeSetReleases({ projectId, onOpen }: { projectId: string; on
             <button key={cs.id} type="button" className="mr-rel-row" data-testid={`mr-release-${cs.id}`}
                     title="Open its deploy plan" onClick={() => onOpen(cs.id)}>
               <b data-user-text>{cs.title}</b>
-              <span className="mr-ui-sub" data-user-text>{repos.join(" · ")}</span>
+              <span className="mr-ui-sub" data-user-text>{repos.join(", ")}</span>
               <span className="mr-ui-spacer" />
               <span className="mr-ui-pill" data-tone={changeTone(cs.state)}>{changeWord(cs.state)}</span>
               <ArrowRight size={13} aria-hidden />
@@ -131,7 +131,7 @@ export function DeployPlanView({ projectId, changeSetId, onBack }: { projectId: 
       <div className="mr-cmp-head">
         <div style={{ minWidth: 0, flex: "1 1 320px" }}>
           <div className="mr-cmp-crumb">Infra <span aria-hidden>›</span>{back}<span aria-hidden>›</span>
-            <b data-user-text>{plan.app_name} · {title}</b></div>
+            <b data-user-text>{plan.app_name}, {title}</b></div>
           <p className="mr-ui-lead" data-testid="mr-dp-lead">
             {n === 1 ? "One component ships" : `${cap(numberWord(n))} components ship`} as one release, in order. If any step fails,
             everything goes back to what is live now.
@@ -140,7 +140,7 @@ export function DeployPlanView({ projectId, changeSetId, onBack }: { projectId: 
         <div className="mr-csc-actions">
           {plan.host || plan.environment ? (
             <span className="mr-csc-chip" data-testid="mr-dp-target" title="Where the release goes">
-              Target: {[plan.environment, plan.host].filter(Boolean).join(" · ")}
+              Target: {[plan.environment, plan.host].filter(Boolean).join(", ")}
             </span>
           ) : null}
           <span className="mr-ui-pill" data-tone={changeTone(plan.state)} data-testid="mr-dp-state">{changeWord(plan.state)}</span>
@@ -196,7 +196,7 @@ export function DeployPlanView({ projectId, changeSetId, onBack }: { projectId: 
         <div className="mr-ui-card" data-testid="mr-dp-rollback">
           <div className="mr-ui-card-h">
             <h3>One rollback</h3>
-            <span className="mr-ui-sub">Reverse order · one button</span>
+            <span className="mr-ui-sub">Reverse order, one button</span>
             <span className="mr-ui-spacer" />
             <GatedButton permission="deployment:rollback" className="ag-btn mr-csc-stop" data-testid="mr-dp-rollback-all"
                          disabled={!!rollbackWhy || busy !== null} title={rollbackWhy || "Every component back to its previous release, newest first"}

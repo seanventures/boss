@@ -3,7 +3,7 @@ import { loadAuthOptions } from "../../auth-options";
 import { MagicLinkLanding } from "./link";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Signing in · BOSS" };
+export const metadata = { title: "Signing in, BOSS" };
 
 type Props = { searchParams: Promise<{ next?: string }> };
 

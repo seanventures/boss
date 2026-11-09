@@ -139,7 +139,7 @@ describe("Community improvement programs panel", () => {
       /<button\b[^>]*\bdisabled\b[^>]*data-testid="improvement-program-adopt-baseline"|<button\b[^>]*data-testid="improvement-program-adopt-baseline"[^>]*\bdisabled\b/,
     );
     expect(html).toContain(
-      "Promote is an enterprise SIM step — Community records trials only.",
+      "Promote is an enterprise SIM step, Community records trials only.",
     );
   });
 

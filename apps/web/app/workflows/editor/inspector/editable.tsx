@@ -17,7 +17,7 @@ export function useLockReason(): string | null {
 
 /**
  * The controls that edit, disabled together with the reason as their tooltip. Everything that
- * only explains or navigates — section labels, HelpTip `(i)`s, the drawer's × — sits OUTSIDE
+ * only explains or navigates, section labels, HelpTip `(i)`s, the drawer's ×, sits OUTSIDE
  * one of these, so it keeps working while the editing is locked.
  */
 export function Editable({ children, inline }: { children: ReactNode; inline?: boolean }) {

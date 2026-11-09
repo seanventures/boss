@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * ACCESS ROLES (IDENTITY.md §9.4): built-in roles are read-only — a lock, and Clone to make one
- * your own — and custom roles open in the editor. Holders, permission counts and where each can
+ * ACCESS ROLES (IDENTITY.md §9.4): built-in roles are read-only, a lock, and Clone to make one
+ * your own, and custom roles open in the editor. Holders, permission counts and where each can
  * be bound, at a glance.
  */
 import React, { useState } from "react";
@@ -71,7 +71,7 @@ function Row({ role, onClone, busy }: { role: AccessRole; onClone: (r: AccessRol
         </a>
       </td>
       <td className="idn-mono">{role.permissions.length} / {ROLE_PERMS.length}</td>
-      <td className="idn-nowrap">{role.bindable_scopes.map((x) => (x === "org" ? "Org" : "Project")).join(" · ")}</td>
+      <td className="idn-nowrap">{role.bindable_scopes.map((x) => (x === "org" ? "Org" : "Project")).join(", ")}</td>
       <td className="idn-mono">{role.holders}</td>
       <td>
         <span className="idn-row">
@@ -104,20 +104,20 @@ export function RoleList({ roles }: { roles: AccessRole[] }) {
     <>
       <div className="idn-sec-h">
         <h1 className="idn-h1">Access roles</h1>
-        <span className="idn-sub">{builtin.length} built-in · {custom.length} custom</span>
+        <span className="idn-sub">{builtin.length} built-in, {custom.length} custom</span>
       </div>
       <ErrorLine error={error} />
       <section className="idn-card" aria-labelledby="idn-builtin-h">
         <div className="idn-card-h">
           <h2 id="idn-builtin-h">Built-in</h2>
-          <span className="idn-sub" title="Clone one to change what it grants">Read-only · clone to customise</span>
+          <span className="idn-sub" title="Clone one to change what it grants">Read-only, clone to customise</span>
         </div>
         {table(builtin, "Built-in access roles")}
       </section>
       <section className="idn-card" aria-labelledby="idn-custom-h">
         <div className="idn-card-h">
           <h2 id="idn-custom-h">Custom</h2>
-          <span className="idn-sub">Versioned · previewed before save</span>
+          <span className="idn-sub">Versioned, previewed before save</span>
         </div>
         {custom.length ? table(custom, "Custom access roles") : (
           <EmptyState compact icon={<CopySimple size={18} />} title="No custom roles yet" testId="roles-empty">

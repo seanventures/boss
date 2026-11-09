@@ -2,7 +2,7 @@
 
 /**
  * A KNOWLEDGE-GRAPH PROJECT'S HOME CARD (BOSSAPP-768 project flow), on the Command Center: the
- * graph's lifecycle — code indexed → rules proposed and approved → what agents learned — with the
+ * graph's lifecycle, code indexed → rules proposed and approved → what agents learned, with the
  * real counts, the team that works on it, and the one next thing (continue the setup, review the
  * rules waiting, or open the graph). One read: GET /v1/knowledge/setup, the stepper's own.
  */
@@ -53,9 +53,9 @@ export function KgLifecycleCard({ projectId, actor, orgId, projectType }: {
   const next = SETUP_STEPS.find((s) => s.key === setup.next);
   const stages = [
     { key: "code", layer: "code", label: "Code indexed", value: n(setup.code_nodes),
-      sub: setup.repositories.length ? `${indexed} of ${setup.repositories.length} repositories${indexing ? " · indexing" : ""}` : "No repository yet" },
+      sub: setup.repositories.length ? `${indexed} of ${setup.repositories.length} repositories${indexing ? ", indexing" : ""}` : "No repository yet" },
     { key: "rules", layer: "rules", label: "Rules", value: n(setup.rules.approved),
-      sub: `approved · ${n(setup.rules.proposed)} waiting for review` },
+      sub: `approved, ${n(setup.rules.proposed)} waiting for review` },
     { key: "learning", layer: "learning", label: "Learnings", value: n(setup.learnings),
       sub: "recorded by agents as they work" },
   ];
@@ -63,7 +63,7 @@ export function KgLifecycleCard({ projectId, actor, orgId, projectType }: {
     <section className="kg-life" data-testid="kg-lifecycle" aria-label="Knowledge graph">
       <header className="kg-life-head">
         <h2>Knowledge graph</h2>
-        <span className="kg-life-progress" data-testid="kg-lifecycle-progress">{next ? `Setup · ${stepsLeftWords(setup)}` : "Set up"}</span>
+        <span className="kg-life-progress" data-testid="kg-lifecycle-progress">{next ? `Setup, ${stepsLeftWords(setup)}` : "Set up"}</span>
         <span className="ag-spacer" />
         {next ? (
           <a className="ag-btn ag-btn-primary" href={href({ kg_tab: "setup" })} data-testid="kg-lifecycle-continue">Continue: {next.label}</a>

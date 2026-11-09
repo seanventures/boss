@@ -75,7 +75,7 @@ describe("the card", () => {
     expect([...(reports?.querySelectorAll(".obs-chip") ?? [])].map((c) => c.textContent)).toEqual(["T-1042", "T-1043", "T-1044"]);
 
     expect(text($("[data-testid='obs-incident-rca']"))).toContain("where every failing request raised KeyError");
-    expect(text($("[data-testid='obs-incident-basis']"))).toBe("release changed failing frame · confidence 90%");
+    expect(text($("[data-testid='obs-incident-basis']"))).toBe("release changed failing frame, confidence 90%");
 
     expect($("[data-testid='obs-incident-run']")?.getAttribute("href")).toBe("?area=delivery_workflows&wfr=wfr_ir_1");
     const strip = $$("[data-testid='obs-incident-steps'] li");

@@ -19,7 +19,7 @@
  * passkey popped "Insert your security key" and there was nothing else to do). "Sign in with a
  * passkey" is a complete sign-in on its own, started only by its button; if it fails or is
  * cancelled, one calm line points back to email and password. Email + password then asks for the
- * second factor the account has: the authenticator code, or its passkey (on a click) — the user
+ * second factor the account has: the authenticator code, or its passkey (on a click), the user
  * can switch between them, and a recovery code always works.
  */
 import { afterEnrolStep, ENROLMENT_GRANT_WORDS } from "../../../lib/identity/enrolment";
@@ -52,8 +52,8 @@ const WORDS: Record<string, string> = {
   invalid_credentials: "Wrong email or password",
   invalid_code: "That code didn't work",
   code_invalid: "That code didn't work",
-  rate_limited: "Too many tries — wait a minute",
-  busy: "Busy — try again in a moment",
+  rate_limited: "Too many tries, wait a minute",
+  busy: "Busy, try again in a moment",
   account_disabled: "This account is disabled. Ask an admin.",
   identity_unavailable: "BOSS can't be reached",
   sso_required: "Your organisation signs in with single sign-on only.",
@@ -248,7 +248,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
         <h1>{recovery ? "Use a recovery code" : codeOffered ? "Enter your code" : "Use your passkey"}</h1>
         <p className="idn-s" data-copy="prose">
           {recovery ? "One of the ten codes you saved. Each works once."
-            : codeOffered ? <>Open your authenticator app and enter the 6-digit code for <b>BOSS · {options.org_name}</b>.</>
+            : codeOffered ? <>Open your authenticator app and enter the 6-digit code for <b>BOSS, {options.org_name}</b>.</>
             : <>Your password was right. Confirm it&apos;s you with the passkey for <b>{options.host}</b>.</>}
         </p>
         {recovery ? (

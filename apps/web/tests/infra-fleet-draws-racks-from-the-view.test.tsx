@@ -40,10 +40,10 @@ describe("Infra › Fleet", () => {
     expect(ready.querySelector('[data-testid="inf-rack-meta"]')?.textContent).toContain("ports 2 of 50");
     expect(slotsIn(rack("this"))).toBe(8);             // max 8, nothing placed: all 8 drawn
     const tile = tilesIn(ready)[0];
-    expect(tile.textContent).toContain("invoice · prod");
+    expect(tile.textContent).toContain("invoice, prod");
     expect(tile.querySelector('[data-testid="inf-tile-state"]')?.textContent).toBe("Up");
     expect(tile.textContent).toContain("9f8e7d6");
-    expect(tile.querySelector('svg[role="img"]')?.getAttribute("aria-label")).toMatch(/^invoice · prod, 24 hours: up/);
+    expect(tile.querySelector('svg[role="img"]')?.getAttribute("aria-label")).toMatch(/^invoice, prod, 24 hours: up/);
   });
 
   it("draws at most 8 empty slots, then +n free; a machine with no limit offers + Place app", async () => {

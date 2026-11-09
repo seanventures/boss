@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * A TEMPLATE'S SIDE SHEET (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.8): what it adds · its secrets
- * (each `Test mode` / `Needs a key` / `Set`, with an inline write-only field) · what the app will
- * talk to · the security note (folded) · Start.
+ * A TEMPLATE'S SIDE SHEET (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.8): what it adds, its secrets
+ * (each `Test mode` / `Needs a key` / `Set`, with an inline write-only field), what the app will
+ * talk to, the security note (folded), Start.
  *
  * START IS A GOVERNED BUILD (§2.3): POST /v1/templates/{id}/apply, the same start path as the
  * composer's. What it can answer, and what the sheet does:
@@ -110,7 +110,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose, ini
   }, [projectId]);
   const defaultWorkflow = workflows.find((w) => w.isDefault);
 
-  // The first stack this install can build — chosen again when the toolchains arrive, until the
+  // The first stack this install can build, chosen again when the toolchains arrive, until the
   // person picks one themselves.
   const [picked, setPicked] = useState(false);
   useEffect(() => {
@@ -226,7 +226,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose, ini
   );
 
   return (
-    <SideSheet title={card.name} sub={`v${card.version}${card.source === "git" ? " · imported" : ""}`} onClose={onClose}
+    <SideSheet title={card.name} sub={`v${card.version}${card.source === "git" ? ", imported" : ""}`} onClose={onClose}
                testId="tpl-sheet" foot={foot}>
       <p className="tpl-muted" data-user-text={card.source === "git" || undefined}>{card.summary}</p>
       <LabelChips labels={card.labels} />
@@ -261,7 +261,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose, ini
                       aria-disabled={off || undefined} data-off={off || undefined} data-level={levels[s] || undefined}
                       title={stackTip(s, installed) + (levels[s] ? ` Support: ${levelWord(levels[s])}.` : "")}
                       data-testid={`tpl-stack-${s}`} onClick={() => { if (!off) { setStack(s); setPicked(true); } }}>
-                {stackLabel(s)}{levels[s] ? ` · ${levelWord(levels[s])}` : ""}{off ? " · off" : ""}
+                {stackLabel(s)}{levels[s] ? `, ${levelWord(levels[s])}` : ""}{off ? ", off" : ""}
               </button>
             );
           })}

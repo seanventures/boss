@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * The deploy drawer (`deploy=<kind>:<id>`, spec §4.6): everything one deploy is — NEEDS YOU,
+ * The deploy drawer (`deploy=<kind>:<id>`, spec §4.6): everything one deploy is, NEEDS YOU,
  * STEPS, FAILED, PLAN, PREFLIGHT, LOG, HEALTH CHECK, PROMOTION and its actions. One poll
  * (`useDeployDetail`): every 3 s while the deploy is live, none once it settles; an unchanged
- * answer is a 304 and no re-render. Nothing here refreshes the console — the promotion line
+ * answer is a 304 and no re-render. Nothing here refreshes the console, the promotion line
  * moves with this poll, not with a page refresh every 5 s as the old timeline did.
  */
 import { GatedButton } from "../../components/gated";
@@ -47,7 +47,7 @@ export function DeployDrawer({ projectId, actor, deployRef, onClose, onOpen, onC
   const row = d?.row;
   const head = row ? (
     <span className="inf-dd-head">
-      <strong className="inf-trunc" data-copy="data">{row.app} · {row.env}</strong>
+      <strong className="inf-trunc" data-copy="data">{row.app}, {row.env}</strong>
       <StateWord w={{ word: row.word, tone: row.tone }} testId="inf-deploy-state" />
       {row.sha7 ? <code className="inf-mono" data-copy="data" title={row.refName ? `Ref ${row.refName}` : undefined}>{row.sha7}</code> : null}
       <Menu label="⋯" testId="inf-deploy-menu" tip="More" items={[
@@ -97,7 +97,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
   const decide = async (v: "approve" | "reject") => {
     if (!row.decisionId) return;
     const data = await run(v, () => decideDeploy(row.decisionId as string, actor, v),
-      () => (v === "approve" ? "Approved · starting the deploy" : "Deploy rejected"));
+      () => (v === "approve" ? "Approved, starting the deploy" : "Deploy rejected"));
     if (data) give(v);
   };
   const rollback = async () => {
@@ -116,7 +116,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
   const redeploy = async () => {
     const data = await run("redeploy", () => (row.kind === "delivery"
       ? redeployDelivery(kindId, actor)
-      : deployTarget(projectId, row.targetId ?? "", actor, row.sha7 ?? row.refName)), () => "Redeploy planned · Approve");
+      : deployTarget(projectId, row.targetId ?? "", actor, row.sha7 ?? row.refName)), () => "Redeploy planned, Approve");
     if (data && typeof data.ref === "string") onOpen?.(data.ref);
   };
   const healthCheck = async () => {
@@ -140,7 +140,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
         </div>
       ) : null}
 
-      {/* WHERE IT IS, IN ONE SENTENCE — the same one the row, the run and the fleet show. */}
+      {/* WHERE IT IS, IN ONE SENTENCE, the same one the row, the run and the fleet show. */}
       <div className="inf-dd-status" data-testid="inf-deploy-sentence" data-phase={verdict === "approve" ? "queued" : row.phase}>
         <StateWord w={shownWord(row, verdict)} />{" "}
         <span data-copy="data">{verdict === "approve" ? "Approved. Starting the deploy." : row.sentence}</span>
@@ -191,7 +191,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
       {d.plan ? (
         <DrawerSection label="Plan" testId="inf-deploy-plan">
           <details className="inf-dd-plan">
-            <summary>{plural(d.plan.steps.length, "step")}{d.plan.envKeys.length ? ` · ${plural(d.plan.envKeys.length, "env key")}` : ""}</summary>
+            <summary>{plural(d.plan.steps.length, "step")}{d.plan.envKeys.length ? `, ${plural(d.plan.envKeys.length, "env key")}` : ""}</summary>
             <ol className="inf-dd-plan-steps" data-testid="inf-deploy-plan-steps">
               {d.plan.steps.map((s, i) => <li key={i} className="inf-mono" data-copy="data">{s}</li>)}
             </ol>
@@ -243,7 +243,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
                 const ok = h.ok === true || h.status === "passed" || h.passed === true;
                 const name = String(h.name ?? h.url ?? h.kind ?? `Check ${i + 1}`);
                 const extra = [h.status !== undefined && typeof h.status === "number" ? String(h.status) : "",
-                  typeof h.latency_ms === "number" ? `${Math.round(h.latency_ms)} ms` : ""].filter(Boolean).join(" · ");
+                  typeof h.latency_ms === "number" ? `${Math.round(h.latency_ms)} ms` : ""].filter(Boolean).join(", ");
                 return (
                   <li key={i} data-ok={ok ? "1" : "0"}>
                     <span aria-label={ok ? "Passed" : "Failed"}>{ok ? "✓" : "✗"}</span>
@@ -261,7 +261,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
         <DrawerSection label="Promotion" testId="inf-deploy-promotion">
           <ol className="inf-promo" aria-label="Promotion">
             {d.promotion.phases.map((p) => (
-              <li key={p.key} data-s={p.state} title={`${p.label} · ${p.state}`}>
+              <li key={p.key} data-s={p.state} title={`${p.label}, ${p.state}`}>
                 <span className="inf-promo-dot" data-s={p.state} aria-hidden />
                 <span>{p.label}</span>
               </li>

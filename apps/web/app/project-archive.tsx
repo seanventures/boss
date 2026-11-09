@@ -24,7 +24,7 @@ import {
 } from "./project-archive-actions";
 import styles from "./project-archive.module.css";
 
-/** "Archived 3 Oct 2026 by ceo" — a date a person reads, not an ISO string. */
+/** "Archived 3 Oct 2026 by ceo", a date a person reads, not an ISO string. */
 export function archivedSentence(at: string | null | undefined, by?: string | null): string {
   if (!at) return "Archived";
   const when = new Date(at);
@@ -96,7 +96,7 @@ export function ArchiveDialog({ projectId, name, onClose, onArchived }: {
           ) : null}
           {state === "failed" ? (
             <div className={styles.error} role="alert" data-testid="archive-dialog-failed">
-              <p>Could not read what this project runs — {error}</p>
+              <p>Could not read what this project runs, {error}</p>
               <button type="button" className={styles.secondary} onClick={() => void load()}>Retry</button>
             </div>
           ) : null}
@@ -177,7 +177,7 @@ export function ArchivedProjects({ orgId, onRestored }: { orgId?: string; onRest
   if (error) {
     return (
       <div className={styles.error} role="alert" data-testid="archived-failed">
-        <p>Could not read archived projects — {error}</p>
+        <p>Could not read archived projects, {error}</p>
         <button type="button" className={styles.secondary} onClick={() => void load()}>Retry</button>
       </div>
     );

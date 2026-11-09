@@ -6,7 +6,7 @@
  * prefers or the browser has none. Then recovery codes, shown once.
  *
  * NEVER PASSKEY-ONLY (BOSSAPP-812): someone who reached here with no password (an emailed
- * sign-up) chooses one right after the factor — the API lets a first password be set only on a
+ * sign-up) chooses one right after the factor, the API lets a first password be set only on a
  * fresh second factor, which enrolling just gave this session. A passkey lives in one browser;
  * the password is the way in from any other.
  */

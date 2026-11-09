@@ -86,7 +86,7 @@ export default function LaunchPage() {
           <span>$</span><code>docker build -f engine/Dockerfile -t boss-engine .</code>
         </div>
         <p>Connect a self-hosted Postgres workspace, bootstrap once, then drive BOSS from the CLI or MCP.</p>
-        <a className={styles.primary} href="/">Open Mission Control <span>→</span></a>
+        <a className={styles.primary} href="/">Open Mission Control</a>
       </section>
 
       <footer className={styles.footer}>

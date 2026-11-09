@@ -414,8 +414,9 @@ class DecisionService:
         force: bool = False,
         system_policy: bool = False,
         content_hash: Optional[str] = None,
+        settle_at: Optional[str] = None,
     ) -> dict:
-        if action not in {"approve", "reject", "revise", "delegate", "execute"}:
+        if action not in {"approve", "reject", "revise", "delegate", "execute", "settle"}:
             raise ValueError(f"Unsupported action: {action}")
         if force and not (note or "").strip():
             # A force merge overrides BOSS's own safety verdict. The reason is the ONLY
@@ -518,7 +519,7 @@ class DecisionService:
             if gone:
                 raise InvalidDecisionTransitionError(gone)
 
-        if action in {"approve", "reject", "revise", "delegate"}:
+        if action in {"approve", "reject", "revise", "delegate", "settle"}:
             # A DEADLINE NOBODY MET MUST NOT ALSO DESTROY THE WORK.
             #
             # Measured on the live project: 127 of 165 decisions (77%) expired, 22 were
@@ -578,6 +579,18 @@ class DecisionService:
                     f"Decision deadline has passed and the safe default "
                     f"({safe_default}) was applied."
                 )
+
+        if action == "settle":
+            # The method resolves the decision and writes the one cost receipt. A second
+            # settle raises; that refusal is the same conflict as any other closed card.
+            try:
+                self.budget.resolve_legacy_exposure(
+                    connection, row["project_id"], decision_id,
+                    settle_at=settle_at or "", actor=actor,
+                )
+            except ValueError as error:
+                raise InvalidDecisionTransitionError(str(error)) from error
+            return self.get_row(connection, decision_id)
 
         if action == "approve":
             # CI GATES (services/ci_gate.py): a build that changed .github/workflows/ needs a

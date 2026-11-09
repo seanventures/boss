@@ -5,7 +5,7 @@
  *
  * Every line is DATA: the agent's name, the server's work verb (agent_acts.work_verb) and the
  * label the engine wrote from names. No model writes any of it. Children fold under their item
- * (`+n inside`) and tool calls under the work that made them (`n tool calls`) — and an item
+ * (`+n inside`) and tool calls under the work that made them (`n tool calls`), and an item
  * with none shows no fold control: a control is never a promise.
  *
  * IT NEVER MOVES UNDER THE READER. New work collects behind a `n new ↑` pill at the top until
@@ -50,9 +50,9 @@ export type ActivityRiverProps = {
 export const RIVER_POLL_MS = 8000;
 const TOOL_CAP = 50;
 
-/** "You approved Approved · Notify" says the verb twice: an approval's label starts with it. */
+/** "You approved Approved, Notify" says the verb twice: an approval's label starts with it. */
 export function withoutVerb(label: string, verb: string): string {
-  const prefix = `${verb} · `;
+  const prefix = `${verb}, `;
   return verb && label.startsWith(prefix) ? label.slice(prefix.length) : label;
 }
 
@@ -68,7 +68,7 @@ const FILTERS: { key: ActivityFilter; label: string; tip: string }[] = [
 /** The face's FINAL state: what the work came to, never a motion. */
 export function riverState(status: string, item?: Pick<ActivityItem, "kind" | "verb">): AvatarState {
   // A person's answer is done whichever way it went; a run that ended badly STOPPED (its
-  // starter never failed — the step that failed did, and that row says so). Work that errored
+  // starter never failed, the step that failed did, and that row says so). Work that errored
   // FAILED; work left open when its run stopped STOPPED. A finished record is never "stuck".
   if (item && (item.verb === "Approved" || item.verb === "Rejected")) return "done";
   if (status === "awaiting_input") return "needs_you";
@@ -84,7 +84,7 @@ export function riverStatusWord(state: AvatarState, item: Pick<ActivityItem, "ki
 }
 
 /** WHO DID IT, AND WHAT. A gate is the operator's: approving or rejecting is something YOU did,
- *  and a wait on a gate is a wait on you — never the gated step's captain "working" it. */
+ *  and a wait on a gate is a wait on you, never the gated step's captain "working" it. */
 export function sentenceOf(item: ActivityItem): { who: { roleKey: string | null; variant: AvatarVariant; name: string };
                                                   verb: string } {
   if (item.verb === "Approved" || item.verb === "Rejected") {
@@ -96,7 +96,7 @@ export function sentenceOf(item: ActivityItem): { who: { roleKey: string | null;
   return { who: whoOf(item), verb: item.verb.toLowerCase() };
 }
 
-/** `Today` · `Yesterday` · `Mon 29 Sep`, in the reader's own time zone (lib/log-time: one
+/** `Today`, `Yesterday`, `Mon 29 Sep`, in the reader's own time zone (lib/log-time: one
  *  clock for every log in the console). */
 export function dayLabel(iso: string, now: Date = new Date()): string {
   return logDayLabel(iso, now);
@@ -118,7 +118,7 @@ export function duration(item: Pick<ActivityItem, "startedAt" | "endedAt">): str
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-/** Who did it: an agent by its callsign, else a person (`You`) or BOSS — never a guessed agent. */
+/** Who did it: an agent by its callsign, else a person (`You`) or BOSS, never a guessed agent. */
 function whoOf(item: ActivityItem): { roleKey: string | null; variant: AvatarVariant; name: string } {
   if (item.roleKey) {
     const id = identityOf(item.roleKey);
@@ -131,7 +131,7 @@ function whoOf(item: ActivityItem): { roleKey: string | null; variant: AvatarVar
 /** Agent-to-agent handoffs carry the edge glyph; work a workflow simply named does not. */
 const HANDOFF_HOWS = new Set(["captain", "asked_by_agent", "model_pick", "only_holder", "only_candidate"]);
 /** Where a river row's `All lines ↗` goes: the act's own lines when it wrote any (turns or
- *  model calls), else its workflow run's — an act scope with no lines was an empty Log. */
+ *  model calls), else its workflow run's, an act scope with no lines was an empty Log. */
 export function riverLogScope(item: Pick<ActivityItem, "actId" | "label" | "verb" | "toolCalls" | "costUsd" | "workflowRunId">): LogScope {
   const name = withoutVerb(item.label, item.verb).trim() || item.label;
   const wroteLines = item.toolCalls > 0 || item.costUsd > 0;
@@ -265,7 +265,7 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false, onOpe
   const [toolsOpen, setToolsOpen] = useState(false);
   const took = duration(item);
 
-  // A TALK OPENS ITS CONVERSATION: the brief, the answer and what the agent did — never a card
+  // A TALK OPENS ITS CONVERSATION: the brief, the answer and what the agent did, never a card
   // naming the console's own actor.
   const conversation = item.kind === "chat" && item.threadId && onOpenConversation ? item.threadId : null;
   const openCard = useCallback(async () => {
@@ -351,8 +351,8 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false, onOpe
           {tools.rows.slice(0, TOOL_CAP).map((t, i) => (
             <li key={`${t.toolName}:${i}`} className="ag-river-tool" data-ok={t.ok === false ? "false" : "true"}>
               <span data-user-text>{t.toolName}</span>
-              <span> · {t.ok === false ? "failed" : "ok"}</span>
-              {t.latencyMs !== null ? <span> · {t.latencyMs}ms</span> : null}
+              <span>, {t.ok === false ? "failed" : "ok"}</span>
+              {t.latencyMs !== null ? <span>, {t.latencyMs}ms</span> : null}
             </li>
           ))}
           {tools.more || item.toolCalls > TOOL_CAP ? (

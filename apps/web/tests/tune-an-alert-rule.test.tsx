@@ -47,7 +47,7 @@ describe("Tune on the Rules list", () => {
     await click($("[data-testid='obs-rule-latency_p95'] [data-testid='obs-rule-edit']"));
     const sheet = $("[data-testid='obs-rule-sheet']")!;
     const where = sheet.querySelector("[data-testid='obs-rule-where'] a")!;
-    expect(text(where)).toBe("deploy/boss.deploy.yaml:12 ↗");
+    expect(text(where)).toBe("deploy/boss.deploy.yaml:12");
     expect(where.getAttribute("href")).toBe(WHERE.href);
     expect(text(sheet.querySelector("[data-testid='obs-rule-save']"))).toBe("Propose PR");
 

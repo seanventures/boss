@@ -23,11 +23,11 @@ function AgentRow({ agent, orgId }: { agent: AgentRosterRow; orgId?: string }) {
       <p>{agent.currentTask}</p>
       {agent.currentTaskId ? <p className="cc-agent-meta">
         {agent.currentTaskStatus ?? "unknown"}
-        {agent.currentTaskOwner ? ` · owned by ${agent.currentTaskOwner}` : ""}
-        {agent.currentTaskUpdatedAt ? ` · updated ${agent.currentTaskUpdatedAt.slice(0, 16).replace("T", " ")} UTC` : ""}
+        {agent.currentTaskOwner ? `, owned by ${agent.currentTaskOwner}` : ""}
+        {agent.currentTaskUpdatedAt ? `, updated ${agent.currentTaskUpdatedAt.slice(0, 16).replace("T", " ")} UTC` : ""}
       </p> : null}
       {agent.currentTaskId ? <a href={`/?${orgId ? `org=${encodeURIComponent(orgId)}&` : ""}area=work&task=${encodeURIComponent(agent.currentTaskId)}`}>
-        Open task ↗
+        Open task 
       </a> : null}
     </div>
   </details>;
@@ -102,13 +102,12 @@ export function CoordinationPanel({ projectId, orgId, initial }: {
           key={item.taskId} title={`Open task: ${item.title}`}>
           <span className="cc-flight-main">
             <span className="cc-flight-title">{item.title || item.taskId}</span>
-            <span className="cc-flight-sub">{item.stage} · {item.status}
-              {item.owner ? ` · ${item.owner}` : ""}
-              {item.updatedAt ? ` · updated ${item.updatedAt.slice(0, 16).replace("T", " ")} UTC` :
-                item.createdAt ? ` · started ${item.createdAt.slice(0, 16).replace("T", " ")} UTC` : ""}</span>
+            <span className="cc-flight-sub">{item.stage}, {item.status}
+              {item.owner ? `, ${item.owner}` : ""}
+              {item.updatedAt ? `, updated ${item.updatedAt.slice(0, 16).replace("T", " ")} UTC` :
+                item.createdAt ? `, started ${item.createdAt.slice(0, 16).replace("T", " ")} UTC` : ""}</span>
           </span>
-          <span className="cc-flight-go" aria-hidden>→</span>
-        </a> : <AreaLink className="cc-flight-row" area={item.area} orgId={orgId}
+                  </a> : <AreaLink className="cc-flight-row" area={item.area} orgId={orgId}
           key={item.title} title={item.title}>{item.title}</AreaLink>)}
         {snapshot.inFlight.length === 0 ? <p className="empty-state">No recent work.</p> : null}
       </div>

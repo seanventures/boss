@@ -65,7 +65,7 @@ describe("the deploy rail", () => {
     const failed = [...rowOf("stack:sd_failed").querySelectorAll(".inf-step")];
     expect(failed.map((s) => s.getAttribute("data-s"))).toEqual(["done", "done", "done", "failed", "pending", "pending"]);
     expect(failed[3].textContent).toBe("✗");
-    expect(failed[3].getAttribute("title")).toBe("Migrate · failed");
+    expect(failed[3].getAttribute("title")).toBe("Migrate, failed");
     const running = rowOf("stack:sd_run").querySelector('.inf-step[data-s="running"]')!;
     expect(running.textContent).toBe("◐");
     expect(running.hasAttribute("data-anim")).toBe(true);
@@ -106,7 +106,7 @@ describe("the deploy rail", () => {
     const row = rowOf("stack:sd_live");
     expect(row.textContent).toContain("Live");
     const note = row.querySelector<HTMLButtonElement>("[data-testid='inf-deploy-failed-after']")!;
-    expect(note.textContent).toBe("Last attempt failed · 2h ago");
+    expect(note.textContent).toBe("Last attempt failed, 2h ago");
     // Only the Live row says it.
     expect(document.querySelectorAll("[data-testid='inf-deploy-failed-after']")).toHaveLength(1);
     await press(note);

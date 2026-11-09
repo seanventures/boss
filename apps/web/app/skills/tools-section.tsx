@@ -2,7 +2,7 @@
 
 /**
  * Tools (spec §5.3 2): one row per skill or MCP tool behind the ability, with its risk word and
- * Allow · Ask · Off. A tool that changes the world (tier >= 2) shows Ask locked — the runtime
+ * Allow, Ask, Off. A tool that changes the world (tier >= 2) shows Ask locked, the runtime
  * asks a person whatever is chosen here, so offering Allow would be a lie. An unreviewed server
  * puts a Review row on top: one press records who vouched for it.
  */
@@ -18,7 +18,7 @@ import { plural, POLICY_LABEL, POLICY_TIP, riskOf, shortError, TIP } from "./kit
 
 const POLICIES: ToolPolicy[] = ["allow", "ask", "off"];
 
-/** `permission`: what setting this tool's policy needs — skill:manage for an ability's tools
+/** `permission`: what setting this tool's policy needs, skill:manage for an ability's tools
  *  (POST /v1/kit/{ability}/policy), mcp_server:review for an MCP server's (…/servers/{id}/policy). */
 export function PolicySeg({ tool, disabled, onPick, permission = "skill:manage" }: {
   tool: KitTool; disabled?: boolean; onPick: (p: ToolPolicy) => void; permission?: Permission;
@@ -33,7 +33,7 @@ export function PolicySeg({ tool, disabled, onPick, permission = "skill:manage" 
         // its tooltip never showed: the tip sits on a wrapper that does, and Ask (the lock)
         // carries the same sentence.
         const tip = locked && p !== "off" ? TIP.locked
-          : p === "ask" && tool.kind === "mcp" ? `${POLICY_TIP.ask} · ${TIP.askInCode}` : POLICY_TIP[p];
+          : p === "ask" && tool.kind === "mcp" ? `${POLICY_TIP.ask}, ${TIP.askInCode}` : POLICY_TIP[p];
         const button = (
           <GatedButton permission={permission} key={p} type="button" role="radio" aria-checked={tool.policy === p}
                   disabled={disabled || below} data-tip={below ? undefined : tip}
@@ -82,7 +82,7 @@ export function ReviewRow({ server, projectId, actor, onReviewed, tools }: {
           <span className="kit-pop" role="dialog" aria-label="Mark reviewed" data-testid="kit-review-pop">
             <strong data-tip={server.name}>{server.name}</strong>
             {server.url ? <span className="kit-fact" data-tip={server.url} data-testid="kit-review-url" data-user-text>{server.url}</span> : null}
-            <span data-testid="kit-review-facts">{plural(tools.length, "tool")} · Highest: {riskOf(top).label}</span>
+            <span data-testid="kit-review-facts">{plural(tools.length, "tool")}, Highest: {riskOf(top).label}</span>
             <span className="kit-pop-actions">
               <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-primary kit-btn-sm" disabled={busy}
                       data-testid="kit-review-confirm" onClick={() => void review()}>Mark reviewed</GatedButton>
@@ -104,7 +104,7 @@ export function ToolsSection({ ability, projectId, actor, onChanged }: {
     const r = await kitApi.policy(projectId, actor, ability.key, tool.ref, policy);
     setBusy(null);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
-    showToast("success", `${tool.label} · ${POLICY_LABEL[policy]}`);
+    showToast("success", `${tool.label}, ${POLICY_LABEL[policy]}`);
     onChanged(r.data);
   };
   const unreviewed = ability.mcp.filter((m) => !m.trusted);

@@ -59,7 +59,7 @@ describe("the cockpit header says one state", () => {
     expect($('[data-testid="fx-strip"]')).toBeNull();
     expect(text("h1")).toBe("Invoice export");
     expect(document.activeElement?.tagName).toBe("H1");
-    expect(text('[data-testid="fx-origin"]')).toBe("from Ship it #182 ↗");
+    expect(text('[data-testid="fx-origin"]')).toBe("from Ship it #182");
     expect(document.body.textContent).not.toMatch(/%|ETA|estimated|almost/);
   });
 
@@ -103,7 +103,7 @@ describe("the cockpit header says one state", () => {
     expect(text('[data-testid="fx-pr-open"]')).toBe("Open PR ↗");
     expect(text('[data-testid="fx-merge-ready"]')).toBe("Ready to merge");
     expect($('[data-testid="fx-merge-ready"]')?.title).toBe("From checks, tests and review comments");
-    expect(text('[data-testid="fx-preview-flag"]')).toBe("Preview live ↗");
+    expect(text('[data-testid="fx-preview-flag"]')).toBe("Preview live");
     expect($('[data-testid="fx-stop"]')).toBeNull();
     expect(text('.fx-bay[data-key="pr"] .fx-bay-link')).toBe("#842 ↗");
   });
@@ -196,7 +196,10 @@ describe("the header's actions", () => {
     expect(text('[data-testid="fx-attempts"]')).toBe("attempt 2 ▾");
     await click($('[data-testid="fx-attempts"]'));
     const items = $$('[data-testid="fx-attempts-menu"] [role="menuitem"]');
-    expect(items.map((i) => i.textContent?.split(" · ").slice(0, 2).join(" · "))).toEqual(["Attempt 2 · Coding", "Attempt 1 · Failed"]);
+    expect(items.map((i) => {
+      const [attempt, rest] = (i.textContent ?? "").split(", ");
+      return `${attempt}, ${(rest ?? "").split(" · ")[0]}`;
+    })).toEqual(["Attempt 2, Coding", "Attempt 1, Failed"]);
     await click(items[1]);
     expect(onOpenBuild).toHaveBeenCalledWith("crun_inv1");
   });

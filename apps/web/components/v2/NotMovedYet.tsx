@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import React from "react";
 
 /**
@@ -11,7 +11,7 @@ import React from "react";
  * NOT A 404, AND NOT A DEAD END.
  *
  * Six nav entries pointed at routes that did not exist, which is the same defect the operator
- * opened this effort with — a control that looks real and does nothing. The honest version of
+ * opened this effort with, a control that looks real and does nothing. The honest version of
  * a half-finished migration is a page that says exactly what is happening and keeps the
  * feature reachable, so nobody has to go looking for where it went.
  *
@@ -49,7 +49,7 @@ export function NotMovedYet({
           href={`/?area=${encodeURIComponent(v1Area)}${q}`}
           data-testid={`v2-not-moved-link-${v1Area}`}
         >
-          Open it there →
+          Open it there
         </Link>
       </p>
 

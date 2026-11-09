@@ -70,7 +70,7 @@ describe("the app drawer", () => {
     expect(rec.writes).toHaveLength(1);
     expect(rec.writes[0].url).toBe("/v1/observability/apps/t_down/probe");
     expect(rec.writes[0].body).toEqual({ project_id: "p1", actor: "ceo" });
-    expect(toasts).toContain("Probed · Down");
+    expect(toasts).toContain("Probed, Down");
     expect(pulseGets()).toBeGreaterThan(before);
   });
 

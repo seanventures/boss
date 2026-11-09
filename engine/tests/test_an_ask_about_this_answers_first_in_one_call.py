@@ -334,3 +334,119 @@ def test_a_screenshot_goes_to_the_loop():
     assert not sa.wants_first_answer(QUESTION, ev, None, has_images=True)
     assert sa.wants_first_answer(QUESTION, ev, None)
     assert not sa.wants_first_answer(QUESTION, type("E", (), {"found": False})(), None)
+
+
+# --------------------------------------------------------------------------------------------
+# A failed deploy step. The cause is already in the step's record (BOSSAPP-570).
+# --------------------------------------------------------------------------------------------
+DEPLOY_REF = "workflow_step:wfr_deploy570:deploy"
+DEPLOY_QUESTION = "Why did the deploy step fail, and what is the fix?"
+#: The AWS example key, a shape the redactor masks. It must not reach the model.
+_LEAKED_KEY = "AKIAIOSFODNN7EXAMPLE"
+_MANIFEST = (
+    "version: 1\n"
+    "name: helpdesk\n"
+    "kind: commands\n"
+    "install:\n"
+    "  - npm ci && npm start\n"
+)
+_LOG = f"bash: line 1: npm: command not found\n{_LEAKED_KEY}\n"
+
+
+def _failed_deploy(db):
+    """A deploy step whose stored deployment already says why: the command, the redacted log,
+    what the machine has, the manifest, and the fix BOSS already started."""
+    db.execute(text(
+        "CREATE TABLE deployment_hosts (id TEXT, name TEXT, address TEXT, status TEXT, "
+        "last_preflight TEXT)"))
+    db.execute(text("CREATE TABLE deployment_targets (id TEXT, app_name TEXT)"))
+    db.execute(text(
+        "CREATE TABLE stack_deployments (id TEXT, status TEXT, error TEXT, failure_reason TEXT, "
+        "steps TEXT, log_tail TEXT, manifest TEXT, manifest_text TEXT, host_id TEXT, "
+        "target_id TEXT, commit_sha TEXT, code_task_run_id TEXT, preflight TEXT)"))
+    db.execute(text(
+        "INSERT INTO deployment_hosts VALUES ('host_1','vm-1','203.0.113.10','verified','{}')"))
+    db.execute(text("INSERT INTO deployment_targets VALUES ('deptgt_hd','HelpDesk')"))
+    db.execute(text(
+        "INSERT INTO stack_deployments VALUES ('sdep_hd','failed',:e,"
+        "'npm: command not found',:steps,:log,:manifest,:text,'host_1','deptgt_hd',"
+        "'abc123def456','crun_shipped',:preflight)"),
+        {"e": json.dumps({"step": "install: install 1", "cause": "app",
+                          "headline": "npm: command not found",
+                          "action": "Switch the manifest to kind: compose."}),
+         "steps": json.dumps([
+             {"name": "prepare", "status": "ok"},
+             {"name": "install: install 1", "status": "failed"}]),
+         "log": _LOG,
+         "manifest": json.dumps({"manifest_path": "boss.deploy.yaml"}),
+         "text": _MANIFEST,
+         "preflight": json.dumps({"facts": {
+             "tools": {"docker": True, "node": False, "npm": False},
+             "versions": {"docker": "27.1.1"}}})})
+    db.execute(text(
+        "INSERT INTO workflow_runs VALUES ('wfr_deploy570','boss-dogfood','failed',:i,NULL,NULL,"
+        "'2026-10-16')"),
+        {"i": json.dumps({"title": "HelpDesk"})})
+    db.execute(text(
+        "INSERT INTO workflow_step_runs VALUES ('wfs_deploy','boss-dogfood','wfr_deploy570',"
+        "'deploy','capability','failed','{}',:o,'deploy failed',1,0,NULL,'2026-10-16')"),
+        {"o": json.dumps({
+            "tool": "deploy", "stack_deployment_id": "sdep_hd",
+            "deploy_fixes": [{"attempt": 1, "cause": "`npm` missing", "host": "203.0.113.10",
+                              "build_run_id": "crun_fix1", "deployment_id": "sdep_hd"}]})})
+
+
+def _prompt_of(model) -> str:
+    call = model.calls[0]
+    assert call["tools"] is None
+    return call["messages"][1]["content"]
+
+
+def test_a_failed_deploy_step_is_answered_from_its_record_with_zero_tool_calls(db, monkeypatch):
+    """The cause is the deployment's own record. One model call, no tools — not a fresh
+    investigation. Removing the deployment from the prompt, or letting the loop run, is the bug."""
+    _failed_deploy(db)
+    model = _Model(reply="Cause: npm is not on the machine.\nFix: kind: compose.\n"
+                          "Not confirmed: nothing; the record settles it.")
+    router, loop, progress = _router(monkeypatch, model)
+    turn = _ask(router, db, DEPLOY_QUESTION, external_ref=DEPLOY_REF)
+    assert len(model.calls) == 1, "a failed deploy step took more than one model call"
+    assert loop.calls == [], "the record already held the cause and tools ran anyway"
+    prompt = _prompt_of(model)
+    for piece in ("install: install 1", "npm ci && npm start", "npm: command not found",
+                  "has no node", "Docker (27.1.1)", "name: helpdesk", "crun_fix1",
+                  "HelpDesk", "203.0.113.10"):
+        assert piece in prompt, piece
+    assert _LEAKED_KEY not in prompt, "the log tail reached the model unredacted"
+    assert "looking deeper" not in " ".join(progress)
+    assert turn.reply.startswith("Cause: npm is not on the machine.")
+
+
+def test_an_investigate_decision_still_uses_the_record_when_it_holds_the_cause(db, monkeypatch):
+    """route_turn may decide 'investigate'. That must not re-open the 240s loop when the
+    step's record already says what failed."""
+    _failed_deploy(db)
+    model = _Model(reply="Cause: npm is missing.\nFix: compose.\nNot confirmed: nothing.")
+    router, loop, _ = _router(monkeypatch, model)
+    router._turn_action = "investigate"
+    _ask(router, db, DEPLOY_QUESTION, external_ref=DEPLOY_REF)
+    assert len(model.calls) == 1 and loop.calls == []
+    assert "npm ci && npm start" in _prompt_of(model)
+
+
+def test_a_step_whose_record_does_not_hold_the_cause_looks_deeper_and_says_so(db, monkeypatch):
+    """No error, no log, no deployment. The tool loop runs, and the progress the dock shows
+    says a deeper look is happening — not a silent multi-minute wait."""
+    db.execute(text(
+        "INSERT INTO workflow_runs VALUES ('wfr_quiet','boss-dogfood','running',:i,NULL,NULL,"
+        "'2026-10-16')"), {"i": json.dumps({"title": "Quiet"})})
+    db.execute(text(
+        "INSERT INTO workflow_step_runs VALUES ('wfs_quiet','boss-dogfood','wfr_quiet','wait',"
+        "'capability','running','{}','{}',NULL,1,0,NULL,'2026-10-16')"))
+    model = _Model()
+    router, loop, progress = _router(monkeypatch, model)
+    _ask(router, db, "Why is this step still running?",
+         external_ref="workflow_step:wfr_quiet:wait")
+    assert model.calls == [], "a record with no cause was answered with no tools"
+    assert len(loop.calls) >= 1
+    assert any("looking deeper" in p for p in progress), progress

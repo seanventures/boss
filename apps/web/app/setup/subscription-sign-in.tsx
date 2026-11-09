@@ -4,10 +4,10 @@
  * Add model › Subscription › Sign in (BOSSAPP-769): the ONE supported way to connect Codex,
  * Claude Code or Grok. The provider's own login runs on the BOSS server; the person opens the URL
  * it printed, enters the one-time code it printed, and approves. Nothing is pasted, dropped or
- * imported — no token, no auth.json, no Replace.
+ * imported, no token, no auth.json, no Replace.
  *
  * Start → the session (URL + code) → poll every 2 s → (a code box when the CLI asks for one) →
- * Signed in, and the drawer's Connect proves it. Cancel — or closing the drawer — kills the login.
+ * Signed in, and the drawer's Connect proves it. Cancel, or closing the drawer, kills the login.
  */
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowSquareOut, CircleNotch, Copy } from "@phosphor-icons/react";
@@ -36,7 +36,7 @@ function refusalOf(error: unknown): SetupRefusal {
            fix: String((error as Error)?.message ?? error) };
 }
 
-/** A headline pill with its fix beside it — the fix is the next step, so it stays readable. */
+/** A headline pill with its fix beside it, the fix is the next step, so it stays readable. */
 function Stopped({ tone, headline, fix, state }: {
   tone: Tone; headline: string; fix: string; state: string;
 }) {
@@ -55,7 +55,7 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
   /** Opened from a row's Sign in: start at once (one press, one effect). */
   autoStart?: boolean;
   /** Replace the CLI's current session: BOSS signs it out and starts a new login even if the
-   *  CLI says it is signed in (a refused login — "Login expired" — or "Sign in again"). */
+   *  CLI says it is signed in (a refused login, "Login expired", or "Sign in again"). */
   fresh?: boolean;
   onSession: (session: SignInSession | null) => void;
 }) {
@@ -72,7 +72,7 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
   tell.current = onSession;
   // The device-code providers (codex, grok) print a URL the person opens; Claude's is a
   // paste-back with nothing to open. One tab, opened synchronously in the click that starts the
-  // sign-in — not a second press — or popup blockers kill it.
+  // sign-in, not a second press, or popup blockers kill it.
   const opensTab = provider !== "claude_code";
   const popup = useRef<Window | null>(null);
   const navigated = useRef(false);
@@ -144,7 +144,7 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
         const next = await fetchSignIn(projectId, id);
         if (!alive.current || latest.current?.sign_in_id !== id) return;
         setSession({ ...next });
-        if (next.state === "signed_in") toast(`${label} signed in · Connect to check it`);
+        if (next.state === "signed_in") toast(`${label} signed in, Connect to check it`);
       } catch (error) {
         if (!alive.current) return;
         const said = refusalOf(error);

@@ -560,10 +560,17 @@ class ClaudeCliAdapter(CliChatBrain):
 
     def _invoke(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
         # One "Not logged in" is a report, not a verdict (model_failures.confirm_login_rejection).
+        # A governed receipt cannot hide that second process on the same key.
+        def once() -> dict:
+            return self._invoke_once(prompt, system_prompt=system_prompt)
+
+        from .openai_adapter import in_single_attempt
+
+        if in_single_attempt():
+            return once()
         from .model_failures import confirm_login_rejection
 
-        return confirm_login_rejection(
-            lambda: self._invoke_once(prompt, system_prompt=system_prompt))
+        return confirm_login_rejection(once)
 
     def _invoke_once(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
         timeout, own_timeout = self._timeouts()

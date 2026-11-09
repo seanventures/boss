@@ -35,9 +35,9 @@ export function AccountMenu({ compact = false, children }: { compact?: boolean; 
   const first = me.display_name.split(" ")[0];
   return (
     <details ref={box} className="idn-me" data-testid="account-menu" data-compact={compact || undefined} onToggle={onToggle}>
-      <summary aria-label={`My account: ${me.display_name}`} title={compact ? `${me.display_name} · ${primaryRoleLabel(me.access_roles)}` : undefined}>
+      <summary aria-label={`My account: ${me.display_name}`} title={compact ? `${me.display_name}, ${primaryRoleLabel(me.access_roles)}` : undefined}>
         <Face name={me.display_name} tone={avatarTone(me.principal_id, me.avatar_seed)} size={compact ? 30 : 26} />
-        {compact ? null : <span><b>{first}</b><span className="idn-me-role"> · {primaryRoleLabel(me.access_roles)}</span></span>}
+        {compact ? null : <span><b>{first}</b><span className="idn-me-role">, {primaryRoleLabel(me.access_roles)}</span></span>}
         {mfa
           ? <ShieldCheck size={15} className="idn-ok" aria-label="MFA on" />
           : <ShieldWarning size={15} className="idn-warn" aria-label="No second factor" />}
@@ -119,7 +119,7 @@ export function IdentityBanners() {
   const stacked = banners.length >= 2;
   return (
     <div className="idn-banners" data-testid="identity-banners">
-      {stub ? <div className="idn-stub" data-testid="stub-banner">Stub data · identity API not connected</div> : null}
+      {stub ? <div className="idn-stub" data-testid="stub-banner">Stub data, identity API not connected</div> : null}
       {!mirrored ? <div className="idn-banner" data-kind="unavailable" data-copy="prose" title="Controls are not mirrored; BOSS checks every action">Access check offline</div> : null}
       {!stacked ? banners.map((b) => <Banner key={b.id} b={b} onClose={close} />) : (
         <div className="idn-banner-stack" data-testid="banner-stack" data-open={open ? "true" : "false"}>

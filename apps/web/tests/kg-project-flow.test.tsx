@@ -107,7 +107,7 @@ describe("Knowledge Graph › Setup", () => {
     expect($('[data-testid="kg-step-scan-why"]')?.textContent).toBe("Needs indexed code: import a repository first.");
     // ① is open: the allowed repositories to add, and where to allow more.
     const pick = $('[data-testid="kg-import-pick"]') as HTMLSelectElement;
-    expect([...pick.options].map((o) => o.textContent)).toEqual(["Choose a repository…", "acme/fineract · Java"]);
+    expect([...pick.options].map((o) => o.textContent)).toEqual(["Choose a repository…", "acme/fineract, Java"]);
     expect($('[data-testid="kg-import-registry"]')?.textContent).toBe("Repo and models");
     expect($('[data-testid="kg-import"]')?.textContent).toContain("2 more there are not allowed yet");
     expect(($('[data-testid="kg-setup-open-graph"]') as HTMLButtonElement).disabled).toBe(true);
@@ -192,7 +192,7 @@ describe("Knowledge Graph › Setup", () => {
     await open();
     expect([state("import"), state("team"), state("scan")]).toEqual(["done", "done", "current"]);
     expect($('[data-testid="kg-step-team-open"]')?.textContent).toBe("Change");
-    expect($('[data-testid="kg-scan-step"] .kg-setup-sub')?.textContent).toBe("Choose an area · Chief Architect reads it");
+    expect($('[data-testid="kg-scan-step"] .kg-setup-sub')?.textContent).toBe("Choose an area, Chief Architect reads it");
     expect($$('[data-testid="kg-scan-areas"] .kg-area-name').map((n) => n.textContent)).toEqual(["fineract-loan", "fineract-core"]);
     await click("kg-scan");
     expect($('[data-testid="kg-scan-preview"]')?.textContent).toContain("up to 60 files");
@@ -229,7 +229,7 @@ describe("Knowledge Graph › Setup", () => {
     window.history.replaceState(null, "", "/?org=o1&project_id=fineract-map&area=knowledge&kg_tab=setup");
     await open();
     expect($(".kg-setup-title")?.textContent).toBe("The knowledge graph is set up");
-    expect($('[data-testid="kg-step-done"]')?.textContent).toContain("51,319 code nodes · 7 approved rules · 3 learnings");
+    expect($('[data-testid="kg-step-done"]')?.textContent).toContain("51,319 code nodes, 7 approved rules, 3 learnings");
     const go = $('[data-testid="kg-setup-open-graph"]') as HTMLButtonElement;
     expect(go.className).toBe("ag-btn ag-btn-primary");
     await click("kg-setup-open-graph");
@@ -248,7 +248,7 @@ describe("Knowledge Graph › Setup", () => {
     mockKgFetch(routes(s));
     await open();
     expect($('[data-testid="kg-tab-graph"]')?.getAttribute("aria-selected")).toBe("true");
-    expect($('[data-testid="kg-setup-strip"]')?.textContent).toContain("Setup · 1 of 4 steps done. Next: Assign the team");
+    expect($('[data-testid="kg-setup-strip"]')?.textContent).toContain("Setup, 1 of 4 steps done. Next: Assign the team");
     await click("kg-setup-continue");
     expect($('[data-testid="kg-tab-setup"]')?.getAttribute("aria-selected")).toBe("true");
     expect(setupOpens(s)).toBe(false);
@@ -381,7 +381,7 @@ describe("one answer to 'is there indexed code?' (tester round 4)", () => {
       expect($('[data-testid="kg-step-scan-why"]')).toBeNull();
       expect($('[data-testid="kg-step-scan"] [data-testid="kg-scan"]')?.textContent).toBe("Scan for rules here");
       expect($('[data-testid="kg-step-scan"] [data-testid="kg-scan-cost"]')?.textContent)
-        .toBe("Spends at most $2.00 from the knowledge budget · reads up to 60 files · proposes up to 25 rules");
+        .toBe("Spends at most $2.00 from the knowledge budget, reads up to 60 files, proposes up to 25 rules");
       // The review still says what it waits for.
       expect($('[data-testid="kg-step-review-why"]')?.textContent).toBe("Rules arrive here from the first scan.");
     });

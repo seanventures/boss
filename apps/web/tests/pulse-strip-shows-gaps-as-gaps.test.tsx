@@ -33,7 +33,7 @@ describe("the Pulse strip", () => {
     expect(cells[60].getAttribute("data-k")).toBe("some");
     expect(cells.filter((c) => c.getAttribute("data-k") === "ok")).toHaveLength(93);
     expect(cells[40].querySelector("title")?.textContent).toMatch(/No probes$/);
-    expect(cells[60].querySelector("title")?.textContent).toMatch(/7 of 8 ok · p95 412 ms$/);
+    expect(cells[60].querySelector("title")?.textContent).toMatch(/7 of 8 ok, p95 412 ms$/);
   });
 
   it("hatches a bucket where every probe failed", async () => {

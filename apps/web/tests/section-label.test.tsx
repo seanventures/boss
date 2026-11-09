@@ -29,15 +29,17 @@ describe("the shared section label", () => {
     expect(document.body.querySelector(".su-row-label strong")).toBeNull();
   });
 
-  it("is styled by one rule: Setup's green, uppercase, wide tracking", () => {
+  it("is styled by one rule: Setup's green, untracked, sentence case", () => {
     const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8");
     const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
       .filter(([, selector]) => selector.split(",").some((s) => s.trim() === ".section-label"));
     expect(rules.length).toBe(1);
     const [, selector, body] = rules[0];
-    expect(selector).toContain(".section-head h2.eyebrow");
+    expect(selector).toContain(".section-head h2.area-name");
     expect(body).toContain("color: var(--accent-text)");
-    expect(body).toContain("letter-spacing: 0.16em");
-    expect(body).toContain("text-transform: uppercase");
+    expect(body).toMatch(/letter-spacing:\s*0\s*;/);
+    expect(body).not.toContain("0.16em");
+    expect(body).toContain("text-transform: none");
+    expect(body).not.toContain("uppercase");
   });
 });

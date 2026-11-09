@@ -122,7 +122,7 @@ type AreaDef = {
   label: string;
   sub: string;
   //: THE GROUP AND THE AREA SWAPPED NAMES. "Govern" was the group heading and "Settings" was
-  //: one area inside it — which read backwards: the knobs (concurrency, turn budgets, spend)
+  //: one area inside it, which read backwards: the knobs (concurrency, turn budgets, spend)
   //: ARE the governing, and everything else in the group is a setting. So the group is
   //: "Settings" and the area that holds the governing knobs is "Govern".
   group: "Run" | "Settings" | "Platform";
@@ -130,7 +130,7 @@ type AreaDef = {
   /** The section this area sits INSIDE.
    *
    *  Observability is not one screen, it is a place you go with a question: is it up, and what
-   *  happened. Those are two screens — the dashboards and the log — and listing them as
+   *  happened. Those are two screens, the dashboards and the log, and listing them as
    *  unrelated siblings made the log look like a separate product rather than the thing you
    *  open when a dashboard says something is wrong. */
   parent?: NavSectionId;
@@ -188,28 +188,28 @@ const ICONS = {
 //
 // Order inside a group is the ORDER OF WORK, not the order things were built: research it
 // (Discovery), spec it (Meetings), build it (Factory), approve it (Approvals), ship it (CI/CD),
-// watch it (Monitoring). It had drifted into an accretion — Approvals and Task Board sat above
-// Discovery because they existed first — so the sidebar described the codebase's history
+// watch it (Monitoring). It had drifted into an accretion, Approvals and Task Board sat above
+// Discovery because they existed first, so the sidebar described the codebase's history
 // instead of the operator's path.
 //
 // Activity log, Reliability and Evidence were briefly deleted from this list to get them out
-// of the Community sidebar. That hid them everywhere — Enterprise and Cloud too — which is not
+// of the Community sidebar. That hid them everywhere, Enterprise and Cloud too, which is not
 // what "cut from Community" means. The edition allowlist in lib/edition.ts is the only place
 // that decides what a Community operator sees; this list stays complete so nothing is lost by
 // hiding it somewhere else.
 //
 // Why those three are cut from Community: Reliability and Evidence have nothing behind them
 // yet (incidents: 0 rows, drift_reports: 0), and Activity log holds 47,921 events of which
-// ~75% are a single internal audit-export event — not empty, unreadable.
+// ~75% are a single internal audit-export event, not empty, unreadable.
 /** Areas that still EXIST but no longer earn a place in the left rail.
  *
  *  Research and the PRD panel are steps of a workflow now, not destinations: the workflow
  *  drives both, and every run links to the dossier it produced and the panel it convened. Two
  *  permanent nav entries for things you arrive at from somewhere else is two rows of standing
  *  cost for a trip nobody takes deliberately. Reachable by URL and by every link that names
- *  them — hidden from the rail, not removed from the console. */
+ *  them, hidden from the rail, not removed from the console. */
 //  AND THE ANSWER TO AN UNREACHABLE DOSSIER IS NOT A NAV ROW. A discovery started from chat
-//  belonged to no run, so nothing linked to it — briefly fixed here by putting Discovery back
+//  belonged to no run, so nothing linked to it, briefly fixed here by putting Discovery back
 //  on the rail, which is the wrong end of the problem: it advertises starting one on its own,
 //  and nobody should. The chat agent starts a WORKFLOW now (see start_workflow in builtin.py),
 //  so the dossier is a step's output and the run is what you open.
@@ -222,7 +222,7 @@ const OWN_RAIL_BUTTON = new Set<AreaId>(["welcome"]);
 const AREAS: AreaDef[] = [
   { id: "overview", label: "Command Center", sub: "What needs you, across every project", group: "Platform", icon: SquaresFour },
   // THE ORDER IS THE ARGUMENT. The Run group opens with the place work is DONE and the path it
-  // follows — Factory, then the workflow governing it, then who does it and who approves it,
+  // follows, Factory, then the workflow governing it, then who does it and who approves it,
   // then where it ships and whether it is alive. Discovery and Meetings are ways IN and follow
   // after; they were first only because they come first chronologically, which is not the same
   // as being what an operator opens the console to look at.
@@ -237,7 +237,7 @@ const AREAS: AreaDef[] = [
   { id: "agent_ops", label: "Agents at work", sub: "What agents resolved on their own", group: "Run", icon: Robot },
   // ONE HOME PER OBJECT. Workflow, Agent work, Team structure and Agent Studio were four rows
   // for two things: workflows (built, run and watched in one area) and the agents that work
-  // them (roster, team and panels in one area). Old links to the retired two still land —
+  // them (roster, team and panels in one area). Old links to the retired two still land , 
   // app/legacy-areas.ts.
   { id: "delivery_workflows", label: "Workflows", sub: "Build, run and watch workflows", group: "Run", icon: ICONS.delivery_workflows },
   { id: "workforce", label: "Agent Studio", sub: "Who does the work", group: "Run", icon: UsersThree },
@@ -258,27 +258,27 @@ const AREAS: AreaDef[] = [
   // code, from the problem to the release, and the autonomy it bought. After the log: what BOSS
   // did about what went wrong.
   { id: "self_fixes", label: "Self-fixes", sub: "Bugs in BOSS that BOSS fixed itself", group: "Run", icon: Wrench },
-  { id: "discovery", label: "Research", sub: "Cited dossiers — a verdict, outcomes and the evidence", group: "Run", icon: ICONS.discovery },
-  { id: "meetings", label: "Panels", sub: "Agents debate it — a decision or a PRD", group: "Run", icon: ICONS.meetings },
+  { id: "discovery", label: "Research", sub: "Cited dossiers, a verdict, outcomes and the evidence", group: "Run", icon: ICONS.discovery },
+  { id: "meetings", label: "Panels", sub: "Agents debate it, a decision or a PRD", group: "Run", icon: ICONS.meetings },
   // ONE ENTRY, NOT TWO. "Metatron" was an always-on captain whose session table does not exist
-  // in this database — a page over state that was never created — and the operator never used
+  // in this database, a page over state that was never created, and the operator never used
   // it. Its idea (a captain with the whole factory in view) is what the BOSS Agent area now IS.
-  { id: "agent", label: "BOSS Agent", sub: "What needs you, across the whole factory — and one conversation that can act on it", group: "Run", icon: ICONS.agent },
-  { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
+  { id: "agent", label: "BOSS Agent", sub: "What needs you, across the whole factory, and one conversation that can act on it", group: "Run", icon: ICONS.agent },
+  { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot, budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
 
   { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and release planning", group: "Run", icon: ICONS.portfolio },
   { id: "processes", label: "Agent processes", sub: "Role handoffs: PRD review → build → QA/UX → panel certify → captain accept", group: "Run", icon: ICONS.processes },
   { id: "shepherd", label: "Task Shepherd", sub: "How the shepherd is reasoning about stuck work", group: "Run", icon: ICONS.shepherd },
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
-  { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger — category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
+  { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger, category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
-  // NAMED FOR WHAT IS IN IT, AND FIRST IN SETTINGS. "Setup" is a stage of the product's life —
+  // NAMED FOR WHAT IS IN IT, AND FIRST IN SETTINGS. "Setup" is a stage of the product's life , 
   // it reads as something you do once and never open again, so the page an operator needs when
   // a model runs out of credit or a repo token expires was filed under a name that says
   // "already done". It carries a badge while anything on it is unfinished or failing.
   { id: "setup", label: "Repo and models", sub: "Where BOSS writes code and what it thinks with", group: "Settings", icon: Database },
-  // GET STARTED (BOSSAPP-808): the 3-step Welcome — its own place, never Repo and models' body.
+  // GET STARTED (BOSSAPP-808): the 3-step Welcome, its own place, never Repo and models' body.
   { id: "welcome", label: "Get started", sub: "Get BOSS working in 3 steps", group: "Settings", icon: Rocket },
   // WHAT YOUR CREW CAN DO (skills-mcp spec §5.1): the Kit of abilities, who holds them, and every
   // skill and MCP server. Second in Settings: a repo and a model come first.
@@ -289,15 +289,15 @@ const AREAS: AreaDef[] = [
   { id: "assurance", label: "Assurance", sub: "Ground truth, proof gates, and security scanning", group: "Settings", icon: ICONS.assurance },
   { id: "org", label: "Access and packs", sub: "Actors, permissions, packs, and modules", group: "Settings", icon: ICONS.org },
   { id: "github", label: "GitHub", sub: "Repositories, branch truth, sync, conflict resolution, and merges", group: "Platform", icon: ICONS.github },
-  { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
-  { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
-  { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
-  { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
+  { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers, discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
+  { id: "sandboxes", label: "Sandboxes", sub: "Execution plane, inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
+  { id: "foundations", label: "Foundations", sub: "Design system, tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
+  { id: "components", label: "Components", sub: "Component library, buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
   {
     id: "enterprise",
     // WHO CAN GET IN is a setting, not a platform feature sitting above the work. It was
     // second in the sidebar, under Command Center, ahead of everything an operator actually
-    // does — and called "SSO", which names one protocol rather than the thing it configures.
+    // does, and called "SSO", which names one protocol rather than the thing it configures.
     label: "Identity",
     sub: "People, roles, agents and sign-in",
     group: "Settings",
@@ -322,7 +322,7 @@ function budgetTone(state?: string): "green" | "amber" | "red" {
 function planeLabel(url: string): string {
   try {
     const host = new URL(url).host;
-    return isLocalPlane(url) ? `local · ${host}` : host;
+    return isLocalPlane(url) ? `local, ${host}` : host;
   } catch {
     return url;
   }
@@ -363,7 +363,7 @@ export type ConsoleShellProps = {
      *  project beside a tab showing forty, and nothing on either screen said why. For a customer
      *  with staging and production open in two tabs it is worse than confusing.
      *
-     *  Comes from the SERVER, because every fetch on this page is server-side — the browser's
+     *  Comes from the SERVER, because every fetch on this page is server-side, the browser's
      *  build-time NEXT_PUBLIC value can disagree with what is actually being called. */
     controlPlane?: string;
   };
@@ -405,8 +405,8 @@ export type ConsoleShellProps = {
 /** IDENTITY AREAS LIVE ON THEIR OWN ROUTES (/identity/**), not as a section of this page. */
 const ROUTE_AREAS: Partial<Record<AreaId, string>> = { enterprise: "/identity" };
 
-/** The palette's Enter: press the first choice the list shows — an area, New build, or a
- *  conversation — exactly as a click would. False when the list shows nothing. */
+/** The palette's Enter: press the first choice the list shows, an area, New build, or a
+ *  conversation, exactly as a click would. False when the list shows nothing. */
 export function activatePaletteChoice(list: HTMLElement | null): boolean {
   const first = list?.querySelector<HTMLButtonElement>(".bx-palette-item");
   if (!first) return false;
@@ -526,7 +526,7 @@ function ConsoleShellInner({
   //
   // This console streams: the server sends HTML as its ~55 feeds answer, so panels appear one
   // at a time and a list can read "12 code tasks" for a second before it reads 200. Watching
-  // that with no indicator, the honest conclusion is that projects are missing — which is
+  // that with no indicator, the honest conclusion is that projects are missing, which is
   // exactly the conclusion that got drawn.
   //
   // Starts TRUE and is cleared after mount, deliberately: the server renders it as loading, so
@@ -540,7 +540,7 @@ function ConsoleShellInner({
     // UNTIL THE PAGE HAS ACTUALLY ARRIVED, NOT FOR A FIXED 1.2 SECONDS.
     //
     // Measured on reference host: the Factory page is 9.2 MB and streams for 10.4 seconds. The bar
-    // was cleared 1200ms after hydration, which happens early in that stream — so for the
+    // was cleared 1200ms after hydration, which happens early in that stream, so for the
     // remaining ~9 seconds cards kept appearing with nothing on screen saying so. A list that
     // is still arriving looks exactly like a list that is short, and the honest conclusion
     // from a page that has stopped saying it is busy is that the rest is not coming.
@@ -553,7 +553,7 @@ function ConsoleShellInner({
     //
     // and React then hydrates a 6 MB payload, which is when sections visibly appear. So the
     // indicator went off at exactly the moment the expensive part began, and the operator
-    // watched projects arrive into a page that had stopped saying it was busy — "not all
+    // watched projects arrive into a page that had stopped saying it was busy, "not all
     // projects loading in the console, but there's no indicator", reported twice.
     //
     // What the bar claims is "this page is still filling up", so it now MEASURES that: the
@@ -586,7 +586,7 @@ function ConsoleShellInner({
       arm();
     });
     const arrived = Promise.all([documentDone, settledDom]).then(() => undefined);
-    // A ceiling, because an indicator that CANNOT go away is the failure the last one had —
+    // A ceiling, because an indicator that CANNOT go away is the failure the last one had , 
     // it became permanent furniture that explained nothing.
     const ceiling = window.setTimeout(finish, 60_000);
     const ticking = window.setInterval(
@@ -594,7 +594,7 @@ function ConsoleShellInner({
 
     // AN AREA THAT KNOWS IT HAS PAINTED SAYS SO (independent test D11). The heuristics above
     // are for areas that cannot tell; one that can (the Command Center, once its view is on
-    // screen) dispatches PAINTED_EVENT, and the bar ends then — not 1.2s + 700ms of quiet later
+    // screen) dispatches PAINTED_EVENT, and the bar ends then, not 1.2s + 700ms of quiet later
     // on a page whose clocks keep the DOM busy.
     const painted = new Promise<void>((r) => window.addEventListener(PAINTED_EVENT, () => r(), { once: true }));
     void Promise.race([Promise.all([floor, arrived]), Promise.all([painted, documentDone])]).then(() => {
@@ -626,7 +626,7 @@ function ConsoleShellInner({
   // changes (new decisions, budget moves, events) appear without manual reload.
   // Skips while the user is typing or the palette is open so nothing is interrupted.
   // Guardrails (the console SSR fans out ~55 API calls per refresh and takes
-  // multiple seconds — an unguarded 7s loop stacked refreshes and starved the
+  // multiple seconds, an unguarded 7s loop stacked refreshes and starved the
   // boss-api healthcheck, 502ing the console mid-session):
   //  - never stack refreshes: skip while the previous one is still rendering
   //  - never refresh a hidden tab: a console left open in a background tab
@@ -640,16 +640,16 @@ function ConsoleShellInner({
   //    only moved the threshold. Measuring the cost and backing off removes it.
   const [refreshPending, startRefresh] = useTransition();
   // EVERY REFRESH GOES THROUGH ONE COORDINATOR (lib/console-refresh.ts): at most one in flight,
-  // at most one more owed. Refreshes asked for faster than they complete never commit — React
-  // renders every pending transition together and waits for the newest — which is how the
+  // at most one more owed. Refreshes asked for faster than they complete never commit, React
+  // renders every pending transition together and waits for the newest, which is how the
   // Discovery area sat on "Loading…" forever on boss-1 while the server rendered it four times.
   // This is the one `router.refresh()` in the console; panels ask via useConsoleRefresh().
   //
-  // A REFRESH HAS LANDED WHEN THE SERVER'S NEW RENDER IS ON SCREEN — NOT WHEN `useTransition`
+  // A REFRESH HAS LANDED WHEN THE SERVER'S NEW RENDER IS ON SCREEN, NOT WHEN `useTransition`
   // SAYS SO. router.refresh() dispatches into Next's own action queue, so the transition around it
   // settles within a frame (measured: "Syncing" on for 15 ms of a 900 ms refresh). The shell took
   // that as landed, its area-load retry 250 ms later started a SECOND router.refresh while the
-  // first was still streaming, and Next 15 dropped the first and left the tree suspended on it —
+  // first was still streaming, and Next 15 dropped the first and left the tree suspended on it , 
   // so the area sat on "Loading Factory…" until the next background poll, 20 s later. Measured on
   // the laptop install, 2026-10-10: 7 of 9 first clicks on an area after a page load took
   // 20.1-20.2 s; the server answered each in under a second.
@@ -658,7 +658,7 @@ function ConsoleShellInner({
   // shell without one (a route page) keeps the transition flag.
   //
   // AND THE SHELL DOES NOT RE-RENDER WHEN ONE STARTS. useTransition's pending flag (and a
-  // "syncing" state after it) re-rendered this whole shell — every mounted area — in the same
+  // "syncing" state after it) re-rendered this whole shell, every mounted area, in the same
   // tick Next dispatched the refresh, and a refresh that answered while that render was still
   // running was the one Next never completed: rail clicks from a heavy screen (Command Center,
   // Decisions) to a cheap area (Activity, Govern) hung 4 times in 4, from a light one 0 in 4.
@@ -738,7 +738,7 @@ function ConsoleShellInner({
     let timer: number | undefined;
 
     const schedule = () => {
-      // At least 20s, and at least three times what the last refresh cost — so a slow console
+      // At least 20s, and at least three times what the last refresh cost, so a slow console
       // polls itself gently instead of continuously, and a fast one stays responsive. The cost
       // is measured start-to-landing by the coordinator; timing the synchronous call to
       // router.refresh() measured nothing, so this was 20s however slow the console was.
@@ -763,7 +763,7 @@ function ConsoleShellInner({
   //
   // The loop above is a poll: it backs off to three times what a render costs, so a change
   // made in the dock or on another screen can sit unshown for up to three minutes. Every
-  // server-rendered panel — the governing knobs, spend, assurance, the identity providers —
+  // server-rendered panel, the governing knobs, spend, assurance, the identity providers , 
   // is a snapshot from the last tick, and an operator who has just changed one of those
   // reasonably expects the page to know.
   //
@@ -848,10 +848,10 @@ function ConsoleShellInner({
     //
     // Fetching it into the open page is a router.refresh(), and Next 15.5 left that refresh
     // uncommitted far too often: measured on a seeded stack, rail clicks from the Command Center
-    // to Activity hung 4 times in 4, to the Factory 4 in 4 — the RSC arrived whole, React never
+    // to Activity hung 4 times in 4, to the Factory 4 in 4, the RSC arrived whole, React never
     // committed it, and the operator read "Loading Factory…" until the 20 s background poll
     // (7 of 9 first clicks on the laptop install). A document load of the area is deterministic
-    // and fast — 0.38-0.41 s to content for every area on the same stack — so it is the path.
+    // and fast, 0.38-0.41 s to content for every area on the same stack, so it is the path.
     // The refresh stays for one case only: something typed on screen that a page load would
     // throw away. That path keeps every mounted area (the cookie below) and is unstuck by the
     // coordinator's watchdog if Next drops it.
@@ -881,7 +881,7 @@ function ConsoleShellInner({
     }
     setAreaLoadAsked({ id, at: Date.now() });
     // Through the coordinator: if a refresh is in flight (fetched before the cookie named this
-    // area), this one is owed and starts the moment it lands — never alongside it.
+    // area), this one is owed and starts the moment it lands, never alongside it.
     refreshCoordinator.request("now");
   }, [refreshCoordinator]);
   const activeLoading = !!loadedAreas && !loadedAreas.includes(active);
@@ -904,7 +904,7 @@ function ConsoleShellInner({
   // A REFRESH THAT CAME BACK WITHOUT THE AREA IS ASKED AGAIN AT ONCE.
   //
   // The area-load refresh can settle without the area in it (it raced another refresh in
-  // flight), and nothing asked again until the background refresh 20s+ later — so every
+  // flight), and nothing asked again until the background refresh 20s+ later, so every
   // first click on an area sat on "Loading …" for 10-30 seconds on boss-1 (2026-10-03),
   // while the server answered in under a second. Ask again, a few times, then let the
   // "taking longer than usual" note speak.
@@ -951,7 +951,7 @@ function ConsoleShellInner({
     // the section being opened is ALREADY THERE. There is nothing to fetch, nothing to mount
     // and nothing to wait for: flipping `active` is the whole navigation.
     //
-    // This used `router.push`, which is a SOFT NAVIGATION — the server re-renders the tree and
+    // This used `router.push`, which is a SOFT NAVIGATION, the server re-renders the tree and
     // streams it back. That was right while the page rendered one area per request, because the
     // incoming section genuinely did not exist yet. It is pure cost now: a 6.3 MB, 6-9 second
     // round trip to fetch a screen the browser is already holding. Reported, finally, as "WHEN
@@ -959,7 +959,7 @@ function ConsoleShellInner({
     //
     // `history.pushState` keeps the URL honest and Back working without asking the server for
     // anything. The popstate that follows is what tells the panels listening on the URL that
-    // the area changed — dispatched here because pushState does not fire one on its own.
+    // the area changed, dispatched here because pushState does not fire one on its own.
     setActive(id);
     setNavTarget(id);
     setNavOpen(false);
@@ -985,7 +985,7 @@ function ConsoleShellInner({
         }
       }
     } catch {
-      /* non-browser / unsupported — the area is already set above, so the console still moves */
+      /* non-browser / unsupported, the area is already set above, so the console still moves */
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [routeMode]);
@@ -1013,7 +1013,7 @@ function ConsoleShellInner({
   }, [active, routeMode]);
 
   // Quick-action links (AreaLink in the Overview command center) switch areas
-  // client-side via this event — instant, no full-page navigation/refetch.
+  // client-side via this event, instant, no full-page navigation/refetch.
   useEffect(() => {
     const onNav = (e: Event) => {
       const id = (e as CustomEvent).detail as AreaId;
@@ -1029,13 +1029,13 @@ function ConsoleShellInner({
   //
   // "The sidebar switches areas client-side, which is why every area is rendered at once: the
   // trade buys instant tabs." Measured on the live box, that trade cost 8.3 MB of HTML and ~9s
-  // of server render on EVERY load — 78% of it an RSC payload carrying forty areas the operator
+  // of server render on EVERY load, 78% of it an RSC payload carrying forty areas the operator
   // cannot see, all of it parsed and hydrated by their machine. Discovery alone was 949 KB.
   // An operator reported their laptop heating up during a video call; this was why.
   //
   // A full browser navigation was indeed the wrong answer. A Next SOFT navigation is the right
   // one: the server re-renders the tree for the requested area and streams it, the document is
-  // never reloaded, and — with page.tsx rendering only the active area — each switch now costs
+  // never reloaded, and, with page.tsx rendering only the active area, each switch now costs
   // one area instead of forty. Tabs stay fast because the payload got forty times smaller, not
   // because it was all shipped up front.
   //
@@ -1070,7 +1070,7 @@ function ConsoleShellInner({
       // KEEP WHO YOU ARE, WHATEVER THE LINK SAYS.
       //
       // The console gates on `?org=`: a URL without it renders "Select your organization".
-      // Any in-console link written as `?area=…` — and several were — dropped it, so following
+      // Any in-console link written as `?area=…`, and several were, dropped it, so following
       // one mid-session read as being logged out. Restored here, at the single place every one
       // of these links passes through, so a link written without it cannot break the session.
       for (const key of IDENTITY_PARAMS) {
@@ -1089,7 +1089,7 @@ function ConsoleShellInner({
       window.dispatchEvent(new PopStateEvent("popstate"));
     };
     // CAPTURE phase, deliberately. The spine nodes and card pills call stopPropagation() so a
-    // click on them does not also open the card behind them -- which would stop a bubble-phase
+    // click on them does not also open the card behind them, which would stop a bubble-phase
     // listener from ever seeing exactly the links this exists to speed up.
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);
@@ -1099,26 +1099,26 @@ function ConsoleShellInner({
   //
   // Which app the agent is talking about lives in the URL (?agent=<run id>), not in component
   // state: the console switches areas client-side, so state held here would survive but state
-  // held in the area would not -- and the whole point is that you can open a preview, walk to
+  // held in the area would not, and the whole point is that you can open a preview, walk to
   // the decision queue, and still be in the same conversation about the same app.
   //
   // The id is a RUN id, which is what makes the conversation unambiguous. AgentChat keys its
   // threads by external_ref, so each app gets its own thread and its own history; asking about
   // BugBox cannot surface ApproveIt's answers.
   // `?agent=` normally carries a RUN id. This sentinel opens the same dock for a
-  // conversation that is not about a record — BOSS in general, or a role a door names.
+  // conversation that is not about a record, BOSS in general, or a role a door names.
   // Kept as one constant so the shell and the panel cannot drift on the spelling.
   const DOCK_GENERAL = "general";
   const [dockedRun, setDockedRun] = useState<string | null>(null);
   // A PREFILL ONLY THE DOCK CONSUMES. `?ask=` is read by whichever AgentChat sees it first,
-  // and the BOSS Agent area is mounted permanently — so a starter clicked in Infra was eaten
+  // and the BOSS Agent area is mounted permanently, so a starter clicked in Infra was eaten
   // by an instance nobody was looking at and the dock opened with an empty box. This param is
   // read here and handed down as a prop, so there is exactly one consumer.
   const [dockAsk, setDockAsk] = useState<string>("");
   // WHICH MEMBER OF THE WORKFORCE THE DOCK IS TALKING TO.
   //
-  // "Ask" on an agent card navigated to the Agents PAGE — leaving whatever the operator was
-  // looking at — to have one question answered. The dock exists for exactly this, and it can
+  // "Ask" on an agent card navigated to the Agents PAGE, leaving whatever the operator was
+  // looking at, to have one question answered. The dock exists for exactly this, and it can
   // carry an identity as easily as a run id.
   const [dockRole, setDockRole] = useState<string>("");
   //: Agent World: who answers BY KEY (the face, the name) and the work the dock is about.
@@ -1126,15 +1126,15 @@ function ConsoleShellInner({
   const [dockAct, setDockAct] = useState<string>("");
   //: Bumped when the dock is asked to start fresh. Passed to AgentChat as a key, so React
   //: remounts it with no thread and no history rather than the component having to unpick its
-  //: own state — a reset that has to remember every field is a reset that misses one.
+  //: own state, a reset that has to remember every field is a reset that misses one.
   const [dockFresh, setDockFresh] = useState(0);
   //: Whether this dock is for thinking about an idea rather than operating the factory. It
-  //: changes who is answering — nobody in particular — as well as how they answer.
+  //: changes who is answering, nobody in particular, as well as how they answer.
   const [dockDiscussing, setDockDiscussing] = useState(false);
   //: WHICH BUMP HAS ALREADY BEEN SPENT ON A MOUNT.
   //:
   //: `fresh={dockDiscussing}` cost an operator a conversation. Discuss mode lives in the URL,
-  //: so every later mount — a reload, reopening the dock, a starter question — also asked for
+  //: so every later mount, a reload, reopening the dock, a starter question, also asked for
   //: a new thread, and a real discussion about a stock-recommendation site came back as an
   //: empty panel with the idea still in the box. The thread was in the database the whole
   //: time; the console simply refused to open it. Starting fresh belongs to the PRESS, not to
@@ -1148,7 +1148,7 @@ function ConsoleShellInner({
   useEffect(() => {
     const read = () => {
       // The run id is the whole handoff now. It goes to the server as `external_ref`, which
-      // resolves it into the system prompt — the console no longer ships a context blob.
+      // resolves it into the system prompt, the console no longer ships a context blob.
       const params = new URLSearchParams(window.location.search);
       setDockedRun(params.get("agent"));
       setDockRole(params.get("dock_role") ?? "");
@@ -1216,7 +1216,7 @@ function ConsoleShellInner({
     const url = new URL(window.location.href);
     url.searchParams.delete("agent");
     // AND WHAT IT WAS FOR. Left behind, `dock_mode=discuss` makes the next dock opened for any
-    // reason — a run, a role, a question about a deploy — arrive as an idea discussion that
+    // reason, a run, a role, a question about a deploy, arrive as an idea discussion that
     // refuses to start anything.
     url.searchParams.delete("dock_mode");
     window.history.pushState({}, "", url.toString());
@@ -1230,7 +1230,7 @@ function ConsoleShellInner({
   // the old area, so every one re-read a stale url and refetched, the navigation committed, the
   // area remounted, and they all fetched again.
   //
-  // The rail no longer pushes — it uses pushState and announces once, itself, with the url
+  // The rail no longer pushes, it uses pushState and announces once, itself, with the url
   // already correct. This effect still covers Back/Forward, where `useSearchParams` updates
   // without anyone announcing it, which is the case every listener was written against.
   const announcedSearch = useRef<string | null>(null);
@@ -1304,7 +1304,7 @@ function ConsoleShellInner({
   // Sidebar only: Community v1 home is a small cut (UI_V1_CUT.md). Palette +
   // `?area=` keep every AreaId reachable (SSO stays in the sidebar).
   // THE RAIL SHOWS ONLY WHAT THE VIEWER CAN OPEN (IDENTITY.md §6.5). A direct URL to one they
-  // cannot still lands — on <AccessDenied> naming the permission, never a blank page.
+  // cannot still lands, on <AccessDenied> naming the permission, never a blank page.
   const navAreas = useMemo(
     () => areasForEdition.filter(
       (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !UNDER_PROJECTS.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
@@ -1485,7 +1485,7 @@ function ConsoleShellInner({
                       {/* COLLAPSED STILL SHOWS WHERE YOU ARE.
                           Hiding the current page inside a closed section is the "where am I"
                           bug: the nav stops answering the one question it exists for. So a
-                          closed section keeps the active child and drops the rest — the
+                          closed section keeps the active child and drops the rest, the
                           control still works, and you never lose your place. */}
                       {open || holdsActive ? (
                         <div className="bx-nav-children" data-collapsed={!open || undefined}>
@@ -1532,7 +1532,7 @@ function ConsoleShellInner({
                     className={`bx-nav-item${a.id === railSelected ? " active" : ""}`}
                     aria-current={a.id === railSelected ? "page" : undefined}
                     data-area-nav={a.id}
-                    // The label survives docking as a tooltip — icons alone are a memory test.
+                    // The label survives docking as a tooltip, icons alone are a memory test.
                     data-label={`${labelFor(a)} — ${a.sub}`}
                     title={`${labelFor(a)} — ${a.sub}`}
                     data-paid-badge={paidBadge ? "true" : undefined}
@@ -1546,7 +1546,7 @@ function ConsoleShellInner({
                         className="bx-nav-badge"
                         data-testid="nav-sso-badge"
                         title="Self-hosted SSO included in Community"
-                        style={{ background: "transparent", border: "1px solid var(--green, #3fb950)", color: "var(--green, #3fb950)" }}
+                        style={{ background: "transparent", border: "1px solid var(--green, var(--boss-c-3fb950))", color: "var(--green, var(--boss-c-3fb950))" }}
                       >
                         {ssoBadge}
                       </span>
@@ -1556,7 +1556,7 @@ function ConsoleShellInner({
                         className="bx-nav-badge"
                         data-testid={`nav-paid-badge-${a.id}`}
                         title="Some panels in this area are Cloud / Enterprise only"
-                        style={{ background: "transparent", border: "1px solid #d29922", color: "#d29922" }}
+                        style={{ background: "transparent", border: "1px solid var(--boss-c-d29922)", color: "var(--boss-c-d29922)" }}
                       >
                         Paid
                       </span>
@@ -1575,7 +1575,7 @@ function ConsoleShellInner({
         </nav>
 
         <div className="bx-sidebar-foot">
-          {/* WHO IS SIGNED IN — the person, from the session, never a claimed actor string. */}
+          {/* WHO IS SIGNED IN, the person, from the session, never a claimed actor string. */}
           <div className="bx-operator" data-testid="signed-in-as">
             {/* The person's own face (the identity kit's, as in the avatar menu), then "Name · Role". */}
             {me ? <Face name={me.display_name} tone={avatarTone(me.principal_id, me.avatar_seed)} size={22} />
@@ -1646,9 +1646,9 @@ function ConsoleShellInner({
             data-live={(live && status.apiReachable) || undefined}
             title={live
               ? (refreshing
-                 ? "Fetching the latest data — click to pause live updates"
-                 : "Live: auto-refreshing — click to pause")
-              : "Paused — click to resume live updates"}
+                 ? "Fetching the latest data, click to pause live updates"
+                 : "Live: auto-refreshing, click to pause")
+              : "Paused, click to resume live updates"}
             onClick={() => setLive((v) => !v)}
             style={{ cursor: "pointer" }}
           >
@@ -1727,8 +1727,8 @@ function ConsoleShellInner({
             usable while the rest land, and covering them would make a fast console feel slower
             than a slow one. */}
         {/* THE FIRST PAINT ONLY. NOT THE BACKGROUND REFRESH.
-            `refreshPending` was here too, and it is true for the whole server re-render — 20
-            seconds and more on this console — against an interval computed from that same
+            `refreshPending` was here too, and it is true for the whole server re-render, 20
+            seconds and more on this console, against an interval computed from that same
             cost. The result was a bar that never went off: an indicator meant to explain why
             the page was still filling up became a permanent piece of furniture that explained
             nothing and could not be dismissed.
@@ -1740,7 +1740,7 @@ function ConsoleShellInner({
             six in a busy header, and it carries `hide-sm` so on a narrow window it is not
             there at all. "I don't see any indicator" was a fair reading of a screen that was
             quietly re-fetching fifty feeds.
-            NOT the sticky strip below — that one WAS wired to refreshPending once and became
+            NOT the sticky strip below, that one WAS wired to refreshPending once and became
             permanent furniture, because a refresh takes about as long as the gap between
             refreshes. A two-pixel line at the very edge cannot become furniture: it occupies
             no layout, moves nothing when it appears, and is unmistakably progress rather than
@@ -1756,7 +1756,7 @@ function ConsoleShellInner({
                data-testid="console-loading">
             <span className="bx-loading-bar" aria-hidden />
             <span className="bx-loading-text">
-              Loading the console — panels fill in as they arrive
+              Loading the console, panels fill in as they arrive
               {/* The elapsed count is the difference between "it is working" and "it has
                   stopped". Only after a few seconds: on a fast load it would be noise. */}
               {settledFor >= 3 ? (
@@ -1789,7 +1789,7 @@ function ConsoleShellInner({
               <span>Loading {activeDef.label}…</span>
               {loadSlow ? (
                 <span>
-                  This is taking longer than usual — the control plane may be busy.{" "}
+                  This is taking longer than usual, the control plane may be busy.{" "}
                   <button type="button" className="linklike"
                           onClick={() => window.location.reload()}>
                     Reload the page
@@ -1822,17 +1822,17 @@ function ConsoleShellInner({
                   lib/dock-subject.ts). This head used to call the no-subject, no-role dock the
                   Deployment Manager, so Repo and model's "Ask BOSS about this step" went to the
                   role whose subject is hosts and rollbacks. */}
-              <span className="eyebrow" data-testid="bx-dock-who">
+              <span className="area-name" data-testid="bx-dock-who">
                 {dockSpeaker({ role: dockRole, discussing: dockDiscussing }).heading}
               </span>
               {dockDiscussing
                 ? <span className="detail">
-                    an idea or the running system &mdash; nothing starts unless you say so
+                    an idea or the running system, nothing starts unless you say so
                   </span>
                 : dockRole
                 ? <span className="detail">answering from this role&rsquo;s own work here</span>
                 : dockedRun === DOCK_GENERAL
-                  ? <span className="detail">BOSS in general &mdash; across the whole factory</span>
+                  ? <span className="detail">BOSS in general, across the whole factory</span>
                   : <code className="detail">{dockedRun}</code>}
               {/* Icon, not a labelled button. The head is a tight strip already holding the
                   title and the run id, and a text "Close" competed with both while doing the
@@ -1862,8 +1862,8 @@ function ConsoleShellInner({
                            : dockSpeaker({ role: dockRole, discussing: false }).roleName}
                          // `dockFresh` in the key so starting a discussion remounts with no
                          // thread and no history, rather than the component unpicking its own
-                         // state — a reset that has to remember every field misses one.
-                         // And the SUBJECT: see dockChatKey — without it a second Ask door with
+                         // state, a reset that has to remember every field misses one.
+                         // And the SUBJECT: see dockChatKey, without it a second Ask door with
                          // the same question sent its turn about the previous subject.
                          fresh={startFresh}
                          roleKey={dockDiscussing ? undefined : dockRoleKey || undefined}

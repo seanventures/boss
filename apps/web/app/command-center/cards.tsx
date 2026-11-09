@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * NOW, in three cards (cc v2): Needs you · In flight · Health.
+ * NOW, in three cards (cc v2): Needs you, In flight, Health.
  *
  * NEEDS YOU says each thing in a sentence with the face of the agent it is about, and a Review
- * button that opens the shared AttentionCard in place — the same buttons (approve, reject,
+ * button that opens the shared AttentionCard in place, the same buttons (approve, reject,
  * retry, waive, the doctor's options) the old page and Agents › Live draw, nothing re-made.
  * Its number is `counts.needs_you`, the one number the nav badge and Approvals say.
  *
@@ -69,33 +69,33 @@ export function needRow(item: AttentionItem, now: number | null): NeedRow {
   const app = item.build?.app;
   if (item.kind === "approval" && item.build && (item.build.planUrl || /plan/i.test(item.title))) {
     return { item, roleKey: item.roleKey, icon: "✎", primary: true,
-             title: `Approve the plan${app ? ` · ${app}` : ""}`,
-             sub: [who ? `${who} drafted it` : "BOSS drafted it", waited && `waiting ${waited}`].filter(Boolean).join(" · ") };
+             title: `Approve the plan${app ? `, ${app}` : ""}`,
+             sub: [who ? `${who} drafted it` : "BOSS drafted it", waited && `waiting ${waited}`].filter(Boolean).join(", ") };
   }
   if (item.kind === "approval" && item.build) {
     return { item, roleKey: item.roleKey, icon: "⇡", primary: true,
-             title: `${cut(withoutIds(item.title))}${app ? ` · ${app}` : ""}`,
-             sub: [who ? `${who} built it` : "Code Tasks", waited && `waiting ${waited}`].filter(Boolean).join(" · ") };
+             title: `${cut(withoutIds(item.title))}${app ? `, ${app}` : ""}`,
+             sub: [who ? `${who} built it` : "Code Tasks", waited && `waiting ${waited}`].filter(Boolean).join(", ") };
   }
   if (item.kind === "approval") {
     const source = item.source || item.run?.subject || (item.decisionKind === "refusal" ? "Budget" : "");
     const money = /spend|budget|cost/i.test(source) || item.decisionKind === "refusal";
     return { item, roleKey: item.roleKey, icon: money ? "$" : "?", primary: !!item.roleKey,
              title: cut(withoutIds(item.title)),
-             sub: [source, waited && (item.run ? `waiting ${waited}` : `raised ${waited} ago`)].filter(Boolean).join(" · ") };
+             sub: [source, waited && (item.run ? `waiting ${waited}` : `raised ${waited} ago`)].filter(Boolean).join(", ") };
   }
   if (item.kind === "readiness") {
-    return { item, roleKey: null, icon: "⚙", primary: false, title: `Setup: ${withoutIds(item.title)}`,
+    return { item, roleKey: null, icon: "Settings", primary: false, title: `Setup: ${withoutIds(item.title)}`,
              sub: item.detail || "Builds can't start until this is done" };
   }
   if (item.kind === "system_health") {
     return { item, roleKey: null, icon: "↺", primary: false, title: withoutIds(item.title),
-             sub: [item.detail, waited && `${waited} ago`].filter(Boolean).join(" · ") };
+             sub: [item.detail, waited && `${waited} ago`].filter(Boolean).join(", ") };
   }
   // A failed step, a build stopped at its checks or its budget, the budget refusing at the door.
   return { item, roleKey: item.roleKey, icon: item.kind === "budget_refused" ? "$" : "!", primary: false,
            title: withoutIds(item.title),
-           sub: [item.detail, waited && `${waited} ago`].filter(Boolean).join(" · ") };
+           sub: [item.detail, waited && `${waited} ago`].filter(Boolean).join(", ") };
 }
 
 function NeedLine({ row, projectId, actor, orgId, open, onToggle, onDone, onRefresh }: {
@@ -160,8 +160,8 @@ export function NeedsCard({ view, lead, olderStopped, needsYou, projectId, actor
         <h2 id="cc2-needs-you-h">Needs you</h2>
         {needsYou ? <span className="cc-n amber" data-testid="cc2-kpi-needs-you"
                           title="Decisions waiting. Same as Approvals and the top bar.">{needsYou}</span> : null}
-        {/* THE ROWS AGREE WITH THE NUMBER (independent test): the number is decisions — the
-            one needs-you rule — and anything else listed is said apart. */}
+        {/* THE ROWS AGREE WITH THE NUMBER (independent test): the number is decisions, the
+            one needs-you rule, and anything else listed is said apart. */}
         {view && all.length > (needsYou ?? 0) ? (
           <span className="cc-n-more" data-testid="cc-needs-more"
                 title="Also listed: stopped work, setup and system findings. Not decisions.">
@@ -211,13 +211,13 @@ export function NeedsCard({ view, lead, olderStopped, needsYou, projectId, actor
             {olderStopped.length ? (
               <Go className="cc-link-quiet" patch={{ area: "delivery_workflows", role: null, view: null }} orgId={orgId}
                   title="Failed steps from before today. Retry or skip them in Workflows." testId="cc-stopped-earlier">
-                {olderStopped.length} stopped earlier ↗
+                {olderStopped.length} stopped earlier
               </Go>
             ) : null}
             {view && view.counts.expiredAnswerable > 0 ? (
               <a className="cc-link-quiet" data-testid="cc2-expired-answerable" href={decisionsHref("expired", orgId)}
                  title="Nothing was applied. You can still answer them.">
-                {view.counts.expiredAnswerable} expired · still answerable ↗
+                {view.counts.expiredAnswerable} expired · still answerable ↗ 
               </a>
             ) : null}
           </div>
@@ -254,8 +254,8 @@ function FlightRow({ m, now, orgId }: { m: Mission; now: number | null; orgId?: 
       <span className="cc-fly-text">
         <b data-user-text>{m.subject}</b>
         <span>
-          {role ? `${nameOf(role).name} · ` : ""}
-          {parts.map((p) => p.text.replace(/^step (\d+) of (\d+)$/, "step $1/$2")).join(" · ")}
+          {role ? `${nameOf(role).name}, ` : ""}
+          {parts.map((p) => p.text.replace(/^step (\d+) of (\d+)$/, "step $1/$2")).join(", ")}
         </span>
       </span>
     </a>
@@ -340,7 +340,7 @@ export function FlightCard({ view, projectId, actor, orgId, now, onRefresh, onSt
           <span className="cc-stall-ico red" aria-hidden>!</span>
           <div>
             <b>{stalled.length} run{stalled.length === 1 ? "" : "s"} stalled {minDays >= 7 ? `${minDays}+ days` : "over a week"}</b>
-            <span title={stalled.map((m) => m.subject).join(" · ")}>{stalled.slice(0, 3).map((m) => m.subject).join(" · ")}</span>
+            <span title={stalled.map((m) => m.subject).join(", ")}>{stalled.slice(0, 3).map((m) => m.subject).join(", ")}</span>
           </div>
           <Go className="cc-btn sm" patch={{ area: "delivery_workflows", role: null, view: null }} orgId={orgId}
               title="Open them in Workflows: retry the step, or stop the run" testId="cc-stalled-open">
@@ -378,7 +378,7 @@ export function FlightCard({ view, projectId, actor, orgId, now, onRefresh, onSt
             return (
               <li key={r.runId}>
                 <a href={runHref(r.runId, orgId)} data-testid="cc2-recent-row" data-outcome={ok ? "ok" : failed ? "failed" : "other"}
-                   title={failed && r.error ? `${r.workflowName} · ${r.error.split("\n")[0]}` : `${r.workflowName} · ${r.outcome}`}
+                   title={failed && r.error ? `${r.workflowName}, ${r.error.split("\n")[0]}` : `${r.workflowName}, ${r.outcome}`}
                    onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(runPatch(r.runId)); } }}>
                   <span aria-label={ok ? "Succeeded" : failed ? "Failed" : r.outcome}>{ok ? "✓" : failed ? "✕" : "–"}</span>
                   <span data-user-text>{r.name}</span>
@@ -407,8 +407,8 @@ function usd(micros: number): string {
 export function todaySpend(view: CommandCenterView | null): string {
   if (!view) return "";
   const t = view.today;
-  if (t.moneyMicros === 0 && t.includedMicros > 0) return `Today: included · ${usd(t.includedMicros)} API value`;
-  return t.includedMicros > 0 ? `Today: ${usd(t.moneyMicros)} · ${usd(t.includedMicros)} included`
+  if (t.moneyMicros === 0 && t.includedMicros > 0) return `Today: included, ${usd(t.includedMicros)} API value`;
+  return t.includedMicros > 0 ? `Today: ${usd(t.moneyMicros)}, ${usd(t.includedMicros)} included`
     : `Today: ${usd(t.moneyMicros)}`;
 }
 
@@ -434,10 +434,10 @@ export function HealthCard({ view, reachable, orgId }: {
         <span className="cc-gauge-text">
           {view ? (
             cap > 0 ? <b>{usd(spent)} <small>of {usd(cap)}</small></b> : <b>{usd(spent)} <small>no cap</small></b>
-          ) : <b>—</b>}
+          ) : <b>{"—"}</b>}
           <span>
             {PERIOD_WORD[b?.period ?? "month"] ?? "This period"}
-            {b?.subscription ? " · subscription calls free" : ""}
+            {b?.subscription ? ", subscription calls free" : ""}
           </span>
         </span>
       </Go>
@@ -451,7 +451,7 @@ export function HealthCard({ view, reachable, orgId }: {
           const tip = reachable ? s.tip : "Can't reach BOSS";
           return (
             <li key={s.key} className="cc-sys" data-tone={t}>
-              <a href={consoleHref(s.href, orgId)} title={`${state} · ${tip}`} data-testid={`cc-dot-${s.key}`}
+              <a href={consoleHref(s.href, orgId)} title={`${state}, ${tip}`} data-testid={`cc-dot-${s.key}`}
                  aria-label={`${s.word}: ${state}. ${tip}`}>
                 <i aria-hidden />{s.word}
               </a>

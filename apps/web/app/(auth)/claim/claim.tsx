@@ -2,7 +2,7 @@
 
 /**
  * CLAIM THIS BOSS (IDENTITY.md §4.11, §4.12, mockup e "First run"): the first Owner, on whichever
- * path this install is on —
+ * path this install is on , 
  *
  *   setup_token      the link from the install output (`#t=`), valid an hour;
  *   legacy_password  the shared console password proves you are the operator (D25);
@@ -14,7 +14,7 @@
  * From a public address there is no form: the setup link screen says, in words nobody can read as
  * an address to type, that `boss identity setup-link` is a terminal command for the server.
  *
- * PASSWORD FIRST (BOSSAPP-812): step 1 is name, email and a PASSWORD — the way in from any
+ * PASSWORD FIRST (BOSSAPP-812): step 1 is name, email and a PASSWORD, the way in from any
  * browser. Step 2 "Protect your account": a passkey on this device (recommended; it is also the
  * one-tap sign-in) or an authenticator app. After a passkey, an authenticator is offered too,
  * because a passkey lives in one browser profile. Then recovery codes, shown once. Owners must
@@ -102,7 +102,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     setToken(linkToken("setup"));
     setPageOrigin(window.location.origin);
     // An address no browser can hold a passkey for (an IP, plain http): the authenticator app is
-    // the way in, said in one plain line — never a prompt the browser will refuse.
+    // the way in, said in one plain line, never a prompt the browser will refuse.
     setNoPasskey(passkeyBlockWords(options.passkey_reason, passkeyPlace()));
     setMins(minutesLeft(claim.expires_at, Date.now()));
   }, [claim.expires_at, options.passkey_reason]);
@@ -119,7 +119,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     || (network && (!originOk || !origin));
   // The password is ALWAYS required (BOSSAPP-812): the way in from any browser.
   const ready = name.trim() && email.includes("@") && password.length >= minPw && !proofMissing;
-  // Why Claim cannot go yet, in one line — a silent disabled button left people guessing.
+  // Why Claim cannot go yet, in one line, a silent disabled button left people guessing.
   const missing = path === "setup_token" && !token ? "Open the setup link first"
     : !name.trim() ? "Add your name"
     : !email.includes("@") ? "Add your email"
@@ -256,7 +256,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     );
   }
 
-  // No setup link in the address: one thing to do — get the link. No form to fill in first.
+  // No setup link in the address: one thing to do, get the link. No form to fill in first.
   // The link lives in the fragment, read after mount: show nothing until it has been read.
   if (pageOrigin === null && path === "setup_token") return <AuthStage label="Claim this BOSS"><Logo host={options.host} /><h1>Claim this BOSS</h1></AuthStage>;
   if (path === "setup_token" && !token) {
@@ -279,7 +279,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
 
   return (
     <AuthStage label="Claim this BOSS" wide>
-      <Logo host={options.host} right={path === "setup_token" && mins !== null ? `setup link · expires in ${mins} min` : bridgeOnly ? "network bridge" : network ? "private network" : options.host} />
+      <Logo host={options.host} right={path === "setup_token" && mins !== null ? `setup link, expires in ${mins} min` : bridgeOnly ? "network bridge" : network ? "private network" : options.host} />
       <h1>Claim this BOSS</h1>
       <p className="idn-s" data-copy="prose">
         {path === "legacy_password"
@@ -314,7 +314,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
             <label htmlFor="claim-seat">Which seat were you?</label>
             <select id="claim-seat" className="idn-i" value={seat} onChange={(e) => setSeat(e.target.value)}>
               {claim.seats.map((s) => <option key={s} value={s}>{SEAT_WORDS[s] ?? s}</option>)}
-              <option value="">None · start fresh</option>
+              <option value="">None, start fresh</option>
             </select>
           </div>
         ) : null}

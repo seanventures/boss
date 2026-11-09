@@ -127,6 +127,7 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
         ("POST", "/v1/github/merge-authorizations/{authorization_id}/authorize"),
         ("POST", "/v1/github/resolution-plans/{plan_id}/approve"),
         ("POST", "/v1/decisions/{decision_id}/approve"),
+        ("POST", "/v1/decisions/{decision_id}/settle"),
         ("POST", "/v1/previews/{preview_id}/approve"),
         ("POST", "/v1/console/v2/autonomy"),
         ("POST", "/v1/console/v2/autonomy/apply"),
@@ -145,9 +146,10 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     # from the knowledge graph POST facts/{id}/promote and /reject (a person's step-up) and
     # DELETE /v1/setup/embedding-model, kept out of MCP on purpose. +1 confirmation-gated is
     # POST /v1/projects: held for a non-human caller like POST /v1/orgs, a person confirms it.
+    # +1 is POST /v1/decisions/{id}/settle: the same human step-up as approve.
     assert rows[("POST", "/v1/projects")]["mcp_status"] == "human_confirmation_gated"
     assert sum(row["mcp_status"] == "human_confirmation_gated"
-               for row in community["operations"]) == 72
+               for row in community["operations"]) == 73
     # +3 operator-only: Rules review's approve / edit / reject (BOSSAPP-768), a person's step-up.
     for action in ("approve", "edit", "reject"):
         assert rows[("POST", f"/v1/knowledge/view/rules/{{rule_id}}/{action}")]["mcp_status"] == (

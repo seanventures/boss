@@ -28,8 +28,9 @@ describe("enabled identity action text colors", () => {
 describe("primary home action text colors", () => {
   it.each([".cc-btn.primary", ".cc-btn.primary:hover:not(:disabled)"])("%s keeps a white label readable across its gradient", (selector) => {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const rule = new RegExp(`${escaped}\\s*\\{([^}]+)}`).exec(homeCss)?.[1];
-    const stops = /background:\s*([^;]+);/.exec(rule ?? "")?.[1].match(/#[0-9a-f]{6}/gi);
+    const rule = new RegExp(`${escaped}\\s*\\{([^}]+)}`).exec(homeCss)?.[1] ?? "";
+    const expanded = rule.replace(/var\(--boss-c-([0-9a-f]{6})\)/gi, "#$1");
+    const stops = /background:\s*([^;]+);/.exec(expanded)?.[1].match(/#[0-9a-f]{6}/gi);
     expect(stops).toHaveLength(2);
     const [start, end] = stops!.map(rgb);
     for (let step = 0; step <= 100; step += 1) {

@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * THE PULSE STRIP (infra-observability spec §3.2, §4.9, §5.4): one component, every density —
+ * THE PULSE STRIP (infra-observability spec §3.2, §4.9, §5.4): one component, every density , 
  * 96/84/90 on Observability › Apps, 48 and 24 at narrow widths, 32 as the heartbeat on an Infra
  * tile and in the target drawer. Frozen in Phase 0; both web streams draw it.
  *
  * Each cell is ok of n probes in its bucket:
- *   all ok → green · some failed → amber · none ok → red, hatched · no probes → an outlined gap.
+ *   all ok → green, some failed → amber, none ok → red, hatched, no probes → an outlined gap.
  * A gap is never drawn green (`n === 0`). Hovering or focusing a cell's tooltip says the bucket's
- * truth: `14:15–14:30 · 7 of 8 ok · p95 412 ms`, or `No probes`. Deploy pins sit above the strip
+ * truth: `14:15, 14:30, 7 of 8 ok, p95 412 ms`, or `No probes`. Deploy pins sit above the strip
  * at the moment each deploy finished, coloured by its result; a pin links to the deploy drawer.
  * The whole strip is one `role=img` with a summary label; `View as table` lists every bucket.
  */
@@ -29,17 +29,17 @@ export function cellKind(c: StripCellIn): CellKind {
 }
 
 
-/** `<from>–<to> · k of n ok · p95 <ms>` or `<from>–<to> · No probes`. */
+/** `<from>, <to>, k of n ok, p95 <ms>` or `<from>, <to>, No probes`. */
 export function cellTip(c: StripCellIn, startMs: number | null, cellS: number, t: LocalTime = LOCAL): string {
   const { hhmm, day } = t;
   let when = "";
   if (startMs !== null && cellS > 0) {
     const end = startMs + cellS * 1000;
-    when = cellS >= 6 * 3600 ? `${day(startMs)} ${hhmm(startMs)}–${hhmm(end)}` : `${hhmm(startMs)}–${hhmm(end)}`;
+    when = cellS >= 6 * 3600 ? `${day(startMs)} ${hhmm(startMs)}, ${hhmm(end)}` : `${hhmm(startMs)}, ${hhmm(end)}`;
   }
-  if (c.n <= 0) return when ? `${when} · No probes` : "No probes";
-  const p95 = c.p95 !== undefined && c.p95 !== null ? ` · p95 ${Math.round(c.p95)} ms` : "";
-  return `${when ? `${when} · ` : ""}${c.ok} of ${c.n} ok${p95}`;
+  if (c.n <= 0) return when ? `${when}, No probes` : "No probes";
+  const p95 = c.p95 !== undefined && c.p95 !== null ? `, p95 ${Math.round(c.p95)} ms` : "";
+  return `${when ? `${when}, ` : ""}${c.ok} of ${c.n} ok${p95}`;
 }
 
 /** The strip's one-line summary for screen readers: `invoice prod, 24 hours: up 99.9%, 2 deploys`. */
@@ -83,7 +83,7 @@ export function PulseStrip({ cells, fromIso, cellS, pins = [], label, span, dens
             const at = Date.parse(p.at);
             if (!Number.isFinite(at)) return null;
             const x = Math.min(W, Math.max(0, ((at - startMs) / total) * W));
-            const tip = `Deployed ${p.sha7 ?? "—"} · ${hhmm(at)} · ${p.word}`;
+            const tip = `Deployed ${p.sha7 ?? "—"}, ${hhmm(at)}, ${p.word}`;
             const mark = (
               <polygon className="obs-pin" data-tone={p.tone} points={`${x - 3},0 ${x + 3},0 ${x},7`}>
                 <title>{tip}</title>

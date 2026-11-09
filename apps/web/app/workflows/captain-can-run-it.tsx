@@ -33,13 +33,13 @@ export async function grantSkill({ projectId, actor, roleKey, skillId }: {
 /**
  * Whether the agent named on a step is permitted to run it, said in the row.
  *
- * WHY IT IS ITS OWN COMPONENT. It owns a request — granting the skill — and putting that state
+ * WHY IT IS ITS OWN COMPONENT. It owns a request, granting the skill, and putting that state
  * in the builder would mean one `busy` flag shared by every row.
  *
  * WHAT IT IS CHECKING. `skill_runtime` lets a step's captain call a skill on one of two
  * grounds: the skill's own `allowed_callers` names it, or the agent HOLDS the skill in
  * `role_skills`. The second is the one an operator controls, so it is the one offered here.
- * Silent when there is nothing to say — a row cluttered with green ticks teaches people to stop
+ * Silent when there is nothing to say, a row cluttered with green ticks teaches people to stop
  * reading it.
  */
 export function CaptainCanRunIt({ projectId, actor, step, mine, holdings, onGranted }: {
@@ -56,7 +56,7 @@ export function CaptainCanRunIt({ projectId, actor, step, mine, holdings, onGran
 
   const captain = String(step.captain ?? "").trim();
   const skillId = String(mine?.skill_id ?? "").trim();
-  // Nothing to check: no agent named, or the step runs an MCP tool rather than a skill — a
+  // Nothing to check: no agent named, or the step runs an MCP tool rather than a skill, a
   // connector's authority comes from the connection, not from a grant on the agent.
   if (!captain || !skillId) return null;
   if ((holdings[captain] ?? []).includes(skillId)) {
@@ -78,7 +78,7 @@ export function CaptainCanRunIt({ projectId, actor, step, mine, holdings, onGran
 
   return (
     <span className="dw-draft-grant" data-testid={`dw-grant-${step.id}`}>
-      {captain} does not hold {skillId} — this step will be refused when it runs.
+      {captain} does not hold {skillId}, this step will be refused when it runs.
       <GatedButton permission="agent_ability:assign" type="button" className="linklike" disabled={busy}
               data-testid={`dw-grant-do-${step.id}`} onClick={() => void grant()}>
         {busy ? "giving…" : `Give ${skillId} to ${captain}`}

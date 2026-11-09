@@ -157,7 +157,7 @@ export function NeedsYou({ items, projectId, actor, orgId, onRefresh, testId }: 
   );
 }
 
-/** `Some data missing · <names>` — one line; the tooltip names what failed (§4.2). */
+/** `Some data missing, <names>`, one line; the tooltip names what failed (§4.2). */
 export function PartialLine({ partial, error, testId }: { partial: string[]; error?: string | null; testId: string }) {
   if (error) {
     return <div className="inf-partial" role="status" data-testid={`${testId}-unreachable`} title={error}>Can&apos;t reach BOSS</div>;
@@ -165,7 +165,7 @@ export function PartialLine({ partial, error, testId }: { partial: string[]; err
   if (!partial.length) return null;
   return (
     <div className="inf-partial" role="status" data-testid={testId} title={`Not answered: ${partial.join(", ")}`}>
-      Some data missing · <span data-copy="data">{partial.join(", ")}</span>
+      Some data missing, <span data-copy="data">{partial.join(", ")}</span>
     </div>
   );
 }
@@ -304,7 +304,7 @@ export function Sheet({ title, testId, onClose, children, wide = false }: { titl
   );
 }
 
-/** `Type <name> to confirm` — the press stays disabled until the name matches exactly. The
+/** `Type <name> to confirm`, the press stays disabled until the name matches exactly. The
  *  server checks the name too (test_retiring_a_host_needs_the_name). */
 export function TypedConfirm({ name, value, onChange, testId }: { name: string; value: string; onChange: (v: string) => void; testId: string }) {
   return (

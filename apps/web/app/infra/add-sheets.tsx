@@ -19,7 +19,7 @@ import { Sheet } from "./kit";
 const val = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 
 /** `Host`: Address, SSH user, SSH port, Name, Arch, Your SSH key → `Add host`. A blank name is
- *  the address; the key is stored durably (`database`) — `file` is lost on BOSS's next deploy. */
+ *  the address; the key is stored durably (`database`), `file` is lost on BOSS's next deploy. */
 export function HostSheet({ projectId, actor, onClose, onAdded }: {
   projectId: string; actor: string; onClose: () => void; onAdded: (hostId: string) => void;
 }) {
@@ -48,7 +48,7 @@ export function HostSheet({ projectId, actor, onClose, onAdded }: {
           onAdded(id);
           return;
         }
-        showToast("success", "Host added · set it up");
+        showToast("success", "Host added, set it up");
         onAdded(id);
       }}>
         <div className="inf-form-row">
@@ -155,7 +155,7 @@ export function HwAccountSheet({ projectId, actor, onClose }: { projectId: strin
               {PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select></label>
         </div>
-        <label className="inf-field" title="The name of a stored secret, such as env:BOSS_AWS_SECRET — never the secret">
+        <label className="inf-field" title="The name of a stored secret, such as env:BOSS_AWS_SECRET, never the secret">
           <span>Secret</span>
           <input name="secret_ref" required placeholder="env:BOSS_AWS_SECRET" autoComplete="off" spellCheck={false} data-testid="inf-hwaccount-secret" /></label>
         <div className="inf-actions">

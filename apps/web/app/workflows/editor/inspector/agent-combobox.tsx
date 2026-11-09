@@ -94,7 +94,7 @@ export function AgentCombobox({ step, view, palette, onChange }: {
         value: agent.role_key, label: agent.name || agent.role_key,
         count: `${agent.skills.length} skill${agent.skills.length === 1 ? "" : "s"}`,
         status, kind: "agent",
-        tip: agent.name && agent.name !== agent.role_key ? `${agent.name} · ${agent.role_key}` : agent.role_key,
+        tip: agent.name && agent.name !== agent.role_key ? `${agent.name}, ${agent.role_key}` : agent.role_key,
       });
     }
     // A NAME THE PROJECT DOES NOT HAVE stays visible rather than silently becoming "Auto": the

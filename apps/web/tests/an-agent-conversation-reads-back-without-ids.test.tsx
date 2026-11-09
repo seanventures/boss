@@ -147,7 +147,7 @@ describe("an agent conversation, read back", () => {
     expect(lists[0]).toEqual([
       "Searched past incidents (kg_precedent) → 3 found",
       "Listed the repositories ×2",
-      "Searched commits for “repayment” · failed",
+      "Searched commits for “repayment”, failed",
       "Read FineractStyle…Processor.java",
     ]);
     expect(lists[1]).toEqual([

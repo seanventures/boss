@@ -1,20 +1,20 @@
 "use client";
 
 /**
- * WHO DID WHAT — the incident card's account of its response (incident_responders.py).
+ * WHO DID WHAT, the incident card's account of its response (incident_responders.py).
  *
  *   WHO DID WHAT
- *   (face) Beacon · Site Reliability Engineer        Triage                          19:05
+ *   (face) Beacon, Site Reliability Engineer        Triage                          19:05
  *          Decide what the alert is and what BOSS does with it
  *          Kept it in this incident  “POST /orders fails on 3-line orders since release 1.2 …”
- *   (face) Beacon · Site Reliability Engineer        Investigate the incident          5 s
+ *   (face) Beacon, Site Reliability Engineer        Investigate the incident          5 s
  *          Root cause, 90% sure  “Release 1a2b3c4 went out …”
- *          Runbook ▸ The app is serving badly · Evidence: metrics · logs · release · 8 skills ↗
- *   (face) Helm · Engineering Captain                 Build, review and test       PR ↗
- *          Design · Atlas — Plans the change     Write tests · Vera — red on the faulty release
- *          Code review · Rook — survived: “…”    Security check · Sentry — clean: “…”
+ *          Runbook ▸ The app is serving badly, Evidence: metrics, logs, release, 8 skills 
+ *   (face) Helm, Engineering Captain                 Build, review and test       PR 
+ *          Design, Atlas, Plans the change     Write tests, Vera, red on the faulty release
+ *          Code review, Rook, survived: “…”    Security check, Sentry, clean: “…”
  *          Regression test test_shipping.py  ● red on the faulty release → ● green with the fix
- *   (you)  Seed Owner · person                        Approve the release   Approved 19:13
+ *   (you)  Seed Owner, person                        Approve the release   Approved 19:13
  *   (BOSS) BOSS's deploy, for Seed Owner              Deploy               Deployed 1a2b3c4
  *
  * Every agent is named by its callsign beside its role (run-face nameOf) and links to its page in
@@ -48,7 +48,7 @@ function secs(a: string | null, b: string | null): string {
   return s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`;
 }
 
-/** "Beacon · Site Reliability Engineer", "Seed Owner · person", "BOSS's deploy, for Seed Owner". */
+/** "Beacon, Site Reliability Engineer", "Seed Owner, person", "BOSS's deploy, for Seed Owner". */
 export function whoWords(w: ResponderWho | null): { name: string; role: string } {
   if (!w) return { name: "Nobody yet", role: "" };
   if (w.kind === "person") return { name: w.name ?? w.role ?? "A person", role: w.name ? "person" : "" };

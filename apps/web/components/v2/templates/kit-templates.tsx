@@ -2,7 +2,7 @@
 
 /**
  * KIT ▸ TEMPLATES (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.5, §2.8): one surface for managing the
- * org's templates. A list (name · built-in or imported · version · status · tested), `Import from
+ * org's templates. A list (name, built-in or imported, version, status, tested), `Import from
  * git` (URL + ref), and a review sheet per template: what it adds, its secrets and hosts, the file
  * tree, the brief AS TEXT (an imported brief is untrusted, never rendered as markup), the
  * validation report and the trial; Approve / Reject for one pending review, Trial, Hide, Delete.
@@ -73,7 +73,7 @@ export function KitTemplates({ projectId }: { projectId: string }) {
     <div className="tpl-kit" data-testid="kit-templates">
       <div className="tpl-kit-head">
         <h3>Templates</h3>
-        <span className="tpl-muted">{rows ? `${rows.length} · ${pending ? `${pending} to review` : "none to review"}` : ""}</span>
+        <span className="tpl-muted">{rows ? `${rows.length}, ${pending ? `${pending} to review` : "none to review"}` : ""}</span>
         <span className="tpl-push" />
         <GatedButton permission="template:import" type="button" className="ag-btn" data-testid="tpl-import-open"
                      title="Import a template from a git URL. Nothing in it runs until an Owner or Admin approves it."
@@ -88,7 +88,7 @@ export function KitTemplates({ projectId }: { projectId: string }) {
               <span className="tpl-row-main">
                 <button type="button" className="ag-link tpl-row-name" style={{ textAlign: "left" }} data-testid={`tpl-kit-open-${t.key}`}
                         onClick={() => setOpen(t)} data-user-text={t.source === "git" || undefined}>{t.name}</button>
-                <span className="tpl-faint">{t.source === "git" ? "Imported" : "Built-in"} · v{t.version}{t.summary ? ` · ${t.summary}` : ""}</span>
+                <span className="tpl-faint">{t.source === "git" ? "Imported" : "Built-in"}, v{t.version}{t.summary ? `, ${t.summary}` : ""}</span>
               </span>
               <StackChips stacks={t.stacks} installed={installed} levels={levels} />
               {t.tested.length ? <span className="tpl-tested">{testedWord(t.tested)}</span> : null}
@@ -241,7 +241,7 @@ function ReviewSheet({ card, installed, onClose, onChanged }: {
     </>
   );
   return (
-    <SideSheet title={t.name} sub={`${imported ? "Imported" : "Built-in"} · v${t.version} · ${STATUS_WORD[t.status] ?? t.status}`}
+    <SideSheet title={t.name} sub={`${imported ? "Imported" : "Built-in"}, v${t.version}, ${STATUS_WORD[t.status] ?? t.status}`}
                onClose={onClose} testId="tpl-review-sheet" foot={foot} wide>
       {error ? <p className="tpl-err" role="alert" data-testid="tpl-review-error" data-user-text>{error}</p> : null}
       <p className="tpl-muted" data-user-text={imported || undefined}>{t.summary}</p>
@@ -282,7 +282,7 @@ function ReviewSheet({ card, installed, onClose, onChanged }: {
       <section className="tpl-sec" aria-label="Checks" data-testid="tpl-validation">
         <h3>Checks</h3>
         {d ? (d.validation.ok
-          ? <span className="tpl-chip" data-tone="green">Passed · {d.validation.fileCount} files</span>
+          ? <span className="tpl-chip" data-tone="green">Passed, {d.validation.fileCount} files</span>
           : <ul className="tpl-tree">{d.validation.reasons.map((r) => <li key={r} data-user-text>{r.replace(/\s*\((?:D\d+|§[\d.]+[^)]*)\)/g, "")}</li>)}</ul>)
           : <span className="tpl-muted">Loading…</span>}
         {d?.validation.rejected ? <span className="tpl-faint" data-user-text>Rejected: {d.validation.rejected.reason || "no reason given"}</span> : null}
@@ -302,13 +302,13 @@ function ReviewSheet({ card, installed, onClose, onChanged }: {
 
       {d?.files.length ? (
         <details className="tpl-fold">
-          <summary>Files · {d.files.length}</summary>
+          <summary>Files, {d.files.length}</summary>
           <ul className="tpl-tree" data-testid="tpl-files">{d.files.map((f) => <li key={f.path} data-user-text>{f.path} <span className="tpl-faint">{f.size} B</span></li>)}</ul>
         </details>
       ) : null}
       {d?.brief ? (
         <details className="tpl-fold">
-          <summary title={imported ? "Untrusted: shown as text, and the build agent reads it as reference only" : undefined}>Brief{imported ? " · untrusted" : ""}</summary>
+          <summary title={imported ? "Untrusted: shown as text, and the build agent reads it as reference only" : undefined}>Brief{imported ? ", untrusted" : ""}</summary>
           <pre className="tpl-pre" data-testid="tpl-brief" data-user-text>{d.brief}</pre>
         </details>
       ) : null}

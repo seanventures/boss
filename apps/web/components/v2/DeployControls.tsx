@@ -1,7 +1,7 @@
 "use client";
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import { GatedButton } from "../gated";
 import React, { useCallback, useEffect, useState } from "react";
 
@@ -20,7 +20,7 @@ import { apiWrite } from "../../lib/api-write";
 import { useOnScreen } from "../../lib/area-shown";
 
 /**
- * Set target, unbind, deploy, retry — the four controls the parity map flags as highest risk.
+ * Set target, unbind, deploy, retry, the four controls the parity map flags as highest risk.
  *
  * DELIBERATELY THE SAME REQUESTS AS v1
  * ------------------------------------
@@ -144,7 +144,7 @@ export function DeployControls({
       );
       const data = await res.json().catch(() => ({}));
       setNoteIsError(!res.ok);
-      setNote(outcomeMessage(res, data, "target retired — bind a new one to deploy again"));
+      setNote(outcomeMessage(res, data, "target retired, bind a new one to deploy again"));
     } catch (e) {
       setNoteIsError(true);
       setNote(String((e as Error)?.message ?? e));
@@ -187,7 +187,7 @@ export function DeployControls({
                 void post("deploy", { targetId: state.targetId })
               }
               data-testid="v2-deploy"
-              /* What it will do, before it is pressed — or why it will not. */
+              /* What it will do, before it is pressed, or why it will not. */
               title={
                 plan
                   ? "This deployment ChangeSet is awaiting review"
@@ -213,7 +213,7 @@ export function DeployControls({
           // NOT a blank space. The v1 card rendered nothing here, which left an app with a
           // merged PR and no visible way forward on its own card.
           <span className="v2-mono v2-controls-unbound" data-testid="v2-controls-unbound">
-            {state.blockedReason} — bind a verified host on CI/CD.
+            {state.blockedReason}, bind a verified host on CI/CD.
           </span>
         )}
 
@@ -235,7 +235,7 @@ export function DeployControls({
 
       {state.live ? (
         <p className="v2-controls-note v2-mono" data-testid="v2-controls-live">
-          deployment {state.liveStatus} — this refreshes while it runs
+          deployment {state.liveStatus}, this refreshes while it runs
         </p>
       ) : null}
 
@@ -249,7 +249,7 @@ export function DeployControls({
       {plan && plan.next_action === "approve_decision" ? (
         <p className="v2-controls-note" data-testid="v2-controls-plan" role="status">
           Plan ready: {plan.review?.app_name || appName} to {plan.review?.host || "its host"}
-          {plan.review?.environment ? ` · ${plan.review.environment}` : ""}. Nothing has
+          {plan.review?.environment ? `, ${plan.review.environment}` : ""}. Nothing has
           deployed. <a href={approvalsHref()}>Approve it in Approvals</a>; it then deploys,
           and rolls back if the health check fails.
         </p>

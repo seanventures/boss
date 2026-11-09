@@ -4,7 +4,7 @@
  * Share card (spec §3.12): the agent's passport as a 1200×630 PNG, to download or paste.
  *
  * The image is drawn by app/api/agent-card/[role] (next/og, behind auth). `Include stats` adds
- * the vitals and is off by default. `Copy card JSON` copies the A2A Agent Card the API serves —
+ * the vitals and is off by default. `Copy card JSON` copies the A2A Agent Card the API serves , 
  * the machine-readable twin of the picture.
  */
 import React, { useEffect, useState } from "react";

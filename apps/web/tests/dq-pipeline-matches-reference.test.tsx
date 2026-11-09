@@ -124,7 +124,7 @@ describe("the DQ agent designs", () => {
     expect(decisions.querySelectorAll("ul").length).toBe(0);
     expect(decisions.textContent!.match(/severity never goes down/g)).toHaveLength(1);
     expect(el.querySelector('[data-testid="steps-from"]')?.textContent).toContain("Flow Orchestrator");
-    expect(el.querySelector('[data-testid="band-kg"]')?.textContent).toBe("Knowledge Graph v3 · read only");
+    expect(el.querySelector('[data-testid="band-kg"]')?.textContent).toBe("Knowledge Graph v3, read only");
   });
 
   it("P0 Context Hydration: the Service Desk is drawn, the policy has no raw value, labels never collide", () => {

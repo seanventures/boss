@@ -144,7 +144,7 @@ describe("the Pipeline tab in the real Workflow Studio editor", () => {
 
     // The same compact contract line as every other card, the kinds on hover.
     expect(byTest("stage-contract-research").textContent).toBe("reads 1 · writes 1");
-    expect(byTest("stage-contract-research").getAttribute("title")).toBe("Reads Rule · Writes Agent decision");
+    expect(byTest("stage-contract-research").getAttribute("title")).toBe("Reads Rule, Writes Agent decision");
     expect(byTest("stage-research").textContent).toContain("Succeeded");
     expect(byTest("stage-meeting").textContent).toContain("Running");
     expect(byTest("stage-row-research").textContent).toContain("Outside agent · Acme Bank review agent");

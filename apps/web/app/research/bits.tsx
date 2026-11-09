@@ -4,7 +4,7 @@
  *  stepper, the BOSS mark that stands for the facilitator, and the "how it works" steps. */
 import React, { useEffect, useState, type ReactNode } from "react";
 
-// The screens' one stylesheet, loaded with the pieces every one of them uses — the full pages
+// The screens' one stylesheet, loaded with the pieces every one of them uses, the full pages
 // and the compact views inside a workflow run's step panel alike.
 import "./research.css";
 
@@ -73,7 +73,7 @@ export function How({ steps }: { steps: string[] }) {
   );
 }
 
-/** The current query string, after mount and on every Back/Forward — what links built with
+/** The current query string, after mount and on every Back/Forward, what links built with
  *  consoleHref keep (the org) without rendering a different href on the server. */
 export function useSearch(): string {
   const [search, setSearch] = useState("");
@@ -120,7 +120,7 @@ export function CopyId({ id, label = "Copy id" }: { id: string; label?: string }
   );
 }
 
-/** "3m ago", worked out after mount — the server's clock is not the browser's, and an age that
+/** "3m ago", worked out after mount, the server's clock is not the browser's, and an age that
  *  differs between the two is a hydration error. */
 export function Ago({ iso, prefix = "" }: { iso?: string | null; prefix?: string }) {
   const [now, setNow] = useState<number | null>(null);

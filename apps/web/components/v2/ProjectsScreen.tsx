@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import React, { useMemo, useState } from "react";
 
 import type { CompanyOverview, V2Project } from "../../lib/v2/overview";
 
 /**
- * Projects — every project across the company.
+ * Projects, every project across the company.
  *
  * One row per app, where an app is a LINEAGE of runs rather than a single run. That
  * distinction is load-bearing: judging an app by its newest run once made BOSS refuse to
@@ -70,7 +70,7 @@ export function ProjectsScreen({
       {!overview.apiReachable ? (
         <p className="v2-empty" data-testid="v2-projects-unreachable">
           Could not reach the control plane{overview.blockedReason ? ` (${overview.blockedReason})` : ""}.
-          Nothing here is a statement about your projects — this page will show them once the
+          Nothing here is a statement about your projects, this page will show them once the
           API answers.
         </p>
       ) : overview.projects.length === 0 ? (
@@ -96,7 +96,7 @@ function ProjectRow({ p, q }: { p: V2Project; q: string }) {
   return (
     <li className="v2-row" data-testid={`v2-project-${p.id}`}>
       <Link href={`/v2/missions/${encodeURIComponent(p.id)}${q}`} className="v2-row-link">
-        {/* Status is a dot AND a word — never colour alone, so it survives greyscale and
+        {/* Status is a dot AND a word, never colour alone, so it survives greyscale and
             colourblind readers. */}
         <span className="v2-status v2-row-status" data-status={p.status}>
           <span className="v2-dot" data-status={p.status} aria-hidden />

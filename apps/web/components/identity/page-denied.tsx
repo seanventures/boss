@@ -1,6 +1,6 @@
 /**
  * A page outside the identity/account sections that the viewer cannot open (lib/identity/pages.ts
- * CONSOLE_PAGES): <AccessDenied> naming the permission, rendered INSTEAD of the page — the page
+ * CONSOLE_PAGES): <AccessDenied> naming the permission, rendered INSTEAD of the page, the page
  * returns this before it fetches anything, so nothing 403s and no data reaches the HTML. When the
  * viewer's access could not be checked at all (the identity API is unreachable), it says that
  * instead, with Retry: the page fails closed, never open.

@@ -40,7 +40,7 @@ export function IdentityProvidersCatalogView({
   return (
     <article className="stack-card identity-providers-pack">
       <h3>Identity provider packs</h3>
-      {/* WHAT SIGN-IN USES TODAY, before any provider is offered — so a configured provider is
+      {/* WHAT SIGN-IN USES TODAY, before any provider is offered, so a configured provider is
           not mistaken for one the login page consults. */}
       <div className="stack-card" data-testid="identity-sign-in-truth" style={{ marginBottom: 12 }}>
         <strong>How sign-in works today</strong>
@@ -61,11 +61,11 @@ export function IdentityProvidersCatalogView({
           <div className="feed-row" style={{ marginBottom: 12 }}>
             <div>
               <p className="detail">
-                {feed.catalog.length} packs · {feed.configuredCount} configured
-                {projectId ? ` · project ${projectId}` : ""}
+                {feed.catalog.length} packs, {feed.configuredCount} configured
+                {projectId ? `, project ${projectId}` : ""}
               </p>
               {feed.standards.length > 0 ? (
-                <p className="detail">Standards: {feed.standards.join(" · ")}</p>
+                <p className="detail">Standards: {feed.standards.join(", ")}</p>
               ) : null}
             </div>
           </div>
@@ -84,7 +84,7 @@ export function IdentityProvidersCatalogView({
                       <h4>{idp.name}</h4>
                       <p className="detail">
                         {protocolPills(idp.protocol_support)}
-                        <span className="detail"> · {idp.category.replace(/_/g, " ")}</span>
+                        <span className="detail">, {idp.category.replace(/_/g, " ")}</span>
                       </p>
                       <p className="detail">{idp.market_notes}</p>
                       {configured?.configured ? (
@@ -104,7 +104,7 @@ export function IdentityProvidersCatalogView({
                         <a href={idp.docs_url} target="_blank" rel="noreferrer">
                           {idp.name} setup guide ↗
                         </a>
-                        {" · "}
+                        {", "}
                         <a href="#identity-provider-form">Record it below</a>
                       </p>
                     </div>

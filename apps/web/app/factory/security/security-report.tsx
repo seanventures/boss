@@ -3,14 +3,14 @@
 /**
  * The before/after (spec §4.6 "Factory ▸ build ▸ Security report"):
  *
- *   8 of 8 targeted fixed · 20 found before · 15 fixed · 5 still open · 0 new
+ *   8 of 8 targeted fixed, 20 found before, 15 fixed, 5 still open, 0 new
  *   1a2b3c4 → 9f8e7d6                                         [Markdown]
  *   Critical ▮ 0 → 0   High ▮▮▮ 3 → 0   Medium ▮▮▮▮ 9 → 4 …
  *   Targeted   SQL injection in findUser   Fixed
  *   New        None (a pass needs none high or critical)
  *
- * Read from `GET /v1/security/reports/{app}?before&after` — the same classification the re-review
- * judges by — and exported as Markdown by the same route (`format=md`).
+ * Read from `GET /v1/security/reports/{app}?before&after`, the same classification the re-review
+ * judges by, and exported as Markdown by the same route (`format=md`).
  */
 import React, { useEffect, useMemo, useState } from "react";
 
@@ -135,7 +135,7 @@ export function SecurityReport({ projectId, appKey, review, before, after, onBac
             </details>
           ) : null}
           <p className="sec-muted sec-tools-line">
-            {rep.after.tools.map((t) => `${TOOL_LABEL[t.name] ?? t.name} ${t.version || "—"}${t.status === "failed" ? " (failed)" : ""}`).join(" · ")}
+            {rep.after.tools.map((t) => `${TOOL_LABEL[t.name] ?? t.name} ${t.version || "—"}${t.status === "failed" ? " (failed)" : ""}`).join(", ")}
           </p>
         </>
       ) : null}

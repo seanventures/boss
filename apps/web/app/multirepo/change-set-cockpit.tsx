@@ -5,9 +5,9 @@
  * belongs to a multi-repo change set (GET /v1/runs/{run}/change-set answers mode "multi") opens
  * this instead of the one-repository cockpit; so does `?area=code_tasks&changeset=<id>`.
  *
- *   header   Factory › app › title · N repositories · minutes · $ so far · Steer · Stop
- *   tabs     Build (screen 5) · Pull requests (screen 6, `&tab=prs`)
- *   Build    Plan → Build · k of n → Review set → You approve → Deploy together;
+ *   header   Factory › app › title, N repositories, minutes, $ so far, Steer, Stop
+ *   tabs     Build (screen 5), Pull requests (screen 6, `&tab=prs`)
+ *   Build    Plan → Build, k of n → Review set → You approve → Deploy together;
  *            one lane per repository (Sandbox, Code, Tests, Review, PR), in dependency order;
  *            the Plan, what is happening now, and the grant (See consent: read-only sheet)
  *
@@ -262,7 +262,7 @@ export function ChangeSetCockpit({ projectId, changeSetId, initial, actor, onClo
           <div>
             <div className="mr-ui-card-h" style={{ marginBottom: 10 }}>
               <h3>Build lanes</h3>
-              <span className="mr-ui-sub">One sandbox per repository · in dependency order
+              <span className="mr-ui-sub">One sandbox per repository, in dependency order
                 <TipQ tip="A lane starts when the lanes it depends on pass their tests. Independent lanes build in parallel." /></span>
             </div>
             <div className="mr-lanes" data-testid="mr-lanes">
@@ -400,7 +400,7 @@ function PlanCard({ cs }: { cs: ChangeSetView }) {
     <div className="mr-ui-card" data-testid="mr-csc-plan">
       <div className="mr-ui-card-h" style={{ marginBottom: 6 }}>
         <h3>Plan</h3>
-        <span className="mr-ui-sub">What changes in each component{cs.plan?.by ? ` · by ${cs.plan.by}` : ""}</span>
+        <span className="mr-ui-sub">What changes in each component{cs.plan?.by ? `, by ${cs.plan.by}` : ""}</span>
       </div>
       {cs.plan?.summary ? <p className="mr-ui-sub" data-user-text style={{ margin: "0 0 6px" }}>{cs.plan.summary}</p> : null}
       {items.length ? items.map((c, i) => {
@@ -411,7 +411,7 @@ function PlanCard({ cs }: { cs: ChangeSetView }) {
             <span className="mr-dot-n" aria-hidden>{i + 1}</span>
             <div style={{ minWidth: 0 }}>
               <b data-user-text>{c.name}</b>
-              <small data-user-text>{c.unchanged ? "No change" : [c.change, c.interface].filter(Boolean).join(" · ") || "—"}</small>
+              <small data-user-text>{c.unchanged ? "No change" : [c.change, c.interface].filter(Boolean).join(", ") || "—"}</small>
             </div>
             <span className="mr-ui-pill" data-tone={word[1]} data-testid={`mr-plan-state-${c.name}`}>{word[0]}</span>
           </div>
@@ -439,23 +439,23 @@ function NowCard({ cs, active }: { cs: ChangeSetView; active: Lane | null }) {
   } else if (cs.state === "blocked") {
     line = <span className="mr-ui-error">{cs.blocked_reason || "Blocked."}</span>;
   } else {
-    line = <span>{changeWord(cs.state)}{cs.error ? ` · ${cs.error}` : ""}</span>;
+    line = <span>{changeWord(cs.state)}{cs.error ? `, ${cs.error}` : ""}</span>;
   }
   return (
     <div className="mr-ui-card" data-testid="mr-csc-now">
-      <div className="mr-ui-eyebrow" style={{ marginBottom: 10 }}>Now</div>
+      <div className="mr-ui-area-name" style={{ marginBottom: 10 }}>Now</div>
       {line}
     </div>
   );
 }
 
-/** "contracts, api, web (write on boss/*) · infra (read)". */
+/** "contracts, api, web (write on boss/*), infra (read)". */
 export function grantWords(cs: ChangeSetView): string {
   const repos = cs.grant?.repos ?? [];
   const write = repos.filter((r) => r.access === "write").map((r) => shortName(r.full_name));
   const read = repos.filter((r) => r.access !== "write").map((r) => shortName(r.full_name));
   return [write.length ? `${write.join(", ")} (write on boss/*)` : "", read.length ? `${read.join(", ")} (read)` : ""]
-    .filter(Boolean).join(" · ");
+    .filter(Boolean).join(", ");
 }
 
 function GrantCard({ cs, onOpen }: { cs: ChangeSetView; onOpen: () => void }) {
@@ -465,7 +465,7 @@ function GrantCard({ cs, onOpen }: { cs: ChangeSetView; onOpen: () => void }) {
       <LockKey size={15} aria-hidden />
       <div>
         <b>Grant:</b> {words ? <span data-user-text>{words}</span> : "none recorded yet"}
-        {cs.grant?.ended_at ? <> · ended</> : null}.{" "}
+        {cs.grant?.ended_at ? <>, ended</> : null}.{" "}
         <button type="button" className="mr-ui-link" onClick={onOpen} data-testid="mr-csc-see-consent"
                 title="Which repositories this change's agents may touch, and how">See consent</button>
       </div>
@@ -486,14 +486,14 @@ function GrantSheet({ projectId, cs, onClose }: { projectId: string; cs: ChangeS
   return (
     <Sheet side wide onClose={onClose} testId="mr-grant-sheet"
            title={<>
-             <span className="mr-cs-eyebrow mr-ui-eyebrow"><ShieldCheck size={13} aria-hidden />This change&apos;s grant</span>
+             <span className="mr-cs-area-name mr-ui-area-name"><ShieldCheck size={13} aria-hidden />This change&apos;s grant</span>
              <span className="mr-cs-title">Which repositories may the agents touch?</span>
            </>}>
-      <p className="mr-cs-subtitle"><span data-user-text>{changeTitle(cs)}</span> · <span data-user-text>{cs.app_name}</span> · read only</p>
+      <p className="mr-cs-subtitle"><span data-user-text>{changeTitle(cs)}</span>, <span data-user-text>{cs.app_name}</span>, read only</p>
       {error ? <p className="mr-ui-error" role="alert">{error}</p> : null}
       <div className="mr-cs-body" data-testid="mr-grant-body">
         <div>
-          <div className="mr-ui-eyebrow">Allowed for this change</div>
+          <div className="mr-ui-area-name">Allowed for this change</div>
           <div className="mr-cs-list">
             {repos.map((r) => (
               <div key={r.full_name} className="mr-cs-grant" data-access={r.access} data-testid={`mr-grant-repo-${r.full_name}`}>
@@ -502,7 +502,7 @@ function GrantSheet({ projectId, cs, onClose }: { projectId: string; cs: ChangeS
                 </span>
                 <div>
                   <b data-user-text>{r.full_name}</b>
-                  <small>{r.words || (r.access === "read" ? "Read only" : "Read · Write on boss/* · Pull requests")}</small>
+                  <small>{r.words || (r.access === "read" ? "Read only" : "Read, Write on boss/*, Pull requests")}</small>
                 </div>
                 <span className="mr-ui-pill" data-tone={r.access === "write" ? "ok" : "muted"}>{r.access === "write" ? "Write" : "Read"}</span>
               </div>
@@ -512,7 +512,7 @@ function GrantSheet({ projectId, cs, onClose }: { projectId: string; cs: ChangeS
         </div>
         {mr?.unreachable.length ? (
           <div>
-            <div className="mr-ui-eyebrow">Not reachable <span>{mr.unreachable.length} other {mr.unreachable.length === 1 ? "repository" : "repositories"}</span></div>
+            <div className="mr-ui-area-name">Not reachable <span>{mr.unreachable.length} other {mr.unreachable.length === 1 ? "repository" : "repositories"}</span></div>
             <div className="mr-cs-chips">
               {mr.unreachable.slice(0, 8).map((u) => (
                 <span key={u} className="mr-ui-chip static" style={{ opacity: 0.65 }} data-user-text><LockKey size={11} aria-hidden />{u}</span>
@@ -525,7 +525,7 @@ function GrantSheet({ projectId, cs, onClose }: { projectId: string; cs: ChangeS
           <dt>How</dt><dd>{mr?.how || `GitHub App token limited to these ${repos.length} repositories`}</dd>
           <dt>Lasts</dt><dd>{mr?.lasts || (grant?.token_lifetime_minutes ? `${grant.token_lifetime_minutes} min per token, ends with the run` : "Ends with the run")}</dd>
           <dt>Never</dt><dd>{mr?.never || "push to a base branch, change settings, delete branches it did not create"}</dd>
-          {grant?.consented_by ? <><dt>Allowed by</dt><dd data-user-text>{grant.consented_by}{grant.remember ? ` · remembered for ${cs.app_name}` : " · this change only"}</dd></> : null}
+          {grant?.consented_by ? <><dt>Allowed by</dt><dd data-user-text>{grant.consented_by}{grant.remember ? `, remembered for ${cs.app_name}` : ", this change only"}</dd></> : null}
           {grant?.ended_at ? <><dt>Ended</dt><dd>{formatDateTime(grant.ended_at)}</dd></> : null}
         </dl>
       </div>

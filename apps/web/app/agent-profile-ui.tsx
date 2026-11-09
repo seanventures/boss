@@ -7,8 +7,8 @@
  * second place to edit workflows. Its workflow half is the Workflow editor's JSON view now; its
  * agent half is two things in the Agents area:
  *
- *   - AgentProfile, a section of the agent's own page: the Studio definition for that role —
- *     its version, model policy and validation — and a Check that compiles it and proves its
+ *   - AgentProfile, a section of the agent's own page: the Studio definition for that role , 
+ *     its version, model policy and validation, and a Check that compiles it and proves its
  *     authority envelope without running a model;
  *   - PanelsView, the Agents area's Panels view: each panel, its members, and a Run.
  *
@@ -77,7 +77,7 @@ function RecentRuns({ runs }: { runs: StudioRun[] }) {
 
 /** The Studio definitions of an agent's page: version, model policy, validation, and a Check
  *  that compiles it without running a model. `bare` renders the rows inside the Passport's one
- *  Profile section — whose Test is the real one — instead of a Profile section of its own. */
+ *  Profile section, whose Test is the real one, instead of a Profile section of its own. */
 export function AgentProfile({ feed, roleKey, actor, bare = false }: {
   feed: AgentStudioFeed; roleKey: string; actor: string; bare?: boolean;
 }) {

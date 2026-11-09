@@ -50,7 +50,7 @@ describe("removing a run", () => {
   });
 
   it("says what it does NOT touch, so nobody thinks it deletes their video", () => {
-    expect(UI).toContain("anything published — is untouched");
+    expect(UI).toContain("anything published, is untouched");
   });
 
   it("goes over DELETE rather than through the action switch", () => {

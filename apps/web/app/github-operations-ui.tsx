@@ -206,7 +206,9 @@ export function GitHubOperations({
   const latestSnapshot = snapshots[0];
   const activeConnectionCount = feed.summary.activeConnections;
   const connectionHealth =
-    connection?.last_test_status ?? connection?.status ?? "unconfigured";
+    selectedBinding?.status === "not_allowed"
+      ? "not_allowed"
+      : (connection?.last_test_status ?? connection?.status ?? "unconfigured");
 
   function chooseBinding(nextBindingId: string) {
     setBindingId(nextBindingId);
@@ -219,9 +221,9 @@ export function GitHubOperations({
       data-area="github"
       aria-label="GitHub mission control"
     >
-      <header className="ghx-titlebar">
+      <header className="ghx-head">
         <div>
-          <span className="eyebrow">GitHub Mission Control</span>
+          <span className="area-name">GitHub Mission Control</span>
           <h2>Repository truth, governed from project to merge.</h2>
           <p>
             Observe every ref, serialize branch writers, reconcile drift, and
@@ -286,7 +288,7 @@ export function GitHubOperations({
             ) : null}
             {feed.bindings.map((binding) => (
               <option key={binding.id} value={binding.id}>
-                {binding.full_name} · {binding.role}
+                {binding.full_name}, {binding.role}
               </option>
             ))}
           </select>
@@ -294,7 +296,7 @@ export function GitHubOperations({
         {selectedBinding ? (
           <div className="ghx-repo-meta">
             <strong>{selectedBinding.full_name}</strong>
-            <span>{selectedBinding.default_branch ?? "default branch unknown"} · {selectedBinding.visibility ?? "visibility unknown"}</span>
+            <span>{selectedBinding.default_branch ?? "default branch unknown"}, {selectedBinding.visibility ?? "visibility unknown"}</span>
             <Status value={selectedBinding.status} />
           </div>
         ) : (
@@ -327,7 +329,7 @@ export function GitHubOperations({
             </h3>
             <p>
               Easy auth uses a SecretRef to an environment variable on the BOSS
-              API host — never paste a raw token into Mission Control. Place a
+              API host, never paste a raw token into Mission Control. Place a
               fine-grained PAT (or GitHub App private key) in the runtime env,
               then connect and bind <span className="mono">owner/repo</span>.
             </p>
@@ -389,7 +391,7 @@ export function GitHubOperations({
                 <select name="connection_id" required defaultValue={feed.connections[0]?.id}>
                   {feed.connections.map((item) => (
                     <option key={item.id} value={item.id}>
-                      {item.connection_label} · {item.status}
+                      {item.connection_label}, {item.status}
                     </option>
                   ))}
                 </select>
@@ -500,7 +502,7 @@ export function GitHubOperations({
                   <input type="hidden" name="snapshot_id" value={latestSnapshot.id} />
                   <span>
                     Latest: <b>{latestSnapshot.source_ref}</b> → <b>{latestSnapshot.target_ref}</b>
-                    {" · "}{label(latestSnapshot.classification)}
+                    {", "}{label(latestSnapshot.classification)}
                   </span>
                   <label>
                     <span className="sr-only">Resolution branch</span>
@@ -540,7 +542,7 @@ export function GitHubOperations({
                       <span><b>{refSnapshot.behind_by}</b> behind</span>
                       <Status value={refSnapshot.classification} />
                     </div>
-                    <p>merge base <code>{shortSha(refSnapshot.merge_base_commit_sha)}</code> · receipt <code>{shortId(refSnapshot.receipt_id)}</code></p>
+                    <p>merge base <code>{shortSha(refSnapshot.merge_base_commit_sha)}</code>, receipt <code>{shortId(refSnapshot.receipt_id)}</code></p>
                   </>
                 ) : <p>No comparison snapshot includes this ref.</p>}
               </div>
@@ -607,7 +609,7 @@ export function GitHubOperations({
               const plan = resolutionPlans.find((item) => item.conflict_set_id === conflict.id);
               return (
                 <div className="ghx-flow-item expanded" key={conflict.id}>
-                  <span><b>{conflict.resolution_branch}</b> · {conflict.conflict_count} file conflict{conflict.conflict_count === 1 ? "" : "s"}</span>
+                  <span><b>{conflict.resolution_branch}</b>, {conflict.conflict_count} file conflict{conflict.conflict_count === 1 ? "" : "s"}</span>
                   <Status value={plan?.status ?? conflict.status} />
                   <span>{plan ? `plan v${plan.version}` : "validated plan required"}</span>
                   {canManage && plan?.status === "proposed" ? (
@@ -637,7 +639,7 @@ export function GitHubOperations({
                   PR #{authorization.pull_request_number}
                 </a>
                 <Status value={authorization.status} />
-                <span>{authorization.observed_checks.length}/{authorization.required_checks.length} checks · {authorization.observed_reviews.length}/{authorization.required_approvals} reviews</span>
+                <span>{authorization.observed_checks.length}/{authorization.required_checks.length} checks, {authorization.observed_reviews.length}/{authorization.required_approvals} reviews</span>
                 {canManage && authorization.status === "pending_approval" ? (
                   <ActionForm permission="github:merge" action={authorizeGitHubMergeAction} className="ghx-review-form">
                     <HiddenScope projectId={feed.projectId} actor={actor} />
@@ -666,9 +668,9 @@ export function GitHubOperations({
           <div className="ghx-flow-items">
             {reconciliationRuns.length === 0 ? <span className="ghx-muted">No reconciliation runs</span> : reconciliationRuns.slice(0, 6).map((run) => (
               <div className="ghx-flow-item expanded" key={run.id}>
-                <span><b>{label(run.source)}</b> · {run.observation_ids.length} observations</span>
+                <span><b>{label(run.source)}</b>, {run.observation_ids.length} observations</span>
                 <Status value={run.status} />
-                <span>{run.attempt_count}/{run.max_attempts} attempts · {run.receipt_ids.length} receipts</span>
+                <span>{run.attempt_count}/{run.max_attempts} attempts, {run.receipt_ids.length} receipts</span>
                 {canManage && ["failed", "deadlettered"].includes(run.status) ? (
                   <ActionForm permission="github:sync" action={repairGitHubReconciliationAction}>
                     <HiddenScope projectId={feed.projectId} actor={actor} />
@@ -780,7 +782,7 @@ export function GitHubOperations({
           {connection ? (
             <div className="ghx-connection-control">
               <span>
-                <b>{connection.connection_label}</b> · credential {connection.credential_configured ? "configured" : "missing"} · {connection.missing_permissions.length} missing permissions
+                <b>{connection.connection_label}</b>, credential {connection.credential_configured ? "configured" : "missing"}, {connection.missing_permissions.length} missing permissions
               </span>
               <ActionForm permission="github:manage" action={setGitHubConnectionStateAction}>
                 <HiddenScope projectId={feed.projectId} actor={actor} />

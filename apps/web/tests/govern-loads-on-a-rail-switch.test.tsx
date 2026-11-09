@@ -69,14 +69,14 @@ describe("Govern reads its own data", () => {
     const models = $("[data-testid=gv-models-link] a")!;
     const q = new URLSearchParams(models.getAttribute("href")!.split("?")[1]);
     expect([q.get("area"), q.get("view"), q.get("win"), q.get("tab")]).toEqual(["observability", "models", "30d", null]);
-    expect($("[data-testid=gv-spend-total]")!.textContent).toBe("$3.00 spent · Included $7.00");
+    expect($("[data-testid=gv-spend-total]")!.textContent).toBe("$3.00 spent, Included $7.00");
     expect($("[data-testid=gv-cache] .gv-low")!.getAttribute("title")).toBe("Under 30% of input came from cache");
   });
 
   it("Envelopes keeps the FinOps honesty words: not loaded and no events are never $0", async () => {
     for (const [state, word, tip] of [
-      ["not_loaded", "Not loaded · not $0", "Cloud spend is not loaded. This is not $0.00."],
-      ["no_events", "No cost events · not $0", "No cost events in this window. Absence is not $0.00 spend."],
+      ["not_loaded", "Not loaded, not $0", "Cloud spend is not loaded. This is not $0.00."],
+      ["no_events", "No cost events, not $0", "No cost events in this window. Absence is not $0.00 spend."],
     ]) {
       g.envelopes = { allocations: [], finops: { state, summary: state === "not_loaded" ? null : { anomalies_open_count: 0 } },
                       reconciliations: [], initiative_rule: { tier_min: 2, amount_usd_micros: 50_000_000 } };

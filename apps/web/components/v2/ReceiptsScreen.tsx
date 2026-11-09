@@ -1,13 +1,13 @@
 "use client";
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import React from "react";
 
 import type { ReceiptFeed, V2Receipt } from "../../lib/v2/receipts";
 
 /**
- * Receipts — what BOSS actually did, and what can be checked.
+ * Receipts, what BOSS actually did, and what can be checked.
  *
  * EVERY NUMBER SAYS WHAT IT COUNTS
  * --------------------------------
@@ -89,7 +89,7 @@ export function ReceiptsScreen({ feed }: { feed: ReceiptFeed }) {
         <>
           {/* WORK FIRST, HEARTBEAT SECOND.
               1,901 receipts in a day and four of them were work. Sorted newest-first with no
-              distinction, the work sat under forty-six ticks — which is exactly why the
+              distinction, the work sat under forty-six ticks, which is exactly why the
               operator could not correlate anything here. */}
           {work.length > 0 ? (
             <ul className="v2-rows" data-testid="v2-receipts-list">
@@ -105,7 +105,7 @@ export function ReceiptsScreen({ feed }: { feed: ReceiptFeed }) {
           {routine.length > 0 ? (
             <details className="v2-routine" data-testid="v2-receipts-routine">
               <summary className="v2-routine-head">
-                {routine.length} routine {routine.length === 1 ? "effect" : "effects"} — BOSS
+                {routine.length} routine {routine.length === 1 ? "effect" : "effects"}, BOSS
                 keeping itself alive (ticks, watches, spend settlement)
               </summary>
               <ul className="v2-rows">
@@ -128,7 +128,7 @@ function ReceiptRow({ r }: { r: V2Receipt }) {
     >
       <span className="v2-status v2-row-status" data-status={r.status.toUpperCase()}>
         <span className="v2-dot" data-status={r.status.toUpperCase()} aria-hidden />
-        {/* The word, not just a colour — and "never finished" rather than the raw status,
+        {/* The word, not just a colour, and "never finished" rather than the raw status,
             because "in_progress" from three days ago is not in progress. */}
         {r.unfinished ? "never finished" : r.status}
       </span>
@@ -171,7 +171,7 @@ function ReceiptRow({ r }: { r: V2Receipt }) {
             </span>
           ) : (
             <span className="v2-row-meta-dim" data-testid={`v2-receipt-noref-${r.id}`}>
-              no provider reference — this one cannot be independently checked
+              no provider reference, this one cannot be independently checked
             </span>
           )}
           {r.created_at ? (

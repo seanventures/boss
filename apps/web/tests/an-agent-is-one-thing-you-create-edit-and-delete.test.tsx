@@ -90,11 +90,11 @@ describe("an agent holds MCP servers (the Passport's Loadout › MCP row)", () =
       { mcp_server_id: "mcp_1", server: "mattermost", tools: ["post"], enabled: true, risk_tier: 2 },
       { mcp_server_id: "mcp_2", server: "github", tools: [], enabled: false, risk_tier: 1 },
     ]);
-    expect(html).toContain("mattermost · 1 tool");
-    expect(html).toContain("github · all tools");
+    expect(html).toContain("mattermost, 1 tool");
+    expect(html).toContain("github, all tools");
     expect(html.split('data-testid="agent-mcp-mcp_1"')[1].split("</span></span>")[0]).toContain('aria-label="Asks a person"');
     // A disabled server is not offered, and the chip says so.
-    expect(html).toContain("Off · turned off in Skills &amp; MCP");
+    expect(html).toContain("Off, turned off in Skills &amp; MCP");
   });
 
   it("holding none says what that means", () => {

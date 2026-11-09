@@ -2,9 +2,9 @@
 
 /**
  * The group drawer (spec §4.10, `model=<group>:<key>`): one model / stage / agent / runner over
- * the window — its stats from the Models view, then RECENT CALLS straight from the ledger
- * (GET /v1/llm-calls, 20 at a time, `Show older` pages by offset). Each call: time · face ·
- * stage · model · in/out · ms · ok/✗ · retries · `Build ↗`. `Logs ↗` opens the Activity log on
+ * the window, its stats from the Models view, then RECENT CALLS straight from the ledger
+ * (GET /v1/llm-calls, 20 at a time, `Show older` pages by offset). Each call: time, face ·
+ * stage, model, in/out, ms, ok/✗, retries, `Build `. `Logs ` opens the Activity log on
  * `llm_call`.
  */
 import React, { useCallback, useEffect, useState } from "react";
@@ -21,7 +21,7 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export const PAGE = 20;
 
-/** `model=<group>:<key>` — the key may itself hold a colon (`guest:codex`). */
+/** `model=<group>:<key>`, the key may itself hold a colon (`guest:codex`). */
 export function readModelParam(v: string | null): { group: Group; key: string } | null {
   if (!v) return null;
   const i = v.indexOf(":");
@@ -78,12 +78,12 @@ export function GroupDrawer({ projectId, group, keyName, row, since, onClose }: 
       {row ? (
         <div className="obs-facts" data-testid="obs-group-stats">
           <span className="obs-fact"><span className="obs-fact-k">Calls</span><span className="obs-fact-v inf-num">{row.calls.toLocaleString("en-US")}</span></span>
-          <span className="obs-fact"><span className="obs-fact-k">Tokens</span><span className="obs-fact-v inf-num">{compact(row.tokensIn)} in · {compact(row.tokensOut)} out</span></span>
+          <span className="obs-fact"><span className="obs-fact-k">Tokens</span><span className="obs-fact-v inf-num">{compact(row.tokensIn)} in, {compact(row.tokensOut)} out</span></span>
           <span className="obs-fact" title={spend?.tip}><span className="obs-fact-k">Spend</span><span className="obs-fact-v inf-num">{spend?.text}</span></span>
           <span className="obs-fact"><span className="obs-fact-k">Avg</span><span className="obs-fact-v inf-num">{ms(row.avgMs)}</span></span>
           <span className="obs-fact"><span className="obs-fact-k">p95</span><span className="obs-fact-v inf-num">{ms(row.p95Ms)}</span></span>
           <span className="obs-fact" title="Calls that failed after retries, of all calls">
-            <span className="obs-fact-k">Errors</span><span className="obs-fact-v inf-num">{row.calls ? pct(row.failed / row.calls) : "—"} · {row.failed}</span>
+            <span className="obs-fact-k">Errors</span><span className="obs-fact-v inf-num">{row.calls ? pct(row.failed / row.calls) : "—"}, {row.failed}</span>
           </span>
           <span className="obs-fact"><span className="obs-fact-k">Retries</span><span className="obs-fact-v inf-num">{row.retries}</span></span>
         </div>

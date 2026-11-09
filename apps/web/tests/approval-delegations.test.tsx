@@ -42,7 +42,7 @@ describe("a delegation reads as what it allows", () => {
       created_at: "2026-10-28T00:00:00Z", expires_at: "2026-11-27T00:00:00Z", revoked_at: null, last_used_at: null,
     } as ApprovalDelegation;
     const line = delegationLine(d);
-    expect(line).toContain("PRD approvals · boss-platform · until");
+    expect(line).toContain("PRD approvals, boss-platform, until");
     expect(line).toContain("up to 5 a day (2 today)");
     expect(renderToStaticMarkup(<span>{NEVER}</span>)).toContain("Never merges to main, deploys, raises a budget");
   });

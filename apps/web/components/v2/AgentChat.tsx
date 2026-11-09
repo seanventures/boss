@@ -1,7 +1,7 @@
 "use client";
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
-// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+// so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
 import { GatedButton, useGate } from "../gated";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
@@ -15,7 +15,7 @@ import { apiWrite } from "../../lib/api-write";
  * -------------------------------
  * v1's chat lost its answer the instant it came back: the action called revalidatePath("/"),
  * which re-rendered the console tree underneath the panel and snapped it to its empty state.
- * Question sent, "3s" ticking, then the openers again — as though nothing had been asked.
+ * Question sent, "3s" ticking, then the openers again, as though nothing had been asked.
  *
  * So this holds the transcript in component state and talks to a route handler, which returns
  * JSON and nothing else. A chat that loses the reply it just received is worse than a slow one.
@@ -23,7 +23,7 @@ import { apiWrite } from "../../lib/api-write";
  * ORDER IS EXPLICIT
  * -----------------
  * Messages are ordered by arrival here, not by a timestamp. A question and its answer can share
- * a created_at — Postgres now() is transaction start — and sorting on that alone put four of
+ * a created_at, Postgres now() is transaction start, and sorting on that alone put four of
  * five answers ABOVE their own question in the v1 transcript.
  */
 

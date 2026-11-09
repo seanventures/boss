@@ -79,7 +79,7 @@ describe("comms dry-run close-the-loop", () => {
     const outbox = page.slice(start, end);
     expect(outbox).toContain("Dry-run deliver");
     expect(outbox).toContain("dryRunOutboxMessageAction");
-    expect(outbox).toContain("dry-run — no provider send");
+    expect(outbox).toContain("dry-run, no provider send");
     expect(outbox).toContain("Queue send");
     expect(outbox.toLowerCase()).not.toMatch(/\bsent\b/);
   });
@@ -95,7 +95,7 @@ describe("comms dry-run close-the-loop", () => {
       receipt_id: "rcpt_dry",
       delivery_mode: "dry_run",
       provider_send: false,
-      message: "dry-run — no provider send",
+      message: "dry-run, no provider send",
     });
 
     const fd = new FormData();

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * NEW PROJECT: one screen, two jobs — "✦ A new app" and "＋ Add to an existing app".
+ * NEW PROJECT: one screen, two jobs, "✦ A new app" and "＋ Add to an existing app".
  *
  * The brief on the left, the live plan on the right (the path, its real steps and who does each,
  * the team, where it lives, whether it can run here), and one footer that says what it costs and
@@ -21,7 +21,7 @@
  * Every Start in the console opens this, so a run is never started blind.
  *
  * WHERE THE CODE LIVES (multi-repo, mockup 03): One repo is the default and exactly today's
- * behaviour and request. Several repos — offered when the project has two or more repositories —
+ * behaviour and request. Several repos, offered when the project has two or more repositories , 
  * maps the app's components to repositories (suggested from names and languages, in build
  * order), PUTs them as the app's components on Start, then starts as today with
  * `repo_layout: {mode: "multi", app_name}`. A refused PUT says why and starts nothing.
@@ -89,9 +89,9 @@ export type NewProjectDraft = {
   workflowKey: string;
   repository: string;
   links: string[];
-  /** Who will be on it. Empty means "whatever BOSS seeds" — see the Team fact. */
+  /** Who will be on it. Empty means "whatever BOSS seeds", see the Team fact. */
   agents: string[];
-  /** What THIS workflow declared it needs — a video to fetch, a clip to trim, a channel to
+  /** What THIS workflow declared it needs, a video to fetch, a clip to trim, a channel to
    *  publish to. Keyed by field name; only filled-in values are sent. */
   inputs: Record<string, string>;
 };
@@ -152,7 +152,7 @@ export function linksFrom(draft: NewProjectDraft): string[] {
  * What "Lives in" says about where the code goes.
  *
  * NO PLATFORM DEFAULT IS PROMISED. With nothing registered this said "the platform default is
- * used" — but the API pre-selects that default whenever one exists, so reaching this branch
+ * used", but the API pre-selects that default whenever one exists, so reaching this branch
  * means there is none. Community has none at all, and the build then deadlettered with "No
  * repository registered for project …" after the panel had already run. The form says what is
  * true: builds need a connected GitHub repository, and where to connect one.
@@ -163,7 +163,7 @@ export function repositoryHint(
   if (suggested) {
     return {
       text: ` Pre-selected: ${suggested.name}${
-        suggested.source === "registry_primary" ? " — this project's primary." : "."}`,
+        suggested.source === "registry_primary" ? ", this project's primary." : "."}`,
       needsConnection: false,
     };
   }
@@ -214,7 +214,7 @@ export function addBlockingReason(o: { app: AppRow | null; gain: string }): stri
  * Everything the workflow declared, less what the composer collects itself: for a product
  * brief, the directive, name, criteria, repository and links; for any other workflow, only the
  * repository, and only when "Lives in" is shown. A workflow somebody made keeps every other
- * field it declared — its `title` may mean a YouTube title, not the run's name. */
+ * field it declared, its `title` may mean a YouTube title, not the run's name. */
 export function composerFields(schema: unknown, brief: boolean, repositoryElsewhere = false) {
   return workflowInputFields(schema).filter((f) =>
     brief ? !WIZARD_COLLECTS.has(f.name) : !(repositoryElsewhere && f.name === "repository"));
@@ -222,8 +222,8 @@ export function composerFields(schema: unknown, brief: boolean, repositoryElsewh
 
 /** The run input Start sends. A product brief sends the brief's own keys (title, directive,
  *  criteria, links, repository) plus its other declared fields; any other workflow sends
- *  exactly its declared fields, by their declared names — what its steps' `from_input` read
- *  and what the example setup scripts document — and nothing it did not ask for. */
+ *  exactly its declared fields, by their declared names, what its steps' `from_input` read
+ *  and what the example setup scripts document, and nothing it did not ask for. */
 export function startInput(o: {
   brief: boolean; draft: NewProjectDraft; fields: ReturnType<typeof workflowInputFields>;
   supplied: Record<string, string>; needsRepository: boolean;
@@ -492,7 +492,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   /** A workflow the operator asked to start, chosen already. */
   startWith?: string;
   /** "Try an example": the template's own example brief, filled in for the operator to read
-   *  and change — never started unseen. */
+   *  and change, never started unseen. */
   example?: { title?: string; directive?: string } | null;
   /** The mode a link asked for (`?compose=`); otherwise the last one used. */
   mode?: ComposeMode | null;
@@ -603,7 +603,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     return first;
   }, [apps, appQuery, allApps, app]);
 
-  /** The missing needs the operator chose to start without — sent as `start_anyway`. */
+  /** The missing needs the operator chose to start without, sent as `start_anyway`. */
   const [startAnyway, setStartAnyway] = useState<string[]>([]);
   /** The checklist from a refused start. */
   const [refusal, setRefusal] = useState<Readiness | null>(null);
@@ -781,7 +781,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     || (several && !mapReady ? "Map each component to a repository." : "")
     // So does something the project lacks, unless the operator chose to start without it.
     || (notReady.length
-        ? `Not ready here yet: ${notReady.map((m) => m.label).join("; ")} — see the plan.`
+        ? `Not ready here yet: ${notReady.map((m) => m.label).join("; ")}, see the plan.`
         : "");
 
   const description = lockedForm
@@ -791,7 +791,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     ? (chosen?.name ?? entry?.name ?? draft.workflowKey)
     : "New build";
 
-  /** WHO IS ON IT, recorded as a CHOICE — but only when it differs from what start_run already
+  /** WHO IS ON IT, recorded as a CHOICE, but only when it differs from what start_run already
    *  seeded. Writing an identical list back as `operator` would claim a decision nobody made. */
   const assignTeam = async (title: string) => {
     // Recording the team is POST /v1/projects/{id}/agents (work_item:manage). A viewer who
@@ -1079,7 +1079,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
 
   const summary = `${adding ? (cards.find((c) => c.key === addPath)?.short ?? "") : (
     cards.find((c) => c.key === draft.workflowKey)?.short ?? pathName(draft.workflowKey))}`
-    + ` · ${total.steps} steps · ${approvalsWord(total.approvals)}`;
+    + `, ${total.steps} steps, ${approvalsWord(total.approvals)}`;
 
   const readyDots = readiness?.checked?.length ? (
     <div className="np-ready" data-testid="np-ready">
@@ -1346,7 +1346,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           <span data-user-text>{[appStack ? stackLabel(appStack) : null, app.repo,
                                   app.prNumber ? `PR #${app.prNumber} branch` : null,
                                   `${app.builds.length} build${app.builds.length === 1 ? "" : "s"} so far`]
-            .filter(Boolean).join(" · ")}</span>
+            .filter(Boolean).join(", ")}</span>
           {(() => {
             // "Working today" only when a live preview or a healthy deploy shows it.
             const w = workingWord(app);
@@ -1444,7 +1444,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     </div>
   );
 
-  /** One repo / Several repos — or, with fewer than two repositories, where to add more. */
+  /** One repo / Several repos, or, with fewer than two repositories, where to add more. */
   const layoutSwitch = !needsRepository || projectRepos === null ? null : severalOffered ? (
     <span className="mr-ui-seg" role="radiogroup" aria-label="Where the code lives" data-testid="np-layout">
       <button type="button" role="radio" aria-checked={layout === "one"} data-testid="np-layout-one"
@@ -1513,7 +1513,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       <b data-user-text className="np-fact-name" data-testid="np-repo-name"
          title={draft.repository || suggested?.name || undefined}>{draft.repository || suggested?.name
           || (repoHint.needsConnection ? "No repository yet" : "The project default")}
-        <span className="np-dim"> · {(repos.find((r) => r.full_name === (draft.repository || suggested?.name))
+        <span className="np-dim">, {(repos.find((r) => r.full_name === (draft.repository || suggested?.name))
           ?.default_branch) || "main"}</span></b>
       {repoHint.needsConnection ? (
         <span className="dw-field-hint" data-testid="dw-new-repo-hint">
@@ -1547,7 +1547,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           <button type="button" role="radio" className="np-choice" key={r.id}
                   aria-checked={draft.repository === r.full_name}
                   data-testid={`dw-new-repo-${r.full_name}`}
-                  title={`${r.role ? `${r.role} · ` : ""}branch ${r.default_branch || "main"}`}
+                  title={`${r.role ? `${r.role}, ` : ""}branch ${r.default_branch || "main"}`}
                   onClick={() => set("repository", r.full_name)}>
             {r.full_name}
           </button>
@@ -1585,7 +1585,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           })}
         </div>
       )}
-      {/* ANY INSTALLED WORKFLOW CAN RUN — onto the app too (Security Hardening, UX Certification,
+      {/* ANY INSTALLED WORKFLOW CAN RUN, onto the app too (Security Hardening, UX Certification,
           Fast Fix), with the same extends_run_id the cards send. */}
       <div className="np-choices" role="radiogroup" aria-label="Workflow" data-testid="np-all-list">
         {adding ? null : (
@@ -1632,7 +1632,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       <div className="np-plan-body">
         <div className="np-flow" data-testid="np-flow" title={String(entry?.description || chosen?.description || "")}>
           <b data-user-text>{currentName}</b>
-          <span>{adding && app ? `Builds on ${app.app}'s branch · ` : ""}{currentFacts.sub} · {currentFacts.gates}</span>
+          <span>{adding && app ? `Builds on ${app.app}'s branch, ` : ""}{currentFacts.sub}, {currentFacts.gates}</span>
         </div>
         {chooser}
         {timeline.length ? <Timeline steps={timeline} /> : (
@@ -1652,8 +1652,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           {cost ? <span className="np-chip">{adding ? "Changes" : "Builds"} like this cost <b>{cost}</b></span> : null}
           {several ? (() => {
             const code = mapRepoNames("code").length;
-            return <span className="np-chip" data-testid="np-cost-several">{code} {code === 1 ? "repository" : "repositories"} · {code} linked {code === 1 ? "PR" : "PRs"} · you approve once</span>;
-          })() : <span className="np-chip">{total.steps} steps · {youApproveWord(total.approvals)}</span>}
+            return <span className="np-chip" data-testid="np-cost-several">{code} {code === 1 ? "repository" : "repositories"}, {code} linked {code === 1 ? "PR" : "PRs"}, you approve once</span>;
+          })() : <span className="np-chip">{total.steps} steps, {youApproveWord(total.approvals)}</span>}
           <HelpTip label="Cost" text={deploysOnlyWithYou
             ? "Starting spends model budget. It stops and asks before it deploys anything."
             : "Starting spends model budget. A deploy your environment's policy ships on its own does not stop to ask."} />

@@ -1,3 +1,4 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* Workflow Studio: library. Classes are prefixed wf- and use only the base tokens. */
 
 /* ── Area header: tabs, search, view switch, actions — one row ─────────────────── */
@@ -53,7 +54,7 @@
   min-width: 0;
   flex: 0 1 240px;
 }
-.wf-lib-search:focus-within { border-color: var(--accent); }
+.wf-lib-search:focus-within { border-color: var(--accent); outline: 2px solid currentColor; outline-offset: 2px;}
 .wf-lib-search input {
   border: 0;
   outline: 0;
@@ -172,8 +173,8 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
   gap: 10px;
   color: var(--faint);
   font: 700 0.75rem/1 var(--sans);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 .wf-lib-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .wf-lib-empty {
@@ -188,7 +189,7 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 }
 .wf-lib-selbar {
   position: sticky;
-  top: 0;
+  inset-block-start: 0;
   z-index: 3;
   display: flex;
   align-items: center;
@@ -213,7 +214,7 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
   border-radius: var(--r-xl);
   background: var(--surface);
   cursor: pointer;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 120ms ease;
 }
 .wf-card:hover { border-color: var(--accent); box-shadow: var(--shadow-sm); }
 .wf-card[data-selected="true"] { border-color: var(--accent); }
@@ -378,8 +379,8 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 .wf-pop-label {
   color: var(--faint);
   font: 700 0.75rem var(--sans);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 .wf-schedule { min-width: 280px; }
 .wf-schedule-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -460,7 +461,7 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
   gap: 8px 16px;
   margin: 0;
 }
-.wf-ag-facts dt { color: var(--faint); font: 700 0.75rem var(--sans); text-transform: uppercase; letter-spacing: 0.06em; }
+.wf-ag-facts dt { color: var(--faint); font: 700 0.75rem var(--sans); text-transform: none; letter-spacing: 0; }
 .wf-ag-facts dd { margin: 2px 0 0; color: var(--ink); font: 0.8125rem var(--sans); text-transform: capitalize; }
 .wf-ag-result { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--red); font: 0.8125rem var(--sans); }
 .wf-ag-result[data-ok="true"] { color: var(--green); }

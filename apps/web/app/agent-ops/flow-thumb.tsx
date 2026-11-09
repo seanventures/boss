@@ -16,7 +16,7 @@ function Shape({ n, size }: { n: StripNode; size: number }) {
   if (n.type === "agent") return <AgentAvatar agent={n.label} size={size} aiBadge={false} />;
   if (n.type === "person") return <AgentAvatar variant="person" size={size} />;
   const glyph = n.type === "signal" ? "↯" : n.type === "needs_you" ? "!" : n.type === "outcome"
-    ? (n.badges.includes("failed") ? "✕" : n.badges.includes("dismissed") ? "–" : "✓") : n.type === "decision" ? "" : "▶";
+    ? (n.badges.includes("failed") ? "✕" : n.badges.includes("dismissed") ? "–" : "✓") : n.type === "decision" ? "" : "Play";
   return <span className="aa-thumb-shape" aria-hidden data-type={n.type}
                data-tone={n.type === "outcome" ? (n.badges.includes("failed") ? "bad" : "ok") : undefined}>{glyph}</span>;
 }

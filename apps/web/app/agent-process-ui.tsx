@@ -163,7 +163,7 @@ export function AgentProcesses({
     <article className="stack-card" data-testid="agent-processes">
       <div className="section-head">
         <div>
-          <span className="eyebrow">Automation</span>
+          <span className="area-name">Automation</span>
           <h2>Agent process</h2>
         </div>
       </div>
@@ -314,7 +314,7 @@ export function AgentProcesses({
             <ul className="detail">
               {previewSteps.map((step) => (
                 <li key={step.id}>
-                  {step.id} · {step.role} · {step.action} · {step.kind}
+                  {step.id}, {step.role}, {step.action}, {step.kind}
                 </li>
               ))}
             </ul>
@@ -620,7 +620,7 @@ export function AgentProcesses({
               style={{
                 width: "100%",
                 cursor: "pointer",
-                background: selectedRunId === run.id ? "rgba(47, 111, 224, 0.08)" : "transparent",
+                background: selectedRunId === run.id ? "var(--boss-c-9893f458c8)" : "transparent",
                 border: 0,
                 color: "inherit",
                 font: "inherit",
@@ -630,7 +630,7 @@ export function AgentProcesses({
               <div>
                 <h4>{run.title}</h4>
                 <p className="detail">
-                  {run.templateName || run.processKey || "process"} · {run.status}
+                  {run.templateName || run.processKey || "process"}, {run.status}
                 </p>
               </div>
             </button>

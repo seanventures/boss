@@ -23,7 +23,7 @@ import { appIdentity, groupIdentity } from "../app-identity";
  *
  * The app card is a `role="button"` wrapping the whole tile, and the tile contains real
  * controls: a host dropdown, a name field, "Set target", "Run preview". A click on any of them
- * bubbled to the card and navigated into the detail page instead — pressing "Set target" left
+ * bubbled to the card and navigated into the detail page instead, pressing "Set target" left
  * the page rather than setting the target.
  *
  * The keyboard case was worse and silent: the card also answers Enter AND SPACE, so typing a
@@ -82,7 +82,7 @@ import { ActionForm } from "../client-forms";
 import { displayTitle } from "../../lib/directive-subject";
 import { browserHref, previewWebHref } from "../../lib/browser-links";
 
-/** Whether Retry can do anything: not while it runs, and not on a build that finished clean —
+/** Whether Retry can do anything: not while it runs, and not on a build that finished clean , 
  *  the same rule as the engine's refuse_finished_retry. */
 export function isRetryable(run: {
   status?: string | null;
@@ -123,7 +123,7 @@ export function RetryControls(
   const reusesTests = failingGates.length > 0 && !failingGates.some((g) => TEST_GATES.includes(g));
   const explains = "Resumes on the same branch and reuses the approved plan"
     + (reusesTests ? " and the existing test suite" : "")
-    + " — it does not rebuild from scratch.";
+    + ", it does not rebuild from scratch.";
 
   // COMPACT: for the action bar at the top, where the sentence beside it would push everything
   // after it off the edge. What it says still has to be knowable before the click, so it moves
@@ -141,11 +141,11 @@ export function RetryControls(
         </SubmitButton>
         {state?.runId ? (
           <span className="cap-badge tone-blue" data-testid="ct-retry-started">
-            attempt {state.attempt ?? "?"} started · {state.runId}
+            attempt {state.attempt ?? "?"} started, {state.runId}
           </span>
         ) : null}
         {state?.error ? (
-          <span className="detail" role="alert" style={{ color: "#f85149" }}
+          <span className="detail" role="alert" style={{ color: "var(--boss-c-f85149)" }}
                 data-testid="ct-retry-error">{state.error}</span>
         ) : null}
       </form>
@@ -162,13 +162,13 @@ export function RetryControls(
       </form>
       <span className="detail">
         Resumes on the same branch and reuses the approved plan
-        {reusesTests ? " and the existing test suite" : ""} — it does not rebuild from scratch.
+        {reusesTests ? " and the existing test suite" : ""}, it does not rebuild from scratch.
       </span>
       {state?.runId ? (
-        <span className="cap-badge tone-blue">attempt {state.attempt ?? "?"} started · {state.runId}</span>
+        <span className="cap-badge tone-blue">attempt {state.attempt ?? "?"} started, {state.runId}</span>
       ) : null}
       {state?.error ? (
-        <span className="detail" style={{ color: "#f85149" }}>{state.error}</span>
+        <span className="detail" style={{ color: "var(--boss-c-f85149)" }}>{state.error}</span>
       ) : null}
     </span>
   );
@@ -185,9 +185,9 @@ export function OverrideControls({ runId }: { runId: string }) {
         {pending ? "Overriding…" : "⚖ Waive failing gates & open PR"}
       </SubmitButton>
       {state?.url ? (
-        <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">PR opened →</a>
+        <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">PR opened</a>
       ) : null}
-      {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
+      {state?.error ? <span className="detail" style={{ color: "var(--boss-c-f85149)" }}> {state.error}</span> : null}
     </form>
   );
 }
@@ -209,7 +209,7 @@ export function PreviewLogs({ previewId }: { previewId: string }) {
     // THROUGH THE SERVER, not straight at the API.
     //
     // This pointed an EventSource at ${PREVIEW_API} directly. The browser cannot reach the API
-    // in this deployment — every other call on the page is server-side — and the API requires a
+    // in this deployment, every other call on the page is server-side, and the API requires a
     // Bearer key, which EventSource cannot send. Both problems disappear behind a same-origin
     // route handler that holds the key.
     const source = new EventSource(
@@ -235,7 +235,7 @@ export function PreviewLogs({ previewId }: { previewId: string }) {
   const placeholder =
     state === "failed"
       ? "Lost the log stream for this preview. It may have expired, or the preview service is"
-        + " unreachable — reopen this panel to try again."
+        + " unreachable, reopen this panel to try again."
       : state === "ended"
         ? "The preview finished writing its startup output, and it produced none."
         : "Waiting for preview output…";
@@ -275,7 +275,7 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
           </SubmitButton>
         </form>
       ) : null}
-      {/* Persistent link(s) from the durable preview record — survive the console's auto-refresh */}
+      {/* Persistent link(s) from the durable preview record, survive the console's auto-refresh */}
       {shown.map((p) => {
         const href = operatorPreviewOpenHref(p);
         return (
@@ -302,13 +302,13 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
           ) : (
             <span className="detail" data-preview-view="missing-url">
               {p.status === "verified"
-                ? "verified-test — no operator URL (not running; View would 409)"
-                : `preview ${p.status} — no operator URL`}
+                ? "verified-test, no operator URL (not running; View would 409)"
+                : `preview ${p.status}, no operator URL`}
             </span>
           )}
           {/* STARTING IS A STATE, NOT AN ABSENCE.
               A preview now exists from the moment the button is pressed, and its ledger says
-              which substrate is being tried and how far it got — the same "what is done, what
+              which substrate is being tried and how far it got, the same "what is done, what
               is pending" a deploy shows. Without this the operator watches a spinner and, when
               it fails, cannot tell whether one substrate was tried or three. */}
           {p.status === "starting" && (p.steps?.length ?? 0) > 0 ? (
@@ -322,8 +322,8 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
                     {x.status === "ok" ? "✓" : x.status === "failed" ? "✗"
                       : x.status === "skipped" ? "–" : "…"}{" "}
                     {x.label || x.step}
-                    {x.duration_ms ? ` · ${Math.round(x.duration_ms / 1000)}s` : ""}
-                    {x.log ? <span className="detail"> — {x.log.slice(0, 120)}</span> : null}
+                    {x.duration_ms ? `, ${Math.round(x.duration_ms / 1000)}s` : ""}
+                    {x.log ? <span className="detail">, {x.log.slice(0, 120)}</span> : null}
                   </li>
                 ))}
               </ul>
@@ -334,13 +334,13 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
             {p.status === "running" || p.status === "starting"
               ? <i className="ct-live-dot" aria-hidden /> : null}
             preview: {p.status === "starting" ? "building…" : p.status}
-            {p.substrate === "preview_rootfs" ? " · retained rootfs" : p.substrate === "preview_docker" ? " · docker" : " · host process"}
+            {p.substrate === "preview_rootfs" ? ", retained rootfs" : p.substrate === "preview_docker" ? ", docker" : ", host process"}
           </span>
           {p.status === "running" ? <PreviewLogs previewId={p.id} /> : null}
         </span>
         );
       })}
-      {/* Rebuild — only when a preview already exists; replaces (does not stack) the current one. */}
+      {/* Rebuild, only when a preview already exists; replaces (does not stack) the current one. */}
       {hasLive ? (
         <form action={action} style={{ display: "inline-flex" }}>
           <input type="hidden" name="run_id" value={runId} />
@@ -357,10 +357,10 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
           <ArrowSquareOut size={15} weight="bold" aria-hidden /> Open preview
         </a>
       ) : null}
-      {/* Library/CLI build: no live URL — show the test-run result (passed) instead of an error. */}
+      {/* Library/CLI build: no live URL, show the test-run result (passed) instead of an error. */}
       {state?.note ? (
-        <details open className="detail" style={{ color: "#3fb950", width: "100%" }}>
-          <summary style={{ cursor: "pointer" }}>✓ Ran tests — passed (library build, no live app)</summary>
+        <details open className="detail" style={{ color: "var(--boss-c-3fb950)", width: "100%" }}>
+          <summary style={{ cursor: "pointer" }}>✓ Ran tests, passed (library build, no live app)</summary>
           <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, marginTop: 6, maxHeight: 320, overflow: "auto" }}>{state.note}</pre>
         </details>
       ) : null}
@@ -368,19 +368,19 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
         // A CLIENT TIMEOUT IS NOT A VERDICT.
         //
         // Starting a preview runs npm install, a build and a launch SYNCHRONOUSLY, and that
-        // regularly outlasts the client's 120s deadline. The reply says so in its own words —
-        // "It may still be working" — and it was being rendered under "⚠ Preview / tests
+        // regularly outlasts the client's 120s deadline. The reply says so in its own words , 
+        // "It may still be working", and it was being rendered under " Preview / tests
         // failed", which states the opposite. The operator is told the preview failed while
         // the preview is still building, and a minute later it is running.
         const stillWorking = /did not answer within/i.test(state.error);
         return (
           <details open className="detail"
-                   style={{ color: stillWorking ? "#d29922" : "#f85149", width: "100%" }}
+                   style={{ color: stillWorking ? "var(--boss-c-d29922)" : "var(--boss-c-f85149)", width: "100%" }}
                    data-testid={stillWorking ? "preview-still-working" : "preview-failed"}>
             <summary style={{ cursor: "pointer" }}>
               {stillWorking
-                ? "⏳ Still building — this took longer than the console waits"
-                : "⚠ Preview / tests failed"}
+                ? " Still building, this took longer than the console waits"
+                : " Preview / tests failed"}
             </summary>
             <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, marginTop: 6, maxHeight: 320, overflow: "auto" }}>{state.error}</pre>
           </details>
@@ -401,9 +401,9 @@ export function ConfirmFeedback({ threadId, workflowName }: { threadId: string; 
                                 : "Confirm & run inline"}
       </SubmitButton>
       {state?.run_id ? (
-        <span className="detail" style={{ color: "#3fb950" }} data-testid="ct-dispatched">
+        <span className="detail" style={{ color: "var(--boss-c-3fb950)" }} data-testid="ct-dispatched">
           {state.path === "workflow" && state.workflow_run_id ? (
-            <>Started the {state.workflow_name} workflow — <a
+            <>Started the {state.workflow_name} workflow, <a
                 href={`?area=delivery_workflows&wfr=${encodeURIComponent(state.workflow_run_id)}`}
                 onClick={(e) => {
                   // The same navigation Build uses: keep the org and project in the URL and
@@ -418,13 +418,13 @@ export function ConfirmFeedback({ threadId, workflowName }: { threadId: string; 
                 }}>
                 open it under Workflows</a> (build {state.run_id})</>
           ) : state.path === "workflow" ? (
-            <>Queued {state.run_id}, but no workflow run was recorded for it — check Workflows.</>
+            <>Queued {state.run_id}, but no workflow run was recorded for it, check Workflows.</>
           ) : (
             <>Running inline in the factory as {state.run_id}</>
           )}
         </span>
       ) : null}
-      {state?.error ? <span className="detail" style={{ color: "#f85149" }}>{state.error}</span> : null}
+      {state?.error ? <span className="detail" style={{ color: "var(--boss-c-f85149)" }}>{state.error}</span> : null}
     </form>
   );
 }
@@ -509,7 +509,7 @@ export function FeedbackControls({ runId, status, anchor = "", projectId }: {
         <h4>{completed ? "Add to this project" : "Diagnose and retry"}</h4>
         <p className="detail">
           {completed
-            ? "Builds on the existing branch and pull request — the agent keeps the context it already has."
+            ? "Builds on the existing branch and pull request, the agent keeps the context it already has."
             : "Prior findings are carried forward automatically; nothing is rebuilt from scratch."}
         </p>
       </header>
@@ -546,7 +546,7 @@ export function FeedbackControls({ runId, status, anchor = "", projectId }: {
                    placeholder="How you will know it worked" />
           </label>
           {/* WHICH PATH THIS CHANGE FOLLOWS. Adding a feature is a piece of work like any
-              other, and it deserves the same choice the New project form offers — a small
+              other, and it deserves the same choice the New project form offers, a small
               addition through Minor Feature, something larger through a workflow with a spec
               and a sign-off in front of it. */}
           <label className="mr-field-label">
@@ -554,9 +554,9 @@ export function FeedbackControls({ runId, status, anchor = "", projectId }: {
             <select className="mr-select" name="workflow_version_id"
                     data-testid="ct-iterate-workflow" defaultValue="">
               {/* INLINE IS THE DEFAULT, AND SAYS WHAT IT MEANS. "Follow the inner pipeline only"
-                  read as a flavour of workflow; it is the absence of one — the change runs
+                  read as a flavour of workflow; it is the absence of one, the change runs
                   straight in the factory and nothing appears under Workflows. */}
-              <option value="">Inline change — no workflow run</option>
+              <option value="">Inline change, no workflow run</option>
               {workflows.filter((w) => w.active_version_id).map((w) => (
                 <option key={w.id} value={w.active_version_id as string}>
                   {w.name}{w.is_catalogue ? " (standard)" : ""}
@@ -586,9 +586,9 @@ export function FeedbackControls({ runId, status, anchor = "", projectId }: {
           <p className="ct-proposal-path" data-testid="ct-proposal-path"
              data-path={state.proposal.path ?? "inline"}>
             {state.proposal.path === "workflow"
-              ? <>Runs as the <b>{state.proposal.workflow_name}</b> workflow — it will appear
+              ? <>Runs as the <b>{state.proposal.workflow_name}</b> workflow, it will appear
                   under Workflows.</>
-              : <>Runs as an <b>inline change</b> in the factory — no workflow run. Pick a
+              : <>Runs as an <b>inline change</b> in the factory, no workflow run. Pick a
                   workflow above to run it through one instead.</>}
           </p>
           <pre>{state.proposal.fix_note}</pre>
@@ -637,7 +637,7 @@ export function useLiveRefresh(active: boolean, intervalMs = 4000, reload?: () =
     const t = setInterval(() => {
       // Both: the console refresh updates every other server-rendered panel, and `reload`
       // re-reads the one list this component owns. The refresh alone was demonstrably not
-      // enough — the server re-rendered and the client kept the old rows. ASKED, not issued:
+      // enough, the server re-rendered and the client kept the old rows. ASKED, not issued:
       // a bare 4s router.refresh() against a 20s render kept the console's refresh queue
       // full, and nothing on screen committed (lib/console-refresh.ts).
       refresh("poll");
@@ -685,7 +685,7 @@ export function Flow({ phase, status, faces }: { phase: string; status: string;
  * The workflows this project can be built with.
  *
  * Fetched here rather than threaded down as a prop: this form is the only thing that needs
- * them, and the Factory page is already 9.6 MB of server-rendered HTML — adding a list of 21
+ * them, and the Factory page is already 9.6 MB of server-rendered HTML, adding a list of 21
  * definitions to every render of it, for a form most visits never open, would be the wrong
  * trade.
  */
@@ -724,7 +724,7 @@ export function startAProjectHref(): string {
 }
 
 /**
- * What the work must do, and how that is proven — for a benchmark or an ordinary task.
+ * What the work must do, and how that is proven, for a benchmark or an ordinary task.
  *
  * The QA benchmark cards showed acceptance scenarios and verification commands; the task list
  * showed a title and a status badge, and threw the rest away. That was not a data gap: every
@@ -734,11 +734,11 @@ export function startAProjectHref(): string {
  * was this supposed to do, and how do we know it did?".
  *
  * Shared rather than copied, because the next field added to one of them should appear in both.
- * Renders nothing when there is nothing to show — an empty disclosure is a promise of detail
+ * Renders nothing when there is nothing to show, an empty disclosure is a promise of detail
  * that is not there.
  */
 /**
- * Launch — on a task card, not only on a benchmark.
+ * Launch, on a task card, not only on a benchmark.
  *
  * The benchmark catalogue could start work; the task list could not, so running something
  * again meant retyping its instructions and acceptance criteria into the New Code Task form,
@@ -746,13 +746,13 @@ export function startAProjectHref(): string {
  * where the spec comes from.
  *
  * Disabled while submitting, and it says so. The benchmark buttons are plain form submits with
- * no feedback, and reference host currently holds four HookWatch runs and two BugBox runs queued —
+ * no feedback, and reference host currently holds four HookWatch runs and two BugBox runs queued , 
  * a button that looks inert gets pressed again, and here every press costs budget.
  */
 /** Launch a benchmark, once.
  *
  * The button was a bare form submit: pressing it navigated nowhere, changed nothing on screen,
- * and the new run only appeared after the page happened to refresh. So it got pressed again —
+ * and the new run only appeared after the page happened to refresh. So it got pressed again , 
  * reference host is holding four HookWatch runs and two BugBox runs, queued and identical. Every
  * one of those is a budgeted governed pipeline. Disabling on submit and saying "Starting…" is
  * the whole fix, and it is the same fix the delivery buttons needed.
@@ -774,20 +774,20 @@ export function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, def
   // render, so the card never invites a press whose only effect would be a second copy. The
   // guard behind the button covers an API caller; this covers the person looking at it.
   const alreadyBuilt = benchmark.built?.run_id ?? null;
-  // Prefer the running app over its pipeline page. "View BugBox" that opens a run -- and, when
-  // the lookup was reporting failures as builds, a FAILED run -- answers a question nobody
+  // Prefer the running app over its pipeline page. "View BugBox" that opens a run, and, when
+  // the lookup was reporting failures as builds, a FAILED run, answers a question nobody
   // asked. The run stays reachable from the card; the app is what "view" means.
   //
   // Built from the preview ID through the gateway, NEVER from app_previews.url: that column
   // holds the sandbox-internal address (http://127.0.0.1:43053), which is unreachable from a
   // browser. Handing it out is where the agent's advice to "open http://127.0.0.1:46181" came
-  // from -- it read the column and repeated it faithfully.
+  // from, it read the column and repeated it faithfully.
   const builtPreviewUrl = benchmark.built?.preview_id
     ? previewWebHref(benchmark.built.preview_id)
     : null;
 
   // `force` is the difference between "build this" and "build it AGAIN". It is only ever set
-  // by the second, explicit control -- so a plain press can never spend a second build.
+  // by the second, explicit control, so a plain press can never spend a second build.
   const launch = async (force = false) => {
     setSent(true);
     const data = new FormData();
@@ -823,17 +823,15 @@ export function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, def
             <a className="cap-btn primary" href={builtPreviewUrl}
                target="_blank" rel="noreferrer"
                title="Open the running app">
-              View {benchmark.name} →
-            </a>
+              View {benchmark.name}</a>
           ) : (
             <button className="cap-btn primary"
                     onClick={() => onOpen?.((startedId || alreadyBuilt) as string)}
                     title="No preview is running; open the completed build instead">
-              View {benchmark.name} →
-            </button>
+              View {benchmark.name}</button>
           )}
           <GatedButton permission="code_task:create" className="cap-btn" disabled={sent} onClick={() => void launch(true)}
-                  title="Convene a new panel and build a second copy — this costs a full run">
+                  title="Convene a new panel and build a second copy, this costs a full run">
             {sent ? "Starting…" : "Build it again"}
           </GatedButton>
         </>
@@ -843,13 +841,11 @@ export function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, def
           // that is actually running, rather than to a viewer that renders nothing.
           <a className="cap-btn primary" href={consoleHref({ area: "meetings" }, search)}
              title="Open the panel this launched">
-            View meeting →
-          </a>
+            View meeting</a>
         ) : (
           <button className="cap-btn primary" onClick={() => onOpen?.(startedId)}
                   title="Open the run this launched">
-            View run →
-          </button>
+            View run</button>
         )
       ) : (
         <GatedButton permission="code_task:create" className="cap-btn primary" disabled={sent} onClick={() => void launch(false)}>
@@ -861,20 +857,20 @@ export function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, def
               : failed ? failed
               : (startedId && startedKind === "existing") || (!startedId && alreadyBuilt)
                 ? (builtPreviewUrl
-                    ? "already built — this opens the running app; building again runs the "
+                    ? "already built, this opens the running app; building again runs the "
                       + "whole panel and pipeline"
-                    : "already built — no preview is running, so this opens the completed "
+                    : "already built, no preview is running, so this opens the completed "
                       + "build; start a preview from there to see the app")
               : startedId
                 ? (startedKind === "meeting"
-                    ? `panel convened ${startedId.slice(0, 13)}… — it drafts a PRD, approves it `
+                    ? `panel convened ${startedId.slice(0, 13)}…, it drafts a PRD, approves it `
                       + `automatically, then builds`
-                    : `started ${startedId.slice(0, 13)}… — it builds the app before there is `
+                    : `started ${startedId.slice(0, 13)}…, it builds the app before there is `
                       + `anything to preview`)
                 // The profile the endpoint actually asks for. It said "Strict" while the
-                // endpoint had been changed to balanced — a caption describing a decision
+                // endpoint had been changed to balanced, a caption describing a decision
                 // made somewhere else, which is how it was wrong in the first place.
-                : "Convenes the PRD panel first, then builds · balanced profile"}
+                : "Convenes the PRD panel first, then builds, balanced profile"}
       </span>
     </div>
   );
@@ -884,7 +880,7 @@ export function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, def
  * Change an app that already exists.
  *
  * The card's other control is "Run this task again", which rebuilds the same app from the same
- * prompt. There was nothing for the far more common case -- the app is mostly right and needs
+ * prompt. There was nothing for the far more common case, the app is mostly right and needs
  * one thing changed. Doing that meant finding the app's git branch by hand, which is not a
  * thing an operator can do, so in practice people asked for a rebuild and got a different app.
  *
@@ -912,7 +908,7 @@ export function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, def
  * The attempt "Run preview" should act on, given an app's attempts newest-first.
  *
  * THE RUN THE BUTTON ACTS ON MUST BE THE RUN THE BUTTON WAS ENABLED BY. The card enables the
- * action from `anyShipped` — does ANY attempt have something to show — but fired it at the
+ * action from `anyShipped`, does ANY attempt have something to show, but fired it at the
  * newest attempt. For an app whose latest run is a blocked follow-up, that means enabling on
  * the strength of the completed run and then previewing the blocked one, which the API
  * rightly rejects with 409 "has not opened a pull request yet".
@@ -931,12 +927,12 @@ export function pickBuiltRun<T extends { status?: string; pull_request_url?: str
 /**
  * The app's origin, taken from whichever run in the group actually recorded one.
  *
- * The spine narrates `builtRun` — the newest COMPLETED run — which for a shipped app is usually
+ * The spine narrates `builtRun`, the newest COMPLETED run, which for a shipped app is usually
  * the deferred-findings FOLLOW-UP. A follow-up is created fresh rather than as a retry, so it
  * carried no `origin`, and the card reported "Research: none / Spec: none" for an app that came
  * from a panel and has a PRD sitting behind it.
  *
- * Where an app came from is a property of the APP, not of whichever run happens to be newest —
+ * Where an app came from is a property of the APP, not of whichever run happens to be newest , 
  * the same lesson as app_id (I21). The engine now carries origin across the follow-up hop; this
  * repairs the runs created before it did.
  */
@@ -963,7 +959,7 @@ export function latestPreviewFor(previews: PreviewRec[], runId: string): Preview
  * The card used to offer "rebuild from scratch", which re-runs the identical brief. If you are
  * unhappy with the app you got, that is the one thing that cannot help: the same brief is what
  * produced it. Re-running a fixed spec is only honest when the spec is deliberately held
- * constant -- comparing benchmark runs, or recovering from a platform failure -- so it lives on
+ * constant, comparing benchmark runs, or recovering from a platform failure, so it lives on
  * each attempt inside the card, not here.
  *
  * This convenes the PRD panel instead, seeded with the app, its repo, and the thing you say is
@@ -972,12 +968,12 @@ export function latestPreviewFor(previews: PreviewRec[], runId: string): Preview
  */
 
 /**
- * Point this app at a VM — the association that makes every later deploy automatic.
+ * Point this app at a VM, the association that makes every later deploy automatic.
  *
  * The link is a row in `deployment_targets`: (project, app_name, environment) → host_id, with
  * `target_ref` DERIVED from the host so the address has one writable home. On merge,
  * `delivery_pipeline.targets_for()` resolves the app's targets and ships to each. That is the
- * whole of "future deployments happen automatically" — the association IS the automation.
+ * whole of "future deployments happen automatically", the association IS the automation.
  *
  * Offered on the card because the alternative was a wizard on another screen, which is the
  * trip this work exists to remove. Shown only when the app has no destination yet.
@@ -989,7 +985,7 @@ export function latestPreviewFor(previews: PreviewRec[], runId: string): Preview
  * `listDeploymentHostsAction`. With a handful of apps that was invisible; past about six it is
  * not, because a browser opens roughly six connections per origin and this page is already
  * megabytes of HTML competing for them. The requests queue, the effects do not resolve, and
- * EVERY card sits at "Checking for a host…" — which reads as "BOSS cannot reach the VM" when
+ * EVERY card sits at "Checking for a host…", which reads as "BOSS cannot reach the VM" when
  * the host list actually returns in about three seconds.
  *
  * The result is shared and briefly cached: the host list is the same for every card on the
@@ -1002,7 +998,7 @@ export function latestPreviewFor(previews: PreviewRec[], runId: string): Preview
  * a deploy calls ids the server no longer knows and gets UnrecognizedActionError. The page
  * looks broken and the message blames the host list, which is the one thing that was fine.
  *
- * This deploys often, so that is a normal event, not an edge case — say what it is and offer
+ * This deploys often, so that is a normal event, not an edge case, say what it is and offer
  * the one action that fixes it.
  */
 export function isStaleClient(error: unknown): boolean {
@@ -1022,11 +1018,11 @@ export function loadHostsOnce(projectId: string): Promise<any> {
   const now = Date.now();
   if (hit && now - hit.at < HOSTS_TTL_MS) return hit.promise as Promise<any>;
   // A fetch with no timeout can hang forever, and this one is the ONLY thing standing between
-  // the operator and the Deploy button — so it always settles, even if the answer is an error.
+  // the operator and the Deploy button, so it always settles, even if the answer is an error.
   // A ROUTE HANDLER, NOT A SERVER ACTION.
   //
   // listDeploymentHostsAction answered in ~2s and still timed out at 20s, because a Server
-  // Action re-renders the current route and returns a fresh RSC payload alongside its value —
+  // Action re-renders the current route and returns a fresh RSC payload alongside its value , 
   // and this page takes 20-27s to render. The lookup was never slow; the reply was.
   // /api/deployment-hosts returns JSON and nothing else.
   const promise = Promise.race([
@@ -1049,7 +1045,7 @@ export function SetupDeployment({ run, projectId, actor, onDone }: {
   // AN EMPTY LIST IS NOT AN ANSWER UNTIL SOMEONE HAS ASKED.
   //
   // `hosts` starts empty and `ready` was `hosts.length > 0`, so between first paint and the
-  // effect resolving, this component stated "No verified host yet" — a definitive claim of
+  // effect resolving, this component stated "No verified host yet", a definitive claim of
   // absence made before it had looked. There WAS a verified host the whole time. On a console
   // page this size, hydration is slow enough that the false claim is what the operator reads.
   //
@@ -1105,7 +1101,7 @@ export function SetupDeployment({ run, projectId, actor, onDone }: {
           // Blaming a missing host for a failed lookup sends the operator to onboard a host
           // they already have. Say which of the two actually happened.
           <span className="detail">
-            Could not read the host list ({loadError}). The app may already have a host —
+            Could not read the host list ({loadError}). The app may already have a host , 
             retry before onboarding a new one.
           </span>
         )
@@ -1132,14 +1128,14 @@ export function SetupDeployment({ run, projectId, actor, onDone }: {
             });
             setBusy(false);
             setMsg(r.ok
-              ? `target set: ${r.data?.host ?? "host"} — plan its first deployment below`
+              ? `target set: ${r.data?.host ?? "host"}, plan its first deployment below`
               : (r.error ?? "could not set the target"));
             if (r.ok) onDone();
           }}
         >
           {/* "Target", not "host". `deployment_targets` is what the model calls this, and a
               button that says "host" while the data says "target" gives one concept two
-              names — the kind of drift that later makes a docs page and a screen disagree.
+              names, the kind of drift that later makes a docs page and a screen disagree.
               A host is the MACHINE; the target is this app's placement on it. */}
           <span className="detail">App&rsquo;s target:</span>
           <select name="host_id" aria-label="Host to deploy this app to">
@@ -1154,7 +1150,7 @@ export function SetupDeployment({ run, projectId, actor, onDone }: {
                  aria-label="App name on the host"
                  style={{ width: 130, fontSize: 12 }} />
           <input name="app_port" placeholder="port (auto)"
-                 aria-label="App port — blank lets BOSS pick a free one"
+                 aria-label="App port, blank lets BOSS pick a free one"
                  style={{ width: 92, fontSize: 12 }} />
           <GatedButton permission="deployment_target:manage" className="cap-btn" type="submit" disabled={busy}>
             {busy ? "Saving…" : "Set target"}
@@ -1170,7 +1166,7 @@ export function SetupDeployment({ run, projectId, actor, onDone }: {
  * What this app SHIPPED, on the card where it was approved.
  *
  * The point of the delivery work is that approving a preview deploys the app without anyone
- * visiting the CI/CD screen — which only holds if the result is visible here. Otherwise
+ * visiting the CI/CD screen, which only holds if the result is visible here. Otherwise
  * "autonomous" means "happens somewhere you have to go and look", which is the same number of
  * screens with an extra step of faith.
  *
@@ -1178,7 +1174,7 @@ export function SetupDeployment({ run, projectId, actor, onDone }: {
  * ship should not grow a permanently empty deployment row.
  */
 /**
- * Retire the target this app is bound to — the undo the console never had.
+ * Retire the target this app is bound to, the undo the console never had.
  *
  * DELETE /v1/deployment-targets/{id} existed all along and nothing called it, so a wrong
  * binding (an app on another app's port, say) could only be fixed in the database. The API
@@ -1188,7 +1184,7 @@ export function SetupDeployment({ run, projectId, actor, onDone }: {
  * Card deployment actions, via a route handler rather than a Server Action.
  *
  * "Set target" showed "Saving…" for minutes. The write takes milliseconds; the wait was the
- * REPLY — a Server Action re-renders the current route to respond, and setupDeploymentAction
+ * REPLY, a Server Action re-renders the current route to respond, and setupDeploymentAction
  * additionally called revalidatePath("/"), on an area with a measured TTFB of ~115 seconds.
  */
 export async function appDeployOp(body: Record<string, unknown>): Promise<{ ok: boolean; data?: any; error?: string }> {
@@ -1292,7 +1288,7 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
 
   // AND WHEN THE CHANGE WAS MADE SOMEWHERE ELSE.
   //
-  // This card shows the app's target and its deployments — exactly the rows the Workflows
+  // This card shows the app's target and its deployments, exactly the rows the Workflows
   // screen and BOSS also change. Setting a target from the workflow left this card showing the
   // old answer until its own poll happened to run, or for ever once the card stopped polling.
   useEffect(() => onChanged(() => { void reload(); }, "factory"), [reload]);
@@ -1343,9 +1339,9 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
 
   // UNBOUND IS ABOUT THE BINDING, NOT THE HISTORY.
   //
-  // This asked `if (!latest)` — no deployment runs — so an app that had ever deployed stayed
+  // This asked `if (!latest)`, no deployment runs, so an app that had ever deployed stayed
   // on the deployment row forever. After unbinding, the card therefore still showed "DEPLOY
-  // FAILED · hetzner-ci-01" with a Retry button aimed at a target that no longer exists, and
+  // FAILED, hetzner-ci-01" with a Retry button aimed at a target that no longer exists, and
   // the unbind looked like it had done nothing. It had: the target was retired.
   //
   // Deployment runs are permanent history and a retired target is current state; the card has
@@ -1357,7 +1353,7 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
         {latest && loaded && !targetId ? (
           <span className="detail ct-deploy-history" title={latest.failure_reason ?? undefined}>
             last deploy: {latest.status}
-            {latest.finished_at ? <> · <ClientRelativeTime iso={latest.finished_at} /></> : null}
+            {latest.finished_at ? <>, <ClientRelativeTime iso={latest.finished_at} /></> : null}
           </span>
         ) : null}
         {linked ? (
@@ -1393,7 +1389,7 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
             </GatedButton>
             {/* THE UNDO THAT WAS NEVER THERE.
                 Once an app was bound to a host and port the card only ever offered "Deploy
-                now" — a wrong binding (this app sat on another app's port) could be fixed
+                now", a wrong binding (this app sat on another app's port) could be fixed
                 nowhere but the database. Retiring keeps the history: deployment runs and
                 health samples reference the target row. */}
             <GatedButton permission="deployment_target:manage" className="cap-btn ct-deploy-action"
@@ -1405,7 +1401,7 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
                       if (!targetId) return;
                       setRetrying(true); setNote(null);
                       const r = await retireTarget(targetId, actor);
-                      setNote(r.ok ? "target retired — pick a new one below" : (r.error ?? "could not retire"));
+                      setNote(r.ok ? "target retired, pick a new one below" : (r.error ?? "could not retire"));
                       setRetrying(false);
                       await reload();
                     }}>
@@ -1437,15 +1433,15 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
       </span>
       <span className="detail">
         {where}
-        {latest.finished_at ? <> · <ClientRelativeTime iso={latest.finished_at} /></> : null}
+        {latest.finished_at ? <>, <ClientRelativeTime iso={latest.finished_at} /></> : null}
       </span>
       {ok && latest.url ? (
-        <a className="cap-btn" href={latest.url} target="_blank" rel="noreferrer">Open ↗</a>
+        <a className="cap-btn" href={latest.url} target="_blank" rel="noreferrer">Open </a>
       ) : null}
       {failed ? (
         <>
           {/* The reason, not just the verdict. "Deploy failed" with no cause is the message
-              that sends someone to the CI/CD screen — the trip this line exists to remove. */}
+              that sends someone to the CI/CD screen, the trip this line exists to remove. */}
           {latest.failure_reason ? (
             <span className="detail ct-deploy-reason" title={latest.failure_reason}>
               {String(latest.failure_reason).slice(0, 60)}
@@ -1470,8 +1466,8 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
             {retrying ? "Planning…" : "Plan retry"}
           </GatedButton>
           {/* RETRY IS NOT ALWAYS THE ANSWER.
-              A deployment that fails because the target itself is wrong — no domain, or the
-              port belongs to another app — fails identically every time it is retried, and
+              A deployment that fails because the target itself is wrong, no domain, or the
+              port belongs to another app, fails identically every time it is retried, and
               the card offered nothing else. Unbinding is the other move, and it was reachable
               only from the database. */}
           <GatedButton permission="deployment_target:manage" className="cap-btn ct-deploy-action"
@@ -1484,7 +1480,7 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
                     if (!tid) return;
                     setRetrying(true); setNote(null);
                     const r = await retireTarget(String(tid), actor);
-                    setNote(r.ok ? "target retired — set a new one to deploy again"
+                    setNote(r.ok ? "target retired, set a new one to deploy again"
                                  : (r.error ?? "could not retire"));
                     setRetrying(false);
                     await reload();
@@ -1544,7 +1540,7 @@ export function RebuildWithSpec({ run, projectId, actor, mode = "rebuild",
     if (controlled) return null;
     // The label MUST follow `mode`. Both modes rendered "Rebuild with a fresh spec", so the
     // card showed two identical buttons side by side where one ADDS to the app and the other
-    // REPLACES it — a difference you could only discover by opening one. Only the expanded
+    // REPLACES it, a difference you could only discover by opening one. Only the expanded
     // panel distinguished them, which is too late to be a choice.
     const isFeature = mode === "feature";
     return (
@@ -1563,21 +1559,21 @@ export function RebuildWithSpec({ run, projectId, actor, mode = "rebuild",
   // than a fresh idea with the same name.
   // Two different asks, and the difference matters to the pipeline: a rebuild starts a new
   // app, a feature continues this one. The [boss:extend_run=...] marker is an explicit
-  // contract with the decision handler — it routes the approved PRD to a follow-up on this
+  // contract with the decision handler, it routes the approved PRD to a follow-up on this
   // app's own branch instead of a fresh scaffold, and is stripped before the PRD is used.
   const directive = mode === "feature"
-    ? `Add a feature to "${app.name}" — an existing, working application in `
+    ? `Add a feature to "${app.name}", an existing, working application in `
       + `${repo || "this project"}. [boss:extend_run=${run.id}]\n\n`
       + `What is wanted: ${complaint.trim()}\n\n`
       + `Write a PRD for THIS FEATURE ONLY. The app already exists and must keep working: do `
       + `not redesign it, do not re-scaffold it, do not restate the whole product. Cover what `
       + `changes, what must not change, the acceptance scenarios for the new behaviour, and `
       + `the evidence required to prove them.`
-    : `Rebuild "${app.name}" — an existing application in ${repo || "this project"}.\n\n`
+    : `Rebuild "${app.name}", an existing application in ${repo || "this project"}.\n\n`
       + `What is wrong with the current build: ${complaint.trim()}\n\n`
       + `Write a PRD for a replacement that fixes this. It must be a real, working full-stack `
       + `application: a server, a database with migrations and seed data, and a UI that is `
-      + `visually finished — considered layout, typography, spacing and states (loading, empty, `
+      + `visually finished, considered layout, typography, spacing and states (loading, empty, `
       + `error), not an unstyled prototype. Include acceptance scenarios and the evidence `
       + `required to prove them.`;
 
@@ -1597,7 +1593,7 @@ export function RebuildWithSpec({ run, projectId, actor, mode = "rebuild",
         onChange={(event) => setComplaint(event.target.value)}
         placeholder={mode === "feature"
           ? "What should it gain?\ne.g. bulk-close issues from the list, with an undo window"
-          : "What is wrong with it?\ne.g. the UI is pale and unstyled — it needs a designed "
+          : "What is wrong with it?\ne.g. the UI is pale and unstyled, it needs a designed "
             + "layout, real typography, and proper empty/loading states"}
       />
       <div className="ct-actions">
@@ -1608,8 +1604,8 @@ export function RebuildWithSpec({ run, projectId, actor, mode = "rebuild",
         <button type="button" className="cap-btn" onClick={() => setOpen(false)}>Cancel</button>
         <span className="detail">
           {mode === "feature"
-            ? `Specs the feature, then builds it onto this app's own branch — costs a panel and a run.`
-            : `Writes a new PRD for ${repo || "this app"}, then builds a replacement — costs a panel and a run.`}
+            ? `Specs the feature, then builds it onto this app's own branch, costs a panel and a run.`
+            : `Writes a new PRD for ${repo || "this app"}, then builds a replacement, costs a panel and a run.`}
         </span>
       </div>
     </ActionForm>
@@ -1633,7 +1629,7 @@ export function ContractDetails({ criteria, verification, label = "Acceptance cr
         </ul>
       )}
       {checks.length > 0 && (
-        <p className="detail" style={{ margin: "6px 0 0" }}>Verification: {checks.join(" · ")}</p>
+        <p className="detail" style={{ margin: "6px 0 0" }}>Verification: {checks.join(", ")}</p>
       )}
     </details>
   );
@@ -1642,7 +1638,7 @@ export function ContractDetails({ criteria, verification, label = "Acceptance cr
 export function QaBenchmarkCatalog({ benchmarks, builtBenchmarkIds = new Set<string>(), projectId, actor, defaultOwner, defaultRepo,
                              launched, onLaunched, onOpen }: {
   benchmarks: QaBenchmarkApp[];
-  /** Benchmarks that appear among the project's runs — the grid's answer, reused here. */
+  /** Benchmarks that appear among the project's runs, the grid's answer, reused here. */
   builtBenchmarkIds?: Set<string>;
   projectId: string;
   actor: string;
@@ -1662,7 +1658,7 @@ export function QaBenchmarkCatalog({ benchmarks, builtBenchmarkIds = new Set<str
   //
   // A benchmark is a thing you can build; once built it IS an app, and that app already has a
   // card below carrying its runs, its PR and its preview. Showing both produced two BugBox
-  // cards in identical styling -- indistinguishable at a glance, and the catalogue one was the
+  // cards in identical styling, indistinguishable at a glance, and the catalogue one was the
   // less useful of the pair. The catalogue now offers what is not built yet; the built ones are
   // named in a line pointing at the app that replaced them.
   // Read from the runs themselves, not only from the catalogue's own `built` field: ApproveIt
@@ -1680,12 +1676,12 @@ export function QaBenchmarkCatalog({ benchmarks, builtBenchmarkIds = new Set<str
       </p>
       {/* The benchmark catalogue: the THIRD card path, and the last one still rendering as
           full-width rows while everything below it had become tiles. Three render paths for
-          the same kind of object is how this page kept looking half-converted — a section
+          the same kind of object is how this page kept looking half-converted, a section
           nobody had touched sat directly above the section that had, and the difference read
           as breakage rather than as an omission. */}
       {builtAlready.length ? (
         <p className="detail" style={{ marginTop: 10 }}>
-          Already built: {builtAlready.map((b) => b.name).join(" · ")} — each is an app below,
+          Already built: {builtAlready.map((b) => b.name).join(", ")}, each is an app below,
           with its runs inside. Rebuild it from there.
         </p>
       ) : null}
@@ -1698,7 +1694,7 @@ export function QaBenchmarkCatalog({ benchmarks, builtBenchmarkIds = new Set<str
             </div>
             <span className="mr-meeting-title">{benchmark.name}</span>
             <p className="detail" style={{ margin: 0 }}>{benchmark.summary}</p>
-            <p className="detail" style={{ margin: 0 }}>Exercises: {benchmark.focus.join(" · ")}</p>
+            <p className="detail" style={{ margin: 0 }}>Exercises: {benchmark.focus.join(", ")}</p>
             <ContractDetails criteria={benchmark.acceptance_scenarios}
                              verification={benchmark.verification_commands}
                              label="Acceptance scenarios & required evidence" />
@@ -1716,8 +1712,8 @@ export function QaBenchmarkCatalog({ benchmarks, builtBenchmarkIds = new Set<str
   );
 }
 
-// Three states, not two: passed (green ✓), failed (red ✗), or NOT RUN (muted –). A skipped
-// check must never read as a failure — that's what made a lean build look like it "failed".
+// Three states, not two: passed (green ✓), failed (red ✗), or NOT RUN (muted , ). A skipped
+// check must never read as a failure, that's what made a lean build look like it "failed".
 export function GateRow({ label, ok, note, skipped }: { label: string; ok?: boolean; note?: string; skipped?: boolean }) {
   const mark = skipped ? "–" : ok ? "✓" : "✗";
   const color = skipped ? "var(--muted)" : ok ? "#3fb950" : "#f85149";
@@ -1725,7 +1721,7 @@ export function GateRow({ label, ok, note, skipped }: { label: string; ok?: bool
     <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
       <span style={{ color, fontWeight: 700, width: 14, textAlign: "center" }}>{mark}</span>
       <span style={{ color: skipped ? "var(--muted)" : "var(--ink)" }}>{label}</span>
-      <span className="detail">— {skipped ? (note && note !== "skipped" ? note : "not run at this rigor") : (note || (ok ? "passed" : "needs attention"))}</span>
+      <span className="detail">,  {skipped ? (note && note !== "skipped" ? note : "not run at this rigor") : (note || (ok ? "passed" : "needs attention"))}</span>
     </div>
   );
 }
@@ -1760,13 +1756,13 @@ export function QaBenchmarkEvidence({ runId, benchmarkName }: { runId: string; b
             {report.results.map((result) => (
               <GateRow key={result.command} label={result.label} ok={result.status === "pass"}
                 skipped={result.status === "not_recorded"}
-                note={`${result.command}${result.exit_code != null ? ` · exit ${result.exit_code}` : ""}`} />
+                note={`${result.command}${result.exit_code != null ? `, exit ${result.exit_code}` : ""}`} />
             ))}
           </div>
           <div style={{ marginTop: 12, display: "grid", gap: 5 }}>
             <div className="ct-block-title" style={{ fontSize: 12.5 }}>
               Benchmark scorecard <span className={`cap-badge tone-${report.scorecard.overall_score == null ? "muted" : report.scorecard.overall_status === "complete" ? "green" : "amber"}`}>
-                {report.scorecard.overall_score == null ? "unscored" : `${report.scorecard.overall_score}/100 · ${report.scorecard.overall_status}`}
+                {report.scorecard.overall_score == null ? "unscored" : `${report.scorecard.overall_score}/100, ${report.scorecard.overall_status}`}
               </span>
             </div>
             <p className="detail" style={{ margin: 0 }}>
@@ -1802,7 +1798,7 @@ export function fmtDuration(ms: number): string {
 //: Which stages belong to which pipeline phase.
 //
 // This is the join the first version of this table got wrong. It deduped by comparing a phase
-// name to a stage name -- but those are the two different vocabularies that made the old
+// name to a stage name, but those are the two different vocabularies that made the old
 // screens look duplicated in the first place, so nothing matched and every piece of work was
 // listed TWICE: once as "Engineer implementing 16m 42s" and once as "solo 16m 42s", with the
 // total counting both.
@@ -1819,7 +1815,7 @@ const PHASE_STAGES: Record<string, string[]> = {
 
 //: Which agent owns a stage. Mirrors llm_telemetry.STAGE_ROLES on the engine side.
 //
-// Used as a FALLBACK when the API does not send a role — older deployments do not, and an
+// Used as a FALLBACK when the API does not send a role, older deployments do not, and an
 // "Agent" column full of dashes is worse than no column. The row prefers whatever the API
 // says; this fills the gap rather than overriding it.
 const STAGE_AGENT: Record<string, string> = {
@@ -1847,14 +1843,14 @@ export function agentLabel(role: string | null | undefined): string {
 }
 
 /**
- * What ran, who ran it, and what it cost — in ONE table.
+ * What ran, who ran it, and what it cost, in ONE table.
  *
  * This replaces two blocks that listed the same steps in different vocabularies: "Step timing"
  * named phases (Engineer implementing, Running tests) and "agent activity" named stages (solo,
  * review_code). Same work, two names, stacked one above the other, so answering "what took 16
  * minutes and who was doing it" meant joining them by eye.
  *
- * Phases with no model call still appear — cloning a repo takes time and no agent — because a
+ * Phases with no model call still appear, cloning a repo takes time and no agent, because a
  * timing table that silently drops the slow non-model steps mis-attributes the wall clock.
  */
 export function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs, totalMs,
@@ -1893,11 +1889,11 @@ export function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, current
       .filter(({ c, i }) => !used.has(i) && stages.includes(c.stage));
     mine.forEach(({ i }) => used.add(i));
     // A phase that appears AGAIN after an earlier copy of itself, on a run the worker
-    // re-delivered, is the interrupted attempt being redone — not new work.
+    // re-delivered, is the interrupted attempt being redone, not new work.
     const replayed = redelivered && phaseTimings.slice(0, i).some((p) => p.phase === t.phase);
     return { phase: t.phase, ms: t.ms, calls: mine.map((x) => x.c), replayed };
   });
-  // Calls whose stage no phase claimed still belong on the screen — dropping them would hide
+  // Calls whose stage no phase claimed still belong on the screen, dropping them would hide
   // spend, and hidden spend is the worst thing this table could do.
   const orphans = calls.filter((_, i) => !used.has(i));
   const spend = calls.reduce((n, c) => n + c.cost_usd_micros, 0) / 1e6;
@@ -1919,13 +1915,13 @@ export function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, current
       {/* WHY THIS BUILD IS SLOW, WHERE ITS TIMINGS ARE READ. The stage durations below are
           what get read as the pipeline being slow; when the machine took that time it has to
           say so in the same block. Only while the build is live, and only on an unhealthy
-          host — it renders nothing otherwise. */}
+          host, it renders nothing otherwise. */}
       {live ? <HostAdviceBanner advice={hostAdvice} /> : null}
       <div className="ct-steps-head">
-        <span className="ct-block-title">Steps — who ran what</span>
+        <span className="ct-block-title">Steps, who ran what</span>
         <span className="ct-steps-total">
           <b>{fmtDuration(totalMs)}</b>{live ? " so far" : ""}
-          {spend > 0 ? <> · <b>${spend.toFixed(2)}</b></> : null}
+          {spend > 0 ? <>, <b>${spend.toFixed(2)}</b></> : null}
         </span>
       </div>
 
@@ -1945,14 +1941,14 @@ export function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, current
               <div className="ct-phase-calls">{g.calls.map((c, j) => <CallRow c={c} key={j} />)}</div>
             ) : loaded ? (
               // A REPLAYED PHASE IS NOT MACHINERY. When the run was re-delivered, the same
-              // phase appears twice and the second copy finds no unclaimed call to show — so
-              // this said "no model call — BOSS's own machinery" about thirty minutes of work
+              // phase appears twice and the second copy finds no unclaimed call to show, so
+              // this said "no model call, BOSS's own machinery" about thirty minutes of work
               // that was thrown away when a lease expired. Saying which it is turns an
               // inexplicable duration into a legible one.
               <div className="ct-phase-nocall" data-testid={g.replayed ? "ct-phase-replayed" : undefined}>
                 {g.replayed
-                  ? "restarted — the previous attempt was interrupted and its work was lost"
-                  : "no model call — BOSS's own machinery"}
+                  ? "restarted, the previous attempt was interrupted and its work was lost"
+                  : "no model call, BOSS's own machinery"}
               </div>
             ) : null}
           </div>
@@ -1999,7 +1995,7 @@ export function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, current
  * a run is created and records it, so this reads a fact rather than guessing one.
  *
  * SAYS "not linked" RATHER THAN NOTHING. A project with no mapping is the normal state today,
- * and an absent line is indistinguishable from a line that failed to load — which is the exact
+ * and an absent line is indistinguishable from a line that failed to load, which is the exact
  * ambiguity that made the rest of this console hard to trust.
  */
 export function WorkflowLink({ run }: { run: CodeTaskRun }) {
@@ -2082,21 +2078,21 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
   return (
     <div className="ct-detail">
       {/* No back button here. It said "← All code tasks" while the one above said "← All
-          apps", and both called setSelected(null) — two names for one action, on one screen.
+          apps", and both called setSelected(null), two names for one action, on one screen.
           The surviving control sits at the top of the split, outside the dockable pane. */}
       {/* NO BACK BUTTON HERE EITHER, and this is the third place it has been.
-          It sat on this row — the RUN's header — while what it leaves is the APP. So it landed
+          It sat on this row, the RUN's header, while what it leaves is the APP. So it landed
           under the app's action bar, beside the run title, reading as a control on the run, and
           an operator had to scan past five buttons to find the way out. A back control belongs
           at the TOP-LEFT of the pane it leaves, above the title of the thing being shown; it is
-          now on the app heading's eyebrow line, which already existed and was nearly empty. */}
+          now on the app heading's area-name line, which already existed and was nearly empty. */}
       <div className="ct-detail-head">
         <h3>{run.title}</h3>
         <span className={`cap-badge tone-${statusTone(run.status)}`}>{run.status}</span>
         <WorkflowLink run={run} />
       </div>
       {/* What the work must do, and how it is proven.
-          This was on the LIST cards, which is what made them unreadable at tile size — and
+          This was on the LIST cards, which is what made them unreadable at tile size, and
           when I removed it I said it lived "one click away in the task view". It did not: the
           detail view had never shown it, so the only content saying what a task was FOR was
           simply gone. A test caught the claim; this makes it true. */}
@@ -2118,17 +2114,17 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
       <Flow phase={run.phase} status={run.status} faces={stageFaces} />
 
       {live ? (
-        <div className="detail" style={{ margin: "8px 0", color: "#58a6ff", fontWeight: 600 }}>
+        <div className="detail" style={{ margin: "8px 0", color: "var(--boss-c-58a6ff)", fontWeight: 600 }}>
           <span style={{ animation: "pulse 1.5s infinite" }}>●</span>{" "}
-          {PHASE_LABEL[run.phase] ?? run.phase} — running{" "}
+          {PHASE_LABEL[run.phase] ?? run.phase}, running{" "}
           <span>{currentPhaseMs != null ? fmtDuration(currentPhaseMs) : "…"}</span>{" "}
           <span className="detail" style={{ fontWeight: 400 }}>(auto‑refreshing every 4s)</span>
         </div>
       ) : null}
 
       {/* ONE TABLE.
-          "Step timing" and "agent activity" listed the same steps twice, in two vocabularies —
-          phase names above, stage names below — so the reader had to join them by eye to answer
+          "Step timing" and "agent activity" listed the same steps twice, in two vocabularies , 
+          phase names above, stage names below, so the reader had to join them by eye to answer
           "what took 16 minutes, and who was doing it". They are one thing: a step, the agent
           that owns it, the model it used, and what it cost. */}
       <CodeTaskSteps runId={run.id} live={live} phaseTimings={phaseTimings}
@@ -2139,8 +2135,8 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
 
       {run.error ? (
         <div className="ct-error">
-          ⚠ {/quality ?gate/i.test(run.error)
-            ? "Quality gate failed — the pipeline blocked the PR (fail-closed). See Review & quality gate below."
+           {/quality ?gate/i.test(run.error)
+            ? "Quality gate failed, the pipeline blocked the PR (fail-closed). See Review & quality gate below."
             : run.error}
         </div>
       ) : null}
@@ -2157,7 +2153,7 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
           </div>
           {((run.finalize_ctx as Record<string, unknown> | undefined)?.advisory_failing_gates as unknown[] | undefined)?.length ? (
             <p className="detail" style={{ marginTop: 4 }}>
-              ⓘ First-pass build: quality checks below are <b>advisory</b> — a ✗ did not block the PR.
+              ⓘ First-pass build: quality checks below are <b>advisory</b>, a ✗ did not block the PR.
               Shipped so you can preview now; use <b>Retry</b> to improve and clear the ✗.
             </p>
           ) : null}
@@ -2174,41 +2170,41 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
               skipped={livePreviews.length === 0}
               note={
                 livePreviews.some((p) => p.status === "running" && operatorPreviewOpenHref(p))
-                  ? "running — open below"
+                  ? "running, open below"
                   : livePreviews.some((p) => p.status === "verified" && operatorPreviewOpenHref(p))
                     ? "verified-test has a View URL"
                     : livePreviews.some((p) => p.status === "verified")
-                      ? "verified-test — no operator URL"
+                      ? "verified-test, no operator URL"
                       : "run a preview"
               }
             />
           </div>
           <p className="detail">
-            Independent reviewer: {st.reviewer_independent ? "yes" : "no"} · Independent test author:{" "}
+            Independent reviewer: {st.reviewer_independent ? "yes" : "no"}, Independent test author:{" "}
             {st.test_author_independent ? "yes" : "no"}
-            {st.profile ? ` · profile: ${st.profile}` : ""}
-            {st.risk_tier != null ? ` · risk tier ${st.risk_tier}` : ""}
+            {st.profile ? `, profile: ${st.profile}` : ""}
+            {st.risk_tier != null ? `, risk tier ${st.risk_tier}` : ""}
           </p>
           {(st.build_engine || st.review_engine) ? (
             <p className="detail">
-              🧠 Builder: <b>{st.build_engine ?? "—"}</b>
-              {st.model ? ` (${st.model})` : ""} · Adversary: <b>{st.review_engine ?? st.build_engine ?? "—"}</b>
+               Builder: <b>{st.build_engine ?? "—"}</b>
+              {st.model ? ` (${st.model})` : ""}, Adversary: <b>{st.review_engine ?? st.build_engine ?? "—"}</b>
               {st.review_model ? ` (${st.review_model})` : ""}
               {st.review_engine && st.build_engine && st.review_engine !== st.build_engine
-                ? " — cross-model review (no self-grading)"
-                : " — same model builds + reviews"}
+                ? ", cross-model review (no self-grading)"
+                : ", same model builds + reviews"}
             </p>
           ) : null}
           {st.review_summary ? (
             <div className="ct-summary" style={{ marginTop: 8 }}>
-              <div className="ct-block-title" style={{ fontSize: 12.5 }}>🔎 Adversarial reviewer findings</div>
+              <div className="ct-block-title" style={{ fontSize: 12.5 }}> Adversarial reviewer findings</div>
               <Markdown text={st.review_summary} />
             </div>
           ) : null}
           {st.security_summary ? (
             <div className="ct-summary" style={{ marginTop: 8 }}>
               <div className="ct-block-title" style={{ fontSize: 12.5 }}>
-                🔒 Security review {st.security_verdict ? `— ${st.security_verdict}` : ""}
+                 Security review {st.security_verdict ? `,  ${st.security_verdict}` : ""}
               </div>
               <Markdown text={st.security_summary} />
             </div>
@@ -2271,7 +2267,7 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
               <li key={i}>
                 <span className={`ct-test-dot ${t.exit_code === 0 && !t.timed_out ? "ok" : "fail"}`} />
                 <code>{t.command}</code>
-                <span className="detail">exit {t.exit_code ?? "—"}{t.timed_out ? " · timed out" : ""}{t.duration_ms != null ? ` · ${t.duration_ms}ms` : ""}</span>
+                <span className="detail">exit {t.exit_code ?? "—"}{t.timed_out ? ", timed out" : ""}{t.duration_ms != null ? `, ${t.duration_ms}ms` : ""}</span>
               </li>
             ))}
           </ul>
@@ -2283,7 +2279,7 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
         <div className="ct-outcome">
           {run.pull_request_url ? (
             <a className="cap-btn" href={changeHref(run.pull_request_url)} {...linkTarget(run.pull_request_url)}>
-              {`${isLocalChangeUrl(run.pull_request_url) ? "View change set" : "View PR"} #${run.pull_request_number} →`}
+              {`${isLocalChangeUrl(run.pull_request_url) ? "View change set" : "View PR"} #${run.pull_request_number}`}
             </a>
           ) : <span className="detail">No PR opened.</span>}
           {run.pull_request_url ? (
@@ -2291,7 +2287,7 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
                       title={appIdentity(run).name || `PR #${run.pull_request_number}`} />
           ) : null}
           {run.decision_id ? (
-            <span className="ct-gate">🔒 Merge gated by Decision <code>{run.decision_id}</code> — approve in the Decisions inbox.</span>
+            <span className="ct-gate"> Merge gated by Decision <code>{run.decision_id}</code>, approve in the Decisions inbox.</span>
           ) : null}
         </div>
       </div>
@@ -2300,7 +2296,7 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
         <div className="ct-block-title">Iterate</div>
         {/* PREVIEW AND RETRY USED TO BE REPEATED HERE.
             Both are in the action bar at the top of this page, so this block rendered a second
-            "Open preview" and a second "Retry" for the same run — two controls that do the same
+            "Open preview" and a second "Retry" for the same run, two controls that do the same
             thing, in two places, and the operator has to work out whether they differ. They do
             not. What is left here is the work that cannot be a button: describing a change and
             proposing it, overriding a finding, and the feedback that needs a form.
@@ -2308,7 +2304,7 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
             in the same place the preview controls would otherwise be. */}
         {/* Separate row: iterate on the same task with feedback */}
         {(run.status === "completed" || run.status === "failed" || run.status === "blocked") ? (
-          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.09)" }}>
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--boss-c-128f8e6c23)" }}>
             <FeedbackControls
               runId={run.id}
               status={run.status}
@@ -2322,13 +2318,13 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
             <OverrideControls runId={run.id} />
             <p className="detail" style={{ marginTop: 4 }}>
               ⚖ Human override: accept the failing finding(s) and open the PR from the work already
-              produced — no re‑run. The PR still carries its own merge gate.
+              produced, no re‑run. The PR still carries its own merge gate.
             </p>
           </div>
         ) : null}
         <p className="detail" style={{ marginTop: 4 }}>
           Preview runs the built app on a local URL (1‑box, auto‑expires). Retry / iterate re‑runs
-          this task <strong>on its existing code</strong> (same branch &amp; PR) — the model builds on
+          this task <strong>on its existing code</strong> (same branch &amp; PR), the model builds on
           prior work, adding your feedback and any prior findings, so context isn&apos;t lost.
         </p>
       </div>
@@ -2342,7 +2338,7 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
  *  real ones and the screen stops being about what the operator is building.
  */
 //  Deliberately narrow. An earlier version also matched "follow-up: deferred review", which
-//  cut the card count from 48 to 2 — those are REAL work (the run that gave ApproveIt its
+//  cut the card count from 48 to 2, those are REAL work (the run that gave ApproveIt its
 //  backend was one of them). Hiding the operator's own follow-ups to reduce clutter defeats
 //  the point of the list.
 const INTERNAL_RUN = /^(captain:|quality improve pass)/i;
@@ -2361,7 +2357,7 @@ export function attemptKind(run: CodeTaskRun): string {
 
 /** Meeting titles are whole directives; a card shows the lead, not the document. */
 export function leadLine(raw: string): string {
-  // The ask, not the panel's scaffolding (lib/directive-subject.ts) — cutting at the first
+  // The ask, not the panel's scaffolding (lib/directive-subject.ts), cutting at the first
   // ". " of a wrapped directive gave "--- WHAT THIS PANEL IS FOR --- You are the panel…".
   const text = displayTitle(raw);
   if (text.length <= 84) return text;

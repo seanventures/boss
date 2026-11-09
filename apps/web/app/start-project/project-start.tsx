@@ -3,11 +3,11 @@
 /**
  * THE PROJECT PAGE (BOSSAPP-810, screen 3): "What should we add?".
  *
- *   header           the project's name; its repo · branch · code mapped ✓
- *   the card         a textarea, four example chips, the estimate, Start — the project's default
+ *   header           the project's name; its repo, branch, code mapped ✓
+ *   the card         a textarea, four example chips, the estimate, Start, the project's default
  *                    workflow for adding a feature, on the imported repo's branch (a project with
  *                    no repo builds a new app: its project.new default)
- *   what happens     Plan (You approve) · Build · Review & test · Pull request (You merge) · Preview
+ *   what happens     Plan (You approve), Build, Review & test, Pull request (You merge), Preview
  *   in this project  each piece of work: its state and the one thing to do
  *
  * One read (GET /v1/projects/{id}/start); Start goes through the one start door

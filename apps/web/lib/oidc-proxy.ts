@@ -19,6 +19,7 @@
  */
 import { clientHop, proxyHops } from "./client-hop";
 import { rawRequestUrl } from "./raw-request-url";
+import { readCapped } from "./read-capped";
 
 export const OIDC_BODY_CAP = 64 * 1024;
 const OIDC = /^\/oidc\/[A-Za-z0-9_-]{1,100}\/(?:\.well-known\/openid-configuration|jwks|authorize|resume|consent|token|userinfo|revocation|end_session|account|hosted\/[a-z-]{2,40})$/;
@@ -90,10 +91,8 @@ export async function forwardOidc(req: Request, opts: { apiUrl: string; fetchImp
   const method = req.method.toUpperCase();
   let body: Uint8Array | undefined;
   if (method === "POST") {
-    const declared = Number(req.headers.get("content-length") ?? "");
-    if (Number.isFinite(declared) && declared > OIDC_BODY_CAP) return answer(413, "invalid_request");
-    const buf = new Uint8Array(await req.arrayBuffer());
-    if (buf.byteLength > OIDC_BODY_CAP) return answer(413, "invalid_request");
+    const buf = await readCapped(req, OIDC_BODY_CAP);
+    if (buf === null) return answer(413, "invalid_request");
     body = buf;
   } else if (method !== "GET" && method !== "HEAD") {
     return answer(405, "invalid_request");

@@ -72,7 +72,7 @@ describe("the self-fix approval card", () => {
       ["code ✓", "security ✓", "regression ✓", "consistency ✓"]);
     expect(tid("sfx-card-seat-security_check")?.getAttribute("title")).toContain("quoting checked");
     expect(tid("sfx-card-review")?.textContent).toContain("other engine");
-    expect(tid("sfx-card-cost")?.textContent).toBe("$3.12 · 14 min · codex");
+    expect(tid("sfx-card-cost")?.textContent).toBe("$3.12, 14 min, codex");
     expect(tid("sfx-card-on-approve")?.textContent).toBe("Installs on this one-box and resumes the step");
     expect(tid("sfx-card-people")?.getAttribute("title")).toContain("single-operator waiver");
     expect(tid("sfx-card-open")?.getAttribute("href")).toContain(`sfx=${SFX}`);

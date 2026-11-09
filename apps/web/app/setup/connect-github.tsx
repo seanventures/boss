@@ -2,7 +2,7 @@
 
 /**
  * ② Repos, first run: ONE "Connect GitHub" (BOSSAPP-815). It creates this install's own BOSS
- * GitHub App from a manifest and installs it on the repos you pick — two clicks on GitHub, no
+ * GitHub App from a manifest and installs it on the repos you pick, two clicks on GitHub, no
  * token to make, copy or renew. The App's key never expires; egress mints a fresh access token
  * before each GitHub call (identity/github_app.py), so a connected repo never stops building
  * because access ran out. Self-hosted tools do the same (Coder, Atlantis, Backstage); a pasted
@@ -55,7 +55,7 @@ export function ConnectGitHub({ onDone, makeDefault = true, onOtherWays, tokenFo
   const [refusal, setRefusal] = useState<SetupRefusal | null>(null);
   const [asBefore, setAsBefore] = useState(false);
 
-  // UNREADABLE IS NOT FRESH: if GitHub access can't be read, the token path as before — never a
+  // UNREADABLE IS NOT FRESH: if GitHub access can't be read, the token path as before, never a
   // new App over a connection we could not see (github-access-row.tsx, unusedAccess).
   const reload = useCallback(() => {
     idGet<unknown>("/v1/identity/github").then((raw) => {
@@ -113,7 +113,7 @@ export function ConnectGitHub({ onDone, makeDefault = true, onOtherWays, tokenFo
       }, { label: "Connect" });
       apply(next);
       const row = next.repository.repos.find((r) => r.full_name === fullName);
-      if (row?.pill.tone === "green") toast("Connected · Working");
+      if (row?.pill.tone === "green") toast("Connected, Working");
       onDone?.();
     } catch (error) { setRefusal(refusalOf(error)); } finally { setBusy(false); }
   };
@@ -138,7 +138,7 @@ export function ConnectGitHub({ onDone, makeDefault = true, onOtherWays, tokenFo
       <div className="su-form" data-testid="gh-connect-pick">
         <div className="su-line">
           <span className="su-dot su-tone-green" aria-hidden="true" />
-          <span>GitHub connected{status.app.account ? <> · <span className="su-mono" data-user-text>@{status.app.account}</span></> : null}</span>
+          <span>GitHub connected{status.app.account ? <>, <span className="su-mono" data-user-text>@{status.app.account}</span></> : null}</span>
         </div>
         {found.repos.length ? (
           <RepoPicker repos={found.repos} busy={busy} onConnect={connect}

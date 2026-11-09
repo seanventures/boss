@@ -234,7 +234,7 @@ describe("Sign-in providers", () => {
     expectClean(el);
     await click(q("[data-testid='provider-edit-idp_okta']"));
     expect((q("#pv-secret") as HTMLInputElement).value).toBe("");
-    expect((q("#pv-secret") as HTMLInputElement).placeholder).toBe("Stored · type to replace");
+    expect((q("#pv-secret") as HTMLInputElement).placeholder).toBe("Stored, type to replace");
     await type(q("#pv-name"), "Acme Okta");
     await click(q("[data-testid='provider-save']"));
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ name: "Acme Okta" });

@@ -89,7 +89,7 @@ const CONSENT_TIP = "No secret store on this server. Encrypted in Postgres.";
 export const CONSENT_REFUSAL = { state: "needs_consent", headline: "Tick the box to store it",
                                  fix: `Tick Store in BOSS database. ${CONSENT_TIP}` };
 
-/** `☐ Store in BOSS database` — asked once, before submit, when there is no secret store. */
+/** `☐ Store in BOSS database`, asked once, before submit, when there is no secret store. */
 export function Consent({ checked, onChange }: { checked: boolean;
                                                  onChange: (v: boolean) => void }) {
   const tip = CONSENT_TIP;
@@ -101,7 +101,7 @@ export function Consent({ checked, onChange }: { checked: boolean;
   );
 }
 
-/** Ask BOSS — only on a failing row, and only when a model works (else it could not answer). */
+/** Ask BOSS, only on a failing row, and only when a model works (else it could not answer). */
 export function AskBoss({ row, pillLabel, tip }: { row: string; pillLabel: string; tip: string }) {
   const { view } = useBoard();
   if (!view.models.some((m) => m.pill.tone === "green")) return null;
@@ -110,7 +110,7 @@ export function AskBoss({ row, pillLabel, tip }: { row: string; pillLabel: strin
             data-tip="Ask BOSS about this problem." data-testid={`su-ask-${row}`}
             onClick={() => openDockAbout({
               subject: null, role: null, fresh: true,
-              question: `Setting up BOSS: ${row} shows "${pillLabel}" — ${tip} What do I do?`,
+              question: `Setting up BOSS: ${row} shows "${pillLabel}", ${tip} What do I do?`,
             })}>
       <Sparkle size={14} aria-hidden="true" />Ask BOSS
     </button>

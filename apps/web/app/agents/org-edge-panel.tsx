@@ -3,7 +3,7 @@
 /**
  * The Edge panel (org-view spec §4.3): what is behind one Flow edge. Every edge opens its
  * evidence (the Honeycomb lesson): the agent pairs it folds, with how the work moved, and the
- * newest handoffs along it — each with its status word and `Open run ↗`.
+ * newest handoffs along it, each with its status word and `Open run `.
  */
 import React, { useEffect, useState } from "react";
 
@@ -29,7 +29,7 @@ export function teamOfRole(board: OrgBoard, roleKey: string): string {
 }
 
 /** Activity, filtered the way Activity can be (walk D9): the receiving agent when the edge has
- *  one, and the window — Activity reads 24h or 7d, so 30d opens on 7d. */
+ *  one, and the window, Activity reads 24h or 7d, so 30d opens on 7d. */
 export function activityHref(targets: string[], days: OrgDays): string {
   return consoleHref({ area: "workforce", view: "activity", layout: null, isolate: null, run: null, focus: null,
                        role: null, agent: targets.length === 1 ? targets[0] : null, days: days >= 7 ? "7" : "1" });
@@ -37,7 +37,7 @@ export function activityHref(targets: string[], days: OrgDays): string {
 
 export function edgeSummary(e: Pick<OrgEdge, "handoffs" | "failed" | "waiting" | "stale">): string {
   return [`${e.handoffs} ${e.handoffs === 1 ? "handoff" : "handoffs"}`, e.failed ? `${e.failed} failed` : "",
-          e.waiting ? `${e.waiting} waiting` : "", e.stale ? `${e.stale} stale` : ""].filter(Boolean).join(" · ");
+          e.waiting ? `${e.waiting} waiting` : "", e.stale ? `${e.stale} stale` : ""].filter(Boolean).join(", ");
 }
 
 export function OrgEdgePanel({ projectId, board, focus, days, onClose }: {
@@ -67,7 +67,7 @@ export function OrgEdgePanel({ projectId, board, focus, days, onClose }: {
       if (r.ok) setRows(r.items); else setError(r.error);
     });
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the edge and window, not every poll
+    // eslint-disable-next-line react-hooks/exhaustive-deps, the edge and window, not every poll
   }, [projectId, key]);
 
   return (

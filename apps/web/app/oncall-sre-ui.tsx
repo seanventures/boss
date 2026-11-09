@@ -29,8 +29,8 @@ function Pill({ text, color }: { text: string; color: string }) {
         color,
         border: `1px solid ${color}55`,
         background: `${color}18`,
-        textTransform: "uppercase",
-        letterSpacing: "0.04em",
+        textTransform: "none",
+        letterSpacing: "0",
         whiteSpace: "nowrap",
       }}
     >
@@ -49,7 +49,7 @@ function PageRow({ page }: { page: OncallPage }) {
         gap: 10,
         padding: "9px 10px",
         borderLeft: `3px solid ${sev}`,
-        background: "var(--panel-2, rgba(128,128,128,0.04))",
+        background: "var(--panel-2, var(--boss-c-8123cd9e1f))",
         borderRadius: 8,
       }}
     >
@@ -78,15 +78,15 @@ function PageRow({ page }: { page: OncallPage }) {
           ) : null}
           {page.kg_node_key ? (
             <span style={{ fontSize: 11, color: "var(--muted)" }}>
-              KG · {page.kg_node_key}
+              KG, {page.kg_node_key}
             </span>
           ) : null}
         </div>
         <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>
-          {page.assignee ? `assignee ${page.assignee} · ` : ""}
+          {page.assignee ? `assignee ${page.assignee}, ` : ""}
           adapter {page.adapter ?? "—"}
           {page.reliability_incident_id
-            ? ` · rel ${page.reliability_incident_id.slice(0, 12)}…`
+            ? `, rel ${page.reliability_incident_id.slice(0, 12)}…`
             : ""}
         </div>
       </div>
@@ -111,7 +111,7 @@ function OncallList({ holders }: { holders: OncallHolder[] }) {
             alignItems: "center",
             padding: "8px 10px",
             borderRadius: 8,
-            background: "var(--panel-2, rgba(128,128,128,0.04))",
+            background: "var(--panel-2, var(--boss-c-8123cd9e1f))",
           }}
         >
           <div style={{ flex: 1 }}>
@@ -120,8 +120,8 @@ function OncallList({ holders }: { holders: OncallHolder[] }) {
             </b>
             <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
               {h.schedule_name}
-              {h.layer ? ` · ${h.layer}` : ""}
-              {h.contact ? ` · ${h.contact}` : ""}
+              {h.layer ? `, ${h.layer}` : ""}
+              {h.contact ? `, ${h.contact}` : ""}
             </div>
           </div>
           <Pill text="on-call" color="#3fb950" />
@@ -145,7 +145,7 @@ export function OncallSreHome({ status }: { status: OncallSreStatus }) {
         </p>
         {!status.apiReachable ? (
           <p className="detail">
-            API unreachable — status will populate once the control plane responds.
+            API unreachable, status will populate once the control plane responds.
           </p>
         ) : null}
       </article>
@@ -247,8 +247,8 @@ export function OncallSreHome({ status }: { status: OncallSreStatus }) {
                 <b style={{ color: "var(--ink)" }}>{s.name}</b>
                 <span style={{ color: "var(--muted)" }}>
                   {" "}
-                  · {s.timezone} · {(s.layers || []).length} layer(s)
-                  {s.enabled ? "" : " · disabled"}
+                 , {s.timezone}, {(s.layers || []).length} layer(s)
+                  {s.enabled ? "" : ", disabled"}
                 </span>
               </div>
             ))}

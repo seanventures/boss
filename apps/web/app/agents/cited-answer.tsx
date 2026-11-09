@@ -37,7 +37,7 @@ export function CitedAnswer({ projectId, actor, text, className }: {
           <span className="agent-cites-label">Cited</span>
           {named.map((id) => (
             <a key={id} className="agent-cite" href={kgNodeHref(id)} data-testid="agent-cite" data-kind={names[id].kind}
-               title={`${names[id].kind_label} · open in the Knowledge Graph`}>
+               title={`${names[id].kind_label}, open in the Knowledge Graph`}>
               <span className="agent-cite-kind">{names[id].kind_label}</span>
               <span className="agent-cite-title" data-user-text>{names[id].title}</span>
             </a>

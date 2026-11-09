@@ -179,7 +179,7 @@ describe("the editor", () => {
   it("problems are listed by line and dotted in the gutter", async () => {
     const el = await mount({ problems: [{ step_id: "build", field: "captain", message: "Missing input spec" }] });
     const line = text().value.split("\n").findIndex((l) => l.includes('"captain"')) + 1;
-    expect(q(el, "wf-json-problems")!.textContent).toBe(`Line ${line} · build · Missing input spec`);
+    expect(q(el, "wf-json-problems")!.textContent).toBe(`Line ${line}, build, Missing input spec`);
     const marked = el.querySelector('.wf-json-ln[data-problem]')!;
     expect(marked.textContent).toBe(String(line));
     expect(marked.getAttribute("title")).toBe("Missing input spec");

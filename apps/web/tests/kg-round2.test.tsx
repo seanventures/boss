@@ -121,7 +121,7 @@ describe("4. the class is the node", () => {
     const onFocusNode = vi.fn();
     await mount(<NodePanel projectId="p" actor="ceo" nodeId={FX.hood.center.id} onFocusNode={onFocusNode} />);
     const members = $('[data-testid="kg-panel-members"]')!;
-    expect(members.textContent).toContain("Methods · 32");
+    expect(members.textContent).toContain("Methods, 32");
     expect(members.querySelectorAll('[data-testid="kg-member"]')).toHaveLength(3);
     expect($('[data-testid="kg-members-more"]')?.textContent).toContain("3 of 32");
     // Not listed twice: the Connections summary leaves "Defines" to Methods.
@@ -273,6 +273,6 @@ describe("tester round 2: the rest", () => {
   it("the drawer never hides a state card; the panel and tree scroll without moving the page", () => {
     expect(css).toMatch(/\.kg-col-canvas > \.kg-stage, \.kg-col-canvas > \.kg-stage-wrap, \.kg-col-canvas > \.kg-canvas-loading \{ right: var\(--kg-occlude, 0px\); \}/);
     expect(css).toMatch(/\.kg-col-panel, \.kg-tree-scroll \{ overscroll-behavior: contain; \}/);
-    expect(css).toMatch(/--kg-file: #d6b48a;/);
+    expect(css).toMatch(/--kg-file: var\(--boss-c-d6b48a\);/);
   });
 });

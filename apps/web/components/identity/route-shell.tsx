@@ -3,7 +3,7 @@
  *
  * Reads who is signed in (once per request, shared with the page), resolves which page is being
  * opened (lib/identity/pages.ts), and renders <AccessDenied> instead of the page when the viewer
- * lacks its permission — before the page fetches anything, so no page 403s after loading. The
+ * lacks its permission, before the page fetches anything, so no page 403s after loading. The
  * tab strip lists only pages the viewer can open. Inside the console shell, so the rail, the top
  * bar and My account are the same everywhere.
  */

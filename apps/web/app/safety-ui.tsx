@@ -21,7 +21,7 @@ export function PolicyEvalList({ items }: { items: PolicyEval[] }) {
     <article className="stack-card">
       <h3 style={{ margin: 0 }}>Policy-eval audit trail</h3>
       <p className="detail">
-        Every allow / deny / defer at an enforcement boundary — the durable record behind “policy
+        Every allow / deny / defer at an enforcement boundary, the durable record behind “policy
         violations tracked and blocked.”
       </p>
       {items.length === 0 ? (
@@ -32,12 +32,12 @@ export function PolicyEvalList({ items }: { items: PolicyEval[] }) {
             <div className="feed-row" key={e.id}>
               <div>
                 <h4 style={{ margin: 0 }}>
-                  <span style={{ color: decisionTone(e.decision), textTransform: "uppercase", fontSize: 12 }}>
+                  <span style={{ color: decisionTone(e.decision), textTransform: "none", fontSize: 12 }}>
                     {e.decision}
                   </span>{" "}
                   <span style={{ color: "var(--ink)" }}>{e.boundary}</span>
                 </h4>
-                <p className="detail">{e.action ?? "—"}{e.reason ? ` · ${e.reason}` : ""}</p>
+                <p className="detail">{e.action ?? "—"}{e.reason ? `, ${e.reason}` : ""}</p>
               </div>
               <span className="pill">{e.createdAt ? formatDateTime(e.createdAt) : ""}</span>
             </div>
@@ -80,7 +80,7 @@ export function RunTraceViewer({ trace, initialRunId }: { trace: RunTrace; initi
 
   return (
     <article className="stack-card">
-      <h3 style={{ margin: 0 }}>Run trace — “why did we do that”</h3>
+      <h3 style={{ margin: 0 }}>Run trace, “why did we do that”</h3>
       <p className="detail">
         Reconstruct a code-task run’s full timeline: the run, its fail-closed quality gate, and every
         event that references it.
@@ -97,16 +97,16 @@ export function RunTraceViewer({ trace, initialRunId }: { trace: RunTrace; initi
         <button type="button" className="button secondary" onClick={lookup}>Trace</button>
       </div>
       {initialRunId && !trace ? (
-        <p className="detail" style={{ color: "#f85149" }}>No run found for “{initialRunId}”.</p>
+        <p className="detail" style={{ color: "var(--boss-c-f85149)" }}>No run found for “{initialRunId}”.</p>
       ) : null}
       {trace ? (
         <>
           <p className="detail" style={{ marginBottom: 6 }}>
-            <b style={{ color: "var(--ink)" }}>{trace.run.title || trace.run.id}</b> — {trace.run.status} · {trace.run.phase} · {trace.eventCount} events
+            <b style={{ color: "var(--ink)" }}>{trace.run.title || trace.run.id}</b>, {trace.run.status}, {trace.run.phase}, {trace.eventCount} events
             {trace.qualityGate ? (
               <>
                 {" "}· gate{" "}
-                <b style={{ color: trace.qualityGate.status === "pass" ? "#3fb950" : "#f85149" }}>
+                <b style={{ color: trace.qualityGate.status === "pass" ? "var(--boss-c-3fb950)" : "var(--boss-c-f85149)" }}>
                   {trace.qualityGate.status}
                 </b>
               </>

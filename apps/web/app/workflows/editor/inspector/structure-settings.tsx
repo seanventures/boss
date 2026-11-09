@@ -4,8 +4,8 @@
  * The settings of a branch block: Branch (if / else), Do at the same time (and its Wait for
  * branches), Repeat until, For each.
  *
- * Every control is one action on the store — PATCH_STEP for a setting, ADD_BRANCH and
- * REMOVE_BRANCH for a parallel's branches, SELECT to go to a step — so undo, the lane and the
+ * Every control is one action on the store, PATCH_STEP for a setting, ADD_BRANCH and
+ * REMOVE_BRANCH for a parallel's branches, SELECT to go to a step, so undo, the lane and the
  * JSON follow. What a condition checks is built from parts (lib/workflow-expression.ts), never
  * typed as code; a condition the builder cannot show as written opens as JSON instead.
  */
@@ -406,7 +406,7 @@ export function LoopSettings(p: StructureProps) {
 
 /**
  * A For each: which list it goes through (`items`, picked from what the start form and earlier
- * steps make — the condition builder's sources — or typed as a path), the step it runs for each
+ * steps make, the condition builder's sources, or typed as a path), the step it runs for each
  * item, at most how many items, and how many at a time. A list longer than the limit is refused
  * when the run gets there, never cut short.
  */
@@ -429,7 +429,7 @@ export function ForEachSettings(p: StructureProps) {
         <span className="wf-label">For each item in</span>
         {literal ? (
           <span className="wf-faint" data-testid="wf-foreach-literal">
-            {`A fixed list of ${(step.items as unknown[]).length} — edit it in JSON`}
+            {`A fixed list of ${(step.items as unknown[]).length}, edit it in JSON`}
           </span>
         ) : (
           <>

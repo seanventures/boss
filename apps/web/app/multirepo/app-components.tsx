@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * FACTORY › APPS › APP › COMPONENTS (multi-repo screen 4): what an app is built from — its
+ * FACTORY › APPS › APP › COMPONENTS (multi-repo screen 4): what an app is built from, its
  * components left to right in dependency order (build order; deploys go the same way), each with
  * its repository, language, folder, live version, where it ships and what it needs; the deploy
  * config it reads; and its recent changes, one row per change set however many repositories the
@@ -222,8 +222,8 @@ export function AppComponentsView({ projectId, appKey, onBack }: { projectId: st
           <span className="mr-ui-gh muted" aria-hidden><FileCode size={16} /></span>
           <div style={{ minWidth: 0 }}>
             <b>{d.name || "Deploy config"}</b>{" "}
-            <span className="mr-ui-mono mr-ui-dim" data-user-text>{d.repository}{d.path && d.path !== "/" ? ` · ${d.path}` : ""}</span>
-            <div className="mr-ui-sub">Read only · BOSS reads the deploy plan here, it does not change it</div>
+            <span className="mr-ui-mono mr-ui-dim" data-user-text>{d.repository}{d.path && d.path !== "/" ? `, ${d.path}` : ""}</span>
+            <div className="mr-ui-sub">Read only, BOSS reads the deploy plan here, it does not change it</div>
           </div>
           <span className="mr-ui-spacer" />
           <span className="mr-ui-pill" data-tone="warn">Read only</span>
@@ -337,7 +337,7 @@ function NewChangeSheet({ projectId, appKey, app, repos, onClose }: {
     }
   };
   return (
-    <Sheet title={`New change · ${app}`} onClose={onClose} testId="mr-new-change">
+    <Sheet title={`New change, ${app}`} onClose={onClose} testId="mr-new-change">
       <form className="mr-cs-body" onSubmit={(e) => void start(e)}>
         <p className="mr-cs-subtitle" style={{ margin: 0 }}>
           BOSS plans it across {repos.length ? listWords(repos) : "the app's repositories"}, builds each in order and opens

@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * Govern › Spend (spec §4.4.4): where money went, over ONE window for every figure on the tab —
+ * Govern › Spend (spec §4.4.4): where money went, over ONE window for every figure on the tab , 
  * the six screens that each defined "spend" their own way are one definition here. Money
  * excludes subscription calls; what those ran is shown beside it as `Included`, never in it.
  *
- * By agent and by model (D4, parity with the old card): money, with `Included` beside it —
+ * By agent and by model (D4, parity with the old card): money, with `Included` beside it , 
  * the old card added subscription runs at list price into "spend". Spent vs cap links on to
  * Observability › Models (infra-observability spec §6.7) for the deeper model view.
  */
@@ -81,7 +81,7 @@ export function SpendTab({ projectId, paused }: { projectId: string; paused: boo
         {s ? (
           <span className="gv-spend-total" data-testid="gv-spend-total">
             <span>{money(s.money_usd_micros)} spent</span>
-            {s.included_usd_micros > 0 ? <span title="Ran on a subscription. Not money, not counted."> · Included {money(s.included_usd_micros)}</span> : null}
+            {s.included_usd_micros > 0 ? <span title="Ran on a subscription. Not money, not counted.">, Included {money(s.included_usd_micros)}</span> : null}
           </span>
         ) : null}
       </div>
@@ -120,11 +120,11 @@ export function SpendTab({ projectId, paused }: { projectId: string; paused: boo
                 <span className="gv-low" title="Under 30% of input came from cache">Low</span>
               ) : null}
               <span className="gv-tile-sub" title="Fresh and cached input tokens">
-                {Number(card.prompt_tokens ?? 0).toLocaleString("en-US")} fresh · {Number(card.cache_read_tokens ?? 0).toLocaleString("en-US")} cached
+                {Number(card.prompt_tokens ?? 0).toLocaleString("en-US")} fresh, {Number(card.cache_read_tokens ?? 0).toLocaleString("en-US")} cached
               </span>
             </section>
             <section className="gv-tile" data-testid="gv-scorecard">
-              <span className="gv-tile-label">SCORECARD</span>
+              <span className="gv-tile-label">Scorecard</span>
               <span>Calls {Number(card.calls ?? 0).toLocaleString("en-US")}</span>
               <span title="Calls that failed">Failed {Number(card.failed_calls ?? 0).toLocaleString("en-US")}</span>
               <span title="Money spent on failed calls">Failed burn {money(Number(card.failed_burn_usd_micros ?? 0))}</span>

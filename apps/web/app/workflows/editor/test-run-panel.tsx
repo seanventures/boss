@@ -5,7 +5,7 @@
  * spending steps may run for real, and start the SAVED version as a test.
  *
  * Every row says, before anything starts, what the test will do with that step: return its pin,
- * run it (it only reads), run it live (you allowed it — with every approval and budget rule a
+ * run it (it only reads), run it live (you allowed it, with every approval and budget rule a
  * normal run has), or refuse it. The server decides; this only says it first
  * (lib/workflow-test-run.ts).
  */
@@ -64,7 +64,7 @@ export function TestRunPanel({ projectId, workflowKey, version, steps, capabilit
         <span className="detail">
           {" "}Runs the saved version{version ? ` (v${version})` : ""} as a test. It is labelled a
           test and left out of your run list.
-          {dirty ? " Unsaved changes are not included — save first to test them." : ""}
+          {dirty ? " Unsaved changes are not included, save first to test them." : ""}
         </span>
       </header>
       <ul className="wf-test-run-steps">

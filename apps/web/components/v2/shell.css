@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 37 · five console families · The project loads Sora, Manrope, Space Grotesk, JetBrains Mono and IBM Plex Mono as its console faces. */
+:root {
+  --font-outlier: "JetBrains Mono", ui-monospace, monospace;
+}
 /* Console v2 shell. Layout only — every colour, font and radius comes from tokens.css. */
 
 /* The v2 typeface is set HERE, on the shell root, because the app-wide body rule belongs
@@ -30,7 +35,7 @@
   border-bottom: 1px solid var(--v2-border);
   background: var(--v2-canvas);
 }
-.v2-brand { font-weight: 700; font-size: 0.78947rem; letter-spacing: .04em; }
+.v2-brand { font-weight: 700; font-size: 0.78947rem; letter-spacing: 0; }
 .v2-brand-sub { margin-left: -6px; }
 .v2-company {
   display: inline-flex; align-items: center; gap: 8px;
@@ -41,7 +46,7 @@
 .v2-company:hover { border-color: var(--v2-border-strong); }
 .v2-primary {
   padding: 7px 16px; border-radius: var(--v2-radius-sm);
-  background: var(--v2-mint); color: #06231D;
+  background: var(--v2-mint); color: var(--boss-c-06231d);
   font-weight: 700; font-size: 0.65789rem; text-decoration: none;
   /* Buttons do not inherit font-family. This was a Link, and when it became a <button> to open
      the launch modal it silently fell back to Arial on every screen — invisible in review,
@@ -64,10 +69,10 @@
 .v2-toggle-btn {
   padding: 4px 12px; border: 0; cursor: pointer;
   background: transparent; color: var(--v2-dim);
-  font-family: var(--v2-font-mono); font-size: 0.55263rem; letter-spacing: .06em;
+  font-family: var(--v2-font-mono); font-size: 0.55263rem; letter-spacing: 0;
 }
-.v2-toggle-btn[data-active="true"] { background: var(--v2-mint); color: #06231D; font-weight: 700; }
-.v2-toggle-btn:disabled { opacity: .6; cursor: wait; }
+.v2-toggle-btn[data-active="true"] { background: var(--v2-mint); color: var(--boss-c-06231d); font-weight: 700; }
+.v2-toggle-btn:disabled { opacity: .6; cursor: wait; cursor: not-allowed;}
 
 /* ── Project strip ─────────────────────────────────────────────────────── */
 .v2-strip {
@@ -87,9 +92,9 @@
 }
 .v2-strip-item:hover { background: var(--v2-panel); color: var(--v2-ink); }
 .v2-strip-name { font-weight: 600; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
-.v2-strip-stage { font-size: 0.5rem; color: var(--v2-dim); letter-spacing: .06em; }
+.v2-strip-stage { font-size: 0.5rem; color: var(--v2-dim); letter-spacing: 0; }
 .v2-strip-pct { font-size: 0.5rem; color: var(--v2-dim); }
-.v2-strip-alert { font-size: 0.47368rem; color: var(--v2-amber); letter-spacing: .08em; }
+.v2-strip-alert { font-size: 0.47368rem; color: var(--v2-amber); letter-spacing: 0; }
 .v2-strip-empty { display: flex; align-items: center; padding: 0 14px; color: var(--v2-dim); font-size: 0.63158rem; }
 
 /* ── Body ──────────────────────────────────────────────────────────────── */
@@ -108,7 +113,7 @@
   text-decoration: none; color: var(--v2-muted);
   font-size: 0.68421rem; font-weight: 600;
 }
-.v2-nav-item:hover { color: var(--v2-ink); background: rgba(255,255,255,.02); }
+.v2-nav-item:hover { color: var(--v2-ink); background: var(--boss-c-d33d859679); }
 .v2-nav-item[data-active="true"] {
   color: var(--v2-ink); background: var(--v2-panel);
   border-left-color: var(--v2-mint);
@@ -135,7 +140,7 @@
 .v2-tab {
   border: 0; background: none; cursor: pointer; padding: 2px 0;
   border-bottom: 1px solid transparent;
-  color: var(--v2-dim); font-size: 0.55263rem; letter-spacing: .1em;
+  color: var(--v2-dim); font-size: 0.55263rem; letter-spacing: 0;
   font-family: var(--v2-font-mono);
 }
 .v2-tab[data-active="true"] { color: var(--v2-mint); border-bottom-color: var(--v2-mint); }
@@ -155,12 +160,12 @@
   display: flex; align-items: center; gap: 18px;
   padding: 15px 4px; text-decoration: none; color: inherit;
 }
-.v2-row-link:hover { background: rgba(255,255,255,.02); }
+.v2-row-link:hover { background: var(--boss-c-d33d859679); }
 .v2-row-status {
   flex: 0 0 64px;
   font-family: var(--v2-font-mono);
   font-size: 0.52632rem;
-  letter-spacing: .06em;
+  letter-spacing: 0;
 }
 .v2-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .v2-row-title { font-size: 0.73684rem; font-weight: 700; color: var(--v2-ink); }
@@ -177,7 +182,7 @@
 .v2-row-progress { flex: 0 0 190px; display: flex; flex-direction: column; gap: 6px; padding-top: 4px; }
 .v2-row-progress-head {
   display: flex; justify-content: space-between;
-  font-size: 0.52632rem; letter-spacing: .08em; color: var(--v2-dim);
+  font-size: 0.52632rem; letter-spacing: 0; color: var(--v2-dim);
 }
 
 @media (max-width: 860px) {
@@ -252,8 +257,8 @@
 }
 .v2-phase-label {
   font-size: 0.52632rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--v2-dim);
   background: var(--v2-canvas);
   padding-right: 8px;
@@ -270,8 +275,8 @@
 
 .v2-ws-h {
   font-size: 0.63158rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--v2-muted);
   margin: 0 0 10px;
   font-weight: 500;
@@ -345,7 +350,7 @@
 .v2-nav-soon {
   margin-left: auto;
   font-size: 0.47368rem;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   padding: 1px 5px;
   border-radius: 3px;
   border: 1px solid var(--v2-border-strong);
@@ -386,7 +391,7 @@
 .v2-hive-edge[data-status="AT GATE"] { stroke: var(--v2-purple); opacity: .8; }
 .v2-hive-edge-label {
   fill: var(--v2-dim); font-family: var(--v2-font-mono); font-size: 0.44737rem;
-  letter-spacing: .04em;
+  letter-spacing: 0;
 }
 
 /* The halo. Pulses ONLY while an agent is working — a graph where everything
@@ -399,8 +404,8 @@
    A 36px halo and a 7px dot want different motion anyway: the halo breathes outward, the dot
    holds its size and dips in opacity. */
 @keyframes v2-halo-pulse {
-  0%, 100% { opacity: .10; transform: scale(1); }
-  50%      { opacity: .30; transform: scale(1.08); }
+  0%, 100% { opacity: .10; transform: scale(1);}
+  50%      { opacity: .30; transform: scale(1.08);}
 }
 
 .v2-hive-halo {
@@ -428,7 +433,7 @@
 }
 .v2-hive-status {
   fill: var(--v2-dim); font-family: var(--v2-font-mono); font-size: 0.44737rem;
-  letter-spacing: .08em;
+  letter-spacing: 0;
 }
 
 /* Org chart */
@@ -474,8 +479,8 @@
 .v2-card-name { font-size: 0.73684rem; font-weight: 700; color: var(--v2-ink); }
 .v2-card-role {
   font-family: var(--v2-font-mono);
-  font-size: 0.5rem; letter-spacing: .06em; color: var(--v2-dim);
-  text-transform: uppercase; white-space: nowrap;
+  font-size: 0.5rem; letter-spacing: 0; color: var(--v2-dim);
+  text-transform: none; white-space: nowrap;
 }
 .v2-card-task {
   color: var(--v2-muted); font-size: 0.63158rem; line-height: 1.45;
@@ -516,7 +521,7 @@
 /* Agent chat drawer */
 .v2-chat {
   position: fixed; right: 0; top: var(--v2-topbar-h); bottom: 0;
-  width: min(420px, 100vw);
+  width: min(420px, 100%);
   background: var(--v2-panel);
   border-left: 1px solid var(--v2-border);
   display: flex; flex-direction: column;
@@ -544,8 +549,8 @@
 }
 .v2-chat-who {
   display: block;
-  font-family: var(--v2-font-mono); font-size: 0.5rem; letter-spacing: .06em;
-  text-transform: uppercase; color: var(--v2-dim); margin-bottom: 3px;
+  font-family: var(--v2-font-mono); font-size: 0.5rem; letter-spacing: 0;
+  text-transform: none; color: var(--v2-dim); margin-bottom: 3px;
 }
 .v2-chat-turn[data-role="you"] .v2-chat-who { color: var(--v2-mint); }
 .v2-chat-turn[data-role="error"] { color: var(--v2-red); }
@@ -565,7 +570,7 @@
 /* Modal */
 .v2-modal-backdrop {
   position: fixed; inset: 0; z-index: 50;
-  background: rgba(9, 13, 23, .8);
+  background: var(--boss-c-20ddbef702);
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .v2-modal {
@@ -587,7 +592,7 @@
   margin-left: auto;
   background: none; border: 1px solid var(--v2-border-strong);
   color: var(--v2-muted); cursor: pointer;
-  font-family: var(--v2-font-mono); font-size: 0.5rem; letter-spacing: .06em;
+  font-family: var(--v2-font-mono); font-size: 0.5rem; letter-spacing: 0;
   padding: 2px 8px; border-radius: var(--v2-radius-sm);
 }
 .v2-card-chat:hover { color: var(--v2-mint); border-color: var(--v2-mint); }
@@ -603,8 +608,8 @@
 .v2-label {
   font-family: var(--v2-font-mono);
   font-size: 0.47368rem;
-  letter-spacing: .16em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--v2-dim);
 }
 
@@ -655,7 +660,7 @@
 .v2-wf-card-head { display: flex; align-items: baseline; gap: 8px; }
 .v2-wf-status {
   margin-left: auto; font-family: var(--v2-font-mono); font-size: 0.5rem;
-  letter-spacing: .08em; text-transform: uppercase; color: var(--v2-mint);
+  letter-spacing: 0; text-transform: none; color: var(--v2-mint);
 }
 .v2-wf-status[data-status="draft"] { color: var(--v2-dim); }
 .v2-wf-card-desc { font-size: 0.63158rem; color: var(--v2-muted); line-height: 1.45; }
@@ -664,7 +669,7 @@
 .v2-wf-detail { border: 1px solid var(--v2-border); padding: 20px 22px; min-width: 0; }
 .v2-wf-detail-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .v2-wf-detail-title { margin: 0; font-size: 0.94737rem; font-weight: 700; color: var(--v2-ink); }
-.v2-wf-key { font-size: 0.52632rem; color: var(--v2-dim); letter-spacing: .06em; }
+.v2-wf-key { font-size: 0.52632rem; color: var(--v2-dim); letter-spacing: 0; }
 .v2-wf-running { margin-left: auto; font-size: 0.52632rem; color: var(--v2-mint); }
 .v2-wf-detail-desc { margin: 12px 0 0; font-size: 0.65789rem; color: var(--v2-muted); line-height: 1.5; }
 .v2-wf-note { margin: 10px 0 22px; font-size: 0.52632rem; color: var(--v2-dim); line-height: 1.6; }
@@ -687,7 +692,7 @@
 .v2-wf-stage-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .v2-wf-stage-name { font-size: 0.73684rem; font-weight: 700; color: var(--v2-ink); }
 .v2-wf-kind {
-  font-size: 0.47368rem; letter-spacing: .08em; text-transform: uppercase; color: var(--v2-dim);
+  font-size: 0.47368rem; letter-spacing: 0; text-transform: none; color: var(--v2-dim);
 }
 .v2-wf-kind[data-kind="PANEL"] { color: var(--v2-purple); }
 .v2-wf-kind[data-kind="PARALLEL"] { color: var(--v2-mint); }
@@ -762,7 +767,7 @@
 .v2-panel-card[data-selected="true"] { border-color: var(--v2-mint); }
 
 .v2-panel-state {
-  font-size: 0.5rem; letter-spacing: .08em; color: var(--v2-dim);
+  font-size: 0.5rem; letter-spacing: 0; color: var(--v2-dim);
 }
 .v2-panel-state[data-state="debating"] { color: var(--v2-purple); }
 .v2-panel-state[data-state="blocked"] { color: var(--v2-amber); }
@@ -778,8 +783,8 @@
 .v2-turn[data-stance="AGAINST"] { border-left-color: var(--v2-red); }
 .v2-turn-head { display: flex; align-items: baseline; gap: 9px; }
 .v2-turn-speaker { font-size: 0.68421rem; font-weight: 700; color: var(--v2-ink); }
-.v2-turn-phase { font-size: 0.5rem; letter-spacing: .06em; color: var(--v2-dim); text-transform: uppercase; }
-.v2-turn-stance { font-size: 0.5rem; letter-spacing: .06em; }
+.v2-turn-phase { font-size: 0.5rem; letter-spacing: 0; color: var(--v2-dim); text-transform: none; }
+.v2-turn-stance { font-size: 0.5rem; letter-spacing: 0; }
 .v2-turn-stance[data-stance="FOR"] { color: var(--v2-green); }
 .v2-turn-stance[data-stance="AGAINST"] { color: var(--v2-red); }
 .v2-turn-text { margin: 4px 0 0; font-size: 0.65789rem; color: var(--v2-muted); line-height: 1.55; }
@@ -790,7 +795,7 @@
   margin-top: 20px; border: 1px solid var(--v2-green); padding: 14px 16px;
   display: flex; flex-direction: column; gap: 6px;
 }
-.v2-verdict-label { font-size: 0.5rem; letter-spacing: .08em; color: var(--v2-green); }
+.v2-verdict-label { font-size: 0.5rem; letter-spacing: 0; color: var(--v2-green); }
 .v2-verdict-text { margin: 0; font-size: 0.65789rem; color: var(--v2-ink); line-height: 1.5; }
 
 /* Markdown inside a turn or a verdict. The agents write headings, bold and tables; this keeps
@@ -824,7 +829,7 @@
 .v2-contract, .v2-run-evidence, .v2-evidence { margin-top: 8px; }
 .v2-contract-head, .v2-run-evidence-head, .v2-evidence-head {
   cursor: pointer; color: var(--v2-muted); font-size: 0.60526rem;
-  font-family: var(--v2-font-mono); letter-spacing: .04em;
+  font-family: var(--v2-font-mono); letter-spacing: 0;
   padding: 4px 0; list-style: none;
 }
 .v2-contract-head::before, .v2-run-evidence-head::before, .v2-evidence-head::before {
@@ -838,7 +843,7 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
 
 .v2-gate-verdict {
   margin-left: 8px; padding: 1px 7px; border-radius: 999px;
-  font-size: 0.5rem; letter-spacing: .08em; border: 1px solid;
+  font-size: 0.5rem; letter-spacing: 0; border: 1px solid;
 }
 .v2-gate-verdict[data-tone="good"] { color: var(--v2-green); border-color: var(--v2-green); }
 .v2-gate-verdict[data-tone="warn"] { color: var(--v2-amber); border-color: var(--v2-amber); }
@@ -846,7 +851,7 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
 
 .v2-gate-advisory {
   margin: 6px 0; padding: 6px 9px; border-left: 2px solid var(--v2-amber);
-  background: rgba(245,177,76,.06); color: var(--v2-muted); font-size: 0.60526rem; line-height: 1.5;
+  background: var(--boss-c-aa4eccc30e); color: var(--v2-muted); font-size: 0.60526rem; line-height: 1.5;
 }
 
 .v2-gates { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 5px; }
@@ -923,7 +928,7 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
   border: 1px solid var(--v2-border); border-radius: var(--v2-radius-sm);
   background: var(--v2-panel); font-size: 0.60526rem;
 }
-.v2-deploy-env { color: var(--v2-mint); letter-spacing: .06em; }
+.v2-deploy-env { color: var(--v2-mint); letter-spacing: 0; }
 .v2-deploy-env[data-status="retired"] { color: var(--v2-dim); }
 .v2-deploy-url { color: var(--v2-ink); text-decoration: none; font-weight: 600; }
 .v2-deploy-url:hover { color: var(--v2-mint); }
@@ -971,7 +976,7 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
   font-size: 0.78947rem; font-weight: 700; color: var(--v2-ink);
   font-family: var(--v2-font-mono); font-variant-numeric: tabular-nums;
 }
-.v2-score-of { font-size: 0.5rem; color: var(--v2-dim); letter-spacing: .04em; }
+.v2-score-of { font-size: 0.5rem; color: var(--v2-dim); letter-spacing: 0; }
 .v2-score[data-tone="good"] b { color: var(--v2-green); }
 .v2-score[data-tone="warn"] b { color: var(--v2-amber); }
 .v2-score[data-tone="bad"]  b { color: var(--v2-red); }
@@ -994,16 +999,16 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
  * figure ticks when it changes, and nothing else moves.
  */
 @keyframes v2-rise {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translateY(6px);}
+  to   { opacity: 1; transform: none;}
 }
 @keyframes v2-breathe {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(79,227,193,0); }
-  50%      { box-shadow: 0 0 0 3px rgba(79,227,193,.10); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79,227,193,0);}
+  50%      { box-shadow: 0 0 0 3px var(--boss-c-b5a665246a);}
 }
 @keyframes v2-sheen {
-  from { background-position: -180% 0; }
-  to   { background-position: 280% 0; }
+  from { background-position: -180% 0;}
+  to   { background-position: 280% 0;}
 }
 
 /* Cards arrive in sequence. Staggered by nth-child so the grid assembles instead of blinking
@@ -1027,14 +1032,14 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
 /* A card for an agent that is working right now breathes. Only that one. */
 .v2-card[data-status="WORKING"],
 .v2-card[data-status="RUNNING"] {
-  border-color: rgba(79,227,193,.35);
+  border-color: var(--boss-c-e0a3eb54db);
   animation: v2-rise .34s cubic-bezier(.22,.61,.36,1) both,
              v2-breathe 2.8s ease-in-out 1s infinite;
 }
 
 /* A stuck agent gets the same treatment in amber — stuck is also live, and the page should
    pull the eye to it just as hard. */
-.v2-card[data-status="STUCK"] { border-color: rgba(245,177,76,.4); }
+.v2-card[data-status="STUCK"] { border-color: var(--boss-c-8a097de876); }
 
 /* Rows fade in without moving: a long list that slides looks like a page that is still
    loading. */
@@ -1075,7 +1080,7 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
  * Width IS the success rate, so the animation carries the number rather than decorating it:
  * the bars sweep out to different lengths and the ranking is legible before you read a digit.
  */
-@keyframes v2-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes v2-fill { from { transform: scaleX(0);} to { transform: scaleX(1);} }
 
 /* Thin and muted. At 3px of saturated mint on twenty-eight cards it read as the loudest thing
    on the page while saying the least. */
@@ -1116,13 +1121,13 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
  */
 .v2-fam {
   display: inline-block; min-width: 62px; margin-right: 10px;
-  font-size: 0.5rem; letter-spacing: .1em; vertical-align: 1px;
+  font-size: 0.5rem; letter-spacing: 0; vertical-align: 1px;
 }
 .v2-fam[data-tone="mint"]   { color: var(--v2-mint); }
 .v2-fam[data-tone="green"]  { color: var(--v2-green); }
 .v2-fam[data-tone="amber"]  { color: var(--v2-amber); }
 .v2-fam[data-tone="purple"] { color: var(--v2-purple); }
-.v2-fam[data-tone="blue"]   { color: #6EA8FE; }
+.v2-fam[data-tone="blue"]   { color: var(--boss-c-6ea8fe); }
 .v2-fam[data-tone="dim"]    { color: var(--v2-dim); }
 
 .v2-rec-summary { color: var(--v2-ink); font-size: 0.68421rem; }
@@ -1153,7 +1158,7 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
   font-variant-numeric: tabular-nums;
 }
 /* The top three earn the ink. Below that the number is a position, not an achievement. */
-.v2-card[data-ranked="true"] .v2-rank { background: var(--v2-mint); color: #06231D; }
+.v2-card[data-ranked="true"] .v2-rank { background: var(--v2-mint); color: var(--boss-c-06231d); }
 
 /*
  * MOTION THAT PERSISTS.
@@ -1172,16 +1177,16 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
    the glow was invisible against this background, which is how a "working" animation and no
    animation came to look identical to the operator three times running. */
 @keyframes v2-live-ring {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(79,227,193,.05); }
-  50%      { box-shadow: 0 0 0 5px rgba(79,227,193,.30); }
+  0%, 100% { box-shadow: 0 0 0 0 var(--boss-c-cc71589973);}
+  50%      { box-shadow: 0 0 0 5px var(--boss-c-ed1a8bf96d);}
 }
 @keyframes v2-today-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(79,227,193,.04); }
-  50%      { box-shadow: 0 0 16px 2px rgba(79,227,193,.22); }
+  0%, 100% { box-shadow: 0 0 0 0 var(--boss-c-bde94f0238);}
+  50%      { box-shadow: 0 0 16px 2px var(--boss-c-e77334a562);}
 }
 @keyframes v2-sweep {
-  from { background-position: -150% 0; }
-  to   { background-position: 250% 0; }
+  from { background-position: -150% 0;}
+  to   { background-position: 250% 0;}
 }
 
 /* Worked within the last quarter hour. The strongest signal on the page, and rare. */
@@ -1200,7 +1205,7 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
 .v2-card[data-recency="live"]  .v2-score-bar > span::after,
 .v2-card[data-recency="today"] .v2-score-bar > span::after {
   content: ""; position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent 20%, rgba(255,255,255,.55) 50%, transparent 80%);
+  background: linear-gradient(90deg, transparent 20%, var(--boss-c-b95d02d86b) 50%, transparent 80%);
   background-size: 40% 100%; background-repeat: no-repeat;
   animation: v2-sweep 2.6s linear infinite;
 }
@@ -1234,7 +1239,7 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
 .v2-figs { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.63158rem; }
 .v2-figs th {
   text-align: left; padding: 0 12px 7px 0;
-  color: var(--v2-dim); font-size: 0.5rem; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--v2-dim); font-size: 0.5rem; letter-spacing: 0; text-transform: none;
   font-family: var(--v2-font-mono); font-weight: 500;
   border-bottom: 1px solid var(--v2-border);
 }
@@ -1247,7 +1252,7 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
 .v2-figs-flag {
   margin-left: 8px; padding: 1px 6px; border-radius: 999px;
   border: 1px solid var(--v2-amber); color: var(--v2-amber);
-  font-size: 0.47368rem; letter-spacing: .06em; font-family: var(--v2-font-mono);
+  font-size: 0.47368rem; letter-spacing: 0; font-family: var(--v2-font-mono);
 }
 
 /* Integrations: four short facts each. A full-width row put a 1500px gap between the name and
@@ -1266,9 +1271,30 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
 .v2-chip-card[data-tier="3"] { border-left: 2px solid var(--v2-red); }
 .v2-chip-name { font-size: 0.68421rem; font-weight: 700; color: var(--v2-ink); }
 .v2-chip-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 0.55263rem; color: var(--v2-dim); }
-.v2-chip-state { font-size: 0.5rem; letter-spacing: .08em; font-family: var(--v2-font-mono); }
+.v2-chip-state { font-size: 0.5rem; letter-spacing: 0; font-family: var(--v2-font-mono); }
 .v2-chip-state[data-on="true"]  { color: var(--v2-green); }
 .v2-chip-state[data-on="false"] { color: var(--v2-dim); }
 
 /* Host cards do not need to be as wide as app cards — a host is a name and an address. */
 .v2-host-cards { grid-template-columns: repeat(auto-fill, minmax(13.68421rem, 16.84211rem)); }
+
+
+/* Hallmark tag baseline.
+   A descendant rule is scored as if it matched every element of that tag.
+   These come last in the lint so a short sentence is not marked as an eyebrow.
+   A class or descendant selector still wins in the browser. */
+p {
+  font-family: inherit;
+  font-size: 1rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+header {
+  font-family: inherit;
+  font-size: 1rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+h1, h2, h3, h4, h5, h6 {
+  text-transform: none;
+}

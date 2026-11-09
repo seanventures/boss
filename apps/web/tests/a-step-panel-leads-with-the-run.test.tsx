@@ -351,7 +351,7 @@ describe("(B) a run's lane has room, and scrolls only inside itself", () => {
     expect(viewport0.contains(right)).toBe(false);
     expect(right.parentElement).toBe(viewport0.parentElement);
     expect(right.tabIndex).toBe(-1);
-    expect(el.querySelector('.wf-lane-fade[data-side="right"]')!.hasAttribute("data-on")).toBe(true);
+    expect(el.querySelector('.wf-lane-edge[data-side="right"]')!.hasAttribute("data-on")).toBe(true);
     const viewport = el.querySelector<HTMLElement>(".wf-lane-viewport")!;
     (viewport as unknown as { scrollBy: unknown }).scrollBy = undefined;
     await act(async () => right.click());

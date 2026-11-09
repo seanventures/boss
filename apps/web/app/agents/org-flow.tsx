@@ -2,7 +2,7 @@
 
 /**
  * Organization › Flow (org-view spec §4.3): where work goes between teams, drawn the way service
- * maps are — never a hairball.
+ * maps are, never a hairball.
  *
  *   - One node per team, in FIXED COLUMNS by where the team usually joins a run (`flow_col`,
  *     computed by the server per window, so polling never moves a node). Ties by TEAM_ORDER.
@@ -14,7 +14,7 @@
  *     dims, and the node opens to its agents with agent-level edges (still ≤12).
  *   - `?run=` draws one run's path at agent level, hop by hop (400ms, ≤4s; all at once when
  *     still). A live handoff sends one dot along an edge only if that edge is drawn.
- *   - The Table (`From · To · Handoffs · Failed · Waiting · Last`) is the accessible Flow: always
+ *   - The Table (`From, To, Handoffs, Failed, Waiting, Last`) is the accessible Flow: always
  *     in the DOM, visually hidden in Map mode, and the whole of Flow under 640px.
  */
 import { GatedButton } from "../../components/gated";
@@ -60,7 +60,7 @@ export type OrgFlowProps = {
   /** `T` and the toggle share this; the shell keeps it across polls. */
   mode: "map" | "table";
   onMode: (mode: "map" | "table") => void;
-  /** The `You ⏸` label: show what waits on you (Teams, or Live). */
+  /** The `You ` label: show what waits on you (Teams, or Live). */
   onShowWaits?: () => void;
 };
 
@@ -68,9 +68,9 @@ export function edgeWidth(handoffs: number): number {
   return Math.min(1 + Math.log2(1 + handoffs), 6);
 }
 
-/** The words an edge's state says: `2 failed ✕`, `1 waiting ⏸`, `1 stale`. */
+/** The words an edge's state says: `2 failed ✕`, `1 waiting `, `1 stale`. */
 export function edgeStateWords(e: Pick<OrgEdge, "failed" | "waiting" | "stale">): string[] {
-  return [e.failed ? `${e.failed} failed ✕` : "", e.waiting ? `${e.waiting} waiting ⏸` : "",
+  return [e.failed ? `${e.failed} failed ✕` : "", e.waiting ? `${e.waiting} waiting ` : "",
           e.stale ? `${e.stale} stale` : ""].filter(Boolean);
 }
 
@@ -103,7 +103,7 @@ export function flowColumns(board: OrgBoard, teams: OrgTeam[]): Column[] {
   if (board.teamEdges.some((e) => e.from === "person")) cols.push({ key: "you", teams: ["person"], you: true });
   for (const c of [...byCol.keys()].sort((a, b) => a - b)) cols.push({ key: `c${c}`, teams: order(byCol.get(c)!) });
   // WHERE WORK WAITS ON YOU (walk D3): gates hold a team's finished work and have no agent, so
-  // they are a node of their own — `You ⏸` — at the end of the flow, fed by the teams they hold.
+  // they are a node of their own, `You `, at the end of the flow, fed by the teams they hold.
   if (teams.some((t) => t.waitingYou > 0)) cols.push({ key: "gate", teams: ["gate"], gate: true });
   if (idle.length) cols.push({ key: "idle", teams: order(idle), muted: true });
   return cols;
@@ -188,7 +188,7 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
       for (let i = 2; i <= p.roles.length; i += 1) local.push(setTimeout(() => { if (alive) setLitCount(i); }, step * (i - 1)));
     });
     return () => { alive = false; local.forEach(clearTimeout); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the run, not every board poll
+    // eslint-disable-next-line react-hooks/exhaustive-deps, the run, not every board poll
   }, [props.focusRunId, projectId]);
 
   // The map draws the teams that worked; the rest are one muted line under it, so the columns
@@ -229,7 +229,7 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
   const teamEdges = useMemo(() => board.teamEdges.filter((e) => e.from !== e.to), [board.teamEdges]);
   const topTeam = teamEdges.slice(0, EDGE_CAP);
   const hidden = Math.max(0, teamEdges.length - EDGE_CAP);
-  // Work held at a gate: each team's finished work waiting on you, as an edge into `You ⏸`.
+  // Work held at a gate: each team's finished work waiting on you, as an edge into `You `.
   const gateEdges: Drawn[] = useMemo(() => teams.filter((t) => t.waitingYou > 0).map((t) => ({
     key: `${t.key}>gate`, from: t.key, to: "gate", fromPt: `t:${t.key}`, toPt: "t:gate", level: "team" as const, gate: true,
     edge: { from: t.key, to: "gate", handoffs: t.waitingYou, failed: 0, waiting: t.waitingYou, stale: 0, lastAt: null },
@@ -365,7 +365,7 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
       });
     }
     prev.current = live;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new presence answer is the trigger
+    // eslint-disable-next-line react-hooks/exhaustive-deps, a new presence answer is the trigger
   }, [live]);
 
   // ── Replay last run: a run focus with dots, 4×, ≤12s; lit at once when still ──────────────
@@ -427,9 +427,9 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
   const noEdges = teamEdges.length === 0;
   const gateTotal = teams.reduce((n, t) => n + t.waitingYou, 0);
   const edgeTitle = (d: Drawn) => {
-    if (d.gate) return `${teamLabel(d.from, board)} work waiting on you · ${d.edge.waiting}`;
+    if (d.gate) return `${teamLabel(d.from, board)} work waiting on you, ${d.edge.waiting}`;
     const name = (k: string) => (d.level === "team" ? teamLabel(k, board) : nameOf(k));
-    return `${name(d.from)} → ${name(d.to)} · ${edgeSummary(d.edge)}${d.edge.lastAt ? ` · last ${ageWords(d.edge.lastAt)} ago` : ""}`;
+    return `${name(d.from)} → ${name(d.to)}, ${edgeSummary(d.edge)}${d.edge.lastAt ? `, last ${ageWords(d.edge.lastAt)} ago` : ""}`;
   };
   const showMap = !narrow && mode === "map";
   const tableRows = teamEdges.filter((e) => !tableTeam || e.from === tableTeam || e.to === tableTeam);
@@ -532,12 +532,12 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
               );
             })}
           </svg>
-          {/* EVERY EDGE SAYS ITS VOLUME (walk D5) and its state in words: `×10 · 1 failed ✕`. Each
+          {/* EVERY EDGE SAYS ITS VOLUME (walk D5) and its state in words: `×10, 1 failed ✕`. Each
               of a two-way pair has its own label, offset with its curve (D4). */}
           {drawn.filter((d) => !d.dim).map((d) => {
             const at = routes.get(`${d.level}:${d.key}`);
             if (!at) return null;
-            const words = d.gate ? [`${d.edge.waiting} waiting ⏸`]
+            const words = d.gate ? [`${d.edge.waiting} waiting `]
               : [`×${d.edge.handoffs}`, ...(d.failedHop && !d.edge.failed ? ["failed ✕"] : []), ...edgeStateWords(d.edge)];
             const state = d.failedHop || d.edge.failed ? "failed" : d.edge.waiting ? "waiting" : d.edge.stale ? "stale" : undefined;
             return (
@@ -545,7 +545,7 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
                       data-edge={d.key} data-state={state} data-gate={d.gate || undefined}
                       style={{ left: at.x, top: at.y }} title={edgeTitle(d)}
                       onClick={() => (d.gate ? props.onShowWaits?.() : props.onOpenEdge({ from: d.from, to: d.to, level: d.level }))}>
-                {words.join(" · ")}
+                {words.join(", ")}
               </button>
             );
           })}
@@ -562,7 +562,7 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
                        data-dim={litTeams && ![...litTeams].some((t) => teams.find((x) => x.key === t)?.waitingYou) ? "isolate" : undefined}>
                     <span className="ag-flow-node-btn ag-flow-you" ref={anchor("t:gate")} data-testid="ag-flow-gate"
                           title="Work held at a gate, waiting on your decision">
-                      <span aria-hidden>⏸</span> You <span className="ag-flow-waits" data-state="waiting">{gateTotal} waiting</span>
+                      <span aria-hidden>Pause</span> You <span className="ag-flow-waits" data-state="waiting">{gateTotal} waiting</span>
                     </span>
                   </div>
                 ) : key === "person" ? (
@@ -588,7 +588,7 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
 
       {showMap && idleTeams.length ? (
         <span className="ag-flow-idle" data-testid="ag-flow-idle" title="Nobody on these teams was handed work">
-          No work in {windowWords(days)} · {idleTeams.map((k) => teamLabel(k, board)).join(" · ")}
+          No work in {windowWords(days)}, {idleTeams.map((k) => teamLabel(k, board)).join(", ")}
         </span>
       ) : null}
       <StuckNow board={board} teams={teams} />
@@ -635,7 +635,7 @@ function FlowNode(p: OrgFlowProps & {
           <span className="ag-flow-waits-row">
             {team.waitingTotal ? (
               <span className="ag-flow-waits" data-state="waiting" title={`Open since ${team.waiting[0]?.since ? localFull(team.waiting[0].since) : "unknown"}`}>
-                Waiting {team.waitingTotal} · oldest {ageWords(team.waiting[0]?.since ?? null)}
+                Waiting {team.waitingTotal}, oldest {ageWords(team.waiting[0]?.since ?? null)}
               </span>
             ) : null}
             {team.work.failed ? (
@@ -713,7 +713,7 @@ function FlowTable({ board, rows, search, visible, teamOf, filter, onClearFilter
                   <td><span className="ag-flow-arrow" aria-hidden>→ </span>{teamLabel(e.to, board)}</td>
                   <td data-label="Handoffs">{e.handoffs}</td>
                   <td data-label="Failed">{e.failed ? `${e.failed} failed ✕` : "0"}</td>
-                  <td data-label="Waiting">{e.waiting ? `${e.waiting} waiting ⏸` : "0"}</td>
+                  <td data-label="Waiting">{e.waiting ? `${e.waiting} waiting ` : "0"}</td>
                   <td data-label="Last" title={e.lastAt ? localFull(e.lastAt) : undefined}>{e.lastAt ? `${ageWords(e.lastAt)} ago` : ""}</td>
                 </tr>
                 {isOpen ? pairs.map((a) => (
@@ -723,7 +723,7 @@ function FlowTable({ board, rows, search, visible, teamOf, filter, onClearFilter
                     <td><span className="ag-flow-arrow" aria-hidden>→ </span><span data-user-text>{nameOf(a.to)}</span></td>
                     <td data-label="Handoffs">{a.handoffs}</td>
                     <td data-label="Failed">{a.failed ? `${a.failed} failed ✕` : "0"}</td>
-                    <td data-label="Waiting">{a.waiting ? `${a.waiting} waiting ⏸` : "0"}</td>
+                    <td data-label="Waiting">{a.waiting ? `${a.waiting} waiting ` : "0"}</td>
                     <td data-label="Last">{a.lastAt ? `${ageWords(a.lastAt)} ago` : ""}</td>
                   </tr>
                 )) : null}
@@ -736,7 +736,7 @@ function FlowTable({ board, rows, search, visible, teamOf, filter, onClearFilter
   );
 }
 
-/** `Stuck now` (walk D3): under the map, where work is stuck — the oldest waits and the newest
+/** `Stuck now` (walk D3): under the map, where work is stuck, the oldest waits and the newest
  *  failures, each with who, how long, what, and the one link that acts on it. */
 function StuckNow({ board, teams }: { board: OrgBoard; teams: OrgTeam[] }) {
   const waits = teams.flatMap((t) => t.waiting).sort((a, b) => (a.since ?? "").localeCompare(b.since ?? "")).slice(0, 5);

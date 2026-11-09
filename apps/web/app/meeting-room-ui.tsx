@@ -1,24 +1,24 @@
 "use client";
 
 /**
- * PANELS — agent meetings that debate to a decision or a PRD (area `meetings`).
+ * PANELS, agent meetings that debate to a decision or a PRD (area `meetings`).
  *
  * Not a sidebar page: the usual way in is a workflow run's panel step, whose step panel shows
  * `MeetingCompact` and links here for the full room. A dossier's "Convene a panel", the
- * Factory's PRD links, Approvals and old links land here too — by `meeting=`, `run=`, `task=`
+ * Factory's PRD links, Approvals and old links land here too, by `meeting=`, `run=`, `task=`
  * or `#id`. The look is the approved mockup (boss-research-panels-mockup: panels-home,
  * meeting); styles in research/research.css.
  *
- *   Panels home  — convene hero (type, directive, website, task, the seats around the table),
+ *   Panels home , convene hero (type, directive, website, task, the seats around the table),
  *                  recent panel cards, Manage seats, Maintenance (vote, sweep).
- *   Meeting room — hero with the stage stepper and the outcome card; the rounds as speaker
+ *   Meeting room, hero with the stage stepper and the outcome card; the rounds as speaker
  *                  cards (each seat's gist, "Read all" for the full reply); the facilitator's
  *                  synthesis beside the PRD's sections (or the verdict / the actions for a
  *                  go/no-go or a stand-up); a drawer with the vote, what was asked and the
  *                  context BOSS added, the linked task, status and cost, and the timeline.
  *
  * NEVER THE PROMPT. Titles, heroes, cards and the drawer read the person's own words through
- * humanBrief (lib/research-panels) — the scaffolding BOSS wraps around a panel's prompt is
+ * humanBrief (lib/research-panels), the scaffolding BOSS wraps around a panel's prompt is
  * shown only as the readable "Context BOSS added".
  */
 import { changeHref, linkTarget } from "../lib/repo-links";
@@ -62,8 +62,8 @@ export const ROLE_ORDER = SEAT_ORDER;
 
 const PHASE_LABEL: Record<string, string> = {
   research: "Researching the site",
-  round1: "Round 1 · opening views",
-  round2: "Round 2 · debate",
+  round1: "Round 1, opening views",
+  round2: "Round 2, debate",
   synthesis: "Synthesis",
   draft: "Drafting the PRD",
   finalize: "Finalizing",
@@ -256,7 +256,7 @@ function Synthesis({ meeting }: { meeting: Meeting }) {
             <b>The PRD</b><span className="rp-spacer" />
             {meeting.pull_request_url ? (
               <a className="rp-link" href={changeHref(meeting.pull_request_url)} {...linkTarget(meeting.pull_request_url)}>
-                PR #{meeting.pull_request_number ?? ""} ↗
+                PR #{meeting.pull_request_number ?? ""} 
               </a>
             ) : null}
           </div>
@@ -284,7 +284,7 @@ function Synthesis({ meeting }: { meeting: Meeting }) {
 
 // ── The outcome card ───────────────────────────────────────────────────────────────────────
 
-/** "Build it": the composer, prefilled from the AGREED PRD — never the raw directive. */
+/** "Build it": the composer, prefilled from the AGREED PRD, never the raw directive. */
 function buildHref(meeting: Meeting, search: string): string {
   const title = titleOf(meeting);
   return composerHref(search, {
@@ -296,7 +296,7 @@ function buildHref(meeting: Meeting, search: string): string {
 /** Convene the same panel again: a failed one's way forward. */
 function ConveneAgain({ meeting, projectId }: { meeting: Meeting; projectId: string }) {
   return (
-    <ActionForm permission="meeting:convene" action={conveneMeetingAction} successMessage="Convened again — the new panel is in session."
+    <ActionForm permission="meeting:convene" action={conveneMeetingAction} successMessage="Convened again, the new panel is in session."
                 onResult={(r) => {
                   // Into the new panel (or the one already in session on this ask).
                   const id = r.ok ? (r.data?.run_id as string | undefined) : undefined;
@@ -326,10 +326,10 @@ export function OutcomeCard({ meeting, search, projectId, inWorkflow = false }: 
   const seats = seatsOf(meeting);
   const repo = repoOf(meeting.pull_request_url);
   const typed = kindOf(meeting) !== "prd_panel";
-  const sub = o.stage === "live" ? `${seats.length} seats · updates live`
-    : o.stage === "published" ? [repo, sections ? `${sections} sections` : ""].filter(Boolean).join(" · ")
+  const sub = o.stage === "live" ? `${seats.length} seats, updates live`
+    : o.stage === "published" ? [repo, sections ? `${sections} sections` : ""].filter(Boolean).join(", ")
     : o.stage === "building" ? "The PRD is being built"
-    : o.stage === "approved" ? "Approved — publishing it as a pull request"
+    : o.stage === "approved" ? "Approved, publishing it as a pull request"
     : o.stage === "awaiting" ? "Publishing waits for your approval"
     : o.stage === "simulated" ? "No model was called"
     : o.stage === "verdict" ? `${(meeting.dissent ?? []).length} dissent${(meeting.dissent ?? []).length === 1 ? "" : "s"} recorded`
@@ -353,14 +353,14 @@ export function OutcomeCard({ meeting, search, projectId, inWorkflow = false }: 
         {o.stage === "failed" ? <ConveneAgain meeting={meeting} projectId={projectId} /> : null}
         {o.stage === "building" || o.stage === "built" ? (
           <a className="rp-btn primary" href={consoleHref(search, { area: "code_tasks", run: meeting.build?.id })}>
-            Open the build →</a>
+            Open the build</a>
         ) : null}
         {!typed && !inWorkflow && (o.stage === "published" || o.stage === "approved") ? (
-          <a className="rp-btn primary" data-testid="meeting-build-it" href={buildHref(meeting, search)}>Build it →</a>
+          <a className="rp-btn primary" data-testid="meeting-build-it" href={buildHref(meeting, search)}>Build it</a>
         ) : null}
         {meeting.pull_request_url ? (
           <a className={`rp-btn${inWorkflow ? " primary" : ""}`} href={changeHref(meeting.pull_request_url)} {...linkTarget(meeting.pull_request_url)}>
-            Open the PR ↗
+            Open the PR 
           </a>
         ) : null}
         {(o.stage === "awaiting" || o.stage === "declined" || (typed && meeting.decision_id)) ? (
@@ -403,13 +403,13 @@ function MeetingEvidence({ meetingId, projectId }: { meetingId: string; projectI
   return (
     <div className="rp-card" data-testid="meeting-evidence">
       <div className="rp-card-h"><b>Phase timeline</b></div>
-      {evidence.simulated ? <p className="rp-sub">A no-spend fixture — no live model was called.</p> : null}
+      {evidence.simulated ? <p className="rp-sub">A no-spend fixture, no live model was called.</p> : null}
       {evidence.phase_timeline.length ? (
         <ol className="rp-timeline">
           {evidence.phase_timeline.map((step) => (
             <li key={step.phase}>
               <b>{PHASE_LABEL[step.phase] ?? step.phase.replace(/_/g, " ")}</b>
-              {" — "}{step.status === "completed" || !step.status ? "done" : step.status.replace(/_/g, " ")}
+              {", "}{step.status === "completed" || !step.status ? "done" : step.status.replace(/_/g, " ")}
             </li>
           ))}
         </ol>
@@ -428,7 +428,7 @@ function Drawer({ meeting, projectId, actor, search }: { meeting: Meeting; proje
   return (
     <details className="rp-more" data-testid="meeting-drawer">
       <summary>{[meeting.can_vote === false ? "The vote" : "Record the vote", "What was asked",
-                 meeting.task_id ? "Linked task" : "", "Status"].filter(Boolean).join(" · ")}</summary>
+                 meeting.task_id ? "Linked task" : "", "Status"].filter(Boolean).join(", ")}</summary>
       <div className="rp-drawer">
         {meeting.can_vote === false ? (
           <div className="rp-card" data-testid="meeting-vote-closed">
@@ -448,7 +448,7 @@ function Drawer({ meeting, projectId, actor, search }: { meeting: Meeting; proje
             </details>
           ) : null}
           {meeting.url ? (
-            <a className="rp-link sm" href={meeting.url} target="_blank" rel="noreferrer">Studied {meeting.url} ↗</a>
+            <a className="rp-link sm" href={meeting.url} target="_blank" rel="noreferrer">Studied {meeting.url} </a>
           ) : null}
         </div>
         <div className="rp-card" data-testid="meeting-task">
@@ -457,15 +457,15 @@ function Drawer({ meeting, projectId, actor, search }: { meeting: Meeting; proje
             <>
               <p className="rp-hyp">{shortTitle(meeting.task_title ?? "", 200)}</p>
               {meeting.task_status ? <span className="rp-sub">{meeting.task_status.replace(/_/g, " ")}</span> : null}
-              <a className="rp-link sm" href={consoleHref(search, { area: "work", task: meeting.task_id })}>View in Work →</a>
+              <a className="rp-link sm" href={consoleHref(search, { area: "work", task: meeting.task_id })}>View in Work</a>
             </>
-          ) : <span className="rp-sub">No task — this panel stands on its own.</span>}
+          ) : <span className="rp-sub">No task, this panel stands on its own.</span>}
         </div>
         <div className="rp-card" data-testid="meeting-status">
           <div className="rp-card-h"><b>Status and cost</b></div>
           <dl className="rp-kv">
             <dt>Kind</dt><dd>{TYPE_LABEL[kindOf(meeting)]}</dd>
-            <dt>Status</dt><dd>{STATUS_WORDS[meeting.status] ?? meeting.status}{meetingLive(meeting) ? ` · ${PHASE_LABEL[meeting.phase ?? ""] ?? ""}` : ""}</dd>
+            <dt>Status</dt><dd>{STATUS_WORDS[meeting.status] ?? meeting.status}{meetingLive(meeting) ? `, ${PHASE_LABEL[meeting.phase ?? ""] ?? ""}` : ""}</dd>
             {meeting.prd_label && kindOf(meeting) === "prd_panel" ? <><dt>PRD</dt><dd>{meeting.prd_label}</dd></> : null}
             {took(meeting.created_at, meeting.completed_at) ? <><dt>Took</dt><dd>{took(meeting.created_at, meeting.completed_at)}</dd></> : null}
             {meeting.model ? <><dt>Model</dt><dd>{meeting.model}</dd></> : null}
@@ -509,12 +509,12 @@ function MeetingRoom({ id, listed, projectId, actor, onBack }: {
       <section className="rp-dhero" data-kind="meeting">
         <div className="rp-aurora" aria-hidden />
         <div className="rp-dh-l">
-          <div className="rp-eyebrow">
+          <div className="rp-area-name">
             <span className="rp-dot" data-tone={live ? undefined : meeting.status === "failed" ? "bad" : "idle"} aria-hidden />
-            {TYPE_LABEL[kind]}{meeting.status === "simulated" ? " · fixture" : ""}
-            <Ago iso={meeting.created_at} prefix=" · " />
-            {took(meeting.created_at, meeting.completed_at) ? ` · took ${took(meeting.created_at, meeting.completed_at)}` : ""}
-            {meeting.cost_usd_micros ? ` · ${usd(meeting.cost_usd_micros)}` : ""}
+            {TYPE_LABEL[kind]}{meeting.status === "simulated" ? ", fixture" : ""}
+            <Ago iso={meeting.created_at} prefix=", " />
+            {took(meeting.created_at, meeting.completed_at) ? `, took ${took(meeting.created_at, meeting.completed_at)}` : ""}
+            {meeting.cost_usd_micros ? `, ${usd(meeting.cost_usd_micros)}` : ""}
           </div>
           <h2 className="rp-dh-t" title={briefOf(meeting)}>{titleOf(meeting)}</h2>
           {line ? <p className="rp-dh-s">{line}</p> : null}
@@ -607,17 +607,17 @@ function ConveneHero({ projectId, roles, tasks, meetings }: {
     ? (new Date(m.completed_at).getTime() - new Date(m.created_at).getTime()) / 1000 : NaN)));
   const cost = median(done.map((m) => m.cost_usd_micros ?? NaN));
   const estimate = type === "prd_panel"
-    ? `${secs ? `About ${secs < 120 ? `${Math.round(secs)} seconds` : `${Math.round(secs / 60)} minutes`}` : "A few minutes"}${cost ? ` and ${usd(cost)}` : ""} a panel · nothing is built until you say so`
-    : "A no-spend fixture today — no model is called";
+    ? `${secs ? `About ${secs < 120 ? `${Math.round(secs)} seconds` : `${Math.round(secs / 60)} minutes`}` : "A few minutes"}${cost ? ` and ${usd(cost)}` : ""} a panel, nothing is built until you say so`
+    : "A no-spend fixture today, no model is called";
   const fixture = type !== "prd_panel";
   return (
     <ActionForm permission="meeting:convene" action={conveneMeetingAction} className="rp-convene" data-testid="meeting-new-form"
-                successMessage={fixture ? "The fixture ran — its minutes are below." : "Convened — the panel is in session below."}>
+                successMessage={fixture ? "The fixture ran, its minutes are below." : "Convened, the panel is in session below."}>
       <div className="rp-aurora" aria-hidden />
       <input type="hidden" name="project_id" value={projectId} />
       <div className="rp-cv-l">
-        <div className="rp-eyebrow"><span className="rp-dot" aria-hidden />Panels · agents debate it, you get a decision</div>
-        <h2 className="rp-h2">Convene a <em>panel</em></h2>
+        <div className="rp-area-name"><span className="rp-dot" aria-hidden />Panels, agents debate it, you get a decision</div>
+        <h2 className="rp-h2">Convene a panel</h2>
         <div className="rp-types" role="radiogroup" aria-label="Meeting type">
           {TYPES.map((t) => (
             <label key={t.key} className="rp-type" data-on={type === t.key ? "true" : undefined}>
@@ -630,20 +630,20 @@ function ConveneHero({ projectId, roles, tasks, meetings }: {
         <div className="rp-composer">
           <label className="rp-sr" htmlFor="rp-directive">Directive</label>
           <textarea id="rp-directive" name="directive" rows={2} required data-testid="meeting-directive-input"
-                    placeholder={type === "standup" ? "Daily stand-up — blockers, commitments, today's plan."
+                    placeholder={type === "standup" ? "Daily stand-up, blockers, commitments, today's plan."
                       : type === "go_no_go" ? "Should we ship the Lead-Triage Inbox to the first ten pilot teams this week?"
                       : "What should the panel decide or spec? e.g. “Add snoozing to the Lead-Triage Inbox: a rep snoozes a lead until a date and it returns that morning at the top.”"} />
           {site ? (
-            <input name="url" className="rp-ctx rp-url" type="url" placeholder="https://example.com — the panel studies it first"
+            <input name="url" className="rp-ctx rp-url" type="url" placeholder="https://example.com, the panel studies it first"
                    aria-label="Website to study" data-testid="meeting-url" autoFocus />
           ) : null}
           <div className="rp-c-row">
             {type === "prd_panel" ? (
               <>
                 <button type="button" className="rp-chip" aria-pressed={site} onClick={() => setSite((x) => !x)}
-                        data-testid="meeting-study-site">↗ Study a website</button>
+                        data-testid="meeting-study-site"> Study a website</button>
                 <span className="rp-chip">
-                  <span aria-hidden>⛓</span>
+                  <span aria-hidden>Link</span>
                   <select name="task_id" defaultValue="" aria-label="Attach to a task" data-testid="meeting-task-select">
                     <option value="">Attach to: new task</option>
                     {tasks.map((t) => (
@@ -657,8 +657,7 @@ function ConveneHero({ projectId, roles, tasks, meetings }: {
             <span className="rp-spacer" />
             <SubmitButton type="submit" className="rp-btn primary" data-testid="meeting-convene"
                           pendingLabel={fixture ? "Running…" : "Convening…"} disabled={chosen.size === 0}>
-              Convene →
-            </SubmitButton>
+              Convene</SubmitButton>
           </div>
         </div>
         <How steps={["Opening views", "They debate", "The facilitator reconciles",
@@ -680,7 +679,7 @@ function ConveneHero({ projectId, roles, tasks, meetings }: {
               </label>
             );
           })}
-          {enabled.length === 0 ? <span className="rp-sub">No seats yet — add one under Manage seats.</span> : null}
+          {enabled.length === 0 ? <span className="rp-sub">No seats yet, add one under Manage seats.</span> : null}
         </div>
       </div>
     </ActionForm>
@@ -707,13 +706,13 @@ function PanelCard({ m, onOpen }: { m: Meeting; onOpen: () => void }) {
         </span>
         {live ? <span className="rp-prc">{PHASE_LABEL[m.phase ?? ""] ?? "In session"}</span>
           : kindOf(m) !== "prd_panel" ? <span className="rp-prc" data-tone="muted">{TYPE_LABEL[kindOf(m)]}</span>
-          : m.pull_request_url ? <span className="rp-prc">PRD · PR #{m.pull_request_number}</span>
+          : m.pull_request_url ? <span className="rp-prc">PRD, PR #{m.pull_request_number}</span>
           // FROM THE PRD'S DECISION, never a hard-coded guess (meeting_service.prd_state_of).
           : <span className="rp-prc" data-tone="muted" data-testid="mr-meeting-prd-state">{m.prd_label ?? "PRD state unknown"}</span>}
       </span>
       <span className="rp-mfoot">
-        <span>{seats.length} seat{seats.length === 1 ? "" : "s"} + facilitator{m.task_id ? " · task linked" : ""}</span>
-        <span>{[t, m.cost_usd_micros ? usd(m.cost_usd_micros) : ""].filter(Boolean).join(" · ") || "—"}</span>
+        <span>{seats.length} seat{seats.length === 1 ? "" : "s"} + facilitator{m.task_id ? ", task linked" : ""}</span>
+        <span>{[t, m.cost_usd_micros ? usd(m.cost_usd_micros) : ""].filter(Boolean).join(", ") || "—"}</span>
       </span>
     </button>
   );
@@ -732,7 +731,7 @@ function ManageSeats({ projectId, roles }: { projectId: string; roles: MeetingRo
           <div key={r.key} className="rp-role-row" data-off={r.enabled === false ? "true" : undefined}>
             <SeatAvatar role={r.title} size={28} />
             <div>
-              <b>{r.title}{r.is_default ? <span className="rp-sub"> · default</span> : null}</b>
+              <b>{r.title}{r.is_default ? <span className="rp-sub">, default</span> : null}</b>
               <span>{r.lens}</span>
             </div>
             <div className="rp-role-acts">
@@ -758,9 +757,9 @@ function ManageSeats({ projectId, roles }: { projectId: string; roles: MeetingRo
       <ActionForm permission="meeting:configure" action={upsertMeetingRoleAction} className="rp-add-role">
         <input type="hidden" name="project_id" value={projectId} />
         <div className="rp-lbl">Add a seat</div>
-        <input type="text" name="title" placeholder="Seat title — e.g. Legal Counsel" required aria-label="Seat title" />
+        <input type="text" name="title" placeholder="Seat title, e.g. Legal Counsel" required aria-label="Seat title" />
         <textarea name="lens" rows={3} required aria-label="Lens"
-                  placeholder="Its lens — how this seat thinks. e.g. legal and contractual risk: IP, liability, compliance, terms." />
+                  placeholder="Its lens, how this seat thinks. e.g. legal and contractual risk: IP, liability, compliance, terms." />
         <div className="rp-c-row">
           <label className="rp-toggle"><input type="checkbox" name="is_default" value="true" /><i aria-hidden />On by default</label>
           <span className="rp-spacer" />
@@ -774,7 +773,7 @@ function ManageSeats({ projectId, roles }: { projectId: string; roles: MeetingRo
 /* ---- Maintenance: one menu, two jobs ------------------------------------------- */
 
 /**
- * Maintenance ⌄ → [Record a vote] [Sweep stalled panels]. One level, each job named once —
+ * Maintenance ⌄ → [Record a vote] [Sweep stalled panels]. One level, each job named once , 
  * not the consensus card's own folds three deep. The vote lists only panels with minutes to vote
  * against, and says why when there are none; results read as sentences.
  */
@@ -869,8 +868,8 @@ export function MeetingsHome({
     return [...meetings, ...more.filter((m) => !seen.has(m.id))];
   }, [meetings, more]);
 
-  // Open from a deep link after mount (avoids a hydration mismatch) — `meeting=`, a run id in
-  // `run=`, the task a dossier's panel was convened for (`task=`), or `#id` — and keep the
+  // Open from a deep link after mount (avoids a hydration mismatch), `meeting=`, a run id in
+  // `run=`, the task a dossier's panel was convened for (`task=`), or `#id`, and keep the
   // selection in sync with Back/Forward. A task whose panel is not on this page is looked up
   // by task (`task:<id>`), never dropped on the list.
   const meetingsRef = useMemo(() => all.map((m) => ({ id: m.id, task_id: m.task_id })), [all]);
@@ -918,13 +917,13 @@ export function MeetingsHome({
         <div className="rp-sec-h">
           <h3>Recent panels</h3>
           <span className="rp-sub" data-testid="panels-counts">
-            {panels} panel{panels === 1 ? "" : "s"} · {prds} became PRDs · {seatsAvailable} role-agent{seatsAvailable === 1 ? "" : "s"}
+            {panels} panel{panels === 1 ? "" : "s"}, {prds} became PRDs, {seatsAvailable} role-agent{seatsAvailable === 1 ? "" : "s"}
           </span>
           <span className="rp-spacer" />
           <PanelsMaintenance actor={actor} meetings={all} />
           <button type="button" className="rp-link" aria-expanded={showSeats} data-testid="meeting-manage-seats"
                   onClick={() => setShowSeats((x) => !x)}>
-            {showSeats ? "Done with seats" : "Manage seats ↗"}
+            {showSeats ? "Done with seats" : "Manage seats "}
           </button>
         </div>
         {showSeats ? <div style={{ marginBottom: 14 }}><ManageSeats projectId={projectId} roles={roles} /></div> : null}
@@ -1004,7 +1003,7 @@ export function MeetingCompact({ meetingId, projectId, buildState }: {
           <div className="rp-cmp-top">
             <Verdict tone={o.tone} testId="meeting-compact-outcome">{o.pill}</Verdict>
             <span className="rp-sub">
-              {[`${seats.length} seats`, t ? `took ${t}` : "", meeting.cost_usd_micros ? usd(meeting.cost_usd_micros) : ""].filter(Boolean).join(" · ")}
+              {[`${seats.length} seats`, t ? `took ${t}` : "", meeting.cost_usd_micros ? usd(meeting.cost_usd_micros) : ""].filter(Boolean).join(", ")}
             </span>
           </div>
           <b className="rp-cmp-title">{live ? panelDoing(meeting) : o.headline}</b>
@@ -1022,7 +1021,7 @@ export function MeetingCompact({ meetingId, projectId, buildState }: {
                   <span className="rp-faces">
                     {seats.map((s) => (
                       <span key={s} data-filled={have[s] ? "true" : "false"}
-                            title={have[s] ? `${callsignOf(s) || s}: ${seatGist(meeting, r, s)?.headline ?? ""}` : `${s} — not yet`}>
+                            title={have[s] ? `${callsignOf(s) || s}: ${seatGist(meeting, r, s)?.headline ?? ""}` : `${s}, not yet`}>
                         <SeatAvatar role={s} size={24} state={have[s] ? "done" : live ? "thinking" : "idle"} />
                       </span>
                     ))}
@@ -1039,9 +1038,9 @@ export function MeetingCompact({ meetingId, projectId, buildState }: {
         <div className="rp-cmp-foot">
           {meeting.pull_request_url ? (
             <a className="rp-btn sm primary" href={changeHref(meeting.pull_request_url)} {...linkTarget(meeting.pull_request_url)}
-               data-testid="meeting-compact-pr">Open the PR ↗</a>
+               data-testid="meeting-compact-pr">Open the PR </a>
           ) : o.stage === "awaiting" ? (
-            <a className="rp-btn sm primary" href={decisionHref(search, meeting.decision_id)}>Review in Approvals →</a>
+            <a className="rp-btn sm primary" href={decisionHref(search, meeting.decision_id)}>Review in Approvals</a>
           ) : null}
           <a className={`rp-btn sm${meeting.pull_request_url || o.stage === "awaiting" ? "" : " primary"}`}
              href={full} data-testid="meeting-compact-open">Open full view ↗</a>

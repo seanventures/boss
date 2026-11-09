@@ -19,7 +19,7 @@ const MEMORY = codeOnly("app/memory-ui.tsx");
 describe("the Memory screen", () => {
   it("names what failed and what to do", () => {
     expect(MEMORY).toContain("Could not load what BOSS remembers:");
-    expect(MEMORY).toContain("Nothing changed — press it again.");
+    expect(MEMORY).toContain("Nothing changed, press it again.");
     expect(MEMORY).not.toMatch(/setError\(body\?\.error \?\? "failed"\)/);
   });
 

@@ -228,9 +228,9 @@ describe("Connectors and ideas (operator, 2026-10-13: there is no Template tab)"
     await click(stripe);
     expect(stripe.getAttribute("aria-disabled")).toBeNull();
     expect(stripe.getAttribute("aria-pressed")).toBe("true");
-    expect(login.textContent).toContain("Added ✓ · 1 of 2");
-    expect(stripe.textContent).toContain("Added ✓ · 2 of 2");
-    expect($('[data-testid="np-connectors-note"]')!.textContent).toBe("2 added · one build");
+    expect(login.textContent).toContain("Added ✓, 1 of 2");
+    expect(stripe.textContent).toContain("Added ✓, 2 of 2");
+    expect($('[data-testid="np-connectors-note"]')!.textContent).toBe("2 added, one build");
     await click(login);                                             // unpicking one keeps the other
     expect(login.getAttribute("aria-pressed")).toBe("false");
     expect(stripe.textContent).toContain("Added ✓");
@@ -261,7 +261,7 @@ describe("Connectors and ideas (operator, 2026-10-13: there is no Template tab)"
     await mount();
     const stack = $('[data-testid="np-stack"]') as HTMLSelectElement;
     expect(stack.value).toBe("");
-    expect([...stack.options].map((o) => o.textContent)).toContain("Node · React + Vite, Express, PostgreSQL");
+    expect([...stack.options].map((o) => o.textContent)).toContain("Node, React + Vite, Express, PostgreSQL");
     expect(stack.getAttribute("title")).toContain("React + Vite, FastAPI, PostgreSQL: experimental");
     await choose(stack, "react-vite+fastapi+postgres");
     await type($('[data-testid="dw-new-title"]'), "HelpDesk AI");
@@ -393,7 +393,7 @@ describe("the walk's findings", () => {
     expect(adapterLanguage(java)).toBe("java");
     expect(adapterWord(java)).toBe("Java Spring Boot (with an optional React + Vite front end)");
     expect(adapterLanguage(adapters.find((a) => a.id === "react-vite+fastapi+postgres")!)).toBe("python");
-    expect(adapterWord(adapters.find((a) => a.id === "react-vite+express+postgres")!)).toBe("Node · React + Vite, Express, PostgreSQL");
+    expect(adapterWord(adapters.find((a) => a.id === "react-vite+express+postgres")!)).toBe("Node, React + Vite, Express, PostgreSQL");
   });
 
   it("the app card lists each connector once and keeps long lists short, the rest in a tooltip", () => {

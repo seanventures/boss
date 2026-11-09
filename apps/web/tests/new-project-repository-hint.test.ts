@@ -25,7 +25,7 @@ describe("the repository step", () => {
   it("names the pre-selected repository when the project resolves to one", () => {
     const primary = repositoryHint({ name: "acme/app", source: "registry_primary" }, 1);
     expect(primary).toEqual({
-      text: " Pre-selected: acme/app — this project's primary.", needsConnection: false });
+      text: " Pre-selected: acme/app, this project's primary.", needsConnection: false });
     const legacy = repositoryHint({ name: "acme/legacy", source: "legacy_settings" }, 0);
     expect(legacy.text).toBe(" Pre-selected: acme/legacy.");
   });

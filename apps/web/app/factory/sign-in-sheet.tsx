@@ -58,7 +58,7 @@ export function useBossSignIn(projectId: string, appKey: string, onChange?: () =
 
   // EVERY WAY THIS READ FAILS IS SAID AS ITS REASON (HelpDesk AI recording, 2026-10-16): the row
   // showed the browser's raw "Failed to fetch" when the request got no answer, and a bare HTTP
-  // status when the API refused — never what happened or what to do.
+  // status when the API refused, never what happened or what to do.
   const load = useCallback(async () => {
     try {
       const r = await fetch(`/v1/apps/${encodeURIComponent(appKey)}/sign-in-with-boss?project_id=${encodeURIComponent(projectId)}`,
@@ -142,7 +142,7 @@ export function BossSignInDetails({ state }: { state: ReturnType<typeof useBossS
           <p className="fx-signin-state" data-testid="fx-signin-state">
             {s.connected ? "Sign in with BOSS is on" : s.client ? "Registered, not wired" : "Sign in with BOSS is off"}
             {s.connected ? <span className="tpl-muted" title="OIDC_BOSS_CLIENT_ID, _SECRET and _ISSUER, in the vault">
-              {` · settings for ${envs.map((e) => (e === "deploy" ? "deploys" : "previews")).join(" and ")}`}</span> : null}
+              {`, settings for ${envs.map((e) => (e === "deploy" ? "deploys" : "previews")).join(" and ")}`}</span> : null}
           </p>
           {s.client ? (
             <dl className="fx-signin-facts">

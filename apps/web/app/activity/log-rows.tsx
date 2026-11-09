@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * The Log's list (spec §4.2.6): one 32px line per row, read like the river — local time to the
+ * The Log's list (spec §4.2.6): one 32px line per row, read like the river, local time to the
  * second (UTC in the tooltip), the level as a glyph AND a word (never colour alone), the agent's
  * face (or the stream's icon), the title with the first line of its body, and on the right the
  * run's name, how long it took, what it cost (money only) and `×n` when identical lines fold.
  *
- * WINDOWED: only the lines on screen (plus a margin) are in the DOM, whatever the depth — a
+ * WINDOWED: only the lines on screen (plus a margin) are in the DOM, whatever the depth, a
  * 50,000-line range never puts 50,000 rows in the page.
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -164,7 +164,7 @@ export function LogRows({ items, labels, byRun, selectedId, arrived, onOpen, onH
               <div key={row.key} className="lx-runhead" style={{ transform: `translateY(${row.top}px)` }}
                    title="Counted on loaded lines">
                 <span data-user-text>{row.label}</span>
-                <span className="lx-runhead-n">{plural(row.lines, "line")}{row.errors ? ` · ${plural(row.errors, "error")}` : ""}</span>
+                <span className="lx-runhead-n">{plural(row.lines, "line")}{row.errors ? `, ${plural(row.errors, "error")}` : ""}</span>
               </div>
             );
           }

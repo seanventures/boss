@@ -20,8 +20,8 @@ export function StepAbility({ step, projectId }: { step: SpecStep; projectId: st
   }
   return (
     <>
-      <span className="wf-chip" data-tone="red" title={`${ability.label} · Not set up`} data-testid="wf-step-ability">
-        {ability.label} · Not set up
+      <span className="wf-chip" data-tone="red" title={`${ability.label}, Not set up`} data-testid="wf-step-ability">
+        {ability.label}, Not set up
       </span>
       <a className="wf-chip" data-tone="red" href={setUpHref(ability.key)} title="Open this ability in Skills & MCP"
          data-testid="wf-step-ability-setup">Set up ↗</a>

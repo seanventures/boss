@@ -96,7 +96,7 @@ describe("the Agents home", () => {
                                      { id: "dec_pr", role_key: null, title: "Merge?", decide_inline: false }] },
     }))));
     await mount(<WorkforceArea workforce={workforce} actor="ceo" />);
-    expect($('[data-testid="ag-home-summary"]')?.textContent).toBe("2 agents · 1 working · 2 need you");
+    expect($('[data-testid="ag-home-summary"]')?.textContent).toBe("2 agents, 1 working, 2 need you");
     expect($('[data-testid="agents-live-dot"]')?.getAttribute("title")).toBe("2 need you");
   });
 

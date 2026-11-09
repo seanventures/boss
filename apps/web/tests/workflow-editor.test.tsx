@@ -169,7 +169,7 @@ describe("the bar and the summary", () => {
   it("opens the copy you already have", async () => {
     api.workflows[0].copy = { definition_id: "wfd_own", workflow_key: "my_flow", name: "My flow" };
     await mount();
-    expect(byTest("wf-open-copy").textContent).toBe("You have a copy · Open");
+    expect(byTest("wf-open-copy").textContent).toBe("You have a copy, Open");
     click(byTest("wf-open-copy"));
     await settle();
     expect(new URLSearchParams(window.location.search).get("wf")).toBe("my_flow");

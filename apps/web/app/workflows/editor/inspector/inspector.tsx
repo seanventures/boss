@@ -20,7 +20,7 @@ export function lockReason(state: EditorState): string | null {
  * is selected. Closes with × or Esc (an open popover takes its own Esc first).
  *
  * IT KEEPS NO WORKFLOW STATE OF ITS OWN. Which inputs the editor wired is the store's `wired`;
- * what each agent holds is the host's palette, refetched after a Grant — so the node, the agent
+ * what each agent holds is the host's palette, refetched after a Grant, so the node, the agent
  * picker and the Grant row read one source and cannot disagree.
  */
 export function Inspector({ state, palette, dispatch, projectId, onClose, refreshPalette, actor, usedFor,

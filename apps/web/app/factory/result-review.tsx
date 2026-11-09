@@ -87,7 +87,7 @@ export function ResultReview({ runId, onChangeRequested }: {
     {snapshot ? <>
       <div>Delivered revision: {revision ? <a href={revision} target="_blank" rel="noreferrer">{snapshot.delivered_head?.slice(0, 12)} ↗</a> : "Revision unavailable"}.
         {pr ? <> <a href={pr} target="_blank" rel="noreferrer">Open pull request ↗</a></> : null}</div>
-      <span className="fx-out-sub" title="Acceptance records usefulness of the saved revision. It does not pass checks, merge code, deploy, or authorize more work.">Usefulness only · approvals unchanged</span>
+      <span className="fx-out-sub" title="Acceptance records usefulness of the saved revision. It does not pass checks, merge code, deploy, or authorize more work.">Usefulness only, approvals unchanged</span>
       {snapshot.criteria.length ? <ul>{snapshot.criteria.map((criterion, index) => <li key={index} data-user-text>{criterion}</li>)}</ul> : <div>No acceptance criteria recorded.</div>}
       <div className="fx-out-links"><span>Checks: {snapshot.checks.state.replaceAll("_", " ")}</span><span>Quality: {snapshot.checks.quality_status ?? "Not recorded"}</span></div>
       <details><summary>Evidence and receipts</summary>
@@ -97,7 +97,7 @@ export function ResultReview({ runId, onChangeRequested }: {
         <div>Test evidence: {snapshot.checks.artifact_id ? <a href={`/v1/artifacts/${encodeURIComponent(snapshot.checks.artifact_id)}`} target="_blank" rel="noreferrer">Open recorded report ↗</a> : "Not recorded"}.
           {" "}<span>Delivery receipt: {snapshot.receipt_status ?? "Not recorded"}</span></div>
         <div><code>{snapshot.receipt_id ?? "No receipt"}</code> <span>{snapshot.effect_kind ?? ""}</span></div>
-        <span title="These are saved BOSS records, without a new remote branch check.">Saved evidence · no remote recheck</span>
+        <span title="These are saved BOSS records, without a new remote branch check.">Saved evidence, no remote recheck</span>
       </details>
       <div className="fx-out-links" title="Observed cost receipts, their estimates, and outstanding reservations are separate. Unknown is not zero; saved costs may change after reconciliation.">
         <span>Observed cost: {amount(snapshot.cost.observed_usd_micros)}</span>

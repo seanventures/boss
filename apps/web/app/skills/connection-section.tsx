@@ -6,11 +6,11 @@
  * SAVE & TEST IS ATOMIC, server side: the API tests the values typed here and stores them only
  * if the test passes. A failure comes back with the field the provider named, and its short
  * reason lands under that field. A SECRET IS NEVER PREFILLED: a stored one shows as
- * `Set · …a1f3` with `Replace` (Email's key: `Set` with `Edit`, no part of it), and its value never
+ * `Set, …a1f3` with `Replace` (Email's key: `Set` with `Edit`, no part of it), and its value never
  * reaches this page.
  *
  * EMAIL (SMTP) IS A CONNECTOR (docs/community/EMAIL.md): connected, it shows what it sends as, the
- * last test (the server's own reply) and Edit · Send test · Disconnect. Its form takes one URL, or
+ * last test (the server's own reply) and Edit, Send test, Disconnect. Its form takes one URL, or
  * the separate fields under "Fields" (`alt`); both store the same config. The URL is sent only
  * when typed, so saving an edit of the fields never re-reads the shown URL.
  */
@@ -62,7 +62,7 @@ function Field({ field, value, stored, error, replacing, onChange, onReplace }: 
 }) {
   const id = `kit-field-${field.name}`;
   if (field.options?.length) {
-    // A CHOICE, NOT TEXT (K7): Email's TLS is None · STARTTLS · SSL, so a plain relay on port 25
+    // A CHOICE, NOT TEXT (K7): Email's TLS is None, STARTTLS, SSL, so a plain relay on port 25
     // or 1025 (Mailpit, postfix) connects, where STARTTLS-or-nothing refused it.
     return (
       <div className="kit-field" data-testid={id}>
@@ -83,7 +83,7 @@ function Field({ field, value, stored, error, replacing, onChange, onReplace }: 
     return (
       <div className="kit-field" data-testid={id}>
         <span className="kit-field-label" data-tip={field.tip}>{field.label}</span>
-        <span className="kit-secret-set" data-testid={`${id}-set`}>{bare ? "Set" : `Set · ${stored}`}</span>
+        <span className="kit-secret-set" data-testid={`${id}-set`}>{bare ? "Set" : `Set, ${stored}`}</span>
         <button type="button" className="kit-link" data-testid={`${id}-replace`} onClick={onReplace}>{bare ? "Edit" : "Replace"}</button>
       </div>
     );
@@ -152,7 +152,7 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
     }
     return (
       <div className="kit-row" data-testid="kit-conn-none">
-        <span data-tip={TIP.builtIn}>Built in · Nothing to connect</span>
+        <span data-tip={TIP.builtIn}>Built in, Nothing to connect</span>
         <TestRow test={ability.last_test} />
       </div>
     );
@@ -176,11 +176,11 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
     setBusy(false);
     if (!r.ok) {
       setError({ field: r.field ?? null, message: r.error });
-      showToast("error", `Test failed · ${shortError(r.error)}`);
+      showToast("error", `Test failed, ${shortError(r.error)}`);
       return;
     }
     setValues({}); setReplacing({}); setEditing(false);
-    showToast("success", `Connected · ${r.data.last_test?.fact ?? chosen.label}`);
+    showToast("success", `Connected, ${r.data.last_test?.fact ?? chosen.label}`);
     onChanged(r.data);
   };
 
@@ -191,8 +191,8 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
     setTesting(false);
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
     onChanged(r.data.ability);
-    if (r.data.ok) showToast("success", `Sent · ${r.data.fact ?? ""}`.trim());
-    else showToast("error", `Test failed · ${shortError(r.data.error)}`);
+    if (r.data.ok) showToast("success", `Sent, ${r.data.fact ?? ""}`.trim());
+    else showToast("error", `Test failed, ${shortError(r.data.error)}`);
   };
 
   const disconnect = async () => {
@@ -208,7 +208,7 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
   // picking another provider's tab shows that provider's empty form, not GitHub's result.
   const onStored = conn.provider === chosen?.key;
   const reused = chosen?.reuses === "github";
-  // Email (SMTP), connected: a summary with Edit · Send test · Disconnect; the form on Edit.
+  // Email (SMTP), connected: a summary with Edit, Send test, Disconnect; the form on Edit.
   const summary = email && Boolean(conn.connected) && onStored && !editing;
   const allFields = chosen?.fields ?? [];
   const mainFields = allFields.filter((f) => !f.alt);
@@ -255,7 +255,7 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
       ) : null}
       {!summary && chosen?.local_only ? (
         <div className="kit-row" data-testid="kit-local-only">
-          <span data-tip={chosen.tip}>Local only · nothing is delivered</span>
+          <span data-tip={chosen.tip}>Local only, nothing is delivered</span>
         </div>
       ) : null}
       {error && !(chosen?.fields ?? []).some((f) => f.name === error.field) ? (

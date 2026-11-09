@@ -32,7 +32,7 @@ describe("Factory repository binding honesty", () => {
     "shows an unconfigured binding when settings report no complete repository %j",
     async (githubFullName) => {
       await mount(home({ githubPlane: "legacy_env", githubFullName }));
-      expect(header().textContent).toBe("GitHub · unconfigured");
+      expect(header().textContent).toBe("GitHub, unconfigured");
       expect(header().title).toBe("GitHub binding is unconfigured.");
       expect(header().textContent).not.toMatch(/\/|\d/);
       expect(header().title).not.toMatch(/PRs open|settings token|settings|connected|ready|\//i);
@@ -41,7 +41,7 @@ describe("Factory repository binding honesty", () => {
 
   it("reports missing binding metadata as unknown, without inventing a settings source", async () => {
     await mount(home());
-    expect(header().textContent).toBe("GitHub · Repository unknown");
+    expect(header().textContent).toBe("GitHub, Repository unknown");
     expect(header().title).toContain("GitHub binding source is unknown.");
     expect(header().title).not.toContain("settings");
   });
@@ -51,14 +51,14 @@ describe("Factory repository binding honesty", () => {
     ["legacy_env", "Repository from settings: Acme-Team/Widget_UI.v2."],
   ])("retains exact repository spelling and the %s source without promising access", async (githubPlane, tip) => {
     await mount(home({ githubPlane, githubFullName: "Acme-Team/Widget_UI.v2" }));
-    expect(header().textContent).toBe("GitHub · Acme-Team/Widget_UI.v2");
+    expect(header().textContent).toBe("GitHub, Acme-Team/Widget_UI.v2");
     expect(header().querySelector("[data-user-text]")?.textContent).toBe("Acme-Team/Widget_UI.v2");
     expect(header().title).toBe(`${tip} Check GitHub access in Connect before starting a build.`);
   });
 
   it("keeps the reported reason and repository when the binding source is unknown", async () => {
     await mount(home({ githubPlane: "future_binding", githubPlaneLabel: "Binding lookup unavailable.", githubFullName: "acme/sandbox" }));
-    expect(header().textContent).toBe("GitHub · acme/sandbox");
+    expect(header().textContent).toBe("GitHub, acme/sandbox");
     expect(header().title).toContain("GitHub binding source is unknown.");
     expect(header().title).toContain("Binding lookup unavailable.");
     expect(header().title).not.toMatch(/PRs open|settings token|ready/i);
@@ -67,7 +67,7 @@ describe("Factory repository binding honesty", () => {
   it("removes a stale repository when refreshed binding metadata becomes incomplete", async () => {
     await mount(home({ githubPlane: "mission_control_binding", githubFullName: "acme/sandbox" }));
     await rerender(home({ githubPlane: "mission_control_binding", githubFullName: "/", githubPlaneLabel: "Choose a repository." }));
-    expect(header().textContent).toBe("GitHub · Repository unknown");
+    expect(header().textContent).toBe("GitHub, Repository unknown");
     expect(header().title).toContain("Project GitHub binding.");
     expect(header().title).toContain("Choose a repository.");
     expect(header().title).not.toContain("acme/sandbox");

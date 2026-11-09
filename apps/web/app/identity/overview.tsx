@@ -47,7 +47,7 @@ function Ring({ score }: { score: number }) {
   );
 }
 
-/** Every role a person holds directly — custom ones too: leaving them out showed 6 of 7 people. */
+/** Every role a person holds directly, custom ones too: leaving them out showed 6 of 7 people. */
 function roleCounts(people: Person[], roles: AccessRole[]) {
   return roles.filter((r) => r.builtin || people.some((p) => p.bindings.some((b) => b.role_key === r.key && !b.via_group))).map((r) => {
     const holders = people.filter((p) => p.status === "active" && p.bindings.some((b) => b.role_key === r.key && !b.via_group));
@@ -57,7 +57,7 @@ function roleCounts(people: Person[], roles: AccessRole[]) {
 
 /**
  * The lines between "people by access role" and "acting for them now": one per person acting,
- * from the role row they hold to their acting row. Real links only — no line, no claim.
+ * from the role row they hold to their acting row. Real links only, no line, no claim.
  */
 function Wires({ left, right, links }: { left: number; right: number; links: [number, number][] }) {
   const paths = links.map(([i, j]) => {
@@ -67,7 +67,7 @@ function Wires({ left, right, links }: { left: number; right: number; links: [nu
   });
   return (
     <div className="idn-wire" aria-hidden>
-      <svg viewBox="0 0 40 100" preserveAspectRatio="none">{paths.map((d, i) => <path key={i} d={d} vectorEffect="non-scaling-stroke" />)}</svg>
+      <svg viewBox="0 0 40 100" preserveAspectRatio="none" aria-hidden="true">{paths.map((d, i) => <path key={i} d={d} vectorEffect="non-scaling-stroke" />)}</svg>
     </div>
   );
 }
@@ -103,9 +103,9 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
     <>
       <section className="idn-hero" aria-labelledby="idn-hero-h">
         <div className="idn-hero-l">
-          <div className="idn-eyebrow">
+          <div className="idn-area-name">
             <span className="idn-dot" aria-hidden />
-            <span>Identity{counts ? ` · ${counts.people} people · ${counts.agents} agents` : ""}</span>
+            <span>Identity{counts ? `, ${counts.people} people, ${counts.agents} agents` : ""}</span>
           </div>
           <h1 id="idn-hero-h">Who can do what, <em>and for whom.</em></h1>
           <p className="idn-lede" data-copy="prose">
@@ -178,7 +178,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                 <span className="idn-num">{c.value}{c.unit ? <small>{c.unit}</small> : null}</span>
                 <span className="idn-txt" data-copy="data">{plainText(c.detail)}</span>
                 {c.fix
-                  ? <a className="idn-fix" href={c.fix.href}>{c.fix.label} →</a>
+                  ? <a className="idn-fix" href={c.fix.href}>{c.fix.label}</a>
                   : <span className="idn-fix done">All good</span>}
               </div>
             ))}
@@ -203,7 +203,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
           <section className="idn-card" aria-labelledby="idn-people-h">
             <div className="idn-card-h">
               <h3 id="idn-people-h">People</h3>
-              {counts ? <span className="idn-sub">{counts.active} active · {counts.invited} invited · {counts.disabled} disabled</span> : null}
+              {counts ? <span className="idn-sub">{counts.active} active, {counts.invited} invited, {counts.disabled} disabled</span> : null}
               <span className="idn-spacer" />
               <a className="idn-link" href="/identity/people">All people <ArrowUpRight size={13} aria-hidden /></a>
             </div>
@@ -216,7 +216,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                       <td>
                         <a className="idn-who" href={`/identity/people/${p.id}`}>
                           <Face name={p.display_name} tone={p.hue} size={34} />
-                          <span><b>{p.display_name}</b><small>{p.email} · {agoText(p.last_seen_at, now, "never").replace(" ago", "")}</small></span>
+                          <span><b>{p.display_name}</b><small>{p.email}, {agoText(p.last_seen_at, now, "never").replace(" ago", "")}</small></span>
                         </a>
                       </td>
                       <td><BindingChips bindings={p.bindings} /></td>
@@ -236,7 +236,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
             <>
               <div className="idn-card-h">
                 <h3 id="idn-roles-h">Access roles</h3>
-                <span className="idn-sub" title="Counts include service accounts and agents, not only people">{roles.filter((r) => r.builtin).length} built-in · {roles.filter((r) => !r.builtin).length} custom · all holders</span>
+                <span className="idn-sub" title="Counts include service accounts and agents, not only people">{roles.filter((r) => r.builtin).length} built-in, {roles.filter((r) => !r.builtin).length} custom, all holders</span>
                 <span className="idn-spacer" />
                 <a className="idn-link" href="/identity/roles">Edit <ArrowUpRight size={13} aria-hidden /></a>
               </div>
@@ -260,12 +260,12 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                 <h3>Groups</h3>
                 <span className="idn-sub">{(() => {
                   const synced = groups.filter((g) => g.source !== "manual").length;
-                  return synced ? `${groups.length} · ${synced} from ${groups.find((g) => g.provider)?.provider ?? "your IdP"}` : `${groups.length}`;
+                  return synced ? `${groups.length}, ${synced} from ${groups.find((g) => g.provider)?.provider ?? "your IdP"}` : `${groups.length}`;
                 })()}</span>
                 <span className="idn-spacer" />
                 <a className="idn-link" href="/identity/groups">All <ArrowUpRight size={13} aria-hidden /></a>
               </div>
-              {!groups.length ? <span className="idn-dim idn-small">No groups yet · <a className="idn-link" href="/identity/groups">make one</a></span> : null}
+              {!groups.length ? <span className="idn-dim idn-small">No groups yet, <a className="idn-link" href="/identity/groups">make one</a></span> : null}
               <div className="idn-groups">
                 {groups.map((g) => (
                   <a key={g.id} className="idn-chip" href={`/identity/groups/${g.id}`}>
@@ -293,7 +293,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                     <span className={`idn-ico${sa.kind === "legacy" ? " warn" : ""}`}>
                       {sa.kind === "legacy" ? <Warning size={15} aria-hidden /> : sa.kind === "scim" ? <UsersThree size={15} aria-hidden /> : sa.name.includes("github") ? <GitBranch size={15} aria-hidden /> : <Key size={15} aria-hidden />}
                     </span>
-                    <span><b>{sa.name}</b><small data-copy="data">{sa.kind === "scim" ? "Directory sync only" : sa.kind === "legacy" ? sa.description : `${keyCount(sa.keys.filter((k) => k.status !== "revoked").length)} · owner ${sa.owners[0]?.name ?? "none"}`}</small></span>
+                    <span><b>{sa.name}</b><small data-copy="data">{sa.kind === "scim" ? "Directory sync only" : sa.kind === "legacy" ? sa.description : `${keyCount(sa.keys.filter((k) => k.status !== "revoked").length)}, owner ${sa.owners[0]?.name ?? "none"}`}</small></span>
                     <span className="idn-r">
                       {sa.kind === "legacy" ? <span className="idn-pill bad">legacy</span>
                         : sa.kind === "scim" ? <span className="idn-pill ok">synced <Ago iso={sa.last_used?.at} bare /></span>
@@ -319,7 +319,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
               </div>
               <div className="idn-agents">
                 {agents.slice(0, 12).map((a) => (
-                  <a key={a.id} href={`/identity/agents/${a.id}`} data-status={a.status} title={`${a.name} · ${a.title}${a.status !== "active" ? ` · ${a.status}` : ""}`}>
+                  <a key={a.id} href={`/identity/agents/${a.id}`} data-status={a.status} title={`${a.name}, ${a.title}${a.status !== "active" ? `, ${a.status}` : ""}`}>
                     <AgentAvatar agent={a.role_key} size={30} state={a.status === "suspended" ? "paused" : "idle"} />
                     <span>{a.name}</span>
                   </a>
@@ -354,7 +354,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                     : <Face name={e.actor.name} tone={e.actor.hue} size={30} />}
                   <span>
                     <span className="idn-t1" data-copy="data">{e.headline}</span>
-                    <span className="idn-m" title={e.event_type}>{eventWords(e.event_type)} · {outcomeWords(e.outcome)}</span>
+                    <span className="idn-m" title={e.event_type}>{eventWords(e.event_type)}, {outcomeWords(e.outcome)}</span>
                   </span>
                   <span className="idn-when"><Ago iso={e.at} bare /></span>
                 </a>

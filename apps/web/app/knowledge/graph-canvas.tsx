@@ -7,8 +7,8 @@
  *
  * - devicePixelRatio-aware; nodes and labels outside the viewport are culled.
  * - Fits the window on load, on data change and on resize; wheel and pinch zoom to the cursor
- *   (0.2×–4×); drag pans; dragging a node moves it for this session; double-click focuses it.
- * - Same-size solid nodes coloured by kind, 1.5–3 px directed edges with 15 × 10 px filled
+ *   (0.2×, 4×); drag pans; dragging a node moves it for this session; double-click focuses it.
+ * - Same-size solid nodes coloured by kind, 1.5, 3 px directed edges with 15 × 10 px filled
  *   arrowheads ending at the rim, edge labels for weights (and on the selected node's edges),
  *   14 px node labels and 16 px bubble labels on a --graph halo, colliding labels left for hover.
  * - Colours are kg.css custom properties read from the element's computed style.
@@ -51,7 +51,7 @@ export type CanvasNode = {
    *  ring node without it is named on hover, when selected, or from LABEL_ZOOM_OUTER up. */
   keepLabel?: boolean;
   /** Past its ring's label capacity (tester round 5): named on hover, when selected, or from
-   *  LABEL_ZOOM_OUTER up — never crowding the ones that fit. */
+   *  LABEL_ZOOM_OUTER up, never crowding the ones that fit. */
   labelCull?: boolean;
   /** Its screen radius when it is neither a class (14) nor an area bubble (28): a cluster. */
   radius?: number;
@@ -73,11 +73,11 @@ export type CanvasEdge = {
 /** Which learning word wins a place first when chips compete for room. */
 const LEARNING_RANK: Record<string, number> = { reused: 4e4, produced: 3e4, cited: 2e4, consulted: 1e4, about: 0 };
 
-/** A learning edge's words: its own, then the others it stands for ("reused · also consulted"). */
+/** A learning edge's words: its own, then the others it stands for ("reused, also consulted"). */
 export function learningWords(e: Pick<CanvasEdge, "kind" | "how" | "also">): string | null {
   const how = learningHow(e);
   if (!how) return null;
-  return e.also?.length ? `${how} · also ${e.also.join(", ")}` : how;
+  return e.also?.length ? `${how}, also ${e.also.join(", ")}` : how;
 }
 
 export type CanvasHandle = { zoomIn: () => void; zoomOut: () => void; fit: () => void };
@@ -131,7 +131,7 @@ export const MIN_TEXT = 0.8;
 
 /**
  * The width a picture is framed in beside the details drawer: what the drawer leaves, unless that
- * is a sliver (a narrow window, where the drawer covers most of the canvas) — then the whole
+ * is a sliver (a narrow window, where the drawer covers most of the canvas), then the whole
  * canvas, the drawer over its edge, so the picture is not squeezed to a stamp.
  */
 export function visibleWidth(canvasW: number, occlude: number): number {
@@ -226,7 +226,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     for (const name of TOKENS) c(name);
     const font = c("--sans") || "sans-serif";
     // Text follows the console's type scale: the spec's 14 / 16 / 12 px at the default root size,
-    // and shrinks with the picture below 100% — never under 80% (tester round 3: ~7 px labels):
+    // and shrinks with the picture below 100%, never under 80% (tester round 3: ~7 px labels):
     // what has no room at that size waits for zoom or hover instead of overlapping.
     const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || ROOT_PX;
     const tr = t.current;
@@ -294,7 +294,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       const key = edgeKey(e);
       const touchesSel = !!selId && (e.src === selId || e.dst === selId);
       const hovered = hv?.what === "edge" && hv.id === key;
-      // The selection's edges stand out — except the Focus centre's, which are every edge.
+      // The selection's edges stand out, except the Focus centre's, which are every edge.
       const hot = hovered || (touchesSel && selId !== centerId);
       let stroke = c("--muted");
       let alpha = mode === "overview" ? 0.55 : 0.6;
@@ -336,7 +336,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
         const tw = ctx.measureText(text).width + 14;
         const lh = fs(19);
         // The centre's (or the selection's) own edges first, the loop's telling words before
-        // "about"; only those move aside for room — an outer ring's word shows where it fits.
+        // "about"; only those move aside for room, an outer ring's word shows where it fits.
         const near = e.src === centerId || e.dst === centerId || touchesSel;
         const rank = LEARNING_RANK[learning.how] ?? 0;
         edgeLabels.push({ id: key, x: geo.label.x, y: geo.label.y - lh / 2, w: tw, h: lh, priority: (near ? 7e5 : 4e5) + rank, text, at: geo.label, hot, color: stroke,
@@ -394,14 +394,14 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       }
       ctx.restore();
       // LABEL CULLING BY ZOOM AND PRIORITY (tester round 4 P0): an outer-ring node that is not
-      // kept is named on hover, when selected, or once zoomed in — never fighting the first ring.
+      // kept is named on hover, when selected, or once zoomed in, never fighting the first ring.
       // Past its ring's label capacity (tester round 5): named on hover, selection or zoom only.
       const culled = mode === "focus" && !isSel && !isHover && d.id !== centerId && !!n.labelCull && tr.k < LABEL_ZOOM_OUTER;
       if (culled) continue;
       const max = n.labelMax ?? LABEL_MAX;
       const weight = isSel ? 600 : 400;
       // The full name first; then two lines at a word boundary; then one line cut on character
-      // width with an ellipsis — never a lone first word (tester round 5: "Creocore…", "Early…").
+      // width with an ellipsis, never a lone first word (tester round 5: "Creocore…", "Early…").
       const line = (text: string, size: number, w = weight, muted = false): Line => ({ text, size, weight: w, muted });
       const big = n.bubble && !n.radius;
       const nameSize = big ? fs(16) : fs(14);
@@ -444,7 +444,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     }
 
     // One placement for node and edge labels, around the circles, inside the visible canvas:
-    // node labels first (each on its best free side, or shortened, or left for hover — never on
+    // node labels first (each on its best free side, or shortened, or left for hover, never on
     // another label), then edge labels in what is left.
     const chosen = placeNodeLabels(labels.map((l) => l.item), obstacles, bounds);
     const nodeBoxes: LabelBox[] = [...chosen.entries()].map(([id, p]) => ({ id, x: p.x, y: p.y, w: p.w, h: p.h, priority: 2e9 }));
@@ -586,11 +586,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
   }, [fitKey]);
 
   // The details drawer slides over the right edge: the selection AND its label are panned out
-  // from under it, never re-zoomed (round 2) — using the room on the left first, so the rest of
+  // from under it, never re-zoomed (round 2), using the room on the left first, so the rest of
   // the picture (the pinned Rules and Learning bubbles) comes out too where it can (round 3).
   useEffect(() => {
     // The Focus centre: the whole ring is re-framed beside the drawer.
-    // A selection never re-frames the picture (round 5) — only a drawer over the canvas (a
+    // A selection never re-frames the picture (round 5), only a drawer over the canvas (a
     // narrow graph) pans what it would cover out from under it.
     if (occludeRight && mode === "focus" && selectedId && selectedId === centerId) { home(); return; }
     if (!occludeRight || !selectedId) {
@@ -767,7 +767,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     if (hover.what === "node") {
       const n = byId.get(hover.id);
       if (!n) return null;
-      return { title: n.label, line: [kindName(n.kind, n.symbol_kind, n.id), n.sub].filter(Boolean).join(" · ") };
+      return { title: n.label, line: [kindName(n.kind, n.symbol_kind, n.id), n.sub].filter(Boolean).join(", ") };
     }
     const [src, dst, kind] = hover.id.split("\u0000");
     const e = edges.find((x) => x.src === src && x.dst === dst && x.kind === kind);
@@ -840,7 +840,7 @@ export function GraphLegend({ items }: { items: Array<{ key: string; token: stri
   );
 }
 
-/** List view (§5.10): the current view as a table — for screen readers, keyboards and tests. */
+/** List view (§5.10): the current view as a table, for screen readers, keyboards and tests. */
 export function GraphTable({ nodes, edges, selectedId, onSelect, onActivate }: {
   nodes: CanvasNode[]; edges: CanvasEdge[]; selectedId: string | null;
   onSelect: (id: string) => void; onActivate: (id: string) => void;

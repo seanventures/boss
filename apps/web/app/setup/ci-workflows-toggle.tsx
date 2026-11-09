@@ -3,7 +3,7 @@
 /**
  * "Builds may change CI workflows" for one repository (services/ci_gate.py). Off by default.
  * Turning it on is an Owner/Admin act with step-up (github:connect), recorded; when on, the GitHub
- * App needs `workflows: write`, and an App created earlier must accept it at GitHub — the link
+ * App needs `workflows: write`, and an App created earlier must accept it at GitHub, the link
  * goes straight to the App's permissions page, then the installation's page.
  */
 import React, { useEffect, useState } from "react";

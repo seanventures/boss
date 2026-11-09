@@ -4,7 +4,7 @@
  * One running workflow, as a lane of the faces that worked it (agents-home spec §4.3). Shared by
  * Agents › Live (density "lane") and the Command Center's Running now (density "row").
  *
- *   Ship it #182   You → Juno → Atlas → (Forge●) → Vera     Coding · step 4 of 7 · 12m   ↗
+ *   Ship it #182   You → Juno → Atlas → (Forge●) → Vera     Coding, step 4 of 7, 12m   
  *
  * NOTHING IS ESTIMATED. `step k of n` and the time on the current step, both from the run's own
  * rows; never a percent or a finish time. The active hop is in its real state; a run waiting
@@ -46,12 +46,12 @@ function actOf(hop: Hop, mission: Mission): Act {
 }
 
 /** The hop states that END work badly: failed (errored), stopped (left open when the run
- *  stopped), and stuck (live, gone quiet — the server's call). The row's current hop is one. */
+ *  stopped), and stuck (live, gone quiet, the server's call). The row's current hop is one. */
 export const ENDED_BADLY: ReadonlySet<string> = new Set(["stuck", "failed", "stopped"]);
 
 /** The lane as drawn (walk D11). A wait for a person is drawn ONCE, as the amber You / A person
  *  hop the row adds from its state: an agent's hop is never ringed amber for it. The person who
- *  started the run never failed — a run that failed failed at a step, not at its start. */
+ *  started the run never failed, a run that failed failed at a step, not at its start. */
 export function laneHops(m: Pick<Mission, "hops" | "state">): MissionHop[] {
   return m.hops.map((h) => {
     if (h.kind !== "hop") return h;
@@ -130,11 +130,11 @@ export function nowParts(m: Mission, stepSeconds: number | null): { text: string
       const who = m.waitingOnRole ? nameOf(m.waitingOnRole).role : "a person";
       return parts({ text: `Waiting on ${who}` }, step);
     }
-    case "waiting": return parts({ text: m.waitingOn ? `Waiting · ${m.waitingOn}` : "Waiting" }, step, time);
-    case "stopped": return parts({ text: `Failed · step ${m.stepIndex}`, tip: clipWords(m.error), cls: "ag-mission-failed" });
+    case "waiting": return parts({ text: m.waitingOn ? `Waiting, ${m.waitingOn}` : "Waiting" }, step, time);
+    case "stopped": return parts({ text: `Failed, step ${m.stepIndex}`, tip: clipWords(m.error), cls: "ag-mission-failed" });
     case "blocked": return parts({ text: "Blocked", tip: clipWords(m.blockedReason), cls: "ag-mission-blocked" }, step);
     case "stalled": return parts({ text: "Stalled", tip: "No progress for over 7 days. Resume or close it.", cls: "ag-mission-blocked" }, step);
-    case "done": return parts({ text: `Finished · ${m.stepCount} steps${m.elapsedSeconds ? ` · ${span(m.elapsedSeconds)}` : ""}` });
+    case "done": return parts({ text: `Finished, ${m.stepCount} steps${m.elapsedSeconds ? `, ${span(m.elapsedSeconds)}` : ""}` });
     default: return parts({ text: m.verb || "Working" }, step, time);
   }
 }
@@ -185,7 +185,7 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
   const name = m.subject || m.workflowName;
   const nameTip = [`${m.workflowName}${m.version ? ` v${m.version}` : ""}`,
                    m.actor ? `started by ${actorWords(m.actor)}` : "", m.startedAt ? localFull(m.startedAt) : ""]
-    .filter(Boolean).join(" · ");
+    .filter(Boolean).join(", ");
   const cost = m.costUsd > 0 ? `$${m.costUsd.toFixed(2)}` : "";
   const runHref = linkTo(runPatch(m.runId), orgId);
   const mapPatch = { area: "workforce", view: "org", run: m.runId, role: null, focus: null };
@@ -209,7 +209,7 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
   return (
     <li className="ag-mission" data-testid={`ag-mission-${m.runId}`} data-state={m.state}
         data-density={density} data-still={still || undefined}
-        title={cost && band === "narrow" ? `${cost} · Metered model spend so far` : undefined}
+        title={cost && band === "narrow" ? `${cost}, Metered model spend so far` : undefined}
         onClick={openRow}>
       <span className="ag-mission-name">
         <a href={runHref} className="ag-trunc" title={nameTip}
@@ -218,9 +218,9 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
         </a>
         {density === "row" && (m.stepLabel || curHop) ? (
           <span className="ag-mission-sub ag-trunc" data-user-text
-                title={[m.subject ? m.workflowName : "", m.stepLabel].filter(Boolean).join(" · ") || undefined}>
+                title={[m.subject ? m.workflowName : "", m.stepLabel].filter(Boolean).join(", ") || undefined}>
             {[m.stepLabel, curHop && curHop.kind === "hop" && curHop.roleKey ? nameOf(curHop.roleKey).role : ""]
-              .filter(Boolean).join(" · ")}
+              .filter(Boolean).join(", ")}
           </span>
         ) : null}
       </span>
@@ -235,7 +235,7 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
             return (
               <li key={`loop-${i}`} className="ag-mission-hop ag-mission-loop" aria-label={`${a} and ${b}, ${h.rounds} rounds`}>
                 {i > 0 ? <span className="ag-chain-edge" aria-hidden><i className="ag-chain-line" /><span className="ag-chain-arrow">→</span></span> : null}
-                <RunFace roleKey={h.a} size={24} /><span className="ag-chain-swap" aria-hidden>↔</span>
+                <RunFace roleKey={h.a} size={24} /><span className="ag-chain-swap" aria-hidden>Link</span>
                 <RunFace roleKey={h.b} size={24} /><span className="ag-chain-rounds">×{h.rounds}</span>
               </li>
             );
@@ -264,7 +264,7 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
             {shown.length ? <span className="ag-chain-edge" aria-hidden><i className="ag-chain-line" /><span className="ag-chain-arrow">→</span></span> : null}
             {m.state === "waiting_you" && m.attentionId ? (
               <button type="button" className="ag-face-btn ag-mission-who" data-testid={`ag-mission-you-${m.runId}`}
-                      title="Waiting on you · open the card" onClick={() => onYou?.(m.attentionId!)}>
+                      title="Waiting on you, open the card" onClick={() => onYou?.(m.attentionId!)}>
                 <RunFace roleKey={null} variant="you" size={24} state="needs_you" />
                 {named ? <span className="ag-mission-hop-name" aria-hidden>You</span> : null}
               </button>
@@ -277,7 +277,7 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
           </li>
         ) : null}
         {density === "lane" && band !== "phone" ? m.next.map((n, i) => (
-          <li key={`next-${i}`} className="ag-mission-next" title={`Next: ${n.roleKey ? nameOf(n.roleKey).name : "Auto"} · ${n.stepLabel}`}
+          <li key={`next-${i}`} className="ag-mission-next" title={`Next: ${n.roleKey ? nameOf(n.roleKey).name : "Auto"}, ${n.stepLabel}`}
               aria-label={`Next: ${n.roleKey ? nameOf(n.roleKey).name : "Auto"}, ${n.stepLabel}`}>
             {n.roleKey ? <RunFace roleKey={n.roleKey} size={16} /> : <Sparkle size={12} weight="bold" aria-hidden />}
           </li>
@@ -287,7 +287,7 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
       <span className="ag-mission-now" title={total !== null ? `Run time ${span(total)}` : undefined}>
         {parts.map((p, i) => (
           <React.Fragment key={i}>
-            {i > 0 ? <span aria-hidden> · </span> : null}
+            {i > 0 ? <span aria-hidden>, </span> : null}
             <span className={p.cls} title={p.tip}>{p.text}</span>
           </React.Fragment>
         ))}

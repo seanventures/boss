@@ -4,7 +4,7 @@
  * One build on the Floor (factory spec §4.2.2): the MissionRow look, with the build drawn as its
  * line of stations.
  *
- *   Invoice export   (Atlas✓)─(Vera✓)─(Forge●)─ · ─ · ─ ·    Coding · 2 of 8 · 9m   $0.31   ↗
+ *   Invoice export   (Atlas✓)─(Vera✓)─(Forge●)─, ─, ─,    Coding, 2 of 8, 9m   $0.31   
  *
  * Every word is the server's (`word`, `tip`); `k of n` counts stations, never a percent; the
  * time ticks locally from `started_at`. Pressing a face opens its Act card; pressing anywhere
@@ -33,7 +33,7 @@ export function buildAnimates(b: Build): boolean {
 const COUNTED = new Set(["building", "queued", "needs_plan"]);
 const TIMED = new Set(["building", "queued", "budget_wait", "needs_plan"]);
 
-/** The "now" words, each its own run of text: `Coding · 2 of 8 · 9m`. */
+/** The "now" words, each its own run of text: `Coding, 2 of 8, 9m`. */
 export function nowParts(b: Build, now: number | null): { text: string; tip?: string; cls?: string }[] {
   const out: { text: string; tip?: string; cls?: string }[] = [
     { text: b.word, tip: b.tip, cls: `fx-word fx-word-${b.state}` },
@@ -72,7 +72,7 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
   const started = localTime(b.startedAt);
   // A tooltip is ~14 words: a long build title (the Captain writes whole briefs) is cut.
   const nameTip = [shortTitle(b.title), `attempt ${b.attempt}`, b.actor ? `started by ${actorWords(b.actor)}` : "", started]
-    .filter(Boolean).join(" · ");
+    .filter(Boolean).join(", ");
   const phone = band === "phone";
 
   function open(e: React.MouseEvent<HTMLElement>) {
@@ -85,7 +85,7 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
   return (
     <li className="fx-row" data-testid={`fx-build-row-${b.runId}`} data-state={b.state} data-density={density}
         data-still={frozen || undefined} data-band={band} onClick={open}
-        title={cost && (band === "narrow" || phone) ? `${cost} · Metered model spend so far` : undefined}>
+        title={cost && (band === "narrow" || phone) ? `${cost}, Metered model spend so far` : undefined}>
       <span className="fx-row-name">
         <button type="button" className="fx-row-open ag-trunc" data-fx-open title={nameTip}
                 data-testid={`fx-build-open-${b.runId}`}>
@@ -107,7 +107,7 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
       <span className="fx-row-now">
         {parts.map((p, i) => (
           <React.Fragment key={i}>
-            {i > 0 ? <span aria-hidden> · </span> : null}
+            {i > 0 ? <span aria-hidden>, </span> : null}
             <span className={p.cls} title={p.tip}>{p.text}</span>
           </React.Fragment>
         ))}
@@ -115,7 +115,7 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
       {cost && band !== "narrow" && !phone
         ? <span className="fx-row-cost" title="Metered model spend so far">{cost}</span>
         : <span className="fx-row-cost" aria-hidden />}
-      <button type="button" className="ag-icon-btn fx-row-go" data-fx-open aria-label={`Open ${b.app}`} title="Open the build">↗</button>
+      <button type="button" className="ag-icon-btn fx-row-go" data-fx-open aria-label={`Open ${b.app}`} title="Open the build">Open</button>
     </li>
   );
 }

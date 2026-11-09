@@ -599,6 +599,13 @@ def test_every_classified_action_gets_buttons_that_tell_the_truth(action):
         assert [a["action"] for a in offered] == ["reject"]
         assert da.guidance(card)["what_to_do"]
         return
+    if action in ("reconcile_legacy_model_exposure", "reconcile_legacy_provider_exposure"):
+        # Settling is the action. Approve would record a go-ahead and start nothing.
+        assert [(a["action"], a.get("settle_at"), a["label"]) for a in offered] == [
+            ("settle", "zero", "Settle at $0 (provider refused)"),
+            ("settle", "estimate", "Settle at the estimate"),
+        ]
+        return
     approve = next(a for a in offered if a["action"] == "approve")
     if action in da.CARRIED_OUT_ON_APPROVAL or kind in {"workflow_gate", "deploy_gate"}:
         assert "starts nothing" not in approve["effect"]

@@ -3,7 +3,7 @@
 /**
  * YouTube's connection (spec §3.1 Media, J9): the existing Google client + channel flow, in the
  * Kit's words. Two steps because OAuth cannot be one: the Google Cloud client is an ordinary form
- * (its secret write-only — sent once, never read back), and a channel is authorised on Google's
+ * (its secret write-only, sent once, never read back), and a channel is authorised on Google's
  * consent screen in a new tab, which this section notices when the tab comes back.
  *
  * Same API as before (/api/channels: save_client, connect, disconnect); only the screen changed.
@@ -106,7 +106,7 @@ export function YoutubeConnection({ projectId, actor }: { projectId: string; act
     <div className="kit-conn" data-testid="kit-youtube">
       <div className="kit-row">
         <span className="kit-field-label" data-tip="Your own Google Cloud OAuth client">Google client</span>
-        <span className="kit-fact">{ready ? `Set · ${status?.client_id_hint ?? ""}` : "Not set"}</span>
+        <span className="kit-fact">{ready ? `Set, ${status?.client_id_hint ?? ""}` : "Not set"}</span>
       </div>
       <label className="kit-field">
         <span className="kit-field-label">Client ID</span>

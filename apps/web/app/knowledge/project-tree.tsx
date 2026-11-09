@@ -3,7 +3,7 @@
 /**
  * THE PROJECT TREE (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.5): an IDE tree beside the canvas.
  *
- * Tabs Project · Rules · Learning. Children load lazily from /tree/children and page at 200; the
+ * Tabs Project, Rules, Learning. Children load lazily from /tree/children and page at 200; the
  * list is virtualised (a package can hold 400 classes); rows are 14 px text on 28 px rows with a
  * chevron, a solid kind dot, the label and a right-aligned count. The search filters it (matches
  * plus their ancestors, matches highlighted); clicking a row with a node focuses it; the
@@ -76,7 +76,7 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
   /** Bumped when live learnings arrive: the open Learning/Rules lists reload. */
   refreshKey?: number;
   /** The selection to open the tree to (a search pick, a panel connection, a canvas click): its
-   *  ancestors are found by its label and expanded, and it is scrolled into view — the tree's
+   *  ancestors are found by its label and expanded, and it is scrolled into view, the tree's
    *  own filter is untouched (tester round 1 P1-7). */
   reveal?: { label: string; nodeId: string } | null;
 }) {
@@ -139,7 +139,7 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
       setFiltered((f) => ({ q, rows: f?.q === q ? f.rows : [], loading: true, error: null }));
       // ONE SEARCH SOURCE (tester round 5: the box found INC-2088 while the tree said "Nothing in
       // Learning matches"): the tree's matches are the tree's own (with their ancestors) plus every
-      // hit the graph search finds in this tab's layer — matched on what search reads (the run, its
+      // hit the graph search finds in this tab's layer, matched on what search reads (the run, its
       // conversation, the attributes), not only on names.
       const [r, s] = await Promise.all([
         getTreeChildren(who, { tab, q }, ctl?.signal),
@@ -235,7 +235,7 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
     });
   };
 
-  /** Enter / Space (the WAI-ARIA tree pattern): select the row — a node is focused on the canvas,
+  /** Enter / Space (the WAI-ARIA tree pattern): select the row, a node is focused on the canvas,
    *  an area, package or group fills the panel. Expanding is the arrows' and the chevron's job. */
   const activate = (row: KgTreeRow) => {
     setCursor(row.key);
@@ -388,7 +388,7 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
                      aria-level={depth + 1} aria-selected={selected} aria-expanded={row.has_children ? isOpen : undefined}
                      tabIndex={i === cursorIndex ? 0 : -1}
                      style={{ top: i * ROW_H, paddingLeft: 6 + depth * 14 }}
-                     title={`${kindName(row.kind)} · ${row.label}`}
+                     title={`${kindName(row.kind)}, ${row.label}`}
                      onClick={() => click(row)} onKeyDown={(e) => onKey(e, row.key)}
                      onFocus={() => { if (cursor !== row.key) setCursor(row.key); }}>
                   <span className="kg-row-caret" aria-hidden

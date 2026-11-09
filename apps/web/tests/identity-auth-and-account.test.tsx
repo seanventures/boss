@@ -121,7 +121,7 @@ describe("Claim this BOSS", () => {
     window.history.replaceState(null, "", "/claim#t=setup_abc");
     const el = await mount(<ClaimFlow options={options({ path: "setup_token", origin: null, expires_at: new Date(Date.now() + 52 * 60_000).toISOString(), seats: SEATS })} />);
     expect(el.querySelector("[data-testid='claim-no-token']")).toBeNull();
-    expect(el.textContent).toMatch(/setup link · expires in 5\d min/);
+    expect(el.textContent).toMatch(/setup link, expires in 5\d min/);
     // BOSSAPP-812: a password first, always (the way in from any browser); no passkey yet.
     expect(el.textContent).toContain("Claim and continue");
     expect(el.textContent).not.toContain("Create a passkey");

@@ -81,8 +81,8 @@ const BLOCK_TYPES: StepView["type"][] = ["gate", "wait", "subworkflow", "conditi
   "foreach"];
 
 /**
- * One step's properties. Every control dispatches exactly one action — `PATCH_STEP`,
- * `RENAME_ID`, `WIRE` (Auto-wire) — so undo, the node and the JSON follow on their own.
+ * One step's properties. Every control dispatches exactly one action, `PATCH_STEP`,
+ * `RENAME_ID`, `WIRE` (Auto-wire), so undo, the node and the JSON follow on their own.
  */
 export function StepInspector({ state, step, palette, dispatch, projectId, actor, refreshPalette, onClose, onRewire }: {
   state: EditorState;
@@ -108,7 +108,7 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
   const named = captain ? palette.agents.find((a) => a.role_key === captain) : undefined;
   const makes = producesOf(step, palette);
 
-  // WHICH SECTIONS THIS STEP DRAWS — decided once, and used both to render them and to place
+  // WHICH SECTIONS THIS STEP DRAWS, decided once, and used both to render them and to place
   // each problem: a problem whose field has a control here shows on that control; every other
   // one (scope on a built-in step, approval on a gate, a captain on a Wait…) shows at the top,
   // so no problem the server names is ever invisible.
@@ -228,7 +228,7 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
  * box bound to `step.title` loses a trailing space before the next key arrives and "Build it"
  * becomes "Buildit". The box keeps the raw text; every key still dispatches (the node and JSON
  * follow as you type, and Ctrl+S saves what is shown), and the box only takes the stored title
- * back when it changes underneath — undo, a JSON edit — or when the box is left.
+ * back when it changes underneath, undo, a JSON edit, or when the box is left.
  */
 function useTitleDraft(step: SpecStep, dispatch: Dispatch<EditorAction>) {
   const stored = typeof step.title === "string" ? step.title : "";
@@ -426,14 +426,14 @@ function ApprovalSection({ step, palette, problems, onPatch }: {
   const onTimeout = String(approval.on_timeout ?? "block");
   const sla = approval.sla_hours;
   // A DEPLOY'S PROMISE IS ITS OWN SETTING (deploy_policy): a person, whatever the environment's
-  // policy — or, ticked, the policy decides. The lock says which, so it never promises a person
+  // policy, or, ticked, the policy decides. The lock says which, so it never promises a person
   // a policy would replace.
   const deploy = isDeploy(step);
   const byPolicy = followsPolicy(step);
   const lockTitle = !forced ? undefined
     : byPolicy ? "Asks a person unless this environment's deploy policy ships without asking"
-    : deploy ? `Risk ${risk} — always needs a person, whatever the environment's deploy policy`
-    : `Risk ${risk} — always needs a person`;
+    : deploy ? `Risk ${risk}, always needs a person, whatever the environment's deploy policy`
+    : `Risk ${risk}, always needs a person`;
   return (
     <Section label="Approval" testId="wf-sec-approval">
       <div className="wf-switch-row" title={lockTitle}
@@ -475,7 +475,7 @@ function ApprovalSection({ step, palette, problems, onPatch }: {
               <option value="block">Wait</option>
               <option value="escalate">Escalate</option>
               <option value="approve" disabled={risk >= 2}
-                      title={risk >= 2 ? `Risk ${risk} — always needs a person` : undefined}>Approve</option>
+                      title={risk >= 2 ? `Risk ${risk}, always needs a person` : undefined}>Approve</option>
             </select>
           </label>
           <label className="wf-field">
@@ -500,7 +500,7 @@ const ASK = "";
 
 /**
  * A DEPLOY STEP ASKS ONLY WHERE: a machine from the Fleet, or "ask me at deploy time". No target,
- * manifest, port or URL — the app's first deploy creates its target on that machine (a free port,
+ * manifest, port or URL, the app's first deploy creates its target on that machine (a free port,
  * a URL and health check from the host), and the deploy plan shows them with an Edit.
  */
 export function DeployWhere({ step, projectId, onPatch }: {
@@ -529,7 +529,7 @@ export function DeployWhere({ step, projectId, onPatch }: {
       <select className="wf-input" value={chosen} data-testid="wf-deploy-where" aria-label="Where it deploys"
               onChange={(e) => onPatch({ input: { name: "host_id", source: e.target.value === ASK ? null : { value: e.target.value } } })}>
         <option value={ASK}>{verified.length === 1 ? `${verified[0].name} (the only machine)` : "Ask me at deploy time"}</option>
-        {verified.map((h) => <option key={h.id} value={h.id}>{h.name}{h.address ? ` · ${h.address}` : ""}</option>)}
+        {verified.map((h) => <option key={h.id} value={h.id}>{h.name}{h.address ? `, ${h.address}` : ""}</option>)}
       </select>
       {hosts && !verified.length ? (
         <span className="wf-faint" data-testid="wf-deploy-where-none">

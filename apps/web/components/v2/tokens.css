@@ -1,3 +1,4 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app · shape: app screen · built: the project · redesign: polish · v2.0.0 */
 /* THE FONTS, ACTUALLY FETCHED.
    --v2-font-display named Space Grotesk and nothing ever loaded it, so every v2
    screen silently rendered in v1's Manrope. Declaring a font is not loading one,
@@ -64,12 +65,12 @@
    an agent's real state on its face, never decoration, with a reduced-motion
    still. That is the only deliberate exception.                            */
 @keyframes v2-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%      { opacity: .45; transform: scale(.86); }
+  0%, 100% { opacity: 1; transform: scale(1);}
+  50%      { opacity: .45; transform: scale(.86);}
 }
 @keyframes v2-blink {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: .2; }
+  0%, 100% { opacity: 1;}
+  50%      { opacity: .2;}
 }
 @media (prefers-reduced-motion: reduce) {
   /* The dot stays, the movement goes — the status is in the colour and the
@@ -97,8 +98,8 @@
 .v2-label {
   font-family: var(--v2-font-mono);
   font-size: 0.66rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--v2-dim);
 }
 
@@ -146,7 +147,7 @@
   display: block;
   height: 100%;
   background: var(--v2-mint);
-  transition: width 400ms ease;
+  transition: none;
 }
 .v2-bar[data-status="GATED"] > span  { background: var(--v2-amber); }
 .v2-bar[data-status="DONE"] > span,

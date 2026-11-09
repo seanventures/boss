@@ -3,12 +3,12 @@
 /**
  * Observability › NOTIFY (BOSSAPP-598, PRD §8): who is told, how, and when. Four zones:
  *
- *   CONTACT POINTS   Console · On-call email ✓ verified · #ops Slack (Unverified [code][Verify])  Test  [+ Add]
+ *   CONTACT POINTS   Console, On-call email ✓ verified, #ops Slack (Unverified [code][Verify])  Test  [+ Add]
  *                    Recent sends ▸ (the outbox, with receipts)
- *   POLICIES         Every alert → Console                         wait 30 s · repeat 4 h      [+ Child] Edit
- *                      └ service="checkout" → On-call email         quiet 22:00–07:00          Edit  Delete
+ *   POLICIES         Every alert → Console                         wait 30 s, repeat 4 h      [+ Child] Edit
+ *                      └ service="checkout" → On-call email         quiet 22:00, 07:00          Edit  Delete
  *   ROUTING PREVIEW  [ service=checkout\nseverity=critical ]  [Preview] → where it goes, after how long, skipped
- *   SILENCES & MAINTENANCE   active silences (End) · [+ Silence] · windows (Delete) · [+ Window] · inhibit rules
+ *   SILENCES & MAINTENANCE   active silences (End), [+ Silence], windows (Delete), [+ Window], inhibit rules
  *
  * The router and the preview share one server function: what the preview says is what happens.
  */
@@ -271,7 +271,7 @@ function PolicySheet({ projectId, actor, policy, parent, cps, onClose, onSaved }
                    placeholder="300" title="At most one update to a group this often" />
             <input type="number" min={0} className="obs-rnum" value={repeat} onChange={(e) => setRepeat(e.target.value)} aria-label="Repeat interval"
                    placeholder="14400" title="Repeat a still-firing, un-acked alert this often" data-testid="obs-policy-repeat" />
-            <span className="inf-faint">wait · interval · repeat (blank: inherit)</span>
+            <span className="inf-faint">wait, interval, repeat (blank: inherit)</span>
           </span></div>
         <label className="obs-rcheck" title="Policy order matters: keep looking at the next sibling after a match">
           <input type="checkbox" checked={cont} onChange={(e) => setCont(e.target.checked)} data-testid="obs-policy-continue" />
@@ -324,10 +324,10 @@ function Policies({ projectId, actor, cps }: Zone & { cps: ContactPoint[] }) {
                 <span className="inf-mono inf-muted" data-copy="data" title="Matches">{depth ? matchersWord(p.matchers) : "every alert"}</span>
                 <span aria-hidden className="inf-faint">→</span>
                 <span className="inf-muted" data-testid="obs-policy-tells">{p.contactPointIds.length ? p.contactPointIds.map(cpName).join(", ") : "inherits"}</span>
-                <span className="inf-faint" title="Group wait · repeat interval">
-                  {p.groupWaitS != null ? `wait ${secondsWord(p.groupWaitS)}` : ""}{p.repeatIntervalS != null ? ` · repeat ${secondsWord(p.repeatIntervalS)}` : ""}
+                <span className="inf-faint" title="Group wait, repeat interval">
+                  {p.groupWaitS != null ? `wait ${secondsWord(p.groupWaitS)}` : ""}{p.repeatIntervalS != null ? `, repeat ${secondsWord(p.repeatIntervalS)}` : ""}
                 </span>
-                {p.quietHours ? <span className="obs-chip" title={`Low urgency waits; ${p.quietHours.timezone}`}>quiet {p.quietHours.start}–{p.quietHours.end}</span> : null}
+                {p.quietHours ? <span className="obs-chip" title={`Low urgency waits; ${p.quietHours.timezone}`}>quiet {p.quietHours.start}, {p.quietHours.end}</span> : null}
                 {p.continueMatching ? <span className="obs-chip" title="Keeps matching the next sibling">continues</span> : null}
                 {p.ruleId ? <span className="obs-chip" title="Written by a rule's Notify setting">rule</span> : null}
                 <span className="ag-spacer" />
@@ -368,7 +368,7 @@ function RoutingPreview({ projectId }: { projectId: string }) {
   };
   return (
     <section className="obs-zone" aria-labelledby="obs-route-head" data-testid="obs-routing">
-      <ZoneHead id="obs-route-head" label="ROUTING PREVIEW" tip="Where an alert with these labels would go — the router's own answer" />
+      <ZoneHead id="obs-route-head" label="ROUTING PREVIEW" tip="Where an alert with these labels would go, the router's own answer" />
       <label className="inf-field">
         <span>Labels (one key=value a line)</span>
         <textarea rows={3} value={labels} onChange={(e) => setLabels(e.target.value)} data-testid="obs-route-labels" spellCheck={false}
@@ -558,7 +558,7 @@ function SilencesZone({ projectId, actor }: Zone) {
                         title={w.activeUntil ? `Active until ${lt.full(w.activeUntil)}` : "Not active now"}>{w.activeUntil ? "In window" : "Window"}</span>
                   <span className="obs-strong" data-user-text>{w.name}</span>
                   <span className="inf-mono inf-muted" data-copy="data">{matchersWord(w.matchers)}</span>
-                  <span className="inf-faint">{rruleWord(w.rrule)} · {w.durationMin} min · {w.mode === "hold" ? "hold" : "mute"} · {w.timezone}</span>
+                  <span className="inf-faint">{rruleWord(w.rrule)}, {w.durationMin} min, {w.mode === "hold" ? "hold" : "mute"}, {w.timezone}</span>
                   <span className="ag-spacer" />
                   <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-win-delete"
                                onClick={() => void drop(w.id, w.name)}>Delete</GatedButton>

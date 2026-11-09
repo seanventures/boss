@@ -65,7 +65,7 @@ describe("the options are readable when they open", () => {
 
   it("and it is opaque, not whatever --surface happens to be", () => {
     const at = CSS.indexOf(".split-action-menu {");
-    expect(CSS.slice(at, at + 900)).toContain("background: #101A30");
+    expect(CSS.slice(at, at + 900)).toContain("background: var(--boss-c-101a30)");
     expect(CSS.slice(at, at + 900)).not.toContain("var(--surface");
   });
 

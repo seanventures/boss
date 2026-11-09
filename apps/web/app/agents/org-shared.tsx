@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Organization's shared parts (org-view spec §4): names, the links every `↗` uses, a drawer that
+ * Organization's shared parts (org-view spec §4): names, the links every `Open` uses, a drawer that
  * traps focus and returns it, and the small menus. One place each, so Teams, Flow and the two
  * panels say a thing the same way.
  */
@@ -105,7 +105,7 @@ export function OpenItemLink({ item, testid }: { item: OrgOpenItem; testid?: str
  *
  * PORTALLED TO <body> (walk D1). The console's panel stack has a transform, which makes it the
  * containing block for `position: fixed`: the sheet sat 800px down a phone and the drawer
- * scrolled away on a desktop. In <body>, fixed means the screen — the Kit's overlays do the same
+ * scrolled away on a desktop. In <body>, fixed means the screen, the Kit's overlays do the same
  * (app/skills/overlay.tsx).
  */
 export function Drawer({ label, testid, onClose, children }: {
@@ -140,8 +140,8 @@ export function Drawer({ label, testid, onClose, children }: {
 
 /**
  * One stuck item, as two lines (walk on boss-1, 2026-10-04: a long run name ran out of its card
- * and over the next one). Line 1 is who, how long, the state and the one action — the action
- * never shrinks and never sits on text; line 2 is what (`step · run`), cut with an ellipsis and
+ * and over the next one). Line 1 is who, how long, the state and the one action, the action
+ * never shrinks and never sits on text; line 2 is what (`step, run`), cut with an ellipsis and
  * whole in its tooltip. Every part may shrink to nothing but the action.
  */
 export function StuckItem({ roleKey, age, ageTip, state, word, label, action, testid }: {
@@ -196,7 +196,7 @@ export function MenuPop({ label, onClose, children, testid }: {
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
     return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once per open
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps, once per open
   useEffect(() => {
     // preventScroll: the page must not jump to the menu (it is fixed under its button).
     ref.current?.querySelector<HTMLElement>("[role='menuitem']:not(:disabled)")?.focus({ preventScroll: true });

@@ -15,7 +15,7 @@ import { rawRequestUrl } from "../../../../lib/raw-request-url";
  *
  * Behind the console's session (middleware.ts), for download and copy, never for unfurling: a
  * private install's run is nobody else's business. It shows the agents, their role in the run,
- * the totals and the accountable person — no repository, no MCP server, no internal id.
+ * the totals and the accountable person, no repository, no MCP server, no internal id.
  */
 export const dynamic = "force-dynamic";
 
@@ -68,10 +68,10 @@ function Card({ card }: { card: CreditsCard }) {
       <div style={{ display: "flex", flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end",
                     borderTop: `1px solid ${C.border}`, paddingTop: 22 }}>
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <div style={{ fontSize: 24, display: "flex" }}>{`${card.steps} steps · ${card.time} · ${card.cost}`}</div>
+          <div style={{ fontSize: 24, display: "flex" }}>{`${card.steps} steps, ${card.time}, ${card.cost}`}</div>
           <div style={{ fontSize: 20, color: C.muted, marginTop: 6, display: "flex" }}>{`Accountable: ${card.accountable}`}</div>
         </div>
-        <div style={{ fontSize: 20, color: C.green, display: "flex" }}>Built with BOSS · open source</div>
+        <div style={{ fontSize: 20, color: C.green, display: "flex" }}>Built with BOSS, open source</div>
       </div>
     </div>
   );

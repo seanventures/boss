@@ -76,8 +76,8 @@ export function AppContext({ projectId, app }: { projectId: string; app: AppRow 
 
   // "Not deployed" only once the deploys have answered: while they load, it says so.
   const where = dep
-    ? `${dep.word} · ${dep.env}${dep.host ? ` on ${dep.host.name}` : ""}`
-    : app.deploys.length ? `${app.deploys[0].word ?? "Deployed"} · ${app.deploys[0].env}`
+    ? `${dep.word}, ${dep.env}${dep.host ? ` on ${dep.host.name}` : ""}`
+    : app.deploys.length ? `${app.deploys[0].word ?? "Deployed"}, ${app.deploys[0].env}`
     : loading && !data ? "Loading…" : "Not deployed";
 
   return (
@@ -121,14 +121,14 @@ export function AppContext({ projectId, app }: { projectId: string; app: AppRow 
             {dep ? (
               <>
                 <span data-user-text>{dep.sentence || dep.word}</span>
-                {dep.finishedAt ? <span className="np-dim"> · last deploy {localFull(dep.finishedAt)}</span> : null}
+                {dep.finishedAt ? <span className="np-dim">, last deploy {localFull(dep.finishedAt)}</span> : null}
               </>
             ) : "Not deployed yet"}
           </dd>
           <dt>Code</dt>
           <dd data-testid="np-ctx-code" data-user-text>
             {[app.repo, app.prNumber ? `PR #${app.prNumber}${app.prState ? ` (${app.prState})` : ""}` : "no PR yet"]
-              .filter(Boolean).join(" · ")}
+              .filter(Boolean).join(", ")}
           </dd>
         </dl>
       </details>

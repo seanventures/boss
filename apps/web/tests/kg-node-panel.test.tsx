@@ -55,15 +55,15 @@ describe("the detail panel", () => {
     mockKgFetch();
     await mount(<Panel />);
     expect($('[data-testid="kg-panel-layer"]')?.textContent).toBe("Code");
-    expect($('[data-testid="kg-panel-kind"]')?.textContent).toBe("Method · Java");
+    expect($('[data-testid="kg-panel-kind"]')?.textContent).toBe("Method, Java");
     expect($('[data-testid="kg-panel-title"]')?.textContent).toBe("disburseLoan()");
     expect($('[data-testid="kg-panel-copy"]')).not.toBeNull();
     const link = $('[data-testid="kg-panel-code-link"]') as HTMLAnchorElement;
     expect(link.href).toBe("https://github.com/paramg/northpeak-fineract-b/blob/HEAD/fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java#L317-L320");
-    expect(link.textContent).toContain("LoanWritePlatformServiceJpaRepositoryImpl.java:317–320");
+    expect(link.textContent).toContain("LoanWritePlatformServiceJpaRepositoryImpl.java:317-320");
     const attrs = $('[data-testid="kg-panel-attrs"]')!.textContent!;
     for (const t of ["org.apache.fineract.portfolio.loanaccount.service", "fineract-provider", "method", "java"]) expect(attrs).toContain(t);
-    expect($('[data-testid="kg-panel-conn-summary"]')?.textContent).toBe("Calls 119 · References 23 · Dispatches to 20 · Overrides 1 · Called by 5 · Dispatched from 3 · Defined in 1");
+    expect($('[data-testid="kg-panel-conn-summary"]')?.textContent).toBe("Calls 119, References 23, Dispatches to 20, Overrides 1, Called by 5, Dispatched from 3, Defined in 1");
     expect($('[data-testid="kg-panel-vector-reason"]')?.textContent).toBe("Not embedded: code symbols are matched by structure, not meaning");
     expect($('[data-testid="kg-panel-provenance"]')?.textContent).toContain("Indexed from the repository on ");
     const order = $$('[data-testid^="kg-panel-"]').map((e) => e.getAttribute("data-testid"))
@@ -107,7 +107,7 @@ describe("the detail panel", () => {
     await mount(<Panel nodeId={rule.node.id} onEditRule={onEditRule} />);
     expect($('[data-testid="kg-panel-layer"]')?.textContent).toBe("Rules");
     expect($('[data-testid="kg-panel-statement"]')?.textContent).toContain(rule.statement);
-    expect($('[data-testid="kg-panel-trust"]')?.textContent).toBe("Proposed · not yet trusted by agents");
+    expect($('[data-testid="kg-panel-trust"]')?.textContent).toBe("Proposed, not yet trusted by agents");
     expect($('[data-testid="kg-panel-attrs"]')?.textContent).toContain(`${Math.round(rule.confidence * 100)}%`);
     expect($('[data-testid="kg-panel-provenance"]')?.textContent).toContain("Proposed by Scout (Chief Architect)");
     expect($('[data-testid="kg-panel-provenance"]')?.textContent).toContain("its “scan” step");

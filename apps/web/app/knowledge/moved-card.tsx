@@ -3,7 +3,7 @@
 /**
  * WHERE THE KNOWLEDGE SCREENS WENT (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.1). Reliability's
  * knowledge explorer and settings moved to Graph, and Approvals' fact queue to Graph › Rules
- * review › Facts; each old place keeps one card that says so and goes there — in the same org
+ * review › Facts; each old place keeps one card that says so and goes there, in the same org
  * AND the same project (tester round 1 P1-2: the link dropped ?project_id= and opened the home
  * project's graph).
  */

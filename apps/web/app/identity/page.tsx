@@ -12,7 +12,7 @@ import { Overview, type OverviewFailures } from "./overview";
 export const dynamic = "force-dynamic";
 
 const data = <T,>(r: ServerRead<T>): T | null => (r.ok ? r.data : null);
-/** A read that FAILED — not one the viewer may not make (403), which each panel says itself. */
+/** A read that FAILED, not one the viewer may not make (403), which each panel says itself. */
 const failed = <T,>(r: ServerRead<T>): ReadFailure | null => (!r.ok && r.status !== 403 ? r : null);
 const SERVER_ERROR: ReadFailure = { status: 500, code: "error" };
 

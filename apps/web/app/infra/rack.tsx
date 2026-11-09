@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * A rack (spec §4.3): one machine and what is placed on it. Head line (name · address · arch,
- * state on the right), meta line (`apps k of n` · `ports k of n` · `checked <ago>`), then either
- * the slot grid — one 168×64 tile per resident, dashed empty slots up to max_apps (≤ 8 drawn,
- * then `+n free`), or `+ Place app` when the machine sets no limit — or, while the machine is
+ * A rack (spec §4.3): one machine and what is placed on it. Head line (name, address, arch,
+ * state on the right), meta line (`apps k of n`, `ports k of n`, `checked <ago>`), then either
+ * the slot grid, one 168×64 tile per resident, dashed empty slots up to max_apps (≤ 8 drawn,
+ * then `+n free`), or `+ Place app` when the machine sets no limit, or, while the machine is
  * still being set up, the Stage line with that stage's one action inline.
  *
  * Every glyph is a field the server sent (§5.4): the tile's dot and word are the target's
@@ -31,7 +31,7 @@ function useChanged(value: string): boolean {
 
 // ── the stage line ──────────────────────────────────────────────────────────────────────────
 
-/** Credential · Authorise · Verify · Provision · Ready — done ✓, the current one marked, the
+/** Credential, Authorise, Verify, Provision, Ready, done ✓, the current one marked, the
  *  edge into the current stage draws once when the stage advances. */
 export function StageLine({ stage, vertical, testId = "inf-stage-line" }: { stage: HostStage; vertical?: boolean; testId?: string }) {
   const prev = useRef(stage.index);
@@ -67,18 +67,18 @@ export function ResidentTile({ r, now, windowEnd, onOpen }: {
   r: Resident; now: number | null; windowEnd: string | null; onOpen: (r: Resident) => void;
 }) {
   const changed = useChanged(r.health.word);
-  const label = r.kind === "target" ? `${r.name}${r.env ? ` · ${r.env}` : ""}` : r.name;
+  const label = r.kind === "target" ? `${r.name}${r.env ? `, ${r.env}` : ""}` : r.name;
   const end = windowEnd ? Date.parse(windowEnd) : NaN;
   const fromIso = Number.isFinite(end) ? new Date(end - r.strip.length * CELL_S * 1000).toISOString() : null;
   let line3: React.ReactNode = null;
   if (r.kind === "target") {
     line3 = r.lastDeploy?.sha7
-      ? <span className="inf-tile-l3" title={`Deployed ${r.lastDeploy.sha7} · ${localTime(r.lastDeploy.at)} · ${r.lastDeploy.word}`}>
-          <span className="inf-mono" data-copy="data">{r.lastDeploy.sha7}</span>{r.lastDeploy.at && now ? ` · ${ago(r.lastDeploy.at, now)}` : ""}
+      ? <span className="inf-tile-l3" title={`Deployed ${r.lastDeploy.sha7}, ${localTime(r.lastDeploy.at)}, ${r.lastDeploy.word}`}>
+          <span className="inf-mono" data-copy="data">{r.lastDeploy.sha7}</span>{r.lastDeploy.at && now ? `, ${ago(r.lastDeploy.at, now)}` : ""}
           {r.lastDeploy.failedAfter ? (
             <span className="inf-failed-after" data-testid="inf-tile-failed-after"
-                  title={`Last attempt failed${now ? ` · ${ago(r.lastDeploy.failedAfter.at, now)} ago` : ""}`}>
-              {" · ✗ "}{now ? ago(r.lastDeploy.failedAfter.at, now) : ""}<span className="ag-sr"> last attempt failed</span>
+                  title={`Last attempt failed${now ? `, ${ago(r.lastDeploy.failedAfter.at, now)} ago` : ""}`}>
+              {", ✗ "}{now ? ago(r.lastDeploy.failedAfter.at, now) : ""}<span className="ag-sr"> last attempt failed</span>
             </span>
           ) : null}
         </span>
@@ -152,7 +152,7 @@ export function RackView({ rack, now, windowEnd, canAct, busy, onHost, onResiden
              data-tone={rack.state.tone} aria-label={rack.thisComputer ? `This computer, ${rack.name}` : rack.name}>
       <header className="inf-rack-head">
         <button type="button" className="inf-rack-name" onClick={() => onHost(rack.id)} data-testid={`inf-rack-open-${rack.id}`}
-                title={`Open this machine · ${rack.name}`}>
+                title={`Open this machine, ${rack.name}`}>
           {rack.thisComputer ? <span className="inf-rack-this">This computer</span> : null}
           {/* The full name on hover: a long one ("Paramagurus-MacBook-Pro…") is cut to fit. */}
           <span className="inf-trunc" data-copy="data" title={rack.name}>{rack.name}</span>

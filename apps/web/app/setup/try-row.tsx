@@ -31,7 +31,7 @@ export const TryRow = forwardRef<HTMLElement, {
   const blocked = !view.ready
     ? (reason?.tip ?? view.verdict.tip)
     : `Runs a short build on ${repo?.full_name ?? "your repository"}. Never merges. You review it.`;
-  // "Your first PR is open." is said once — when this page watched it open — not for ever.
+  // "Your first PR is open." is said once, when this page watched it open, not for ever.
   const wasRunning = useRef(false);
   const [justOpened, setJustOpened] = useState(false);
   useEffect(() => {

@@ -90,7 +90,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
     <div className="wo-shell">
       <header className="wo-header">
         <div>
-          <span className="eyebrow">Allocation control plane</span>
+          <span className="area-name">Allocation control plane</span>
           <h2>Put scarce attention and compute on the work that matters.</h2>
           <p>
             Explainable priority feeds a quota-bounded lease queue.{" "}
@@ -140,7 +140,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
                   <span className={`wo-band ${item.priority_band}`}>{item.priority_band}</span>
                   <span className="wo-work-copy">
                     <strong>{item.title}</strong>
-                    <small>{item.workload_class} · {item.allocation_status}</small>
+                    <small>{item.workload_class}, {item.allocation_status}</small>
                   </span>
                   <span className="wo-score">{item.effective_score.toFixed(1)}</span>
                 </button>
@@ -203,7 +203,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               );
             })}
           </div>
-          <div className="wo-flow-label"><span>LEASED JOB FLOW</span><i /></div>
+          <div className="wo-flow-label"><span>Leased job flow</span><i /></div>
           <div className="wo-job-list">
             {feed.jobs.length === 0 ? (
               <p className="wo-empty">No jobs are waiting for or holding capacity.</p>
@@ -213,7 +213,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
                   <span className={`wo-status ${tone(job.status)}`} />
                   <div>
                     <strong>{job.work_title ?? job.kind}</strong>
-                    <small>{job.kind} · {job.workload_class}</small>
+                    <small>{job.kind}, {job.workload_class}</small>
                   </div>
                   <div className="wo-job-state">
                     <span>{job.status}</span>
@@ -277,7 +277,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
                 <span>{provider.display_name}</span>
                 {/* CONNECTED OR NOT, SAID ON THE ROW. All five trackers are seeded as `active`
                     with empty configurations, so a list that said "default" and "available" read
-                    as five working trackers while none could create a ticket — and
+                    as five working trackers while none could create a ticket, and
                     meeting-to-tickets failed at its approved last step (boss-1, 2026-10-02). */}
                 <small data-testid={`work-tracker-state-${provider.provider_key}`}>
                   {provider.connected ? "connected" : "not connected"} ·{" "}
@@ -297,7 +297,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
                 <span className={`wo-status ${tone(binding.sync_status)}`} />
                 <div>
                   <strong>{binding.external_key ?? binding.work_title}</strong>
-                  <small>{binding.provider_name} · {binding.external_state ?? binding.sync_status}</small>
+                  <small>{binding.provider_name}, {binding.external_state ?? binding.sync_status}</small>
                 </div>
                 {binding.external_url ? (
                   <a href={binding.external_url} target="_blank" rel="noreferrer" aria-label={`Open ${binding.external_key ?? binding.work_title}`}>
@@ -307,7 +307,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               </div>
             ))}
           </div>
-          <div className="wo-flow-label"><span>LIVE STATUS RAIL</span><i /></div>
+          <div className="wo-flow-label"><span>Live status rail</span><i /></div>
           <div className="wo-presence-list">
             {feed.presenceEvents.length === 0 ? (
               <p className="wo-empty">PR, deployment, and bot events will stream here.</p>
@@ -369,9 +369,9 @@ export function WorkOrchestration({ feed, actor }: Props) {
           </div>
           <div className="wo-inspector-meta">
             <div><SlidersHorizontal size={16} /><span>{selected.rationale || "No priority rationale recorded."}</span></div>
-            <div><Gauge size={16} /><span>{selectedAllocation ? `${selectedAllocation.granted_units}/${selectedAllocation.requested_units} units · ${selectedAllocation.reason}` : "No active allocation"}</span></div>
-            <div><Ticket size={16} /><span>{selectedBinding ? `${selectedBinding.provider_name} · ${selectedBinding.external_key ?? selectedBinding.sync_status}` : "Tracker binding required"}</span></div>
-            <div><Robot size={16} /><span>{selected.owner_actor ?? "Unassigned"} · {selected.workload_class}</span></div>
+            <div><Gauge size={16} /><span>{selectedAllocation ? `${selectedAllocation.granted_units}/${selectedAllocation.requested_units} units, ${selectedAllocation.reason}` : "No active allocation"}</span></div>
+            <div><Ticket size={16} /><span>{selectedBinding ? `${selectedBinding.provider_name}, ${selectedBinding.external_key ?? selectedBinding.sync_status}` : "Tracker binding required"}</span></div>
+            <div><Robot size={16} /><span>{selected.owner_actor ?? "Unassigned"}, {selected.workload_class}</span></div>
           </div>
           {selectedBinding && selectedBinding.sync_status !== "synced" ? (
             <ActionForm permission="integration:manage" action={syncTrackerBindingAction} className="wo-inline-sync">

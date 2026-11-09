@@ -4,8 +4,8 @@
  * SEVERAL CONNECTORS IN ONE BUILD: the compose sheet (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.3,
  * BOSSAPP-526). The composer opens it when two to six connectors are added (one still opens the
  * single connector's TemplateSheet, unchanged). It shows what the ONE build adds: the connectors
- * in the order they are wired · the stack they share · their secrets merged (a test key asked for
- * once) · every host the app will talk to, accepted as a whole · the note · Start.
+ * in the order they are wired, the stack they share, their secrets merged (a test key asked for
+ * once), every host the app will talk to, accepted as a whole, the note, Start.
  *
  * START IS ONE GOVERNED BUILD: POST /v1/templates/compose. What it can answer, and what the sheet
  * does (never a silent failure, never a code):
@@ -280,7 +280,7 @@ export function ComposeSheet({ projectId, cards, target, inApp = [], onStarted, 
   );
 
   return (
-    <SideSheet title={title} sub={`${cards.length} connectors · one build`} onClose={onClose} testId="cmp-sheet" foot={foot}>
+    <SideSheet title={title} sub={`${cards.length} connectors, one build`} onClose={onClose} testId="cmp-sheet" foot={foot}>
       <p className="tpl-muted">One build adds them all, wired in this order. A connector another needs goes first.</p>
       {loadError ? <p className="tpl-err" role="alert">{loadError}</p> : null}
       {githubAsMeNotice(githubAsMe) ? (
@@ -300,7 +300,7 @@ export function ComposeSheet({ projectId, cards, target, inApp = [], onStarted, 
                 <span className="tpl-row-main">
                   <span className="tpl-row-name" data-user-text={c.source === "git" || undefined}>{c.name}</span>
                   <span className="tpl-faint" data-user-text={c.source === "git" || undefined}>{c.summary}</span>
-                  {d?.routes.length ? <span className="tpl-faint tpl-mono" data-user-text>{d.routes.join(" · ")}</span> : null}
+                  {d?.routes.length ? <span className="tpl-faint tpl-mono" data-user-text>{d.routes.join(", ")}</span> : null}
                 </span>
               </li>
             );
@@ -337,7 +337,7 @@ export function ComposeSheet({ projectId, cards, target, inApp = [], onStarted, 
                       aria-disabled={off || undefined} data-off={off || undefined} data-level={levels[s] || undefined}
                       title={stackTip(s, installed) + (levels[s] ? ` Support: ${levelWord(levels[s])}.` : "")}
                       data-testid={`cmp-stack-${s}`} onClick={() => { if (!off) { setStack(s); setPicked(true); } }}>
-                {stackLabel(s)}{levels[s] ? ` · ${levelWord(levels[s])}` : ""}{off ? " · off" : ""}
+                {stackLabel(s)}{levels[s] ? `, ${levelWord(levels[s])}` : ""}{off ? ", off" : ""}
               </button>
             );
           }) : <span className="tpl-muted">None shared</span>}
@@ -368,7 +368,7 @@ export function ComposeSheet({ projectId, cards, target, inApp = [], onStarted, 
                 <li key={s.name} className="tpl-row" data-testid={`cmp-secret-${s.name}`}>
                   <span className="tpl-row-main">
                     <span className="tpl-row-name tpl-mono">{s.name}</span>
-                    <span className="tpl-faint" data-user-text>{[s.purpose, s.by.join(", ")].filter(Boolean).join(" · ")}</span>
+                    <span className="tpl-faint" data-user-text>{[s.purpose, s.by.join(", ")].filter(Boolean).join(", ")}</span>
                   </span>
                   <span className="tpl-chip" data-tone={w.tone === "warn" ? "amber" : "green"} title={w.tip}>{w.word}</span>
                   {field ? (

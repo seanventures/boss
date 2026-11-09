@@ -127,7 +127,7 @@ export function DeploySheet({ projectId, actor, onClose, onPlanned, initialTarge
           <select name="target" value={targetId} onChange={(e) => setTargetId(e.target.value)} data-testid="inf-deploy-target">
             {shown.length === 0 ? <option value="">No targets yet</option> : null}
             {shown.map((t) => (
-              <option key={t.id} value={t.id}>{t.app_name} · {t.environment}{t.target_kind ? ` (${t.target_kind})` : ""}</option>
+              <option key={t.id} value={t.id}>{t.app_name}, {t.environment}{t.target_kind ? ` (${t.target_kind})` : ""}</option>
             ))}
           </select>
         </label>

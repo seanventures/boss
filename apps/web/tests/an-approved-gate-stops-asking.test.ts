@@ -79,7 +79,7 @@ describe("what the operator is told", () => {
   const UI = codeOnly("app/delivery-workflows-ui.tsx");
 
   it("approved says it is starting, not that it is waiting", () => {
-    expect(UI).toContain("Approved — starting.");
+    expect(UI).toContain("Approved, starting.");
     expect(UI).toContain("as soon as a worker picks it up");
   });
 
@@ -87,6 +87,6 @@ describe("what the operator is told", () => {
     // The hold default means expiry applied nothing, so the question is still answerable —
     // opening the decision reopens it.
     expect(UI).toContain("The gate expired before anyone answered it.");
-    expect(UI).toContain("Answer it now →");
+    expect(UI).toContain("Answer it now");
   });
 });

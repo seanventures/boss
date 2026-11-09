@@ -2,9 +2,9 @@
 
 /**
  * Loadout › Instructions (agent-loadout spec §3.3): the operator's written way of working for
- * this agent — a review checklist, house rules — uploaded as a .md/.txt or pasted. Always in its
+ * this agent, a review checklist, house rules, uploaded as a .md/.txt or pasted. Always in its
  * prompt, in the modes it is for; it shapes how it works, never what it may do. Each change is a
- * new agent version (`Added · v8 · applies to new work`).
+ * new agent version (`Added, v8, applies to new work`).
  *
  * The rows, the budget meter, `+ Add ▾`, each row's 👁 preview and `⋯` menu, the `Not used` pill
  * (a document today's check refuses is left out of the prompt) and the read-only state (no
@@ -33,7 +33,7 @@ export const INSTRUCTION_TIPS = {
   readOnly: "Needs agent-editor rights",
 };
 
-/** `Work only`, `Work, Chat` — shown only when a document is not in every mode. */
+/** `Work only`, `Work, Chat`, shown only when a document is not in every mode. */
 export function modesLabel(modes: InstructionMode[]): string | null {
   if (modes.length === MODES.length) return null;
   return modes.length === 1 ? `${MODE_LABEL[modes[0]]} only` : modes.map((m) => MODE_LABEL[m]).join(", ");
@@ -41,8 +41,8 @@ export function modesLabel(modes: InstructionMode[]): string | null {
 
 /**
  * Markdown as text only: no raw HTML (the renderer builds React nodes, never markup), links
- * only to http(s) and opened `noopener noreferrer`, and images NOT loaded — a remote image in a
- * playbook is a tracking pixel — but shown as `[image: alt]`.
+ * only to http(s) and opened `noopener noreferrer`, and images NOT loaded, a remote image in a
+ * playbook is a tracking pixel, but shown as `[image: alt]`.
  */
 export function safeMarkdownText(body: string): string {
   return body
@@ -73,13 +73,13 @@ export function InstructionsRow({ projectId, roleKey, actor, onVersion, onMakeSk
   const load = useCallback(async () => {
     const r = await instructionsApi.list(projectId, roleKey, actor);
     if (r.ok) { setList(r.data); setFailed(""); onAccess?.(r.data.canEdit); } else setFailed(r.error);
-  }, [projectId, roleKey, actor]); // eslint-disable-line react-hooks/exhaustive-deps -- onAccess is a setter
+  }, [projectId, roleKey, actor]); // eslint-disable-line react-hooks/exhaustive-deps, onAccess is a setter
   useEffect(() => { void load(); }, [load, reloadKey]);
   // Ages are measured from when the list arrived, read in an effect (never during render).
   useEffect(() => { setNow(Date.now()); }, [list]);
 
   const changed = (version: number, verb: string) => {
-    showToast("success", `${verb} · v${version} · applies to new work`);
+    showToast("success", `${verb}, v${version}, applies to new work`);
     onVersion(version);
     void load();
   };
@@ -143,7 +143,7 @@ export function InstructionsRow({ projectId, roleKey, actor, onVersion, onMakeSk
         </div>
         {failed ? (
           <button type="button" className="kit-link" data-testid="instructions-retry" onClick={() => void load()}>
-            Can&apos;t reach BOSS API · Retry
+            Can&apos;t reach BOSS API, Retry
           </button>
         ) : null}
         {!list && !failed ? (
@@ -175,7 +175,7 @@ export function InstructionsRow({ projectId, roleKey, actor, onVersion, onMakeSk
                   <span className="kit-chip" data-tone="amber" data-testid="instruction-not-used"
                         data-tip={`Fails the check now: ${item.unusableReason ?? "it may not be used"}. Edit or remove it.`}>Not used</span>
                 ) : null}
-                <span className="kit-faint" data-tip={`Updated by ${item.updatedBy}${item.updatedAt ? ` · ${item.updatedAt.slice(0, 16).replace("T", " ")}` : ""}`}>
+                <span className="kit-faint" data-tip={`Updated by ${item.updatedBy}${item.updatedAt ? `, ${item.updatedAt.slice(0, 16).replace("T", " ")}` : ""}`}>
                   {ago(item.updatedAt, now)}
                 </span>
               </span>
@@ -264,7 +264,7 @@ function PreviewDrawer({ projectId, actor, roleKey, item, startEditing, canEdit,
         <h3 className="kit-drawer-title">{item.name}</h3>
         <button type="button" className="ag-icon-btn" aria-label="Close" data-tip="Close" onClick={onClose}><X size={14} aria-hidden /></button>
         <span className="ld-drawer-facts">
-          <span>{sizeLabel(item.sizeChars)} · ≈ {item.tokensEst.toLocaleString("en-US")} tokens</span>
+          <span>{sizeLabel(item.sizeChars)}, ≈ {item.tokensEst.toLocaleString("en-US")} tokens</span>
           {item.sinceVersion ? <span className="kit-chip" data-tip={INSTRUCTION_TIPS.since}>Since v{item.sinceVersion}</span> : null}
         </span>
       </div>

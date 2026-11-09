@@ -5,7 +5,7 @@
  * names a delegate that approves or rejects chosen kinds of decisions in chosen projects, for up
  * to 90 days, optionally capped per day. Step-up happens once, here. Creating it shows the
  * delegate's key ONCE (BOSS keeps only a hash). BOSS never lets a delegate merge to main, deploy,
- * raise a budget or change identity, security or settings — whatever is chosen here.
+ * raise a budget or change identity, security or settings, whatever is chosen here.
  */
 import React, { useState } from "react";
 import { Plus, Prohibit, Stamp } from "@phosphor-icons/react";
@@ -36,9 +36,9 @@ export type ApprovalDelegationsAnswer = {
 export const NEVER = "Never merges to main, deploys, raises a budget, or changes identity, security or settings.";
 
 export function delegationLine(d: ApprovalDelegation): string {
-  const cap = d.daily_cap ? ` · up to ${d.daily_cap} a day (${d.used_today} today)` : "";
+  const cap = d.daily_cap ? `, up to ${d.daily_cap} a day (${d.used_today} today)` : "";
   const until = d.status === "revoked" ? "revoked" : d.expires_at ? `until ${shortDate(d.expires_at)}` : "";
-  return `${d.kind_labels.join(", ")} · ${d.projects.join(", ")} · ${until}${cap}`;
+  return `${d.kind_labels.join(", ")}, ${d.projects.join(", ")}, ${until}${cap}`;
 }
 
 export function ApproveOnMyBehalf({ initial, projects }: {
@@ -75,7 +75,7 @@ export function ApproveOnMyBehalf({ initial, projects }: {
             <Stamp size={22} aria-hidden />
             <span>
               <b data-copy="data">{d.delegate.name ?? "Approval delegate"}</b>
-              <small data-copy="data">{delegationLine(d)} · used <Ago iso={d.last_used_at} /></small>
+              <small data-copy="data">{delegationLine(d)}, used <Ago iso={d.last_used_at} /></small>
             </span>
             <span className="idn-spacer" />
             <Pill tone={d.status === "active" ? "ok" : "mute"}>{d.status}</Pill>
@@ -85,7 +85,7 @@ export function ApproveOnMyBehalf({ initial, projects }: {
                   setBusy(d.id);
                   try {
                     await idPost(`/v1/identity/me/approval-delegations/${encodeURIComponent(d.id)}/revoke`, {});
-                    showToast("success", "Revoked · the delegate stops now");
+                    showToast("success", "Revoked, the delegate stops now");
                     await reload();
                   } catch (e) { showToast("error", refusalSentence(e)); }
                   setBusy(null);
