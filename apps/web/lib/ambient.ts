@@ -13,18 +13,19 @@
  * a no-op that says so. It exists so the morning review (and a fresh install with no ambient
  * work yet) can see the screens on realistic data; it is always labelled "Sample data".
  */
+import { parseDiagnosis, parseWaitReason, type Diagnosis, type WaitReason } from "./stuck-work";
 import { obsWrite, type WriteResult } from "../app/observability/obs-write";
 import { demoAnswer, demoWrite } from "./ambient-demo";
 
 // ── the wire ────────────────────────────────────────────────────────────────────────────────
 
 export type NodeType = "signal" | "agent" | "person" | "policy" | "squad" | "boss" | "action"
-  | "decision" | "needs_you" | "run" | "outcome";
+  | "decision" | "needs_you" | "run" | "outcome" | "learning";
 export type EdgeKind = "raised" | "claimed" | "proposed" | "critique" | "vote" | "handoff" | "escalate"
-  | "decided" | "settles" | "overrides" | "acted" | "asks" | "resulted";
+  | "decided" | "settles" | "overrides" | "acted" | "asks" | "resulted" | "applied";
 
 export type Ref = { kind: string; id?: string | null; work_item_id?: string };
-export type FlowNode = { id: string; type: NodeType; label: string; stage: number; badges: string[]; ref?: Ref };
+export type FlowNode = { id: string; type: NodeType; label: string; stage: number; badges: string[]; ref?: Ref; detail?: string };
 export type FlowEdge = { from: string; to: string; kind: EdgeKind; label: string; dissent: boolean; ref?: Ref };
 
 export type Outcome = "needs_you" | "running" | "resolved_by_agents" | "resolved_by_person" | "overridden"
@@ -42,8 +43,10 @@ export type ItemSummary = {
   updated_at: string | null; resolved_at: string | null;
 };
 
-export type StripNode = { type: NodeType; label: string; badges: string[] };
-export type ListItem = ItemSummary & { badges: ItemBadges; strip: StripNode[] };
+export type StripNode = { type: NodeType; label: string; badges: string[]; /** A detector's icon (Phosphor name). */ icon?: string };
+export type ListItem = ItemSummary & { badges: ItemBadges; strip: StripNode[];
+  /** What the build it started waits for, and what the Shepherd found (stuck_work.item_status). */
+  why?: WaitReason | null; diagnosis?: Diagnosis | null; run_id?: string | null };
 
 export const TABS = ["needs_you", "running", "resolved_by_agents", "overridden", "failed"] as const;
 export type Tab = (typeof TABS)[number];
@@ -79,11 +82,24 @@ export type Signal = { id: string; kind: string; title: string; severity: string
 export type ClassRow = {
   task_class: string; title: string; level: string; ceiling: string; max_ceiling: string; default_level: string;
   risk: string; owner_role: string | null; level_name: string; suggested_level: string | null; source: string;
+  /** This class's own "review always-on builds before they start"; null follows the project. */
+  review_builds: boolean | null;
 };
 export type AutonomyView = { classes: ClassRow[]; levels: Array<{ level: string; name: string }> };
 export type Envelope = { cap_usd_micros: number; spent_usd_micros: number; held_usd_micros: number; available_usd_micros: number; resets: string };
 export type StopState = { stopped: boolean; scope: string | null; by: string | null; at: string | null; reason: string };
-export type SettingsView = { settings: Record<string, unknown>; envelope: Envelope; stop: StopState };
+/** The always-on mode (install-wide): env pins it (BOSS_AMBIENT_COS), else a person chose it in Govern, else off. */
+export type AlwaysOnMode = "off" | "propose" | "route";
+export type ModeState = { mode: AlwaysOnMode; source: "env" | "console" | "default"; pinned: boolean; by: string | null; at: string | null };
+export const MODE_WORDS: Record<AlwaysOnMode, { label: string; tip: string }> = {
+  off: { label: "Off", tip: "No agent picks up work by itself" },
+  propose: { label: "Ask first", tip: "Agents triage and suggest; a person approves handovers on one card per project" },
+  route: { label: "Act within levels", tip: "Hand-offs go straight to the owning agent from A1; each kind of work then runs at its own level below" },
+};
+/** "Review always-on builds before they start": off by default, so always-on builds start on the
+ *  project's Captain authority. Class → project → install; null follows the next level up. */
+export type ReviewBuilds = { install: boolean; project: boolean | null; classes: Record<string, boolean>; effective: boolean; source: "install" | "project" };
+export type SettingsView = { settings: Record<string, unknown>; envelope: Envelope; stop: StopState; mode: ModeState; review_builds: ReviewBuilds };
 
 export type Summary = { n: number; median: number | null; p90: number | null };
 export type DayRow = { day: string; a0: number; a1: number; a2: number; a3: number; agent: number; policy: number; squad: number; person: number; total: number };
@@ -119,6 +135,18 @@ export type Recommendation = {
   proposed_shape: "ticket" | "epic" | "prd" | string; status: RecStatus | string; rank: number | null; score: number;
   value: Level3; effort: Level3; risk: Level3; evidence: number; sources: number; single_source: boolean;
   resurfaced: boolean; snoozed_until: string | null; strip: StripNode[];
+  /** The item's estimate in dollars, who would do it (role keys) and why (roadmap screen). */
+  cost_usd?: number | null; squad?: string[]; why?: string; subject?: string;
+  /** THE CARD'S OWN DIAGRAM (screen 07), from the engine (ambient/roadmap_card.py): concrete
+   *  evidence ("2 incidents", "sla.py hot") → the detector ("Incident hotspot") → what the agent
+   *  does, and the ≈ cost with what it is based on. Absent on an older engine. */
+  card?: RecCard | null;
+  /** The work it became (the run or build its artifact names), once started. */
+  work_id?: string;
+};
+export type RecCard = {
+  evidence: { label: string; icon: string }[]; detector: { label: string; icon: string } | null;
+  does: string; cost_usd: number | null; cost_basis: string;
 };
 export type RoadmapView = { status: string; recommendations: Recommendation[]; counts: Record<string, number> };
 /** The drawer's text (GET /v1/ambient/roadmap/{id} → detail): only shown on ⓘ. */
@@ -153,7 +181,7 @@ const a = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const o = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {});
 const sn = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
-const NODE_TYPES = new Set<NodeType>(["signal", "agent", "person", "policy", "squad", "boss", "action", "decision", "needs_you", "run", "outcome"]);
+const NODE_TYPES = new Set<NodeType>(["signal", "agent", "person", "policy", "squad", "boss", "action", "decision", "needs_you", "run", "outcome", "learning"]);
 
 export function parseNode(w: unknown): FlowNode {
   const x = o(w);
@@ -161,7 +189,8 @@ export function parseNode(w: unknown): FlowNode {
   const ref = o(x.ref);
   return { id: s(x.id), type, label: clampWords(s(x.label), NODE_WORDS), stage: Math.max(0, Math.min(5, n(x.stage))),
            badges: a(x.badges).map((b) => s(b)).filter(Boolean),
-           ref: Object.keys(ref).length ? (ref as Ref) : undefined };
+           ref: Object.keys(ref).length ? (ref as Ref) : undefined,
+           ...(sn(x.detail) ? { detail: s(x.detail) } : {}) };
 }
 
 export function parseEdge(w: unknown): FlowEdge {
@@ -196,7 +225,9 @@ export function parseList(w: unknown): ListView {
                                     strip: a(o(i).strip).slice(0, 6).map((sn_) => {
                                       const p = parseNode({ ...o(sn_), id: "s" });
                                       return { type: p.type, label: p.label, badges: p.badges.slice(0, 2) };
-                                    }) })),
+                                    }),
+                                    why: parseWaitReason(o(i).why), diagnosis: parseDiagnosis(o(i).diagnosis),
+                                    run_id: sn(o(i).run_id) })),
   };
 }
 
@@ -222,7 +253,7 @@ export const OUTCOME_WORDS: Record<string, { label: string; tone: "amber" | "blu
 };
 export const outcomeWords = (o_: string) => OUTCOME_WORDS[o_] ?? { label: o_ || "Open", tone: "grey" as const };
 
-export const LEVEL_WORDS: Record<string, string> = { A0: "Observe", A1: "Propose", A2: "Act to draft", A3: "Act and report" };
+export { LEVEL_MEANINGS, LEVEL_WORDS } from "./autonomy-levels";
 
 export function money(usd: number | null | undefined): string {
   if (usd == null || !Number.isFinite(usd)) return "—";
@@ -347,7 +378,8 @@ export const parseAutonomy = (w: unknown): AutonomyView => {
       const y = o(c);
       return { task_class: s(y.task_class), title: s(y.title || y.task_class), level: s(y.level, "A0"), ceiling: s(y.ceiling, "A0"),
                max_ceiling: s(y.max_ceiling || y.ceiling, "A0"), default_level: s(y.default_level, "A0"), risk: s(y.risk, "low"),
-               owner_role: sn(y.owner_role), level_name: s(y.level_name), suggested_level: sn(y.suggested_level), source: s(y.source) };
+               owner_role: sn(y.owner_role), level_name: s(y.level_name), suggested_level: sn(y.suggested_level), source: s(y.source),
+               review_builds: typeof y.review_builds === "boolean" ? y.review_builds : null };
     }),
     levels: a(x.levels).map((l) => ({ level: s(o(l).level), name: s(o(l).name) })),
   };
@@ -361,9 +393,28 @@ const parseStop = (w: unknown): StopState => {
   const x = o(w);
   return { stopped: x.stopped === true, scope: sn(x.scope), by: sn(x.by), at: sn(x.at), reason: s(x.reason) };
 };
+export const parseMode = (w: unknown): ModeState => {
+  const x = o(w);
+  const m = s(x.mode);
+  const src = s(x.source);
+  return {
+    mode: (m === "propose" || m === "route" ? m : "off"),
+    source: (src === "env" || src === "console" ? src : "default"),
+    pinned: x.pinned === true, by: sn(x.by), at: sn(x.at),
+  };
+};
+export const parseReviewBuilds = (w: unknown): ReviewBuilds => {
+  const x = o(w);
+  const classes: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(o(x.classes))) if (typeof v === "boolean") classes[k] = v;
+  const project = typeof x.project === "boolean" ? x.project : null;
+  const install = x.install === true;
+  return { install, project, classes, effective: project ?? install, source: project === null ? "install" : "project" };
+};
 export const parseSettings = (w: unknown): SettingsView => {
   const x = o(w);
-  return { settings: o(x.settings), envelope: parseEnvelope(x.envelope), stop: parseStop(x.stop) };
+  return { settings: o(x.settings), envelope: parseEnvelope(x.envelope), stop: parseStop(x.stop), mode: parseMode(x.mode),
+           review_builds: parseReviewBuilds(x.review_builds) };
 };
 const parseSum = (w: unknown): Summary => {
   const x = o(w);
@@ -417,9 +468,19 @@ export const riskLevel = (r: number): Level3 => (r < 1.1 ? "low" : r < 1.3 ? "me
 
 const parseStrip = (w: unknown): StripNode[] => a(w).slice(0, 6).map((x) => {
   const p = parseNode({ ...o(x), id: "s" });
-  return { type: p.type, label: p.label, badges: p.badges.slice(0, 2) };
+  return { type: p.type, label: p.label, badges: p.badges.slice(0, 2), ...(typeof o(x).icon === "string" ? { icon: String(o(x).icon) } : {}) };
 });
 
+const parseCard = (v: unknown): RecCard | null => {
+  if (!v || typeof v !== "object") return null;
+  const c = o(v);
+  const node = (x: unknown) => ({ label: s(o(x).label), icon: s(o(x).icon) });
+  return {
+    evidence: a(c.evidence).map(node).filter((e) => e.label).slice(0, 2),
+    detector: c.detector && s(o(c.detector).label) ? node(c.detector) : null,
+    does: s(c.does), cost_usd: typeof c.cost_usd === "number" && c.cost_usd > 0 ? c.cost_usd : null, cost_basis: s(c.cost_basis),
+  };
+};
 export const parseRec = (w: unknown): Recommendation => {
   const y = o(w);
   const b = o(y.badges);
@@ -431,6 +492,9 @@ export const parseRec = (w: unknown): Recommendation => {
     value: valueLevel(n(b.value)), effort: effortLevel(n(b.effort, 1)), risk: riskLevel(n(b.risk, 1)),
     evidence: n(b.evidence), sources: n(b.sources), single_source: b.single_source === true, resurfaced: b.resurfaced === true,
     snoozed_until: sn(y.snoozed_until), strip: parseStrip(y.strip),
+    cost_usd: typeof b.cost_usd === "number" ? b.cost_usd : null, squad: a(y.squad).map((q) => s(q)).filter(Boolean), why: s(y.why), subject: s(y.subject),
+    card: parseCard(y.card),
+    work_id: s(o(y.artifact).workflow_run_id || o(y.artifact).code_task_run_id) || undefined,
   };
 };
 
@@ -486,6 +550,13 @@ export const stopAgents = (projectId: string, reason: string, everywhere = false
 export const resumeAgents = (projectId: string, reason = "", everywhere = false) =>
   everywhere ? aaWrite("/v1/ambient/resume-all", { reason }, "Resume all")
              : aaWrite("/v1/ambient/resume", { project_id: projectId, reason }, "Resume");
+/** "Review always-on builds before they start" for a project, or one class (`taskClass`); null clears it. */
+export const setReviewBuilds = (projectId: string, review: boolean | null, taskClass?: string) =>
+  aaWrite("/v1/ambient/review-builds", { project_id: projectId, review, ...(taskClass ? { task_class: taskClass } : {}) }, "Review builds", "PUT");
+/** The install-wide default every project follows until it sets its own (Govern › Autonomy). */
+export const setReviewBuildsInstall = (review: boolean) => aaWrite("/v1/ambient/review-builds/install", { review }, "Review builds", "PUT");
+/** Turn the always-on agents on or off for the install (autonomy:manage; 409 while .env pins it). */
+export const setAlwaysOn = (mode: AlwaysOnMode, reason = "") => aaWrite("/v1/ambient/mode", { mode, reason }, "Always-on", "PUT");
 export type AcceptAs = "ticket" | "epic" | "prd";
 export type RejectCategory = (typeof REJECT_CATEGORIES)[number];
 const recWrite = (id: string, verb: string) => `/v1/ambient/roadmap/${encodeURIComponent(id)}/${verb}`;
@@ -494,8 +565,8 @@ export const acceptRec = (projectId: string, id: string, as: AcceptAs, note = ""
 export const rejectRec = (projectId: string, id: string, reason: string, category: RejectCategory = "other") =>
   aaWrite(recWrite(id, "reject"), { project_id: projectId, reason, category }, "Reject");
 /** Not now: hidden until `until` (now + days, an ISO datetime; the engine allows ≤ 180 days). */
-export const snoozeRec = (projectId: string, id: string, days = 14, nowMs = Date.now()) =>
-  aaWrite(recWrite(id, "snooze"), { project_id: projectId, until: new Date(nowMs + days * 86_400_000).toISOString() }, "Not now");
+export const snoozeRec = (projectId: string, id: string, days = 14, nowMs = Date.now(), reason = "") =>
+  aaWrite(recWrite(id, "snooze"), { project_id: projectId, until: new Date(nowMs + days * 86_400_000).toISOString(), ...(reason ? { reason } : {}) }, "Not now");
 
 // ── the demo loader (a demo project only; autonomy:manage) ─────────────────────────────────
 

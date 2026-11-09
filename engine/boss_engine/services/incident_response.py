@@ -220,6 +220,14 @@ OCCURRENCE_HISTORY = 20
 _RANGE = re.compile(r"\[\s*([0-9][0-9a-z]*)\s*(?::[^\]]*)?\]")
 
 
+#: A FIX THAT SHIPPED AS A DEPLOY RESTARTS THE APP: cold caches and connection pools make the
+#: first minutes slow. A firing in that warm-up is held with the incident it follows (one
+#: observation), and only a breach that is still there once it has passed is a new occurrence
+#: (HelpDesk AI 2026-11-07: p95 820 ms vs 800 ms, 3.5 min after the rollback went live, opened
+#: a new incident whose squad proposed rolling back to the release that caused the first one).
+DEPLOY_WARMUP = timedelta(minutes=3)
+
+
 def rule_settle_window(rule: Optional[dict]) -> timedelta:
     """How long a rule can keep firing on samples from BEFORE a fix: its own lookback (window
     minutes, the longest range selector in its expr) plus its `for` and keep_firing_for. Pure.
@@ -249,7 +257,7 @@ def settling_until(inc: dict, rule: Optional[dict]) -> Optional[datetime]:
     if ver.get("state") != "recovered":
         return None
     fixed = _dt(ver.get("since")) or _dt(ver.get("at"))
-    return fixed + rule_settle_window(rule) if fixed else None
+    return fixed + rule_settle_window(rule) + DEPLOY_WARMUP if fixed else None
 
 
 def archive_occurrence(connection, incident_id: str, *, now: datetime) -> None:
@@ -267,6 +275,8 @@ def archive_occurrence(connection, incident_id: str, *, now: datetime) -> None:
             "first_seen": _iso(inc.get("first_seen")),
             "closed_at": ver.get("at") or _iso(inc.get("last_seen")),
             "status": inc.get("status"), "archived_at": _iso(now),
+            "mitigated_at": _iso(inc.get("mitigated_at")),
+            "resolved_at": _iso(inc.get("resolved_at")),
             **{k: ctx.get(k) for k in ("response", "verification", "alert", "deploy", "app")}}
     history = [h for h in (ctx.get("occurrences") or []) if isinstance(h, dict)]
     _merge_ctx(connection, incident_id,
@@ -278,6 +288,21 @@ def _response_in_flight(connection, project_id: str, incident_id: str) -> Option
         "SELECT id FROM workflow_runs WHERE project_id = :p AND input->>'incident_id' = :i "
         "AND status = ANY(:s) ORDER BY created_at DESC LIMIT 1"),
         {"p": project_id, "i": incident_id, "s": list(_ACTIVE_RUN_STATES)}).scalar()
+
+
+def squad_working(connection, incident_id: str) -> Optional[str]:
+    """The incident squad's live work item on this incident, or None. While one works it, the
+    squad's own verification closes the incident, never the monitor's alert-clear."""
+    try:
+        with connection.begin_nested():
+            return connection.execute(sql(
+                "SELECT w.id FROM work_item_links l JOIN work_items w ON w.id = l.work_item_id "
+                "WHERE l.kind = 'incident' AND l.ref = :i AND w.ambient "
+                "AND w.task_class IN ('incident_response', 'incident_staging_mitigation') "
+                "AND w.lifecycle NOT IN ('resolved', 'dismissed', 'failed') LIMIT 1"),
+                {"i": incident_id}).scalar()
+    except Exception:  # noqa: BLE001 — no ambient board here: nobody else closes it
+        return None
 
 
 def on_alert(connection, target: dict, incident_id: str, *, action: str, window: dict,
@@ -965,6 +990,9 @@ def _timeline(connection, inc: dict, workflow_run_id: Optional[str]) -> list[dic
                                       f"{_person(connection, d['approved_by'])}"})
             items.append({"at": _iso(d["finished_at"] or d["created_at"]), "kind": "deploy",
                           "what": f"Deployed {str(d['commit_sha'])[:7]}: {d['status']}"})
+    if inc.get("mitigated_at") and (occurrence is None or inc["mitigated_at"] >= occurrence):
+        items.append({"at": _iso(inc["mitigated_at"]), "kind": "mitigated",
+                      "what": "Mitigated: the mitigation is live"})
     return sorted(items, key=lambda i: i["at"] or "")
 
 
@@ -1006,7 +1034,12 @@ def report(connection, project_id: str, incident_id: str, *,
     deploy = ctx.get("deploy") or {}
     data = {
         "incident_id": incident_id, "title": inc["title"], "service": inc["service"],
-        "status": inc["status"], "opened_at": _iso(opened), "resolved_at": _iso(closed),
+        "status": inc["status"], "opened_at": _iso(opened),
+        # The real times: mitigated when the mitigation went live, resolved when recovery was
+        # verified — and never a mitigation stamped before this occurrence opened.
+        "mitigated_at": _iso(inc.get("mitigated_at")) if inc.get("mitigated_at") and (
+            opened is None or inc["mitigated_at"] >= opened) else None,
+        "resolved_at": _iso(closed),
         "minutes_to_recover": round((closed - opened).total_seconds() / 60.0, 1)
         if closed else None,
         "faulty_release": deploy.get("commit_sha"), "previous_release": deploy.get(
@@ -1035,6 +1068,7 @@ def report_markdown(d: dict[str, Any]) -> str:
     out = [f"# Incident report: {d['title']}", "",
            f"- **Service:** {d['service']}",
            f"- **Opened:** {d['opened_at']}",
+           f"- **Mitigated:** {d.get('mitigated_at') or 'not yet'}",
            f"- **Resolved:** {d['resolved_at'] or 'not yet'}"
            + (f" ({d['minutes_to_recover']} min)" if d.get("minutes_to_recover") else ""),
            f"- **Faulty release:** {str(d.get('faulty_release') or '')[:12]}"

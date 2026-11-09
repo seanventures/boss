@@ -1065,6 +1065,7 @@ class StackTargetCreateBody(OpenProjectBody):
     environment: SkipValidation[str | None] = None
     manifest_path: SkipValidation[str | None] = None
     public_url: SkipValidation[str | None] = None
+    port: SkipValidation[int | None] = None
 
 
 class StackDeployPlanBody(OpenProjectBody):

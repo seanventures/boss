@@ -81,6 +81,9 @@ const COMMUNITY_HIDDEN_PRIMARY_NAV = new Set(["foundations", "components"]);
 // Each returns the moment it earns a click.
 const V1_COMMUNITY_PRIMARY_NAV = new Set([
   "overview",
+  // Projects (BOSSAPP-914): every project's home, and the first run. Never paid.
+  "projects",
+  "project",
   // THE FIRST TEN MINUTES, and the one entry a self-hosted operator needs before any other.
   // Every piece of setup already had an endpoint; what nobody had was the order. A console that
   // hides its own setup behind documentation is a console that gets abandoned during
@@ -162,8 +165,8 @@ export function communityNavCopy(areaId: string): { label?: string; sub?: string
   }
   if (areaId === "code_tasks") {
     return {
-      label: "Factory",
-      sub: "Builds, apps and gated PRs",
+      label: "Code Tasks",
+      sub: "Builds, apps and gated PRs (was Factory)",
     };
   }
   if (areaId === "discovery") {

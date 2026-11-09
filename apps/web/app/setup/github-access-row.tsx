@@ -74,6 +74,16 @@ function lostRepos(raw: string | null): string[] {
   return names;
 }
 
+/** What GitHub's return says after an access change: "Access updated", and the repositories the
+ *  App reaches now (named on the redirect by the API, which asked GitHub). */
+export function accessUpdatedSentence(repos: string[], count: number): string {
+  if (!repos.length) return "Access updated";
+  const total = Math.max(count, repos.length);
+  const shown = repos.slice(0, 5).join(", ");
+  const more = total > 5 ? ` and ${total - 5} more` : "";
+  return `Access updated · BOSS sees ${total} repo${total === 1 ? "" : "s"}: ${shown}${more}`;
+}
+
 const FAILED_WORDS: Record<string, string> = {
   bad_state: "The link expired or was used. Start again.",
   state_expired: "That took over 10 minutes. Start again.",
@@ -515,7 +525,7 @@ export const GitHubAccessRow = forwardRef<HTMLElement, { initial?: GitHubStatus 
       if (!said) return;
       if (said === "app_connected") { toast("GitHub App connected"); setBack(true); }
       else if (said === "app_updated") {
-        toast("GitHub repository access updated");
+        toast(accessUpdatedSentence(lostRepos(params.get("repos")), Number(params.get("repo_count")) || 0));
         setBack(true);
         const lost = lostRepos(params.get("lost"));
         if (lost.length === 1) toast(`${lost[0]} lost access and an app still uses it`, "error");
@@ -523,6 +533,7 @@ export const GitHubAccessRow = forwardRef<HTMLElement, { initial?: GitHubStatus 
       }
       else { setRedirectFailed(true); toast(FAILED_WORDS[params.get("reason") ?? ""] ?? "GitHub App not connected", "error"); }
       params.delete("github"); params.delete("reason"); params.delete("lost");
+      params.delete("repos"); params.delete("repo_count");
       window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
     } catch { /* no window */ }
   }, []);

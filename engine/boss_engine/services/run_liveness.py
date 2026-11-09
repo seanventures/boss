@@ -144,6 +144,47 @@ def progressing(connection, settings: Any, run_id: str) -> bool:
                           executing=executing_here(run_id))
 
 
+#: A run left `repairing` (or `running`) at phase 'done' handed its work on or finished every
+#: stage: no worker will touch it again. With no live job it is at rest after the same grace the
+#: shepherd's sweep gives an orphan (shepherd_service.ORPHAN_AFTER_MINUTES), not after a whole
+#: agent turn's horizon.
+HANDED_OFF_GRACE_SECONDS = 20 * 60
+#: Statuses a list may call "Running". `queued` is waiting, not working (its own bucket).
+WORKING = ("running", "repairing")
+
+#: SQL (alias `c` = code_task_runs): when the run last did anything observable, and whether a job
+#: that could advance it is live. The one read every list uses to call a build Running or Stalled.
+LAST_ACTIVITY_SQL = ("GREATEST(c.updated_at, COALESCE((SELECT max(t.created_at) FROM agent_turns t "
+                     "WHERE t.code_task_run_id = c.id), c.updated_at))")
+
+
+def live_job_sql(alias: str = "c") -> str:
+    from .jobs import run_job_match_sql
+
+    return (f"EXISTS (SELECT 1 FROM jobs j WHERE {run_job_match_sql('code_task_runs', alias + '.id')} "
+            "AND j.status IN ('queued','running','leased'))")
+
+
+def stalled_since(*, status: Optional[str], phase: Optional[str], last_activity: Any,
+                  live_job: bool, now: Any, horizon_seconds: float,
+                  executing: bool = False) -> Any:
+    """When a build that claims to work stopped moving, or None while it is genuinely active.
+
+    Pure, and THE rule for "is this Running?" on every list (Project › Work, the Factory floor):
+
+    * not `running`/`repairing` → None (its own state says what it is);
+    * phase 'done' with no live job (a repair round handed to the next attempt, or a run whose
+      status was never closed) → stalled once quiet for HANDED_OFF_GRACE_SECONDS;
+    * otherwise → stalled once silent past the stall horizon (`progressing`'s rule), job or not.
+    """
+    if executing or str(status or "") not in WORKING or last_activity is None:
+        return None
+    quiet = (now - last_activity).total_seconds()
+    if str(phase or "") == "done" and not live_job:
+        return last_activity if quiet >= HANDED_OFF_GRACE_SECONDS else None
+    return last_activity if quiet >= horizon_seconds else None
+
+
 # ------------------------------------------------------------------------------------------ #
 # Supersession: a newer attempt of the same work exists
 # ------------------------------------------------------------------------------------------ #

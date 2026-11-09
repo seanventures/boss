@@ -113,3 +113,60 @@ describe("Autonomy & safety", () => {
     expect(writes(calls, "/v1/ambient/resume")).toHaveLength(1);
   });
 });
+
+describe("Always-on agents (install-wide mode)", () => {
+  it("an owner turns always-on on from Govern, as PUT /v1/ambient/mode", async () => {
+    const off = (c: Call) => (c.path === "/v1/ambient/settings" && c.method === "GET"
+      ? { body: { ...(demoAnswer("/v1/ambient/settings") as object), mode: { mode: "off", source: "default", pinned: false } } }
+      : undefined);
+    const calls = await open("owner", off);
+    expect(tid("aa-mode")?.dataset.mode).toBe("off");
+    expect(tid("aa-kill")?.textContent).toContain("Always-on is off");
+    await click(tid("aa-mode-route"));
+    const put = writes(calls, "/v1/ambient/mode");
+    expect(put).toHaveLength(1);
+    expect(put[0].method).toBe("PUT");
+    expect(put[0].body).toMatchObject({ mode: "route" });
+  });
+
+  it("an operator cannot give agents more room; a pinned mode cannot be changed here", async () => {
+    let calls = await open("operator");
+    await click(tid("aa-mode-off"));
+    expect(writes(calls, "/v1/ambient/mode")).toHaveLength(0);
+    unmount();
+    const pinned = (c: Call) => (c.path === "/v1/ambient/settings" && c.method === "GET"
+      ? { body: { ...(demoAnswer("/v1/ambient/settings") as object), mode: { mode: "propose", source: "env", pinned: true } } }
+      : undefined);
+    calls = await open("owner", pinned);
+    expect(tid("aa-mode-pinned")).toBeTruthy();
+    await click(tid("aa-mode-route"));
+    expect(writes(calls, "/v1/ambient/mode")).toHaveLength(0);
+  });
+
+  it("reviewing always-on builds is off by default, an install-wide switch and a per-class choice", async () => {
+    const calls = await open();
+    const sw = tid("aa-review-builds-toggle") as HTMLInputElement;
+    expect(sw.checked).toBe(false);
+    expect(tid("aa-review-builds")?.textContent).toContain("Captain authority");
+    await click(sw);
+    await settle();
+    const put = writes(calls, "/v1/ambient/review-builds/install");
+    expect(put).toHaveLength(1);
+    expect(put[0].body).toMatchObject({ review: true });
+    const sel = row("flaky_test").querySelector<HTMLSelectElement>('[data-testid="aa-review-class"]')!;
+    expect(sel.value).toBe("inherit");
+    sel.value = "on";
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    const cls = writes(calls, "/v1/ambient/review-builds");
+    expect(cls).toHaveLength(1);
+    expect(cls[0].body).toMatchObject({ project_id: "p1", review: true, task_class: "flaky_test" });
+  });
+
+  it("does not let an operator change who reviews always-on builds", async () => {
+    const calls = await open("operator");
+    expect((tid("aa-review-builds-toggle") as HTMLInputElement).disabled).toBe(true);
+    expect(row("flaky_test").querySelector<HTMLSelectElement>('[data-testid="aa-review-class"]')!.disabled).toBe(true);
+    expect(writes(calls, /review-builds/)).toHaveLength(0);
+  });
+});

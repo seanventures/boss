@@ -43,8 +43,31 @@ export function showToast(type: ToastType, message: string): void {
   }
 }
 
+const AFTER_LOAD_KEY = 'boss:toast-after-load';
+
+/** A toast the NEXT page shows: for a press that ends in a full page load (Delete project lands
+ *  on Projects). Kept for this tab only; read once by the Toaster when the page mounts. */
+export function toastAfterLoad(type: ToastType, message: string): void {
+  try { window.sessionStorage.setItem(AFTER_LOAD_KEY, JSON.stringify({ type, message })); } catch { /* storage off: no toast */ }
+}
+
 export function Toaster(): React.ReactElement | null {
   const [toasts, setToasts] = useState<Toast[]>([]);
+
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(AFTER_LOAD_KEY);
+      if (raw) {
+        window.sessionStorage.removeItem(AFTER_LOAD_KEY);
+        const left = JSON.parse(raw) as { type?: ToastType; message?: string };
+        if (left?.message) {
+          const id = Date.now() + Math.random();
+          setToasts((prev) => [...prev, { id, type: left.type === 'error' ? 'error' : 'success', message: String(left.message) }]);
+          setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 6000);
+        }
+      }
+    } catch { /* storage off or a bad entry: nothing to show */ }
+  }, []);
 
   useEffect(() => {
     function onToast(e: Event) {

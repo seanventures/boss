@@ -7,9 +7,13 @@ a faulty release went out, customers complained, BOSS's alert fired and BOSS inv
 fixed and verified recovery. This module seeds that incident into ONE project from fixtures —
 an incident row with the serving release, the failing route, the app's log signatures, the
 release diff and customer reports; the firing alert; a small code graph for the Order API
-(POST /orders → create_order → order_total → bulk_discount); and the PAST incident's precedent
-learning (the D2 occurrence) — then runs the real squad over it with the scripted engine
-(no model) and FixtureEffects (no host is touched). Every row it writes is the shape the real
+(POST /orders → create_order → order_total → bulk_discount) — then runs the real squad over it
+with the scripted engine (no model) and FixtureEffects (no host is touched).
+
+NO HAND-SEEDED LESSON. "Seen before" must come from a real resolved incident: when the project
+has no lesson for this route yet, the scenario first runs the SAME fault once on staging, end to
+end (the squad rolls back, fixes, verifies and closes), and that close writes the precedent the
+second occurrence recalls. Both incidents are real rows the squad worked. Every row it writes is the shape the real
 pipeline writes, so the Agent Operations view draws it exactly as it would a live incident.
 
 The alert reaches the squad the real way: the `app_alerts` signal adapter sweeps it into a
@@ -51,7 +55,8 @@ SERVING = "6bf2672e41c0a9d35b7f18c2e6d4a0b9c3f1e852"
 PREVIOUS = "2c41a9e07d5b3f8e1a6c9d2b4e7f0a3c5d8b1e96"
 COUPON = "9d1e7b3a52c84f06e9b1d7a3c5f2e8b0d4a6c193"
 ROUTE = "POST /orders"
-PAST_INCIDENT = "INC-31 (D2, Oct 18)"
+#: Where the earlier occurrence runs when the project has no lesson yet (A2: no person needed).
+PAST_ENV = "staging"
 
 
 def enabled() -> bool:
@@ -66,7 +71,10 @@ def demo_mind(environment: str = "production") -> squad.ScriptedMind:
         ("agent:operations_engineer", "verdict"): {
             "key": "top", "confidence": 0.9,
             "reason": "Release 6bf2672 changed bulk_discount on the POST /orders path and the "
-                      "TypeError is raised there. The signature matches INC-31."},
+                      "TypeError is raised there, the same signature as the earlier incident."},
+        ("agent:sre", "same_lesson"): {
+            "key": "same", "reason": "Same route, same TypeError in bulk_discount: the earlier "
+                                     "incident's lesson, seen again."},
         ("agent:adversarial_reviewer", "critique"): {
             "key": "agree" if staging else "concern",
             "reason": "The rollback also reverts the coupon change 9d1e7b3 from the same "
@@ -145,44 +153,29 @@ def _code_graph(connection: Connection, project_id: str) -> dict[str, str]:
     return ids
 
 
-def _past_incident(connection: Connection, project_id: str) -> str:
-    """The D2 occurrence's postmortem, as the squad's own close-out writes it: an incident node
-    and a precedent learning."""
-    from .knowledge import learning_writeback as lw
-
-    found = connection.execute(text(
+def learned_before(connection: Connection, project_id: str) -> Optional[str]:
+    """The lesson an earlier, REAL resolved occurrence left for this route (its precedent), or
+    None. Never written here: only the squad's close-out writes one."""
+    return connection.execute(text(
         "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = 'precedent' "
-        "AND attrs->>'incident_id' = :i"), {"p": project_id, "i": PAST_INCIDENT}).scalar()
+        "AND (valid_to IS NULL OR valid_to > now()) AND attrs ? 'incident_id' "
+        "AND attrs->'detail'->'applies_to' ? :r ORDER BY first_seen LIMIT 1"),
+        {"p": project_id, "r": ROUTE}).scalar()
+
+
+def learn_first(connection: Connection, project_id: str, *, settings: Any = None
+                ) -> Optional[str]:
+    """When the project has no lesson for the route yet: run the same fault once on staging,
+    end to end, so the squad's own close-out writes it. Returns the lesson's node id."""
+    found = learned_before(connection, project_id)
     if found:
         return found
-    item = lw.record(
-        connection, project_id=project_id, learning_kind="precedent",
-        title="order-api: pricing change broke large orders",
-        statement="POST /orders 5xx TypeError in pricing for large orders after a release",
-        detail={"symptom": "POST /orders 5xx TypeError in pricing for large orders after a "
-                           "release",
-                "cause_summary": "A pricing change for bulk orders broke totals for 10+ items",
-                "fix_summary": "Roll back to the last healthy release, then fix forward with a "
-                               "regression test for 15+ items",
-                "applies_to": [ROUTE, APP], "reuse_count": 0},
-        about={"symbols": ["app/pricing.py"]},
-        evidence=[{"type": "metric", "ref": PAST_INCIDENT, "excerpt": "6.1% 5xx on order-api"},
-                  {"type": "test", "ref": "tests/test_pricing.py::test_15_items",
-                   "excerpt": "regression test", "passed": True}],
-        confidence=0.85, observed={"agent_role": "sre", "step": "postmortem"})
-    node_id = item["node"]["id"]
-    connection.execute(text("UPDATE kg_nodes SET attrs = attrs || CAST(:a AS JSONB) "
-                            "WHERE id = :n"),
-                       {"a": json.dumps({"incident_id": PAST_INCIDENT, "demo": True}),
-                        "n": node_id})
-    old = _store().upsert_node(
-        connection, project_id=project_id, kind="incident", node_key="incident:demo-inc-31",
-        name="Order API 5xx on large orders (D2)", body="Rolled back, then fixed forward.",
-        trust_tier="observed", actor_kind="system", source="incident_squad",
-        attrs={"incident_id": PAST_INCIDENT, "demo": True})
-    _store().upsert_edge(connection, project_id=project_id, src_id=old, dst_id=node_id,
-                         kind="produced", actor_kind="system", attrs={"demo": True})
-    return node_id
+    prepared = prepare(connection, project_id, environment=PAST_ENV, settings=settings,
+                       learn=False)
+    squad.route_incident(connection, project_id=project_id, item_id=prepared["item_id"],
+                         mind=demo_mind(PAST_ENV), effects=FixtureEffects())
+    apply_scenario_clock(connection, project_id, prepared["item_id"])
+    return learned_before(connection, project_id)
 
 
 def seed(connection: Connection, project_id: str, *, environment: str = "production",
@@ -244,9 +237,8 @@ def seed(connection: Connection, project_id: str, *, environment: str = "product
                           "runbook_url": "boss:runbook/app-serving"}),
          "f": fired, "n": now, "i": incident_id})
     code = _code_graph(connection, project_id)
-    precedent = _past_incident(connection, project_id)
-    return {"incident_id": incident_id, "alert_id": alert_id, "precedent_id": precedent,
-            "code": code}
+    return {"incident_id": incident_id, "alert_id": alert_id,
+            "precedent_id": learned_before(connection, project_id), "code": code}
 
 
 # ── the scenario clock (demo only) ───────────────────────────────────────────────────────────
@@ -372,11 +364,14 @@ def apply_scenario_clock(connection: Connection, project_id: str, item_id: str) 
 # ── the run ──────────────────────────────────────────────────────────────────────────────────
 
 def run_scenario(connection: Connection, project_id: str, *, environment: str = "production",
-                 approve_as: Optional[str] = None, settings: Any = None) -> dict[str, Any]:
+                 approve_as: Optional[str] = None, settings: Any = None,
+                 learn: bool = True) -> dict[str, Any]:
     """prepare() then run the squad on the scripted engine, then the scenario clock; with
     `approve_as`, answer the production Needs-you card as that person. Returns the stages and
-    the Agent Operations graph of the item."""
-    prepared = prepare(connection, project_id, environment=environment, settings=settings)
+    the Agent Operations graph of the item. `learn`: an earlier occurrence runs first when the
+    project has no lesson yet (learn_first)."""
+    prepared = prepare(connection, project_id, environment=environment, settings=settings,
+                       learn=learn)
     item_id = prepared["item_id"]
     stages = [squad.route_incident(connection, project_id=project_id, item_id=item_id,
                                    mind=demo_mind(environment), effects=FixtureEffects())]
@@ -394,7 +389,8 @@ def run_scenario(connection: Connection, project_id: str, *, environment: str = 
 
 def run_through_chief_of_staff(connection: Connection, project_id: str, *,
                                environment: str = "production", settings: Any = None,
-                               approve_as: Optional[str] = None) -> dict[str, Any]:
+                               approve_as: Optional[str] = None,
+                               learn: bool = True) -> dict[str, Any]:
     """THE INTEGRATED PATH: the alert becomes a signal (the real app_alerts adapter), the CHIEF OF
     STAFF triages it (rules, route mode: an incident goes straight to the SRE squad), and the
     SRE squad works it through the same handler the owners' tick calls
@@ -402,6 +398,8 @@ def run_through_chief_of_staff(connection: Connection, project_id: str, *,
     marked `demo:` (subject_ref) so a person's answer resumes it on the same scripted engine."""
     from .ambient import chief_of_staff
 
+    if learn:
+        learn_first(connection, project_id, settings=settings)
     seeded = seed(connection, project_id, environment=environment)
     signals.sweep(connection, project_id=project_id, only=["app_alerts"])
     sig = connection.execute(text(
@@ -434,9 +432,12 @@ def run_through_chief_of_staff(connection: Connection, project_id: str, *,
 
 
 def prepare(connection: Connection, project_id: str, *, environment: str = "production",
-            settings: Any = None) -> dict[str, Any]:
+            settings: Any = None, learn: bool = True) -> dict[str, Any]:
     """Seed, sweep the alert into a signal (the real app_alerts adapter) and let the CoS
-    stand-in open and route the item. Returns the seeded ids plus signal_id and item_id."""
+    stand-in open and route the item. Returns the seeded ids plus signal_id and item_id.
+    `learn`: run an earlier occurrence first when there is no lesson yet (learn_first)."""
+    if learn:
+        learn_first(connection, project_id, settings=settings)
     seeded = seed(connection, project_id, environment=environment)
     signals.sweep(connection, project_id=project_id, only=["app_alerts"])
     sig_id = connection.execute(text(

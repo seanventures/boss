@@ -48,6 +48,7 @@ const NOT_WRITES = new Set([
   "lib/workflow-api.ts#checkSpec",               // POST …/check is a read-only dry run (workflow:read), run as you type
   "lib/stack-deploy.ts#deployFormProblem",       // pure form validation
   "lib/security-scan.ts#runSecurityScan",        // no browser caller (server actions only)
+  "lib/add-server.ts#readServer",                // POST …/servers/read reads the words and probes; creates nothing (assistant:chat), as you type
 ]);
 
 /** `file helper` uses that run only inside a press gated on a STRICTER permission (every role
@@ -61,6 +62,7 @@ const SUBSUMED: Record<string, string> = {
 const PASSTHROUGH: Record<string, string> = {
   "app/agents/org-actions.ts": "refuses through the mirror itself; its buttons (org-teams, org-agent-panel) are gated — the callAction test checks them",
   "app/workflows/editor/save/use-save-flow.tsx": "applyWorkClass runs inside Save, which workflow-editor.tsx gates on workflow:publish",
+  "lib/watch-app.ts": "its helpers (registered) send through obsWrite; app/projects/watch-app.tsx gates each press on observability:manage",
 };
 
 /** `file helper-or-op` pairs that are background writes (an effect, a poll), never a press. */

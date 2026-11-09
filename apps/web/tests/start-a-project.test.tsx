@@ -90,10 +90,11 @@ describe("the URL opens the flow at a choice", () => {
     window.history.replaceState(null, "", "/?org=org_1&new_project=import");
     stubFetch((c) => (c.path === "/v1/github/repos" ? { body: registryFixture() } : undefined));
     await mountAs(<ProjectMenu projects={[{ id: "p1", name: "Acme Shop" }]} activeId="p1" homeId="p1" orgId="org_1" />);
-    expect(tid("start-project")!.getAttribute("data-step")).toBe("import");
-    expect(tid("import-repo")).not.toBeNull();
-    await click(tid("start-close"));
-    expect(tid("start-project")).toBeNull();
+    // Add a project v2: the one screen, reading a repo, its results listed inline.
+    expect(tid("add-project")!.getAttribute("data-kind")).toBe("repo");
+    expect(tid("ap-results")).not.toBeNull();
+    await click(tid("ap-close"));
+    expect(tid("add-project")).toBeNull();
     expect(new URL(window.location.href).searchParams.has("new_project")).toBe(false);
     expect(new URL(window.location.href).searchParams.get("org")).toBe("org_1");
   });
@@ -102,23 +103,27 @@ describe("the URL opens the flow at a choice", () => {
     window.history.replaceState(null, "", "/?org=org_1");
     stubFetch(() => undefined);
     await mountAs(<ProjectMenu projects={[{ id: "p1", name: "Acme Shop" }]} activeId="p1" homeId="p1" />);
-    expect(tid("start-project")).toBeNull();
+    expect(tid("add-project")).toBeNull();
     window.history.pushState(null, "", "/?org=org_1&new_project=sample");
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
-    expect(tid("start-project")!.getAttribute("data-step")).toBe("sample");
+    // The door opens the sheet with Try a sample lit: one press starts it (a link creates nothing).
+    expect(tid("add-project")).not.toBeNull();
+    expect(tid("ap-sample")!.hasAttribute("data-lit")).toBe(true);
   });
 
-  it("/?new_project=idea opens one sentence box; the full form is one press away, with Back", async () => {
+  it("/?new_project=idea opens the one input; the full form is More ways › Blank, with Back", async () => {
     window.history.replaceState(null, "", "/?new_project=idea");
     stubFetch(() => undefined);
     await mountAs(<ProjectMenu projects={[{ id: "p1", name: "Acme Shop" }]} activeId="p1" homeId="p1" />);
-    expect(tid("start-idea-step")!.querySelector("label span")!.textContent).toBe("Describe it in a sentence");
+    expect(tid("ap-input")!.getAttribute("aria-label")).toBe("Your idea, a repo or a folder");
+    expect(tid("add-project")!.getAttribute("data-kind")).toBe("idea");
     expect(tid("new-project-form")).toBeNull();
-    await click(tid("idea-form"));
+    await click(tid("ap-more-ways"));
+    await click(tid("ap-way-blank"));
     // Both project types are still offered: an app, or a knowledge graph of an existing codebase.
     expect($$('[data-testid="new-project-type"] input').map((i) => (i as HTMLInputElement).value)).toEqual(["app", "knowledge_graph"]);
     await click(tid("new-project-back"));
-    expect(tid("start-idea-step")).not.toBeNull();
+    expect(tid("add-project")).not.toBeNull();
   });
 });
 
@@ -136,7 +141,7 @@ describe("New app from an idea", () => {
     await type(tid("idea-text"), sentence);
     expect((tid("idea-name") as HTMLInputElement).value).toBe("Shift-swap board");
     await click(tid("idea-go"));
-    expect(calls.find((c) => c.path === "/v1/projects")!.body).toEqual({ name: "Shift-swap board", description: sentence });
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "Shift-swap board", description: sentence });
     expect(calls.find((c) => c.path === "/api/delivery-workflows")!.body).toEqual({
       action: "start", project_id: "shift-swap-board", work_class: "project.new",
       input: { directive: sentence, title: "Shift-swap board" } });
@@ -163,7 +168,7 @@ describe("New app from an idea", () => {
     expect(tid("start-idea-readiness")).not.toBeNull();
     await click(tid("dw-readiness-start-anyway"));
     await click(tid("idea-go"));
-    expect(calls.filter((c) => c.path === "/v1/projects").length).toBe(1);
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/projects").length).toBe(1);
     expect((calls.filter((c) => c.path === "/api/delivery-workflows")[1].body as { start_anyway: string[] }).start_anyway).toEqual(["deployment_target"]);
     expect(go).toHaveBeenCalledTimes(1);
   });
@@ -211,7 +216,7 @@ describe("screen 1 — New project", () => {
     const go = vi.fn();
     await mountAs(<StartProjectSheet step="choose" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
     await click(tid("preset-aml"));
-    expect(calls.find((c) => c.path === "/v1/projects")!.body).toEqual({ name: "AML alert investigation", project_type: "knowledge_graph" });
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "AML alert investigation", project_type: "knowledge_graph" });
     const href = new URLSearchParams(String(go.mock.calls[0][0]).split("?")[1]);
     expect([href.get("project_id"), href.get("area"), href.get("kg_tab")]).toEqual(["aml-alert-investigation", "knowledge", "documents"]);
   });
@@ -227,7 +232,7 @@ describe("screen 1 — New project", () => {
     const go = vi.fn();
     await mountAs(<StartProjectSheet step="choose" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
     await click(tid("preset-bug-triage-board"));
-    expect(calls.filter((c) => c.path === "/v1/projects").map((c) => (c.body as { name: string }).name))
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/projects").map((c) => (c.body as { name: string }).name))
       .toEqual(["Bug triage board", "Bug triage board 2"]);
     const href = new URLSearchParams(String(go.mock.calls[0][0]).split("?")[1]);
     expect([href.get("project_id"), href.get("area"), href.get("start_preset")]).toEqual(["bug-triage-board-2", "overview", "bug-triage-board"]);
@@ -247,7 +252,7 @@ describe("the sample", () => {
     await mountAs(<StartProjectSheet step="sample" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
     expect($$(".spj-flow li b").map((b) => b.textContent)).toEqual(["Plan", "Build", "Review", "Pull request", "Preview"]);
     await click(tid("start-sample-go"));
-    expect(calls.find((c) => c.path === "/v1/projects")!.body).toEqual({ name: "Hello World" });
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "Hello World" });
     expect(calls.find((c) => c.path.endsWith("/apply"))!.body).toEqual({
       project_id: "hello-world", new_app: { name: "Hello World" }, stack: "node", workflow_key: "minor_feature",
       dedupe_key: "sample:hello-world" });
@@ -274,63 +279,171 @@ describe("the sample", () => {
     await click(tid("dw-readiness-start-anyway"));
     await click(tid("start-sample-go"));
     // One project, two applies: the second says what it starts without.
-    expect(calls.filter((c) => c.path === "/v1/projects").length).toBe(1);
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/projects").length).toBe(1);
     expect((calls.filter((c) => c.path.endsWith("/apply"))[1].body as { start_anyway: string[] }).start_anyway).toEqual(["deployment_target"]);
     expect(go).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("screen 2 — Import a repo", () => {
+describe("screen 2 — Add a project › Existing · repo or folder (wireframe 03)", () => {
+  const CAPTAIN = {
+    role_key: "engineering_captain", name: "Helm", role: "Engineering Captain",
+    candidates: [{ agent_id: "a_helm", role_key: "engineering_captain", name: "Helm", role: "Engineering Captain" },
+                 { agent_id: "a_atlas", role_key: "chief_architect", name: "Atlas", role: "Chief Architect" },
+                 { agent_id: "a_marshal", role_key: "chief_of_staff", name: "Marshal", role: "Chief of Staff" }],
+    squad: [{ name: "Juno", role_key: "product_manager" }, { name: "Forge", role_key: "software_engineer" },
+            { name: "Vera", role_key: "qa_engineer" }, { name: "Beacon", role_key: "sre" }],
+  };
   function api() {
     const reg = registryFixture();
     reg.items.push({ ...reg.items[0], id: "ghr_billing", full_name: "globex/billing", language: "Python" });
+    reg.items[1] = { ...reg.items[1], used_by: [], pushed_at: new Date(Date.now() - 3 * 3600_000).toISOString() };
     return stubFetch((c) => {
       if (c.path === "/v1/github/repos") return { body: reg };
-      if (c.path === "/v1/github/repos/ghr_api/facts") return { body: FACTS };
+      if (c.path === "/v1/projects/p1/captain") return { body: CAPTAIN };
+      if (c.path === "/v1/github/repos/ghr_api/facts") return { body: { ...FACTS, files_total: 214 } };
       if (c.method === "POST" && c.path === "/v1/projects") return { status: 201, body: { id: "orders", name: (c.body as { name: string }).name } };
       if (c.method === "PUT" && c.path === "/v1/projects/orders/repos/ghr_api") {
         return { body: { project_id: "orders", repo_mode: "single", items: [{ binding_id: "b1", full_name: "acme/api" }], addable: [] } };
       }
+      if (c.method === "POST" && c.path === "/v1/projects/orders/onboarding/start") return { body: { state: "running" } };
+      if (c.method === "POST" && c.path === "/v1/projects/orders/captain") return { body: { role_key: "chief_architect" } };
       return undefined;
     });
   }
 
-  it("picks an account's allowed repo, reads it, names it, and creates the project with the repo", async () => {
+  it("one head: Add a project · New | Existing · repo or folder · Try a sample · ✕", async () => {
+    api();
+    await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={() => {}} />);
+    expect(tid("start-project")!.querySelector("h2")!.textContent).toBe("Add a project");
+    expect(tid("start-tab-idea")!.textContent).toBe(" New · from an idea");
+    expect(tid("start-tab-import")!.textContent).toBe(" Existing · repo or folder");
+    expect(tid("start-tab-import")!.getAttribute("aria-selected")).toBe("true");
+    expect(tid("start-tab-sample")!.textContent).toBe(" Try a sample");
+  });
+
+  it("the sample keeps the same head (no second title, no Back)", async () => {
+    api();
+    await mountAs(<StartProjectSheet step="sample" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={() => {}} />);
+    expect(tid("start-project")!.querySelector("h2")!.textContent).toBe("Add a project");
+    expect(tid("start-back")).toBeNull();
+    expect(tid("start-tab-sample")!.getAttribute("aria-current")).toBe("page");
+    expect(tid("start-tab-presets")).not.toBeNull();
+  });
+
+  it("picks a repo, Helm reads it live, names it with the captain, and Start onboarding creates and starts it", async () => {
     const calls = api();
     const go = vi.fn();
     await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
-    // Every account the registry reaches; allowed, live repos only (not mobile, not the archived one).
-    expect($$('[data-testid="import-account"] option').map((o) => o.textContent)).toEqual(["acme", "globex"]);
-    expect($$('[data-testid="import-repos"] .spj-repo .spj-mono').map((r) => r.textContent)).toEqual(["api", "contracts", "infra", "web"]);
-    expect(tid("import-add-account")!.textContent).toBe("Repo not listed? Add a GitHub account");
+    // The accounts are read-only chips; + account goes to Repo and models (contract §15).
+    expect($$('[data-testid="import-accounts"] .spj-acct').map((b) => b.textContent!.trim())).toEqual(["acme", "globex"]);
+    expect(tid("import-add-account")!.textContent).toBe("+ account");
     expect(new URLSearchParams(tid("import-add-account")!.getAttribute("href")!.split("?")[1]).get("area")).toBe("setup");
+    expect($$('[data-testid="import-repos"] .spj-repo .spj-mono:not(small)').map((r) => r.textContent)).toEqual(["api", "contracts", "infra", "web"]);
+    expect(tid("import-age-ghr_api")!.textContent).toBe("3h");
+    expect(tid("import-inuse-ghr_contracts")!.textContent).toBe("in use");
+    await type(tid("import-search"), "con");
+    expect($$('[data-testid="import-repos"] .spj-repo .spj-mono:not(small)').map((r) => r.textContent)).toEqual(["contracts"]);
+    await type(tid("import-search"), "");
+    expect(tid("import-live")).toBeNull();
     expect((tid("import-create") as HTMLButtonElement).disabled).toBe(true);
+    // The default captain and crew.
+    expect(tid("import-captain")!.textContent).toContain("Helm");
+    expect(tid("import-captain")!.textContent).toContain("Engineering Captain");
+    expect(tid("import-crew")!.textContent).toContain("default crew · change later");
 
     await click(tid("import-repo-ghr_api"));
     expect(tid("import-repo-ghr_api")!.getAttribute("aria-selected")).toBe("true");
-    expect($$('[data-testid="import-facts"] div').map((d) => d.textContent)).toEqual([
-      "LanguageJava · Spring", "Build & testGradle ✓", "Runs asWeb API", "Branchdevelop"]);
-    expect(tid("import-mapping")!.textContent).toContain("Mapping starts when you create it");
+    expect(tid("import-live")!.textContent).toBe("live");
+    expect(tid("import-check-access")!.textContent).toBe("Accessread · branch · PR");
+    expect(tid("import-check-stack")!.textContent).toBe("StackJava · Spring");
+    expect(tid("import-check-build")!.textContent).toBe("Build & testGradle · tests");
+    expect(tid("import-mapping")!.textContent).toBe("Map code0 / 214 files · starts on Start");
     expect((tid("import-name") as HTMLInputElement).value).toBe("Api");
+    expect(tid("import-estimate")!.textContent).toBe("Helm takes it from here · ≈ 5 min · ≈ $1");
+
+    // A different captain is chosen from the real candidates.
+    await click(tid("import-captain"));
+    await click(tid("import-captain-chief_architect"));
+    expect(tid("import-captain")!.textContent).toContain("Atlas");
 
     await type(tid("import-name"), "Orders");
     await click(tid("import-create"));
     expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "Orders" });
     expect(calls.some((c) => c.method === "PUT" && c.path === "/v1/projects/orders/repos/ghr_api")).toBe(true);
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects/orders/captain")!.body).toEqual({ agent_id: "chief_architect" });
+    expect(calls.some((c) => c.method === "POST" && c.path === "/v1/projects/orders/onboarding/start")).toBe(true);
     const href = new URLSearchParams(String(go.mock.calls[0][0]).split("?")[1]);
-    expect([href.get("project_id"), href.get("area")]).toEqual(["orders", "overview"]);
+    expect([href.get("project_id"), href.get("area")]).toEqual(["orders", "project"]);
   });
 
-  it("another account lists its own repos; Map business rules too makes a knowledge-graph project", async () => {
+  it("a repo another project uses says so before you start; another account lists its own repos; rules make a KG project", async () => {
     const calls = api();
     await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={() => {}} />);
-    await choose(tid("import-account"), "globex");
-    expect($$('[data-testid="import-repos"] .spj-repo .spj-mono').map((r) => r.textContent)).toEqual(["billing"]);
-    await choose(tid("import-account"), "acme");
+    await click(tid("import-repo-ghr_contracts"));
+    expect(tid("import-inuse-warning")!.textContent).toBe("Already used by Acme Shop, Payments. A second one works on the same code.");
+    await click(tid("import-account-globex"));
+    expect($$('[data-testid="import-repos"] .spj-repo .spj-mono:not(small)').map((r) => r.textContent)).toEqual(["billing"]);
+    await click(tid("import-account-acme"));
     await click(tid("import-repo-ghr_api"));
     await click(tid("import-rules"));
     await click(tid("import-create"));
     expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "Api", project_type: "knowledge_graph" });
+    // The default captain is kept: no captain write.
+    expect(calls.some((c) => c.path.endsWith("/captain") && c.method === "POST")).toBe(false);
+  });
+
+  it("03-25: a repo a NEW project cannot reach says Connect GitHub on the spot, and nothing is created", async () => {
+    const reg = registryFixture();
+    reg.items[1] = { ...reg.items[1], new_project: { ok: false, code: "github_not_connected", message: "Connect GitHub first: a new project reaches a repository through the organisation's GitHub App." } };
+    const calls = stubFetch((c) => {
+      if (c.path === "/v1/github/repos") return { body: reg };
+      if (c.path === "/v1/github/repos/ghr_api/facts") return { body: { ...FACTS, files_total: 214 } };
+      return undefined;
+    });
+    const go = vi.fn();
+    await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
+    await click(tid("import-repo-ghr_api"));
+    expect(tid("import-connect-github")!.textContent).toContain("Connect GitHub first");
+    expect(new URLSearchParams(tid("import-connect-github-go")!.getAttribute("href")!.split("?")[1]).get("focus")).toBe("repository");
+    expect((tid("import-create") as HTMLButtonElement).disabled).toBe(true);
+    await click(tid("import-create"));
+    expect(calls.some((c) => c.method === "POST" && c.path === "/v1/projects")).toBe(false);
+    expect(go).not.toHaveBeenCalled();
+  });
+
+  it("03-25: a 409 github_not_connected on the repo is said with Connect GitHub — never swallowed into a page with no repo", async () => {
+    const reg = registryFixture();
+    stubFetch((c) => {
+      if (c.path === "/v1/github/repos") return { body: reg };
+      if (c.path === "/v1/github/repos/ghr_api/facts") return { body: { ...FACTS, files_total: 214 } };
+      if (c.method === "POST" && c.path === "/v1/projects") return { status: 201, body: { id: "orders", name: "Api" } };
+      if (c.method === "PUT" && c.path === "/v1/projects/orders/repos/ghr_api") {
+        return { status: 409, body: { error: "github_not_connected", message: "Connect GitHub for this project first (Setup › GitHub access)." } };
+      }
+      return undefined;
+    });
+    const go = vi.fn();
+    await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
+    await click(tid("import-repo-ghr_api"));
+    await click(tid("import-create"));
+    expect(tid("import-connect-github")!.textContent).toContain("Connect GitHub for this project first");
+    expect(tid("import-connect-github-go")).not.toBeNull();
+    expect(go).not.toHaveBeenCalled();
+  });
+
+  it("03-11: rows listed before the push time was kept are read again once, and each gets its age", async () => {
+    const reg = registryFixture();
+    reg.items[1] = { ...reg.items[1], used_by: [] };
+    const fresh = { ...reg, items: reg.items.map((r) => ({ ...r, pushed_at: new Date(Date.now() - 12 * 86_400_000).toISOString() })) };
+    const calls = stubFetch((c) => {
+      if (c.method === "POST" && c.path === "/v1/github/repos/refresh") return { body: fresh };
+      if (c.path === "/v1/github/repos") return { body: reg };
+      return undefined;
+    });
+    await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={() => {}} />);
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/github/repos/refresh")).toHaveLength(1);
+    expect(tid("import-age-ghr_api")!.textContent).toBe("12d");
   });
 
   it("names its accounts from the registry, the connection's first", () => {

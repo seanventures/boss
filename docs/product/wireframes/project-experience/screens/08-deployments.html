@@ -1,0 +1,70 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project deployments</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-project="1" data-tab="deploy" data-crumb="Projects|HelpDesk AI Demo|Deployments">
+<div id="content">
+
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="teal"><i class="ph ph-rocket-launch"></i></span><h3>How code ships</h3><span class="pin">1</span><a class="more">Policy in Govern</a></div>
+  <div class="fl">
+    <span class="fl-n" data-t="done"><i class="ph ph-git-merge"></i>PR merged</span><span class="fl-w" data-s="done"></span>
+    <span class="fl-n" data-t="done"><i class="ph ph-package"></i>Image built</span><span class="fl-w" data-s="done"></span>
+    <span class="fl-n" data-t="agent"><span class="face" data-a="beacon" data-size="s"></span>Staging · auto</span><span class="fl-w" data-s="done"></span>
+    <span class="fl-n" data-t="done"><i class="ph ph-check-circle"></i>Smoke test</span><span class="fl-w"></span>
+    <span class="fl-n" data-t="you"><i class="ph-fill ph-lock-simple"></i>Prod · you approve</span>
+  </div>
+</section>
+
+<section class="grid g2">
+  <section class="card env">
+    <div class="env-h"><span class="ico" data-c="green"><i class="ph ph-flask"></i></span><h3>Staging</h3><span class="tag" data-tone="green"><span class="dot" data-s="done"></span>Healthy</span><span class="wf-spacer"></span><span class="btn" data-size="s"><i class="ph ph-arrow-counter-clockwise"></i>Redeploy</span></div>
+    <a class="env-url"><i class="ph ph-globe"></i>http://203.0.113.20:8004 <i class="ph ph-arrow-square-out"></i></a>
+    <div class="row" style="gap:16px">
+      <div class="ring" style="--p:99.9;width:56px;height:56px"><span>99.9%</span></div>
+      <div style="flex:1;min-width:0"><span class="lbl">24h</span>
+        <div class="health"><span style="height:20px"></span><span style="height:21px"></span><span style="height:19px"></span><span style="height:22px"></span><span style="height:20px"></span><span style="height:21px"></span><span style="height:12px" data-s="warn"></span><span style="height:20px"></span><span style="height:22px"></span><span style="height:21px"></span><span style="height:20px"></span><span style="height:22px"></span><span style="height:21px"></span><span style="height:20px"></span><span style="height:19px"></span><span style="height:21px"></span><span style="height:22px"></span><span style="height:20px"></span><span style="height:21px"></span><span style="height:22px"></span><span style="height:20px"></span><span style="height:21px"></span><span style="height:22px"></span><span style="height:22px"></span></div></div>
+      <div class="kv" style="font-size:.6rem"><dt>p95</dt><dd class="mono">180ms</dd><dt>Errors</dt><dd class="mono">0.1%</dd></div>
+    </div>
+    <div class="row wrap" style="gap:8px;font-size:.6rem;padding-top:10px;border-top:1px solid var(--border)">
+      <span class="face" data-a="beacon" data-size="s"></span><span>Last deploy <b>PR #2</b> · 2h ago</span><span class="mono faint">a41c9e2</span><span class="wf-spacer"></span><a class="link-chip"><i class="ph ph-terminal-window"></i>Logs</a><a class="link-chip" title="Opens this server in Infra (shared by 3 projects)"><i class="ph ph-hard-drives"></i>runs on 203.0.113.20 ↗</a></div>
+  </section>
+
+  <section class="card env locked">
+    <div class="env-h"><span class="ico" data-c="amber"><i class="ph ph-buildings"></i></span><h3>Production</h3><span class="tag" data-tone="amber">Not set up</span></div>
+    <div class="empty" style="padding:14px 10px">
+      <svg width="120" height="64" viewBox="0 0 120 64" aria-hidden="true"><rect x="8" y="22" width="44" height="34" rx="6" fill="none" stroke="var(--border-strong)" stroke-width="2" stroke-dasharray="4 3"/><rect x="68" y="22" width="44" height="34" rx="6" fill="color-mix(in srgb, var(--amber) 14%, transparent)" stroke="var(--amber)" stroke-width="2"/><path d="M52 39 H68" stroke="var(--amber)" stroke-width="2" stroke-dasharray="3 3"/><circle cx="90" cy="14" r="9" fill="var(--amber)"/><text x="90" y="18" text-anchor="middle" font-size="11" font-weight="800" fill="#1b1300">!</text></svg>
+      <b>Pick a host for production</b>
+      <span class="muted" style="font-size:.6rem">Beacon sets it up; you approve each prod deploy.</span>
+      <span class="btn" data-kind="amber"><i class="ph ph-cloud"></i>Pick host</span></div>
+  </section>
+</section>
+
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="green"><i class="ph ph-key"></i></span><h3>Demo logins</h3><span class="tag">Staging</span><span class="pin">2</span><a class="more"><i class="ph ph-gear"></i> Manage in Settings</a></div>
+  <div>
+    <div class="cred"><span class="tag" data-tone="blue"><i class="ph ph-crown"></i>Admin</span><span class="mono ell">admin@demo.test</span><span class="secret">••••••••••</span><span class="row"><i class="ph ph-eye" title="Reveal — owners only, audited"></i><i class="ph ph-copy" title="Copy"></i></span></div>
+    <div class="cred"><span class="tag"><i class="ph ph-headset"></i>Agent</span><span class="mono ell">agent@demo.test</span><span class="row"><span class="mono">demo-agent-24</span><span class="tag" data-tone="amber" title="Revealed for 30s">29s</span></span><span class="row"><i class="ph ph-eye-slash"></i><i class="ph ph-copy"></i></span></div>
+    <div class="cred"><span class="tag"><i class="ph ph-user"></i>Customer</span><span class="mono ell">customer@demo.test</span><span class="secret">••••••••••</span><span class="row"><i class="ph ph-eye"></i><i class="ph ph-copy"></i></span></div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="blue"><i class="ph ph-clock-counter-clockwise"></i></span><h3>History</h3></div>
+  <div class="ck">
+    <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t">Staging · PR #2 UI refresh<small>Wed 16:40 · 3m 10s · smoke ✓</small></span><span class="face" data-a="beacon" data-size="s"></span></div>
+    <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t">Staging · PR #1 SLA timers<small>Mon 11:05 · 2m 50s · smoke ✓</small></span><span class="face" data-a="beacon" data-size="s"></span></div>
+    <div class="ck-i" data-s="warn"><span class="ck-b">↺</span><span class="ck-t">Staging · first deploy<small>Nov 2 · port clash → moved to 8004 by Beacon</small></span><span class="face" data-a="beacon" data-size="s"></span></div>
+  </div>
+</section>
+
+<div class="notes"><b>Design notes</b><ol>
+  <li><b>1</b> The ship path as a diagram; the gates come from Govern policy (staging auto, prod a person). Prod's node is amber + locked until a person sets it up and approves.</li>
+  <li><b>2</b> Demo logins here are read-only (user + reveal); they are managed in Project › Settings. Reveal = owner/admin with step-up, audited, hides after 30s. "runs on 203.0.113.20 ↗" opens the shared server in Infra, which lists every project on it and links back.</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>

@@ -86,8 +86,8 @@ describe("a panel is named for what was asked", () => {
   });
 });
 
-it("the Community Factory screen is called Factory, as the rail calls it", () => {
+it("the Community Code Tasks screen (was Factory) is called as the rail calls it", () => {
   // The private repo's page-community.tsx ships as this tree's page.tsx (page_export_rewrite).
   const page = readFileSync("app/page.tsx", "utf8");
-  expect(page).toContain('data-area="code_tasks" aria-label="Factory"');
+  expect(page).toContain('data-area="code_tasks" aria-label="Code Tasks"');
 });

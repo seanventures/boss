@@ -5,7 +5,8 @@
  *
  *   Factory  [● Floor] [Apps 12], 3 building, 2 need you, [Find a build] [+ New build ▾]
  *
- * `?area=code_tasks` opens on the Floor; `view=apps` is the Apps tab; `view=repositories` the
+ * `?area=code_tasks` opens on the Floor (the Builds tab); `view=apps` is the Apps tab; `view=lab`
+ * the lab projects (01-06: Builds, Apps, Lab); `view=repositories` the
  * project's repositories (multi-repo); `view=components&app=<key>` an app's components (reached
  * from its Apps row, drawn under the Apps tab); `build=<run>` opens that
  * build's cockpit full width over either tab (`run=` from older links is rewritten to it).
@@ -29,6 +30,7 @@ import { AppsTab } from "./factory/apps-tab";
 import { Cockpit } from "./factory/cockpit";
 import { startDirectChangeAction } from "./factory/floor-actions";
 import { FloorView } from "./factory/floor";
+import { LabTab } from "./factory/lab-links";
 import { isInternalRun } from "./factory/legacy-build-parts";
 import { BenchmarkSheetBody } from "./factory/benchmark-sheet";
 import { ProjectRepositories } from "./multirepo/project-repos";
@@ -42,10 +44,13 @@ export {
 } from "./factory/legacy-build-parts";
 import { useAreaKeydown } from "../lib/area-keys";
 
-type View = "floor" | "apps" | "repositories" | "components";
-type UrlState = { view: View; build: string | null; app?: string | null; changeset?: string | null };
+type View = "floor" | "apps" | "lab" | "repositories" | "components";
+type UrlState = { view: View; build: string | null; app?: string | null; changeset?: string | null;
+  /** `logs=build|preview|deploy`: the build opens with its Logs drawer on that tab. */
+  logs?: "build" | "preview" | "deploy" | null };
+const LOG_TABS = new Set(["build", "preview", "deploy"]);
 
-const VIEWS = new Set<View>(["apps", "repositories", "components"]);
+const VIEWS = new Set<View>(["apps", "lab", "repositories", "components"]);
 
 /** Where the URL says the Factory is. `run=` (older links) reads as `build=`. */
 export function readFactoryUrl(search: string): UrlState & { legacyRun: boolean; wantsNew: boolean } {
@@ -65,6 +70,9 @@ export function readFactoryUrl(search: string): UrlState & { legacyRun: boolean;
     app: view === "components" ? app : null,
     // A multi-repo change, addressed directly (`changeset=<id>`, `&tab=prs` for its PRs).
     changeset: q.get("changeset") || null,
+    // A "Live log" link: `logs=build` (the old `view=logs` meant the same and opened nothing).
+    logs: LOG_TABS.has(q.get("logs") || "") ? (q.get("logs") as "build" | "preview" | "deploy")
+      : q.get("view") === "logs" && build ? "build" : null,
     legacyRun: !q.get("build") && !!legacy,
     wantsNew: q.get("new") === "1",
   };
@@ -275,7 +283,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
       const now = readFactoryUrl(window.location.search);
       if (now.legacyRun) writeUrl({ build: now.build, run: null }, "replace");
       if (now.wantsNew) { writeUrl({ new: null }, "replace"); setMenu(true); }
-      setUrl({ view: now.view, build: now.build, app: now.app, changeset: now.changeset });
+      setUrl({ view: now.view, build: now.build, app: now.app, changeset: now.changeset, logs: now.logs });
     };
     read();
     window.addEventListener("popstate", read);
@@ -284,13 +292,13 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
 
   const openBuild = useCallback((runId: string, from: HTMLElement | null) => {
     opener.current = { runId, el: from };
-    writeUrl({ build: runId, run: null }, "push");
-    setUrl((u) => ({ ...u, build: runId }));
+    writeUrl({ build: runId, run: null, logs: null }, "push");
+    setUrl((u) => ({ ...u, build: runId, logs: null }));
   }, []);
 
   const closeBuild = useCallback(() => {
-    writeUrl({ build: null, run: null, tab: null }, "push");
-    setUrl((u) => ({ ...u, build: null }));
+    writeUrl({ build: null, run: null, tab: null, logs: null }, "push");
+    setUrl((u) => ({ ...u, build: null, logs: null }));
     const back = opener.current ?? (url.build ? { runId: url.build, el: null } : null);
     // FOCUS GOES BACK TO WHAT OPENED IT (walk D17), the same element if it survived, else the
     // row now drawing that build (a Building row, a Stopped row, its card), once the Floor has
@@ -354,14 +362,16 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
     <div className="fx" data-testid="fx">
       <header className="fx-head" hidden={!!url.build || !!url.changeset}>
         {/* The console title already says Factory (walk D19): this heading is for screen readers. */}
-        <h2 className="ag-sr">Factory</h2>
-        <span className="fx-tabs" role="tablist" aria-label="Factory views">
+        <h2 className="ag-sr">Code Tasks</h2>
+        <span className="fx-tabs" role="tablist" aria-label="Code Tasks views">
           <button type="button" role="tab" aria-selected={url.view === "floor"} className="fx-tab" data-testid="fx-view-floor"
-                  title="What needs you and what's building" onClick={() => setView("floor")}>Floor</button>
+                  title="What needs you and what's building" onClick={() => setView("floor")}>Builds</button>
           <button type="button" role="tab" aria-selected={url.view === "apps" || url.view === "components"} className="fx-tab" data-testid="fx-view-apps"
                   title="Every app, where it runs, how it got there" onClick={() => setView("apps")}>
             Apps{counts?.apps ? <span className="fx-tab-count">{counts.apps}</span> : null}
           </button>
+          <button type="button" role="tab" aria-selected={url.view === "lab"} className="fx-tab" data-testid="fx-view-lab"
+                  title="Lab projects: insecure-by-design training apps, built apart from real apps" onClick={() => setView("lab")}>Lab</button>
           <button type="button" role="tab" aria-selected={url.view === "repositories"} className="fx-tab" data-testid="fx-view-repositories"
                   title="Which repositories this project uses, and One repo or Several" onClick={() => setView("repositories")}>Repositories</button>
         </span>
@@ -399,11 +409,15 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
         <ChangeSetCockpit key={url.changeset} projectId={projectId} changeSetId={url.changeset} actor={actor}
                           onClose={() => { writeUrl({ changeset: null, tab: null }, "push"); setUrl((u) => ({ ...u, changeset: null })); }} />
       ) : url.build ? (
-        <Cockpit projectId={projectId} runId={url.build} actor={actor} orgId={orgId ?? null}
+        <Cockpit projectId={projectId} runId={url.build} actor={actor} orgId={orgId ?? null} initialLogs={url.logs ?? null}
                  onClose={closeBuild} onOpenBuild={(id) => openBuild(id, opener.current?.el ?? null)} />
       ) : url.view === "components" && url.app ? (
         <div role="tabpanel" aria-label="Components">
           <AppComponentsView projectId={projectId} appKey={url.app} onBack={() => setView("apps")} />
+        </div>
+      ) : url.view === "lab" ? (
+        <div role="tabpanel" aria-label="Lab">
+          <LabTab projectId={projectId} />
         </div>
       ) : url.view === "repositories" ? (
         <div role="tabpanel" aria-label="Repositories">
@@ -415,7 +429,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
                    onOpen={openBuild} onNew={openNewProject} onComponents={openComponents} />
         </div>
       ) : (
-        <div role="tabpanel" aria-label="Floor">
+        <div role="tabpanel" aria-label="Builds">
           <FloorView projectId={projectId} actor={actor} floor={floor.data} error={floor.error} loading={floor.loading}
                      refresh={reloadFloor} paused={!live} query={query} orgId={orgId ?? null}
                      onOpen={openBuild} onPlan={plan} onDirect={() => setSheet("direct")} onApps={() => setView("apps")} />

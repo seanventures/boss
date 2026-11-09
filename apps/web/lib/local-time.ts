@@ -62,6 +62,10 @@ let hydrated = false;
 export function markHydrated(): void {
   if (typeof window !== "undefined") hydrated = true;
 }
+/** Whether this page has hydrated (a mount effect has run): before it, render as the server did. */
+export function isHydrated(): boolean {
+  return hydrated && typeof window !== "undefined";
+}
 export function localFull(v: number | string | null | undefined): string {
   if (hydrated && typeof window !== "undefined") return LOCAL.full(v);
   const ms = typeof v === "number" ? v : v ? Date.parse(v) : NaN;
@@ -77,4 +81,45 @@ export function localWith(v: number | string | null | undefined, options: Intl.D
   return hydrated && typeof window !== "undefined"
     ? d.toLocaleString([], options)
     : d.toLocaleString("en-US", { ...options, timeZone: "UTC" });
+}
+
+// ── THE VIEWER'S ZONE, ONE FORMATTER (operator, 2026-11-06) ─────────────────────────────────
+// "since 3:23 PM" for a wait that began at 7:23 local (PST) was the console printing UTC. Every
+// time on the Project screens and every step's "waiting on you · since …" goes through these:
+// Intl.DateTimeFormat in the browser's own zone once hydrated, UTC before (the server's paint),
+// so hydration never disagrees. `zone` is for tests.
+
+/** The browser's IANA zone after hydration; "UTC" on the server and before hydration. */
+export function viewerZone(): string {
+  if (!hydrated || typeof window === "undefined") return "UTC";
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; }
+}
+
+const dayKey = (ms: number, zone: string) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+
+/** "3:23 PM" when it is today in `zone`, else "Nov 5". */
+export function sinceLocal(sinceMs: number, nowMs: number, zone: string = viewerZone()): string {
+  if (!Number.isFinite(sinceMs)) return "";
+  const d = new Date(sinceMs);
+  if (dayKey(sinceMs, zone) !== dayKey(nowMs, zone)) {
+    return new Intl.DateTimeFormat("en-US", { timeZone: zone, month: "short", day: "numeric" }).format(d);
+  }
+  return new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit", hour12: true }).format(d);
+}
+
+/** "Nov 6, 7:23 AM PST" — a full stamp with the zone's short name, for a tooltip. */
+export function stampLocal(v: number | string | null | undefined, zone: string = viewerZone()): string {
+  const ms = typeof v === "number" ? v : v ? Date.parse(v) : NaN;
+  if (!Number.isFinite(ms)) return "";
+  return new Intl.DateTimeFormat("en-US", { timeZone: zone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+                                            hour12: true, timeZoneName: "short" }).format(new Date(ms));
+}
+
+/** A time from an API field: an ISO stamp becomes "3:23 PM" / "Nov 5" in the viewer's zone;
+ *  anything already in words ("2h ago", "Mon") is shown as it came. */
+export function whenLocal(v: string | null | undefined, nowMs: number = Date.now(), zone: string = viewerZone()): string {
+  if (!v) return "";
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) return v;
+  return sinceLocal(Date.parse(v), nowMs, zone);
 }

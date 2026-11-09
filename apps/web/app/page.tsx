@@ -1,5 +1,5 @@
 
-import { ProjectAway } from "./project-away";
+import { changeHref, isLocalChangeUrl, linkTarget, prWhere } from "../lib/repo-links";
 import { networkTrustedConsole } from "../lib/console-session";
 import { accessForArea } from "../lib/identity/area-access";
 import { checkWith } from "../lib/identity/check";
@@ -132,6 +132,8 @@ import { emptyOrgChart, emptyWorkforce, fetchOrgChart, fetchWorkforce } from "..
 import { ShepherdConsole } from "./shepherd-ui";
 import { getShepherdOverviewAction } from "./actions";
 import { InfraHome } from "./infra/infra-home";
+import { ProjectsHome } from "./projects/projects-home";
+import { ProjectPage } from "./projects/project-page";
 import { ObsHome } from "./observability/obs-home";
 import { GraphArea } from "./knowledge/graph-area";
 import { KgLifecycleCard } from "./knowledge/kg-lifecycle";
@@ -237,7 +239,7 @@ function formatRecommendation(decision: DecisionFeedItem): string {
   if (action === "review_pull_request") {
     return [
       title ? `Approve the code change “${title}”.` : "Approve this code change.",
-      pr ? `Pull request ${prNum} is open on GitHub with the full diff to review.` : "",
+      pr ? `${isLocalChangeUrl(pr) ? "Change set" : "Pull request"} ${prNum} is open ${prWhere(pr)} with the full diff to review.` : "",
       vstatus
         ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? `, ${vsummary}` : ""}.`
         : "",
@@ -1028,12 +1030,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             objectType={ownerResolution.target?.type ?? "object"}
           />
         ) : null}
-        {otherProject ? (
-          <ProjectAway name={otherProject.name}
-                       homeName={otherProjectFeed?.items.find((p) => p.id === selectedOrg.project_id)?.name
-                                 ?? selectedOrg.org_name}
-                       lab={/lab \(insecure by design\)$/.test(otherProject.name)} />
-        ) : null}
+        {/* WHICH PROJECT IS OPEN is the top bar's breadcrumb now (with a Lab chip for a template's
+            lab); the rail's list and the avatar menu switch projects. No "Project: X ← Back to Y". */}
         {/* ONE AGENT SURFACE.
             There were three: this chat area, a Metatron Captain page, and the Task Shepherd
             autopilot. The operator used one of them and did not like it, "I never used
@@ -1466,6 +1464,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {shows("welcome") ? (
         <section className="panel-stack" data-area="welcome" aria-label="Get started">
           <SetupBoard projectId={activeProjectId} actor={activeActorId} layout="welcome" />
+        </section>
+        ) : null}
+
+        {/* PROJECTS (BOSSAPP-914): the list and the first run, and one project's page. Each reads
+            its own data client-side (contract §1-§12); nothing for them is fetched here. */}
+        {shows("projects") ? (
+        <section data-area="projects" aria-label="Projects">
+          <ProjectsHome projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId}
+                        projects={projects.items.filter((p) => p.orgId === activeOrgId).map((p) => ({ id: p.id, name: p.name }))}
+                        homeId={selectedOrg.project_id}
+                        setupUnfinished={Boolean(setupSummary?.get_started && setupSummary.ready === false)} />
+        </section>
+        ) : null}
+
+        {shows("project") ? (
+        <section data-area="project" aria-label="Project">
+          <ProjectPage projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} homeId={selectedOrg.project_id} />
         </section>
         ) : null}
 
@@ -2943,7 +2958,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       </code>
                     )}
                     {codeTask.pull_request_url ? (
-                      <a href={codeTask.pull_request_url} target="_blank" rel="noreferrer">
+                      <a href={changeHref(codeTask.pull_request_url)} {...linkTarget(codeTask.pull_request_url)}>
                         {codeTask.pull_request_url}
                       </a>
                     ) : null}
@@ -3079,7 +3094,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             Monitoring, so "where is my ApproveIt?" had no answer and was reconstructed by
             hand. This groups the runs into apps and puts each one's life on a single row. */}
         {shows("code_tasks") ? (
-        <section className="panel-stack" data-area="code_tasks" aria-label="Factory">
+        <section className="panel-stack" data-area="code_tasks" aria-label="Code Tasks">
           <CodeTasksHome
             projectId={activeProjectId}
             orgId={activeOrgId}
@@ -3409,7 +3424,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           </p>
                         ) : null}
                         {evidence.pullRequestUrl ? (
-                          <a href={evidence.pullRequestUrl} rel="noreferrer" target="_blank">
+                          <a href={changeHref(evidence.pullRequestUrl)} {...linkTarget(evidence.pullRequestUrl)}>
                             Open sandbox PR
                           </a>
                         ) : null}

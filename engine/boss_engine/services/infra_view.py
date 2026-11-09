@@ -177,6 +177,9 @@ def deploy_status(raw_status: Optional[str], *, decision_status: Optional[str] =
     # another run took the decision, or it was answered elsewhere. It is not waiting on you.
     if status == "awaiting_approval" and decision_status and decision_status != "pending":
         status = "superseded"
+    # Closed because a later deploy overtook it (cleared_causes): nobody said no.
+    if status == "rejected" and decision_status == "withdrawn":
+        status = "superseded"
     w = deploy_word(status, newest_for_target=newest_for_target)
     listed = steps if isinstance(steps, list) else (_json(steps) or [])
     now = next((_step_title(x) for x in listed
@@ -335,6 +338,9 @@ class Resident(TypedDict, total=False):
     url: Optional[str]                  # preview open url | Grafana url
     open_url: Optional[str]             # target: the app, once its newest deploy is live healthy
     port: Optional[int]
+    # The project it belongs to (BOSSAPP-914 §5): the host drawer's "Projects on this server",
+    # each linking to that Project › Deployments. {id, name, href}; None for monitoring.
+    project: Optional[dict[str, str]]
 
 
 class Rack(TypedDict, total=False):
@@ -1113,6 +1119,18 @@ def _place_rack(this: ThisComputer, place: Optional[dict[str, Any]]) -> Rack:
             "ports_total": None, "residents": [], "stage_action": None}
 
 
+def _project_ref(connection: Any, project_id: str) -> Optional[dict[str, str]]:
+    """{id, name, href} of the project whose apps these are: a resident names its project."""
+    from .project_experience.common import project_href
+
+    row = connection.execute(text("SELECT id, name FROM projects WHERE id = :p"),
+                             {"p": project_id}).mappings().first()
+    if row is None:
+        return None
+    return {"id": str(row["id"]), "name": str(row["name"] or row["id"]),
+            "href": project_href(str(row["id"]), tab="deployments")}
+
+
 def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[str], *,
                  can_write: bool = True) -> dict[str, Any]:
     """Everything the racks are drawn from, read once (shared by fleet and host_detail)."""
@@ -1141,6 +1159,8 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
     monitoring = _guard(connection, partial, "monitoring",
                         lambda: monitoring_stored(connection, project_id), None)
     host_writes = preconditions(settings)["host_writes_allowed"]
+    owner = _guard(connection, partial, "project", lambda: _project_ref(connection, project_id),
+                   None)
 
     racks: dict[str, Rack] = {}
     retired = 0
@@ -1188,6 +1208,7 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
     unplaced: list[Resident] = []
     for t in targets:
         res = _target_resident(t, health, strip_, last)
+        res["project"] = owner
         rack = racks.get(str(t.get("host_id") or ""))
         if rack is not None and rack.get("retired"):
             rack = None  # an app still pointed at a retired machine is not placed anywhere
@@ -1199,7 +1220,7 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
         ports[rack["id"]] |= _ports_of(t.get("domains"))
     for p in previews:
         if this_rack_id and this_rack_id in racks:
-            racks[this_rack_id]["residents"].append(_preview_resident(p))
+            racks[this_rack_id]["residents"].append({**_preview_resident(p), "project": owner})
             if p.get("port"):
                 ports[this_rack_id].add(int(p["port"]))
     if monitoring:
@@ -1223,11 +1244,29 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
             "unplaced": unplaced, "retired": retired}
 
 
-def fleet(connection: Any, settings: Any, project_id: str, *, viewer: Optional[str] = None) -> Fleet:
+def fleet(connection: Any, settings: Any, project_id: str, *, viewer: Optional[str] = None,
+          visible_project_ids: Optional[list[str]] = None) -> Fleet:
     partial: list[str] = []
     can_write = viewer_can_write(connection, settings, project_id, viewer,
                                  catalogue_permission="host:manage")
     parts = _fleet_parts(connection, settings, project_id, partial, can_write=can_write)
+    if visible_project_ids is not None:
+        # ONE COUNT WITH THE SERVER DRAWER (14-05): a rack's apps and ports are everything the
+        # viewer's projects hold on that machine (host_overview.usage), the drawer's tiles; the
+        # other projects' apps are a chip that opens the drawer.
+        from .project_experience.host_overview import usage as host_usage
+
+        used = _guard(connection, partial, "deploys", lambda: host_usage(
+            connection, [str(r["id"]) for r in parts["racks"] if r["id"] != "this"
+                         and not r.get("retired")], list(visible_project_ids)), {})
+        for rack in parts["racks"]:
+            u = used.get(str(rack["id"]))
+            if not u:
+                continue
+            own = rack["apps"]
+            rack["apps"] = max(own, int(u["apps"]))
+            rack["others"] = max(0, rack["apps"] - own)
+            rack["ports_used"] = max(int(rack["ports_used"] or 0), len(u["ports"]))
     items = _guard(connection, partial, "attention",
                    lambda: attention(connection, settings, project_id), [])
     mine = [i for i in items if i.get("area") == "infra"]
@@ -1461,14 +1500,10 @@ def _approver(name: Optional[str], viewer: Optional[str], types: dict[str, str]
 
 
 def _stack_history(connection: Any, target_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
-    hist: dict[str, list[dict[str, Any]]] = {t: [] for t in target_ids}
-    if target_ids:
-        for h in connection.execute(text(
-                "SELECT id, target_id, status, commit_sha, apply_started_at, created_at "
-                "FROM stack_deployments WHERE target_id = ANY(:t)"),
-                {"t": list(target_ids)}).mappings():
-            hist[h["target_id"]].append(dict(h))
-    return hist
+    from .stack_deploy import stack_history
+
+    # The same history the rollback route reads: known-good targets only (rollback_option).
+    return stack_history(connection, list(target_ids))
 
 
 def _run_history(connection: Any, target_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
@@ -1765,7 +1800,12 @@ def split_deploy_ref(ref: Any) -> Optional[tuple[str, str]]:
     THE ONE READER of a deploy ref. The console hands refs to sibling screens (the Activity
     log's `subject=`), and every reader that compared the whole ref to a row id matched
     nothing: "Open full log" showed 0 lines for a deploy that had nine steps."""
-    kind, _, ident = str(ref or "").partition(":")
+    raw = str(ref or "").strip()
+    # A bare stack deployment id (`sdep_…`, what a workflow step and the Project page hold) is
+    # that stack deploy: "Open the deploy" from them landed on "Not a deploy" (PX-03).
+    if raw.startswith("sdep_") and ":" not in raw:
+        return "stack", raw
+    kind, _, ident = raw.partition(":")
     if kind not in DEPLOY_REF_TABLES or not ident.strip():
         return None
     return kind, ident.strip()

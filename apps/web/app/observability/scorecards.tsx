@@ -29,7 +29,7 @@ import { Empty, Sheet, Skeleton, ZoneHead, useUrlState, writeUrl } from "../infr
 import "../improve/improve.css";
 
 const KINDS = [
-  { key: "build", label: "Builds", tip: "Factory builds and quick changes" },
+  { key: "build", label: "Builds", tip: "Code Tasks builds and quick changes" },
   { key: "workflow_run", label: "Runs", tip: "Whole workflow runs" },
   { key: "step", label: "Steps", tip: "One workflow step each" },
   { key: "panel", label: "Panels", tip: "PRD panels" },

@@ -75,7 +75,7 @@ export function needRow(item: AttentionItem, now: number | null): NeedRow {
   if (item.kind === "approval" && item.build) {
     return { item, roleKey: item.roleKey, icon: "⇡", primary: true,
              title: `${cut(withoutIds(item.title))}${app ? `, ${app}` : ""}`,
-             sub: [who ? `${who} built it` : "Factory", waited && `waiting ${waited}`].filter(Boolean).join(", ") };
+             sub: [who ? `${who} built it` : "Code Tasks", waited && `waiting ${waited}`].filter(Boolean).join(", ") };
   }
   if (item.kind === "approval") {
     const source = item.source || item.run?.subject || (item.decisionKind === "refusal" ? "Budget" : "");

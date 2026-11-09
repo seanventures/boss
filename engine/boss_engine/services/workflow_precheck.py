@@ -636,7 +636,8 @@ def _binding(ctx: Context) -> Optional[dict[str, Any]]:
 
     def read() -> Optional[dict[str, Any]]:
         row = ctx.connection.execute(text(
-            "SELECT id, full_name, status, checks, checked_at, default_branch, connection_id "
+            "SELECT id, full_name, status, checks, checked_at, default_branch, connection_id, "
+            "COALESCE(host, 'github') AS host "
             "FROM github_repository_bindings WHERE project_id = :p "
             "AND (:r = '' OR lower(full_name) = lower(:r)) "
             "ORDER BY (role = 'primary') DESC LIMIT 1"),
@@ -702,6 +703,17 @@ def check_github(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
         return result("github.access", "fixable",
                       f"no repository binding{' for ' + repo if repo else ''} in this project",
                       action="Connect the repository in Repo and models.")
+    from .local_repo import exists as _local_exists, is_local as _is_local
+
+    if binding.get("host") == "local" or _is_local(binding.get("full_name")):
+        # BOSSAPP-918: a repository on this machine; no GitHub access is involved.
+        owner, _, name = str(binding["full_name"]).partition("/")
+        if _local_exists(owner, name, ctx.settings):
+            return result("github.access", "ready",
+                          f"{binding['full_name']} is local on this machine (no GitHub needed)")
+        return result("github.access", "will_fail",
+                      f"the local repository {binding['full_name']} is missing on this machine",
+                      action="Run onboarding: it makes the local repository again.")
     checks = binding.get("checks") or {}
     if isinstance(checks, str):
         checks = json.loads(checks)
@@ -823,11 +835,39 @@ def check_github_own_link(ctx: Context, step: dict[str, Any]) -> Optional[dict[s
                   action=f"Re-run the pre-check online; if it still fails, {GITHUB_LINK_FIX}.")
 
 
+def _local_bare(ctx: Context) -> Optional[tuple[Any, str]]:
+    """(bare repository, default branch) when the project's code is in a repository BOSS keeps
+    on this machine (BOSSAPP-918): its files are read there, with no token and no network."""
+    binding = _binding(ctx)
+    full = str((binding or {}).get("full_name") or "")
+    from . import local_repo
+
+    if not local_repo.is_local(full):
+        return None
+    owner, _, name = full.partition("/")
+    try:
+        git_dir = local_repo.bare_path(owner, name, ctx.settings)
+        if not (git_dir / "HEAD").is_file():
+            return None
+        return git_dir, local_repo.default_branch(git_dir)
+    except Exception:  # noqa: BLE001 — unreadable: the check says unknown
+        return None
+
+
 def _repo_files(ctx: Context, rel_dir: str) -> Optional[list[str]]:
-    """Names in a repository directory: from the local repo root, else GitHub (read-only)."""
+    """Names in a repository directory: from the local repo root, a local project's bare
+    repository, else GitHub (read-only)."""
     if ctx.repo_root is not None:
         d = ctx.repo_root / rel_dir
         return sorted(p.name for p in d.iterdir()) if d.is_dir() else []
+    bare = _local_bare(ctx)
+    if bare is not None:
+        from . import local_repo
+
+        prefix = rel_dir.strip("/") + "/"
+        names = {p[len(prefix):].split("/", 1)[0] for p in local_repo.list_paths(bare[0], bare[1])
+                 if p.startswith(prefix)}
+        return sorted(n for n in names if n)
     if ctx.offline:
         return None
     binding = _binding(ctx)
@@ -845,6 +885,11 @@ def _repo_text(ctx: Context, rel_path: str) -> Optional[str]:
     if ctx.repo_root is not None:
         p = ctx.repo_root / rel_path
         return p.read_text(errors="ignore") if p.is_file() else ""
+    bare = _local_bare(ctx)
+    if bare is not None:
+        from . import local_repo
+
+        return local_repo.read_file(bare[0], bare[1], rel_path) or ""
     if ctx.offline:
         return None
     binding = _binding(ctx)

@@ -37,6 +37,8 @@ const deploy = (ref: string, testid: string, press?: string[]): ParityCheck => d
 const cloud = (sub: string, testid: string, extra = "", press?: string[]): ParityCheck => ({ kind: "testid", surface: "infra", url: `?view=cloud&cloud=${sub}${extra}`, testid, press });
 const add = (item: string, testid: string): ParityCheck => fleet(testid, "?view=fleet", ["infra-add", item]);
 const obs = (testid: string, url = "?view=apps", press?: string[]): ParityCheck => ({ kind: "testid", surface: "obs", url, testid, press });
+/** The Pulse view of Observability › Apps (screen 15 made rows the default; the Pulse is kept). */
+const PULSE = "?view=apps&apps=pulse";
 const app = (testid: string, press?: string[]): ParityCheck => obs(testid, "?view=apps&app=t_live", press);
 const sources = (testid: string, press?: string[]): ParityCheck => obs(testid, "?view=sources", press);
 
@@ -98,7 +100,7 @@ export const PARITY: ParityRow[] = [
   { id: "P-I-54", today: "CICD API pill + vendor cards", home: "CI config sheet", fate: "Kept", check: deploys("inf-ci-vendor", "?view=deploys", ["inf-deploys-more", "inf-deploys-ci"]) },
   { id: "P-I-55", today: "Generate config + Validate YAML", home: "CI config sheet", fate: "Kept", check: deploys("inf-ci-generate", "?view=deploys", ["inf-deploys-more", "inf-deploys-ci"]) },
   { id: "P-I-56", today: "Pipeline run provenance", home: "CI config sheet", fate: "Kept", check: deploys("inf-ci-runs", "?view=deploys", ["inf-deploys-more", "inf-deploys-ci"]) },
-  { id: "P-I-57", today: "DeploymentHealth (from delivery)", home: "Observability › Apps", fate: "Moved", check: obs("obs-pulse-row") },
+  { id: "P-I-57", today: "DeploymentHealth (from delivery)", home: "Observability › Apps", fate: "Moved", check: obs("obs-pulse-row", PULSE) },
   { id: "P-I-58", today: "ProviderOps ChangeSet links", home: "Deep links to Cloud › Changes", fate: "Kept", check: { kind: "code", file: "lib/infra-view.ts", pattern: "cloud=changes&changeset=", must: true, why: "links carry the change id" } },
   { id: "P-I-59", today: "notifyChanged(\"delivery\") bus", home: "notifyChanged(\"infra\") + usePolled kick", fate: "Kept", check: { kind: "code", file: "app/infra/*.tsx", pattern: "notifyChanged\\(\"infra\"\\)", must: true, why: "a write elsewhere re-polls the views" } },
 
@@ -160,16 +162,16 @@ export const PARITY: ParityRow[] = [
   { id: "P-O-02", today: "?watch=app|env deep link", home: "app drawer", fate: "Kept", check: { kind: "redirect", from: "?area=monitoring&watch=invoice%7Cprod", to: { area: "observability", view: "apps", watch: "invoice|prod" } } },
   { id: "P-O-03", today: "Monitoring is not set up yet", home: "Apps empty / Sources Needs a machine", fate: "Kept", check: sources("obs-stack-state") },
   { id: "P-O-04", today: "Health title counts", home: "Header counts + ordering", fate: "Kept", check: obs("obs-head-counts") },
-  { id: "P-O-05", today: "Per target dot, app, env", home: "Pulse row", fate: "Kept", check: obs("obs-pulse-row") },
+  { id: "P-O-05", today: "Per target dot, app, env", home: "Pulse row", fate: "Kept", check: obs("obs-pulse-row", PULSE) },
   { id: "P-O-06", today: "URL ↗ / planned", home: "Drawer Open app ↗", fate: "Kept", check: app("obs-app-open") },
   { id: "P-O-07", today: "status since / never probed", home: "Row down <dur> / since", fate: "Kept", check: app("obs-app-since") },
   { id: "P-O-08", today: "Open dashboard / no dashboard", home: "Drawer Dashboard ↗", fate: "Kept", check: app("obs-app-dashboard") },
-  { id: "P-O-09", today: "uptime 24h, 7d", home: "Row uptime + drawer", fate: "Kept", check: obs("obs-pulse-uptime") },
-  { id: "P-O-10", today: "latency, p95", home: "Row p95 + chart", fate: "Kept", check: obs("obs-pulse-p95") },
+  { id: "P-O-09", today: "uptime 24h, 7d", home: "Row uptime + drawer", fate: "Kept", check: obs("obs-pulse-uptime", PULSE) },
+  { id: "P-O-10", today: "latency, p95", home: "Row p95 + chart", fate: "Kept", check: obs("obs-pulse-p95", PULSE) },
   { id: "P-O-11", today: "build, deployed, checked", home: "Drawer facts", fate: "Kept", check: app("obs-app-facts") },
   { id: "P-O-12", today: "HealthHistory toggle", home: "Strip tooltip + chart", fate: "Kept", check: app("obs-latency-chart") },
   { id: "P-O-13", today: "History facts", home: "Drawer facts + chart", fate: "Kept", check: app("obs-app-facts") },
-  { id: "P-O-14", today: "HealthGraph SVG", home: "Pulse strip + latency chart", fate: "Kept", check: obs("obs-pulse-strip") },
+  { id: "P-O-14", today: "HealthGraph SVG", home: "Pulse strip + latency chart", fate: "Kept", check: obs("obs-pulse-strip", PULSE) },
   { id: "P-O-15", today: "last_error", home: "INCIDENTS first error + Show error", fate: "Kept", check: app("obs-app-incidents") },
   { id: "P-O-16", today: "Incidents list", home: "Drawer INCIDENTS", fate: "Kept", check: app("obs-app-incidents") },
   { id: "P-O-17", today: "Scraped but not health-checked", home: "NOT WATCHED + Not watched chip", fate: "Kept", check: obs("obs-not-watched") },

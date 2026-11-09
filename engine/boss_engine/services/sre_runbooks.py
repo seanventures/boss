@@ -652,7 +652,7 @@ class SreRunbookService:
             connection,
             project_id,
             None,
-            f"Approve SRE runbook {runbook['name']!r} for incident {incident_id}?",
+            f"Approve SRE runbook {runbook['name']!r} for the open incident?",
             {
                 "kind": "sre_runbook",
                 "runbook_id": runbook["id"],

@@ -23,7 +23,7 @@ COMMUNITY_OUTPUT = ROOT / "docs/community/mcp-api-capability-matrix.json"
 
 def mounted_rows(edition: str) -> list[dict]:
     os.environ["BOSS_EDITION"] = edition
-    sys.path[:0] = [str(ROOT / "apps/api"), str(ROOT / "engine")]
+    sys.path[:0] = [str(ROOT / "apps/api"), str(ROOT / "engine"), str(ROOT)]
     from app.main import app
     from app.request_bodies import OpenRequestBody
     from boss_engine.mcp.api_surface import ApiSurface, confirmation_eligible
@@ -39,6 +39,17 @@ def mounted_rows(edition: str) -> list[dict]:
         for method in route.methods
     }
 
+    def body_model(field):
+        """The body's declared type. FastAPI's pydantic-v1 ModelField had `.type_`; the
+        pydantic-v2 one (FastAPI >= 0.100, `fastapi._compat.ModelField`) keeps it on
+        `field_info.annotation`."""
+        if field is None:
+            return None
+        if hasattr(field, "type_"):
+            return field.type_
+        info = getattr(field, "field_info", None)
+        return getattr(info, "annotation", None)
+
     def body_type_enforcement(method: str, path: str, quality: str) -> str:
         """Separate field discoverability from Pydantic's actual type checks."""
         if quality == "parameters_only":
@@ -46,7 +57,7 @@ def mounted_rows(edition: str) -> list[dict]:
         if quality == "loose_json_body":
             return "unstructured"
         route = route_lookup[(method, path)]
-        model = route.body_field.type_ if route.body_field else None
+        model = body_model(route.body_field)
         if isinstance(model, type) and issubclass(model, OpenRequestBody):
             fields = model.model_fields.values()
             if fields and all(

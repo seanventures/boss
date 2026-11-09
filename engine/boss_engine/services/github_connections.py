@@ -490,7 +490,7 @@ class GitHubConnectionService:
         rows = connection.execute(
             text(
                 f"""
-                SELECT id, project_id, connection_id, repository_id, owner, name,
+                SELECT id, project_id, connection_id, repository_id, host, owner, name,
                        full_name, role, default_branch, visibility, archived,
                        status, permissions, capabilities, metadata, last_synced_at,
                        created_by, created_at, updated_at
@@ -514,7 +514,7 @@ class GitHubConnectionService:
         row = connection.execute(
             text(
                 """
-                SELECT id, project_id, connection_id, repository_id, owner, name,
+                SELECT id, project_id, connection_id, repository_id, host, owner, name,
                        full_name, role, default_branch, visibility, archived,
                        status, permissions, capabilities, metadata, last_synced_at,
                        created_by, created_at, updated_at
@@ -1351,6 +1351,15 @@ class GitHubConnectionService:
     ) -> tuple[GitHubAdapter, dict[str, Any], dict[str, Any]]:
         """Resolve a live project binding to an execution-scoped adapter."""
         binding = self.get_repository_binding(connection, project_id, binding_id)
+        from . import local_repo
+
+        if binding.get("host") == "local" or local_repo.is_local_owner(binding.get("owner")):
+            # BOSSAPP-918: a repository BOSS keeps on this machine — no connection, no credential.
+            from .local_repo_host import LocalGitAdapter
+
+            return (LocalGitAdapter(self.settings, owner=binding["owner"], repo=binding["name"],
+                                    project_id=project_id),
+                    {}, binding)
         github_connection = self.get_connection(
             connection, project_id, binding["connection_id"]
         )
@@ -1884,6 +1893,8 @@ class GitHubConnectionService:
             "project_id": row["project_id"],
             "connection_id": row["connection_id"],
             "repository_id": row["repository_id"],
+            # BOSSAPP-918: where the code is — github, or a repository BOSS keeps locally.
+            "host": (row.get("host") if hasattr(row, "get") else None) or "github",
             "owner": row["owner"],
             "name": row["name"],
             "full_name": row["full_name"],

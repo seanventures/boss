@@ -88,7 +88,7 @@ export function Proof({ n, orgId }: { n: ProofNumbers; orgId?: string | null }) 
   return (
     <div className="cc-proof" data-testid="cc-proof">
       <Go patch={{ area: "code_tasks", view: "apps", build: null, role: null }} orgId={orgId}
-          title="Apps your team has built. Opens the Factory." testId="cc-proof-apps">
+          title="Apps your team has built. Opens Code Tasks." testId="cc-proof-apps">
         <b>{n ? n.apps : dash}</b><span>apps built</span>
       </Go>
       <Go patch={{ area: "code_tasks", view: "apps", build: null, role: null }} orgId={orgId}

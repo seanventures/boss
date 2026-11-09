@@ -21,6 +21,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import text
 
 from boss_engine.db import begin
 from boss_engine.identity import P, Scope, permit
@@ -62,10 +63,36 @@ class SettingsBody(Body):
     breaker_min_runs: Optional[int] = None
 
 
+class ReviewBuildsBody(Body):
+    """Project › Settings › Autonomy & budget: "Review always-on builds before they start".
+    `review` null clears it (follow the install's default, or the project's for a class)."""
+    review: Optional[bool] = None
+    task_class: Optional[str] = Field(default=None, min_length=1, max_length=60)
+
+
+class InstallReviewBuildsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    review: bool
+    actor: Optional[str] = None
+
+
 class InstallBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     actor: Optional[str] = None
     reason: str = Field(default="", max_length=500)
+
+
+class ModeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: str = Field(pattern="^(off|propose|route)$")
+    actor: Optional[str] = None
+    reason: str = Field(default="", max_length=500)
+
+
+class EntryAnswerBody(Body):
+    """One entry of the project's always-on card answered on its own (asks.answer_entry)."""
+    answer: str = Field(pattern="^(approve|reject|take|hold)$")
+    note: str = Field(default="", max_length=500)
 
 
 class SweepBody(Body):
@@ -113,6 +140,16 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
                                                         task_class=task_class, limit=limit,
                                                         before=before))
 
+    # ── stalled work: what the Shepherd fixed, is trying, and needs a person for ──────────────
+    @router.get("/v1/ambient/stalled-work")
+    @permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
+    def stalled_work(project_id: str) -> dict:
+        from boss_engine.services import stuck_work
+
+        with begin(engine) as c:
+            require_reader(c, project_id)
+            return _errors(lambda: stuck_work.board(c, project_id))
+
     @router.get("/v1/ambient/work-items/{work_item_id}")
     @permit(P.WORK_ITEM_READ, scope=Scope.of("work_item", path="work_item_id"))
     def get_item(work_item_id: str, project_id: str) -> dict:
@@ -149,6 +186,22 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
             _item(c, payload.project_id, work_item_id)
             return {"item": _errors(lambda: board.dismiss(c, work_item_id, actor=actor,
                                                           reason=payload.reason))}
+
+    # ── the project's one card, answered entry by entry ──────────────────────────────────────
+    @router.post("/v1/ambient/cards/{decision_id}/entries/{work_item_id}/answer")
+    @permit(P.DECISION_APPROVE, scope=Scope.of("decision", path="decision_id"))
+    def answer_entry(decision_id: str, work_item_id: str, payload: EntryAnswerBody) -> dict:
+        from boss_engine.services.ambient import asks
+
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "decision_resolve")
+            owner = c.execute(text("SELECT project_id FROM decisions WHERE id = :d"),
+                              {"d": decision_id}).scalar()
+            if owner != payload.project_id:
+                raise HTTPException(status_code=404, detail="no such card here")
+            return _errors(lambda: asks.answer_entry(
+                c, settings(), decision_id, work_item_id, answer=payload.answer, actor=actor,
+                note=payload.note or None))
 
     # ── signals ──────────────────────────────────────────────────────────────────────────────
     @router.get("/v1/ambient/signals")
@@ -210,7 +263,7 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
         with begin(engine) as c:
             require_reader(c, project_id)
             return {"classes": policy.matrix(c, project_id),
-                    "levels": [{"level": k, "name": v}
+                    "levels": [{"level": k, "name": v, "meaning": task_classes.LEVEL_MEANINGS[k]}
                                for k, v in task_classes.LEVEL_NAMES.items()],
                     "actions": [{"key": a.key, "title": a.title, "min_level": a.min_level,
                                  "risk": a.risk, "reversibility": a.reversibility,
@@ -236,7 +289,9 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
             require_reader(c, project_id)
             return {"settings": policy.settings_for(c, project_id),
                     "envelope": policy.envelope(c, project_id),
-                    "stop": policy.stop_state(c, project_id)}
+                    "stop": policy.stop_state(c, project_id),
+                    "mode": policy.mode_state(c, settings()),
+                    "review_builds": policy.review_builds_state(c, project_id)}
 
     @router.put("/v1/ambient/settings")
     @permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
@@ -246,6 +301,26 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
             actor = require_write_actor(c, payload.project_id, payload.actor, "role_review")
             return {"settings": _errors(lambda: policy.update_settings(
                 c, payload.project_id, actor=actor, **changes))}
+
+    @router.put("/v1/ambient/review-builds")
+    @permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
+    def put_review_builds(payload: ReviewBuildsBody) -> dict:
+        """Review always-on builds before they start (off by default: they start on the project's
+        Captain authority). For the project, or one task class (`task_class`)."""
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "role_review")
+            return {"review_builds": _errors(lambda: policy.set_review_builds(
+                c, payload.project_id, actor=actor, review=payload.review,
+                task_class=payload.task_class))}
+
+    @router.put("/v1/ambient/review-builds/install")
+    @permit(P.AUTONOMY_MANAGE, scope=Scope.org())
+    def put_review_builds_install(payload: InstallReviewBuildsBody) -> dict:
+        """The install-wide default every project follows until it sets its own (Govern › Autonomy)."""
+        with begin(engine) as c:
+            actor = org_actor(c, payload.actor)
+            return {"review_builds": policy.set_review_builds_install(c, review=payload.review,
+                                                                      actor=actor)}
 
     @router.post("/v1/ambient/stop")
     @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
@@ -278,6 +353,27 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
             actor = org_actor(c, payload.actor)
             return {"stop": policy.resume(c, project_id=None, actor=actor,
                                           reason=payload.reason)}
+
+    # ── the always-on mode (install-wide; design §9 "UI plus API plus env var") ──────────────
+    @router.get("/v1/ambient/mode")
+    @permit(P.AUTONOMY_READ, scope=Scope.org())
+    def get_mode() -> dict:
+        with begin(engine) as c:
+            return {"mode": policy.mode_state(c, settings())}
+
+    @router.put("/v1/ambient/mode")
+    @permit(P.AUTONOMY_MANAGE, scope=Scope.org())
+    def put_mode(payload: ModeBody) -> dict:
+        """Turn the always-on agents on (propose: every handover asks a person; route: each class
+        acts within its own level) or off. Giving agents more room is the privileged direction:
+        autonomy:manage, like Resume. BOSS_AMBIENT_COS in .env pins it (409)."""
+        with begin(engine) as c:
+            actor = org_actor(c, payload.actor)
+            try:
+                return {"mode": policy.set_mode(c, settings(), mode=payload.mode, actor=actor,
+                                                reason=payload.reason)}
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/v1/ambient/scorecard")
     @permit(P.AUTONOMY_READ, scope=Scope.project(query="project_id"))

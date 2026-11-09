@@ -7,6 +7,7 @@
  * SRE → investigator and engineer → squad vote (2 agree · 1 dissent) → staging rollback →
  * recovered in 4m → postmortem.
  */
+import { LEVEL_WORDS } from "./autonomy-levels";
 
 type Wire = Record<string, unknown>;
 type N = { id: string; type: string; label: string; stage: number; badges?: string[]; ref?: Wire };
@@ -287,10 +288,10 @@ function autonomy(): Wire {
   return {
     classes: CLASSES.map(([k, title, level, ceiling, risk, owner]) => ({
       task_class: k, title, level, ceiling, max_ceiling: ceiling, default_level: level, risk, owner_role: owner || null,
-      level_name: { A0: "Observe", A1: "Propose", A2: "Act to draft", A3: "Act and report" }[level],
+      level_name: LEVEL_WORDS[level],
       suggested_level: k === "ci_fix_boss_pr" ? "A3" : null, source: "default",
     })),
-    levels: [{ level: "A0", name: "Observe" }, { level: "A1", name: "Propose" }, { level: "A2", name: "Act to draft" }, { level: "A3", name: "Act and report" }],
+    levels: Object.entries(LEVEL_WORDS).map(([level, name]) => ({ level, name })),
   };
 }
 
@@ -407,7 +408,7 @@ export function demoAnswer(path: string): unknown {
   }
   if (p === "/v1/ambient/signals") return { signals: SIGNALS };
   if (p === "/v1/ambient/autonomy") return autonomy();
-  if (p === "/v1/ambient/settings") return { settings: { daily_cap_usd_micros: 5_000_000, max_concurrent: 2 }, envelope: ENVELOPE, stop: NOT_STOPPED };
+  if (p === "/v1/ambient/settings") return { settings: { daily_cap_usd_micros: 5_000_000, max_concurrent: 2 }, envelope: ENVELOPE, stop: NOT_STOPPED, mode: { mode: "route", source: "console", pinned: false, by: "person:vee", at: null } };
   if (p === "/v1/ambient/scorecard") return scorecard();
   if (p === "/v1/ambient/roadmap") return roadmap();
   m = p.match(/^\/v1\/ambient\/roadmap\/([^/]+)$/);

@@ -146,6 +146,17 @@ describe("the detail panel", () => {
     expect(($('[data-testid="kg-panel-open-run"]') as HTMLAnchorElement).getAttribute("href")).toBe("/?area=code_tasks&build=ctr_fixture_build_1");
   });
 
+  it("a lesson from incidents lists where it was learned and where it was applied, each opening its incident", async () => {
+    const LESSON: KgNodeDetailResponse = { ...LEARN_DETAIL, usage: { shown: 0, consulted_runs: 1, reused_runs: 1,
+      incidents: [{ id: "kgn_inc_1", label: "INC-1", how: "taught" }, { id: "kgn_inc_2", label: "INC-2", how: "reused" }] } };
+    mockKgFetch({ "/view/node/": { body: LESSON } });
+    const onFocusNode = vi.fn();
+    await mount(<Panel nodeId={learning.node.id} onFocusNode={onFocusNode} />);
+    expect($('[data-testid="kg-panel-incidents"]')?.textContent).toBe("Learned in INC-1 · applied in INC-2");
+    await act(async () => ($$('[data-testid="kg-panel-incident"]')[1] as HTMLButtonElement).click());
+    expect(onFocusNode).toHaveBeenCalledWith("kgn_inc_2");
+  });
+
   it("an area bubble is summarised from the overview, with its edges clickable and Open its packages", async () => {
     mockKgFetch();
     const area = FX.overview.areas[0];

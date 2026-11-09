@@ -199,10 +199,43 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(projects_archive_router)
 
+    # Delete a project with a full cleanup (services/projects_delete.py).
+    from .projects_delete import router as projects_delete_router
+
+    app.include_router(projects_delete_router)
+
     # BOSSAPP-810 — New project: the project page's view and Import's repository facts (reads).
     from .start_project import router as start_project_router
 
     app.include_router(start_project_router)
+
+    # BOSSAPP-913/914 — the Project experience: one read per Project-page tab, the captain, the
+    # onboarding agent, ⌘K and Project › Settings. Unguarded: a broken import fails the boot.
+    from .project_experience import router as project_experience_router
+
+    app.include_router(project_experience_router)
+    # Add a project › Folder on host (screen 03): read-only folder probe + the source record.
+    from .host_folders import router as host_folders_router
+
+    app.include_router(host_folders_router)
+    # Local-first projects (BOSSAPP-915): the local repository, its change sets and Merge,
+    # import, the machine checks, Publish to GitHub, and work waiting for GitHub.
+    from .local_projects import router as local_projects_router
+
+    app.include_router(local_projects_router)
+    # Infra › Add a server (agentic-factory 3): read + probe, Add and set up, the setup page.
+    from .add_server import router as add_server_router
+
+    app.include_router(add_server_router)
+    # Project › Health › Watch this app (agentic-factory 2): the SRE agent's read, Start
+    # watching, the landing and its one gate — over Observability's rules and contact points.
+    from .watch_app import router as watch_app_router
+
+    app.include_router(watch_app_router)
+    # Add a project v2 (new-project-v2): Helm's understanding, the preview, Create and start.
+    from .add_project import router as add_project_router
+
+    app.include_router(add_project_router)
 
     # BOSSAPP-768 — Rules review: the business rules agents propose, approved by a person
     try:
@@ -399,6 +432,12 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .govern import router as govern_router
 
     app.include_router(govern_router)
+
+    # Govern › Where people decide: the ONE compliance list (services/decide_list.py).
+    # Imported unguarded: the list is the boundary every gate reads; a broken import fails boot.
+    from .decide_list import router as decide_list_router
+
+    app.include_router(decide_list_router)
 
     try:
         from .factory_flow import router as factory_flow_router

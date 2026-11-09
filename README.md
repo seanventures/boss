@@ -41,7 +41,7 @@ You need Git on the install machine. If GitHub asks you to sign in, use an accou
 
 Use a new directory named `boss-rc10.11`. The command stops if the clone fails, and it pins the install to that commit. Continue from `cd boss-rc10.11`. Services listen on the machine itself. Add `--console-origin https://boss.example.com`, with your hostname, when the console will be opened from somewhere else. Omit it to open `http://127.0.0.1:3000` on the install machine.
 
-`boss upgrade` writes a backup, then moves to a later release. `boss upgrade --to REF` picks the release. `boss uninstall` stops BOSS and keeps the data. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
+`boss upgrade` writes a backup (database, keys, artifacts, and the local repositories volume that holds unpublished local projects' code), then moves to a later release. `boss upgrade --to REF` picks the release. `boss uninstall` stops BOSS and keeps the data. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
 The copy at [boss.sean.network/install.sh](https://boss.sean.network/install.sh) is published separately. This page does not treat it as v1.0-rc10.11. The manual in this repository is the source. The [hosted docs](https://boss.sean.network/docs/) are published separately too.
 

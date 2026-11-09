@@ -1,5 +1,5 @@
+import { changeHref, linkTarget, repoHref } from "../lib/repo-links";
 import { ClientRelativeTime } from "./client-relative-time";
-import { repoUrl } from "../lib/github-urls";
 import type { RepoActivity, RepoRecentRun } from "../lib/repo-activity";
 
 /** The GitHub area used to show only "is a connection configured", which tells a developer
@@ -57,9 +57,8 @@ function RepoCard({ repo }: { repo: RepoActivity }) {
           <span className="area-name">Repository</span>
           <h3 className="ra-repo-name">
             <a
-              href={repoUrl(repo.full_name)}
-              target="_blank"
-              rel="noreferrer"
+              href={repoHref(repo.full_name) ?? undefined}
+              {...linkTarget(repoHref(repo.full_name))}
             >
               {repo.full_name}
             </a>
@@ -150,7 +149,7 @@ function RepoCard({ repo }: { repo: RepoActivity }) {
                 </td>
                 <td>
                   {run.pr && run.pr_url ? (
-                    <a href={run.pr_url} target="_blank" rel="noreferrer">
+                    <a href={changeHref(run.pr_url)} {...linkTarget(run.pr_url)}>
                       #{run.pr}
                     </a>
                   ) : (

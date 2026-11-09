@@ -43,21 +43,21 @@
 /* Agent Studio: the quiet setup check, what Flows holds, and the runs started here. */
 .as-button.ghost { border: 1px solid transparent; background: transparent; color: var(--muted); }
 .as-button.ghost:hover:not(:disabled) { color: var(--ink); border-color: var(--border); }
-.as-flows-scope { margin: 8px 0; color: var(--muted); font-size: 0.82rem; line-height: 1.45; }
+.as-flows-scope { margin: 8px 0; color: var(--muted); font-size: var(--fs-ui); line-height: 1.45; }
 .as-runs { display: grid; gap: 6px; margin-top: 12px; }
 .as-runs ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .as-runs li {
   display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 10px;
   align-items: baseline; padding: 6px 8px;
-  border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 0.85rem;
+  border: 1px solid var(--border); border-radius: var(--r-sm); font-size: var(--fs-body);
 }
 .as-runs li i {
-  font-style: normal; text-transform: none; font-size: 0.7rem; letter-spacing: 0;
+  font-style: normal; text-transform: none; font-size: var(--fs-tag); letter-spacing: 0;
 }
 .as-run-when { color: var(--faint); white-space: nowrap; }
 .as-run-what { color: var(--ink-soft); overflow-wrap: anywhere; }
-.as-runs-empty { color: var(--muted); font-size: 0.85rem; margin: 0; }
+.as-runs-empty { color: var(--muted); font-size: var(--fs-body); margin: 0; }
 
 /* ActionForm's inline result line. */
-.action-form-done { color: var(--green); font-size: 0.88rem; margin: 6px 0 0; }
+.action-form-done { color: var(--green); font-size: var(--fs-body); margin: 6px 0 0; }
 .action-form-done a { color: var(--accent-text); }

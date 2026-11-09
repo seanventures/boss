@@ -31,6 +31,7 @@ SCHEDULER_NAME = re.compile(
 #: entry point -> the function in the same file whose body names projects_archive (itself, or the
 #: query helper it picks its work with).
 GUARDED: dict[str, str] = {
+    "services/add_server.py::tick": "tick",                       # server setups + the host watch
     "services/jobs.py::claim_job": "claim_job",                   # the lease: every job
     "services/knowledge/repo_index.py::enqueue_due": "_due_rows",
     "services/knowledge/ingest.py::tick": "tick",
@@ -50,12 +51,17 @@ GUARDED: dict[str, str] = {
     "services/factory_flow.py::tick": "tick",
     "services/process_manager.py::tick": "tick",
     "services/person_wait.py::poll_due": "poll_due",
+    # The always-on stuck-work Shepherd: `due` picks builds with live_sql (stuck_work.py).
+    "services/stuck_work.py::sweep": "due",
+    # Nothing stays acknowledged and idle: `due` picks incidents with live_sql (acked_idle.py).
+    "services/acked_idle.py::sweep": "due",
     # Autonomous agents (BOSSAPP-902): the Chief of Staff's tick triages live projects only
     # (and its owners' turn picks items with live_sql); the learning tick runs detectors for
     # live projects only; the SRE squad's watch skips an archived project.
     "services/ambient/chief_of_staff.py::tick": "tick",
     "services/ambient/roadmap.py::tick": "tick",
     "services/incident_squad.py::tick": "tick",
+    "services/incident_squad.py::sweep_rounds": "sweep_rounds",
 }
 
 #: New work refused at its door (ProjectArchived -> 409), checked the same way.
@@ -75,6 +81,8 @@ _RECOVERY = ("recovers work already in flight; any new attempt goes through star
 _TARGETS = "probes only the targets deployment_health.sweep picked, which skips archived projects"
 
 EXEMPT: dict[str, str] = {
+    "services/add_server.py::claim": "takes the next attempt of ONE server setup that the guarded "
+                                     "tick (or that server's own page) picked; starts nothing itself",
     "identity/claim.py::claim": "the owner claim at install time, not a scheduler",
     "services/ambient/signals.py::sweep": "records what the sensors saw; starts no work — the "
                                           "Chief of Staff's tick (guarded) never triages an "
@@ -146,10 +154,14 @@ _HOUSE = "worker or install housekeeping; no project work"
 WORKER_ROUTES: dict[str, str] = {
     "/v1/worker/poll": "tick:services/jobs.py::claim_job",
     "/v1/worker/heartbeat": _LEASE, "/v1/worker/complete": _LEASE, "/v1/worker/fail": _LEASE,
+    # A build that finished while GitHub was down: its push, under the job's lease (github_outage).
+    "/v1/repos/push-pending/execute": _LEASE,
+    "/v1/projects/onboarding/execute": _LEASE,   # the onboarding agent's leased pass
     "/v1/self/host-stall": _HOUSE,
     "/v1/activity/retention/prune": _HOUSE,
     "/v1/telemetry/tick": "install-wide Improve BOSS telemetry",
     "/v1/ambient/tick": "tick:services/ambient/chief_of_staff.py::tick",
+    "/v1/servers/tick": "tick:services/add_server.py::tick",
     "/v1/ambient/learning/tick": "tick:services/ambient/roadmap.py::tick",
     "/v1/qa/benchmark-apps/tuning-sweep": "the install's benchmark ledger",
     "/v1/model-gateway/leases": _LEASE, "/v1/model-gateway/leases/{x}/heartbeat": _LEASE,

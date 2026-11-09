@@ -31,7 +31,10 @@ def _running_run(engine) -> tuple[str, str]:
     return run_id, project
 
 
-def test_a_refused_authority_blocks_the_build_with_the_next_step(engine, monkeypatch):
+def test_a_refused_authority_pauses_the_build_on_a_person_with_the_next_step(engine, monkeypatch):
+    """No grant is a PERSON blocker (person_wait, L2b): the build pauses with one plain ask and
+    resumes by itself once a grant covers it -- never a 500, never `running` for ever. (It used
+    to end `blocked`; then the pause path crashed on every statement: 2026-11-07, laptop.)"""
     run_id, _ = _running_run(engine)
 
     def refused(*a, **kw):
@@ -39,13 +42,15 @@ def test_a_refused_authority_blocks_the_build_with_the_next_step(engine, monkeyp
 
     monkeypatch.setattr(code_task_service, "_run_code_task", refused)
     out = code_task_service.run_code_task(engine, main.settings, main.jobs, run_id)
-    assert out["status"] == "blocked" and out["done"] is True and out["reason"] == "no_authority"
+    assert out["status"] == "waiting_on_person" and out["done"] is True and out["reason"] == "no_authority"
     assert "console" in out["message"] and "consent" in out["message"]
     with engine.begin() as db:
-        row = db.execute(text("SELECT status, error FROM code_task_runs WHERE id = :i"), {"i": run_id}).mappings().one()
-    assert row["status"] == "blocked"
-    said = json.dumps(row["error"]) if not isinstance(row["error"], str) else row["error"]
-    assert "No one's authority covers this build" in said and "no_grant" not in said
+        row = db.execute(text("SELECT r.status, d.question, d.recommendation FROM code_task_runs r "
+                              "JOIN decisions d ON d.id = r.decision_id WHERE r.id = :i"),
+                         {"i": run_id}).mappings().one()
+    assert row["status"] == "waiting_on_person"
+    assert row["recommendation"]["action"] == "grant_builder_authority"
+    assert "standing grant" in row["question"] and "no_grant" not in row["question"]
 
 
 def test_both_build_paths_raise_the_refusal_never_a_bare_runtime_error():

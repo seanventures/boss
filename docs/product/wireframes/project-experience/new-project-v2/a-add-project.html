@@ -1,0 +1,227 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Add a project v2</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css"><link rel="stylesheet" href="np2.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+<script>{ const m = new URLSearchParams(location.search).get("mode"); document.documentElement.dataset.mode = m === "repo" ? "repo" : "idea";
+  document.documentElement.dataset.sub = m === "fix" ? "fix" : m === "repo" ? "repo" : "look"; }</script>
+<style>
+  [data-mode="idea"] .m-repo, [data-mode="repo"] .m-idea { display: none !important; }
+  [data-sub="look"] .s-fix, [data-sub="fix"] .s-look, [data-sub="repo"] .s-fix, [data-sub="repo"] .s-look { display: none !important; }
+</style>
+</head>
+<body data-active="projects" data-crumb="Projects|Add project">
+<div id="content"><section class="grid g3" style="opacity:.4"><div class="card" style="height:260px"></div><div class="card"></div><div class="card"></div></section></div>
+<div id="overlay">
+<div class="scrim"></div>
+<div class="sheet np2" role="dialog" aria-label="Add a project">
+  <div class="sheet-h"><span class="ico"><i class="ph ph-folder-plus"></i></span><h2>Add a project</h2>
+    <span class="wf-spacer"></span>
+    <a class="np2-chip" title="Starts now: Hello World · Node · Small workflow · 6 steps · ≈ 8 min · ≈ $0.40"><i class="ph ph-flask"></i>Try a sample <i class="ph ph-play"></i></a>
+    <i class="ph ph-x" style="margin-left:6px" title="Close (Esc)"></i></div>
+
+  <div class="np2-body">
+    <!-- ── THE ONE INPUT ─────────────────────────────────────────────── -->
+    <div class="np2-in m-idea" data-multi title="A few lines about the idea, a repo (owner/repo or URL), or a folder (/path) — BOSS tells which">
+      <span class="kind"><i class="ph-fill ph-lightbulb"></i></span><span class="pin" style="position:absolute;left:-6px;top:-6px">1</span>
+      <div class="txt">A helpdesk for our support team.
+Customers email support@ and it becomes a ticket. AI drafts the reply from our past answers; staff sign in with Google, edit and approve before it sends.
+Track the 4-hour first-reply SLA, tag tickets by product, and send the lead a daily summary.
+No chat or phone for now.<span class="caret"></span></div>
+      <div class="tools"><span class="link-chip" title="Full screen editor (Esc closes)"><i class="ph ph-arrows-out"></i></span><span class="link-chip" title="Start from an idea: example briefs"><i class="ph ph-sparkle"></i>Ideas</span></div>
+      <div class="np2-in-foot"><span class="grow" title="Starts at 5 lines and grows to 12, then scrolls; ⤢ opens the full-screen editor"><i class="ph ph-arrows-vertical"></i>4 lines · grows</span><span>·</span><span>⇧↵ new line</span><span>·</span><span>paste a link or a doc, Helm reads it</span><span class="wf-spacer"></span><span class="np2-hide-s">Helm rewrote it below ↓</span></div>
+    </div>
+    <div class="np2-in m-repo" data-multi title="A sentence, a repo (owner/repo or URL), or a folder (/path) — BOSS tells which">
+      <span class="kind"><i class="ph-fill ph-github-logo"></i></span>
+      <div class="txt"><span class="muted">paramg/</span>helpdesk<span class="caret"></span></div>
+      <div class="tools"><span class="tag"><i class="ph ph-user"></i>paramg</span><a class="link-chip" title="Connect another account — opens Repo and models › GitHub (global)">+ account</a></div>
+      <div class="np2-in-foot"><span>⇧↵ to add lines under the repo: they become a note to Helm</span></div>
+    </div>
+
+    <div class="np2-detect">
+      <span class="np2-kinds" title="Detected from what you typed. Click to force another reading.">
+        <span class="m-idea" aria-selected="true"><i class="ph ph-lightbulb"></i>Idea · new app</span><span class="m-idea"><i class="ph ph-git-branch"></i>Repo</span><span class="m-idea"><i class="ph ph-folder-open"></i>Folder</span>
+        <span class="m-repo"><i class="ph ph-lightbulb"></i>Idea</span><span class="m-repo" aria-selected="true"><i class="ph ph-git-branch"></i>Repo · existing app</span><span class="m-repo"><i class="ph ph-folder-open"></i>Folder</span>
+      </span>
+      <span class="m-idea">Auto-detected: several lines read as an idea. Paste <span class="mono">owner/repo</span>, a GitHub URL or <span class="mono">/srv/app</span> to bring code you have.</span>
+      <span class="m-repo">Auto-detected. ↵ picks the top match.</span>
+    </div>
+
+    <!-- inline repo search (repo mode) -->
+    <div class="np2-drop m-repo" role="listbox" aria-label="Repositories">
+      <div class="grp"><i class="ph ph-github-logo"></i>GitHub · paramg <span class="pin">3</span></div>
+      <div class="pick" aria-selected="true"><i class="ph ph-git-branch"></i><span class="mono"><span class="faint">paramg/</span><b>helpdesk</b>-ai-demo</span><span class="faint" style="font-size:.54rem">FastAPI · React</span><span class="wf-spacer"></span><span class="faint mono" style="font-size:.54rem">3h</span><span class="wf-kbd">↵</span></div>
+      <div class="pick"><i class="ph ph-git-branch"></i><span class="mono"><span class="faint">paramg/</span><b>helpdesk</b>-legacy</span><span class="wf-spacer"></span><span class="tag" style="font-size:.5rem" title="Already used by NorthPeak Retail">in use</span><span class="faint mono" style="font-size:.54rem">1mo</span></div>
+      <div class="grp"><i class="ph ph-hard-drives"></i>Folders on hosts</div>
+      <div class="pick"><i class="ph ph-folder-open"></i><span class="mono">/srv/apps/<b>helpdesk</b></span><span class="faint" style="font-size:.54rem">on boss-1 · read-only</span><span class="wf-spacer"></span><span class="faint mono" style="font-size:.54rem">2d</span></div>
+    </div>
+
+    <!-- ── PROJECT BRIEF (idea) ─────────────────────────────────────────── -->
+    <div class="ub m-idea" data-sub-card title="Helm's rewrite of your words as a brief. Check it before anything starts.">
+      <div class="ub-h">
+        <span class="face" data-a="helm" data-size="m"></span>
+        <div><b>Project brief</b> <span class="pin">2</span><small class="s-look">From your 4 lines · edit any line</small><small class="s-fix">Editing · change any line, or give a hint and Rewrite</small></div>
+        <span class="wf-spacer"></span>
+        <span class="ub-key np2-hide-s" title="So you can see what Helm added to your words"><i>your words</i><i><mark>Helm added</mark></i></span>
+      </div>
+      <div class="ub-grid">
+        <div>
+          <div class="ub-f"><span class="lbl">Title</span><span class="ttl">HelpDesk AI: email support with <mark>approved</mark> AI replies</span><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f"><span class="lbl">Problem</span><span><mark>Replies are slow and uneven; staff retype answers they already wrote.</mark></span><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f"><span class="lbl">Who uses it</span><span>Support staff (Google sign-in) · the team lead · customers <mark>by email only</mark></span><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f s-look"><span class="lbl">Out of scope</span><span>Live chat · phone · <mark>a customer portal</mark></span><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f s-fix"><span class="lbl">Out of scope</span><span>Live chat · phone · <mark>a customer portal</mark></span><i class="ph ph-pencil-simple ed"></i></div>
+        </div>
+        <div>
+          <div class="ub-f s-look"><span class="lbl">Must-haves</span>
+            <ul><li>An email to support@ becomes a ticket</li><li>AI drafts a reply from past answers</li><li>Staff edit and approve; <mark>nothing sends without approval</mark></li><li>4-hour first-reply SLA, <mark>flagged when at risk</mark></li><li>Tag tickets by product</li><li>Daily summary to the lead</li></ul><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f s-fix" data-on><span class="lbl">Must-haves</span>
+            <ul style="list-style:none;padding-left:0"><li><i class="ph ph-dots-six-vertical faint"></i> An email to support@ becomes a ticket</li><li><i class="ph ph-dots-six-vertical faint"></i> AI drafts a reply from past answers</li><li><i class="ph ph-dots-six-vertical faint"></i> Staff edit and approve; nothing sends without approval</li>
+              <li><div class="ub-in"><i class="ph ph-dots-six-vertical faint"></i>SLA per product (default 4 h), flagged at 75%<span class="caret"></span><span class="wf-spacer"></span><i class="ph ph-trash faint"></i></div></li>
+              <li><i class="ph ph-dots-six-vertical faint"></i> Tag tickets by product</li><li><i class="ph ph-dots-six-vertical faint"></i> Daily summary to the lead</li><li class="faint"><i class="ph ph-plus"></i> add a must-have</li></ul><i class="ph ph-check ed" style="color:var(--green)"></i></div>
+          <div class="ub-f"><span class="lbl">Done when</span><span><mark>An email reaches the inbox as a ticket within a minute, with a draft; it sends only after a person approves; an SLA breach is flagged.</mark></span><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f" data-q><span class="lbl">Open · 2</span>
+            <div class="ub-q"><span>Which mailbox does support@ live in?</span><div class="sugs"><span class="sug">Google Workspace</span><span class="sug">Microsoft 365</span><span class="sug">Other…</span></div>
+              <span>Daily summary by email or Slack?</span><div class="sugs"><span class="sug">Email</span><span class="sug">Slack</span><span class="sug" title="Helm decides during the PRD">Leave to PRD</span></div></div><i class="ph ph-pencil-simple ed"></i></div>
+        </div>
+      </div>
+      <div class="ub-act">
+        <span class="btn s-look" data-kind="ok" title="Confirms the brief (Create and start also confirms it)"><i class="ph-bold ph-check"></i>Looks right</span>
+        <span class="btn s-look" title="Every line becomes editable in place"><i class="ph ph-pencil-simple"></i>Fix it</span>
+        <span class="btn s-fix" data-kind="ok"><i class="ph-bold ph-check"></i>Save brief</span>
+        <span class="btn s-fix" data-kind="ghost">Cancel</span>
+        <span class="ub-hint s-look" title="Tell Helm how to rewrite it, then ↻"><i class="ph ph-magic-wand"></i>Hint for a rewrite, e.g. “shorter”, “split into phases”</span>
+        <span class="ub-hint s-fix" data-filled><i class="ph ph-magic-wand"></i>make the SLA configurable per product<span class="caret"></span></span>
+        <span class="btn" data-size="s" title="Helm rewrites the whole brief from your words + the hint"><i class="ph ph-arrows-clockwise"></i>Rewrite <span class="pin" style="margin-left:2px">3</span></span>
+      </div>
+    </div>
+
+    <!-- ── HERE'S WHAT I FOUND (existing repo) ───────────────────────── -->
+    <div class="ub m-repo" title="Helm's summary of the repo, and what onboarding will do with it">
+      <div class="ub-h">
+        <span class="face" data-a="helm_live" data-size="m"></span>
+        <div><b>Repo summary</b> <span class="pin">2</span><small>From <span class="mono">helpdesk-ai-demo</span> so far · 118 / 214 files · fills as Helm reads</small></div>
+        <span class="wf-spacer"></span><span class="tag" data-tone="blue"><span class="dot" data-s="run"></span>reading</span>
+      </div>
+      <div class="ub-grid">
+        <div>
+          <div class="ub-f"><span class="lbl">What it is</span><span class="ttl">A helpdesk: email → ticket → AI-drafted reply → staff approve</span><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f"><span class="lbl">Main parts</span><div class="ub-files"><span><i class="ph ph-folder"></i>api/tickets <em>38 files</em></span><span><i class="ph ph-folder"></i>api/replies <em>21 · calls GPT</em></span><span><i class="ph ph-folder"></i>web/src/inbox <em>44 · React</em></span><span><i class="ph ph-folder"></i>api/auth <em>Google OAuth</em></span></div><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f"><span class="lbl">Health</span><span><span class="tag" data-tone="green">86 tests</span> <span class="tag" data-tone="amber">2 fail on main</span> <span class="tag">no staging yet</span></span><i></i></div>
+        </div>
+        <div>
+          <div class="ub-f"><span class="lbl">Onboarding will</span>
+            <ol class="ub-steps"><li><span>Map the code into the knowledge graph</span></li><li><span>Run <span class="mono">make setup</span> and <span class="mono">make test</span>; explain the 2 failures</span></li><li><span>List the business rules it finds (SLA, routing)</span></li><li><span>Propose a first backlog (≈ 5 items) for you to accept</span></li><li><span>Set up staging on boss-1 · :8005</span></li></ol><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f"><span class="lbl">Your note</span><span class="faint">Optional: add lines under the repo, e.g. “start with the SLA bugs”</span><i class="ph ph-pencil-simple ed"></i></div>
+        </div>
+      </div>
+      <div class="ub-act">
+        <span class="btn" data-kind="ok"><i class="ph-bold ph-check"></i>Looks right</span>
+        <span class="btn"><i class="ph ph-pencil-simple"></i>Fix it</span>
+        <span class="faint" style="font-size:.54rem">Nothing is changed in the repo until you approve a PR.</span>
+      </div>
+    </div>
+
+    <!-- ── WHAT BOSS WILL DO ─────────────────────────────────────────── -->
+    <div class="np2-sum">
+      <div class="np2-sum-h">
+        <span class="face m-idea" data-a="helm" data-size="m"></span><span class="face m-repo" data-a="helm_live" data-size="m"></span>
+        <div><b>What BOSS will do</b> <span class="pin">4</span><div class="faint m-idea" style="font-size:.56rem">Picked from the brief · click any box to change it</div>
+          <div class="faint m-repo" style="font-size:.56rem">Helm is reading <span class="mono">helpdesk-ai-demo</span> · 118 / 214 files</div></div>
+        <span class="wf-spacer"></span>
+        <span class="tag m-repo" data-tone="blue"><span class="dot" data-s="run"></span>live</span>
+        <span class="pin np2-hide-s">5</span><span class="np2-ready np2-hide-s" title="Readiness: what this install needs before it can start"><span><i></i>Model</span><span><i></i>GitHub</span><span><i></i>Budget</span><span><i></i>Host</span></span>
+      </div>
+
+      <div class="np2-flow">
+        <div class="np2-node" title="Who takes the project over · change captain or crew">
+          <span class="lbl">Captain<i class="ph ph-caret-down"></i></span>
+          <div class="row"><span class="face" data-a="helm" data-size="s"></span><span class="v">Helm</span></div>
+          <span class="faces"><span class="face" data-a="juno" data-size="s"></span><span class="face" data-a="forge" data-size="s"></span><span class="face" data-a="vera" data-size="s"></span><span class="face" data-a="beacon" data-size="s"></span></span>
+        </div>
+        <div class="np2-node m-idea" title="BOSS picks the stack from the brief · change it">
+          <span class="lbl">Stack<span class="auto">AUTO</span><i class="ph ph-caret-down"></i></span>
+          <span class="v">FastAPI + React</span><span class="s">Python 3.11 · Postgres</span>
+        </div>
+        <div class="np2-node m-repo" data-t="live" title="Read from the repo">
+          <span class="lbl">Stack<span class="auto">FOUND</span><i class="ph ph-caret-down"></i></span>
+          <span class="v">FastAPI + React</span><span class="s">make setup · make test</span>
+        </div>
+        <div class="np2-node" title="Connectors suggested from the sentence (or found in the repo) · add or drop">
+          <span class="lbl">Connectors<i class="ph ph-caret-down"></i></span>
+          <div class="np2-cx m-idea"><span data-on><i class="ph ph-google-logo"></i>Google login</span><span data-on><i class="ph ph-envelope-simple"></i>Email · Resend</span><span data-add>+ 4</span></div>
+          <div class="np2-cx m-repo"><span data-on title="Already in the app"><i class="ph ph-google-logo"></i>in app</span><span data-add>+ add</span></div>
+        </div>
+        <div class="np2-node" data-t="you" title="The workflow it runs · change it">
+          <span class="lbl">Workflow<span class="auto m-idea">AUTO</span><i class="ph ph-caret-down"></i></span>
+          <span class="v m-idea">Standard</span><span class="s m-idea">15 steps · <b style="color:var(--amber)">4 you approve</b></span>
+          <span class="v m-repo">Onboard → Minor</span><span class="s m-repo">then 6 steps · <b style="color:var(--amber)">2 you approve</b></span>
+        </div>
+        <div class="np2-node" title="Where the code lives · one repo or several">
+          <span class="lbl">Code<i class="ph ph-caret-down"></i></span>
+          <span class="v m-idea mono" style="font-size:.6rem">paramg/helpdesk-ai</span><span class="s m-idea">new repo · 1 PR</span>
+          <span class="v m-repo mono" style="font-size:.6rem">helpdesk-ai-demo</span><span class="s m-repo">its branch · PRs</span>
+        </div>
+        <div class="np2-node" title="Staging target suggested from your hosts · change it">
+          <span class="lbl">Staging<i class="ph ph-caret-down"></i></span>
+          <span class="v">boss-1 · :8005</span><span class="s">suggested · free port</span>
+        </div>
+      </div>
+
+      <div class="np2-strip m-idea" title="Standard: every step; amber = you approve">
+        <span class="lbl">Steps</span>
+        <div class="st" data-strip="15" data-you="3,11,14,15"></div>
+        <span class="st-legend"><span><span class="st-n" style="width:12px;height:12px"></span>agents</span><span><span class="st-n" data-s="you" style="width:12px;height:12px"></span>you approve: PRD · PR · demo · prod</span></span>
+      </div>
+      <div class="np2-strip m-repo" title="Onboarding, then the first work runs on Minor feature">
+        <span class="lbl">Then</span>
+        <div class="fl" style="padding:0">
+          <span class="fl-n" data-t="run">Discover</span><span class="fl-w"></span><span class="fl-n">Ready for work</span><span class="fl-w"></span><span class="fl-n">Backlog</span><span class="fl-w"></span><span class="fl-n" data-t="you">You accept</span>
+        </div>
+      </div>
+
+      <div class="np2-row">
+        <span class="np2-chip" title="Prefilled from the sentence · edit inline"><i class="ph ph-pencil-simple"></i>Name <b class="m-idea">HelpDesk AI</b><b class="m-repo">HelpDesk AI Demo</b></span>
+        <span class="np2-chip" title="Who hears when it needs you or finishes"><i class="ph ph-bell-ringing"></i>Tell <b>you · email</b></span>
+        <span class="np2-chip" data-dashed title="Who it's for · done when · read first · talks to"><i class="ph ph-plus"></i>More detail</span>
+        <span class="np2-chip m-repo" title="Also find the business rules in its code (Knowledge Graph)"><i class="ph ph-check-square"></i>Map business rules</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="np2-foot">
+    <span class="tag" data-tone="cost" title="Builds like this cost (history)" ><span class="m-idea">≈ $4–7 · ≈ 35 min to PR</span><span class="m-repo">≈ $1 · ≈ 5 min to ready</span></span>
+    <span class="faint np2-hide-s" style="font-size:.56rem"><i class="ph ph-shield-check"></i> Nothing reaches prod without you</span>
+    <span class="wf-spacer"></span>
+    <a class="faint np2-hide-s" style="font-size:.58rem" title="Talk it through first: a PRD meeting, then the build"><i class="ph ph-chats-circle"></i> Plan with an agent first</a>
+    <a class="faint np2-hide-s" style="font-size:.58rem" title="Blank project · Knowledge-graph project · Presets"><i class="ph ph-dots-three"></i> More ways</a>
+    <span class="btn" data-kind="primary" title="Creates the project and starts it with the brief above (confirming it) — the only button"><i class="ph ph-rocket-launch"></i>Create and start <span class="pin" style="margin-left:4px">6</span><span class="np2-kbd">⌘↵</span></span>
+  </div>
+<div class="notes" style="margin:0 18px 16px">
+<b>Design notes — one screen, one button (v3: multi-line input + Helm’s understanding)</b><ol class="np2-n">
+  <li><b>1</b> One <b>multi-line</b> input: starts at 5 lines, grows to 12, then scrolls; ⤢ opens a full-screen editor; ⇧↵ is a new line, ⌘↵ is Create and start. Detection is unchanged: several lines or a sentence → new app; <span class="mono">owner/repo</span>, a GitHub URL → existing repo (extra lines below it become a note to Helm); <span class="mono">/path</span> → folder. The kind pill still forces another reading.</li>
+  <li><b>2</b> <b>Project brief</b> (from an idea) or <b>Repo summary</b> (from a repo): Helm rewrites the words into a brief (title · problem · who uses it · 3–6 must-haves · out of scope · done when · open questions with quick answers). Helm’s additions are dotted-underlined so you see what it inferred vs what you said. For a repo, the card summarises what Helm found and lists what onboarding will do.</li>
+  <li><b>3</b> Confirm or correct: <b>Looks right</b> confirms; <b>Fix it</b> makes every line editable in place (?mode=fix); a hint + <b>Rewrite</b> asks Helm for a new version (“shorter”, “split into phases”). Editing your own words above re-runs the rewrite and keeps your manual edits pinned.</li>
+  <li><b>4</b> What BOSS will do is unchanged (six boxes, step strip), now picked from the brief rather than the raw sentence.</li>
+  <li><b>5</b> Models and the GitHub account stay global and read-only (readiness dots, account chip).</li>
+  <li><b>6</b> One primary, <b>Create and start</b> (⌘↵), which starts with the brief as shown and so also confirms it: still 2 clicks; 3 if you press Looks right first. The confirmed brief becomes the PRD’s first draft. Open questions left unanswered go to the PRD meeting.</li>
+</ol></div>
+</div>
+</div>
+
+<script>
+  document.querySelectorAll("[data-strip]").forEach((el) => {
+    const n = +el.dataset.strip, you = (el.dataset.you || "").split(",").map(Number);
+    const L = ["Research","Panel","PRD","Design","Plan","Build","Unit tests","Review","Security","Fix","Pull request","Staging","Smoke","Demo","Prod"];
+    let h = "";
+    for (let i = 1; i <= n; i++) {
+      const y = you.includes(i);
+      h += (i > 1 ? '<span class="st-w"></span>' : "") + `<span class="st-n"${y ? ' data-s="you"' : ""} title="${L[i-1] || "Step " + i}${y ? " · you approve" : ""}">${y ? "✋" : i}</span>`;
+    }
+    el.innerHTML = h;
+  });
+</script>
+<script src="../shell.js"></script>
+<script src="np2-nav.js"></script>
+</body></html>

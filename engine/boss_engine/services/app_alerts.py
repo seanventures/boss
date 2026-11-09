@@ -115,6 +115,41 @@ BUILTIN: dict[str, dict[str, Any]] = {
         "unit": "", "params": {},
     },
 }
+_NAME_NOISE = frozenset({"helpdesk", "app", "boss", "alert"})
+
+
+def rule_name_words(name: Any, limit: int = 4) -> str:
+    """A rule's identifier in words: `TicketsApi5xx` → "Tickets api 5xx", `error_rate_high` →
+    "Error rate high" (≤ `limit` words). Never the raw CamelCase or snake_case name."""
+    import re as _re
+
+    raw = str(name or "").strip()
+    if not raw:
+        return "Alert"
+    spaced = raw.replace("_", " ").replace("-", " ")
+    spaced = _re.sub(r"(?<=[a-z])(?=[A-Z0-9])|(?<=[0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ",
+                     spaced)
+    parts = [p for p in spaced.split() if p.lower() not in _NAME_NOISE] or spaced.split()
+    text_ = " ".join(parts[:limit]).lower()
+    return text_[:1].upper() + text_[1:]
+
+
+def rule_label(kind: Any, alert: Any, summary: Any = None) -> str:
+    """THE NAME of a rule or of an alert it fired, on every surface (Observability's rules and
+    history, the project's Health card and parity component, incident drivers): the built-in
+    rule's label ("Error rate"); else its own summary when that is a short name ("5xx on
+    /api/tickets", ≤ 5 words, not a sentence); else its identifier in words ("Host disk
+    filling") — never `HostDiskFilling`."""
+    b = BUILTIN.get(str(kind or ""), {})
+    if b.get("label"):
+        return str(b["label"])
+    said = " ".join(str(summary or "").split())
+    if said and len(said.split()) <= 5 and not said.endswith((".", "!", "?")) \
+            and "(" not in said:
+        return said
+    return rule_name_words(alert)
+
+
 #: Which parameters a person may set, with their bounds (the edit sheet and the yaml).
 PARAM_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "error_rate": {"threshold": (0.1, 100.0), "window_minutes": (1, 1440),
@@ -1426,6 +1461,14 @@ def _group(connection, target: dict, now: datetime, rules_by_id: dict[str, dict]
                 "                  ELSE lifecycle END, "
                 " acked_by = CASE WHEN status IN ('resolved', 'dismissed') THEN NULL "
                 "                 ELSE acked_by END, "
+                # A NEW OCCURRENCE starts its own clock: the last one's acked/mitigated/
+                # resolved times live on in its archived occurrence, never on this one.
+                " acked_at = CASE WHEN status IN ('resolved', 'dismissed') THEN NULL "
+                "                 ELSE acked_at END, "
+                " mitigated_at = CASE WHEN status IN ('resolved', 'dismissed') THEN NULL "
+                "                     ELSE mitigated_at END, "
+                " resolved_at = CASE WHEN status IN ('resolved', 'dismissed') THEN NULL "
+                "                    ELSE resolved_at END, "
                 " first_seen = CASE WHEN status IN ('resolved', 'dismissed') THEN :now "
                 "                   ELSE first_seen END WHERE id = :id"),
                 {"id": inc_id, "now": now, "title": title, "alerted": alerted})
@@ -1540,11 +1583,78 @@ def _incident_title(target: dict, a: dict, window: Optional[dict] = None,
             f"{ann.get('summary') or a['alertname']}{val}")[:200]
 
 
+#: A rule state that says nothing either way: too few requests to judge, or no data at all.
+QUIET_STATES = ("too_little", "no_data")
+#: QUIET HOLD (HelpDesk AI 2026-11-07, "Recovered at 07:37; the incident is still open" for
+#: hours): a rule that went quiet after its alerts cleared holds the incident, because quiet is
+#: not recovery — but only for this long. A staging app nobody calls can read quiet forever, and
+#: an incident nobody works must not stay open on that. After the hold, with no breach since,
+#: no response running and no squad on it, the monitor closes it and says why; a new breach
+#: opens it again.
+QUIET_HOLD = timedelta(minutes=30)
+
+
+def _rules_behind(connection, incident_id: str) -> list[dict[str, Any]]:
+    return [dict(r) for r in connection.execute(sql(
+        "SELECT DISTINCT r.id, r.subject_id, r.last_state, r.last_eval_at, r.enabled "
+        "FROM app_alerts a JOIN app_alert_rules r ON r.id = a.rule_id OR (a.rule_id IS NULL "
+        " AND r.subject_id = a.subject_id AND r.kind = a.rule_kind) "
+        "WHERE a.incident_id = :i AND a.source_kind = 'rule'"), {"i": incident_id}).mappings().all()]
+
+
+def _last_cleared(connection, incident_id: str) -> Optional[datetime]:
+    return connection.execute(sql(
+        "SELECT max(cleared_at) FROM app_alerts WHERE incident_id = :i"), {"i": incident_id}).scalar()
+
+
+def why_open(connection, project_id: str, incident_id: str, *,
+             now: Optional[datetime] = None) -> Optional[dict[str, Any]]:
+    """WHY AN INCIDENT WITH NOTHING FIRING IS STILL OPEN, and who must act — the one answer the
+    monitor closes by and every card says (app_alerts_view.incident_states). None while an alert
+    in it fires or is pending. {key, word, who, closes_at}:
+
+    * response — a response run still has it; it closes by its own verification
+    * squad    — the incident squad works it; its recovery check closes it
+    * reported — reported, not raised by BOSS's monitor: a person closes it
+    * quiet    — a rule reads quiet (too little traffic, no data): BOSS closes it on its own at
+                 `closes_at` (QUIET_HOLD after the last alert cleared) unless it fires again
+    * next     — every rule reads OK: the next evaluation closes it"""
+    from . import incident_response
+
+    now = now or _now()
+    if connection.execute(sql(
+            "SELECT 1 FROM app_alerts WHERE incident_id = :i AND state IN ('pending', 'firing') "
+            "AND inhibited_by IS NULL LIMIT 1"), {"i": incident_id}).first():
+        return None
+    run = incident_response._response_in_flight(connection, project_id, incident_id)
+    if run:
+        return {"key": "response", "who": "boss", "closes_at": None,
+                "word": "a response is still running; it closes the incident once its fix "
+                        "is verified"}
+    if incident_response.squad_working(connection, incident_id):
+        return {"key": "squad", "who": "squad", "closes_at": None,
+                "word": "the SRE squad still has it; it closes when its recovery check passes"}
+    ctx = _json(connection.execute(sql("SELECT finalize_ctx FROM incidents WHERE id = :i"),
+                                   {"i": incident_id}).scalar(), {}) or {}
+    behind = _rules_behind(connection, incident_id)
+    if ctx.get("alert") in (None, {}) or not behind:
+        return {"key": "reported", "who": "person", "closes_at": None,
+                "word": "BOSS's monitor did not raise it, so a person closes it"}
+    if any(r["enabled"] and r["last_state"] in QUIET_STATES for r in behind):
+        until = (_last_cleared(connection, incident_id) or now) + QUIET_HOLD
+        return {"key": "quiet", "who": "boss", "closes_at": _iso(until),
+                "word": "too little traffic to confirm it; it closes on its own unless it "
+                        "fires again"}
+    return {"key": "next", "who": "boss", "closes_at": None,
+            "word": "its rules read OK; the next check closes it"}
+
+
 def _maybe_resolve_incidents(connection, target: dict, now: datetime) -> list[dict[str, Any]]:
     """An incident the monitor raised resolves when none of its alerts is open any more and
     every rule behind them now reads OK on enough traffic. Quiet is not recovery: a rule that
-    went silent (too little traffic, no data) HOLDS the incident until it reads OK. And a
-    running response closes its incident by its own verification, never the monitor."""
+    went silent (too little traffic, no data) HOLDS the incident until it reads OK — for
+    QUIET_HOLD at most, then it closes saying why. And a running response or a working squad
+    closes its incident by its own verification, never the monitor."""
     from . import incident_response
 
     out = []
@@ -1560,27 +1670,38 @@ def _maybe_resolve_incidents(connection, target: dict, now: datetime) -> list[di
             "AND state IN ('pending', 'firing') AND inhibited_by IS NULL"), {"i": inc_id}).scalar()
         if still:
             continue
-        behind = connection.execute(sql(
-            "SELECT DISTINCT r.id, r.subject_id, r.last_state, r.last_eval_at, r.enabled "
-            "FROM app_alerts a JOIN app_alert_rules r ON r.id = a.rule_id OR (a.rule_id IS NULL "
-            " AND r.subject_id = a.subject_id AND r.kind = a.rule_kind) "
-            "WHERE a.incident_id = :i AND a.source_kind = 'rule'"), {"i": inc_id}).mappings().all()
+        behind = _rules_behind(connection, inc_id)
         mirrored = connection.execute(sql(
             "SELECT count(*) FROM app_alerts WHERE incident_id = :i AND source_kind = 'external'"),
             {"i": inc_id}).scalar()
         if not behind and not mirrored:
             continue
-        if behind and not all(
-                (not r["enabled"]) or (r["last_state"] == "ok" and (
-                    r["subject_id"] != target["id"] or r["last_eval_at"] == now))
-                for r in behind):
-            continue
+
+        def reads(r: dict, states: tuple[str, ...]) -> bool:
+            return (not r["enabled"]) or (r["last_state"] in states and (
+                r["subject_id"] != target["id"] or r["last_eval_at"] == now))
+
+        quiet = False
+        if behind and not all(reads(r, ("ok",)) for r in behind):
+            # QUIET HOLD over: every rule reads OK or quiet, and QUIET_HOLD has passed since
+            # the last alert cleared with no breach. Closed below, unless someone works it.
+            cleared = _last_cleared(connection, inc_id)
+            if not (all(reads(r, ("ok",) + QUIET_STATES) for r in behind)
+                    and cleared is not None and now - cleared >= QUIET_HOLD):
+                continue
+            quiet = True
         inc = connection.execute(sql("SELECT id, finalize_ctx FROM incidents WHERE id = :i"),
                                  {"i": inc_id}).mappings().first()
         ctx = _json(inc["finalize_ctx"], {}) or {}
         if ctx.get("alert") in (None, {}):
             continue        # reported only: the monitor never closes what it did not raise
         if incident_response._response_in_flight(connection, target["project_id"], inc_id):
+            continue
+        if incident_response.squad_working(connection, inc_id):
+            # An incident squad owns it: the squad closes it by its own recovery check, once
+            # its mitigation is live. An alert that clears in a quiet window while the bad
+            # release still serves is not recovery (HelpDesk AI 2026-11-07: resolved 13:38,
+            # the rollback went live 13:39).
             continue
         connection.execute(sql(
             "UPDATE incidents SET status = 'resolved', lifecycle = 'resolved', "
@@ -1592,6 +1713,13 @@ def _maybe_resolve_incidents(connection, target: dict, now: datetime) -> list[di
                                                  "word": "Every alert in it resolved"}, at=now)
             out.append({"incident_id": inc_id, "action": "resolved", "event_id": None})
             continue
+        if quiet:
+            minutes = int(QUIET_HOLD.total_seconds() // 60)
+            incident_response._evidence(connection, inc_id, "note", ref="quiet_hold", payload={
+                "text": f"Closed by BOSS's monitor: no breach for {minutes} min after every "
+                        "alert in it cleared, too little traffic to read OK, and no squad or "
+                        "response working it. A new breach opens it again.",
+                "quiet_hold_min": minutes}, at=now)
         rule = connection.execute(sql(
             "SELECT r.* FROM app_alerts a JOIN app_alert_rules r ON r.id = a.rule_id "
             "WHERE a.incident_id = :i ORDER BY a.cleared_at DESC NULLS LAST LIMIT 1"),
@@ -2352,7 +2480,7 @@ def _respond(connection, alert: dict, incident_id: Optional[str],
                     "repository": deploy.get("repository"), "title": title,
                     "directive": f"Respond to the incident: {title}."},
         dedupe_key=f"alert:{alert['id']}:respond", door="alert_rule", door_id=rule["id"],
-        door_name=f"Respond automatically on {rule['alert']}")
+        door_name=f"Respond automatically on {rule_label(rule.get('kind'), rule['alert'])}")
     if got.get("run_id"):
         return {"run_id": got["run_id"], "word": "Responding"}
     return {"run_id": None, "word": got.get("word") or "Could not start the response"}
@@ -2489,7 +2617,8 @@ def auto_responding(connection, target_id: Optional[str]) -> list[dict[str, Any]
     out = []
     for r in map(_rule_dict, rows):
         out.append({"rule_id": r["id"], "kind": r["kind"], "alert": r["alert"],
-                    "label": BUILTIN.get(r["kind"], {}).get("label") or r["alert"],
+                    "label": rule_label(r["kind"], r["alert"],
+                                        (r.get("annotations") or {}).get("summary")),
                     "on_behalf_of": (r.get("respond_link") or {}).get("on_behalf_of")})
     return out
 
@@ -2649,7 +2778,11 @@ def update_rule(connection, target: dict, rule_id: Optional[str], change: dict[s
         raise RuleRefused("Respond automatically needs the agent's triage on")
     link = rule.get("respond_link")
     if new.get("auto_respond") and not rule.get("auto_respond"):
-        link = respond_link(connection, target["project_id"], new["alert"]) or None
+        # The consent sheet names the rule as people read it ("Error rate"), never its id
+        # (`AppErrorRate`, X-73): rule_label, the one name every surface shows.
+        ann = new.get("annotations") if isinstance(new.get("annotations"), dict) else {}
+        link = respond_link(connection, target["project_id"],
+                            rule_label(new.get("kind"), new["alert"], ann.get("summary"))) or None
     if not new.get("auto_respond"):
         link = None
     after = _snapshot(new)

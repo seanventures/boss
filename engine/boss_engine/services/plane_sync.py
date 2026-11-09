@@ -31,6 +31,12 @@ _EVENT_STATE: dict[str, Optional[str]] = {
 }
 
 
+
+def _title(run) -> str:
+    """The build a Plane card is about, by its short title (never its id)."""
+    first = (str(run.get("title") or "").splitlines() or [""])[0].strip()
+    return (first[:59].rstrip() + "…") if len(first) > 60 else (first or "its build")
+
 def comment_for(event_type: str, run: dict[str, Any]) -> Optional[str]:
     """The human-readable Plane comment for a lifecycle event (or None to skip commenting)."""
     fc = run.get("finalize_ctx") or {}
@@ -118,7 +124,7 @@ def _recorded_effect(
                         )
                         create_blocking_decision(
                             reconcile_connection, project_id, run.get("task_id"),
-                            f"Reconcile uncertain Plane {operation} for code task {run['id']}",
+                            f"Check whether Plane {operation} finished for “{_title(run)}”",
                             {
                                 "action": "review_plane_sync_uncertain", "receipt_id": receipt_id,
                                 "run_id": run["id"], "event": event_type,
@@ -164,7 +170,7 @@ def _recorded_effect(
                 )
                 create_blocking_decision(
                     outcome_connection, project_id, run.get("task_id"),
-                    f"Reconcile Plane {operation} for code task {run['id']}",
+                    f"Plane {operation} failed for “{_title(run)}”: retry or skip it",
                     {
                         "action": "review_plane_sync_failure", "receipt_id": receipt_id,
                         "run_id": run["id"], "event": event_type,

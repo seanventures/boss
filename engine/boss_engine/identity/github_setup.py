@@ -309,6 +309,29 @@ def complete_install(*, installation_id: str, state: Optional[str], org_id: str,
     return select_installation(installation_id=installation_id, org_id=org_id, db=db, by=person)
 
 
+#: A state GitHub carried back that no longer opens the install path: signed for another
+#: moment, already used, or expired. On GitHub's own return (a repository-access change at
+#: github.com/settings/installations) that is not a failure — the change is already saved on
+#: GitHub — so the callback confirms it through the signed-in session and the App's API instead.
+STALE_STATE_CODES = frozenset({"bad_state", "state_expired", "state_replayed"})
+
+
+def confirm_installation(*, installation_id: str, org_id: str, db: Any) -> Optional[str]:
+    """GitHub sent a signed-in person back with an installation id and no usable state: ask the
+    App's own API whether that id is one of ITS installations (the query alone proves nothing).
+    Nothing is stored: a redirect never swaps the installation builds use. Returns the account
+    the installation is on, or None when no Setup-created App is here to ask. Raises
+    GitHubSetupError `not_this_apps_installation` when the App's API does not know the id."""
+    cfg = app_config(db, org_id)
+    installation_id = str(installation_id or "").strip()
+    if cfg.get("source") != "setup" or not cfg.get("app_id") or not installation_id.isdigit():
+        return None
+    resp = github_app._call("GET", f"/app/installations/{installation_id}", token=github_app.app_jwt(db))  # noqa: SLF001
+    if resp.status != 200:
+        raise GitHubSetupError("not_this_apps_installation", 403)
+    return ((resp.json() or {}).get("account") or {}).get("login")
+
+
 def installations(*, db: Any, org_id: str) -> list[dict[str, Any]]:
     if not app_config(db, org_id)["app_id"]:
         raise GitHubSetupError("app_not_configured", 409)
@@ -668,7 +691,9 @@ def _registered_repos(db: Any) -> list[str]:
     point = nested() if callable(nested) else None
     try:
         rows = db.execute(_sql("SELECT DISTINCT lower(full_name) AS r FROM github_repository_bindings "
-                               "WHERE status = 'active' AND full_name LIKE '%/%' ORDER BY 1")).scalars().all()
+                               "WHERE status = 'active' AND full_name LIKE '%/%' "
+                               # A repository on this machine is not the GitHub App's (BOSSAPP-918).
+                               "AND full_name NOT LIKE 'local\\_%' ORDER BY 1")).scalars().all()
     except Exception:  # noqa: BLE001 — an older schema: nothing registered
         if point is not None:
             point.rollback()

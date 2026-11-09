@@ -21,6 +21,8 @@ const p = (permission: Permission): AreaAccess => ({ permission });
 
 export const AREA_ACCESS: Readonly<Record<AreaId, AreaAccess>> = {
   overview: p("project:read"),
+  projects: p("project:read"),
+  project: p("project:read"),
   code_tasks: p("code_task:read"),
   delivery_workflows: p("workflow:read"),
   workforce: p("agent:read"),

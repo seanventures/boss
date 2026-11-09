@@ -5,20 +5,29 @@ import React, { useEffect, useRef, useState } from "react";
 import { GatedButton } from "../components/gated";
 import { consoleHref } from "./console-href";
 import { useDetailsDismiss } from "../lib/details-dismiss";
-import { EMPTY_DRAFT, NewProjectSheet, type NewProjectDraft } from "./new-project-sheet";
-import { StartProjectSheet } from "./start-project/start-sheet";
-import { NEW_PROJECT_PARAM, clearStepParam, projectPageHref, stepFromParam, type StartStep } from "../lib/start-project";
+import { StartProjectHost } from "./start-project/start-host";
+import { NEW_PROJECT_PARAM, stepFromParam, type StartStep } from "../lib/start-project";
 import { ArchiveDialog, ArchivedNotice, ArchivedProjects, useArchived } from "./project-archive";
+import { DeleteProjectDialog } from "./project-delete";
 import type { ProjectType } from "@boss/api-client";
 
 export type ProjectMenuItem = { id: string; name: string; type?: ProjectType };
 
 /** Where a project opens: the org's own project is the console with no ?project_id=. */
-export function projectHref(id: string, homeId: string): string {
+export function projectHref(id: string, homeId: string, search?: string): string {
   // The AREA STAYS (tester round 2: switching project on the Knowledge Graph landed on the Command
   // Center); what names one project's records (a node, a scan, a build) does not.
   return consoleHref({ project_id: id === homeId ? undefined : id, task: undefined, run: undefined,
-                       kg_node: undefined, kg_scan: undefined, kg_tab: undefined, kg_sub: undefined, build: undefined, role: undefined });
+                       kg_node: undefined, kg_scan: undefined, kg_tab: undefined, kg_sub: undefined, build: undefined, role: undefined }, search);
+}
+
+/** The query string a rendered href may use: none until mounted, so the browser's first render
+ *  matches the server's (which has no window) — React does not patch a mismatched href, and
+ *  warned on every page. After mount, the page's own query (the area stays). */
+export function useMountedSearch(): string | undefined {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  return mounted ? undefined : "";
 }
 
 /** Where a new knowledge-graph project opens: its Knowledge Graph setup (kg-setup.tsx). */
@@ -39,6 +48,8 @@ const NEW_PROJECT_TIP =
   "A new project in this organization: its own agents, skills, budget, settings and work, set up like the first one";
 const ARCHIVE_TIP = "Hide this project and pause its schedules, monitors and indexing. Nothing is deleted";
 const HOME_TIP = "The home project can't be archived: BOSS's own agent and the worker's schedules live there";
+const DELETE_TIP = "Delete this project and everything BOSS holds for it. The GitHub repository stays";
+const HOME_DELETE_TIP = "The home project can't be deleted: BOSS's own agent and the worker's schedules live there";
 
 /**
  * THE PROJECT MENU, in the top bar beside the organization: which project is open, the org's
@@ -75,15 +86,14 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
   }, []);
-  const closeStart = () => { setStep(null); clearStepParam(); };
-  // The draft is the menu's, not the sheet's form: a passkey prompt or a refused step-up keeps it.
-  const [draft, setDraft] = useState<NewProjectDraft>(EMPTY_DRAFT);
   const [archiving, setArchiving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const active = projects.find((p) => p.id === activeId);
   // Not in the list: it may be archived. Asked once per project; never for a listed one.
   const archived = useArchived(active ? undefined : activeId);
   const isHome = activeId === homeId;
+  const search = useMountedSearch();
   const goHome = () => window.location.assign(projectHref(homeId, homeId));
   const openProject = (id: string) => window.location.assign(projectHref(id, homeId));
   // A menu closes when it has done its job or the person looks away (KG tester round 2: it stayed
@@ -106,7 +116,7 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
             <li key={p.id}>
               {/* A real load (data-console-load): the home project's link names no project, so the
                   shell could not tell it from an in-console reveal of the project on screen. */}
-              <a href={projectHref(p.id, homeId)} aria-current={p.id === activeId ? "page" : undefined}
+              <a href={projectHref(p.id, homeId, search)} aria-current={p.id === activeId ? "page" : undefined}
                  data-testid={`project-menu-${p.id}`} data-console-load=""
                  onClick={(e) => {
                    // Read the URL at the press, not at render: a server-rendered href has no query
@@ -135,6 +145,17 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
             Archive project…
           </GatedButton>
         )) : null}
+        {active ? (isHome ? (
+          <button type="button" className="bx-project-menu-new bx-project-menu-archive bx-project-menu-delete" aria-disabled="true"
+                  title={HOME_DELETE_TIP} data-testid="delete-project" onClick={(event) => event.preventDefault()}>
+            Delete project…<span className="sr-only">{HOME_DELETE_TIP}</span>
+          </button>
+        ) : (
+          <GatedButton permission="project:delete" className="bx-project-menu-new bx-project-menu-archive bx-project-menu-delete"
+                       title={DELETE_TIP} data-testid="delete-project" onClick={() => { close(); setDeleting(true); }}>
+            Delete project…
+          </GatedButton>
+        )) : null}
         <button type="button" className="bx-project-menu-new bx-project-menu-toggle" aria-expanded={showArchived}
                 aria-controls="boss-archived-projects" data-testid="show-archived"
                 title="Projects that were archived: hidden from this list, restorable"
@@ -148,17 +169,10 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
         ) : null}
       </div>
     </details>
-    {step === "form" ? (
-      <NewProjectSheet draft={draft} onDraft={setDraft} onClose={closeStart} onBack={() => setStep("idea")}
-                       onCreated={(id, type) => {
-                         setDraft(EMPTY_DRAFT);
-                         clearStepParam();
-                         // A knowledge-graph project opens on its setup: import, team, first scan.
-                         // An app opens on its page: "What should we build?", the description ready.
-                         window.location.assign(type === "knowledge_graph" ? knowledgeSetupHref(id, homeId) : projectPageHref(id, homeId));
-                       }} />
-    ) : step ? (
-      <StartProjectSheet step={step} onStep={setStep} onClose={closeStart} projectId={activeId} homeId={homeId} />
+    {/* THE ONE ADD-A-PROJECT SHEET (start-host.tsx): drawn by whichever host mounted first. */}
+    <StartProjectHost projectId={activeId} homeId={homeId} step={step} onStep={setStep} />
+    {deleting && active ? (
+      <DeleteProjectDialog projectId={active.id} name={active.name} onClose={() => setDeleting(false)} />
     ) : null}
     {archiving && active ? (
       <ArchiveDialog projectId={active.id} name={active.name} onClose={() => setArchiving(false)}

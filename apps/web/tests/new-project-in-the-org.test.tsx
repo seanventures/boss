@@ -113,9 +113,9 @@ describe("the project menu", () => {
     expect(document.querySelector('[data-testid="new-project-form"]')).toBeNull();
   });
 
-  it("sits in the top bar beside the organization, on the org's own projects", () => {
+  it("sits in the avatar menu beside the organization, on the org's own projects (BOSSAPP-914: the rail lists projects)", () => {
     const src = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
-    expect(src("app/ConsoleShell.tsx")).toMatch(/className="bx-org-chip"[\s\S]{0,400}<ProjectMenu projects=\{projects\.items\}/);
+    expect(src("app/ConsoleShell.tsx")).toMatch(/<ProjectMenu projects=\{projects\.items\}[\s\S]{0,600}className="bx-menu-org"/);
     expect(src("app/page.tsx")).toMatch(/projects\.items\.filter\(\(p\) => p\.orgId === activeOrgId\)/);
   });
 });

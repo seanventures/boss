@@ -60,7 +60,9 @@ describe("sign out", () => {
     expect(menu).toContain('window.location.assign("/login")');
     expect(menu).toContain('data-testid="sign-out"');
     const shell = codeOnly("app/ConsoleShell.tsx");
-    expect(shell).toContain("<AccountMenu />");
-    expect(shell).toContain('<button type="button" className="cap-btn" onClick={signOut}>Sign out</button>');
+    // The avatar menu holds the old System menu's rows (BOSSAPP-914 top bar); without an identity
+    // the fallback avatar menu still offers Sign out.
+    expect(shell).toContain("<AccountMenu compact>");
+    expect(shell).toMatch(/<button type="button" role="menuitem" onClick=\{signOut\}>[\s\S]{0,80}Sign out<\/button>/);
   });
 });

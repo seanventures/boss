@@ -13,6 +13,7 @@
  * The figures come from the change set (code_task:read) and its deploy plan (deployment:read);
  * when either cannot be read the card still shows what the decision itself carries.
  */
+import { changeHref, linkTarget } from "../../lib/repo-links";
 import React, { useEffect, useState } from "react";
 import { ArrowCounterClockwise, Check, ShieldCheck, Clock, Warning } from "@phosphor-icons/react";
 
@@ -133,7 +134,7 @@ export function ChangeSetApproval({ decision, projectId, actorId, pending }: {
                 return (
                   <tr key={p.repository} data-testid={`mr-approval-row-${p.repository}`}>
                     <td className="mr-ui-mono" data-user-text>{p.repository}</td>
-                    <td>{p.pr_url ? <a className="mr-ui-link mr-ui-mono" href={p.pr_url} target="_blank" rel="noreferrer">#{p.pr_number}</a>
+                    <td>{p.pr_url ? <a className="mr-ui-link mr-ui-mono" href={changeHref(p.pr_url)} {...linkTarget(p.pr_url)}>#{p.pr_number}</a>
                       : <span className="mr-ui-mono">#{p.pr_number ?? "—"}</span>}</td>
                     <td className="mr-ui-mono nw">+{p.additions ?? lane?.additions ?? 0} −{p.deletions ?? lane?.deletions ?? 0}</td>
                     <td>{testsChip(lane?.ci_state)}</td>

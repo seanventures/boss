@@ -152,6 +152,8 @@ EVIDENCE_TABLES: dict[str, tuple[str, str, Optional[str]]] = {
     "security_finding": ("security_findings", "id", None),
     "cost_anomaly": ("cost_anomalies", "id", "project_id"),
     "dossier": ("project_dossiers", "id", "project_id"),
+    # The alert-gap detector: a live app (its deploy target) with no alert rule.
+    "deployment_target": ("deployment_targets", "id", "project_id"),
 }
 SHAPE_ONLY: dict[str, re.Pattern[str]] = {
     "commit": re.compile(r"^[0-9a-f]{7,40}$"),

@@ -4,10 +4,13 @@
 // runtime in tests, where `React` must be in scope at call time. Every sibling client
 // component in app/ does the same.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Kanban } from "@phosphor-icons/react";
 
 import { searchForProject } from "./url-intent";
 import { appIdentity } from "./app-identity";
 import { ArchivedNotice, useArchived } from "./project-archive";
+import { STRIP_NOTICE_SLOT } from "./strip-notice";
 
 /**
  * Software projects built inside the selected control project, in the header.
@@ -51,7 +54,15 @@ const ADMITS: Record<Filter, (status: string) => boolean> = {
   DONE: (s) => s === "DONE",
 };
 
-export function ProjectStrip({ projectId, area }: { projectId: string; area?: string }) {
+export { STRIP_NOTICE_SLOT };
+
+/**
+ * `chip` (BOSSAPP-914 round 3): the strip is a compact "Builds 9 ⌄" chip IN the top bar, beside
+ * the bell — no wireframe has a second row under the bar, and on a phone that row cost a tenth
+ * of the screen. Same reads, same picker (it drops from the chip), same archived notice (in the
+ * slot under the bar).
+ */
+export function ProjectStrip({ projectId, area, chip = false }: { projectId: string; area?: string; chip?: boolean }) {
   // On the Factory the Floor's sections ARE the filter (factory spec §4.1): no second set here.
   const filtersShown = area !== "code_tasks";
   const [projects, setProjects] = useState<StripProject[]>([]);
@@ -77,9 +88,12 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   const [refreshing, setRefreshing] = useState(false);
   // Read once per project, not on the 30 s poll: archiving is rare and a page reload follows it.
   const archived = useArchived(projectId);
-  const notice = archived
+  const banner = archived
     ? <ArchivedNotice state={archived} onRestored={() => window.location.reload()} />
     : null;
+  const slot = chip && typeof document !== "undefined" ? document.getElementById(STRIP_NOTICE_SLOT) : null;
+  const notice = banner && slot ? createPortal(banner, slot) : banner;
+  const navClass = chip ? "bx-strip bx-strip-chip" : "bx-strip";
 
   const scopeGeneration = useRef(0);
   // Visibility and polling can overlap the first request; only the newest request may settle it.
@@ -173,6 +187,8 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
     for (const f of FILTERS) out[f] = projects.filter((p) => ADMITS[f](p.status)).length;
     return out;
   }, [projects]);
+
+  const attention = counts.GATED + projects.filter((p) => p.status === "STUCK").length;
 
   const shown = useMemo(
     () => projects
@@ -319,7 +335,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
 
   if (state === "loading") {
     return (
-      <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="loading">
+      <nav className={navClass} aria-label={STRIP_LABEL} data-state="loading">
         {notice}
         <span className="bx-strip-label">{STRIP_LABEL}</span>
         <span className="bx-strip-note">Loading…</span>
@@ -329,9 +345,9 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
 
   if (state === "failed") {
     return (
-      <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="failed">
+      <nav className={navClass} aria-label={STRIP_LABEL} data-state="failed" title={chip && error ? `Could not load software projects — ${error}` : undefined}>
         {notice}
-        <span className="bx-strip-label">{STRIP_LABEL}</span>
+        <span className="bx-strip-label">{chip ? <Kanban size={14} aria-hidden /> : null}{STRIP_LABEL}</span>
         {/* The reason, not a shrug. "Could not load" sends the operator to the API to find out
             what this line already knows. */}
         <span className="bx-strip-note bx-strip-error">Could not load software projects, {error}</span>
@@ -340,20 +356,23 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   }
 
   if (confirmedEmpty) {
-    return notice ? <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="archived">{notice}</nav> : null;
+    return notice ? <nav className={navClass} aria-label={STRIP_LABEL} data-state="archived">{notice}</nav> : null;
   }
 
   return (
-    <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="ready" data-testid="bx-strip" ref={pickerRef}>
+    <nav className={navClass} aria-label={STRIP_LABEL} data-state="ready" data-testid="bx-strip" ref={pickerRef}>
       {notice}
       <button type="button" className="bx-project-trigger" aria-expanded={expanded}
-              aria-controls="boss-project-picker" onClick={() => setExpanded((open) => !open)}>
-        <span>{STRIP_LABEL}</span><strong>{total}</strong>
-        {counts.GATED + projects.filter((p) => p.status === "STUCK").length > 0 ?
+              aria-controls="boss-project-picker" onClick={() => setExpanded((open) => !open)}
+              title={chip ? `${total} build${total === 1 ? "" : "s"}${attention ? ` · ${attention} need attention` : ""} — open the list` : undefined}
+              data-attention={attention > 0 || undefined} data-testid="bx-strip-trigger">
+        {chip ? <Kanban size={15} aria-hidden /> : null}
+        <span className="bx-strip-word">{STRIP_LABEL}</span><strong>{total}</strong>
+        {attention > 0 ?
           <span className="bx-project-attention">
-            {counts.GATED + projects.filter((p) => p.status === "STUCK").length} need attention
+            {chip ? <>{attention}<span className="bx-strip-sr"> need attention</span></> : `${attention} need attention`}
           </span> : null}
-        <span aria-hidden>{expanded ? "⌃" : "⌄"}</span>
+        <span aria-hidden className="bx-strip-caret">{expanded ? "⌃" : "⌄"}</span>
       </button>
       {error ? <span className="bx-strip-note bx-strip-error" role="status">Could not refresh, {error}</span> : null}
       <span className="bx-strip-label">

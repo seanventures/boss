@@ -16,6 +16,7 @@
  */
 import React, { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
+import { Flask, FolderPlus, GitBranch, Lightbulb, X } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
@@ -23,7 +24,7 @@ import { IdentityError } from "../../lib/identity/api";
 import { withConsent } from "../../lib/identity/consent";
 import { templatesApi } from "../../lib/templates";
 import {
-  CHOICES, allPresets, createFresh, nameFromIdea, projectPageHref, shownPresets, type Preset, type StartStep,
+  CHOICES, allPresets, createFresh, installWideRefusal, nameFromIdea, projectPageHref, shownPresets, type Preset, type StartStep,
 } from "../../lib/start-project";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { ImportRepo } from "./import-repo";
@@ -88,6 +89,10 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
     try {
       let pid = sampleProject;
       if (!pid) {
+        // CHECK FIRST (00a-26): what no new project can bring (the install's model) is asked
+        // before the project is made, so a refusal leaves nothing behind.
+        const wide = asReadiness(await installWideRefusal(homeId, SAMPLE.workflow_key, undefined, startAnyway));
+        if (wide) { setRefusal(wide); setBusy(null); return; }
         const made = await guarded("Create the Hello World project.", () => createFresh(SAMPLE.name));
         pid = made.id;
         setSampleProject(pid);
@@ -115,7 +120,8 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
       const made = await guarded(`Create the ${p.title} project.`, () => createFresh(p.title, {
         type: p.kind === "knowledge_graph" ? "knowledge_graph" : "app" }));
       if (p.kind === "knowledge_graph") { go(knowledgePresetHref(made.id, homeId)); return; }
-      const href = projectPageHref(made.id, homeId);
+      // A preset's brief waits in the Command Center's "What should we build?" (project-start.tsx).
+      const href = projectPageHref(made.id, homeId, "overview");
       go(`${href}&start_preset=${encodeURIComponent(p.key)}`);
     } catch (e) {
       setError(refusalText(e));
@@ -165,13 +171,25 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
       <div className="bx-np-sheet spj-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId}
            data-testid="start-project" data-step={step}>
         <div className="spj-head">
-          {step !== "choose" ? (
-            <button type="button" className="spj-back" data-testid="start-back" disabled={!!busy}
-                    onClick={() => { setRefusal(null); setError(null); onStep("choose"); }}>Back</button>
-          ) : null}
-          <h2 id={titleId} className="bx-np-title">{step === "import" ? "Import a repo" : step === "sample" ? "Try a sample" : step === "idea" ? "New app from an idea" : "New project"}</h2>
-          <button type="button" className="spj-close" aria-label="Close" title="Close" data-testid="start-close"
-                  disabled={!!busy} onClick={onClose}>×</button>
+          {/* ADD A PROJECT (BOSSAPP-914 screen 3): New · from an idea | Existing · repo, as tabs, with
+              Try a sample beside them. The choice screen (presets) stays one press away. */}
+          {/* ONE HEAD ON EVERY STEP (screen 03, PX-39): Add a project · New | Existing · Try a sample.
+              The sample and the presets are this sheet's third door, never a different title. */}
+          <span className="spj-ico" aria-hidden><FolderPlus size={17} weight="duotone" /></span>
+          <h2 id={titleId} className="bx-np-title" style={{ flex: "none" }}>Add a project</h2>
+          <div className="spj-seg" role="tablist" aria-label="New or existing">
+            <button type="button" role="tab" aria-selected={step === "idea"} data-testid="start-tab-idea" disabled={!!busy}
+                    onClick={() => { setRefusal(null); setError(null); onStep("idea"); }}><Lightbulb size={14} aria-hidden /> New · from an idea</button>
+            <button type="button" role="tab" aria-selected={step === "import"} data-testid="start-tab-import" disabled={!!busy}
+                    onClick={() => { setRefusal(null); setError(null); onStep("import"); }}><GitBranch size={14} aria-hidden /> Existing · repo or folder</button>
+          </div>
+          <span style={{ flex: 1 }} />
+          <button type="button" className="spj-more spj-sample-link" data-testid="start-tab-sample" disabled={!!busy}
+                  aria-current={step === "sample" || step === "choose" ? "page" : undefined}
+                  onClick={() => { setRefusal(null); setError(null); onStep("sample"); }}>
+            <Flask size={13} aria-hidden /> Try a sample</button>
+          <button type="button" className="spj-close" aria-label="Close" title="Close (Esc)" data-testid="start-close"
+                  disabled={!!busy} onClick={onClose}><X size={16} weight="bold" aria-hidden /></button>
         </div>
 
         {step === "choose" ? (
@@ -220,7 +238,8 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
               <li><b>Pull request</b><span>You merge</span></li>
               <li><b>Preview</b><span>Live</span></li>
             </ol>
-            <p className="spj-quiet">Hello World. One page and one test. About 8 minutes.</p>
+            <p className="spj-quiet">Hello World. One page and one test. About 8 minutes.
+              {" "}<button type="button" className="spj-more" data-testid="start-tab-presets" disabled={!!busy} onClick={() => onStep("choose")}>More samples &amp; presets</button></p>
             {refusal ? (
               <div data-testid="start-sample-readiness">
                 <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />
@@ -272,7 +291,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
 
         {step === "import" ? (
           <ImportRepo projectId={projectId} onCreated={(id, type) => go(type === "knowledge_graph"
-            ? knowledgePresetHref(id, homeId, "setup") : projectPageHref(id, homeId))} />
+            ? knowledgePresetHref(id, homeId, "setup") : projectPageHref(id, homeId, "project", "onboarding"))} />
         ) : null}
 
         {error ? <p className="bx-np-error" role="alert" data-testid="start-error">{error}</p> : null}

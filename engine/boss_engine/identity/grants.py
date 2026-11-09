@@ -100,7 +100,18 @@ def _from_row(db: Any, row: Mapping[str, Any]) -> DelegationGrant:
         resources=row["resources"] or {}, allow_subdelegation=row["allow_subdelegation"],
         allowed_children=tuple(row["allowed_children"] or ()), max_depth=row["max_depth"],
         status=GrantStatus(row["status"]), created_at=row["created_at"], expires_at=row["expires_at"],
-        task_run_id=row["task_run_id"], parent_grant_id=row["parent_grant_id"], purpose=row["purpose"] or "")
+        task_run_id=row["task_run_id"], parent_grant_id=row["parent_grant_id"], purpose=row["purpose"] or "",
+        authority_kind=row.get("authority_kind"))
+
+
+#: identity_delegation_grants.authority_kind of the project's Captain authority (captain_authority.py).
+CAPTAIN_AUTHORITY = "captain"
+
+
+def is_captain_authority(grant: Optional[DelegationGrant]) -> bool:
+    """The project's Captain authority: BOSS's own standing authority for always-on builds, never a
+    person's consent. No person-facing path (consent, a schedule, find_covering) ever picks it."""
+    return grant is not None and grant.authority_kind == CAPTAIN_AUTHORITY
 
 
 def load(grant_id: Optional[str], *, db: Any) -> Optional[DelegationGrant]:
@@ -253,6 +264,20 @@ def user_repo_access_refusal(org_id: str, person_id: str, gh: Mapping[str, Any],
         if ok is not True:
             return {"repo": repo, "needs": need, "answer": ok}
     return None
+
+
+def check_grant_repo_access(grant: Optional[DelegationGrant], org_id: str, person_id: str,
+                            gh: Mapping[str, Any], *, db: Any, use_cache: bool = True) -> None:
+    """The repository guard for the grant a run stands on. A person's grant: the confused-deputy
+    guard (the person must reach every repository they let an agent reach). The project's Captain
+    authority: its sponsor did not choose its repositories — they are exactly the ones an Owner or
+    Admin bound to the project — so every one must STILL be bound to that project, read live."""
+    if is_captain_authority(grant):
+        from .captain_authority import require_repos_bound
+
+        require_repos_bound(db, grant, list(gh.get("repos") or ()))
+        return
+    check_user_repo_access(org_id, person_id, gh, db=db, use_cache=use_cache)
 
 
 def check_user_repo_access(org_id: str, person_id: str, gh: Mapping[str, Any], *, db: Any,
@@ -545,6 +570,9 @@ def extend_grant(ctx: AuthContext, grant_id: str, days: int, *, db: Any) -> Dele
         raise GrantRefused("forbidden", 403, {"permission": "delegation:grant"})
     if g.task_run_id:
         raise GrantRefused("task_grants_end_with_their_run", 409)
+    if is_captain_authority(g):
+        # It has no end date to extend: it stands until a person revokes it.
+        raise GrantRefused("captain_authority_has_no_expiry", 409)
     pol = policy_for(g.org_id, db=db)
     days = max(1, min(int(days), int(pol.delegation_max_days), GRANT_MAX_DAYS))
     person = principal(db, g.user_principal_id)
@@ -629,8 +657,9 @@ def find_covering(person_id: str, *, agent_ids: Iterable[str], permissions: froz
     from sqlalchemy import text
 
     agent_ids, repos = list(agent_ids), list(repos)
-    found = [g for g in for_person(person_id, db=db)
-             if covers(g, agent_ids=agent_ids, permissions=permissions, project_id=project_id, repos=repos, run_id=run_id)]
+    # The project's Captain authority is never a person's consent: a person's own start asks them.
+    found = [g for g in for_person(person_id, db=db) if not is_captain_authority(g)
+             and covers(g, agent_ids=agent_ids, permissions=permissions, project_id=project_id, repos=repos, run_id=run_id)]
     found.sort(key=lambda g: (0 if g.task_run_id and not g.task_run_id.startswith(PENDING_PREFIX)
                               else 1 if not g.task_run_id else 2))
     for g in found:

@@ -118,7 +118,7 @@ export function ChangeSetCockpit({ projectId, changeSetId, initial, actor, onClo
 
   const back = (
     <button type="button" className="mr-ui-link" onClick={onClose} data-testid="mr-csc-back">
-      <ArrowLeft size={12} aria-hidden /> Factory
+      <ArrowLeft size={12} aria-hidden /> Code Tasks
     </button>
   );
   if (!cs) {

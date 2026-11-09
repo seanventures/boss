@@ -1,0 +1,175 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Watch an app</title>
+<link rel="stylesheet" href="../project-experience/console.css"><link rel="stylesheet" href="../project-experience/project.css">
+<link rel="stylesheet" href="../project-experience/new-project-v2/np2.css"><link rel="stylesheet" href="af.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-crumb="Projects|HelpDesk AI Demo|Health|Watch this app" data-base="../project-experience/">
+<div id="content">
+
+<div class="af-cap">1 · The sheet: one input, the SRE agent reads live</div>
+<div class="af-stage">
+<div class="sheet np2 af-sheet" role="dialog" aria-label="Watch an app">
+  <div class="sheet-h"><span class="ico"><i class="ph ph-pulse"></i></span><h2>Watch an app</h2>
+    <span class="wf-spacer"></span><i class="ph ph-x" title="Close (Esc)"></i></div>
+  <div class="np2-body">
+    <div class="np2-in" data-multi title="Name an app, paste its URL, or say what matters. The SRE agent works out the rest.">
+      <span class="kind"><i class="ph-fill ph-pulse"></i></span><span class="pin" style="position:absolute;left:-6px;top:-6px">1</span>
+      <div class="txt">HelpDesk staging.
+Wake me if replies stop sending or the inbox gets slow.
+Tell #support-eng on Slack.<span class="caret"></span></div>
+      <div class="np2-in-foot"><span>a project, a URL, or a few words · ⇧↵ new line</span><span class="wf-spacer"></span><span class="np2-hide-s">Beacon is reading the app ↓</span></div>
+    </div>
+    <div class="np2-detect">
+      <span class="np2-kinds" title="Detected. Click to force another reading."><span aria-selected="true"><i class="ph ph-folders"></i>Project app</span><span><i class="ph ph-globe"></i>Just a URL</span><span><i class="ph ph-bell"></i>Alerts elsewhere</span></span>
+      <span>Matched <b>HelpDesk AI Demo · staging</b> (203.0.113.20:8004)</span>
+    </div>
+
+    <!-- AGENT ACTIONS -->
+    <div class="ub">
+      <div class="ub-h"><span class="face" data-a="beacon_live" data-size="m"></span>
+        <div><b>Agent actions</b> <span class="pin">2</span><small>Beacon (SRE) read the app, its code graph and 7 days of logs · fills as it reads</small></div>
+        <span class="tag" data-tone="blue"><span class="dot" data-s="run"></span>reading</span></div>
+      <div class="ub-grid">
+        <div>
+          <div class="ub-f"><span class="lbl">How it talks</span><span><span class="tag" data-tone="green">FOUND</span> <span class="mono">/metrics</span> · Prometheus · 41 series · Docker logs · <mark>no traces (not needed yet)</mark></span><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f"><span class="lbl">What matters</span><div class="ub-files"><span><i class="ph ph-paper-plane-tilt"></i>Replies sending <em>api/replies · your words</em></span><span><i class="ph ph-tray"></i>Inbox speed <em>web/src/inbox · your words</em></span><span><i class="ph ph-timer"></i><mark>4-hour SLA job</mark> <em>found in code</em></span><span><i class="ph ph-google-logo"></i><mark>Google sign-in</mark> <em>found in code</em></span></div><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f" data-q><span class="lbl">Open · 1</span><div class="ub-q"><span>At night, wake you or wait until 08:00?</span><div class="sugs"><span class="sug">Wake me</span><span class="sug">Wait till 08:00</span><span class="sug" title="SRE fixes what it can alone and tells you in the morning">Fix alone, tell me</span></div></div><i class="ph ph-pencil-simple ed"></i></div>
+        </div>
+        <div>
+          <div class="ub-f"><span class="lbl">Watches · 5</span>
+            <div class="af-watch" style="width:100%">
+              <div><i class="ph ph-paper-plane-tilt"></i><span>Reply sends fail &gt; 2% for 5 min<small>baseline 0.1% · would have fired 0× in 7 d</small></span><span class="tag" data-tone="red">wake</span></div>
+              <div><i class="ph ph-tray"></i><span>Inbox p95 &gt; 800 ms for 10 min<small>baseline 180 ms · 1× in 7 d (Tue deploy)</small></span><span class="tag" data-tone="amber">tell</span></div>
+              <div><i class="ph ph-timer"></i><span><mark>SLA job hasn’t run in 15 min</mark><small>heartbeat · 0× in 7 d</small></span><span class="tag" data-tone="red">wake</span></div>
+              <div><i class="ph ph-google-logo"></i><span><mark>Sign-in errors &gt; 5%</mark><small>0× in 7 d</small></span><span class="tag" data-tone="amber">tell</span></div>
+              <div><i class="ph ph-heartbeat"></i><span>App down 2 min<small>uptime probe · 0× in 7 d</small></span><span class="tag" data-tone="red">wake</span></div>
+            </div><i class="ph ph-pencil-simple ed"></i></div>
+        </div>
+      </div>
+      <div class="ub-act"><span class="btn" data-kind="ok"><i class="ph-bold ph-check"></i>Looks right</span><span class="btn"><i class="ph ph-pencil-simple"></i>Fix it</span>
+        <span class="ub-hint"><i class="ph ph-magic-wand"></i>Hint, e.g. “quieter”, “also watch the email queue”</span></div>
+    </div>
+
+    <!-- WHAT BOSS WILL DO -->
+    <div class="np2-sum">
+      <div class="np2-sum-h"><span class="face" data-a="beacon" data-size="m"></span>
+        <div><b>What BOSS will do</b> <span class="pin">3</span><div class="faint" style="font-size:.56rem">Picked from the app and your words · click any box to change it</div></div>
+        <span class="wf-spacer"></span><span class="np2-ready np2-hide-s"><span><i></i>Host</span><span><i></i>Model</span><span><i></i>Budget</span></span></div>
+      <div class="np2-flow">
+        <div class="np2-node" data-t="live"><span class="lbl">Signals<span class="auto">FOUND</span><i class="ph ph-caret-down"></i></span><span class="v">/metrics + logs</span><span class="s">no app change</span></div>
+        <div class="np2-node"><span class="lbl">Collector<span class="auto">AUTO</span><i class="ph ph-caret-down"></i></span><span class="v">on boss-1</span><span class="s">already running</span></div>
+        <div class="np2-node"><span class="lbl">Watches<span class="auto">AUTO</span><i class="ph ph-caret-down"></i></span><span class="v">5 watches</span><span class="s">3 wake · 2 tell</span></div>
+        <div class="np2-node"><span class="lbl">On call<i class="ph ph-caret-down"></i></span><div class="row"><span class="face" data-a="beacon" data-size="s"></span><span class="v">SRE agent</span></div><span class="s">triage + fix alone</span></div>
+        <div class="np2-node" data-t="you"><span class="lbl">Tell<i class="ph ph-caret-down"></i></span><span class="v">#support-eng · you</span><span class="s"><b style="color:var(--amber)">Slack: verify once</b></span></div>
+        <div class="np2-node"><span class="lbl">Runbooks<i class="ph ph-caret-down"></i></span><span class="v">3 from repo</span><span class="s">restart · rollback · queue</span></div>
+      </div>
+      <div class="np2-strip"><span class="lbl">Alone</span>
+        <span class="np2-cx"><span data-on><i class="ph ph-arrow-clockwise"></i>restart</span><span data-on><i class="ph ph-arrow-counter-clockwise"></i>roll staging back</span><span data-on><i class="ph ph-arrows-out"></i>scale</span><span data-on><i class="ph ph-bell-slash"></i>mute noise ≤ 1 h</span><span data-on><i class="ph ph-git-pull-request"></i>open a fix PR</span></span>
+        <span class="lbl" style="margin-left:6px;color:var(--amber)">Waits for you</span>
+        <span class="np2-cx"><span title="Production deploy (Where people decide)"><i class="ph ph-hand-palm"></i>prod rollback</span><span title="Talking to the outside"><i class="ph ph-hand-palm"></i>status page · customers</span></span></div>
+    </div>
+  </div>
+  <div class="np2-foot">
+    <span class="tag" data-tone="cost">≈ $0.20 a day · first data ≈ 1 min</span>
+    <span class="faint np2-hide-s" style="font-size:.56rem"><i class="ph ph-shield-check"></i> Prod and customers stay with you</span>
+    <span class="wf-spacer"></span>
+    <a class="faint np2-hide-s" style="font-size:.58rem" title="OTel, Collector, remote write, /metrics, URL, other tool: the old paths, with tokens shown once"><i class="ph ph-wrench"></i> Wire it myself</a>
+    <span class="btn" data-kind="primary"><i class="ph ph-eye"></i>Start watching <span class="pin" style="margin-left:4px">4</span><span class="np2-kbd">⌘↵</span></span>
+  </div>
+</div>
+</div>
+
+<!-- a box's popover -->
+<div class="af-cap">A watch’s popover (any line in Watches) <span class="pin">5</span></div>
+<div class="pop" style="max-width:620px">
+  <div class="pop-h"><i class="ph ph-tray"></i><b>Inbox p95 &gt; 800 ms for 10 min</b><span class="anchor">tell · #support-eng</span></div>
+  <svg viewBox="0 0 300 54" style="width:100%;height:54px" aria-label="7 days of inbox p95 with the threshold"><polyline fill="none" stroke="var(--teal)" stroke-width="1.5" points="0,44 20,42 40,43 60,41 80,44 100,40 120,43 140,42 160,12 170,10 180,40 200,43 220,42 240,41 260,43 280,42 300,41"/><line x1="0" x2="300" y1="20" y2="20" stroke="var(--amber)" stroke-dasharray="4 3"/><text x="152" y="9" fill="var(--amber)" font-size="7">Tue deploy · would fire</text></svg>
+  <div class="af-kv"><span>When</span><span><span class="np2-chip">p95</span> of <span class="np2-chip">inbox requests</span> above <span class="np2-chip">800 ms</span> for <span class="np2-chip">10 min</span></span>
+    <span>PromQL</span><span class="af-code">histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{route=~"/inbox.*"}[5m]))) &gt; 0.8<i class="ph ph-pencil-simple" title="Edit PromQL"></i></span>
+    <span>Then</span><span>SRE triages · may restart or roll staging back · tells #support-eng</span></div>
+  <div class="pop-f"><span class="btn" data-kind="ghost">Remove</span><span class="btn" data-kind="primary">Done</span></div>
+</div>
+
+<!-- WHERE IT LANDS -->
+<div class="af-cap">2 · Where it lands: the app’s health, with the agent already on call <span class="pin">6</span></div>
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="teal"><i class="ph ph-heartbeat"></i></span><h3>HelpDesk AI Demo · staging</h3><span class="tag" data-tone="green"><span class="dot" data-s="done"></span>watched</span><span class="wf-spacer"></span><span class="face" data-a="beacon_live" data-size="s"></span><span style="font-size:.56rem">Beacon on call</span></div>
+  <div class="af-prog">
+    <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>Read</b><small>/metrics · logs</small></div>
+    <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>Collector</b><small>boss-1</small></div>
+    <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>First data</b><small>41 series</small></div>
+    <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>5 watches</b><small>all quiet</small></div>
+    <div class="af-ps" data-s="you"><span class="c"><i class="ph-bold ph-hand-palm"></i></span><b>Verify Slack</b><small>only you</small></div>
+    <div class="af-ps" data-s="run"><span class="c"><i class="ph ph-eye"></i></span><b>On call</b><small>from now</small></div>
+  </div>
+  <div class="now-line" style="margin-top:14px"><span class="face" data-a="beacon" data-size="s"></span><b>Now</b><span>Learning a 7-day baseline from history · email reaches you now; Slack waits for the code</span></div>
+  <div class="ny" style="margin-top:10px"><span class="ny-ico">!</span><span class="ny-t" style="font-size:.6rem"><b>Verify #support-eng</b> · Beacon posted a 6-digit code there. Sending outside your own inbox is yours to allow.</span><span class="wf-spacer"></span><span class="btn" data-kind="amber" data-size="s">Enter code</span></div>
+</section>
+
+<div class="af-cap">3 · The first time something breaks <span class="pin">7</span></div>
+<section class="card">
+  <div class="af-why" style="margin-bottom:10px">
+    <span class="fl-n" data-t="signal"><span><i class="ph-bold ph-lightning"></i> Sends fail 9%</span><small>02:14 · staging</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="agent"><span><span class="face" data-a="beacon" data-size="s"></span> SRE triage</span><small>Resend 429 · 88%</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="decision"><span>On the list?</span><small>staging · no</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="done"><span>Backoff + queue</span><small>runbook · 1 min</small></span><span class="fl-w" data-s="done"></span>
+    <span class="fl-n" data-t="done"><span>✓ Recovered</span><small>6 min · you slept</small></span>
+  </div>
+  <div class="af-why">
+    <span class="fl-n" data-t="signal"><span><i class="ph-bold ph-lightning"></i> Same on prod</span><small>later</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="agent"><span><span class="face" data-a="beacon" data-size="s"></span> Same fix ready</span><small>tested on staging</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="decision"><span>On the list?</span><small>prod · yes</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="you"><span>✋ You approve</span><small>1 click, from the page</small></span>
+  </div>
+</section>
+
+<div class="af-cap">Clicks, old vs new <span class="pin">8</span></div>
+<section class="card"><div class="cc">
+  <b>App watched, 5 alerts, Slack</b>
+  <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(31 * 9px)"></span>31 <em>Connect (3) + paste env vars and redeploy the app yourself · 5 rules × 4 · contact point (3) + verify (2) · policy (3)</em></div>
+    <div class="cc-bar" data-new><span class="b" style="width:calc(3 * 9px)"></span><b>3</b> <em>Watch an app · Start watching · Enter code (the one outside-send gate)</em></div></div>
+  <b>Change one alert</b>
+  <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(4 * 9px)"></span>4 <em>app drawer · Alerts · rule · Save with a why</em></div>
+    <div class="cc-bar" data-new><span class="b" style="width:calc(3 * 9px)"></span><b>3</b> <em>Watches line · chip · Done (why asked on later edits)</em></div></div>
+  <b>An incident at night</b>
+  <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(3 * 9px)"></span>3+ <em>page wakes you · Diagnose · Remediate</em></div>
+    <div class="cc-bar" data-new><span class="b" style="width:calc(0.4 * 9px)"></span><b>0</b> <em>staging: SRE fixes it alone · prod: 1 (approve)</em></div></div>
+</div></section>
+
+<div class="af-cap">Parity · 18 of 18 kept</div>
+<section class="card"><table class="parity"><thead><tr><th>Capability</th><th>Was</th><th>Now</th></tr></thead><tbody>
+  <tr><td>7 connect paths (BOSS builds it, OTel, Collector, remote write, /metrics, URL, alerts elsewhere)</td><td>“How does it talk?” radio</td><td>Detected; kind pill to force; Wire it myself keeps every path</td></tr>
+  <tr><td>Tokens and env vars, shown once</td><td>Connect result</td><td>Wire it myself (same, shown once); not needed when /metrics is found</td></tr>
+  <tr><td>Live first-data check, “3 rules proposed”</td><td>After Connect</td><td>The card fills live; the watches are proposed before you start</td></tr>
+  <tr><td>Rule builder: metric list, measure, window, where, threshold, for, severity</td><td>4-click builder</td><td>Watch popover chips; the full builder under ⋯</td></tr>
+  <tr><td>PromQL always visible, Edit PromQL</td><td>Builder</td><td>Popover, same</td></tr>
+  <tr><td>“Would have fired N× in 24 h”</td><td>Builder</td><td>Every watch shows 7 days, with the sparkline</td></tr>
+  <tr><td>Agent triages / Respond automatically consent</td><td>Per-rule checkboxes</td><td>On call box: alone vs waits, which follows Where people decide</td></tr>
+  <tr><td>Required “why” on rule edits; repo rules become a PR</td><td>Rule sheet</td><td>Kept on every later edit</td></tr>
+  <tr><td>Silence, unsilence</td><td>Silence sheet</td><td>Unchanged; SRE may mute noise ≤ 1 h alone, and says so</td></tr>
+  <tr><td>Contact points: email, Slack, Mattermost, webhook; verify; Test</td><td>Notify › + Add</td><td>Tell box; verifying an outside channel is the one gate</td></tr>
+  <tr><td>Notification policy tree, matchers, group, wait/repeat, quiet hours</td><td>Notify</td><td>Unchanged under Notify › Advanced; the night question sets quiet hours</td></tr>
+  <tr><td>Routing preview</td><td>Notify</td><td>Unchanged</td></tr>
+  <tr><td>Maintenance windows, inhibit rules</td><td>Notify</td><td>Unchanged</td></tr>
+  <tr><td>Add tools recommender, deploy the monitoring stack</td><td>Sources</td><td>Collector box (auto); Sources unchanged</td></tr>
+  <tr><td>Token rotation with overlap, Test</td><td>Sources</td><td>Unchanged</td></tr>
+  <tr><td>Answer the on-call agent, Ask again</td><td>Alerts tab</td><td>Same, on the app page and in Approvals</td></tr>
+  <tr><td>Diagnose / Remediate / False alarm</td><td>Reliability</td><td>SRE does them alone below the line; the buttons stay for overrides</td></tr>
+  <tr><td>Permission observability:manage</td><td>Gated buttons</td><td>Gated Start watching</td></tr>
+</tbody></table></section>
+
+<div class="notes"><b>Design notes: monitoring sets itself up the way onboarding does</b><ol class="np2-n">
+  <li><b>1</b> One input: a project app, a URL, or a few words about what matters. Detection picks the path. Nobody has to know how their app emits telemetry.</li>
+  <li><b>2</b> The SRE agent reads the running app (/metrics, logs) and the code graph. It turns “replies stop sending” into concrete watches with a 7-day baseline and backtest. Additions from the code (SLA job, sign-in) are dotted-underlined.</li>
+  <li><b>3</b> Six boxes, each changed through a popover. The strip shows what the agent may do alone vs. what waits. That split comes from Where people decide, not from per-rule checkboxes.</li>
+  <li><b>4</b> One primary, <b>Start watching</b>. Nothing is pasted into the app, and nothing is redeployed when /metrics already exists.</li>
+  <li><b>5</b> The rule builder lives on as chips in the popover, and the PromQL stays visible.</li>
+  <li><b>6</b> Lands on the app’s health page with the agent already on call. It asks only one thing: verify the outside channel (Talking to the outside).</li>
+  <li><b>7</b> The first incident shows what changes: on staging the agent fixes it alone. On prod the same fix waits for one click.</li>
+</ol></div>
+</div>
+<script src="../project-experience/shell.js"></script>
+</body></html>

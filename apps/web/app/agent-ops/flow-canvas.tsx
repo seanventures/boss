@@ -9,7 +9,14 @@
  * button. Click any node, or a dissenting arrow, for the drawer; nothing else is text.
  *
  * Nodes are HTML (focusable buttons with faces); arrows are one SVG beneath them, placed by
- * lib/ambient-layout.ts. Wide charts scroll inside their own frame, never the page.
+ * lib/ambient-layout.ts.
+ *
+ * ZOOM TO FIT (operator, 2026-11-07: "in the video it was full screen, this one is not"): the
+ * frame takes the room the page gives it — its full width and, on a desktop, the viewport's
+ * height below it — and the chart is scaled to fit both, centred, up to FIT.max (a node never
+ * grows past a sensible size) and down to FIT.min (still legible; past that the frame scrolls,
+ * never the page). It re-fits whenever the frame or the window changes size (a drawer opening
+ * beside it, a resize). Labels wrap to three lines and carry their full words as a tooltip.
  */
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -20,8 +27,9 @@ import { activeNodeId, layoutFlow, type PlacedNode } from "../../lib/ambient-lay
 export const TYPE_WORDS: Record<string, string> = {
   signal: "Signal", agent: "Agent", person: "Person", policy: "Policy", squad: "Squad", boss: "BOSS",
   action: "Proposed action", decision: "Decision", needs_you: "Needs you", run: "Work started", outcome: "Outcome",
+  learning: "Applied learning",
 };
-const ICON: Record<string, string> = { signal: "↯", policy: "§", squad: "⚑", boss: "◆", action: "Play", run: "Settings" };
+const ICON: Record<string, string> = { signal: "↯", policy: "§", squad: "⚑", boss: "◆", action: "Play", run: "Settings", learning: "✦" };
 
 function outcomeTone(n: FlowNode): "ok" | "bad" | "quiet" {
   if (n.badges.includes("failed")) return "bad";
@@ -66,6 +74,40 @@ function NodeBody({ node, active }: { node: PlacedNode; active: boolean }) {
   );
 }
 
+/** How far the chart may zoom: never smaller than legible, never a node larger than ~1.6×. */
+export const FIT = { min: 0.6, max: 1.6 } as const;
+/** Below the frame: the legend row and the page's bottom margin. */
+const BELOW = 64;
+/** The frame fills the viewport's height only on a desktop-sized frame; a phone hugs the chart. */
+const FILL_MIN_W = 720;
+const FILL_MIN_H = 320;
+
+/** The zoom that fits a `lw`×`lh` chart in a `w`×`h` box (h null: width only), clamped to FIT. */
+export function fitScale(lw: number, lh: number, w: number, h: number | null): number {
+  if (!w || !lw || !lh) return 1;
+  const s = Math.min((w - 2) / lw, h ? (h - 2) / lh : Number.POSITIVE_INFINITY);
+  return Math.max(FIT.min, Math.min(FIT.max, s));
+}
+
+type Room = { w: number; h: number | null; base: number };
+/** The laptop root (layout-scale.css): the size the chart's px layout is drawn for. */
+const BASE_ROOT_PX = 19;
+function rootPx(): number {
+  if (typeof window === "undefined" || typeof getComputedStyle === "undefined") return BASE_ROOT_PX;
+  const v = parseFloat(getComputedStyle(document.documentElement).fontSize);
+  return Number.isFinite(v) && v > 0 ? v : BASE_ROOT_PX;
+}
+
+/** The frame's width and, on a desktop, the height left in the viewport below its top. */
+function measure(el: HTMLElement, compact: boolean): Room {
+  const w = el.clientWidth;
+  const base = rootPx();
+  if (compact || typeof window === "undefined" || w < FILL_MIN_W) return { w, h: null, base };
+  const top = el.getBoundingClientRect().top + (window.scrollY || 0);
+  const h = Math.round(window.innerHeight - top - BELOW);
+  return { w, h: h >= FILL_MIN_H ? h : null, base };
+}
+
 export function FlowCanvas({ nodes, edges, lifecycle, selected, onSelect, onAnswer, compact = false }: {
   nodes: FlowNode[]; edges: FlowEdge[]; lifecycle: string; selected?: string | null;
   onSelect: (target: { node?: FlowNode; edge?: FlowEdge }) => void; onAnswer?: () => void; compact?: boolean;
@@ -73,23 +115,35 @@ export function FlowCanvas({ nodes, edges, lifecycle, selected, onSelect, onAnsw
   const uid = useId().replace(/:/g, "");
   const layout = useMemo(() => layoutFlow(nodes, edges), [nodes, edges]);
   const active = activeNodeId(layout, lifecycle);
-  // FIT THE FRAME: a wide chart shrinks to the frame (down to 60%, still legible), then scrolls.
+  // ZOOM TO FIT the frame's width and the viewport's height below it; re-fit on every resize.
   const frame = useRef<HTMLDivElement>(null);
-  const [room, setRoom] = useState<number | null>(null);
+  const [room, setRoom] = useState<Room | null>(null);
   useEffect(() => {
     const el = frame.current;
-    if (!el || typeof ResizeObserver === "undefined") return undefined;
-    const ro = new ResizeObserver(() => setRoom(el.clientWidth));
-    ro.observe(el);
-    setRoom(el.clientWidth);
-    return () => ro.disconnect();
-  }, []);
-  const scale = room ? Math.max(0.6, Math.min(1, (room - 2) / layout.width)) : 1;
+    if (!el) return undefined;
+    const fit = () => setRoom((cur) => {
+      const next = measure(el, compact);
+      return cur && cur.w === next.w && cur.h === next.h && cur.base === next.base ? cur : next;
+    });
+    fit();
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
+    ro?.observe(el);
+    window.addEventListener("resize", fit);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", fit); };
+  }, [compact, nodes.length]);
+  const scale = room?.w ? fitScale(layout.width, layout.height, room.w, room.h) : 1;
+  const drawnH = layout.height * scale;
+  // The frame fills the height it was given (the chart centred in it), never less than the chart.
+  const frameH = room?.h ? Math.max(room.h, Math.ceil(drawnH) + 2) : undefined;
   if (!nodes.length) return <div className="aa-canvas-empty" data-testid="aa-canvas-empty">Nothing drawn yet</div>;
   return (
-    <div className="aa-canvas-frame" data-testid="aa-canvas" data-compact={compact || undefined} ref={frame} data-scale={scale.toFixed(2)}>
-      <div className="aa-canvas-fit" style={{ width: layout.width * scale, height: layout.height * scale }}>
-      <div className="aa-canvas" style={{ width: layout.width, height: layout.height, transform: scale < 1 ? `scale(${scale})` : undefined }}>
+    <div className="aa-canvas-frame" data-testid="aa-canvas" data-compact={compact || undefined} ref={frame} data-scale={scale.toFixed(2)}
+         data-fill={frameH ? "" : undefined} style={frameH ? { height: frameH } : undefined}>
+      <div className="aa-canvas-fit" style={{ width: layout.width * scale, height: drawnH }}>
+      {/* The chart's own type base: the laptop root, whatever the screen's root (its words are
+          em, its boxes px — they stay in proportion; the whole chart grows by zoom-to-fit). */}
+      <div className="aa-canvas" style={{ width: layout.width, height: layout.height, transform: scale !== 1 ? `scale(${scale})` : undefined,
+                                          fontSize: room && room.base !== BASE_ROOT_PX ? `${(BASE_ROOT_PX / room.base).toFixed(4)}rem` : undefined }}>
         <svg className="aa-edges" width={layout.width} height={layout.height} aria-hidden>
           <defs>
             <marker id={`${uid}-a`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -123,7 +177,8 @@ export function FlowCanvas({ nodes, edges, lifecycle, selected, onSelect, onAnsw
                   data-selected={selected === n.id || undefined} data-active={active === n.id || undefined}
                   data-tone={n.type === "outcome" ? outcomeTone(n) : undefined}
                   style={{ left: n.x, top: n.y, width: n.w, height: n.h }}
-                  aria-label={`${TYPE_WORDS[n.type] ?? n.type}: ${n.label}`} title={`${TYPE_WORDS[n.type] ?? n.type}, open details`}
+                  aria-label={`${TYPE_WORDS[n.type] ?? n.type}: ${n.label}`}
+                  title={[n.label, n.detail ?? `${TYPE_WORDS[n.type] ?? n.type}, open details`].filter(Boolean).join(", ")}
                   onClick={() => onSelect({ node: n })}>
             <NodeBody node={n} active={active === n.id} />
           </button>

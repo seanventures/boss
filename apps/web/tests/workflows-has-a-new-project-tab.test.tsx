@@ -185,13 +185,14 @@ describe("every New project door opens the tab", () => {
     expect([params().get("compose"), params().get("new"), params().get("tab")]).toEqual([null, null, "new"]);
   });
 
-  it("while already on Runs (openNewProject pushes and announces)", async () => {
+  it("while already on Runs, openNewProject opens Add a project and leaves the tab alone (v2)", async () => {
     await mount();
     expect(selected()).toBe("dw-tab-runs");
     await act(async () => { openNewProject(); });
     await settle();
-    expect(selected()).toBe("dw-tab-new");
-    expect($('[data-testid="np-stub"]')?.dataset.mode).toBe("new");
+    // A new app is Add a project now (the one screen); Workflows › New build has moved.
+    expect(selected()).toBe("dw-tab-runs");
+    expect(params().get("new_project")).toBe("idea");
   });
 
   it("a Library card's Start opens it on that workflow", async () => {

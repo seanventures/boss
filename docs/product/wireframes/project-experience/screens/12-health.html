@@ -1,0 +1,92 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project health</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-project="1" data-tab="health" data-crumb="Projects|HelpDesk AI Demo|Health">
+<div id="content">
+
+<!-- one row per environment: the four numbers that answer "is it OK?" -->
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="green"><i class="ph ph-heartbeat"></i></span><h3>Staging</h3><span class="tag" data-tone="green"><span class="dot" data-s="done"></span>Healthy</span>
+    <a class="link-chip" title="Opens the live app"><i class="ph ph-globe"></i>203.0.113.20:8004 ↗</a><span class="pin">1</span>
+    <span class="wf-spacer"></span><span class="faint" style="font-size:.56rem">last 24h</span></div>
+  <div class="grid g4">
+    <div class="tile"><span class="lbl">Uptime</span><div class="row"><div class="ring" style="--p:99.9"><span>99.9</span></div><span class="s">SLO 99.5%</span></div></div>
+    <div class="tile"><span class="lbl">Error rate</span><span class="v">0.4%</span>
+      <svg class="spark" viewBox="0 0 120 26" preserveAspectRatio="none"><polyline fill="none" stroke="var(--amber)" stroke-width="1.6" points="0,22 15,21 30,22 45,20 60,8 70,12 80,20 95,21 110,22 120,21"/></svg></div>
+    <div class="tile"><span class="lbl">p95 latency</span><span class="v">180<small class="faint" style="font-size:.6rem"> ms</small></span>
+      <svg class="spark" viewBox="0 0 120 26" preserveAspectRatio="none"><polyline fill="none" stroke="var(--teal)" stroke-width="1.6" points="0,16 15,15 30,17 45,14 60,10 70,13 80,15 95,14 110,15 120,13"/></svg></div>
+    <div class="tile"><span class="lbl">SLO burn</span>
+      <div class="bar" style="height:10px;margin-top:6px"><span style="width:22%;background:var(--green)"></span></div>
+      <span class="s"><span class="tag" data-tone="green">OK</span>22% of budget used</span></div>
+  </div>
+</section>
+
+<section class="card locked">
+  <div class="row"><span class="ico" data-c="amber"><i class="ph ph-buildings"></i></span><b>Production</b><span class="tag" data-tone="amber">Not set up</span>
+    <span class="faint" style="font-size:.58rem">Health appears once prod has a host</span><span class="wf-spacer"></span><a class="link-chip">Deployments <i class="ph ph-arrow-right"></i></a></div>
+</section>
+
+<section class="split">
+  <div class="grid">
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="red"><i class="ph ph-siren"></i></span><h3>Incidents</h3><span class="pin">2</span><a class="more">In Agents at work <i class="ph ph-arrow-right"></i></a></div>
+      <div class="ck">
+        <div class="ck-i" style="grid-template-columns:24px minmax(0,1fr) auto"><span class="ck-b" style="border-color:var(--green);background:var(--green);color:#032015">✓</span>
+          <div style="min-width:0"><div class="ck-t">5xx on /api/tickets<small>Today 09:12 · 14 min · resolved by the squad</small></div>
+            <div class="fl" style="padding:6px 0 0"><span class="fl-n" data-t="signal"><i class="ph ph-bell-ringing"></i>Alert</span><span class="fl-w" data-s="done"></span>
+              <span class="fl-n" data-t="agent"><span class="face" data-a="beacon" data-size="s"></span>SRE squad</span><span class="fl-w" data-s="done"></span>
+              <span class="fl-n" data-t="decision"><i class="ph ph-magnifying-glass"></i>Pool exhausted</span><span class="fl-w" data-s="done"></span>
+              <span class="fl-n" data-t="done"><i class="ph ph-wrench"></i>Pool 10→20</span><span class="fl-w" data-s="done"></span>
+              <span class="fl-n" data-t="done"><i class="ph ph-check-circle"></i>Recovered</span></div></div>
+          <a class="link-chip"><i class="ph ph-robot"></i>Graph ↗</a></div>
+        <div class="ck-i" style="grid-template-columns:24px minmax(0,1fr) auto"><span class="ck-b" style="border-color:var(--amber);background:var(--amber);color:#1b1300;border-radius:50%">!</span>
+          <div style="min-width:0"><div class="ck-t">Slow ticket list<small>Wed · fix needs your approval</small></div>
+            <div class="fl" style="padding:6px 0 0"><span class="fl-n" data-t="signal"><i class="ph ph-timer"></i>p95 1.4s</span><span class="fl-w" data-s="done"></span>
+              <span class="fl-n" data-t="agent"><span class="face" data-a="beacon" data-size="s"></span>SRE squad</span><span class="fl-w" data-s="done"></span>
+              <span class="fl-n" data-t="decision"><i class="ph ph-database"></i>Missing index</span><span class="fl-w"></span>
+              <span class="fl-n" data-t="you">Approve fix</span><span class="fl-w"></span><span class="fl-n" data-t="todo">Recovered</span></div></div>
+          <a class="link-chip"><i class="ph ph-robot"></i>Graph ↗</a></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="amber"><i class="ph ph-bell-ringing"></i></span><h3>Alerts</h3><span class="tag" data-tone="green">0 firing</span></div>
+      <div class="ck">
+        <div class="ck-i"><span class="dot" data-s="done"></span><span class="ck-t">5xx on /api/tickets<small>page · resolved 09:26</small></span><span class="tag" data-tone="green">resolved</span></div>
+        <div class="ck-i"><span class="dot"></span><span class="ck-t">p95 &gt; 800ms<small>ticket · quiet 3d</small></span><span class="tag" data-tone="idle">ok</span></div>
+        <div class="ck-i"><span class="dot"></span><span class="ck-t">Health check down<small>page · quiet 5d</small></span><span class="tag" data-tone="idle">ok</span></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="teal"><i class="ph ph-shield-check"></i></span><h3>Monitoring</h3><span class="pin">3</span></div>
+      <div class="cap"><span class="face" data-a="beacon" data-size="l"></span><div class="cap-body"><div class="cap-name">Beacon's pack</div>
+        <div class="cap-now"><span class="dot" data-s="done"></span>6 rules · in repo · on deploy</div></div></div>
+      <div class="row wrap" style="gap:6px;margin-top:10px"><span class="tag"><i class="ph ph-pulse"></i>Uptime</span><span class="tag"><i class="ph ph-warning"></i>5xx</span><span class="tag"><i class="ph ph-timer"></i>Latency</span><span class="tag"><i class="ph ph-hard-drive"></i>Disk</span><span class="tag"><i class="ph ph-database"></i>DB conns</span><span class="tag"><i class="ph ph-certificate"></i>TLS</span></div>
+      <a class="more" style="display:inline-block;margin-top:10px;font-size:.6rem"><i class="ph ph-file-code"></i> monitoring/alerts.yaml ↗</a>
+    </section>
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="blue"><i class="ph ph-link"></i></span><h3>Go deeper</h3></div>
+      <div class="grid" style="gap:8px">
+        <a class="pick" style="border-color:var(--border)"><i class="ph ph-chart-line"></i>Grafana dashboard<span class="wf-spacer"></span><i class="ph ph-arrow-square-out faint"></i></a>
+        <a class="pick" style="border-color:var(--border)"><i class="ph ph-terminal-window"></i>Logs · staging<span class="wf-spacer"></span><i class="ph ph-caret-right faint"></i></a>
+        <a class="pick" style="border-color:var(--border)" title="Org-wide view of every app and BOSS itself"><i class="ph ph-pulse"></i>Observability › this app<span class="wf-spacer"></span><i class="ph ph-arrow-right faint"></i></a>
+      </div>
+    </section>
+  </div>
+</section>
+
+<div class="notes"><b>Design notes</b><ol>
+  <li><b>1</b> One card per environment with the four numbers that answer "is it OK?". The header's health chip (every tab) opens this tab; the ring/sparks open the environment drawer with full charts.</li>
+  <li><b>2</b> Each incident is its mini flow (alert → SRE squad → root cause → fix → recovered); "Graph ↗" opens the full diagram in Agents at work. An incident waiting on you also shows in Needs you.</li>
+  <li><b>3</b> Beacon installs the monitoring pack on first deploy (rules live in the repo). Grafana, logs and the org-wide Observability view are one click away; Observability links back here.</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>

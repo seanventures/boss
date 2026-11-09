@@ -56,7 +56,6 @@ NEXT_STEPS: tuple[dict[str, Any], ...] = (
 )
 
 _LIVE_RUN = ("queued", "validating", "running", "waiting", "paused", "blocked")
-_OPEN_GATE = ("pending", "delegated")
 _PLAN_STEPS = ("meeting", "spec_review", "research")
 
 
@@ -186,11 +185,13 @@ def mapping(item: Optional[dict[str, Any]]) -> dict[str, Any]:
     state = str(item.get("status") or "pending")
     files, parsed = int(item.get("files") or 0), int(item.get("parsed") or 0)
     nodes = int(((item.get("graph") or {}).get("nodes")) or 0)
+    counts = {"files": files or None, "parsed": parsed if files else None}
     if state == "indexed" or (state not in ("queued", "running", "pending") and nodes > 0):
-        return {"state": "done", "percent": 100, "done": True}
+        return {"state": "done", "percent": 100, "done": True,
+                "files": files or None, "parsed": files or parsed or None}
     if state == "running":
         pct = min(99, round(parsed * 100 / files)) if files else 5
-        return {"state": "running", "percent": pct, "done": False}
+        return {"state": "running", "percent": pct, "done": False, **counts}
     if state in ("failed", "too_large"):
         return {"state": "failed", "percent": 0, "done": False, "error": item.get("error") or state}
     return {"state": "queued", "percent": 0, "done": False}
@@ -226,6 +227,8 @@ def repo_facts(connection: Connection, project_id: str, repo_id: str, *,
             "description": row.get("description"), "private": row.get("private"),
             "facts": found, "read_from": source if paths else None,
             "mapping": mapping(item), "in_project": item is not None,
+            # Add a project › Map code "0 / 214 files": how many files the repository has.
+            "files_total": len(paths or []) or None,
             "suggested_name": suggested_name(full_name)}
 
 
@@ -344,13 +347,17 @@ def _work(connection: Connection, project_id: str, limit: int = 8) -> list[dict[
     if not runs:
         return []
     ids = [r["id"] for r in runs]
+    from .decision_actions import ATTENTION_CANDIDATE_STATUSES, attention
+
     gates: dict[str, str] = {}
     for g in connection.execute(text(
-            "SELECT s.workflow_run_id, s.step_id FROM workflow_step_runs s "
+            "SELECT s.workflow_run_id, s.step_id, dd.* FROM workflow_step_runs s "
             "JOIN decisions dd ON dd.id = s.decision_id "
             "WHERE s.workflow_run_id = ANY(:ids) AND s.status = 'waiting' AND dd.status = ANY(:open) "
-            "ORDER BY s.created_at"), {"ids": ids, "open": list(_OPEN_GATE)}).mappings().all():
-        gates.setdefault(str(g["workflow_run_id"]), str(g["step_id"]))
+            "ORDER BY s.created_at"),
+            {"ids": ids, "open": list(ATTENTION_CANDIDATE_STATUSES)}).mappings().all():
+        if attention(dict(g)) == "needs_action":    # the one rule every surface uses
+            gates.setdefault(str(g["workflow_run_id"]), str(g["step_id"]))
     prs: dict[str, str] = {}
     for p in connection.execute(text(
             "SELECT workflow_run_id, output->>'pull_request_url' AS url FROM workflow_step_runs "

@@ -92,8 +92,15 @@ def admit_new_item(connection: Connection, *, project_id: str, fingerprint: str,
     return {"ok": True}
 
 
-def admit_start(connection: Connection, *, project_id: str) -> dict[str, Any]:
-    """May one more ambient item move to in_progress here now (stop, breaker, concurrency)?"""
+#: Work that never waits for a concurrency slot behind backlog items: an incident is urgent
+#: (HelpDesk AI 2026-11-07: two security patches in progress would have held INC-2's squad).
+URGENT_CLASSES = frozenset({"incident_response", "incident_staging_mitigation"})
+
+
+def admit_start(connection: Connection, *, project_id: str,
+                task_class: Optional[str] = None) -> dict[str, Any]:
+    """May one more ambient item move to in_progress here now (stop, breaker, concurrency)?
+    An incident (URGENT_CLASSES) is held only by the stop and the breaker."""
     stopped = policy.stop_state(connection, project_id)
     if stopped["stopped"]:
         return _refuse(connection, project_id, "stopped",
@@ -101,6 +108,8 @@ def admit_start(connection: Connection, *, project_id: str) -> dict[str, Any]:
     breaker = check_breaker(connection, project_id)
     if breaker["tripped"]:
         return _refuse(connection, project_id, "breaker", breaker["reason"])
+    if task_class in URGENT_CLASSES:
+        return {"ok": True}
     limit = int(policy.settings_for(connection, project_id)["max_concurrent"])
     running = int(connection.execute(text(
         "SELECT count(*) FROM work_items WHERE project_id = :p AND ambient AND "

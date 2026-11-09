@@ -3200,6 +3200,31 @@ def _already_spawned_followup(engine, parent_run_id: str) -> bool:
         return False
 
 
+def _findings_to_pass_two(engine, project_id: str, run_id: str, workflow_run_id: str,
+                          findings: list[dict]) -> tuple[bool, str]:
+    """(follow-up still wanted, why not). When this run's workflow will run its More tests pass
+    on this branch next (workflow_capability_runner.pass_two_pending), the findings are put on
+    this run (`pass_two_findings`, which that pass's brief carries) and no follow-up starts."""
+    from .workflow_capability_runner import PASS_TWO_FINDINGS, pass_two_pending
+
+    try:
+        with _transaction(engine) as c:
+            if not pass_two_pending(c, workflow_run_id):
+                return True, ""
+            c.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                "|| jsonb_build_object(CAST(:k AS text), CAST(:f AS jsonb)) WHERE id = :id"),
+                {"k": PASS_TWO_FINDINGS, "f": json.dumps(list(findings or [])[:20]),
+                 "id": run_id})
+            emit_event(c, project_id, "code_task.deferred_findings_to_pass_two", "boss",
+                       "code_task_run", run_id,
+                       {"workflow_run_id": workflow_run_id, "findings": list(findings)[:20]})
+    except Exception:  # noqa: BLE001 — unknown: the ordinary follow-up (still one owner)
+        _log_caught(logger)
+        return True, ""
+    return False, "handed to the workflow's More tests pass, which works on this branch next"
+
+
 def _spawn_deferred_findings_task(
     engine, settings, jobs, *, project_id, task_id, spec, base_branch,
     findings: list[dict], parent_run_id: str, parent_title: str,
@@ -4215,6 +4240,54 @@ def _authority_refused(engine, budget, project_id: str, reservation_id: Optional
     return AuthorityRefused(getattr(exc, "reason", None) or type(exc).__name__)
 
 
+def _hold_for_github(engine, run_id: str, result: Any) -> Any:
+    """A build that finished while GitHub was down (github_outage, BOSSAPP-922) ends "waiting
+    for GitHub", in words, never failed: its commits are on this machine's mirror, its change set
+    waits for the push, and a queued job pushes it and opens the pull request when GitHub
+    answers. Every other build passes through unchanged."""
+    try:
+        from . import github_outage
+        from .local_repo_host import is_local_pr_url
+
+        with _transaction(engine) as c:
+            row = c.execute(sql(
+                "SELECT project_id, status, pull_request_url, finalize_ctx, spec FROM code_task_runs "
+                "WHERE id = :id"), {"id": run_id}).mappings().first()
+            if row is None:
+                return result
+            fctx = row["finalize_ctx"] or {}
+            if not fctx.get("github_offline") or not is_local_pr_url(row["pull_request_url"]):
+                return result
+            if row["status"] in ("failed", "cancelled", github_outage.WAITING_STATUS):
+                return result
+            cs = c.execute(sql(
+                "SELECT id, repository, branch, base_branch FROM local_change_sets "
+                "WHERE run_id = :r OR branch = :b ORDER BY created_at DESC LIMIT 1"),
+                {"r": run_id, "b": fctx.get("work_branch") or ""}).mappings().first()
+            if cs is None:
+                return result
+            owner, _, repo = str(cs["repository"]).partition("/")
+            pending_id = github_outage.record_pending(
+                c, project_id=row["project_id"], owner=owner, repo=repo, branch=cs["branch"],
+                base_branch=cs["base_branch"], run_id=run_id, change_set_id=cs["id"],
+                reason=str(fctx.get("github_offline") or "GitHub did not answer"))
+            github_outage.mark_run_waiting(c, run_id, reason=str(fctx.get("github_offline")),
+                                           pending_id=pending_id)
+            emit_event(c, row["project_id"], "code_task.waiting_for_github", "boss",
+                       "code_task_run", run_id, {"pending_id": pending_id,
+                                                 "branch": cs["branch"]})
+        out = dict(result) if isinstance(result, dict) else {}
+        out.update({"status": github_outage.WAITING_STATUS, "done": True,
+                    "push_pending_id": pending_id,
+                    "message": "Waiting for GitHub: the build finished and its commits are safe "
+                               "on this machine; BOSS pushes them and opens the pull request as "
+                               "soon as GitHub answers."})
+        return out
+    except Exception:  # noqa: BLE001 — never turn a finished build into a failure over this
+        _log_caught(logger)
+        return result
+
+
 def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            *, fencing_token: Optional[str] = None) -> dict:
     """One governed attempt, with the MCP servers of the agent it runs as (skills-mcp E6).
@@ -4251,8 +4324,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _template_files(engine, run, _sbx):
             if mcp is not None and _sbx is not None:
                 mcp.move_into(_sbx)
-            return _run_governed_code_task(engine, settings, jobs, run_id,
-                                           fencing_token=fencing_token, mcp=mcp)
+            result = _run_governed_code_task(engine, settings, jobs, run_id,
+                                             fencing_token=fencing_token, mcp=mcp)
+        return _hold_for_github(engine, run_id, result)
     finally:
         if mcp is not None:
             mcp.cleanup()
@@ -4337,6 +4411,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if plane.get("owner") and plane.get("repo"):
                 _owner = plane["owner"]
                 _repo = plane["repo"]
+            if plane.get("github_plane") == "local" and (spec.get("owner"), spec.get("repo")) != (
+                    _owner, _repo):
+                # The run names its LOCAL repository from here on, so its preview, its deploy
+                # and its merge read the bare repository, never the install's GitHub default.
+                c.execute(sql(
+                    "UPDATE code_task_runs SET spec = COALESCE(spec, '{}'::jsonb) || "
+                    "jsonb_build_object('owner', CAST(:o AS text), 'repo', CAST(:r AS text), "
+                    "'repo_host', 'local'), updated_at = now() WHERE id = :id"),
+                    {"o": _owner, "r": _repo, "id": run_id})
+                spec = {**spec, "owner": _owner, "repo": _repo, "repo_host": "local"}
             emit_event(
                 c, project_id, "code_task.github_plane", "boss", "code_task_run",
                 run_id,
@@ -4350,6 +4434,32 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     except Exception:  # noqa: BLE001 — never block a run on plane bookkeeping
         _log_caught(logger)
         pass
+    # GITHUB IS DOWN, THE BUILD GOES ON (github_outage, BOSSAPP-922): a GitHub repository's
+    # adapter falls back to the repository's local mirror once GitHub stops answering after the
+    # retries; the build then ends "waiting for GitHub" and a queued job pushes it later.
+    from . import github_outage as _gho
+    from .local_repo import is_local_owner as _is_local_owner_early
+
+    _outage: Optional[_gho.ResilientGitHub] = None
+    if (not _is_local_owner_early(_owner) and _owner and _repo
+            and getattr(settings, "github_outage_mirror", True)):
+        def _record_offline(reason: str) -> None:
+            from .local_repo_host import LocalSandboxPipeline
+
+            sf.pipeline = LocalSandboxPipeline(settings, _outage.mirror())
+            with _transaction(engine) as _c:
+                _c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                    "|| jsonb_build_object('github_offline', CAST(:why AS text)), updated_at = now() "
+                    "WHERE id = :id"), {"why": reason[:300], "id": run_id})
+                emit_event(_c, project_id, "code_task.github_offline", "boss", "code_task_run",
+                           run_id, {"reason": reason[:300],
+                                    "words": "GitHub is not answering; the build continues on "
+                                             "this machine's copy of the repository."})
+
+        _outage = _gho.ResilientGitHub(sf.github, settings=settings, project_id=project_id,
+                                       run_id=run_id, engine=engine, on_switch=_record_offline)
+        sf.github = _outage
     title = run["title"]
     # APP-3 (#93): when the task didn't specify tests, resolve the target from the project type —
     # web/TS gets build/typecheck/lint/e2e (the scaffold's scripts) so the repair loop optimizes a
@@ -4503,7 +4613,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except Exception:  # noqa: BLE001
             _log_caught(logger)
             token = None
-    if not token:
+    from .local_repo import is_local_owner as _is_local_owner
+
+    if not token and not _is_local_owner(owner):
         # Same third source as the ungoverned path: the credential this project registered in
         # Setup, after the App and the environment.
         with _transaction(engine) as c:
@@ -5384,14 +5496,32 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # token. A refused authority fails the build; it never falls back to the shared token.
     from boss_engine.identity import runs as identity_runs
 
+    from . import local_repo as _local_repo
+
+    _local_code = _local_repo.is_local_owner(owner)
     try:
-        identity_run = identity_runs.start_code_task_run(
-            engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
-            role_key=identity_runs.code_task_builder(spec, fctx), job_id=job_id)
+        # A LOCAL REPOSITORY (BOSSAPP-918) is on this machine: nothing outside is reached, so
+        # there is no GitHub authority to delegate and no egress to route through.
+        if not _local_code:
+            identity_run = identity_runs.start_code_task_run(
+                engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
+                role_key=identity_runs.code_task_builder(spec, fctx), job_id=job_id)
     except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
         _log_caught(logger)
         raise _authority_refused(engine, budget, project_id, reservation_id, run_id, exc) from exc
     egress_access = identity_run[1] if identity_run is not None else None
+    if _local_code:
+        token = ""
+        if use_microvm:
+            raise RuntimeError(
+                "This project's code is local, and a micro-VM stage cannot reach a repository on "
+                "this machine. Build it on the local sandbox (Project settings › Sandbox), or "
+                "publish it to GitHub first.")
+        # The sandbox clones the bare repository over file:// — the same provision call, the
+        # clone URL is the only difference.
+        egress_access = SimpleNamespace(
+            clone_url=_local_repo.file_url(_local_repo.bare_path(owner, repo, settings)),
+            git_config=[], own_git=None)
     if identity_run is not None:
         token = ""
         guest_egress["spec"] = {"clone_url": egress_access.clone_url,
@@ -5413,8 +5543,34 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
         with _transaction(engine) as c:
             _phase(c, "provisioning")
-        sandbox.provision(owner, repo, base_branch=base_branch,
-                          work_branch=work_branch, token=token, egress=egress_access)
+        if _outage is not None and not use_microvm:
+            # THE MIRROR IS FETCHED AT BUILD START (all branches and tags), so an outage later in
+            # the build — or one that already began — has this repository to build on.
+            _murl, _menv = _gho.access_for(egress_access, owner, repo, token)
+            _mirror = _gho.refresh_mirror(settings, owner, repo, url=_murl, env=_menv)
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.github_mirror", "boss", "code_task_run",
+                           run_id, {"ok": _mirror["ok"],
+                                    **({} if _mirror["ok"] else {"error": _mirror["error"][-200:]})})
+        try:
+            sandbox.provision(owner, repo, base_branch=base_branch,
+                              work_branch=work_branch, token=token, egress=egress_access)
+        except Exception as _clone_error:  # noqa: BLE001 — re-raised unless GitHub is down
+            if (_outage is None or use_microvm or not _gho.is_outage(_clone_error)
+                    or not _gho.mirror_ready(owner, repo, settings)):
+                raise
+            _outage.go_offline(f"clone: {_clone_error}")
+            try:
+                sandbox.teardown()
+            except Exception:  # noqa: BLE001
+                _log_caught(logger)
+            from . import local_repo as _lr
+
+            sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
+            sandbox.provision(owner, repo, base_branch=base_branch, work_branch=work_branch,
+                              token="", egress=SimpleNamespace(
+                                  clone_url=_lr.file_url(_lr.mirror_path(owner, repo, settings)),
+                                  git_config=[], own_git=None))
         if _brief_refused:
             _repo_verdict = repository_stack_verdict(getattr(sandbox, "path", None))
             if _repo_verdict is None or not _repo_verdict.ok:
@@ -5838,9 +5994,30 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             """Authoritative test command, scoped to the official app directory. BOSS's own
             install (NPM_INSTALL_CMD, the one every gate runs) is its first step."""
             result = _run_verify_once(record=record)
+            env = None
+            if record and not result.ok:
+                # COULD THE SUITE RUN AT ALL? (suite_environment) When its failures share one
+                # environmental cause — the run's test database refused the login because the
+                # build-services server restarted empty (crun_de96bf12) — they are not the app's:
+                # BOSS makes the database usable again and runs the suite once more; if it still
+                # cannot, the build says "BOSS couldn't run the full suite", never "N failing".
+                from . import suite_environment
+
+                env = suite_environment.after_verify(
+                    engine, settings, project_id=project_id, run_id=run_id,
+                    output=last_verify_output, lease=_services_lease)
+                if env and env.get("restored") == "restored":
+                    result = _run_verify_once(record=record)
+                    env = (suite_environment.classify(last_verify_output,
+                                                      boss_service=_services_lease is not None)
+                           if not result.ok else None)
             if record:
                 _install_fail[0] = verification_target.install_failure(result)
                 _failed_check[0] = verification_target.failed_check(result)
+                if env:
+                    from .suite_environment import failed_check as _env_check
+
+                    _failed_check[0] = _env_check(env, str(getattr(result, "command", "") or ""))
             return result
 
         def _run_verify_once(*, record: bool = True):
@@ -9429,6 +9606,31 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.followup_skipped", "boss",
                            "code_task_run", run_id, {"reason": _followup_skip_reason})
+        # ONE OWNER PER PULL REQUEST (code_task_service.lineage_branch_owner). A workflow whose
+        # More tests pass has not started yet hands the deferred findings to THAT pass — it
+        # extends this same branch and PR next — instead of starting a second run on the branch
+        # beside it; and a follow-up never starts while another run of the lineage works there.
+        if (deferred_findings and _followup_ok and not _checks
+                and not fctx.get("is_followup") and fctx.get("workflow_run_id")):
+            _followup_ok, _followup_skip_reason = _findings_to_pass_two(
+                engine, project_id, run_id, str(fctx.get("workflow_run_id")),
+                deferred_findings)
+        if deferred_findings and _followup_ok and not fctx.get("is_followup"):
+            from .code_task_service import lineage_branch_owner
+
+            with _transaction(engine) as c:
+                _owner = lineage_branch_owner(c, project_id, str(fctx.get("root_run_id")
+                                                                 or run_id),
+                                              exclude=(run_id,))
+            if _owner:
+                _followup_ok = False
+                _followup_skip_reason = (f"{_owner['id']} is already working on this branch; "
+                                         "one run owns a pull request at a time")
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.followup_skipped", "boss",
+                               "code_task_run", run_id,
+                               {"reason": _followup_skip_reason, "branch_owner": _owner["id"],
+                                "findings": deferred_findings[:20]})
         # A PR that opened with its checks failing always gets its follow-up: it is the fix.
         if (deferred_findings
                 and (getattr(settings, "code_review_followup_tasks", True) or _checks)

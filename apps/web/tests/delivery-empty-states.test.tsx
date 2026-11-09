@@ -35,7 +35,7 @@ describe("Infra empty-state honesty (BOSS-344)", () => {
   it("no machine and no hardware place: one line and Add host, no fleet chrome", async () => {
     await mountFleet("view=fleet", { routes: [{ match: /^\/v1\/infra\/fleet$/, etag: true, reply: emptyFleet }] });
     expect(byTestId("infra-fleet-empty")?.textContent).toContain("No machines yet");
-    expect(byTestId("inf-empty-add-host")?.textContent).toBe("Add host");
+    expect(byTestId("inf-empty-add-host")?.textContent).toBe("Add a server");
     expect(document.querySelector('[data-testid="inf-rack"], [data-testid="inf-rack-this"], [data-testid="inf-unplaced"]')).toBeNull();
     // P-I-08: the old h2 sentences are gone.
     expect(document.body.textContent).not.toContain("Nothing deploys yet");

@@ -187,3 +187,32 @@ def test_a_follow_up_belongs_to_its_parents_workflow_run(env, staffed):  # noqa:
             checks_failing={"failed": ["written_tests_pass"]}, parent_workflow_run_id=wf_run)
     assert _fctx(env, new).get("workflow_run_id") == wf_run
     _runs_as_person(env, new, grant)
+
+
+def test_a_retry_of_a_follow_up_is_still_a_follow_up(env, staffed):  # noqa: F811
+    """boss-platform 2026-10-28..11-03: retries did not carry `is_followup`, so the recursion
+    guard ("a follow-up never spawns its own follow-up") saw each repair round of a follow-up as
+    a fresh build, and chains grew "Follow-up: checks failing — Follow-up: checks failing — …"."""
+    _, crun, _ = _workflow_build(env)
+    _shipped(env, crun)
+    new = _follow_up(env, crun)
+    with env.engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET status='failed' WHERE id=:r"), {"r": new})
+    with lineage.acting(WORKER_KEY):
+        child = cts.retry_code_task(env.engine, get_settings(), _Jobs(), new)["run_id"]
+    fctx = _fctx(env, child)
+    assert fctx.get("is_followup") is True and fctx.get("root_run_id") == crun, fctx
+
+
+def test_every_follow_up_spawn_names_its_workflow_run():
+    """Both spawn paths (the gate's and the parked build's) pass the parent's workflow run, so a
+    follow-up is listed on the run it belongs to, never as work of its own."""
+    for module in (cts, governed):
+        source = inspect.getsource(module)
+        for match in re.finditer(r"(?<!def )\b_spawn_deferred_findings_task\(\s*\n", source):
+            depth, end = 0, match.end()
+            for end in range(match.end() - 2, len(source)):
+                depth += {"(": 1, ")": -1}.get(source[end], 0)
+                if depth == 0:
+                    break
+            assert "parent_workflow_run_id=" in source[match.start():end + 1], module.__name__

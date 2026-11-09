@@ -82,6 +82,8 @@ NON_PROD_ENVS = frozenset({"staging", "stage", "preview", "dev", "development", 
 MAX_MODEL_CALLS = 6
 #: A past incident counts as "the same signature" at or above this similarity.
 MIN_SIMILARITY = 0.25
+#: With no model to judge, a precedent this similar is taken as the same lesson (RuleMind).
+SAME_LESSON_SIMILARITY = 0.5
 MAX_HARDENING = 3
 
 Q_TRIAGE = "How bad is it, and who works it?"
@@ -135,7 +137,8 @@ class Mind(Protocol):
     def choose(self, connection: Connection, *, project_id: str, item_id: str, seat: str,
                kind: str, question: str, options: list[dict[str, Any]],
                context: Mapping[str, Any]) -> dict[str, Any]:
-        """{key, reason, confidence, by, cost_usd_micros}. `kind` is verdict | critique | vote."""
+        """{key, reason, confidence, by, cost_usd_micros}. `kind` is verdict | critique | vote |
+        same_lesson (is today's incident the precedent's lesson again: same | different)."""
 
 
 class RuleMind:
@@ -146,6 +149,13 @@ class RuleMind:
     def choose(self, connection, *, project_id, item_id, seat, kind, question, options,
                context) -> dict[str, Any]:
         del connection, project_id, item_id, question
+        if kind == "same_lesson":
+            # No model: the same lesson only when the signatures match closely.
+            close = float(context.get("similarity") or 0) >= SAME_LESSON_SIMILARITY
+            return {"key": "same" if close else "different", "confidence": 0.6, "by": self.by,
+                    "reason": ("The signature matches the precedent closely (BOSS's evidence "
+                               "rule, no model verdict)." if close else
+                               "The signatures differ too much to call it the same lesson.")}
         if kind == "verdict":
             best = max(options, key=lambda o: float(o.get("confidence") or 0))
             return {"key": best["key"], "confidence": float(best.get("confidence") or 0),
@@ -153,7 +163,9 @@ class RuleMind:
                               "verdict).", "by": self.by}
         strong = float(context.get("confidence") or 0) >= 0.7
         if kind == "critique":
-            key = "agree" if strong else "concern"
+            # Weak evidence is an objection (a person decides), never a "concern": a concern is
+            # an acceptance with a named risk (collab.tally), and the rule has no risk to name.
+            key = "agree" if strong else "object"
             return {"key": key, "confidence": 0.6, "by": self.by,
                     "reason": ("The cause is corroborated and the action has an undo."
                                if strong else "The cause is not corroborated yet.")}
@@ -246,6 +258,28 @@ class Effects(Protocol):
                        ctx: "Ctx") -> dict[str, Any]: ...
 
 
+def rollback_live(connection: Connection, incident_id: str, deployment_id: str
+                  ) -> dict[str, Any]:
+    """Is the rollback redeploy live? {state: pending | live | failed, at, word}. When it is,
+    the incident's mitigated_at becomes the moment it went live (not when it was decided)."""
+    row = connection.execute(text(
+        "SELECT status, commit_sha, finished_at, updated_at FROM stack_deployments "
+        "WHERE id = :d"), {"d": deployment_id}).mappings().first()
+    if row is None:
+        return {"state": "failed", "at": None, "word": "The rollback was not planned"}
+    sha = str(row["commit_sha"] or "")[:7]
+    if row["status"] == "healthy":
+        at = row["finished_at"] or row["updated_at"]
+        connection.execute(text(
+            "UPDATE incidents SET mitigated_at = :t WHERE id = :i"), {"t": at, "i": incident_id})
+        return {"state": "live", "at": at, "word": f"Rolled back: {sha} is live"}
+    if row["status"] in ("failed", "rejected", "cancelled", "canceled", "superseded"):
+        return {"state": "failed", "at": None,
+                "word": f"The rollback to {sha} did not go live ({row['status']})"}
+    return {"state": "pending", "at": None,
+            "word": f"Waiting for the rollback to {sha} to go live"}
+
+
 class BossEffects:
     """Real targets. A rollback plans a governed redeploy of the last healthy commit
     (stack_deploy.rollback_stack_deploy — its own approval rules still apply); the fix is the
@@ -262,9 +296,27 @@ class BossEffects:
         if not deployment:
             return {"ok": False, "word": "No BOSS deployment to roll back"}
         planned = rollback_stack_deploy(connection.engine, self.settings,
-                                        deployment_id=deployment, actor=party_id(actor))
-        return {"ok": True, "word": f"Redeploying {str(ctx.deploy.get('previous_commit_sha'))[:7]}",
+                                        deployment_id=deployment, actor=party_id(actor),
+                                        authority=ctx.rollback_authority)
+        to = str((planned or {}).get("commit_sha") or self.rollback_target(connection, ctx=ctx)
+                 or "")
+        # PENDING until the redeploy is live: mitigated_at is when it went live, and recovery is
+        # judged from then (check_recovery), never from when it was decided.
+        return {"ok": True, "word": f"Redeploying {to[:7]}", "pending": True,
+                "deployment_id": str((planned or {}).get("id") or ""),
                 "ref": str((planned or {}).get("id") or deployment)}
+
+    def rollback_target(self, connection, *, ctx) -> Optional[str]:
+        """The last KNOWN-GOOD commit the serving deployment would roll back to
+        (stack_deploy.rollback_option, the route's own rule), or None: then no rollback."""
+        from .stack_deploy import get_stack_deployment
+
+        deployment = ctx.deploy.get("stack_deployment_id")
+        if not deployment:
+            return None
+        found = get_stack_deployment(connection, str(deployment)) or {}
+        return found.get("rollback_commit") if "rollback" in (found.get("actions") or []) \
+            else None
 
     def start_fix(self, connection, *, project_id, ctx, brief, actor) -> dict[str, Any]:
         from .incident_response import _response_in_flight
@@ -275,37 +327,47 @@ class BossEffects:
                 return {"ok": True, "link": ("workflow_run", running), "joined": True,
                         "word": "Joined the running Incident Response"}
         from .app_alerts import RESPONSE_WORKFLOW
-        from .event_dispatch import start_workflow_on_grant
+        from .event_dispatch import SQUAD_DOOR, start_workflow_on_grant
 
+        # The squad's own door: event_dispatch re-derives its authority from this item (the
+        # class's level here, or a person's approval on its card) and refuses otherwise.
         got = start_workflow_on_grant(
             connection, project_id=project_id, workflow_key=RESPONSE_WORKFLOW,
-            link=(ctx.rule or {}).get("respond_link"), actor="monitor",
+            link=(ctx.rule or {}).get("respond_link"), actor=str(actor or "monitor"),
             input_data={"incident_id": ctx.incident_id, "target_id": ctx.target_id,
                         "extends_run_id": ctx.deploy.get("extends_run_id"),
                         "commit_sha": ctx.deploy.get("commit_sha"),
                         "previous_commit_sha": ctx.deploy.get("previous_commit_sha"),
                         "repository": ctx.deploy.get("repository"), "title": ctx.item["title"],
                         "directive": brief[:2000]},
-            dedupe_key=f"squad:{ctx.item['id']}:fix", door="ambient", door_id=ctx.item["id"],
+            dedupe_key=f"squad:{ctx.item['id']}:fix", door=SQUAD_DOOR, door_id=ctx.item["id"],
             door_name="Incident squad fix")
+        authority = got.get("authority") or {}
         if got.get("run_id"):
-            return {"ok": True, "link": ("workflow_run", got["run_id"]), "word": "Fix started"}
-        return {"ok": False, "word": got.get("word") or "Could not start the fix"}
+            return {"ok": True, "link": ("workflow_run", got["run_id"]), "word": "Fix started",
+                    "authority": authority}
+        return {"ok": False, "word": got.get("word") or "Could not start the fix",
+                "authority": authority}
 
     def check_recovery(self, connection, *, project_id, ctx) -> dict[str, Any]:
         from .incident_response import look_at_recovery, start_recovery_check
 
         if not ctx.incident_id or not ctx.target_id:
-            return {"status": "unknown", "word": "No app monitor to verify against"}
+            return alert_recovery(connection, ctx)
         squad_ctx = (ctx.fctx.get("squad") or {})
         check_id = squad_ctx.get("recovery_check_id")
+        # Judged from when the mitigation went LIVE (Pass.verify's rollback gate), never from
+        # when it was decided: the bad release's own minutes are not "recovered".
         row = (look_at_recovery(connection, check_id) if check_id else
-               start_recovery_check(connection, project_id, ctx.incident_id))
+               start_recovery_check(connection, project_id, ctx.incident_id,
+                                    since=ctx.mitigation_live_at))
         if not check_id:
             _merge_squad_ctx(connection, ctx.incident_id, {"recovery_check_id": row["id"],
                                                            "item_id": ctx.item["id"]})
-        status = {"recovered": "recovered", "failed": "failing", "timed_out": "failing"}.get(
-            row["status"], "waiting")
+        # Timed out = the window closed without enough traffic to say either way: NOT the same
+        # as failing, and the card a person reads must not claim it is.
+        status = {"recovered": "recovered", "failed": "failing",
+                  "timed_out": "unconfirmed"}.get(row["status"], "waiting")
         return {"status": status, "word": row.get("summary") or status,
                 "evidence": [{"kind": "incident", "ref": ctx.incident_id,
                               "note": clean_text(row.get("summary"), 200)}]}
@@ -324,6 +386,14 @@ class Ctx:
     diff: dict[str, Any] = field(default_factory=dict)
     reports: int = 0
     rule: Optional[dict[str, Any]] = None
+    #: The app's name and environment as a person reads them (app_place), "" when unknown.
+    place_name: str = ""
+    place_env: str = ""
+    #: The decision a rollback runs under (rollback_approval): set by the squad just before it
+    #: calls Effects.rollback, so the deploy asks nobody a second time.
+    rollback_authority: Optional[dict[str, Any]] = None
+    #: When the rollback redeploy went live (Pass.verify's gate): recovery is judged from then.
+    mitigation_live_at: Optional[datetime] = None
 
     @property
     def incident_id(self) -> Optional[str]:
@@ -348,10 +418,23 @@ class Ctx:
                    or (self.incident or {}).get("service") or "the app")
 
     @property
-    def environment(self) -> str:
+    def env_known(self) -> str:
+        """The environment the rows say, or "" — never a guess a person would read as fact."""
         env = (self.fctx.get("app") or {}).get("environment") or (
-            ((self.alert or {}).get("labels") or {}).get("env")) or "production"
-        return str(env).lower()
+            ((self.alert or {}).get("labels") or {}).get("env")) or self.place_env
+        return str(env or "").lower()
+
+    @property
+    def environment(self) -> str:
+        """For gating: an environment nothing names is treated as production (the safe side).
+        Words a person reads use `env_known`."""
+        return self.env_known or "production"
+
+    @property
+    def app_name(self) -> str:
+        """The app by the name a person knows it (a target's or a monitored service's name),
+        never a raw id."""
+        return self.place_name or plain_app(self.app)
 
     @property
     def is_prod(self) -> bool:
@@ -433,6 +516,7 @@ def load_context(connection: Connection, project_id: str, item_id: str) -> Ctx:
             {"ids": [i for i in incident_ids if i], "p": project_id}).mappings().first()
         incident = dict(row) if row else None
     ctx = Ctx(item=item, signals=sigs, alert=alert, incident=incident)
+    ctx.place_name, ctx.place_env = app_place(connection, project_id, item, alert=alert)
     if alert and alert.get("rule_id"):
         rule = connection.execute(text("SELECT * FROM app_alert_rules WHERE id = :r"),
                                   {"r": alert["rule_id"]}).mappings().first()
@@ -569,9 +653,37 @@ def similar_incidents(connection: Connection, project_id: str, *, app: str,
                           "symptom": detail.get("symptom"),
                           "cause": detail.get("cause_summary"),
                           "fix": detail.get("fix_summary"),
-                          "incident": attrs.get("incident_id"),
+                          "incident": attrs.get("incident_ref") or attrs.get("incident_id"),
+                          "incident_id": attrs.get("incident_id"),
+                          "cause_key": attrs.get("cause_key"),
+                          "bad_releases": precedent_bad_releases(attrs),
                           "similarity": round(min(score, 1.0), 2)})
     return sorted(found, key=lambda f: -f["similarity"])[:3]
+
+
+_ROLLBACK_FIX = re.compile(r"roll ?back|revert", re.I)
+
+
+def precedent_bad_releases(attrs: Mapping[str, Any]) -> list[str]:
+    """The release(s) a precedent whose fix WAS a rollback rolled back from: what that lesson
+    knows is bad. Applying the lesson ("roll back to the last good release") rolls back to the
+    CURRENT last known-good release, never to one of these (HelpDesk AI 2026-11-07: INC-1's
+    lesson, applied on fa64985, proposed rolling back to c6d4d3a — the release INC-1 rolled back
+    from). Newer precedents record `rolled_back_from`; older ones name it as their diff evidence."""
+    attrs = attrs or {}
+    if not _ROLLBACK_FIX.search(str((attrs.get("detail") or {}).get("fix_summary") or "")):
+        return []
+    out = [str(c) for c in attrs.get("rolled_back_from") or () if c]
+    if not out:
+        out = [str(e.get("ref")) for e in attrs.get("evidence") or ()
+               if isinstance(e, Mapping) and e.get("type") == "diff" and e.get("ref")]
+    return [c for c in dict.fromkeys(out) if len(c) >= 7]
+
+
+def _same_commit(a: Any, b: Any) -> bool:
+    """Two commit refs name the same commit (either may be abbreviated, at least 7 chars)."""
+    a, b = str(a or "").lower(), str(b or "").lower()
+    return len(a) >= 7 and len(b) >= 7 and (a.startswith(b) or b.startswith(a))
 
 
 def runbooks_for(connection: Connection, project_id: str, ctx: Ctx) -> list[dict[str, Any]]:
@@ -693,12 +805,25 @@ class _Pass:
             board.link(self.c, self.item_id, "incident", ctx.incident_id, actor=lead)
         if ctx.alert:
             board.link(self.c, self.item_id, "alert", ctx.alert["id"], actor=lead)
-        other = self.c.execute(text(
-            "SELECT id FROM work_items WHERE project_id = :p AND ambient AND id <> :w "
-            "AND app = :app AND task_class = ANY(:cls) AND lifecycle = ANY(:live) "
-            "ORDER BY created_at LIMIT 1"),
-            {"p": self.p, "w": self.item_id, "app": ctx.app, "cls": list(INCIDENT_CLASSES),
-             "live": list(board.LIVE)}).scalar()
+        # One squad per INCIDENT, not per app: another live item on this app is joined only
+        # when this is the same incident again; one stalled on an older incident is closed.
+        other = None
+        facts = {"incident_id": ctx.incident_id, "commit": ctx.deploy.get("commit_sha"),
+                 "deployed_at": ctx.deploy.get("deployed_at")} if ctx.incident_id else {}
+        for oid in self.c.execute(text(
+                "SELECT id FROM work_items WHERE project_id = :p AND ambient AND id <> :w "
+                "AND app = :app AND task_class = ANY(:cls) AND lifecycle = ANY(:live) "
+                "ORDER BY created_at"),
+                {"p": self.p, "w": self.item_id, "app": ctx.app, "cls": list(INCIDENT_CLASSES),
+                 "live": list(board.LIVE)}).scalars().all():
+            older = board.get(self.c, oid) or {}
+            why_new = new_round_reason(self.c, older, facts)
+            if why_new is None:
+                other = oid
+                break
+            stuck = stalled(self.c, older)
+            if stuck:
+                retire(self.c, older, why=f"{stuck}; {why_new} has its own round")
         if other:
             for s in ctx.signals:
                 board.link(self.c, other, "signal", s["id"], actor=lead)
@@ -856,11 +981,22 @@ class _Pass:
                     evidence=chosen["evidence"], options=[c["key"] for c in candidates],
                     confidence=chosen["confidence"],
                     cost=int(verdict.get("cost_usd_micros") or 0))
+        if ctx.incident_id and chosen["basis"] == "change" and commit:
+            # The release this incident BLAMED is never a rollback target again
+            # (stack_deploy.implicated_commits): kept on the incident across occurrences.
+            blamed = list((ctx.fctx.get("squad") or {}).get("blamed_commits") or [])
+            if commit not in blamed:
+                _merge_squad_ctx(self.c, ctx.incident_id,
+                                 {"blamed_commits": (blamed + [commit])[-10:]})
         if ctx.incident_id:
             from .incident_response import _evidence as add_evidence
 
+            self.cause_key = signature_key(ctx.app, ctx.failing_route, top.get("exc_type"),
+                                           changed_names)
             add_evidence(self.c, ctx.incident_id, "rca_hypothesis", ref=chosen["basis"],
                          payload={"root_cause": chosen["means"], "basis": chosen["basis"],
+                                  **({"cause_key": self.cause_key} if self.cause_key else {}),
+                                  "exception": top.get("exc_type"),
                                   "confidence": chosen["confidence"], "key": chosen["key"],
                                   "suspect_commit": commit or None,
                                   "changed": changed_names, "by": inv,
@@ -888,6 +1024,7 @@ class _Pass:
                   {"how": "similar_incident", "similarity": p["similarity"],
                    "agent_role": party_id(self.squad.investigator),
                    "work_item_id": self.item_id})
+        self._log_use([p["node_id"] for p in found], "consulted", self.squad.investigator)
         for i, p in enumerate(found):
             p["choice"] = f"Reuse {_short_ref(p.get('incident'), i)} fix"
         reversible_fix = next((p for p in found if p.get("fix") and
@@ -906,6 +1043,7 @@ class _Pass:
         _edge(self.c, self.p, node, applied["node_id"], "reused",
               {"how": "applied_fix", "agent_role": party_id(lead), "work_item_id": self.item_id,
                "similarity": applied["similarity"]})
+        self._log_use([applied["node_id"]], "reused", lead)
         self.c.execute(text(
             "UPDATE kg_nodes SET attrs = jsonb_set(attrs, '{detail,reuse_count}', "
             "to_jsonb(COALESCE((attrs->'detail'->>'reuse_count')::int, 0) + 1)), "
@@ -915,22 +1053,82 @@ class _Pass:
             "summary": short_label(f"Applying learning: {applied['fix'] or applied['title']}", 12),
             "evidence": [{"kind": "kg_node", "ref": applied["node_id"],
                           "note": f"from {applied.get('incident') or 'a past incident'}"}]})
+        bad = self._blame_precedent_releases(applied)
         self.decide(lead, Q_LEARN, applied["choice"],
                     f"Same signature as {applied.get('incident') or 'a past incident'} "
                     f"(similarity {applied['similarity']}). Its known fix comes first: "
-                    f"{clean_text(applied['fix'] or 'see the precedent', 160).rstrip('.')}.",
+                    f"{clean_text(applied['fix'] or 'see the precedent', 160).rstrip('.')}."
+                    + (f" Never back to {', '.join(c[:7] for c in bad)}, the release it rolled "
+                       "back from." if bad else ""),
                     evidence=evidence, options=[p["choice"] for p in found]
                     + ["No precedent"], confidence=applied["similarity"])
         self.learning = applied
         return applied
 
+    def _blame_precedent_releases(self, applied: Mapping[str, Any]) -> list[str]:
+        """Applying a rollback lesson: the release that lesson rolled back from is blamed on THIS
+        incident too (finalize_ctx.squad.blamed_commits), so the one known-good rule
+        (stack_deploy.rollback_option, via implicated_commits) — the squad's target, the console's
+        button, the redeploy and its approval — never rolls back to it. The lesson's fix is then
+        "roll back to the CURRENT last known-good release", never the commit it once replaced."""
+        bad = [c for c in applied.get("bad_releases") or () if c]
+        ctx = self.ctx
+        if not bad or not ctx.incident_id:
+            return bad
+        squad_ctx = dict(ctx.fctx.get("squad") or {})
+        blamed = list(squad_ctx.get("blamed_commits") or [])
+        new = [c for c in bad if not any(_same_commit(c, b) for b in blamed)]
+        if new:
+            blamed = (blamed + new)[-10:]
+            _merge_squad_ctx(self.c, ctx.incident_id, {"blamed_commits": blamed})
+            squad_ctx["blamed_commits"] = blamed
+            ctx.fctx["squad"] = squad_ctx
+        return bad
+
+    def _log_use(self, ids: list[str], use_kind: str, seat: str) -> None:
+        """The incident used these learnings: kg_usage rows, anchored on the incident (the unit of
+        work), so "Learned on the job" and the Graph count the reuse."""
+        from .knowledge import learning_writeback as lw
+
+        try:
+            with self.c.begin_nested():
+                lw.log_incident_use(self.c, project_id=self.p,
+                                    incident_id=self.ctx.incident_id or self.item_id, ids=ids,
+                                    use_kind=use_kind, agent_role=party_id(seat),
+                                    step="incident_squad.apply_learnings")
+        except Exception:  # noqa: BLE001 — usage is a count, never a reason to stop the squad
+            LOG.info("incident squad: usage not logged for %s", self.item_id, exc_info=True)
+
     # 4. mitigate --------------------------------------------------------------------------
+    def rollback_target(self) -> Optional[str]:
+        """The LAST KNOWN-GOOD release to roll back to, or None. Real targets answer from the
+        deploy history (BossEffects.rollback_target: never a release that was rolled back from
+        or that an incident blamed, never past a rollback); effects without a history (tests,
+        the demo fixture) fall back to the release before the serving one."""
+        if hasattr(self, "_target"):
+            return self._target
+        fn = getattr(self.effects, "rollback_target", None)
+        if callable(fn):
+            try:
+                target = fn(self.c, ctx=self.ctx)
+            except Exception:  # noqa: BLE001 — no answer is no known-good target
+                LOG.info("incident squad: no rollback target for %s", self.item_id,
+                         exc_info=True)
+                target = None
+        else:
+            target = self.ctx.deploy.get("previous_commit_sha")
+        blamed = (self.ctx.fctx.get("squad") or {}).get("blamed_commits") or ()
+        if target and any(_same_commit(target, b) for b in blamed):
+            # Whatever answered (an effect without a deploy history), a release this incident
+            # blamed (or a lesson it applied rolled back from) is never the target.
+            target = None
+        self._target = str(target) if target else None
+        return self._target
+
     def mitigation_action(self) -> Optional[str]:
-        """Rollback when the release is the suspect and an earlier healthy release exists."""
+        """Rollback when the release is the suspect and a known-good release exists."""
         cause = getattr(self, "cause", None) or {}
-        rollback_ok = bool(self.ctx.deploy.get("previous_commit_sha")) and (
-            cause.get("basis") in ("change", "memory"))
-        if not rollback_ok:
+        if cause.get("basis") not in ("change", "memory") or not self.rollback_target():
             return None
         return "prod_rollback" if self.ctx.is_prod else "staging_rollback"
 
@@ -938,7 +1136,7 @@ class _Pass:
         action = self.mitigation_action()
         if action is None:
             return None
-        prev = str(self.ctx.deploy.get("previous_commit_sha"))
+        prev = str(self.rollback_target())
         learned = getattr(self, "learning", None)
         summary = f"Roll back {self.ctx.app} to {prev[:7]}" + (
             " (known fix)" if learned else "")
@@ -946,6 +1144,7 @@ class _Pass:
             "action": action, "summary": summary,
             "verify": f"5xx back under the alert threshold for {self.ctx.app}",
             "undo": {"action": "redeploy", "commit": str(self.ctx.deploy.get("commit_sha"))},
+            "to_commit": prev,
             "confidence": float((getattr(self, "cause", None) or {}).get("confidence") or 0)})
 
     def deliberate(self, proposal: dict[str, Any]) -> dict[str, Any]:
@@ -957,8 +1156,14 @@ class _Pass:
         cause = getattr(self, "cause", None) or {}
         context = {"action": action, "summary": proposal["body"]["summary"],
                    "cause": cause.get("summary"), "confidence": cause.get("confidence"),
-                   "release_commits": len(self.ctx.diff.get("commits") or []),
-                   "environment": self.ctx.environment}
+                   # An unknown diff is "unknown", never 0: a critic read "0 commits" as an
+                   # anomaly and withheld agreement (HelpDesk AI 2026-11-07).
+                   "release_commits": len(self.ctx.diff["commits"])
+                   if self.ctx.diff.get("commits") else "unknown",
+                   "rollback_to": proposal["body"].get("to_commit"),
+                   "environment": self.ctx.environment,
+                   "autonomy": verdict.get("level"),
+                   "needs_a_person": bool(verdict.get("needs_person"))}
         crit = self.mind.choose(
             self.c, project_id=self.p, item_id=self.item_id, seat=self.squad.critic,
             kind="critique", question=f"Is it safe to {proposal['body']['summary'].lower()}?",
@@ -990,7 +1195,7 @@ class _Pass:
         proposal = self.propose_mitigation()
         if proposal is None:
             self.decide(self.squad.lead, Q_MITIGATE, "Fix forward",
-                        "No earlier healthy release to roll back to, or the release is not the "
+                        "No known-good release to roll back to, or the release is not the "
                         "suspect. The fix goes forward.", evidence=self.cause_evidence(),
                         options=["Roll back", "Restart", "Fix forward"], confidence=0.6)
             return self.fix_and_verify(mitigated=False)
@@ -998,14 +1203,16 @@ class _Pass:
         gate, record = talk["gate"], talk["consensus"]
         undo = proposal["body"].get("undo")
         if gate["allowed"] and not gate["needs_person"] and record["result"] == "approved":
-            self.decide(self.squad.lead, Q_MITIGATE, _rollback_word(self.ctx),
+            self.decide(self.squad.lead, Q_MITIGATE, _rollback_word(self.ctx, self.rollback_target()),
                         f"{proposal['body']['summary']}. A critic agreed; the undo is a "
                         "redeploy of the serving commit.", evidence=self.cause_evidence(),
-                        options=[_rollback_word(self.ctx), "Fix forward"],
+                        options=[_rollback_word(self.ctx, self.rollback_target()), "Fix forward"],
                         action=proposal["body"]["action"], consensus=record,
                         proposal_id=proposal["id"], undo=undo, cost=talk["cost"],
                         confidence=proposal["body"].get("confidence"))
-            return self.execute_rollback()
+            return self.execute_rollback(authority={
+                "approved_by": self.squad.lead, "decision_id": None,
+                "basis": f"{gate.get('task_class')} at {gate.get('level')}, critic agreed"})
         return self.ask_person(proposal, gate, record, talk["cost"])
 
     def cause_evidence(self) -> list[dict[str, Any]]:
@@ -1021,9 +1228,8 @@ class _Pass:
         dissent = record.get("dissent") or []
         rec = self.decide(
             f"squad:{self.item_id}", Q_MITIGATE, "Recommend rollback",
-            f"Squad recommends: {proposal['body']['summary']} ({approve} of {voted} approve"
-            f"{', ' + str(len(dissent)) + ' dissent' if dissent else ''}). "
-            "Production needs a person.", evidence=self.cause_evidence(),
+            f"Squad recommends: {proposal['body']['summary']} ({_consensus_words(record)}). "
+            f"{_why_a_person(gate, record, self.ctx)}", evidence=self.cause_evidence(),
             options=["Recommend rollback", "Recommend fix only"],
             action="propose", consensus=record, proposal_id=proposal["id"], cost=cost,
             confidence=proposal["body"].get("confidence"))
@@ -1046,34 +1252,64 @@ class _Pass:
         return {"stage": "needs_you", "item": moved,
                 "decision_id": moved.get("needs_you_decision_id"), "consensus": record}
 
-    def execute_rollback(self) -> dict[str, Any]:
+    def run_rollback(self, *, actor: str, authority: dict[str, Any]) -> dict[str, Any]:
+        """THE ONE WAY a decided rollback runs (the squad within its autonomy, or a person's
+        answer): under that decision's authority (one question, never a second "Deploy …?"),
+        and the incident's mitigated_at is when the redeploy went LIVE — now for an immediate
+        rollback, else when BossEffects.check_recovery sees it live."""
         lead = self.squad.lead
         board.assert_lease(self.c, self.item_id, owner=lead, token=self.token, lock=True)
-        done = self.effects.rollback(self.c, project_id=self.p, ctx=self.ctx, actor=lead)
+        self.ctx.rollback_authority = authority
+        try:
+            done = self.effects.rollback(self.c, project_id=self.p, ctx=self.ctx, actor=actor)
+        finally:
+            self.ctx.rollback_authority = None
         if done.get("link"):
             board.link(self.c, self.item_id, *done["link"], actor=lead)
         evidence = self.base_evidence()[:2] + [
-            {"kind": "commit", "ref": str(self.ctx.deploy.get("previous_commit_sha"))[:40],
+            {"kind": "commit", "ref": str(self.rollback_target() or
+                                          self.ctx.deploy.get("previous_commit_sha"))[:40],
              "note": clean_text(done.get("word"), 200)}]
         self.post("finding", lead, {"summary": short_label(done.get("word") or "Rolled back", 6),
                                     "evidence": evidence})
         if self.ctx.incident_id:
+            pending = bool(done.get("pending")) and done.get("ok", True)
             self.c.execute(text(
-                "UPDATE incidents SET lifecycle = 'monitoring', mitigated_at = now(), "
-                "status = 'remediating' WHERE id = :i"), {"i": self.ctx.incident_id})
+                "UPDATE incidents SET lifecycle = 'monitoring', status = 'remediating', "
+                "mitigated_at = CASE WHEN :pending THEN NULL ELSE clock_timestamp() END "
+                "WHERE id = :i"),
+                {"i": self.ctx.incident_id, "pending": pending})
+            if pending and done.get("deployment_id"):
+                _merge_squad_ctx(self.c, self.ctx.incident_id,
+                                 {"rollback_deployment_id": done["deployment_id"],
+                                  "item_id": self.item_id})
+                squad_ctx = dict(self.ctx.fctx.get("squad") or {})
+                squad_ctx["rollback_deployment_id"] = done["deployment_id"]
+                self.ctx.fctx["squad"] = squad_ctx
+        return done
+
+    def execute_rollback(self, *, authority: dict[str, Any]) -> dict[str, Any]:
+        done = self.run_rollback(actor=self.squad.lead, authority=authority)
         if not done.get("ok", True):
             return self.escalate(done.get("word") or "The rollback could not run")
         return self.fix_and_verify(mitigated=True)
 
     def escalate(self, why: str) -> dict[str, Any]:
+        """A person's call now. Asked through the one ambient path (asks.ask): it joins the
+        project's one card, in plain words — never a card of its own per incident."""
+        from .ambient import asks
+
         self.post("escalate", self.squad.lead, {"to": "person:on-call", "reason": why})
-        moved = board.needs_you(
-            self.c, self.item_id, actor=self.squad.lead, token=self.token,
-            question=clean_text(why, 200), recommendation={
-                "action": NEEDS_YOU_ACTION, "mitigation": "escalate",
-                "demo": bool(_is_demo(self.ctx))},
-            options=[{"key": "hold", "label": "I'll take it"}], risk_tier=1)
-        return {"stage": "escalated", "item": moved}
+        entry = asks.incident_entry(self.c, self.ctx.item, actor=self.squad.lead,
+                                    question=why)
+        entry["demo"] = bool(_is_demo(self.ctx))
+        got = asks.ask(self.c, self.effects_settings(), self.item_id, actor=self.squad.lead,
+                       token=self.token, entry=entry)
+        moved = board.get(self.c, self.item_id)
+        return {"stage": "escalated", "item": moved, "card": got}
+
+    def effects_settings(self) -> Any:
+        return getattr(self.effects, "settings", None)
 
     # 5. verify, then fix, then close ------------------------------------------------------
     def fix_and_verify(self, *, mitigated: bool, fix_authorised_by: Optional[str] = None
@@ -1119,14 +1355,22 @@ class _Pass:
             return None
         done = self.effects.start_fix(self.c, project_id=self.p, ctx=self.ctx, brief=brief,
                                       actor=decided_by)
+        if not done.get("ok", True):
+            # Never record "Start fix build" for a start that was refused or failed: say why
+            # where people look, and leave the fix for a person.
+            self.post("finding", eng, {"summary": short_label(
+                done.get("word") or "Fix not started", 8), "evidence": evidence})
+            return done
         links = {}
         if done.get("link"):
             board.link(self.c, self.item_id, *done["link"], actor=eng)
             if done["link"][0] == "workflow_run":
                 links["workflow_run_id"] = done["link"][1]
+        basis = (done.get("authority") or {}).get("why")
         self.decide(decided_by, Q_FIX, "Start fix build",
                     f"{done.get('word') or 'Fix started'}: regression test first, then the "
-                    "smallest fix. Merge and deploy still need a person.",
+                    "smallest fix. Merge and deploy still need a person."
+                    + (f" Allowed: {clean_text(basis, 140).replace('.', '')}." if basis else ""),
                     evidence=evidence, options=["Start fix build", "No fix"],
                     action="start_workflow", consensus=consensus, proposal_id=proposal["id"],
                     undo={"action": "cancel_run"}, **links)
@@ -1138,14 +1382,32 @@ class _Pass:
         lines = [f"Incident on {self.ctx.app} ({self.ctx.environment}): {self.ctx.item['title']}",
                  f"Cause (squad verdict): {cause.get('means') or cause.get('summary')}"]
         if learned:
-            lines.append(f"Known fix from a past incident: {learned.get('fix')}")
+            # The [L:<id>] marker is how a build cites a learning: its use is logged as reuse.
+            lines.append(f"Known fix from {learned.get('incident') or 'a past incident'} "
+                         f"[L:{learned['node_id']}]: {learned.get('fix')}")
         lines.append("Write a regression test that fails on the serving release, then the "
                      "smallest fix. State the root cause in the pull request.")
         return "\n".join(lines)
 
+    def rollback_gate(self) -> Optional[dict[str, Any]]:
+        """A rollback planned but not live yet is not a mitigation: wait for it (the incident's
+        mitigated_at is set when it goes live, rollback_live), and say so if it never does."""
+        dep = (self.ctx.fctx.get("squad") or {}).get("rollback_deployment_id")
+        if not dep or not self.ctx.incident_id:
+            return None
+        live = rollback_live(self.c, self.ctx.incident_id, str(dep))
+        if live["state"] == "live":
+            self.ctx.mitigation_live_at = live["at"]
+            return None
+        return {"status": "waiting" if live["state"] == "pending" else "unconfirmed",
+                "word": live["word"],
+                "evidence": [{"kind": "incident", "ref": self.ctx.incident_id,
+                              "note": live["word"]}]}
+
     def verify(self, *, mitigated: bool) -> dict[str, Any]:
         lead = self.squad.lead
-        seen = self.effects.check_recovery(self.c, project_id=self.p, ctx=self.ctx)
+        seen = self.rollback_gate() or self.effects.check_recovery(
+            self.c, project_id=self.p, ctx=self.ctx)
         status = seen.get("status")
         evidence = _evid(*(seen.get("evidence") or []), *self.base_evidence()[:1])
         if status == "waiting":
@@ -1167,13 +1429,20 @@ class _Pass:
                 ledger.record_outcome(self.c, mitigation["act_id"], outcome="succeeded",
                                       outcome_ref=self.ctx.incident_id)
             return self.close(mitigated=mitigated)
-        # failing or unknown: undo is a person's call now; say so on the board
-        self.decide(lead, Q_VERIFY, "Still failing",
+        # failing or not confirmed: a person's call now; say so on the board, in plain words
+        # that say what was done (a rollback, or nothing yet) and what was seen. Nothing to
+        # verify against ("unknown") is NOT failing: it is not confirmed either way.
+        unconfirmed = status != "failing"
+        verdict = "Not confirmed" if unconfirmed else "Still failing"
+        self.decide(lead, Q_VERIFY, verdict,
                     clean_text(seen.get("word") or "Not recovered.", 240).rstrip(".") + ".",
-                    evidence=evidence, options=["Recovered", "Still failing"], confidence=0.8)
-        if mitigation and not mitigation.get("outcome"):
+                    evidence=evidence, options=["Recovered", "Still failing", "Not confirmed"],
+                    confidence=0.6 if unconfirmed else 0.8)
+        if mitigation and not mitigation.get("outcome") and not unconfirmed:
             ledger.record_outcome(self.c, mitigation["act_id"], outcome="failed")
-        return self.escalate("Mitigation did not recover the app; undo and decide")
+        return self.escalate(recovery_question(self.ctx.app_name, self.ctx.env_known,
+                                               rolled_back=bool(mitigation),
+                                               unconfirmed=unconfirmed))
 
     def _mitigation_act(self) -> Optional[dict[str, Any]]:
         rows = [d for d in ledger.list_decisions(self.c, self.p, work_item_id=self.item_id)
@@ -1190,8 +1459,10 @@ class _Pass:
         postmortem = None
         if ctx.incident_id:
             self.c.execute(text(
+                # resolved_at IS when the squad verified recovery: never an earlier stamp (an
+                # alert that cleared in a quiet window while the bad release was still live).
                 "UPDATE incidents SET status = 'resolved', lifecycle = 'resolved', "
-                "resolved_at = COALESCE(resolved_at, now()) WHERE id = :i"),
+                "resolved_at = clock_timestamp() WHERE id = :i"),
                 {"i": ctx.incident_id})
             from .sre_postmortem import draft_postmortem
 
@@ -1205,7 +1476,9 @@ class _Pass:
         narrative = "\n".join(x for x in (
             f"{ctx.item['title']} ({ctx.environment}).",
             f"Cause: {cause.get('means') or cause.get('summary') or 'not established'}.",
-            f"Learning applied: {learned['title']}." if learned else "",
+            (f"Learning applied: {learned['title']} (from {learned.get('incident')})."
+             if learned and learned.get("incident") else
+             f"Learning applied: {learned['title']}." if learned else ""),
             f"Resolution: {fix_line}.",
             f"Squad: {', '.join(self.squad.seats().values())}.") if x)
         node = incident_node(self.c, self.p, ctx, body=narrative, attrs={
@@ -1267,36 +1540,79 @@ class _Pass:
         if row is None:
             return None
         attrs = row["attrs"] or {}
-        return {"node_id": row["id"], "title": row["name"], "incident": attrs.get("incident_id"),
-                "fix": (attrs.get("detail") or {}).get("fix_summary")}
+        return {"node_id": row["id"], "title": row["name"],
+                "incident": attrs.get("incident_ref") or attrs.get("incident_id"),
+                "incident_id": attrs.get("incident_id"), "cause_key": attrs.get("cause_key"),
+                "fix": (attrs.get("detail") or {}).get("fix_summary"),
+                "bad_releases": precedent_bad_releases(attrs)}
+
+    def same_lesson(self, learned: Mapping[str, Any], cause: Mapping[str, Any]) -> bool:
+        """Is today's incident the precedent's lesson again? The lead judges (the one agent
+        path: a model with the precedent and today's evidence in context; BOSS's evidence rule
+        only when no model answers). Same → the lesson is strengthened; different → a new one."""
+        ctx = self.ctx
+        top = ctx.signatures[0] if ctx.signatures else {}
+        verdict = self.mind.choose(
+            self.c, project_id=self.p, item_id=self.item_id, seat=self.squad.lead,
+            kind="same_lesson",
+            question=f"Is this the lesson from {learned.get('incident') or 'the past incident'} "
+                     "again?",
+            options=[{"key": "same", "means": "Same cause: strengthen that lesson"},
+                     {"key": "different", "means": "Another cause: keep a new lesson"}],
+            context={"precedent": {"title": learned.get("title"), "fix": learned.get("fix"),
+                                   "incident": learned.get("incident"),
+                                   "cause_key": learned.get("cause_key")},
+                     "similarity": learned.get("similarity"),
+                     "today": {"cause": cause.get("means") or cause.get("summary"),
+                               "route": ctx.failing_route, "exception": top.get("exc_type"),
+                               "cause_key": getattr(self, "cause_key", "")}})
+        return verdict.get("key") == "same"
 
     def _write_precedent(self, cause: dict[str, Any], mitigated: bool,
                          changed: list[dict[str, Any]]) -> Optional[str]:
+        """The lesson this incident leaves. A lesson comes only from a real resolved incident.
+        The same lesson again (the squad applied a precedent and judges the cause the same) is
+        STRENGTHENED, never duplicated or replaced: its count and history stay."""
         from .knowledge import learning_writeback as lw
 
         ctx = self.ctx
         top = ctx.signatures[0] if ctx.signatures else {}
         commit = str(ctx.deploy.get("commit_sha") or "")
-        symptom = " ".join(x for x in (
-            f"{ctx.failing_route or ctx.app} 5xx",
-            f"{top.get('exc_type')}" if top.get("exc_type") else "",
-            "after a release" if commit else "") if x)
-        evidence = [{"type": "metric", "ref": ctx.incident_id or self.item_id,
+        inc = ctx.incident_id or self.item_id
+        ref = incident_ref(self.c, self.p, ctx.incident_id)
+        evidence = [{"type": "metric", "ref": inc,
                      "excerpt": f"{ctx.error_pct}% 5xx on {ctx.app}"}]
         if commit:
             evidence.append({"type": "diff", "ref": commit[:12],
                              "excerpt": ", ".join(n["name"] for n in changed[:3]) or None})
+        learned = getattr(self, "learning", None)
+        if learned and learned.get("node_id"):
+            try:
+                if self.same_lesson(learned, cause):
+                    with self.c.begin_nested():
+                        lw.reinforce(self.c, project_id=self.p, node_id=learned["node_id"],
+                                     incident_id=inc, incident_ref=ref, evidence=evidence,
+                                     actor_role=party_id(self.squad.lead))
+                    self._same_cause_as(learned)
+                    return learned["node_id"]
+            except Exception:  # noqa: BLE001 — fall through to a new lesson
+                LOG.warning("incident squad: lesson %s not reinforced", learned.get("node_id"),
+                            exc_info=True)
+        symptom = " ".join(x for x in (
+            f"{ctx.failing_route or ctx.app} 5xx",
+            f"{top.get('exc_type')}" if top.get("exc_type") else "",
+            "after a release" if commit else "") if x)
+        fix_summary = ("Roll back to the last good release, then fix forward with a regression "
+                       "test" if mitigated else "Fix forward with a regression test")
         try:
             with self.c.begin_nested():
                 item = lw.record(
                     self.c, project_id=self.p, learning_kind="precedent",
-                    title=short_label(f"{ctx.app}: {cause.get('summary') or symptom}", 12),
+                    title=lesson_title(cause, symptom, mitigated, app=ctx.app),
                     statement=f"{symptom}: {cause.get('means') or cause.get('summary')}",
                     detail={"symptom": symptom,
                             "cause_summary": cause.get("summary") or cause.get("means"),
-                            "fix_summary": ("Roll back to the last healthy release, then fix "
-                                            "forward with a regression test" if mitigated else
-                                            "Fix forward with a regression test"),
+                            "fix_summary": fix_summary,
                             "applies_to": [x for x in (ctx.failing_route, ctx.app) if x],
                             "reuse_count": 0},
                     about={"symbols": [n.get("path") or n["name"] for n in changed[:5]]},
@@ -1310,9 +1626,28 @@ class _Pass:
         if node_id:
             self.c.execute(text(
                 "UPDATE kg_nodes SET attrs = attrs || CAST(:a AS JSONB) WHERE id = :n"),
-                {"a": json.dumps({"incident_id": ctx.incident_id or self.item_id}),
+                {"a": json.dumps({"incident_id": inc, "incident_ref": ref,
+                                  "incidents": [{"id": inc, "ref": ref}],
+                                  **({"rolled_back_from": [commit]}
+                                     if mitigated and commit else {}),
+                                  **({"cause_key": self.cause_key}
+                                     if getattr(self, "cause_key", "") else {})}),
                  "n": node_id})
         return node_id
+
+    def _same_cause_as(self, learned: Mapping[str, Any]) -> None:
+        """The squad judged this incident the precedent's lesson again: say so on the incident's
+        RCA (the precedent's cause key), so the Incident hotspot detector counts one cause."""
+        key = learned.get("cause_key")
+        if not key or key == getattr(self, "cause_key", "") or not self.ctx.incident_id:
+            return
+        from .incident_response import _evidence as add_evidence
+
+        add_evidence(self.c, self.ctx.incident_id, "rca_hypothesis", ref="memory",
+                     payload={"root_cause": f"Same cause as {learned.get('incident')}",
+                              "basis": "memory", "cause_key": key,
+                              "precedent": learned.get("node_id"), "by": self.squad.lead,
+                              "work_item_id": self.item_id})
 
     def hardening(self, cause: dict[str, Any], node: str) -> list[dict[str, Any]]:
         """Follow-up items (§12.6) as `kg` signals the Recommended roadmap (911) picks up, each
@@ -1349,14 +1684,175 @@ class _Pass:
 PERSON_OPTIONS = ["Roll back + fix", "Fix only", "Hold"]
 
 
+def incident_ref(connection: Connection, project_id: str, incident_id: Optional[str]
+                 ) -> Optional[str]:
+    """An incident's short name in its project, "INC-<n>" (its place by first_seen): what a
+    person reads on a lesson ("from INC-1") instead of an id."""
+    if not incident_id:
+        return None
+    n = connection.execute(text(
+        "SELECT count(*) FROM incidents i, incidents me WHERE me.id = :i AND i.project_id = "
+        "me.project_id AND (i.first_seen, i.id) <= (me.first_seen, me.id)"),
+        {"i": incident_id}).scalar()
+    return f"INC-{int(n)}" if n else None
+
+
+def signature_key(app: Any, route: Any, exception: Any, symbols: Iterable[Any] = ()) -> str:
+    """A root cause's stable identity across incidents: where it fails (route), how (the
+    exception's type) and in what code (the first changed symbol on the failing path). Two
+    releases with the same bug on the same function give the same key; ids and numbers never
+    enter it. '' when there is nothing structural to key on."""
+    parts = [str(x).strip().lower() for x in (app, route, exception, next(iter(symbols), None))
+             if x and str(x).strip()]
+    return " | ".join(parts) if len(parts) >= 2 else ""
+
+
 def _short_ref(ref: Any, index: int) -> str:
     """A past incident's short name for a label: 'INC-31 (D2, Oct 18)' -> 'INC-31'."""
     word = str(ref or "").split(" ")[0].strip()
     return word[:24] if word else f"#{index + 1}"
 
 
-def _rollback_word(ctx: "Ctx") -> str:
-    return f"Roll back to {str(ctx.deploy.get('previous_commit_sha') or '')[:7]}".strip()
+_RAW_ID = re.compile(r"^[a-z]{2,6}_[0-9A-Za-z]{6,}$")
+
+
+def plain_app(value: Any) -> str:
+    """An app's name for a person: a raw id (svc_…, deptgt_…) is never one."""
+    name = str(value or "").strip()
+    return "The app" if not name or _RAW_ID.match(name) or name == "the app" else name
+
+
+def app_place(connection: Connection, project_id: Any, item: Mapping[str, Any], *,
+              alert: Optional[Mapping[str, Any]] = None) -> tuple[str, str]:
+    """(name, environment) of the app an item is about, from the rows that know it: the
+    deployment target of that name (or the alert's target), else the monitored service (by id or
+    name) and its target. The environment is "" when no row names one — a person never reads
+    "production" because nothing said otherwise."""
+    key = str(item.get("app") or "") or str(item.get("subject_ref") or "").partition(":")[2]
+    target_id = (alert or {}).get("target_id")
+    row = None
+    if target_id:
+        row = connection.execute(text(
+            "SELECT app_name AS name, environment FROM deployment_targets WHERE id = :t"),
+            {"t": target_id}).mappings().first()
+    if row is None and key:
+        row = connection.execute(text(
+            "SELECT app_name AS name, environment FROM deployment_targets WHERE project_id = :p "
+            "AND (app_name = :k OR id = :k) ORDER BY created_at DESC LIMIT 1"),
+            {"p": project_id, "k": key}).mappings().first()
+    if row is None and key:
+        try:
+            with connection.begin_nested():
+                row = connection.execute(text(
+                    "SELECT COALESCE(t.app_name, s.name) AS name, "
+                    "COALESCE(NULLIF(s.environment, ''), t.environment) AS environment "
+                    "FROM monitored_services s LEFT JOIN deployment_targets t "
+                    "ON t.id = s.deployment_target_id WHERE s.id = :k "
+                    "OR (s.project_id = :p AND s.name = :k) LIMIT 1"),
+                    {"p": project_id, "k": key}).mappings().first()
+        except Exception:  # noqa: BLE001 — an install without monitored services
+            row = None
+    name = plain_app((row or {}).get("name") or key)
+    env = str((row or {}).get("environment") or "").strip().lower()
+    return name, env
+
+
+def alert_recovery(connection: Connection, ctx: "Ctx") -> dict[str, Any]:
+    """No BOSS monitor to verify against: the item's own alerts are the evidence. All cleared
+    (or only BOSS's own self-check) → recovered; still firing → waiting (the tick looks again),
+    until RECOVERY_ALERT_MINUTES have passed → failing; no alert at all → unknown, which is
+    never "failing"."""
+    from .ambient import asks
+
+    state = asks.alerts_state(connection, ctx.item)
+    if state == "meta":
+        return {"status": "recovered",
+                "word": "The alert was BOSS's own monitor, not the app, and it cleared"}
+    if state == "cleared":
+        return {"status": "recovered", "word": "The alert cleared on BOSS's monitor"}
+    if state == "firing":
+        age = _minutes_since(ctx.item.get("created_at"))
+        if age is not None and age >= RECOVERY_ALERT_MINUTES:
+            return {"status": "failing",
+                    "word": f"The alert is still firing after {age} minutes"}
+        return {"status": "waiting", "word": "The alert is still firing"}
+    return {"status": "unknown", "word": "No monitor to verify against"}
+
+
+#: With no BOSS monitor, an alert still firing this long after the incident opened is failing.
+RECOVERY_ALERT_MINUTES = 30
+
+
+def recovery_question(app: Any, environment: Any, *, rolled_back: bool,
+                      unconfirmed: bool) -> str:
+    """The escalation a person reads when an incident is not seen to recover — what was done
+    and what was seen, about the app by name: never "mitigation did not recover" when nothing
+    was rolled back, never "failing" when the window simply had too little traffic."""
+    where = str(app or "The app") + (f" ({environment})" if environment else "")
+    if unconfirmed:
+        return (f"{where}: too little traffic to confirm it recovered"
+                + (" after the rollback" if rolled_back else "") + " — check it or close it?")
+    if rolled_back:
+        return f"{where} did not recover after the rollback — undo it or take over?"
+    return f"{where} still fails and no fix has landed — take over?"
+
+
+def lesson_title(cause: Mapping[str, Any], symptom: str, mitigated: bool, *,
+                 app: str = "") -> str:
+    """A lesson is named by what broke and what fixed it ("A release-branch routing table lookup
+    threw on an unknown queue → roll back to the last good release"), never by the app it
+    happened in: "helpdesk-ai-v3 · from INC-1" told nobody anything."""
+    what = clean_text(cause.get("means") or cause.get("summary") or symptom, 200)
+    what = re.split(r"(?<=[.;])\s", what)[0].rstrip(".;")
+    for name in {app, app.lower()} - {""}:
+        what = re.sub(rf"\b(on|in|of|for)\s+{re.escape(name)}\b", "", what, flags=re.I)
+        what = re.sub(rf"^{re.escape(name)}\s*[:·-]\s*", "", what, flags=re.I)
+        what = what.replace(name, "the app")
+    what = re.sub(r"\s{2,}", " ", what).strip() or symptom
+    fix = "roll back to the last good release" if mitigated else "fix forward with a test"
+    head = " ".join(what.split()[:14])
+    return f"{head[:1].upper()}{head[1:]} → {fix}"
+
+
+def _rollback_word(ctx: "Ctx", to: Optional[str] = None) -> str:
+    return f"Roll back to {str(to or ctx.deploy.get('previous_commit_sha') or '')[:7]}".strip()
+
+
+def _consensus_words(record: Mapping[str, Any]) -> str:
+    """What the squad said, as it happened: the votes when there was a vote, else the critic's
+    position — never "0 of 0 approve"."""
+    votes = record.get("votes") or []
+    dissent = record.get("dissent") or []
+    tail = f", {len(dissent)} dissent" if dissent else ""
+    if votes:
+        approve = sum(1 for v in votes if v.get("vote") == "approve")
+        return f"{approve} of {len(votes)} approve{tail}"
+    crit = [c for c in record.get("critiques") or [] if c.get("position")]
+    if not crit:
+        return "no critic answered"
+    pos = {"agree": "the critic agrees", "concern": "the critic agrees, with a concern",
+           "object": "the critic objects", "unsafe": "the critic calls it unsafe"}
+    return pos.get(str(crit[-1]["position"]), f"critic: {crit[-1]['position']}")
+
+
+def _why_a_person(gate: Mapping[str, Any], record: Mapping[str, Any], ctx: "Ctx") -> str:
+    """Why THIS rollback needs a person, from the gate and the consensus that decided it — the
+    environment the incident is really in, never a fixed "Production needs a person"."""
+    env = ctx.env_known or "an unnamed environment"
+    if gate.get("grace"):
+        return f"{gate['grace'].get('reason') or 'New project'}: a person decides."
+    if not gate.get("allowed") or gate.get("needs_person") and gate.get("consensus_mode") in (
+            "squad_vote_and_person", "recommend_only"):
+        reason = clean_text(gate.get("reason"), 160).rstrip(".")
+        if ctx.is_prod:
+            return f"A rollback in {env} needs a person" + (f" ({reason})." if reason else ".")
+        return (f"{reason[:1].upper()}{reason[1:]}: a person decides." if reason
+                else "A person decides.")
+    if record.get("result") == "needs_person":
+        return "The critic called it unsafe: a person decides."
+    if record.get("result") == "rejected":
+        return "The critic objected: a person decides."
+    return "No critic agreed yet: a person decides."
 
 
 def _minutes_since(value: Any) -> Optional[int]:
@@ -1382,6 +1878,230 @@ def _start_pass(connection: Connection, project_id: str, item_id: str, *, squad:
     board.start(connection, item_id, owner=squad.lead, token=token)
     return _Pass(connection, project_id, item_id, squad=squad, mind=mind, effects=effects,
                  token=token)
+
+
+# ── one round per incident (HelpDesk AI 2026-11-07, INC-2) ───────────────────────────────────
+#
+# An incident item's board fingerprint is its task class + app. On 2026-11-07 the p95 blip item
+# that followed INC-1 sat in_progress ("Hold", fix forward, nothing running); release-1.3
+# (d3a0740) went live, AppErrorRate fired again and opened a NEW incident — and its signal was
+# merged into the stale item as "Seen again ×1": no triage, no cause, no rollback, errors for
+# 10+ minutes. A signal now joins an item only when it is a true repeat of the SAME incident:
+# a different incident, or a release that went live after the item opened (not the item's own
+# rollback), is a new round with its own item. An item that made no progress hands absorbed
+# new-incident signals back to triage and closes with a plain note.
+
+#: An incident item with no move for this long, and no fix or rollback in flight, is stalled.
+NO_PROGRESS_MINUTES = 20
+_RUN_DONE = ("completed", "failed", "cancelled", "canceled", "deadlettered", "succeeded",
+             "error", "rejected")
+
+
+def incident_facts(connection: Connection, sigs: Iterable[Mapping[str, Any]]
+                   ) -> dict[str, Any]:
+    """What the signals say about WHICH incident they are: its id and the release live when it
+    fired ({incident_id, commit, deployed_at}), from the incident or alert rows they cite."""
+    out: dict[str, Any] = {}
+    for s in sigs:
+        evidence = s.get("evidence") or []
+        if isinstance(evidence, str):
+            evidence = _json(evidence) or []
+        for e in evidence:
+            if not isinstance(e, Mapping) or not e.get("ref"):
+                continue
+            if e.get("kind") == "incident" and not out.get("incident_id"):
+                out["incident_id"] = str(e["ref"])
+            elif e.get("kind") == "alert":
+                row = connection.execute(text(
+                    "SELECT incident_id, release FROM app_alerts WHERE id = :a"),
+                    {"a": e["ref"]}).mappings().first()
+                if row is None:
+                    continue
+                release = _json(row["release"]) or {}
+                if row["incident_id"] and not out.get("incident_id"):
+                    out["incident_id"] = str(row["incident_id"])
+                if release.get("commit_sha") and not out.get("commit"):
+                    out["commit"] = str(release["commit_sha"])
+                    out["deployed_at"] = release.get("deployed_at")
+        if out.get("incident_id"):
+            break
+    return out
+
+
+def _own_incident(connection: Connection, item: Mapping[str, Any]) -> dict[str, Any]:
+    """The incident an item was opened for: its first `incident` link, else the incident its
+    first signal cites. With the release that incident blamed and the item's own rollbacks."""
+    inc = connection.execute(text(
+        "SELECT ref FROM work_item_links WHERE work_item_id = :w AND kind = 'incident' "
+        "ORDER BY created_at, ref LIMIT 1"), {"w": item["id"]}).scalar()
+    if not inc:
+        first = connection.execute(text(
+            "SELECT s.evidence FROM work_item_links l JOIN signals s ON s.id = l.ref "
+            "WHERE l.work_item_id = :w AND l.kind = 'signal' ORDER BY l.created_at, l.ref "
+            "LIMIT 1"), {"w": item["id"]}).mappings().first()
+        if first is not None:
+            inc = incident_facts(connection, [dict(first)]).get("incident_id")
+    own: dict[str, Any] = {"incident_id": inc, "rollbacks": []}
+    if inc:
+        fctx = _json(connection.execute(text(
+            "SELECT finalize_ctx FROM incidents WHERE id = :i"), {"i": inc}).scalar()) or {}
+        own["commit"] = (fctx.get("deploy") or {}).get("commit_sha")
+    for m in collab.messages(connection, item["id"], kinds=("proposal",)):
+        body = m.get("body") or {}
+        if str(body.get("action") or "").endswith("rollback") and body.get("to_commit"):
+            own["rollbacks"].append(str(body["to_commit"]))
+    return own
+
+
+def new_round_reason(connection: Connection, item: Mapping[str, Any],
+                     facts: Mapping[str, Any]) -> Optional[str]:
+    """Why a signal with these incident facts is NOT a repeat of `item`'s incident (plain words),
+    or None when it is the same incident again (then it joins)."""
+    if not facts or item.get("task_class") not in INCIDENT_CLASSES:
+        return None
+    from .incident_response import _dt
+
+    own = _own_incident(connection, item)
+    inc = facts.get("incident_id")
+    if inc and own.get("incident_id") and inc != own["incident_id"]:
+        return f"a new incident ({incident_ref(connection, item['project_id'], inc) or inc})"
+    commit = facts.get("commit")
+    live_at = _dt(facts.get("deployed_at"))
+    opened = _dt(item.get("created_at"))
+    if commit and live_at and opened and live_at > opened \
+            and not _same_commit(commit, own.get("commit")) \
+            and not any(_same_commit(commit, r) for r in own["rollbacks"]):
+        return f"release {str(commit)[:7]} went live after this item opened"
+    return None
+
+
+def item_fingerprint(connection: Connection, project_id: str, base: str,
+                     sigs: Iterable[Mapping[str, Any]]) -> str:
+    """The board fingerprint for an incident group: the live item it truly repeats; else the
+    app's (`base`) when nothing lives there; else its own incident's (and, for a new release
+    inside one incident, that release's) — never the app's live item whatever the incident."""
+    facts = incident_facts(connection, sigs)
+    inc = facts.get("incident_id")
+    if not inc:
+        return base
+    own = signals.fingerprint("item", base, "incident", inc, project_id=project_id)
+    lives = {fp: board.live_for_fingerprint(connection, project_id, fp) for fp in (own, base)}
+    for fp, live in lives.items():
+        if live is not None and new_round_reason(connection, live, facts) is None:
+            return fp
+    if lives[base] is None:
+        return base
+    if lives[own] is None:
+        return own
+    return signals.fingerprint("item", base, "incident", inc, "release",
+                               str(facts.get("commit") or ""), project_id=project_id)
+
+
+def stalled(connection: Connection, item: Mapping[str, Any], *,
+            minutes: Optional[int] = None) -> Optional[str]:
+    """Plain words for why an incident item is making no progress, or None while it is. Live,
+    not waiting on a person's card, not watching a recovery, no agent working it now, no fix
+    run going, no rollback in flight, and nothing but "Seen again" for `minutes`."""
+    from .incident_response import _dt
+
+    if item.get("task_class") not in INCIDENT_CLASSES or item.get("lifecycle") not in (
+            "proposed", "claimed", "in_progress"):
+        return None
+    if _watching(connection, item["id"]):
+        return None
+    if item.get("lease_kind") == "agent" and (_dt(item.get("lease_expires_at")) or
+                                              datetime.min.replace(tzinfo=timezone.utc)) \
+            > datetime.now(timezone.utc):
+        return None
+    decisions = ledger.list_decisions(connection, item["project_id"], work_item_id=item["id"])
+    if not any(d["question"] == Q_TRIAGE for d in decisions):
+        return None                       # not worked yet: the owners' turn picks it up
+    for l in board.links(connection, item["id"]):
+        if l["kind"] in ("code_task", "pull_request"):
+            return None
+        if l["kind"] == "workflow_run":
+            status = connection.execute(text("SELECT status FROM workflow_runs WHERE id = :r"),
+                                        {"r": l["ref"]}).scalar()
+            if status and str(status) not in _RUN_DONE:
+                return None
+    last = connection.execute(text(
+        "SELECT max(created_at) FROM work_item_messages WHERE work_item_id = :w AND NOT "
+        "(kind = 'finding' AND sender IN ('agent:chief_of_staff', 'boss'))"),
+        {"w": item["id"]}).scalar()
+    last = _dt(last) or _dt(item.get("created_at"))
+    minutes = NO_PROGRESS_MINUTES if minutes is None else minutes
+    if last is None or (datetime.now(timezone.utc) - last).total_seconds() < minutes * 60:
+        return None
+    mitigation = next((d for d in reversed(decisions) if d["question"] == Q_MITIGATE), None)
+    state = (f"\"{mitigation['chosen']}\"" if mitigation else "no mitigation")
+    held = " (held by a person)" if item.get("lease_kind") == "person" else ""
+    return f"{state}{held} since {last.strftime('%H:%M')} UTC with no fix running"
+
+
+def retire(connection: Connection, item: Mapping[str, Any], *, why: str,
+           handed: int = 0) -> dict[str, Any]:
+    """Close a stalled incident item with a plain note (BOSS may end any live item)."""
+    tail = (f" {handed} new alert{'s' if handed != 1 else ''} went to a new round."
+            if handed else " New evidence goes to a new round.")
+    note = clean_text(f"No progress: {why}. Closed.{tail}", 300)
+    cited = [{"kind": l["kind"], "ref": l["ref"], "note": note}
+             for l in board.links(connection, item["id"]) if l["kind"] in ("incident", "signal")]
+    collab.post(connection, item["id"], kind="finding", sender="boss", body={
+        "summary": "No progress: closed", "evidence": cited[:1]})
+    return board.finish(connection, item["id"], actor="boss", lifecycle="resolved",
+                        outcome=note)
+
+
+def hand_over_new_rounds(connection: Connection, item: Mapping[str, Any]) -> list[str]:
+    """Signals an item absorbed that belong to a NEW incident (merged before one round per
+    incident held): back to the Chief of Staff's triage, which opens their own round."""
+    rows = connection.execute(text(
+        "SELECT s.id, s.evidence FROM signals s JOIN work_item_links l ON l.ref = s.id "
+        "AND l.kind = 'signal' AND l.work_item_id = :w WHERE s.work_item_id = :w "
+        "ORDER BY s.first_seen_at"), {"w": item["id"]}).mappings().all()
+    moved = []
+    for r in rows:
+        why = new_round_reason(connection, item, incident_facts(connection, [dict(r)]))
+        if why is None:
+            continue
+        connection.execute(text(
+            "UPDATE signals SET work_item_id = NULL, status = 'new', updated_at = now() "
+            "WHERE id = :s"), {"s": r["id"]})
+        connection.execute(text(
+            "DELETE FROM work_item_links WHERE work_item_id = :w AND kind = 'signal' "
+            "AND ref = :s"), {"w": item["id"], "s": r["id"]})
+        moved.append(r["id"])
+        if item.get("lifecycle") in board.LIVE:
+            collab.post(connection, item["id"], kind="finding", sender="boss", body={
+                "summary": short_label(f"Not this incident: {why}", 10),
+                "evidence": [{"kind": "signal", "ref": r["id"]}]})
+    return moved
+
+
+def sweep_rounds(connection: Connection, *, project_id: str) -> list[dict[str, Any]]:
+    """The owners' tick: every live incident item gives back signals of a new incident, and one
+    that made no progress is closed with a plain note. Returns what moved."""
+    from . import projects_archive
+
+    if projects_archive.is_archived(connection, project_id):
+        return []
+    rows = connection.execute(text(
+        "SELECT id FROM work_items WHERE project_id = :p AND ambient AND task_class = ANY(:c) "
+        "AND lifecycle = ANY(:live) ORDER BY created_at"),
+        {"p": project_id, "c": list(INCIDENT_CLASSES), "live": list(board.LIVE)}).scalars().all()
+    out = []
+    for item_id in rows:
+        item = board.get(connection, item_id)
+        if item is None:
+            continue
+        with connection.begin_nested():
+            why = stalled(connection, item)
+            moved = hand_over_new_rounds(connection, item)
+            if why:
+                retire(connection, item, why=why, handed=len(moved))
+            if moved or why:
+                out.append({"item_id": item_id, "handed": moved, "closed": bool(why)})
+    return out
 
 
 # ── the entry points ─────────────────────────────────────────────────────────────────────────
@@ -1475,7 +2195,7 @@ HANDLERS = {klass: route_incident for klass in INCIDENT_CLASSES}
 def resume(connection: Connection, *, project_id: str, item_id: str, answer: str, actor: str,
            settings: Any = None, mind: Optional[Mind] = None,
            effects: Optional[Effects] = None, squad: Optional[Squad] = None,
-           note: str = "") -> dict[str, Any]:
+           note: str = "", decision_id: Optional[str] = None) -> dict[str, Any]:
     """A person answered the squad's Needs-you card: `approve` (roll back, then fix), `fix_only`
     or `hold`. The person's decision is its own ledger row (the gate lets only a person take a
     production action), the squad's recommendation gets its outcome, and the squad continues."""
@@ -1524,21 +2244,57 @@ def resume(connection: Connection, *, project_id: str, item_id: str, answer: str
                options=PERSON_OPTIONS, action=body["action"],
                consensus=record, proposal_id=proposal["id"], undo=body.get("undo"),
                how="approved", confidence=body.get("confidence"))
-    board.assert_lease(connection, item_id, owner=squad.lead, token=run.token, lock=True)
-    done = run.effects.rollback(connection, project_id=project_id, ctx=run.ctx, actor=who)
-    if done.get("link"):
-        board.link(connection, item_id, *done["link"], actor=squad.lead)
-    run.post("finding", squad.lead, {
-        "summary": short_label(done.get("word") or "Rolled back", 6),
-        "evidence": run.base_evidence()[:2] + [
-            {"kind": "commit", "ref": str(run.ctx.deploy.get("previous_commit_sha"))[:40]}]})
-    if run.ctx.incident_id:
-        connection.execute(text(
-            "UPDATE incidents SET lifecycle = 'monitoring', mitigated_at = now(), "
-            "status = 'remediating' WHERE id = :i"), {"i": run.ctx.incident_id})
+    # The person's answer on the card IS the rollback's approval: the deploy runs under it.
+    done = run.run_rollback(actor=who, authority={"approved_by": who.split(":", 1)[-1]
+                                                  if who.startswith("person:") else who,
+                                                  "decision_id": decision_id})
     if not done.get("ok", True):
         return run.escalate(done.get("word") or "The rollback could not run")
     return run.fix_and_verify(mitigated=True, fix_authorised_by=who)
+
+
+_SHA = re.compile(r"\bto ([0-9a-f]{7,40})\b")
+
+
+def rollback_still_known_good(connection: Connection, item: Mapping[str, Any],
+                              recommendation: Mapping[str, Any]) -> Optional[bool]:
+    """For a squad's open "Roll back X to Y?" card: is Y still the last KNOWN-GOOD release
+    (BossEffects.rollback_target)? None when the card is not a rollback or nothing can tell
+    (demo fixtures, no BOSS deployment): then the card stands."""
+    if recommendation.get("mitigation") not in ("prod_rollback", "staging_rollback") or \
+            recommendation.get("demo"):
+        return None
+    proposal = next((m for m in collab.messages(connection, item["id"], kinds=("proposal",))
+                     if m["id"] == recommendation.get("proposal_id")), None)
+    body = (proposal or {}).get("body") or {}
+    proposed = str(body.get("to_commit") or "")
+    if not proposed:
+        found = _SHA.search(str(body.get("summary") or ""))
+        proposed = found.group(1) if found else ""
+    if not proposed:
+        return None
+    ctx = load_context(connection, item["project_id"], item["id"])
+    if not ctx.deploy.get("stack_deployment_id"):
+        return None
+    target = BossEffects(None).rollback_target(connection, ctx=ctx)
+    return bool(target) and str(target).startswith(proposed)
+
+
+def withdraw_rollback(connection: Connection, *, project_id: str, item_id: str,
+                      why: str) -> dict[str, Any]:
+    """The reconsider path's answer to a stale rollback card: the squad records why it no
+    longer rolls back and fixes forward (the fix's own gate still decides who starts it)."""
+    item = board.get(connection, item_id, project_id=project_id)
+    squad = assemble_squad(connection, project_id, (item or {}).get("app"))
+    run = _start_pass(connection, project_id, item_id, squad=squad, mind=RuleMind(),
+                      effects=BossEffects(None))
+    run.cause = run._cause_from_ledger()
+    run.learning = run._learning_from_ledger()
+    run.decide(squad.lead, Q_MITIGATE, "Fix forward",
+               f"Rollback withdrawn: {clean_text(why, 200).rstrip('.')}.",
+               evidence=run.cause_evidence(), options=["Roll back", "Fix forward"],
+               confidence=0.8)
+    return run.fix_and_verify(mitigated=False)
 
 
 def _watching(connection: Connection, item_id: str) -> bool:
@@ -1609,10 +2365,13 @@ def on_needs_you_answered(connection: Connection, settings: Any, decision: Mappi
 
         mind, effects = demo.demo_mind(), demo.FixtureEffects()
     resume(connection, project_id=decision["project_id"], item_id=item_id, answer=answer,
-           actor=actor, settings=settings, mind=mind, effects=effects, note=note or "")
+           actor=actor, settings=settings, mind=mind, effects=effects, note=note or "",
+           decision_id=decision.get("id"))
 
 
 __all__ = ["Squad", "assemble_squad", "RuleMind", "ScriptedMind", "AgentMind", "BossEffects",
            "Ctx", "load_context", "route_to_code", "similar_incidents", "runbooks_for",
            "incident_node", "incident_class", "intake", "route_incident", "HANDLERS", "resume", "tick", "continue_item",
+           "incident_facts", "new_round_reason", "item_fingerprint", "stalled", "retire",
+           "hand_over_new_rounds", "sweep_rounds",
            "on_needs_you_answered", "NEEDS_YOU_ACTION", "INCIDENT_CLASSES"]

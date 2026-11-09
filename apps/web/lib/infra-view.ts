@@ -84,6 +84,9 @@ export type Resident = {
   /** A target's app, once its newest deploy went live and passed its health check. */
   openUrl: string | null;
   port: number | null;
+  /** The project this resident belongs to (BOSSAPP-914): a shared server lists each project's
+   *  apps, each linking to that Project › Deployments. Absent from an older engine. */
+  project: { id: string; name: string } | null;
 };
 export function parseResident(w: unknown): Resident {
   const o = obj(w);
@@ -95,6 +98,9 @@ export function parseResident(w: unknown): Resident {
     lastDeploy: ld ? { sha7: optStr(ld.sha7), at: optStr(ld.at), word: str(ld.word), ref: optStr(ld.ref),
                        failedAfter: parseFailedAfter(ld.failed_after) } : null,
     expiresAt: optStr(o.expires_at), url: optStr(o.url), openUrl: optStr(o.open_url), port: optNum(o.port),
+    project: o.project && typeof o.project === "object" && str(obj(o.project).id)
+      ? { id: str(obj(o.project).id), name: str(obj(o.project).name, str(obj(o.project).id)) }
+      : str(o.project_id) ? { id: str(o.project_id), name: str(o.project_name, str(o.project_id)) } : null,
   };
 }
 
@@ -110,6 +116,9 @@ export type Rack = {
   checkedAt: string | null;
   maxApps: number | null;
   apps: number;
+  /** Apps of the viewer's OTHER projects on this machine (counted in `apps`, drawn as a chip
+   *  that opens the server's drawer, where every project on it is listed). */
+  others: number;
   portsUsed: number;
   portsTotal: number | null;
   residents: Resident[];
@@ -120,7 +129,7 @@ export function parseRack(w: unknown): Rack {
   return {
     id: str(o.id), thisComputer: o.this_computer === true, name: str(o.name), address: optStr(o.address),
     arch: optStr(o.arch), state: parseWord(o.state), stage: parseStage(o.stage), checkedAt: optStr(o.checked_at),
-    maxApps: optNum(o.max_apps), apps: num(o.apps), portsUsed: num(o.ports_used), portsTotal: optNum(o.ports_total),
+    maxApps: optNum(o.max_apps), apps: num(o.apps), others: num(o.others), portsUsed: num(o.ports_used), portsTotal: optNum(o.ports_total),
     residents: arr(o.residents).map(parseResident), stageAction: (optStr(o.stage_action) as StageAction) ?? null,
   };
 }

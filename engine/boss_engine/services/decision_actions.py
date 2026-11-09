@@ -20,6 +20,7 @@ what to do instead.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
@@ -198,17 +199,38 @@ RECORDED_ON_APPROVAL = frozenset({
     "reconcile_legacy_provider_exposure",
     "reconcile_provider_changeset",
     "verify_provider_outcome_before_retry",
-    "verify_provider_outcome_then_settle_or_release",
+    # (An expired budget hold with no recorded outcome no longer asks a person: the budget
+    # governor settles it at its estimate by policy — budget._settle_unknown_at_estimate. A card
+    # raised before that is still answered as a general card and closes itself on the next pass.)
     # A next action an agent-room summary named as a decision (agent_converse): approving records
     # the person's answer on the conversation; nothing is started.
     "decide",
+    # A build BOSS started on its own was refused for want of a person's grant (person_wait):
+    # the person gives the builder a standing grant; BOSS resumes every paused build by itself.
+    "grant_builder_authority",
+    # "Review always-on builds before they start" is on (person_wait): approving lets the build
+    # start on the project's Captain authority at the next Shepherd tick; rejecting drops it.
+    "review_always_on_build",
+    # The stuck-work Shepherd found a build no safe move can unblock (stuck_work._raise_card):
+    # the card says what a person must do; the build's own page carries the diagnosis.
+    "stuck_work_needs_person",
+    # A subscription's hourly keep-alive got a rejected login (subscription_keepalive): the
+    # owner signs in again; the card records the answer and starts nothing.
+    "sign_in_to_subscription_again",
+    # An incident acknowledged and then left idle with no safe fix (acked_idle._escalate): the
+    # person takes it or closes it on the incident; the card records the answer.
+    "incident_needs_owner",
 })
 #: Producers that build the action from a provider key (comms: configure_or_enable_slack_…).
 RECORDED_ON_APPROVAL_PREFIXES = ("configure_or_enable_",)
 
+#: The project's ONE always-on card (ambient/asks._recommendation): classified by the card's
+#: work item and asker (is_ambient_card), carried by ambient/answers.on_answered per entry.
+AMBIENT_CARD_ACTIONS = frozenset({"ambient_route", "ambient_card"})
+
 #: Every action BOSS is known to write. The enforcing test fails on a producer outside it.
 KNOWN_ACTIONS = (REFUSAL_REASONS | CARRIED_OUT_ON_APPROVAL | WORKFLOW_GATE_ACTIONS
-                 | RECORDED_ON_APPROVAL)
+                 | RECORDED_ON_APPROVAL | AMBIENT_CARD_ACTIONS)
 
 KINDS = ("refusal", "deploy_gate", "workflow_gate", "architecture_review", "pull_request",
          "change_set", "general")
@@ -417,6 +439,39 @@ def _general_approve(decision: Mapping[str, Any]) -> dict[str, Any]:
         "approve", "Approve", "approve",
         "Records your approval. BOSS starts nothing from this card by itself; work that needs "
         "this approval can use it when it runs again.")
+
+
+#: An always-on card's answers (ambient/asks.card_options) as the actions that carry them:
+#: approve and reject are themselves; a third answer ("I'll take it" on a spent-budget card) is
+#: sent as `revise`, which ambient/answers.on_answered carries like the others.
+_AMBIENT_ACTION = {"approve": ("approve", "approve"), "reject": ("reject", "reject"),
+                   # "Hold" (a squad's proposal, a mitigation) is carried as a refusal.
+                   "hold": ("reject", "neutral")}
+
+
+def _ambient_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """THE CARD'S OWN ANSWERS ARE ITS BUTTONS. An always-on card says what each answer does
+    ("Give it $1 more", "Close it", "I'll take it"); drawn as Approve / Reject they promised
+    nothing in particular. [] when the decision is not such a card or carries no answers."""
+    if not is_ambient_card(decision):
+        return []
+    options = decision.get("options")
+    if isinstance(options, str):
+        try:
+            options = json.loads(options)
+        except ValueError:
+            options = None
+    if not isinstance(options, list) or not all(isinstance(o, Mapping) and o.get("label")
+                                                for o in options):
+        return []
+    out: list[dict[str, Any]] = []
+    for o in options:
+        action, tone = _AMBIENT_ACTION.get(str(o.get("key")), ("revise", "neutral"))
+        if any(a["action"] == action for a in out):
+            continue                       # one button per action: the first answer names it
+        out.append(_action(action, str(o["label"]), tone,
+                           f"{o['label']}: BOSS carries this answer out at once."))
+    return out + [_delegate()]
 
 
 def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -634,6 +689,9 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "saying what to change."),
             _delegate(),
         ]
+    ambient = _ambient_actions(decision)
+    if ambient:
+        return ambient
     actions = [
         _general_approve(decision),
         _action("reject", "Reject", "reject", "Declines it; nothing is carried out."),
@@ -645,6 +703,34 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
             needs="note"))
     actions.append(_delegate())
     return actions
+
+
+def on_the_boundary(decision: Mapping[str, Any]) -> bool:
+    """Is this decision one of the kinds only a person decides (decide_list: production deploy,
+    merge to the default branch, spend above the cap, secrets, outside messages, deleting data,
+    who can do what)?"""
+    from .decide_list import classify
+
+    try:
+        return classify(decision) is not None
+    except Exception:  # noqa: BLE001 — an unreadable row is not on the boundary
+        return False
+
+
+def never_expires(decision: Mapping[str, Any]) -> bool:
+    """A QUESTION ON THE COMPLIANCE BOUNDARY NEVER SILENTLY EXPIRES.
+
+    Its default is hold, so a passing deadline applies nothing: expiring it could only hide it.
+    Four "Approve code change" merges for the helpdesk security fixes (dec_409e473b…,
+    2026-11-08) went to `expired` 24 h after they were asked and dropped out of Needs you, the
+    bell and Approvals' default view while their runs sat "waiting on PR #3 to be merged".
+    So such a decision stays open past its deadline and ages from when it was asked:
+    DecisionService.expire_overdue clears the deadline and records ONE `decision.overdue`
+    reminder instead of expiring it, and reopens one that expired before this rule while a
+    waiting workflow step still waits on it."""
+    if str(decision.get("default_action") or "hold").lower() != "hold":
+        return False
+    return on_the_boundary(decision)
 
 
 def reopenable(decision: Mapping[str, Any]) -> bool:
@@ -677,6 +763,8 @@ def reopenable(decision: Mapping[str, Any]) -> bool:
 #:   needs_action  pending or delegated and not past its deadline, or parked in a
 #:                 revision_requested nothing reads (the stuck pull requests): the operator is
 #:                 the only way it moves.
+#:                 A question on the compliance boundary (never_expires) is needs_action
+#:                 past its deadline: it never expires.
 #:   expired       expired with a hold default, so nothing was applied and it can still be
 #:                 answered. Shown in its own group with its age, never in the default view:
 #:                 most of these are about work that has long moved on.
@@ -714,13 +802,17 @@ def attention(decision: Mapping[str, Any], now: Optional[datetime] = None) -> st
     expired in the inbox.
     """
     status = str(decision.get("status") or "")
-    if status in _OPEN and _deadline_passed(decision, now):
+    held = never_expires(decision)
+    if status in _OPEN and _deadline_passed(decision, now) and not held:
         status = "expired"
     if status in _OPEN:
         return "needs_action"
     if status == "revision_requested":
         return "resolved" if consumes_revision(decision) else "needs_action"
     if status in _REOPENABLE and reopenable({**dict(decision), "status": status}):
+        # A boundary question an older build expired is back in needs_action only once the
+        # sweep reopens it, and it does so only while work still waits on it
+        # (DecisionService.reopen_boundary_decisions); the rest stay in this group.
         return "expired"
     return "resolved"
 
@@ -773,7 +865,31 @@ def waiting_on_operator(connection, project_id: str, *, now: Optional[datetime] 
     ).bindparams(*binds)
     wanted = {"needs_action", "expired"} if include_expired else {"needs_action"}
     rows = [dict(r) for r in connection.execute(statement, params).mappings().all()]
-    return sorted((r for r in rows if attention(r, now) in wanted), key=_sort_key)
+    return sorted(one_question_per_pull_request(r for r in rows if attention(r, now) in wanted),
+                  key=_sort_key)
+
+
+def one_question_per_pull_request(rows) -> list[dict[str, Any]]:
+    """ONE MERGE QUESTION PER PULL REQUEST, on every surface: of two open "approve this code
+    change" questions about the same pull request, only the newest is waiting on a person.
+    run_decisions.withdraw_superseded_pr_questions closes the older one when a build settles;
+    until then (minutes, for two runs that both claimed PR #2 — helpdesk-ai-v3, 2026-11-07)
+    every badge, the bell and Needs you showed "Merge PR #2" twice."""
+    rows = list(rows)
+    newest: dict[str, Any] = {}
+    for r in rows:
+        rec = _rec(r)
+        url = str(rec.get("pull_request_url") or "")
+        if rec.get("action") != "review_pull_request" or not url:
+            continue
+        if url not in newest or str(r.get("created_at") or "") > str(
+                newest[url].get("created_at") or ""):
+            newest[url] = r
+    keep = {id(r) for r in newest.values()}
+    return [r for r in rows
+            if not (_rec(r).get("action") == "review_pull_request"
+                    and str(_rec(r).get("pull_request_url") or "")
+                    and id(r) not in keep)]
 
 
 def count_waiting_on_operator(connection, project_id: str, *, now: Optional[datetime] = None,

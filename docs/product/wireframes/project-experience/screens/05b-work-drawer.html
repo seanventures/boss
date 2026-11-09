@@ -1,0 +1,51 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Work item drawer</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-project="1" data-tab="work" data-crumb="Projects|HelpDesk AI Demo|Work">
+<div id="content">
+  <section class="card" style="padding:0;opacity:.6"><div class="wk">
+    <div class="wk-grp"><b>Needs you</b></div>
+    <div class="wk-row" data-s="you"><span class="dot" data-s="you"></span><div class="wk-t">Visual refresh finish</div><span></span><span></span><span></span></div>
+    <div class="wk-grp"><b>Running</b></div>
+    <div class="wk-row"><span class="dot" data-s="run"></span><div class="wk-t">Ticket search filters</div><span></span><span></span><span></span></div>
+    <div class="wk-grp"><b>Planned</b></div>
+    <div class="wk-row"><span class="dot"></span><div class="wk-t">Email-to-ticket intake</div><span></span><span></span><span></span></div>
+    <div class="wk-row"><span class="dot"></span><div class="wk-t">SLA timer ignores weekends</div><span></span><span></span><span></span></div>
+  </div></section>
+</div>
+<div id="overlay">
+<div class="scrim"></div>
+<aside class="drawer" aria-label="Visual refresh finish">
+  <div class="drawer-h"><span class="ico" data-c="amber"><i class="ph-bold ph-git-merge"></i></span>
+    <div style="min-width:0;flex:1"><b style="font-size:.78rem">Visual refresh finish</b><div class="row" style="font-size:.56rem;color:var(--faint)"><span class="tag">Feature</span><span>Run #43</span><span class="mono">$2.10</span><span class="mono">31 min</span></div></div>
+    <i class="ph ph-arrows-out-simple" title="Open full page in Code Tasks"></i><i class="ph ph-x" title="Close"></i></div>
+  <div class="drawer-b">
+    <div class="needs-bar"><span class="ny-ico">!</span><b>Ready to merge</b><span class="wf-spacer"></span><span class="btn" data-kind="amber" data-size="s"><i class="ph ph-git-merge"></i>Merge PR #3</span></div>
+
+    <div><span class="lbl">How it went</span>
+      <div class="ck" style="margin-top:6px">
+        <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="row"><span class="face" data-a="juno" data-size="s"></span><span class="ck-t">Plan<small>PRD · 4 changes</small></span></span><a class="link-chip">PRD</a></div>
+        <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="row"><span class="face" data-a="you" data-size="s"></span><span class="ck-t">You approved<small>Tue 14:02</small></span></span><span></span></div>
+        <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="row"><span class="face" data-a="forge" data-size="s"></span><span class="ck-t">Build<small>11 files · +420 −96</small></span></span><a class="link-chip">Diff</a></div>
+        <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="row"><span class="face" data-a="vera" data-size="s"></span><span class="ck-t">Review &amp; test<small>148/148 · 2 findings fixed</small></span></span><a class="link-chip">Findings</a></div>
+        <div class="ck-i" data-s="you"><span class="ck-b">!</span><span class="row"><span class="face" data-a="you" data-size="s"></span><span class="ck-t">Merge<small>Only a person merges</small></span></span><a class="link-chip">PR #3 ↗</a></div>
+        <div class="ck-i"><span class="ck-b"></span><span class="row"><span class="face" data-a="beacon" data-size="s"></span><span class="ck-t">Staging<small>Auto after merge</small></span></span><span></span></div>
+      </div></div>
+
+    <div class="grid g2">
+      <div class="card" style="padding:10px"><span class="lbl">Preview</span><div class="row" style="margin-top:6px"><i class="ph ph-globe"></i><a class="mono">:8104</a><span class="tag" data-tone="green">Up</span></div></div>
+      <div class="card" style="padding:10px"><span class="lbl">Cost</span><div class="bar" style="margin-top:8px"><span style="width:20%;background:var(--teal)"></span><span style="width:55%;background:#7aa2f7"></span><span style="width:25%;background:var(--green)"></span></div><div class="faint" style="font-size:.52rem;margin-top:4px">Plan · Build · Review</div></div>
+    </div>
+
+    <div><span class="lbl">Links</span><div class="row wrap" style="margin-top:6px">
+      <a class="link-chip"><i class="ph ph-flow-arrow"></i>Workflow run</a><a class="link-chip"><i class="ph ph-code"></i>Build in Code Tasks</a><a class="link-chip"><i class="ph ph-git-pull-request"></i>PR #3 ↗</a><a class="link-chip"><i class="ph ph-terminal-window"></i>Logs</a><a class="link-chip"><i class="ph ph-graph"></i>What it learned</a></div></div>
+  </div>
+  <div class="drawer-f"><div class="composer"><span class="face" data-a="helm" data-size="s"></span>Ask Helm about this work…<span class="wf-spacer"></span><i class="ph ph-paper-plane-tilt"></i></div></div>
+</aside>
+</div>
+<script src="../shell.js"></script>
+</body></html>

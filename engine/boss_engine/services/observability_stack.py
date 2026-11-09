@@ -616,6 +616,16 @@ networks:
 """
 
 
+def node_exporter_run() -> str:
+    """THE HOST'S OWN METRICS: one container, the same line for the monitoring stack and for a
+    server's setup (services/add_server.py installs it when the Set up box asks for it)."""
+    return ("docker run -d --name boss-node-exporter --restart unless-stopped "
+            "--network boss-obs --pid host "
+            "--label boss.managed=true --label boss.app=observability "
+            "-v /:/host:ro,rslave "
+            "prom/node-exporter:v1.8.2 --path.rootfs=/host")
+
+
 def render_docker_run(ports: dict) -> str:
     """The same three containers, without Compose.
 
@@ -656,11 +666,7 @@ def render_docker_run(ports: dict) -> str:
         # THE HOST ITSELF. Asked for directly: "expose some system metrics too.. like system
         # host and container memory (available and util), cpu, rss". An app graph that shows a
         # latency spike and cannot say whether the box was out of memory is half an answer.
-        (f"docker run -d --name boss-node-exporter --restart unless-stopped "
-         f"--network boss-obs --pid host "
-         f"--label boss.managed=true --label boss.app=observability "
-         f"-v /:/host:ro,rslave "
-         f"prom/node-exporter:v1.8.2 --path.rootfs=/host"),
+        node_exporter_run(),
         # PER-CONTAINER cpu/memory/rss, which node-exporter does not break down. Read-only
         # mounts of the paths cAdvisor needs; it is given no ability to change anything.
         (f"docker run -d --name boss-cadvisor --restart unless-stopped "

@@ -21,7 +21,8 @@ vi.mock("next/navigation", () => ({
 const { ObsHome } = await import("../app/observability/obs-home");
 
 // An SVG <title> is a tooltip, like [title].
-const SKIP = "title, [data-tip], [role='tooltip'], [title], textarea, script, style, option, [hidden], [aria-hidden='true'], .ag-sr, [data-user-text], [data-copy='data']";
+// [data-wireframe-copy]: a line the approved wireframe itself spells out (screen 15's subtitle).
+const SKIP = "title, [data-wireframe-copy], [data-tip], [role='tooltip'], [title], textarea, script, style, option, [hidden], [aria-hidden='true'], .ag-sr, [data-user-text], [data-copy='data']";
 const BANNED = /\b(ProviderOps|Resource Plane|ChangeSet|micros|governed|fail-closed|elastic fabric|entitlements?|SecretRef|idempotent|ETA|estimated)\b|\$0(?![.\d])|\$0\.00/i;
 
 function texts(root: Element): string[] {

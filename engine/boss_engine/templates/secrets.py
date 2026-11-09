@@ -492,10 +492,6 @@ def deploy_target_demo_logins(c, settings, *, project_id: str, app_key: str) -> 
     in as the demo customer (D2). Same rule as every value here: only a value BOSS generated, only
     a demo login name, never a value a person set."""
     from ..app_links.service import resolve_app_key
-    from ..services.secret_backends import resolve_secret_ref
-    from ..services.secrets_service import ref_key_for
-    from ..services.stack_deploy import _find_secret_ref, _generated_secret_name
-    from .run_env import is_demo_login_name
 
     out: list[dict] = []
     targets = c.execute(text(
@@ -517,19 +513,37 @@ def deploy_target_demo_logins(c, settings, *, project_id: str, app_key: str) -> 
             key = app_key
         if key != app_key:
             continue
-        manifest = t["manifest"] if isinstance(t["manifest"], dict) else json.loads(t["manifest"] or "{}")
-        stack = str(manifest.get("name") or "")
-        for name in manifest.get("generated_env_keys") or []:
-            if not stack or not is_demo_login_name(str(name)):
-                continue
-            ref = _find_secret_ref(c, project_id, [ref_key_for(t["id"], _generated_secret_name(stack, name))])
-            if not ref:
-                continue
-            value = resolve_secret_ref(c, ref, settings)
-            if value:
-                env_word = str(t["environment"] or "deploy")
-                out.append({"name": str(name), "value": value, "target_id": t["id"],
-                            "label": env_word[:1].upper() + env_word[1:]})
+        out += target_demo_logins(c, settings, project_id=project_id, target=t)
+    return out
+
+
+def target_demo_logins(c, settings, *, project_id: str, target: dict) -> list[dict]:
+    """The demo login passwords ONE deploy target runs with: the target secrets its newest
+    healthy stack deploy generated (`stack/<manifest name>/<KEY>`), demo login names only.
+    `target` carries id, environment and that deploy's manifest summary. Shared by
+    deploy_target_demo_logins (an app's targets) and the Project page's reveal (one
+    environment's targets, BOSSAPP-914 §11)."""
+    from ..services.secret_backends import resolve_secret_ref
+    from ..services.secrets_service import ref_key_for
+    from ..services.stack_deploy import _find_secret_ref, _generated_secret_name
+    from .run_env import is_demo_login_name
+
+    out: list[dict] = []
+    raw = target.get("manifest")
+    manifest = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+    stack = str(manifest.get("name") or "")
+    for name in manifest.get("generated_env_keys") or []:
+        if not stack or not is_demo_login_name(str(name)):
+            continue
+        ref = _find_secret_ref(c, project_id, [ref_key_for(target["id"],
+                                                           _generated_secret_name(stack, name))])
+        if not ref:
+            continue
+        value = resolve_secret_ref(c, ref, settings)
+        if value:
+            env_word = str(target.get("environment") or "deploy")
+            out.append({"name": str(name), "value": value, "target_id": target["id"],
+                        "label": env_word[:1].upper() + env_word[1:]})
     return out
 
 

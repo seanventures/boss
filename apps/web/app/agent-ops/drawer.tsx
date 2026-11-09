@@ -7,6 +7,7 @@
  * dissent's reason in full) → evidence → undo → cost, and the run it started. Override lives on
  * a decision (decision:approve); the answer to Needs you opens Approvals, the one queue.
  */
+import { changeHref, changeViewPath, isLocalRepo, parseLocalChange, repoHref } from "../../lib/repo-links";
 import React, { useEffect, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
@@ -36,9 +37,12 @@ function Face({ who, size = 22 }: { who: string; size?: number }) {
 export function evidenceHref(e: Evidence, orgId?: string | null): string | null {
   if (e.kind === "url" && /^https?:\/\//.test(e.ref)) return e.ref;
   if (e.kind === "pull_request") {
-    if (/^https?:\/\//.test(e.ref)) return e.ref;
+    if (/^https?:\/\//.test(e.ref)) return changeHref(e.ref);
     const m = e.ref.match(/^([\w.-]+\/[\w.-]+)#(\d+)$/);
-    return m ? `https://github.com/${m[1]}/pull/${m[2]}` : null;
+    if (!m) return null;
+    // A local repository's change set opens in BOSS; a GitHub one on GitHub.
+    const local = isLocalRepo(m[1]) ? parseLocalChange(`http://boss-local/${m[1]}/pull/${m[2]}`) : null;
+    return local ? changeViewPath(local.projectId, local.number) : `${repoHref(m[1])}/pull/${m[2]}`;
   }
   if (e.kind === "workflow_run") return runHref(e.ref, orgId);
   if (e.kind === "kg_node") return kgNodeHref(e.ref, orgId);

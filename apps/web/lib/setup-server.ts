@@ -31,6 +31,7 @@ export async function fetchSetupSummary(projectId: string): Promise<SetupSummary
  *  first PR is missing (BOSSAPP-808); else Repo and models while setup is not ready. */
 export function landingArea(requestedArea: string | undefined, summary: SetupSummary | null): string | null {
   if (requestedArea && requestedArea.trim()) return null;
-  if (summary && summary.get_started === true && summary.ready === false) return "welcome";
+  // GET STARTED IS PROJECTS' FIRST RUN NOW (BOSSAPP-914): the 3 steps, then the first project.
+  if (summary && summary.get_started === true && summary.ready === false) return "projects";
   return summary && summary.ready === false ? "setup" : null;
 }

@@ -373,6 +373,10 @@ JOB_PRIORITY_BACKGROUND = 90
 JOB_PRIORITY_BULK = 95
 
 
+#: When this process started: a lease lost before it was lost by an older BOSS.
+PROCESS_STARTED_AT = now_utc()
+
+
 class JobLeaseService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -661,6 +665,20 @@ class JobLeaseService:
         admission_cap = None
         for candidate in candidates:
             payload = candidate["payload"] or {}
+            # A RECLAIM PAST ITS LAST ATTEMPT ENDS HERE. Reclaiming an expired lease added an
+            # attempt and never compared it with max_attempts, so a job whose every attempt died
+            # before it could report (the step endpoint 500'd, the worker's fail() hit a reset
+            # connection) was re-leased every five minutes for hours: four CVE builds on the
+            # laptop reached attempt 30 of 3 while the console said "Queued" (2026-11-07).
+            if (candidate["status"] in {"leased", "running"}
+                    and int(candidate["attempt"] or 0) >= int(candidate["max_attempts"] or 1)):
+                with connection.begin_nested():
+                    self.retire_lost_lease(
+                        connection, candidate["id"], actor=worker_id,
+                        reason=(f"Every attempt ({candidate['attempt']} of "
+                                f"{candidate['max_attempts']}) stopped without reporting back: "
+                                "its worker lost the lease each time. BOSS stopped retrying it."))
+                continue
             # THE MACHINE IS ASKED BEFORE A HEAVY JOB STARTS (stability spec §4b.2). A queued
             # build costs nothing; a thrashing host slows every build and the control plane
             # with it. A reclaim (its previous holder is gone) is never held back.
@@ -1302,6 +1320,17 @@ class JobLeaseService:
                 "deadletter_id": None,
             }
 
+        return self._deadletter(connection, row, error, actor=worker_id)
+
+    def _deadletter(self, connection: Connection, row: Any, error: dict[str, Any], *,
+                    actor: str) -> dict[str, Any]:
+        """The one terminal path for a job: failed_final -> a deadletter row -> deadlettered,
+        and the run it carried (build, discovery, deploy) is told, in words."""
+        row = dict(row)
+        job_id = row["id"]
+        project_id = row["project_id"]
+        current_time = now_utc()
+        worker_id = actor
         connection.execute(
             text(
                 """
@@ -1536,6 +1565,79 @@ class JobLeaseService:
         if row["lease_expires_at"] <= now_utc() and not allow_expired:
             raise LeaseNotFoundError("Lease has expired.")
         return row
+
+    #: A lease this long past its expiry with nobody reclaiming it is not coming back: its
+    #: holder (a worker slot, an API thread running a setup proof) is gone. Heartbeats renew a
+    #: lease every minute or two, so an hour is far past any live holder.
+    ABANDONED_LEASE_MINUTES = 60
+
+    def retire_lost_lease(self, connection: Connection, job_id: str, *, actor: str,
+                          reason: str) -> Optional[dict[str, Any]]:
+        """End a job whose lease expired and whose attempts are spent: the same terminal path a
+        reported failure takes (deadletter row, slot released, its build marked failed in
+        words). Only while it is still leased/running and expired; anything else is left alone."""
+        row = connection.execute(text(
+            """
+            SELECT id, project_id, task_id, work_item_id, tracker_binding_id, allocation_id,
+                   kind, payload, status, attempt, max_attempts, data_boundary, workload_class,
+                   resource_units, lease_owner, lease_expires_at, heartbeat_at, last_error
+            FROM jobs WHERE id = :id AND status IN ('leased', 'running')
+              AND lease_expires_at <= :now
+            FOR UPDATE SKIP LOCKED
+            """), {"id": job_id, "now": now_utc()}).mappings().first()
+        if not row:
+            return None
+        last = row.get("last_error") or {}
+        if isinstance(last, str):
+            try:
+                last = json.loads(last)
+            except ValueError:
+                last = {"message": last}
+        error = {"type": "LeaseLost", "code": "lease_lost", "message": reason[:500],
+                 "attempt": int(row["attempt"] or 0), "max_attempts": int(row["max_attempts"] or 0),
+                 "lease_owner": row.get("lease_owner"),
+                 "previous_error": (last.get("message") if isinstance(last, dict) else None),
+                 # Every attempt was lost while an OLDER BOSS ran (its lease ran out before this
+                 # process started): the stuck-work Shepherd may try it once on this version.
+                 "lost_on_older_boss": bool((row["heartbeat_at"] or row["lease_expires_at"])
+                                            and (row["heartbeat_at"] or row["lease_expires_at"])
+                                            <= PROCESS_STARTED_AT)}
+        return self._deadletter(connection, row, error, actor=actor)
+
+    def reap_lost_leases(self, connection: Connection, *, actor: str = "reaper",
+                         minutes: Optional[int] = None) -> dict[str, int]:
+        """Every job whose lease ran out long ago and nobody took back: spent attempts are
+        retired (deadlettered, its run told why); the rest go back to the queue. Covers kinds no
+        worker leases (a setup proof run in an API thread, an architecture draft from a worker
+        id that no longer exists), which claim_job never sees."""
+        horizon = now_utc() - timedelta(minutes=minutes or self.ABANDONED_LEASE_MINUTES)
+        rows = connection.execute(text(
+            "SELECT id, project_id, kind, attempt, max_attempts, lease_owner, lease_expires_at FROM jobs "
+            "WHERE status IN ('leased', 'running') AND lease_expires_at < :h "
+            "ORDER BY lease_expires_at LIMIT 200"), {"h": horizon}).mappings().all()
+        out = {"retired": 0, "requeued": 0}
+        for r in rows:
+            silent = int((now_utc() - r["lease_expires_at"]).total_seconds() // 60)
+            with connection.begin_nested():
+                if int(r["attempt"] or 0) >= int(r["max_attempts"] or 1):
+                    done = self.retire_lost_lease(
+                        connection, r["id"], actor=actor,
+                        reason=(f"Its {r['kind']} job lost its holder ({r['lease_owner'] or 'no one'}) "
+                                f"and nobody took it back for {silent} min; all "
+                                f"{r['max_attempts']} attempt(s) are spent, so BOSS ended it."))
+                    out["retired"] += 1 if done else 0
+                else:
+                    moved = connection.execute(text(
+                        "UPDATE jobs SET status = 'queued', lease_owner = NULL, "
+                        "lease_token_hash = NULL, lease_expires_at = NULL, heartbeat_at = NULL, "
+                        "run_after = now(), updated_at = now() WHERE id = :id "
+                        "AND status IN ('leased', 'running') AND lease_expires_at < :h"),
+                        {"id": r["id"], "h": horizon}).rowcount
+                    if moved:
+                        out["requeued"] += 1
+                        emit_event(connection, r["project_id"], "job.requeued_lost_lease", actor, "job",
+                                   r["id"], {"kind": r["kind"], "silent_minutes": silent})
+        return out
 
     def close_abandoned(
         self,
@@ -2606,7 +2708,7 @@ class JobLeaseService:
             connection,
             project_id,
             task_id,
-            f"Budget state {policy['budget_state']} deferred job: {kind}",
+            f"Budget state {policy['budget_state']} deferred a job: {_key_words(kind)}",
             {
                 "action": "review_budget_policy",
                 "job_id": job_id,
@@ -2658,7 +2760,7 @@ class JobLeaseService:
             connection,
             project_id,
             task_id,
-            f"Budget blocked spend-gated job: {kind}",
+            f"Budget blocked a spend-gated job: {_key_words(kind)}",
             {"action": "create_budget_reservation"},
             {"reservation_id": reservation_id},
             "budget_missing_for_job",
@@ -2761,3 +2863,9 @@ class JobLeaseService:
             str(outbox_message_id),
             deadletter_id,
         )
+
+
+def _key_words(value):
+    from .decision_words import key_words
+
+    return key_words(value)

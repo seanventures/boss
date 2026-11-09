@@ -17,6 +17,7 @@
  * SSH is off); host writes only when `can.install_key` / `can.install_docker` / `can.retire`.
  * Never a dead button.
  */
+import { consoleHref } from "../console-href";
 import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
@@ -30,6 +31,10 @@ import {
 import { ago, copyText, CopyButton, ErrorLine, localTime, Menu, useNow } from "./infra-util";
 import { confirmed, Drawer, DrawerSection, Empty, Skeleton, Sheet, StateWord, TypedConfirm } from "./kit";
 import { StageLine } from "./rack";
+import { ServerOverview } from "./server-overview";
+import { ServerSetup } from "./server-setup";
+import { openDockAbout } from "../../lib/dock-subject";
+import { setCrumbTrail } from "../shell-crumb-here";
 
 const STORES: { key: string; label: string; tip: string }[] = [
   { key: "database", label: "Database", tip: "database (survives restarts)" },
@@ -347,8 +352,18 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
   const [busy, run] = useBusy();
   const [error, setError] = useState<string | null>(null);
   const h = detail.data;
+  const agentSetup = !!h && !h.thisComputer
+    && (h.facts.labels as Record<string, unknown> | undefined)?.added_by === "add_a_server";
   // A drawer opened on a host that is gone (retired and deleted) says so rather than spinning.
   useEffect(() => { setError(null); }, [hostId]);
+  // THE BREADCRUMB NAMES THE SERVER (14-01): "Infra / Servers / 203.0.113.20" while it is open —
+  // a server is shared and org-wide, never "<project> / Infra".
+  const crumbName = h ? String(h.facts.address ?? h.name) : "";
+  useEffect(() => {
+    if (!crumbName) return undefined;
+    setCrumbTrail({ area: "infra", trail: [{ label: "Servers", href: "?area=infra&view=fleet" }, { label: crumbName }] });
+    return () => setCrumbTrail(null);
+  }, [crumbName]);
 
   const head = h ? (
     <>
@@ -364,13 +379,28 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
   ) : <span className="inf-drawer-title">Machine</span>;
 
   return (
-    <Drawer label={h ? `Machine ${h.name}` : "Machine"} testId="inf-host-drawer" onClose={onClose} head={head}>
+    <Drawer label={h ? `Machine ${h.name}` : "Machine"} testId="inf-host-drawer" onClose={onClose} head={head} width={880} expandable>
       {!h && detail.loading ? <Skeleton testId="inf-host-loading" /> : null}
       {!h && detail.error ? <Empty testId="inf-host-missing"><span title={detail.error}>Can&apos;t read this machine</span></Empty> : null}
       {h ? (
         <>
-          {canWrite && !h.thisComputer && h.stage.stage !== "ready" && h.state.tone !== "none"
-            ? <Setup host={h} actor={actor} refresh={detail.refresh} /> : null}
+          {/* ADDED THROUGH ADD A SERVER: the agent sets it up; the diagram leads, and the old stepper
+              stays one press away ("Do it by hand"). */}
+          {agentSetup ? (
+            <ServerSetup hostId={h.id} projectId={projectId} canExec={canWrite} onAskBoss={() => openDockAbout({
+              subject: { kind: "fleet", id: projectId }, role: "Deployment Manager", history: "push",
+              question: `What would it take to deploy this project onto ${h.name}?` })} />
+          ) : null}
+          {/* THE SERVER AT A GLANCE (screen 14): capacity, the projects on it, plugins, changes. */}
+          {!h.thisComputer && !agentSetup ? <ServerOverview projectId={projectId} hostId={h.id} canExec={canWrite} /> : null}
+          {canWrite && !h.thisComputer && h.stage.stage !== "ready" && h.state.tone !== "none" ? (
+            agentSetup ? (
+              <details className="inf-by-hand" data-testid="inf-host-by-hand">
+                <summary title="The four-stage stepper: generate or adopt a key, authorise, verify, install Docker">Do it by hand</summary>
+                <Setup host={h} actor={actor} refresh={detail.refresh} />
+              </details>
+            ) : <Setup host={h} actor={actor} refresh={detail.refresh} />
+          ) : null}
           <DrawerSection label="FACTS" testId="inf-host-facts">
             {h.thisComputer ? (
               <dl className="inf-facts">
@@ -433,6 +463,7 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
               <ErrorLine error={error} />
             </DrawerSection>
           ) : null}
+          {h.thisComputer ? <ProjectsOnServer residents={h.residents} /> : null}
           <DrawerSection label="ON THIS MACHINE" testId="inf-host-residents">
             {h.residents.length ? (
               <ul className="inf-resident-rows">
@@ -462,5 +493,37 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
         </>
       ) : null}
     </Drawer>
+  );
+}
+
+/** PROJECTS ON THIS SERVER (BOSSAPP-914 screen 14): a shared server stays in Infra; what runs on it
+ *  is grouped by project, each linking to that Project › Deployments (which links back here). */
+export function ProjectsOnServer({ residents }: { residents: HostDetail["residents"] }) {
+  const byProject = new Map<string, { name: string; apps: HostDetail["residents"] }>();
+  for (const r of residents) {
+    if (!r.project) continue;
+    const g = byProject.get(r.project.id) ?? { name: r.project.name, apps: [] };
+    g.apps.push(r);
+    byProject.set(r.project.id, g);
+  }
+  if (!byProject.size) return null;
+  return (
+    <DrawerSection label="PROJECTS ON THIS SERVER" testId="inf-host-projects">
+      <ul className="inf-resident-rows">
+        {[...byProject.entries()].map(([id, g]) => (
+          <li key={id} className="inf-row-btn inf-host-project" data-testid={`inf-host-project-${id}`}>
+            <span className="inf-trunc inf-host-project-name">
+              <b>{g.name}</b>{" "}
+              <span className="inf-faint">{g.apps.map((a) => [a.env, a.port ? `:${a.port}` : ""].filter(Boolean).join(" ")).filter(Boolean).join(" · ")}</span>
+            </span>
+            <StateWord w={g.apps[0].health} />
+            <a className="inf-link" href={consoleHref({ project_id: id, area: "project", tab: "deployments", host: undefined, view: undefined })}
+               data-console-load data-testid={`inf-host-project-link-${id}`} title={`${g.name}: its deployments, demo logins and health`}>
+              Project › Deployments
+            </a>
+          </li>
+        ))}
+      </ul>
+    </DrawerSection>
   );
 }

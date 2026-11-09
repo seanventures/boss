@@ -709,6 +709,24 @@ body {
   --tier-frontier: var(--boss-c-c58af9);
   --tier-frontier-soft: var(--boss-c-d81c3c5035);
 
+  /* THE TYPE SCALE (BOSSAPP-914): one set of sizes for every area, named once so every header,
+     card and row reads as the same product. Taken from the Workflows page as it renders (the
+     console's best-read screen), not from the wireframes: their sizes were drawn small (meta
+     11.4px, tags 10.6px, labels 10.3px) and made every screen built from them read a size small.
+     At the 19px root: display 26, page 21.5, title 16, body, rows, buttons and inputs 14,
+     meta 13.3, tags 13, MONO CAPS labels 11.4 px (raised a step on 2026-11-08: the dense project
+     pages measured a median of 13px against Workflows' 14px). Nothing that is read sits below
+     13px except a caps label. tests/type-is-a-token.test.ts holds these floors and keeps literal sizes out. */
+  --fs-display: 1.368rem; /* a big number, a hero glyph */
+  --fs-page: 1.132rem;  /* a page's title (h1) */
+  --fs-title: .842rem;  /* a card's, sheet's or section's title */
+  --fs-body: .737rem;   /* body text */
+  --fs-row: .737rem;    /* a list row's title */
+  --fs-ui: .737rem;     /* buttons, inputs, tabs */
+  --fs-meta: .7rem;     /* meta lines, chips, counts, links */
+  --fs-tag: .684rem;    /* tags, badges, ages */
+  --fs-label: .6rem;    /* MONO CAPS section labels */
+
   /* shape */
   --r-sm: 8px;
   --r: 8px;
@@ -9514,7 +9532,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   background: var(--surface); color: var(--ink); box-shadow: 0 32px 90px var(--boss-c-4c46ca1826);
   font-size: 0.875rem; line-height: 1.45; box-sizing: border-box;
 }
-.bx-np-title { margin: 0; font-family: var(--display); font-size: 1.15rem; font-weight: 600; }
+.bx-np-title { margin: 0; font-family: var(--display); font-size: var(--fs-page); font-weight: 600; }
 .bx-np-sub { margin: -6px 0 0; color: var(--ink-soft); }
 .bx-np-sheet .bx-project-type { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .bx-np-sheet .bx-project-type legend { padding: 0 0 6px; color: var(--ink-soft); font-weight: 600; }
@@ -9525,8 +9543,84 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .bx-np-sheet .bx-project-type-option[data-checked] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--ink); }
 .bx-np-sheet .bx-project-type-option input { margin: 3px 0 0; accent-color: var(--accent); }
 .bx-np-field { display: grid; gap: 4px; color: var(--ink-soft); }
-.bx-np-field em { font-style: normal; color: var(--faint); font-size: 0.75rem; }
+.bx-np-field em { font-style: normal; color: var(--faint); font-size: var(--fs-body); }
 .bx-np-field .input { width: 100%; box-sizing: border-box; }
-.bx-np-next { margin: 0; padding: 8px 10px; border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: 0.82rem; }
+.bx-np-next { margin: 0; padding: 8px 10px; border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: var(--fs-body); }
 .bx-np-error { margin: 0; color: var(--red); }
 .bx-np-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+
+/* An answer's leading path as flow chips (lib/answer-flow; captain drawer, screen 09). */
+.agent-flow { display: flex; align-items: center; flex-wrap: wrap; row-gap: 6px; margin: 2px 0 8px; }
+.agent-flow-n { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 8px; border: 1.5px solid var(--border-strong);
+  font-size: var(--fs-ui); font-weight: 600; white-space: nowrap; }
+.agent-flow-n[data-s="done"] { border-color: var(--green); color: var(--green); }
+.agent-flow-n[data-s="now"] { border-color: var(--teal); color: var(--teal); box-shadow: 0 0 0 2px color-mix(in srgb, var(--teal) 25%, transparent); }
+.agent-flow-n[data-s="waiting"] { background: var(--amber); border-color: var(--amber); color: #1b1300; }
+.agent-flow-n[data-s="todo"] { border-style: dashed; color: var(--faint, var(--muted)); }
+.agent-flow-w { width: 14px; height: 2px; background: var(--border-strong); flex: none; }
+.agent-flow-w[data-s="done"] { background: var(--green); }
+
+/* An answer's cards (app/answer-cards.tsx, screen 09): flow steps that never leave an arrow at
+   a wrap, record chips, and the "New work" card. */
+.agent-flow-step { display: inline-flex; align-items: center; flex: none; }
+.agent-flow-step[data-wrap] > .agent-flow-w { visibility: hidden; }
+.agent-flow-n { gap: 5px; }
+.agent-flow-n[data-s="agent"] { border-radius: 999px; border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.agent-flow-n[data-s="you"] { border-style: dashed; border-color: var(--amber); color: var(--amber); }
+.ac-cites { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+.ac-cite { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-strong);
+  font-size: var(--fs-ui); font-weight: 600; color: var(--ink-soft, var(--muted)); text-decoration: none; max-width: 100%; }
+.ac-cite > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-cite:hover { border-color: var(--accent); color: var(--accent-text, var(--accent)); }
+.ac-cite[data-kind="pr"] svg { color: var(--green); } .ac-cite[data-kind="issue"] svg { color: var(--red); }
+.ac-cite[data-kind="run"] svg, .ac-cite[data-kind="env"] svg { color: var(--teal); }
+.ac-cite[data-kind="file"] svg, .ac-cite[data-kind="doc"] svg { color: var(--blue, var(--accent)); }
+.ac-cite[data-kind="place"] svg { color: var(--green); }
+.ac-act { margin-top: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--teal) 5%, var(--surface, transparent)); display: flex; flex-direction: column; gap: 6px; }
+.ac-act-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.ac-ico { width: 24px; height: 24px; border-radius: 7px; display: inline-grid; place-items: center; flex: none;
+  color: var(--teal); background: color-mix(in srgb, var(--teal) 16%, transparent); }
+.ac-act-t { font-size: var(--fs-title); min-width: 0; overflow-wrap: anywhere; }
+.ac-spacer { flex: 1; }
+.ac-cost { font-family: var(--mono); font-size: var(--fs-meta); font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  color: var(--px-violet, #8b7cf6); background: color-mix(in srgb, var(--px-violet, #8b7cf6) 14%, transparent); }
+.ac-act .agent-flow { margin: 2px 0 0; }
+.ac-act-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ac-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border-radius: 8px; border: 1px solid var(--border-strong);
+  background: var(--surface, transparent); color: var(--ink, inherit); font: inherit; font-size: var(--fs-ui); font-weight: 600; cursor: pointer; text-decoration: none; }
+.ac-btn[data-kind="primary"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ac-btn[data-kind="ghost"] { border-color: transparent; background: none; color: var(--muted); }
+.ac-btn:disabled { opacity: .6; cursor: default; }
+.ac-done { color: var(--green); font-weight: 700; font-size: var(--fs-body); }
+.ac-link { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-ui); font-weight: 600; color: var(--accent-text, var(--accent)); }
+.ac-said { margin: 0; font-size: var(--fs-ui); color: var(--amber); }
+@media (prefers-reduced-motion: reduce) { .ac-act, .ac-cite { transition: none; } }
+
+/* THE COMPACT ATTENTION CARD (BOSSAPP-914 round 3): an attention card ("Order API recovered",
+   "Merge PR #3?") on an area page — Infra, Observability, Code Tasks — reads at the Project page's
+   type scale (--fs-*), not the Agents surface's larger one it was built in. Every action is kept. */
+:is(.inf-needs, .fx) .ag-att { gap: 6px; padding: 10px 12px; }
+:is(.inf-needs, .fx) .ag-att-head { gap: 8px; }
+:is(.inf-needs, .fx) .ag-att-title { font-size: var(--fs-body); font-weight: 600; line-height: 1.3; }
+:is(.inf-needs, .fx) .ag-att-age { font-family: var(--mono); font-size: var(--fs-tag); }
+:is(.inf-needs, .fx) .ag-att-context, :is(.inf-needs, .fx) .ag-att-detail, :is(.inf-needs, .fx) .ag-att-error, :is(.inf-needs, .fx) .ag-att-done,
+:is(.inf-needs, .fx) .ag-att-confirm, :is(.inf-needs, .fx) .ag-att-details { font-size: var(--fs-meta); }
+:is(.inf-needs, .fx) .ag-att-actions { gap: 6px; }
+:is(.inf-needs, .fx) .ag-att-actions .ag-btn { min-height: 26px; font-size: var(--fs-meta); }
+:is(.inf-needs, .fx) .ag-att-actions .ag-link { font-size: var(--fs-meta); }
+@media (max-width: 639px) {
+  /* Touch size on a phone (§5.3), each action its own width — never a full-width bar. */
+  :is(.inf-needs, .fx) .ag-att-actions .ag-btn { flex: 0 0 auto; width: auto; min-height: 44px; }
+}
+
+/* APPROVALS at the shared type scale (round 3): its head, filters and cards read at the Project
+   page's sizes. Typography only; every control is kept. */
+.decision-inbox-section .section-head h2 { font-size: var(--fs-page); line-height: 1.25; }
+.decision-inbox-section .section-head .eyebrow { font-family: var(--mono); font-size: var(--fs-label); letter-spacing: .12em; }
+.decision-inbox-section .section-head .status-meta { font-size: var(--fs-meta); line-height: 1.5; }
+.decision-inbox-section .dq-filter-btn { font-size: var(--fs-meta); }
+.decision-inbox-section .dq-filter-count { font-size: var(--fs-tag); }
+.decision-inbox-section .dq-title { font-size: var(--fs-title); }
+.decision-inbox-section .dq-rationale { font-size: var(--fs-ui); }

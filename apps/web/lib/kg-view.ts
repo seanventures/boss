@@ -551,7 +551,8 @@ export function kgRunHref(prov: { code_task_run_id?: string | null; workflow_run
 
 /** The code on GitHub at those lines, through the shared URL builder (lib/github-urls.ts). */
 export function codeHref(repo: string | null | undefined, path: string | null | undefined, lines?: [number, number] | number | null, ref = "HEAD"): string | null {
-  if (!repo || !path || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return null;
+  // A local repository (`local_<project>/<name>`) has no page on GitHub: no link.
+  if (!repo || !path || !/^[\w.-]+\/[\w.-]+$/.test(repo) || repo.startsWith("local_")) return null;
   const clean = path.split("/").map(encodeURIComponent).join("/");
   const anchor = Array.isArray(lines) ? `#L${lines[0]}-L${lines[1]}` : typeof lines === "number" ? `#L${lines}` : "";
   return `${repoUrl(repo)}/blob/${encodeURIComponent(ref)}/${clean}${anchor}`;

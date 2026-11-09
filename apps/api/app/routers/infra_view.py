@@ -81,8 +81,12 @@ def build_infra_router(
     def infra_fleet(project_id: str, request: Request, response: Response,
                     viewer: Optional[str] = None):
         """Machines, what is placed on them, what is not placed, and what needs you (§4.3)."""
+        from apps.api.app.main import visible_project_rows
+
+        visible = [str(r["id"]) for r in visible_project_rows(request)]
         return _read(project_id, request, response, lambda c: infra_view.fleet(
-            c, settings(), project_id.strip(), viewer=viewer_of(viewer)))
+            c, settings(), project_id.strip(), viewer=viewer_of(viewer),
+            visible_project_ids=visible))
 
     @router.get("/v1/infra/hosts/{host_id}")
     @permit(P.HOST_READ, scope=Scope.project(query="project_id"))

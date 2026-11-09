@@ -289,6 +289,8 @@ export const ACTION_PERMISSIONS: Readonly<Record<string, Permission>> = {
   "app/project-archive-actions.ts#listArchivedProjects": "project:read",
   "app/project-archive-actions.ts#archiveProject": "project:delete",
   "app/project-archive-actions.ts#restoreProject": "project:delete",
+  "app/project-delete-actions.ts#readDelete": "project:read",
+  "app/project-delete-actions.ts#deleteProject": "project:delete",
   "app/process-manager-actions.ts#loadProcessManagerAction": "autopilot:read",
   "app/process-manager-actions.ts#loadProcessManagerMetricsAction": "autopilot:read",
   "app/process-manager-actions.ts#loadProcessManagerProposalsAction": "autopilot:read",

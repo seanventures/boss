@@ -1,0 +1,261 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>New work</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css"><link rel="stylesheet" href="np2.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+<style>
+  /* the modal's two zones: the work (top + bottom) and the chat beside it; on a phone the chat sits between them */
+  .nw-body { grid-template-areas: "top side" "bot bot"; }
+  .nw-top { grid-area: top; } .nw-bot { grid-area: bot; border-top: 1px solid var(--border); } .nw-side { grid-area: side; }
+  .nw .ub-grid { grid-template-columns: minmax(0, 1fr); }
+  .nw .nw-defs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .nw .np2-foot { position: sticky; bottom: 0; background: var(--surface); z-index: 2; }
+  .nw-botrow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  @media (max-width: 760px) { .nw-body { grid-template-areas: "top" "side" "bot"; } .nw .nw-defs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+</style>
+<script>
+  /* ?state=typing | chat | ready | refused  (a, b, c, and c with a readiness refusal) */
+  window.NW = (() => { const s = new URLSearchParams(location.search).get("state"); return ["typing", "chat", "ready", "refused"].includes(s) ? s : "typing"; })();
+  document.documentElement.dataset.state = window.NW;
+</script>
+</head>
+<body data-active="projects" data-project="1" data-tab="work" data-crumb="Projects|HelpDesk AI Demo|Work">
+<div id="content">
+  <!-- Work tab: the inline composer is replaced by one bar that opens the modal -->
+  <div class="nw-tab-bar" title="Opens New work. Typing here opens it with your words."><i class="ph ph-plus-circle" style="color:var(--accent-text);font-size:1rem"></i>New work: describe a feature, a bug, or paste a ticket link…<span class="wf-spacer"></span><span class="wf-kbd">N</span></div>
+  <div class="row wrap" style="gap:10px">
+    <div class="filters"><span aria-selected="true">All 9</span><span><span class="dot" data-s="you"></span> Needs you 1</span><span><span class="dot" data-s="run"></span> Running 1</span><span>Planned 4</span><span><span class="dot" data-s="done"></span> Done 3</span></div>
+  </div>
+  <section class="card" style="padding:0"><div class="wk">
+    <div class="wk-grp"><span class="dot" data-s="you"></span><b>Needs you</b></div>
+    <div class="wk-row" data-s="you"><span class="ico" data-c="amber" style="width:22px;height:22px;font-size:.7rem"><i class="ph-bold ph-git-merge"></i></span>
+      <div><div class="wk-t ell">Visual refresh finish</div><div class="wk-sub"><span class="tag">Feature</span><span>Waiting 3h</span></div></div>
+      <div class="st"><span class="st-n" data-s="done">P</span><span class="st-w"></span><span class="st-n" data-s="done">B</span><span class="st-w"></span><span class="st-n" data-s="you">PR</span></div><span></span><div></div></div>
+    <div class="wk-grp"><span class="dot"></span><b>Planned</b><span class="faint">· ranked by Marshal</span></div>
+    <div class="wk-row"><span class="ico" style="width:22px;height:22px;font-size:.7rem"><i class="ph ph-envelope-simple"></i></span>
+      <div><div class="wk-t ell">Email-to-ticket intake</div><div class="wk-sub"><span class="tag">Feature</span><span>Next up</span></div></div>
+      <div class="st"><span class="st-n">P</span><span class="st-w"></span><span class="st-n">B</span><span class="st-w"></span><span class="st-n">PR</span></div><span></span><div></div></div>
+  </div></section>
+</div>
+
+<div id="overlay">
+<div class="scrim"></div>
+<div class="sheet np2 nw" role="dialog" aria-modal="true" aria-label="New work">
+  <div class="sheet-h"><span class="ico"><i class="ph ph-plus-circle"></i></span><h2>New work</h2>
+    <span class="tag np2-hide-s" title="Builds onto this project's branch"><i class="ph ph-git-branch"></i>HelpDesk AI Demo · its branch</span>
+    <span class="wf-spacer"></span>
+    <i class="ph ph-arrows-out np2-hide-s" title="Full screen" style="color:var(--faint)"></i>
+    <i class="ph ph-x" style="margin-left:6px" title="Close (Esc) · your words are kept as a draft"></i></div>
+
+  <div class="nw-body">
+    <!-- ── TOP: kind, words, Helm's understanding ─────────────────────── -->
+    <div class="nw-main nw-top">
+      <div class="nw-kinds">
+        <div class="seg" role="tablist" aria-label="Kind of work" title="The kind picks the default workflow"><span aria-selected="true"><i class="ph ph-sparkle"></i>Feature</span><span><i class="ph ph-bug"></i>Bug</span><span><i class="ph ph-link"></i>Ticket or link</span></div>
+        <span class="pin">1</span>
+        <span class="faint np2-hide-s" style="font-size:.54rem">A link pasted on any tab is read too</span>
+      </div>
+
+      <div class="np2-in" data-in="ready refused" style="padding:9px 12px;align-items:center" title="Your words, folded once the brief is confirmed · click to open">
+        <span class="kind" style="width:28px;height:28px;font-size:.85rem"><i class="ph-fill ph-sparkle"></i></span>
+        <div class="txt ell" style="padding-top:0">Let agents tag tickets by product. When a ticket comes in, pick the product from the email and…</div>
+        <span class="link-chip" style="flex:none"><i class="ph ph-caret-down"></i>3 lines</span>
+      </div>
+      <div class="np2-in" data-multi data-in="typing chat" title="A few lines: what should change and why. Paste issue links, screenshots or logs.">
+        <span class="kind"><i class="ph-fill ph-sparkle"></i></span>
+        <div class="txt" data-in="typing">Let agents tag tickets by product.
+When a ticket comes in, pick the product from the email and the customer’s plan; staff can change it<span class="caret"></span></div>
+        <div class="txt" data-in="chat">Let agents tag tickets by product.
+When a ticket comes in, pick the product from the email and the customer’s plan; staff can change it in the inbox.
+Lead wants to filter the inbox by product.</div>
+        <div class="tools"><span class="link-chip" title="Full-screen editor"><i class="ph ph-arrows-out"></i></span><span class="link-chip" title="Attach a screenshot, log or file"><i class="ph ph-paperclip"></i></span></div>
+        <div class="np2-in-foot"><span class="grow"><i class="ph ph-arrows-vertical"></i>4 lines · grows</span><span>·</span><span>⇧↵ new line · ⌘↵ start</span><span class="wf-spacer"></span><span class="np2-hide-s" data-in="typing">Helm reads as you type</span></div>
+      </div>
+
+      <!-- (a) Helm reading -->
+      <div class="ub" data-in="typing">
+        <div class="ub-h"><span class="face" data-a="helm_live" data-size="m"></span>
+          <div><b>Task</b> <span class="pin">2</span><small>Reading your words and the code graph · <span class="mono">api/tickets</span>, <span class="mono">api/tags</span>…</small></div>
+          <span class="wf-spacer"></span><span class="tag" data-tone="blue"><span class="dot" data-s="run"></span>reading</span></div>
+        <div class="ub-grid">
+          <div><div class="ub-f"><span class="lbl">Title</span><span class="ub-sk" style="width:70%;margin-top:4px"></span><i></i></div>
+               <div class="ub-f"><span class="lbl">What changes</span><span style="display:flex;flex-direction:column;gap:5px;padding-top:4px"><span class="ub-sk"></span><span class="ub-sk" style="width:60%"></span></span><i></i></div></div>
+          <div><div class="ub-f"><span class="lbl">Acceptance</span><span style="display:flex;flex-direction:column;gap:5px;padding-top:4px"><span class="ub-sk" style="width:80%"></span><span class="ub-sk" style="width:65%"></span><span class="ub-sk" style="width:72%"></span></span><i></i></div>
+               <div class="ub-f"><span class="lbl">Area · risk</span><span class="ub-sk" style="width:50%;margin-top:4px"></span><i></i></div></div>
+        </div>
+      </div>
+
+      <!-- (b)(c) the understanding -->
+      <div class="ub" data-ok data-in="ready refused" title="The confirmed brief, folded · click to open every line">
+        <div class="ub-h"><span class="face" data-a="helm" data-size="m"></span>
+          <div><b>Auto-tag new tickets by product</b> <span class="pin">2</span>
+            <small style="color:var(--green)"><i class="ph-bold ph-check"></i> Brief confirmed · updated from your chat with Helm</small></div>
+          <span class="wf-spacer"></span><span class="btn" data-size="s"><i class="ph ph-pencil-simple"></i>Edit</span></div>
+        <div class="row wrap" style="gap:6px;font-size:.56rem">
+          <span class="np2-chip"><i class="ph ph-list-checks"></i>Done when <b>5</b></span>
+          <span class="np2-chip" style="border-color:color-mix(in srgb, var(--green) 55%, transparent);color:var(--green)"><i class="ph ph-plus"></i>re-tag the 12,000 existing tickets</span>
+          <span class="np2-chip"><i class="ph ph-graph"></i>3 files + 1 migration</span>
+          <span class="tag" data-tone="amber">Risk: medium</span>
+          <i class="ph ph-caret-down faint" style="margin-left:auto" title="Open the whole brief"></i>
+        </div>
+      </div>
+      <div class="ub" data-in="chat" title="Helm's rewrite of your words, checked against the code graph">
+        <div class="ub-h"><span class="face" data-a="helm" data-size="m"></span>
+          <div><b>Task</b> <span class="pin">2</span>
+            <small data-in="chat">Your 3 lines as a change · checked against the code graph · click any line to edit</small>
+            <small data-in="ready refused" style="color:var(--green)"><i class="ph-bold ph-check"></i> Confirmed · updated from your chat with Helm</small></div>
+          <span class="wf-spacer"></span>
+          <span class="ub-key np2-hide-s"><i>your words</i><i><mark>Helm added</mark></i></span></div>
+        <div class="ub-grid">
+          <div>
+            <div class="ub-f"><span class="lbl">Title</span><span class="ttl">Auto-tag new tickets by product</span><i class="ph ph-pencil-simple ed"></i></div>
+            <div class="ub-f"><span class="lbl">What changes</span><span>Each new ticket gets a product tag picked from the email text and the customer’s plan, <mark>with a confidence</mark>. Staff can change it in the inbox; the lead can filter by product.</span><i class="ph ph-pencil-simple ed"></i></div>
+            <div class="ub-f"><span class="lbl">Area <small class="faint" style="letter-spacing:0;text-transform:none">code graph</small></span>
+              <div class="ub-files"><span><i class="ph ph-file-py"></i>api/tickets/intake.py <em>writes tickets</em></span><span><i class="ph ph-file-py"></i>api/tags/models.py <em>tag table exists</em></span><span><i class="ph ph-file-tsx"></i>web/src/inbox/TicketRow.tsx <em>shows tags</em></span><span class="faint"><i class="ph ph-database"></i>+ 1 migration <em>tickets.product</em></span></div><i></i></div>
+          </div>
+          <div>
+            <div class="ub-f"><span class="lbl">Done when</span>
+              <ul><li>A new ticket has a product tag within 10 s</li><li><mark>The tag shows its confidence; under 60% it says “check”</mark></li><li>Staff change it in one click; the change is logged</li><li>The inbox filters by product</li></ul><i class="ph ph-pencil-simple ed"></i></div>
+            <div class="ub-f" data-new data-in="ready refused"><span class="lbl" style="color:var(--green)">+ from chat</span><span>Re-tags the 12,000 existing tickets once, in the background</span><i class="ph ph-pencil-simple ed"></i></div>
+            <div class="ub-f"><span class="lbl">Risk</span><span><span class="tag" data-tone="amber">Medium</span> touches intake, which every email passes through · <mark>adds a column to a 12k-row table</mark></span><i></i></div>
+          </div>
+        </div>
+        <div class="ub-act">
+          <span class="btn" data-kind="ok" data-in="chat" title="Confirms it (Start also confirms it)"><i class="ph-bold ph-check"></i>Looks right</span>
+          <span class="btn" data-in="chat"><i class="ph ph-pencil-simple"></i>Fix it</span>
+          <span class="btn" data-in="ready refused" data-size="s"><i class="ph ph-pencil-simple"></i>Edit</span>
+          <span class="ub-hint np2-hide-s" data-in="chat"><i class="ph ph-magic-wand"></i>Hint for a rewrite, e.g. “smaller first step”</span>
+          <span class="btn" data-size="s" data-in="chat"><i class="ph ph-arrows-clockwise"></i>Rewrite</span>
+          <span class="faint" style="font-size:.54rem" data-in="ready refused">This becomes the work item’s spec and the PR’s checklist.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SIDE: a short chat with Helm before it starts ──────────────── -->
+    <aside class="nw-side" aria-label="Talk it through with Helm">
+      <div class="row"><span class="face" data-a="helm" data-size="s"></span><b style="font-family:var(--display);font-size:.68rem">Talk it through</b><span class="pin">3</span><span class="wf-spacer"></span>
+        <span class="nw-turns" data-in="typing">0 / 4</span><span class="nw-turns" data-in="chat">1 / 4</span><span class="nw-turns" data-in="ready refused">3 / 4</span></div>
+      <div class="nw-chat">
+        <div data-in="typing" class="faint" style="font-size:.58rem;line-height:1.5">Helm asks at most one or two questions once it has read your words and the code. Optional: you can start without answering.</div>
+        <div class="sugs" data-in="typing"><span class="sug">What could break?</span><span class="sug">Smaller first step?</span><span class="sug">Similar work before?</span></div>
+
+        <div data-in="chat ready refused" class="who"><span class="face" data-a="helm" data-size="s"></span>Helm</div>
+        <div class="msg" data-from="agent" data-in="chat ready refused">There’s already a tags table, but nothing writes product tags yet. One question:</div>
+        <div class="msg" data-from="agent" data-in="chat ready refused"><b>Should the 12,000 existing tickets be tagged too, or only new ones?</b></div>
+        <div class="sugs" data-in="chat"><span class="sug" style="border-color:var(--accent-line)">Only new</span><span class="sug" style="border-color:var(--accent-line)">Re-tag all once</span><span class="sug" style="border-color:var(--accent-line)">Last 30 days</span></div>
+
+        <div class="msg" data-from="you" data-in="ready refused">Re-tag all once</div>
+        <div class="msg" data-from="agent" data-in="ready refused">Added it as a background job (criterion 5). That adds about 4 min and $0.20. Anything else?</div>
+        <span class="sys" data-in="ready refused"><i class="ph-bold ph-check"></i>Brief updated · Done when +1 · estimate updated</span>
+        <div class="msg" data-from="you" data-in="ready refused">High priority, and tell #support-eng</div>
+        <div class="msg" data-from="agent" data-in="ready refused">Set both below. Ready to start.</div>
+      </div>
+      <div class="composer"><i class="ph ph-chat-circle-dots"></i><span data-in="typing chat">Reply to Helm, or ask anything…</span><span data-in="ready refused">Ask Helm…</span><span class="wf-spacer"></span><i class="ph ph-paper-plane-tilt"></i></div>
+      <span class="faint" style="font-size:.5rem">Up to 4 turns here; longer talks go to Ask Helm, with this draft attached.</span>
+    </aside>
+
+    <!-- ── BOTTOM: defaults, plan, readiness ─────────────────────────── -->
+    <div class="nw-main nw-bot">
+      <div class="row"><span class="lbl">Picked for you</span><span class="pin">4</span><span class="faint" style="font-size:.54rem">from the kind and the brief · click to change</span></div>
+      <div class="nw-defs">
+        <div class="nw-def" data-wide data-t="you" title="Default for a Feature · change picks another of this project's workflows">
+          <span class="lbl">Workflow<span class="auto" style="font-size:.44rem;color:var(--accent-text)">AUTO</span><i class="ph ph-caret-down"></i></span>
+          <span class="v">Minor feature <span class="faint" style="font-weight:400;font-size:.52rem">· fits a feature: small change in 3 files</span></span>
+          <div class="np2-strip"><div class="st" data-strip="7" data-you="5"></div><span class="s">7 steps · <b style="color:var(--amber)">1 you approve: merge PR</b></span></div>
+        </div>
+        <div class="nw-def" title="Where it lands in Planned, and how Marshal ranks it">
+          <span class="lbl">Priority<i class="ph ph-caret-down"></i></span>
+          <span class="v" data-in="typing chat"><i class="ph ph-equals" style="color:var(--faint)"></i>Normal</span>
+          <span class="v" data-in="ready refused"><i class="ph-bold ph-caret-double-up" style="color:var(--amber)"></i>High</span>
+          <span class="s" data-in="typing chat">Marshal ranks it</span><span class="s" data-in="ready refused">set in chat</span>
+        </div>
+        <div class="nw-def" title="Median of this workflow's last 7 runs in this project">
+          <span class="lbl">Estimate</span>
+          <span class="v mono" data-in="typing chat" style="font-size:.58rem">≈ 18 min · ≈ $1.20</span>
+          <span class="v mono" data-in="ready refused" style="font-size:.58rem">≈ 22 min · ≈ $1.40</span>
+          <span class="s">from 7 runs here</span>
+        </div>
+        <div class="nw-def" data-dashed title="Link a GitHub or Plane issue, or have BOSS create one">
+          <span class="lbl">Issue<i class="ph ph-caret-down"></i></span>
+          <span class="v" data-in="typing chat" style="color:var(--faint);font-weight:500">+ link or create</span>
+          <span class="v" data-in="ready refused"><i class="ph ph-github-logo"></i>creates #31</span>
+          <span class="s">GitHub · paramg/helpdesk-ai-demo</span>
+        </div>
+        <div class="nw-def" title="Who hears when it needs someone or finishes">
+          <span class="lbl">Tell<i class="ph ph-caret-down"></i></span>
+          <span class="v" data-in="typing chat"><span class="face" data-a="you" data-size="s" style="width:16px;height:16px"></span>you · email</span>
+          <span class="v" data-in="ready refused"><span class="face" data-a="you" data-size="s" style="width:16px;height:16px"></span>you + #support-eng</span>
+          <span class="s">on merge, on stuck</span>
+        </div>
+        <div class="nw-def" title="Where it is deployed after merge">
+          <span class="lbl">Target<i class="ph ph-caret-down"></i></span>
+          <span class="v">staging · :8004</span><span class="s">prod only with you</span>
+        </div>
+        <div class="nw-def" data-dashed title="Crew · connector · branch · read first">
+          <span class="lbl">More<i class="ph ph-caret-down"></i></span>
+          <span class="v" style="color:var(--faint);font-weight:500">crew · connector · branch</span>
+        </div>
+      </div>
+
+      <div class="nw-plan" data-in="chat ready refused">
+        <div class="row"><span class="lbl">Plan</span><span class="pin">5</span><span class="wf-spacer"></span><span class="faint" style="font-size:.52rem">Nothing reaches prod without you</span></div>
+        <div class="fl" style="padding:0">
+          <span class="fl-n" data-t="agent"><span class="face" data-a="helm" data-size="s"></span>Plan</span><span class="fl-w"></span>
+          <span class="fl-n" data-t="agent"><span class="face" data-a="forge" data-size="s"></span>Build + migrate</span><span class="fl-w"></span>
+          <span class="fl-n" data-t="agent"><span class="face" data-a="vera" data-size="s"></span>Review · tests</span><span class="fl-w"></span>
+          <span class="fl-n" data-t="you"><i class="ph-bold ph-git-merge"></i>You merge</span><span class="fl-w"></span>
+          <span class="fl-n" data-t="todo"><i class="ph ph-globe"></i>Staging</span>
+        </div>
+      </div>
+
+      <!-- readiness refusal: the same panel and consent as today, inside the modal -->
+      <div class="ub" data-in="refused" style="border-color:color-mix(in srgb, var(--amber) 60%, transparent);background:color-mix(in srgb, var(--amber) 5%, var(--surface))">
+        <div class="ub-h"><span class="ico" data-c="amber"><i class="ph ph-warning"></i></span>
+          <div><b>Not ready to run here: 1 thing</b> <span class="pin">6</span><small>Ready: model, GitHub, budget, host</small></div></div>
+        <div class="ck">
+          <div class="ck-i" data-s="warn"><span class="ck-b">!</span><span class="ck-t">Resend API key<small>Needed by Staging smoke test. The run stops for you before Staging, so it can be added later.</small></span><a class="link-chip">Open setup</a></div>
+        </div>
+        <label class="row" style="font-size:.6rem"><i class="ph ph-square" style="font-size:.9rem;color:var(--amber)"></i>Start anyway, I accept that it will stop before Staging</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="np2-foot">
+    <span class="tag" data-tone="cost" data-in="typing chat">≈ 18 min · ≈ $1.20</span><span class="tag" data-tone="cost" data-in="ready refused">≈ 22 min · ≈ $1.40</span>
+    <span class="faint np2-hide-s" style="font-size:.56rem" data-in="typing">Start uses the defaults; Helm’s read takes a few seconds</span>
+    <span class="wf-spacer"></span>
+    <span class="btn" title="Adds it to Planned, ranked by Marshal, without starting"><i class="ph ph-list-plus"></i>Add to Next</span>
+    <span class="btn" data-kind="primary" data-in="typing chat ready" title="Starts it with the brief and defaults shown (also confirms the brief)"><i class="ph-fill ph-play"></i>Start <span class="pin" style="margin-left:4px">7</span><span class="np2-kbd">⌘↵</span></span>
+    <span class="btn" data-kind="primary" data-off data-in="refused" title="Tick Start anyway above to accept what is missing"><i class="ph-fill ph-play"></i>Start anyway <span class="pin" style="margin-left:4px">7</span></span>
+  </div>
+
+<div class="notes" style="margin:0 18px 16px">
+<b>Design notes — New work as a small modal (replaces the one-line composer)</b><ol class="np2-n">
+  <li><b>1</b> Opens from the header’s <b>New work</b>, from the bar that replaces the composer on Project › Work (typing there opens it with your words), from <b>N</b>, and from an Ask-Helm answer’s “New work” card (prefilled, never sent). Kind tabs: Feature · Bug · Ticket or link. A pasted GitHub/Plane link is read on any tab.</li>
+  <li><b>2</b> The words are a multi-line box. Helm rewrites them into the <b>Task</b> card: title · what changes · done when (acceptance) · area from the code graph · risk. Same pattern as Add a project: Looks right / Fix it / Rewrite with a hint; Helm’s additions are dotted-underlined.</li>
+  <li><b>3</b> <b>Talk it through</b>: at most 4 turns. Helm asks one clarifying question with quick replies; answers update the brief (marked “+ from chat”) and the defaults. Optional: you can start without answering. Longer talks move to Ask Helm with this draft attached.</li>
+  <li><b>4</b> <b>Picked for you</b>: workflow (default per kind, with its steps and the approval points in amber), priority, estimate (time and cost from this project’s runs), issue (link or create), who to tell, target (staging). Each chip opens a popover; More holds crew, connector, branch.</li>
+  <li><b>5</b> The plan preview shows who does each step and where you step in.</li>
+  <li><b>6</b> A refusal for something the project lacks shows the same readiness panel as today, inside the modal; the primary becomes <b>Start anyway</b> and unlocks only when every missing item is ticked.</li>
+  <li><b>7</b> One primary: <b>Start</b> (⌘↵), which confirms the brief as shown. <b>Add to Next</b> plans it for later in Planned, at Marshal’s rank. Esc keeps the words as a draft.</li>
+</ol></div>
+</div>
+</div>
+
+<script>
+  document.querySelectorAll("[data-in]").forEach((el) => { if (!el.dataset.in.split(" ").includes(window.NW)) el.remove(); });
+  document.querySelectorAll("[data-strip]").forEach((el) => {
+    const n = +el.dataset.strip, you = (el.dataset.you || "").split(",").map(Number);
+    const L = ["Plan", "Build", "Unit tests", "Review", "Merge PR", "Staging", "Smoke"];
+    let h = "";
+    for (let i = 1; i <= n; i++) {
+      const y = you.includes(i);
+      h += (i > 1 ? '<span class="st-w"></span>' : "") + `<span class="st-n"${y ? ' data-s="you"' : ""} title="${L[i-1]}${y ? " · you approve" : ""}">${y ? "✋" : i}</span>`;
+    }
+    el.innerHTML = h;
+  });
+</script>
+<script src="../shell.js"></script>
+<script src="np2-nav.js"></script>
+</body></html>

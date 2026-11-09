@@ -1834,14 +1834,51 @@ def projects_with_running_work(engine) -> list:
     return [r["project_id"] for r in rows]
 
 
+def projects_with_unsettled_runs(engine) -> list:
+    """Every project with a run that claims to be working (_RUN_TABLES' working statuses).
+
+    Wider than projects_with_running_work: a project whose only rows are `repairing` or
+    `blocked` has nothing for `watch` to look at, and is exactly where abandoned rows pile up."""
+    from ..db import begin
+    found: list = []
+    with begin(engine) as c:
+        for table, _id_col, working in _RUN_TABLES:
+            try:
+                with c.begin_nested():
+                    found += [r[0] for r in c.execute(
+                        sql(f"SELECT DISTINCT project_id FROM {table} "
+                            "WHERE status = ANY(:w)"), {"w": list(working)}).all()]
+            except Exception:  # noqa: BLE001 — one missing table must not stop the rest
+                continue
+    return sorted({str(p) for p in found if p})
+
+
 def watch_all(engine, settings: Settings, *, dry_run: bool = False,
               actor: str = "shepherd", class_modes: Optional[dict] = None,
               jobs=None) -> dict[str, Any]:
-    """Watch in-flight work across every project that has any."""
+    """Watch in-flight work across every project that has any, and close abandoned runs in
+    every project that has them.
+
+    THE SWEEP IS NOT ONE PROJECT'S. sweep_abandoned_runs ran only inside `autopilot`, which the
+    worker calls for its one default project; every other project's handed-off and orphaned
+    runs claimed to be working forever. On the laptop 41 of boss-platform's builds sat
+    `repairing` at phase 'done' for up to ten days, all listed as Running, while boss-dogfood
+    (the default) had none. Closing a row nothing can advance is free and idempotent, so it runs
+    for every project here, as `watch` already does.
+    """
     results = [watch(engine, settings, p, dry_run=dry_run, actor=actor,
                      class_modes=class_modes, jobs=jobs)
                for p in projects_with_running_work(engine)]
+    closed = 0
+    if not dry_run:
+        for p in projects_with_unsettled_runs(engine):
+            try:
+                closed += int(sweep_abandoned_runs(engine, settings, p, actor=actor)
+                              .get("closed_total") or 0)
+            except Exception:  # noqa: BLE001 — a shepherd that stops on one project misses the rest
+                logger.debug("sweep_abandoned_runs failed for %s", p, exc_info=True)
     return {
+        "abandoned_closed": closed,
         "projects": len(results),
         "in_flight": sum(r["in_flight"] for r in results),
         "acted": [a for r in results for a in r["acted"]],

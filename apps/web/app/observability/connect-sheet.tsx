@@ -152,6 +152,11 @@ export function ConnectSheet({ projectId, actor, onClose }: { projectId: string;
         </div>
       ) : (
         <div className="obs-rform">
+          {/* ONE APP'S WATCHES LIVE ON ITS OWN PAGE (Project › Health › Watch this app): one input,
+              the SRE agent sets it up. This sheet stays the "Wire it myself" path. */}
+          <a className="inf-link" data-testid="obs-connect-watch" href={`?area=project&project_id=${encodeURIComponent(projectId)}&tab=health&watch=1`}
+             title="One input: the SRE agent reads the app and proposes the watches">
+            Watching one of this project&apos;s apps? Project › Health › Watch this app ›</a>
           <fieldset className="obs-zone obs-connect-paths" data-testid="obs-connect-paths">
             <legend className="obs-rlabel">How does it talk?</legend>
             {CONNECT_PATHS.map((p) => (

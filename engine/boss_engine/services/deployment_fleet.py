@@ -190,19 +190,68 @@ def get_host(connection, host_id: str) -> Optional[dict[str, Any]]:
 #: another project; BOSS's own agent found "attach refused across projects" and had no way on.
 #: Managing the machine (its key, verify, retire) stays with the project that registered it.
 #: A SQL predicate over deployment_hosts (alias optional) with the project bound as `:p`.
+#: Another project's host is shared only once it is VERIFIED (2026-11-07): an unproven machine
+#: is its owner's to finish, and a target on it would fail at deploy time.
 def usable_hosts_sql(alias: str = "") -> str:
     a = f"{alias}." if alias else ""
-    return (f"({a}project_id = :p OR {a}project_id IN (SELECT p2.id FROM projects p2 "
+    return (f"({a}project_id = :p OR ({a}status = 'verified' AND {a}project_id IN ("
+            "SELECT p2.id FROM projects p2 "
             "JOIN workspaces w2 ON w2.id = p2.workspace_id WHERE w2.org_id = "
             "(SELECT w1.org_id FROM projects p1 JOIN workspaces w1 ON w1.id = p1.workspace_id "
-            "WHERE p1.id = :p)))")
+            "WHERE p1.id = :p))))")
 
 
 def host_usable_by(connection, host_id: str, project_id: str) -> bool:
-    """May `project_id` deploy onto this host (its own, or one its organisation shares)?"""
+    """May `project_id` deploy onto this host (its own, or a verified one its org shares)?"""
     return bool(connection.execute(
         sql(f"SELECT 1 FROM deployment_hosts WHERE id = :h AND {usable_hosts_sql()}"),
         {"h": host_id, "p": project_id}).first())
+
+
+class HostNotUsable(ValueError):
+    """Why a project may not place an app on a host, said as {headline, action}."""
+
+    def __init__(self, headline: str, action: str, *, status_code: int = 404):
+        super().__init__(f"{headline} {action}")
+        self.headline = headline
+        self.action = action
+        self.status_code = status_code
+
+    def to_dict(self) -> dict[str, str]:
+        return {"headline": self.headline, "action": self.action}
+
+
+def usable_host(connection, host_id: str, project_id: str) -> dict[str, Any]:
+    """THE ONE RULE for placing an app on a host: create a target, attach one, set up a deploy.
+
+    A project may use its own hosts and the verified hosts its organisation shares
+    (`usable_hosts_sql`). Each create/attach path used to ask "is the host in THIS project?" on
+    its own, so the onboarding agent offered the shared, verified 2.29.2.202 for staging and the
+    stack-target create then refused it ("No such host in this project."). Managing the machine
+    (key, verify, retire) stays with the project that registered it.
+    """
+    host = get_host(connection, str(host_id)) if host_id else None
+    if not host or not host_usable_by(connection, host["id"], project_id):
+        if host and host.get("project_id") != project_id and host.get("status") != "verified" \
+                and _same_org(connection, str(host.get("project_id") or ""), project_id):
+            raise HostNotUsable(
+                f"Host {host['name']!r} belongs to another project and is not verified yet.",
+                "A shared host is usable once its own project verifies it in Infra.",
+                status_code=422)
+        raise HostNotUsable("No such host in this project or its organisation.",
+                            "Add the VM in Infra first, then create the target on it.")
+    if host.get("status") == "retired":
+        raise HostNotUsable(f"Host {host['name']!r} is retired.",
+                            "Pick an active host, or register the VM again.", status_code=422)
+    return host
+
+
+def _same_org(connection, project_a: str, project_b: str) -> bool:
+    return bool(connection.execute(
+        sql("SELECT 1 FROM projects pa JOIN workspaces wa ON wa.id = pa.workspace_id "
+            "JOIN projects pb ON pb.id = :b JOIN workspaces wb ON wb.id = pb.workspace_id "
+            "WHERE pa.id = :a AND wa.org_id = wb.org_id"),
+        {"a": project_a, "b": project_b}).first())
 
 
 def list_hosts(connection, project_id: str, *, include_retired: bool = False
@@ -460,6 +509,46 @@ def install_generated_key(connection, settings: Settings, *, host_id: str,
             "next": "Verify the host, then Provision it if docker is missing."}
 
 
+def run_on_host(connection, settings: Settings, host: dict, script: str, *,
+                timeout: int = 60):
+    """ONE WAY TO RUN A COMMAND ON A HOST WITH ITS OWN KEY: resolve the host's credential,
+    materialise it for this one call, run through deploy_service._ssh (the transport every deploy
+    uses, so the host-key pin applies), and discard the key file. Provisioning and a server's
+    setup (services/add_server.py) both come through here."""
+    from .deploy_service import _discard_key_file, _materialise_key, _ssh, _ssh_key_file
+    from .secret_backends import SecretUnavailable, resolve_target_secret
+
+    if not host.get("key_secret_ref"):
+        raise ValueError("no credential for this host yet — adopt or install a key first.")
+    probe_target = {"secret_refs": [{"name": "ssh_key", "secret_ref_id": host["key_secret_ref"]}]}
+    ephemeral = None
+    try:
+        material = resolve_target_secret(connection, probe_target, "ssh_key", settings)
+        key = ephemeral = _materialise_key(material) if material else _ssh_key_file(settings)
+    except (SecretUnavailable, Exception) as exc:  # noqa: BLE001
+        raise ValueError(f"host credential is unusable: {exc}")
+    try:
+        return _ssh(key, host["address"], (host.get("ssh_user") or "root").strip(),
+                    int(host.get("ssh_port") or 22), script, timeout=timeout)
+    finally:
+        if ephemeral:
+            _discard_key_file(ephemeral)
+
+
+def docker_install_script(host: dict) -> str:
+    """Install Docker if it is missing (apt docker.io), start it, and say the version."""
+    sudo = "" if (host.get("ssh_user") or "root").strip() == "root" else "sudo -n "
+    return (
+        "set -e; "
+        "if command -v docker >/dev/null; then echo DOCKER_PRESENT; else "
+        f"  {sudo}env DEBIAN_FRONTEND=noninteractive apt-get update -qq && "
+        f"  {sudo}env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+        "     docker.io >/dev/null 2>&1 && echo DOCKER_INSTALLED || echo DOCKER_FAILED; "
+        "fi; "
+        f"{sudo}systemctl enable --now docker >/dev/null 2>&1 || true; "
+        "command -v docker >/dev/null && docker --version || echo DOCKER_STILL_MISSING")
+
+
 def provision_host(connection, settings: Settings, *, host_id: str,
                    install_docker: bool = True,
                    actor: str = "operator") -> dict[str, Any]:
@@ -470,53 +559,21 @@ def provision_host(connection, settings: Settings, *, host_id: str,
     changes someone's machine and should be an explicit act.
     """
     require_direct_host_write_policy(settings)
-    from .deploy_service import _discard_key_file, _materialise_key, _ssh, _ssh_key_file
-    from .secret_backends import SecretUnavailable, resolve_target_secret
-
     host = get_host(connection, host_id)
     if not host:
         raise ValueError(f"no such deployment host: {host_id}")
     if not host.get("key_secret_ref"):
         raise ValueError("no credential for this host yet — adopt or install a key first.")
 
-    user = (host.get("ssh_user") or "root").strip()
     address = host["address"]
-    port = int(host.get("ssh_port") or 22)
-
-    probe_target = {"secret_refs": [{"name": "ssh_key", "secret_ref_id": host["key_secret_ref"]}]}
-    ephemeral = None
-    try:
-        material = resolve_target_secret(connection, probe_target, "ssh_key", settings)
-        key = ephemeral = _materialise_key(material) if material else _ssh_key_file(settings)
-    except (SecretUnavailable, Exception) as exc:  # noqa: BLE001
-        raise ValueError(f"host credential is unusable: {exc}")
-
     steps: list[str] = []
-    try:
-        if install_docker:
-            # Distro packages, not the convenience script piped from the internet: an
-            # unattended `curl | sh` on someone else's machine is not a thing to do quietly.
-            # `sudo -n` so a host without passwordless sudo fails fast instead of hanging on a
-            # prompt nobody can answer.
-            sudo = "" if user == "root" else "sudo -n "
-            script = (
-                "set -e; "
-                "if command -v docker >/dev/null; then echo DOCKER_PRESENT; else "
-                f"  {sudo}env DEBIAN_FRONTEND=noninteractive apt-get update -qq && "
-                f"  {sudo}env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-                "     docker.io >/dev/null 2>&1 && echo DOCKER_INSTALLED || echo DOCKER_FAILED; "
-                "fi; "
-                f"{sudo}systemctl enable --now docker >/dev/null 2>&1 || true; "
-                "command -v docker >/dev/null && docker --version || echo DOCKER_STILL_MISSING")
-            res = _ssh(key, address, user, port, script, timeout=300)
-            out = f"{getattr(res, 'stdout', '') or ''}{getattr(res, 'stderr', '') or ''}"
-            steps.append(out.strip()[-400:])
-            if "DOCKER_STILL_MISSING" in out:
-                raise ValueError(f"docker could not be installed on {address}: "
-                                 f"{out.strip()[-300:]}")
-    finally:
-        if ephemeral:
-            _discard_key_file(ephemeral)
+    if install_docker:
+        res = run_on_host(connection, settings, host, docker_install_script(host), timeout=300)
+        out = f"{getattr(res, 'stdout', '') or ''}{getattr(res, 'stderr', '') or ''}"
+        steps.append(out.strip()[-400:])
+        if "DOCKER_STILL_MISSING" in out:
+            raise ValueError(f"docker could not be installed on {address}: "
+                             f"{out.strip()[-300:]}")
 
     emit_event(connection, host["project_id"], "host.provisioned", actor,
                "deployment_host", host_id, {"host": host["name"], "steps": steps})
@@ -877,6 +934,17 @@ def verify_host(connection, settings: Settings, *, host_id: str) -> dict[str, An
               "deferred_to_app": deferred, "reachable": bool(probe_result.get("reachable")),
               "arch_detected": probe_result.get("arch_detected"),
               "connector": report.get("connector")}
+    # WHAT THE MACHINE SAID ABOUT ITSELF STAYS: the capacity read (host_overview, Add a server's
+    # read) lives at last_preflight.facts, and a verify that rewrote the record whole dropped it,
+    # so the server page went back to "not read yet" after every Re-verify.
+    prior = host.get("last_preflight") or {}
+    if isinstance(prior, str):
+        try:
+            prior = json.loads(prior)
+        except ValueError:
+            prior = {}
+    if isinstance(prior, dict) and prior.get("facts"):
+        stored["facts"] = prior["facts"]
     detected = probe_result.get("arch_detected")
     connection.execute(
         sql("UPDATE deployment_hosts SET status = :s, last_preflight_at = now(), "
@@ -906,10 +974,10 @@ def attach_target(connection, *, target_id: str, host_id: str) -> dict[str, Any]
     ).mappings().first()
     if not target:
         raise ValueError(f"no such deployment target: {target_id}")
-    if target["project_id"] != host.get("project_id") and not host_usable_by(
-            connection, host_id, target["project_id"]):
-        raise ValueError(
-            "host and target belong to different organisations; attach refused")
+    try:
+        usable_host(connection, host_id, target["project_id"])
+    except HostNotUsable as refused:
+        raise ValueError(f"{refused.headline} {refused.action} (attach refused)") from None
 
     connection.execute(
         sql("UPDATE deployment_targets SET host_id = :h, target_ref = :ref, "
@@ -1050,6 +1118,24 @@ def _first_free_port(connection, address: str, *, start: int = 3000,
     return None
 
 
+def suggest_port(connection, host: dict[str, Any], *, project_id: str = "",
+                 app_name: str = "") -> Optional[int]:
+    """The port a new target on this host should get: the app's own earlier port when nobody
+    holds it now, else the first free one in the host's range (port_min..port_max). The same
+    choice `create_deployment_target` makes, offered BEFORE the create (the confirm sheets)."""
+    address = str(host.get("address") or "")
+    if not address:
+        return None
+    taken = _ports_assigned_on(connection, address)
+    if project_id and app_name:
+        had = _port_the_app_had(connection, project_id, app_name, address)
+        if had and had not in taken:
+            return had
+    low = int(host.get("port_min") or 3000)
+    high = int(host.get("port_max") or 65535)
+    return _first_free_port(connection, address, start=low, end=high)
+
+
 def create_deployment_target(
     connection, *, project_id: str, app_name: str, environment: str = "staging",
     repo: Optional[str] = None, host_id: Optional[str] = None, port: Optional[int] = None,
@@ -1125,9 +1211,10 @@ def create_deployment_target(
     hosts = [dict(h) for h in list_hosts(connection, project_id)]
     verified = [h for h in hosts if h.get("status") == "verified"]
     if host_id:
-        host = get_host(connection, host_id) if host_usable_by(connection, host_id, project_id) else None
-        if not host:
-            return {"ok": False, "error": f"no such deployment host: {host_id}",
+        try:
+            host = usable_host(connection, host_id, project_id)
+        except HostNotUsable as refused:
+            return {"ok": False, "error": f"{refused.headline} {refused.action}",
                     "hosts": [{"host_id": h["id"], "name": h["name"],
                                "status": h["status"]} for h in hosts]}
     elif len(verified) == 1:

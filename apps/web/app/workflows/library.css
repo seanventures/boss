@@ -30,8 +30,8 @@
   border: 0;
   background: transparent;
   color: var(--muted);
-  font: 600 0.875rem/1 var(--sans);
-  padding: 8px 14px;
+  font: 600 var(--fs-ui)/1 var(--sans);
+  padding: 7px 12px;
   border-radius: calc(var(--r) - 2px);
   cursor: pointer;
   white-space: nowrap;
@@ -103,7 +103,7 @@
 .wf-btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
 .wf-btn-ghost { background: transparent; }
 .wf-btn-danger { background: var(--red); border-color: var(--red); color: var(--ink); }
-.wf-btn-sm { height: 28px; padding: 0 9px; font-size: 0.75rem; }
+.wf-btn-sm { height: 28px; padding: 0 9px; font-size: var(--fs-meta); }
 .wf-btn-icon { padding: 0 6px; }
 
 .wf-link {
@@ -295,13 +295,13 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 .wf-avatar {
   width: 20px;
   height: 20px;
-  font-size: 0.75rem;
+  font-size: var(--fs-meta);
   border: 2px solid var(--surface);
   margin-left: -5px;
 }
 .wf-card-agents .wf-avatar:first-child { margin-left: 0; }
 .wf-card-live { color: var(--amber); font-style: normal; }
-.wf-card-copies { margin-left: auto; font-size: 0.75rem; }
+.wf-card-copies { margin-left: auto; font-size: var(--fs-meta); }
 
 .wf-card-actions {
   position: absolute;
@@ -413,7 +413,7 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 .wf-libsteps-table tr[data-usable="false"] .wf-libsteps-label { color: var(--faint); }
 .wf-libsteps-icon { width: 28px; color: var(--muted); }
 .wf-libsteps-label { font-weight: 600; }
-.wf-libsteps-used { color: var(--faint); font-size: 0.8125rem; white-space: nowrap; }
+.wf-libsteps-used { color: var(--faint); font-size: var(--fs-ui); white-space: nowrap; }
 .wf-libsteps-act { text-align: right; white-space: nowrap; }
 .wf-risk { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
 .wf-risk[data-risk="high"] { background: var(--amber); }
@@ -425,7 +425,7 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 /* A phone: the three area tabs share the row, none scrolls off it. */
 @media (max-width: 480px) {
   .wf-tabs { max-width: 100%; }
-  .wf-tab { padding: 8px 10px; font-size: 0.8125rem; }
+  .wf-tab { padding: 8px 10px; font-size: var(--fs-ui); }
 }
 
 /* ── Runs: the run bar above an open run's lane ─────────────────────────────────── */

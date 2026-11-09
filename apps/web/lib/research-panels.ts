@@ -518,9 +518,10 @@ export function meetingFromUrl(search: string, hash: string, meetings: Array<Pic
  * builds this link so a change to the composer's contract is a one-line change.
  */
 export function composerHref(search: string, o: { title?: string; brief: string }): string {
+  // Add a project v2: "Build it" opens the one screen with the brief written in (start-host
+  // reads and consumes `brief` and `title`); it never starts unseen.
   return consoleHref(search, {
-    area: "delivery_workflows", tab: "new", compose: "new", new: "1",
-    title: o.title?.trim() || undefined, brief: o.brief.trim().slice(0, 4000),
+    new_project: "idea", title: o.title?.trim() || undefined, brief: o.brief.trim().slice(0, 4000),
   });
 }
 

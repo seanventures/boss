@@ -25,7 +25,7 @@ afterEach(() => { unmount(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("one Pulse", () => {
   it("one row per app, in the server's order, each saying its state in a word", async () => {
-    await openObs("?view=apps");
+    await openObs("?view=apps&apps=pulse");
     const rows = $$("[data-testid='obs-pulse-row']");
     expect(rows.map((r) => r.getAttribute("data-target"))).toEqual(["t_down", "t_slow", "t_quiet", "t_live", "t_cloud"]);
     expect(rows.map((r) => text(r.querySelector(".inf-state-word")))).toEqual(["Down", "Slow", "No signal", "Up", "Not deployed"]);
@@ -35,14 +35,24 @@ describe("one Pulse", () => {
     expect(text(rows[4].querySelector(".obs-nostrip"))).toBe("Not deployed");
   });
 
+  it("every app row links to its Project › Health with a labelled chip (screen 15)", async () => {
+    await openObs("?view=apps&apps=pulse");
+    for (const row of $$("[data-testid='obs-pulse-row']")) {
+      const chip = row.querySelector("[data-testid='obs-app-project-health']")!;
+      expect(text(chip)).toBe("Project › Health");
+      const q = new URLSearchParams((chip.getAttribute("href") ?? "").split("?")[1]);
+      expect([q.get("area"), q.get("tab")]).toEqual(["project", "health"]);
+    }
+  });
+
   it("a Down row says how long, from when it went down", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true, now: NOW_MS });
-    await openObs("?view=apps");
+    await openObs("?view=apps&apps=pulse");
     expect(text($("[data-testid='obs-pulse-row'][data-target='t_down'] [data-testid='obs-pulse-p95']"))).toBe("down 1h 4m");
   });
 
   it("the header counts what the Pulse shows", async () => {
-    await openObs("?view=apps");
+    await openObs("?view=apps&apps=pulse");
     const counts = text($("[data-testid='obs-head-counts']"));
     expect(counts).toContain("1 up");
     expect(counts).toContain("1 slow");
@@ -51,14 +61,14 @@ describe("one Pulse", () => {
   });
 
   it("an app scraped but not health-checked is named, not dropped", async () => {
-    await openObs("?view=apps");
+    await openObs("?view=apps&apps=pulse");
     const nw = $("[data-testid='obs-not-watched']")!;
     expect(text(nw)).toContain("orders, dev");
     expect(nw.querySelector("a[href='http://grafana.local/d/orders']")).not.toBeNull();
   });
 
   it("nothing deployed: one line and the way to Infra", async () => {
-    await openObs("?view=apps", { pulse: emptyPulseWire() });
+    await openObs("?view=apps&apps=pulse", { pulse: emptyPulseWire() });
     expect(text($("[data-testid='obs-apps-empty']"))).toBe("Nothing deployed yet Infra ↗");
     expect($("[data-testid='obs-pulse-row']")).toBeNull();
   });
@@ -82,21 +92,21 @@ describe("one Pulse", () => {
   });
 
   it("a pin is a link to that deploy in Infra", async () => {
-    await openObs("?view=apps");
+    await openObs("?view=apps&apps=pulse");
     const pin = $("[data-testid='obs-pulse-row'][data-target='t_live'] svg.obs-pins a");
     expect(pin?.getAttribute("href")).toBe("?area=infra&view=deploys&deploy=stack%3Asd_live");
     expect(pin?.getAttribute("aria-label")).toMatch(/^Deployed a1b2c3d, \d\d:\d\d, Live$/);
   });
 
   it("the workflow's watch= link opens that app's drawer", async () => {
-    await openObs("?view=apps&watch=invoice%7Cprod");
+    await openObs("?view=apps&apps=pulse&watch=invoice%7Cprod");
     expect(params().get("app")).toBe("t_live");
     expect(params().get("watch")).toBeNull();
     expect($("[data-testid='obs-app-drawer']")).not.toBeNull();
   });
 
   it("an unknown watch= becomes Find with the app's name", async () => {
-    await openObs("?view=apps&watch=ghost%7Cprod");
+    await openObs("?view=apps&apps=pulse&watch=ghost%7Cprod");
     expect(params().get("app")).toBeNull();
     expect(params().get("q")).toBe("ghost");
   });
@@ -104,7 +114,7 @@ describe("one Pulse", () => {
 
 describe("Ask BOSS is reachable from Observability", () => {
   it("offers the old starters, the sick app asked about as its deployment", async () => {
-    await openObs("?view=apps");
+    await openObs("?view=apps&apps=pulse");
     await click($("[data-testid='obs-ask']"));
     const starters = $$("[data-testid='obs-ask-starter']");
     expect(starters.length).toBeGreaterThanOrEqual(2);
@@ -117,7 +127,7 @@ describe("Ask BOSS is reachable from Observability", () => {
 
   it("one sick app is asked about AS that deployment", async () => {
     const { pulseWire, PULSE_ROWS } = await import("./_helpers/obs-fixtures");
-    await openObs("?view=apps", { pulse: pulseWire({ rows: PULSE_ROWS.filter((r) => r.target_id !== "t_slow") }) });
+    await openObs("?view=apps&apps=pulse", { pulse: pulseWire({ rows: PULSE_ROWS.filter((r) => r.target_id !== "t_slow") }) });
     await click($("[data-testid='obs-ask']"));
     await click($$("[data-testid='obs-ask-starter']")[0]);
     expect(params().get("agent")).toBe("deployment:t_down");
@@ -125,7 +135,7 @@ describe("Ask BOSS is reachable from Observability", () => {
   });
 
   it("Open BOSS here opens the dock with no question", async () => {
-    await openObs("?view=apps");
+    await openObs("?view=apps&apps=pulse");
     await click($("[data-testid='obs-ask']"));
     await click($("[data-testid='obs-ask-open']"));
     expect(params().get("agent")).toBe("general");

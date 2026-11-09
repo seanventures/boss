@@ -206,10 +206,13 @@ def test_a_failed_run_that_already_asks_a_person_gets_no_second_card(eng, projec
 def test_the_chief_of_staff_asks_at_most_three_cards_per_class_a_day(eng, project):
     pid = project
     with eng.begin() as c:
+        # (Hand-offs to another owner: a stale PR's nudge is the Chief of Staff's own act now,
+        # done without a card, so it is never capped.)
         for n in range(5):
-            signals.record_signal(c, project_id=pid, source="pr", kind="pr.stale",
-                                  title=f"PR #{n} waiting 4d", subject_kind="pull_request",
-                                  subject_id=f"pr:acme/web#{n}", severity="low")
+            signals.record_signal(c, project_id=pid, source="scan", kind="scan.untested_hotspot",
+                                  title=f"Hot file without tests: src/f{n}.js",
+                                  subject_kind="module", subject_id=f"acme/web:src/f{n}.js",
+                                  severity="low")
     report = _tick(eng, pid)
     outcomes = sorted(i["outcome"] for i in report["projects"][pid]["items"])
     assert outcomes == ["capped", "capped", "proposed", "proposed", "proposed"]

@@ -525,6 +525,16 @@ def create_project(connection, settings, *, org_id, name, slug=None, description
     from .services import org_models
 
     org_models.sync_for(connection, project_slug, actor=actor)
+    # THE PROJECT'S CAPTAIN AUTHORITY (identity/captain_authority.py), sponsored by its Owner, so
+    # always-on builds here start without a person's grant. Created later (at boot, or on first
+    # use) when the project has no Owner person or no Captain Passport yet.
+    try:
+        from .identity import captain_authority
+
+        with connection.begin_nested():
+            captain_authority.ensure_for_project(connection, project_slug)
+    except Exception:  # noqa: BLE001 — never fails a project's creation
+        pass
     return {"project_id": project_slug, "workspace_id": workspace_id, "org_id": org_id,
             "name": name, "slug": project_slug, "description": description,
             "project_type": kind}

@@ -27,7 +27,7 @@ from .github_adapter import (
     PullRequestResult,
 )
 
-KNOWN_REPO_HOSTS = ("github", "bitbucket", "mcp")
+KNOWN_REPO_HOSTS = ("github", "bitbucket", "mcp", "local")
 
 
 @runtime_checkable
@@ -62,6 +62,11 @@ def clone_url_for(host: str, owner: str, repo: str, token: str = "") -> str:
         if token:
             return f"https://x-token-auth:{token}@bitbucket.org/{owner}/{repo}.git"
         return f"https://bitbucket.org/{owner}/{repo}.git"
+    if kind == "local":
+        # BOSSAPP-918: a bare repository BOSS keeps on this machine; no credential exists.
+        from . import local_repo
+
+        return local_repo.file_url(local_repo.bare_path(owner, repo))
     raise ValueError(f"unsupported repo host {host!r} (known: {', '.join(KNOWN_REPO_HOSTS)})")
 
 
@@ -137,6 +142,10 @@ def git_access(host: str, owner: str, repo: str, token: str = "") -> GitAccess:
     import base64
 
     kind = (host or "github").strip().lower()
+    from . import local_repo
+
+    if kind == "local" or local_repo.is_local_owner(owner):
+        return GitAccess(local_repo.file_url(local_repo.bare_path(owner, repo)), via="local")
     url = clone_url_for(kind, owner, repo, "")
     if not token:
         return GitAccess(url, via="anonymous")
@@ -161,6 +170,12 @@ def make_repo_host(settings, *, host: Optional[str] = None,
     ``owner``/``repo`` bind the Bitbucket adapter to a specific workspace/slug; the GitHub adapter
     stays settings-bound exactly as today (its multi-repo routing happens at the clone/token layer)."""
     kind = (host or getattr(settings, "target_repo_host", "") or "github").strip().lower()
+    from . import local_repo
+
+    if kind == "local" or local_repo.is_local_owner(owner):
+        from .local_repo_host import LocalGitAdapter
+
+        return LocalGitAdapter(settings, owner=str(owner or ""), repo=str(repo or ""))
     if kind == "github":
         return GitHubAdapter(settings)
     if kind == "bitbucket":

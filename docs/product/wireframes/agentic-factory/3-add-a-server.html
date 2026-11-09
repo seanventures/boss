@@ -1,0 +1,169 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Add a server</title>
+<link rel="stylesheet" href="../project-experience/console.css"><link rel="stylesheet" href="../project-experience/project.css">
+<link rel="stylesheet" href="../project-experience/new-project-v2/np2.css"><link rel="stylesheet" href="af.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="infra" data-crumb="Infra|Add a server" data-base="../project-experience/">
+<div id="content">
+
+<div class="af-cap">1 · The sheet: paste anything that names a machine</div>
+<div class="af-stage">
+<div class="sheet np2 af-sheet" role="dialog" aria-label="Add a server">
+  <div class="sheet-h"><span class="ico"><i class="ph ph-hard-drives"></i></span><h2>Add a server</h2>
+    <span class="wf-spacer"></span><i class="ph ph-x" title="Close (Esc)"></i></div>
+  <div class="np2-body">
+    <div class="np2-in" data-multi title="An address, user@host, an ssh line, or a few words. The Infra agent works out the rest.">
+      <span class="kind"><i class="ph-fill ph-hard-drives"></i></span><span class="pin" style="position:absolute;left:-6px;top:-6px">1</span>
+      <div class="txt">ubuntu@203.0.113.40
+A staging box.<span class="caret"></span></div>
+      <div class="np2-in-foot"><span>an address, <span class="mono">user@host</span>, an ssh line, or “a cloud box for staging”</span><span class="wf-spacer"></span><span class="np2-hide-s">Never paste a key here: you hand it over below</span></div>
+    </div>
+    <div class="np2-detect">
+      <span class="np2-kinds"><span aria-selected="true"><i class="ph ph-terminal-window"></i>SSH server</span><span title="The machine dials out to BOSS (was Enroll machine)"><i class="ph ph-plug"></i>It dials in</span><span title="A DigitalOcean, AWS… account: BOSS makes the box"><i class="ph ph-cloud"></i>Cloud account</span></span>
+      <span>Auto-detected: user <b>ubuntu</b>, port <b>22</b> open, host key <span class="mono">SHA256:Qx…7f</span></span>
+    </div>
+
+    <!-- THE ONE HUMAN GATE -->
+    <div class="af-gate" title="Credentials are on the list in Where people decide: only a person hands one over">
+      <div class="af-gate-h"><span class="ny-ico">✋</span><div><b>Let BOSS in · the one thing only you can do</b> <span class="pin">2</span><small>A credential is on the list (Secrets and credentials). Pick one way; the agent does the rest.</small></div></div>
+      <div class="af-opts">
+        <div class="af-opt" aria-checked="true"><b><i class="ph ph-copy"></i> Run one line on the server</b>
+          <span class="af-code">echo "ssh-ed25519 AAAAC3Nz…Hq2 boss@boss-1" &gt;&gt; ~/.ssh/authorized_keys<i class="ph ph-copy"></i></span>
+          <span class="faint" style="font-size:.52rem">Adds only BOSS’s public key for <b>ubuntu</b>, nothing runs. The agent sees it land and goes on; no “I ran it”.</span></div>
+        <div class="af-opt"><b><i class="ph ph-key"></i> Use a key I already have</b>
+          <span class="input" data-ph><i class="ph ph-lock-key"></i>paste a private key · write-only · stored in the vault</span>
+          <span class="faint" style="font-size:.52rem">Or pick a stored one: <a class="link-chip">deploy-key-2</a></span></div>
+      </div>
+    </div>
+
+    <!-- AGENT ACTIONS -->
+    <div class="ub">
+      <div class="ub-h"><span class="face" data-a="forge_live" data-size="m"></span>
+        <div><b>Agent actions</b> <span class="pin">3</span><small>Infra agent · from the network now; the rest fills the moment the key lands</small></div>
+        <span class="tag" data-tone="amber">waiting for the key</span></div>
+      <div class="ub-grid">
+        <div>
+          <div class="ub-f"><span class="lbl">The machine</span><span class="ttl">203.0.113.40 · <mark>name boss-2</mark></span><i class="ph ph-pencil-simple ed"></i></div>
+          <div class="ub-f"><span class="lbl">Seen so far</span><span><span class="tag" data-tone="green">SSH 22</span> <span class="tag" data-tone="green">80 · 443 free</span> <span class="tag">OS, CPU, disk: after the key</span></span><i></i></div>
+          <div class="ub-f"><span class="lbl">What it’s for</span><span><b>Staging</b> · <mark>any project can deploy here; no app is moved</mark></span><i class="ph ph-pencil-simple ed"></i></div>
+        </div>
+        <div>
+          <div class="ub-f"><span class="lbl">Then the agent will</span>
+            <ol class="ub-steps"><li><span>Read OS, CPU, memory, disk, arch</span></li><li><span>Install Docker, node-exporter and Caddy for TLS (if missing)</span></li><li><span>Verify it can build and run a container</span></li><li><span>Add it to the staging pool, with its free ports</span></li><li><span>Start watching host health (disk, Docker, certs)</span></li></ol><i class="ph ph-pencil-simple ed"></i></div>
+        </div>
+      </div>
+      <div class="ub-act"><span class="btn" data-kind="ok"><i class="ph-bold ph-check"></i>Looks right</span><span class="btn"><i class="ph ph-pencil-simple"></i>Fix it</span><span class="faint" style="font-size:.54rem">Nothing is installed until the key lands. Prod targets stay a person’s choice.</span></div>
+    </div>
+
+    <!-- WHAT BOSS WILL DO -->
+    <div class="np2-sum">
+      <div class="np2-sum-h"><span class="face" data-a="forge" data-size="m"></span>
+        <div><b>What BOSS will do</b> <span class="pin">4</span><div class="faint" style="font-size:.56rem">Picked from the address and your words · click any box to change it</div></div></div>
+      <div class="np2-flow">
+        <div class="np2-node" data-t="you"><span class="lbl">Access<i class="ph ph-caret-down"></i></span><span class="v">ubuntu · BOSS key</span><span class="s"><b style="color:var(--amber)">you hand it over</b></span></div>
+        <div class="np2-node"><span class="lbl">Name<span class="auto">AUTO</span><i class="ph ph-caret-down"></i></span><span class="v">boss-2</span><span class="s">arch: detected</span></div>
+        <div class="np2-node"><span class="lbl">Set up<span class="auto">AUTO</span><i class="ph ph-caret-down"></i></span><span class="v">Docker · exporter · Caddy</span><span class="s">only what’s missing</span></div>
+        <div class="np2-node"><span class="lbl">Role<i class="ph ph-caret-down"></i></span><span class="v">Staging pool</span><span class="s">staging · prod · builds</span></div>
+        <div class="np2-node"><span class="lbl">Watch<i class="ph ph-caret-down"></i></span><span class="v">host health</span><span class="s">Infra + SRE</span></div>
+        <div class="np2-node"><span class="lbl">Owner<i class="ph ph-caret-down"></i></span><div class="row"><span class="face" data-a="forge" data-size="s"></span><span class="v">Infra agent</span></div><span class="s">fixes disk, Docker, certs</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="np2-foot">
+    <span class="tag" data-tone="cost">≈ 4 min to ready · $0.03</span>
+    <span class="faint np2-hide-s" style="font-size:.56rem"><i class="ph ph-shield-check"></i> Retiring it or deploying prod still asks you</span>
+    <span class="wf-spacer"></span>
+    <a class="faint np2-hide-s" style="font-size:.58rem" title="Address, user, port, arch, key store: the old form, prefilled"><i class="ph ph-wrench"></i> Fill it in myself</a>
+    <span class="btn" data-kind="primary"><i class="ph ph-plus-circle"></i>Add and set up <span class="pin" style="margin-left:4px">5</span><span class="np2-kbd">⌘↵</span></span>
+  </div>
+</div>
+</div>
+
+<div class="af-cap">2 · Where it lands: the server page, setting itself up <span class="pin">6</span></div>
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="teal"><i class="ph ph-hard-drives"></i></span><h3>boss-2 · 203.0.113.40</h3><span class="tag" data-tone="blue"><span class="dot" data-s="run"></span>setting up</span><span class="wf-spacer"></span><span class="face" data-a="forge_live" data-size="s"></span><span style="font-size:.56rem">Infra agent</span></div>
+  <div class="af-prog">
+    <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-key"></i></span><b>Key landed</b><small>you · 0:40</small></div>
+    <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>Read</b><small>Ubuntu 22.04 · x86_64 · 4 vCPU · 8 GB</small></div>
+    <div class="af-ps" data-s="run"><span class="c"><i class="ph ph-package"></i></span><b>Install</b><small>Docker 27 · 2 of 3</small></div>
+    <div class="af-ps"><span class="c"><i class="ph ph-seal-check"></i></span><b>Verify</b><small>build + run</small></div>
+    <div class="af-ps"><span class="c"><i class="ph ph-target"></i></span><b>Ready</b><small>in the staging pool</small></div>
+    <div class="af-ps"><span class="c"><i class="ph ph-eye"></i></span><b>Watching</b><small>disk · Docker · certs</small></div>
+  </div>
+  <div class="now-line" style="margin-top:14px"><span class="face" data-a="forge" data-size="s"></span><b>Now</b><span>Installing Docker 27 from the official repo · node-exporter next</span><span class="wf-spacer"></span><a class="link-chip"><i class="ph ph-terminal"></i>Live log</a></div>
+  <div class="grid g3" style="margin-top:12px">
+    <div class="af-stat"><div class="n">8 GB</div><div class="k">memory · 4 vCPU · x86_64 (detected, not typed)</div></div>
+    <div class="af-stat"><div class="n">96 GB</div><div class="k">disk free · Infra agent alerts at 80%</div></div>
+    <div class="af-stat"><div class="n">90</div><div class="k">free ports (:8000–8099) for whichever apps pick it</div></div>
+  </div>
+  <div class="row wrap" style="margin-top:10px;gap:8px;font-size:.56rem;color:var(--muted)"><i class="ph ph-info"></i>Adding a server never moves an app. Each app picks its servers on its own page (Project › Deployments), where this one now shows as ready. Prod is never picked for you.</div>
+</section>
+
+<div class="af-cap">3 · A week later: the Infra agent on its own <span class="pin">7</span></div>
+<section class="card">
+  <div class="af-why" style="margin-bottom:10px">
+    <span class="fl-n" data-t="signal"><span><i class="ph-bold ph-hard-drives"></i> Disk 83%</span><small>boss-2</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="agent"><span><span class="face" data-a="forge" data-size="s"></span> Infra</span><small>18 GB build cache</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="decision"><span>On the list?</span><small>cache, not data · no</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="done"><span>Pruned cache</span><small>1 min</small></span><span class="fl-w" data-s="done"></span>
+    <span class="fl-n" data-t="done"><span>✓ 64%</span><small>told you in the digest</small></span>
+  </div>
+  <div class="af-why">
+    <span class="fl-n" data-t="signal"><span><i class="ph-bold ph-certificate"></i> Cert ends in 9 d</span><small>Caddy</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="agent"><span><span class="face" data-a="forge" data-size="s"></span> Infra</span><small>renew failed · DNS</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="decision"><span>On the list?</span><small>DNS is outside · yes</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="you"><span>✋ You add a record</span><small>exact record shown</small></span>
+  </div>
+</section>
+
+<div class="af-cap">Clicks, old vs new <span class="pin">8</span></div>
+<section class="card"><div class="cc">
+  <b>Server ready</b>
+  <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(11 * 14px)"></span>11 <em>Add · Host · Add host (3) · Generate key · Copy · run it · I ran it · Verify · Install Docker · Verify (7) · Connect monitoring (1+)</em></div>
+    <div class="cc-bar" data-new><span class="b" style="width:calc(3 * 14px)"></span><b>3</b> <em>Add a server · Copy the line (run it) · Add and set up</em></div></div>
+  <b>Fields typed</b>
+  <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(6 * 14px)"></span>6 <em>address, user, port, name, arch, key path</em></div>
+    <div class="cc-bar" data-new><span class="b" style="width:calc(1 * 14px)"></span><b>1</b> <em>the line you paste</em></div></div>
+  <b>Disk full at night</b>
+  <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(4 * 14px)"></span>you <em>notice a failed build, SSH in, prune by hand</em></div>
+    <div class="cc-bar" data-new><span class="b" style="width:calc(0.4 * 14px)"></span><b>0</b> <em>Infra agent prunes cache alone</em></div></div>
+</div></section>
+
+<div class="af-cap">Parity · 19 of 19 kept</div>
+<section class="card"><table class="parity"><thead><tr><th>Capability</th><th>Was</th><th>Now</th></tr></thead><tbody>
+  <tr><td>Address, SSH user, SSH port, Name, Arch</td><td>Host sheet fields</td><td>Read from the input and the machine; each editable in the Access / Name popovers</td></tr>
+  <tr><td>Generate key, or Use my key + “Store in”</td><td>Stepper stage 1</td><td>The gate’s two options; store choice in the Access popover</td></tr>
+  <tr><td>“Reach it by”, Copy command, I ran it</td><td>Stepper stage 2</td><td>One line; the agent detects it landed (no “I ran it”)</td></tr>
+  <tr><td>Verify, Install Docker, Verify</td><td>Stepper stages 3–4</td><td>Automatic, shown as the setup diagram with a live log</td></tr>
+  <tr><td>Server says which actions can work; regenerate-key warning</td><td>Stepper</td><td>Same rules drive the diagram; regenerate sits in Access with the warning</td></tr>
+  <tr><td>Enroll machine (dials out)</td><td>Add › Enroll</td><td>Kind pill “It dials in”</td></tr>
+  <tr><td>Hardware / cloud account (secret by reference)</td><td>Add › Hardware account; Cloud › + Account</td><td>Kind pill “Cloud account”; the secret goes through the gate, never the input</td></tr>
+  <tr><td>App target: VM, name, env, port, repo, URL, manifest, More</td><td>Target sheet</td><td>Moves to the app: Project › Deployments (every field incl. More)</td></tr>
+  <tr><td>Cloud target kinds, ref, domains, secrets</td><td>Target sheet › Cloud</td><td>Project › Deployments › Cloud</td></tr>
+  <tr><td>Free port lookup</td><td>Target sheet</td><td>Same, in the app’s target sheet; the server page shows how many are free</td></tr>
+  <tr><td>Plugins on/off</td><td>Plugins tab</td><td>Set up box picks what is missing; Plugins tab unchanged</td></tr>
+  <tr><td>Secrets: upload, generate keypair, verify, bind</td><td>Secrets sheet</td><td>Unchanged; reached from Access</td></tr>
+  <tr><td>Preflight</td><td>Target drawer</td><td>Runs on its own in Verify; button kept</td></tr>
+  <tr><td>Correct record, Re-verify</td><td>Host drawer</td><td>Unchanged on the server page</td></tr>
+  <tr><td>Retire host (typed name, cleanup choices)</td><td>Host drawer</td><td>Unchanged; it is a Deleting data decision</td></tr>
+  <tr><td>Move app, Remove app, Retire target</td><td>Target drawer</td><td>Unchanged</td></tr>
+  <tr><td>Pick prod host</td><td>Project › Deployments</td><td>Unchanged; a Production deploy decision, never picked for you</td></tr>
+  <tr><td>Ask BOSS “Deploy onto X?”</td><td>Infra header</td><td>Kept; the server page’s Now line opens the same chat</td></tr>
+  <tr><td>Permission host:manage, step-up</td><td>Gated buttons</td><td>Gated Add and set up; key handover asks for a passkey</td></tr>
+</tbody></table></section>
+
+<div class="notes"><b>Design notes: a server onboards itself, like a repo does</b><ol class="np2-n">
+  <li><b>1</b> One input. An address, <span class="mono">user@host</span>, an ssh line or a sentence. The probe shows what it can already see (port, host key) before any credential.</li>
+  <li><b>2</b> The single human step is handing over access. It is on the list in Where people decide (Secrets and credentials), so it is drawn amber and set apart. The agent detects that the key landed, so there is no “I ran it” button.</li>
+  <li><b>3</b> <b>Agent actions</b> says what the machine is for (a role: staging, prod or builds, never an app) and lists what the agent will do.</li>
+  <li><b>4</b> Six boxes, each with a popover. Every old field is still reachable, prefilled.</li>
+  <li><b>5</b> One primary, <b>Add and set up</b>.</li>
+  <li><b>6</b> Lands on the server page with the setup as a diagram and a live log. No app moves: each app picks servers on its own Deployments tab, where this one now appears as ready. Prod is never picked for you.</li>
+  <li><b>7</b> After setup the Infra agent owns the host: it prunes cache alone, and asks only when the fix is outside (DNS) or on the list.</li>
+</ol></div>
+</div>
+<script src="../project-experience/shell.js"></script>
+</body></html>

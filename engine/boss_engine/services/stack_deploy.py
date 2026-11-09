@@ -447,7 +447,18 @@ def host_facts_from(out: str) -> dict[str, Any]:
         tools.setdefault("docker", bool(facts["docker"]))
     if "SUDO_OK" in out or "SUDO_NO" in out:
         facts["sudo"] = "SUDO_OK" in out
+    from .project_experience.host_overview import capacity_from
+
+    capacity = capacity_from(out)
+    if capacity:
+        facts["capacity"] = capacity
     return facts
+
+
+def _capacity_probe() -> str:
+    from .project_experience.host_overview import CAPACITY_PROBE
+
+    return CAPACITY_PROBE
 
 
 def host_has(facts: Optional[Mapping[str, Any]]) -> list[str]:
@@ -512,6 +523,9 @@ def preflight_host(access: HostAccess, manifest: DeployManifest) -> Preflight:
         "command -v tar >/dev/null 2>&1 && echo TAR_OK || echo TAR_MISSING; "
         "command -v curl >/dev/null 2>&1 && echo CURL_OK || echo CURL_MISSING; "
         + _tools_probe([t for t, _ in needed])
+        # HOW FULL THE MACHINE IS (Infra › server, screen 14): cpus, load, memory, disk, OS and
+        # the running images — read-only, kept on the host's record with the other facts.
+        + "; " + _capacity_probe()
     )
     result = access.run(probe, timeout=40)
     out = result.output
@@ -1038,13 +1052,24 @@ def _row(connection: Connection, deployment_id: str, *, lock: bool = False):
 ACTIONS = ("approve", "reject", "rollback", "open")
 
 
+#: How far back an incident's verdict on a release counts against it as a rollback target.
+IMPLICATED_DAYS = 30
+
+
 def rollback_option(row: dict[str, Any], history: list[dict[str, Any]]) -> dict[str, Any]:
     """Whether THIS deployment offers Roll back, and the commit that would deploy.
 
     `row` and `history` are `stack_deployments` rows for one target, carrying `id`, `status`,
-    `commit_sha`, `apply_started_at` and `created_at`. Available only when `row` is the
-    target's LATEST deployment that applied a ChangeSet (apply_started_at set), has finished
-    healthy or failed, and an earlier healthy commit different from its own exists.
+    `commit_sha`, `apply_started_at` and `created_at` (and, from `stack_history`, `rollback_of`
+    and `implicated`). Available only when `row` is the target's LATEST deployment that applied a
+    ChangeSet (apply_started_at set), has finished healthy or failed, and an earlier KNOWN-GOOD
+    commit different from its own exists.
+
+    KNOWN-GOOD, never "the previous deploy" blindly (HelpDesk AI 2026-11-07: after rolling back
+    from c6d4d3a, a warm-up blip proposed rolling "back" to c6d4d3a, the release that caused the
+    incident): a commit that was itself rolled back from, or that an incident blamed
+    (`implicated`), is never a target; and a deployment that IS a rollback is already the last
+    known-good release, so it offers no further rollback (the way on is a fix forward).
     """
     none = {"rollback_available": False, "rollback_commit": None}
     if row.get("status") not in ("healthy", "failed") or row.get("apply_started_at") is None:
@@ -1053,14 +1078,66 @@ def rollback_option(row: dict[str, Any], history: list[dict[str, Any]]) -> dict[
     latest = max(applied, key=lambda h: h["created_at"], default=None)
     if latest is None or latest.get("id") != row.get("id"):
         return none
+    if row.get("rollback_of") or latest.get("rollback_of"):
+        return none
+    by_id = {h.get("id"): h for h in history}
+    bad = {str(by_id[h["rollback_of"]].get("commit_sha")) for h in history
+           if h.get("rollback_of") in by_id}
+    bad |= {str(h.get("commit_sha")) for h in history if h.get("implicated")}
     earlier = [h for h in history
                if h.get("status") == "healthy" and h.get("commit_sha")
                and h.get("commit_sha") != row.get("commit_sha")
+               and str(h.get("commit_sha")) not in bad
                and h["created_at"] < row["created_at"]]
     if not earlier:
         return none
     return {"rollback_available": True,
             "rollback_commit": max(earlier, key=lambda h: h["created_at"])["commit_sha"]}
+
+
+def implicated_commits(connection: Connection, target_ids: list[str]) -> dict[str, set[str]]:
+    """Per target: the releases an open or recent incident BLAMED (the incident squad's cause
+    verdict, `finalize_ctx.squad.blamed_commits`) — never a rollback target."""
+    out: dict[str, set[str]] = {t: set() for t in target_ids}
+    if not target_ids:
+        return out
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(text(
+                "SELECT i.finalize_ctx->'app'->>'target_id' AS t, b.c FROM incidents i "
+                "CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof("
+                "  i.finalize_ctx->'squad'->'blamed_commits') = 'array' "
+                "  THEN i.finalize_ctx->'squad'->'blamed_commits' ELSE '[]'::jsonb END) AS b(c) "
+                "WHERE i.finalize_ctx->'app'->>'target_id' = ANY(:t) "
+                "AND (i.status NOT IN ('resolved', 'dismissed') "
+                "     OR i.last_seen > now() - make_interval(days => :d))"),
+                {"t": list(target_ids), "d": IMPLICATED_DAYS}).mappings().all()
+    except Exception:  # noqa: BLE001 — no incidents table (a bare install): nothing blamed
+        return out
+    for r in rows:
+        out.setdefault(str(r["t"]), set()).add(str(r["c"]))
+    return out
+
+
+def stack_history(connection: Connection, target_ids: list[str]) -> dict[str, list[dict]]:
+    """Every stack deployment per target, as `rollback_option` reads them: with `rollback_of`
+    and `implicated` (an incident blamed its commit). The one history every caller uses."""
+    hist: dict[str, list[dict[str, Any]]] = {t: [] for t in target_ids}
+    if not target_ids:
+        return hist
+    for h in connection.execute(
+            text("SELECT id, target_id, status, commit_sha, apply_started_at, created_at, "
+                 "rollback_of FROM stack_deployments WHERE target_id = ANY(:t)"),
+            {"t": list(target_ids)}).mappings().all():
+        hist.setdefault(h["target_id"], []).append(dict(h))
+    blamed = implicated_commits(connection, list(target_ids))
+    for t, rows in hist.items():
+        for h in rows:
+            sha = str(h.get("commit_sha") or "")
+            # A blamed ref may be abbreviated (a lesson names its release by 12 characters).
+            h["implicated"] = bool(sha) and any(
+                len(b) >= 7 and sha.startswith(b) for b in blamed.get(t, set()))
+    return hist
 
 
 def deployment_actions(row: dict[str, Any], history: list[dict[str, Any]],
@@ -1083,12 +1160,7 @@ def _describe(connection: Connection, rows: list[Any]) -> list[dict[str, Any]]:
     if not rows:
         return []
     target_ids = sorted({r["target_id"] for r in rows})
-    history: dict[str, list[dict[str, Any]]] = {t: [] for t in target_ids}
-    for h in connection.execute(
-            text("SELECT id, target_id, status, commit_sha, apply_started_at, created_at "
-                 "FROM stack_deployments WHERE target_id = ANY(:t)"),
-            {"t": target_ids}).mappings().all():
-        history[h["target_id"]].append(dict(h))
+    history = stack_history(connection, target_ids)
     decision_ids = sorted({r["decision_id"] for r in rows if r.get("decision_id")})
     decisions = {d["id"]: d["status"] for d in connection.execute(
         text("SELECT id, status FROM decisions WHERE id = ANY(:d)"),
@@ -1174,23 +1246,35 @@ def _target(connection: Connection, target_id: str) -> Optional[dict]:
 def create_stack_target(connection: Connection, *, project_id: str, host_id: str,
                         app_name: str, repository: str, environment: str = "production",
                         manifest_path: Optional[str] = None, public_url: Optional[str] = None,
-                        actor: str) -> dict[str, Any]:
+                        port: Optional[int] = None, actor: str) -> dict[str, Any]:
     """Where a stack is deployed: a repository, on a host, for an environment.
 
     `target_ref` is derived from the host, as every fleet target's is; a stack target never
     carries an address of its own.
     """
-    from .deployment_fleet import get_host, target_ref_for
+    from .deployment_fleet import HostNotUsable, _ports_assigned_on, target_ref_for, usable_host
 
     owner, repo = split_repository(repository)
-    host = get_host(connection, host_id)
-    if not host or host.get("project_id") != project_id:
-        raise StackDeployError("No such host in this project.",
-                               "Add the VM in Infra first, then create the target on it.",
-                               status_code=404)
-    if host.get("status") == "retired":
-        raise StackDeployError(f"Host {host['name']!r} is retired.",
-                               "Pick an active host, or register the VM again.")
+    # ONE RULE (deployment_fleet.usable_host): this project's hosts and the verified hosts its
+    # organisation shares. "Host in this project" alone refused the shared host onboarding offered.
+    try:
+        host = usable_host(connection, host_id, project_id)
+    except HostNotUsable as refused:
+        raise StackDeployError(refused.headline, refused.action,
+                               status_code=refused.status_code) from None
+    if port is not None:
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            raise StackDeployError(f"Port {port!r} is not a number.",
+                                   "Give a port between 1 and 65535, or leave it blank.") from None
+        if not 1 <= port <= 65535:
+            raise StackDeployError(f"Port {port} is out of range.",
+                                   "Give a port between 1 and 65535, or leave it blank.")
+        holder = _ports_assigned_on(connection, str(host["address"])).get(port)
+        if holder:
+            raise StackDeployError(f"Port {port} on {host['address']} is already {holder}'s.",
+                                   "Pick another port, or leave it blank.", status_code=409)
     name = str(app_name or "").strip() or repo
     environment = str(environment or "production").strip() or "production"
     path = str(manifest_path or "").strip().lstrip("/") or None
@@ -1220,8 +1304,11 @@ def create_stack_target(connection: Connection, *, project_id: str, host_id: str
              "        :h, :mp, :url, now(), now())"),
         {"i": target_id, "p": project_id, "a": name, "r": f"{owner}/{repo}", "e": environment,
          "k": TARGET_KIND, "ref": target_ref_for(host),
-         "dom": json.dumps([url] if url else []),
-         "req": json.dumps([{"kind": "repo_owner", "name": owner}]),
+         # A PORT OF ITS OWN is said as the domain `address:port` (target_address, address_env:
+         # APP_BASE_URL and PORT), which is also what reserves it (_ports_assigned_on).
+         "dom": json.dumps([url] if url else [f"{host['address']}:{port}"] if port else []),
+         "req": json.dumps([{"kind": "repo_owner", "name": owner}]
+                           + ([{"kind": "app_port", "name": str(port)}] if port else [])),
          "by": actor, "h": host_id, "mp": path, "url": url})
     emit_event(connection, project_id, "deployment.stack_target_created", actor,
                "deployment_target", target_id,
@@ -1673,8 +1760,14 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                       manifest_path: Optional[str] = None,
                       approval_decision_id: Optional[str] = None,
                       retire_projects: Optional[list[str]] = None,
-                      person_required: bool = False) -> dict[str, Any]:
+                      person_required: bool = False,
+                      rollback_authority: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Record a deployment of `repository@ref` to a stack target, held for approval.
+
+    `rollback_authority`: a ROLLBACK (`rollback_of`) an incident squad already decided — a
+    person's answer on its "Roll back X to Y?" card, or the squad acting within its autonomy
+    after a critic agreed — is that approval: one question for one rollback, never a second
+    "Deploy …?" (rollback_approval). Ignored on anything that is not a rollback.
 
     `person_required`: a workflow step that promised a person started it — only a person's
     answer approves it, never the environment's policy (deploy_policy.pre_approval).
@@ -1856,6 +1949,25 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                **({"shared_compose_project": shared_project} if shared_project else {}),
                **({"retire_projects": retire} if retire else {}),
                **({"retire_app_in": moved_from} if moved_from else {})}
+    if not summary.get("demo_logins") and summary.get("generated_env_keys"):
+        # WHO SIGNS IN: boss.deploy.yaml names no demo users, so read them from the app's own
+        # seed / login files at this commit (names only), for Try it, Deployments and Settings.
+        try:
+            from .project_experience.demo_logins import discover_in_repository
+
+            with engine.connect() as connection:
+                found = discover_in_repository(
+                    connection, project_id, f"{owner}/{repo}",
+                    lambda p: github.read_file(owner, repo,
+                                               f"{workdir_}/{p}" if workdir_ else p, commit))
+            from .project_experience.demo_logins import DISCOVERY_RULE
+
+            summary["demo_logins_rule"] = DISCOVERY_RULE
+            if found:
+                summary["demo_logins"] = found
+                summary["demo_logins_from"] = "repository"
+        except Exception:  # noqa: BLE001 — names are a nicety; never refuse a deploy over them
+            pass
     rp = ResourcePlaneService(settings)
     with engine.begin() as connection:
         # Check-then-insert under ONE lock per target. Everything above took seconds (GitHub,
@@ -1964,6 +2076,9 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         approval = pre_approval(connection, project_id, target.get("environment"),
                                 gate_decision_id=approval_decision_id,
                                 person_required=person_required)
+        if not approval and rollback_of and rollback_authority:
+            approval = rollback_approval(connection, project_id, rollback_authority,
+                                         rollback_of=rollback_of, commit=commit)
         if approval and rp.required_approvers_for_changeset(connection, changeset["id"]):
             approval = None
         if approval and release_card and release_card.get("needs_reason"):
@@ -2054,9 +2169,44 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         return get_stack_deployment(connection, deployment_id)
 
 
+def rollback_approval(connection: Connection, project_id: str, authority: dict[str, Any], *,
+                      rollback_of: str, commit: str) -> Optional[dict[str, Any]]:
+    """The incident squad's decision as THIS rollback's approval, or None (then a person is
+    asked as for any deploy). Holds only for a rollback to the rolled-back deployment's
+    known-good commit (rollback_option): the target served it healthy before, so nothing ships
+    that was not already reviewed and live — the release card's guard has nothing to list.
+    A person's card counts once: a second deployment naming it asks again."""
+    rolled = _row(connection, rollback_of)
+    if not rolled or rolled.get("project_id") != project_id:
+        return None
+    current = get_stack_deployment(connection, rollback_of) or {}
+    if not commit or str(current.get("rollback_commit") or "") != commit:
+        return None
+    approved_by = str(authority.get("approved_by") or "").strip()
+    if not approved_by:
+        return None
+    decision_id = authority.get("decision_id")
+    if decision_id:
+        rec = connection.execute(
+            text("SELECT recommendation FROM decisions WHERE id = :d AND project_id = :p "
+                 "AND status IN ('pending', 'approved')"),
+            {"d": decision_id, "p": project_id}).scalar()
+        rec = rec if isinstance(rec, dict) else json.loads(rec or "null") if rec else None
+        if not rec or rec.get("action") != "incident_squad.mitigate":
+            return None
+        if connection.execute(text("SELECT 1 FROM stack_deployments WHERE decision_id = :d "
+                                   "LIMIT 1"), {"d": decision_id}).first():
+            return None
+    return {"source": "incident_squad", "decision_id": decision_id or None,
+            "approved_by": approved_by}
+
+
 def rollback_stack_deploy(engine, settings: Settings, *, deployment_id: str,
-                          actor: str) -> dict[str, Any]:
-    """Plan a NEW governed deployment of the commit that was healthy before this one."""
+                          actor: str, authority: Optional[dict[str, Any]] = None
+                          ) -> dict[str, Any]:
+    """Plan a NEW governed deployment of the last known-good commit before this one.
+    `authority`: the incident squad's decision that is this rollback's approval
+    (rollback_approval) — then no second question."""
     with engine.begin() as connection:
         row = _row(connection, deployment_id)
         if not row:
@@ -2078,7 +2228,8 @@ def rollback_stack_deploy(engine, settings: Settings, *, deployment_id: str,
                              target_id=row["target_id"], repository=row["repository"],
                              ref=str(current["rollback_commit"]), actor=actor,
                              rollback_of=deployment_id,
-                             manifest_path=release_manifest_path(row))
+                             manifest_path=release_manifest_path(row),
+                             rollback_authority=authority)
 
 
 def release_manifest_path(row: Mapping[str, Any]) -> Optional[str]:
@@ -2393,6 +2544,11 @@ def _finalize(connection: Connection, settings: Settings, *, deployment_id: str,
                        "stack_deployment", deployment_id,
                        {"commit": row["commit_sha"], "mode": outcome["mode"],
                         "open_url": outcome["open_url"]})
+            # DEPLOY REQUESTS THIS ONE OVERTOOK (cleared_causes): an older commit still asking
+            # to ship to this target, or the same commit asked again, is withdrawn now.
+            from .cleared_causes import on_deploy_healthy
+
+            on_deploy_healthy(connection, row["project_id"], actor="boss")
             checks = target_health_checks(outcome.get("health") or [])
             if checks:
                 # ONE DEFINITION OF HEALTHY. The target's health_checks are what the monitor

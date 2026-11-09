@@ -23,6 +23,8 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from .local_repo import is_local
+
 
 class RepositoryResolutionError(RuntimeError):
     """The requested repository could not be resolved for this project."""
@@ -49,11 +51,13 @@ def _registered_rows(connection, project_id: str, *, limit: int) -> list[dict]:
             """
             SELECT b.id, b.connection_id, b.owner, b.name, b.full_name, b.role,
                    b.default_branch, b.visibility, b.archived, b.status,
+                   COALESCE(b.host, 'github') AS host,
                    c.connection_label, c.status AS connection_status,
                    c.auth_method, c.account_login, c.last_test_status
             FROM github_repository_bindings b
-            JOIN github_connections c ON c.id = b.connection_id
-            WHERE b.project_id = :p
+            -- A LOCAL repository (BOSSAPP-918) has no connection: it is listed all the same.
+            LEFT JOIN github_connections c ON c.id = b.connection_id
+            WHERE b.project_id = :p AND (c.id IS NOT NULL OR b.host = 'local')
             ORDER BY (b.role = 'primary') DESC, b.full_name
             LIMIT :lim
             """
@@ -80,6 +84,10 @@ def list_repositories(connection, project_id: str, *, limit: int = 50) -> list[d
     out = []
     for row in _registered_rows(connection, project_id, limit=limit):
         item = dict(row)
+        if item.get("host") == "local":
+            item.update({"connection_label": "On this machine", "connection_status": "active"})
+            out.append(item)
+            continue
         item.update(registry.clone_note(
             connection, org_id, full_name=item.get("full_name") or "",
             binding_status=item.get("status"), connection_status=item.get("connection_status"),
@@ -200,6 +208,30 @@ def repository_activity(
     return out
 
 
+def _fill_local_merged_counts(activity: list[dict[str, Any]], *, max_lookups: int) -> None:
+    if not activity:
+        return
+    try:
+        from ..db import get_engine
+
+        engine = get_engine()
+        with engine.connect() as c:
+            for repo in activity:
+                prs = [int(r["pr"]) for r in repo.get("recent_runs", []) if r.get("pr")][:max_lookups]
+                if not prs:
+                    repo["prs_merged"] = 0
+                    continue
+                merged = int(c.execute(text(
+                    "SELECT count(DISTINCT number) FROM local_change_sets WHERE repository = :r "
+                    "AND number = ANY(:n) AND state = 'merged'"),
+                    {"r": f"{repo['owner']}/{repo['repo']}", "n": prs}).scalar() or 0)
+                repo["prs_merged"] = merged
+                repo["merge_rate"] = round(merged / len(prs) * 100, 1)
+    except Exception:  # noqa: BLE001 — an honest blank, as for GitHub
+        for repo in activity:
+            repo.setdefault("prs_merged", None)
+
+
 def fill_merged_counts(activity: list[dict[str, Any]], *, token: str,
                        api_base_url: str = "https://api.github.com",
                        max_lookups: int = 25) -> None:
@@ -208,12 +240,19 @@ def fill_merged_counts(activity: list[dict[str, Any]], *, token: str,
     Bounded to `max_lookups` PRs per repo so a dashboard render can never fan out into
     an unbounded API sweep. Leaves prs_merged as None on any failure -- a wrong zero
     would read as "BOSS never lands anything", which is worse than an honest blank.
+
+    A repository BOSS keeps on this machine (BOSSAPP-919) has its merges in local_change_sets,
+    never on GitHub: those are counted from the database, with or without a token.
     """
+    _fill_local_merged_counts([r for r in activity if is_local(f"{r.get('owner')}/{r.get('repo')}")],
+                              max_lookups=max_lookups)
     if not token:
         return
     import httpx
 
     for repo in activity:
+        if is_local(f"{repo.get('owner')}/{repo.get('repo')}"):
+            continue
         prs = [r["pr"] for r in repo.get("recent_runs", []) if r.get("pr")][:max_lookups]
         if not prs:
             repo["prs_merged"] = 0

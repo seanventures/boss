@@ -148,6 +148,7 @@ from .schemas import (
     AgentActionRunRequest,
     AgentActionRunResponse,
     AgentChatResponse,
+    AgentProposalOutcomeRequest,
     CommandProposeRequest,
     CommandProposeResponse,
     MeetingProposeRequest,
@@ -1510,6 +1511,14 @@ async def lifespan(_: FastAPI):
         print("[lifespan] activity-log capture installed")
     except Exception as exc:  # noqa: BLE001 — never block boot on a log handler
         print(f"[lifespan] activity-log capture unavailable: {exc}")
+    # WHICH BOSS STARTED, AND WHY: this start's commit, image and container, so "was that
+    # restart our upgrade or a crash?" is a lookup (install_history; the install_restarts tool).
+    from boss_engine.services.install_history import record_start as _record_start
+
+    _started = _record_start(engine, "api")
+    if _started and _started.get("upgraded"):
+        print(f"[lifespan] upgraded {_started['previous_commit'][:8]} -> "
+              f"{_started['commit'][:8]}")
     # A FRESH INSTALL MUST BE ABLE TO PRESS BUILD.
     #
     # The delivery catalogue — the twelve workflows a directive is routed to — was installed
@@ -1580,6 +1589,42 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] stale build questions withdrawn: {len(stale)}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a repair
         print(f"[lifespan] stale build-question sweep skipped: {exc}")
+    # BOUNDARY QUESTIONS NEVER EXPIRE (decision_actions.never_expires). Those an older build let
+    # expire — merges, deploys, spend still unanswered — are reopened here, after the two
+    # sweeps above closed the ones whose run is over. Idempotent; expire_overdue repeats it.
+    try:
+        with begin(engine) as connection:
+            reopened = decisions.reopen_boundary_decisions(connection)
+        if reopened:
+            print(f"[lifespan] boundary decisions reopened: {len(reopened)}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a repair
+        print(f"[lifespan] boundary-decision reopen skipped: {exc}")
+    # QUESTIONS WHOSE CAUSE CLEARED (cleared_causes): a failed effect's "GitHub integration is
+    # not configured" after GitHub writes succeeded, a merge question after its PR merged.
+    try:
+        from boss_engine.services.cleared_causes import withdraw_cleared
+
+        with begin(engine) as connection:
+            cleared = withdraw_cleared(connection, actor="boss")
+        if cleared:
+            print(f"[lifespan] decisions whose cause cleared withdrawn: {len(cleared)}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a repair
+        print(f"[lifespan] cleared-cause sweep skipped: {exc}")
+    # DEMO USERS FOR APPS DEPLOYED BEFORE DEPLOYS READ THEM (project_experience.demo_logins):
+    # named once from each app's own seed files, off the boot path (it reads GitHub).
+    def _name_demo_users() -> None:
+        try:
+            from boss_engine.services.project_experience.demo_logins import backfill_deployed_users
+
+            named = backfill_deployed_users(engine, settings)
+            if named:
+                print(f"[lifespan] demo users named for {len(named)} deploy(s)")
+        except Exception as exc:  # noqa: BLE001 — names are a nicety
+            print(f"[lifespan] demo-user backfill skipped: {exc}")
+
+    import threading as _threading
+
+    _threading.Thread(target=_name_demo_users, name="demo-user-backfill", daemon=True).start()
     # Preview lifecycle is independent from the API. Reconcile the durable rows against
     # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:
@@ -1659,6 +1704,14 @@ async def lifespan(_: FastAPI):
                 if _owners:
                     _identity_passports.upgrade_from_roles(org_id=_org, db=_connection,
                                                            default_sponsor=_owners[0])
+                    # Every project's Captain authority (always-on builds start without a
+                    # person's grant; identity/captain_authority.py): existing projects backfilled.
+                    from boss_engine.identity import captain_authority as _captain_authority
+
+                    with _connection.begin_nested():
+                        _made = _captain_authority.backfill(_connection)
+                    if _made:
+                        print(f"[identity] {_made} project(s) got their Captain authority")
         print(f"[identity] vault ready (key {_kek or 'none configured, empty vault'}); signing keys provisioned")
         from boss_engine.identity import github_setup as _identity_github
 
@@ -1825,6 +1878,17 @@ async def authn_error_answers_with_its_own_status(_request: Request, exc: AuthnE
     return JSONResponse(status_code=int(getattr(exc, "status", 401) or 401),
                         content={"error": getattr(exc, "code", "unauthenticated")},
                         headers={"Cache-Control": "no-store"})
+
+
+from boss_engine.identity.vault import VaultError as _VaultError, refusal as _vault_refusal  # noqa: E402
+
+
+@app.exception_handler(_VaultError)
+async def vault_refusal_in_words(_request: Request, exc: _VaultError):
+    """A vault refusal no route caught (BOSSAPP-913 13-03 / X-73): the vault's own words and the
+    fix (vault.refusal), never "VaultNotFound (see the API log …)". The code is secret-free."""
+    status, body = _vault_refusal(exc)
+    return JSONResponse(status_code=status, content=body, headers={"Cache-Control": "no-store"})
 
 
 from boss_engine.services.projects_archive import ProjectArchived as _ProjectArchived  # noqa: E402
@@ -5855,6 +5919,14 @@ def onboard_org_endpoint(payload: OrgOnboardBody):
 def list_projects(request: Request, include_archived: bool = False) -> ProjectListResponse:
     """The projects the caller may read. An archived project (services/projects_archive.py) is
     left out unless `include_archived=true`; the console's "Show archived" asks for it."""
+    return ProjectListResponse(
+        items=[project_summary_from_row(row)
+               for row in visible_project_rows(request, include_archived=include_archived)])
+
+
+def visible_project_rows(request: Request, *, include_archived: bool = False) -> list:
+    """THE ONE ANSWER to "which projects may this caller read": GET /v1/projects, the Projects
+    list (GET /v1/projects/summary) and the jump search all read it, so they cannot disagree."""
     authenticated, principal = catalog_read_scope()
     with begin(engine) as connection:
         rows = connection.execute(
@@ -5890,10 +5962,7 @@ def list_projects(request: Request, include_archived: bool = False) -> ProjectLi
         ).mappings().all()
         # IDENTITY (S2): only projects the caller holds project:read in (§6.7).
         visible = _readable_projects(request, [str(row["id"]) for row in rows])
-        return ProjectListResponse(
-            items=[project_summary_from_row(row) for row in rows
-                   if visible is None or str(row["id"]) in visible]
-        )
+        return [row for row in rows if visible is None or str(row["id"]) in visible]
 
 
 @app.post("/v1/projects", status_code=201, response_model=ProjectCreatedResponse)
@@ -8242,8 +8311,20 @@ def run_code_task_step_endpoint(payload: open_bodies.CodeTaskStepBody):
                 connection, run["project_id"], actor, "workflow_execute"
             )
     from .services.code_task_service import run_code_task
-    return run_code_task(engine, settings, jobs, run_id,
-                         fencing_token=payload.get("fencing_token"))
+    try:
+        return run_code_task(engine, settings, jobs, run_id,
+                             fencing_token=payload.get("fencing_token"))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # A crash is recorded ON THE RUN (what, where) and answered in words, so the build's own
+        # page, the worker's error and the stuck-work diagnosis all say what broke -- not a bare
+        # 500 the worker could not even report (crun_de5396b5: 30 silent crashes, 2026-11-07).
+        from boss_engine.services import stuck_work
+
+        said = stuck_work.record_step_crash(engine, run_id, exc)
+        LOGGER.exception("code_task_step_crashed run_id=%s", run_id)
+        raise HTTPException(status_code=500, detail=said) from exc
 
 
 class InvestigationRunBody(BaseModel):
@@ -8983,16 +9064,13 @@ def register_deployment_target(payload: dict):
 
         target_ref = payload["target_ref"]
         if host_id:
-            from boss_engine.services.deployment_fleet import get_host, target_ref_for
+            from boss_engine.services.deployment_fleet import (
+                HostNotUsable, target_ref_for, usable_host)
 
-            host = get_host(connection, host_id)
-            if not host or host.get("project_id") != payload["project_id"]:
-                raise HTTPException(status_code=422, detail=(
-                    f"no deployment host {host_id} in this project; add the VM under Hosts "
-                    "first"))
-            if host.get("status") == "retired":
-                raise HTTPException(status_code=422, detail=(
-                    f"host {host['name']} is retired; nothing may be scheduled on it"))
+            try:
+                host = usable_host(connection, host_id, payload["project_id"])
+            except HostNotUsable as refused:
+                raise HTTPException(status_code=422, detail=refused.to_dict()) from None
             target_ref = target_ref_for(host)
 
         connection.execute(text("""
@@ -10517,7 +10595,8 @@ def create_stack_target_endpoint(payload: open_bodies.StackTargetCreateBody):
                 app_name=str(payload.get("app_name") or ""), repository=repository,
                 environment=str(payload.get("environment") or "production"),
                 manifest_path=payload.get("manifest_path"),
-                public_url=payload.get("public_url"), actor=actor)
+                public_url=payload.get("public_url"), port=payload.get("port") or None,
+                actor=actor)
         except StackDeployError as exc:
             raise _stack_error(exc)
 
@@ -11481,7 +11560,7 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
     if not host_id:
         raise HTTPException(status_code=422, detail="host_id is required")
 
-    from boss_engine.services.deployment_fleet import attach_target, get_host
+    from boss_engine.services.deployment_fleet import HostNotUsable, attach_target, usable_host
 
     with begin(engine) as connection:
         run = connection.execute(
@@ -11494,14 +11573,13 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
         require_project_actor(connection, run["project_id"], actor, "task_create")
         assert_run_is_deployable(run)
 
-        host = get_host(connection, host_id)
-        if not host:
-            raise HTTPException(status_code=404, detail="no such deployment host")
-        if host.get("project_id") != run["project_id"]:
-            # Binding a foreign host would also grant this project use of its SSH key.
-            raise HTTPException(
-                status_code=422,
-                detail="host belongs to a different project; setup-deployment refused")
+        # ONE RULE (deployment_fleet.usable_host): this project's hosts, or a verified host its
+        # organisation shares. Another organisation's machine (and its SSH key) never.
+        try:
+            host = usable_host(connection, host_id, run["project_id"])
+        except HostNotUsable as refused:
+            raise HTTPException(status_code=refused.status_code,
+                                detail=f"{refused.headline} {refused.action}") from None
         if host.get("status") != "verified":
             # A target pointed at an unproven host fails at deploy time, long after the
             # decision was made and somewhere less obvious than here.
@@ -13661,6 +13739,28 @@ def engine_agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatR
     threads, gates confirmations, and answers questions grounded in live engine
     data via the read-tool layer. This is the canonical endpoint."""
     return agent_turn(payload, request, endpoint="/v1/engine/agent/chat")
+
+
+@app.post("/v1/engine/agent/proposal")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("thread_id", "agent_thread"),))
+def agent_proposal_outcome(payload: AgentProposalOutcomeRequest, request: Request) -> dict:
+    """Start or Not now on an answer's "New work" card (turn_cards). Start itself is THE start
+    door (POST /v1/projects/{id}/work) — this records what the person chose on the card, spends
+    the offer it came from, and tells the conversation a start happened."""
+    with begin(engine) as connection:
+        thread = connection.execute(text(
+            "SELECT project_id FROM agent_threads WHERE id = :t"),
+            {"t": payload.thread_id}).mappings().first()
+        if thread is None or str(thread["project_id"]) != payload.project_id:
+            raise HTTPException(status_code=404, detail="No such conversation.")
+        try:
+            card = orchestration_agent.record_proposal_outcome(
+                connection, thread_id=payload.thread_id, message_id=payload.message_id,
+                outcome=payload.outcome, run_id=payload.run_id, href=payload.href)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+    return {"proposal": card}
 
 
 @app.post("/v1/agent/chat", response_model=AgentChatResponse, deprecated=True)
@@ -27847,8 +27947,20 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
         moved.update({f"release:{k}": v for k, v in _release.advance_all(engine, ctx.settings).items()})
     except Exception as error:  # noqa: BLE001
         moved = {"error": type(error).__name__}
+    # QUESTIONS WHOSE CAUSE CLEARED while nothing was listening (cleared_causes): a PR merged by
+    # a person in GitHub, a GitHub write that worked after a credentials failure. Its own
+    # transaction; facts on record only, no GitHub call.
+    cleared: list[str] = []
+    try:
+        from boss_engine.services.cleared_causes import withdraw_cleared
+
+        with begin(engine) as connection:
+            cleared = withdraw_cleared(connection, actor="boss")
+    except Exception:  # noqa: BLE001 — a question left open never stops the tick
+        cleared = []
     return {**advanced, "gate_timeouts": timeouts, **({"other_projects": others} if others else {}),
-            **({"change_sets": moved} if moved else {})}
+            **({"change_sets": moved} if moved else {}),
+            **({"cleared_decisions": cleared} if cleared else {})}
 
 
 @app.get("/v1/workflows", response_model=WorkflowDefinitionListResponse)

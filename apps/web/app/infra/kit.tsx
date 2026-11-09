@@ -207,6 +207,10 @@ function useDialog(onClose: () => void) {
     const box = ref.current;
     box?.querySelector<HTMLElement>("[data-autofocus], button, a[href], input, select, textarea, [tabindex='0']")?.focus();
     const onKey = (e: KeyboardEvent) => {
+      // A DIALOG ABOVE THIS ONE (the consent sheet, "Confirm it's you") owns the keys while the
+      // focus is in it: Esc closes that one, never the sheet underneath it.
+      const at = document.activeElement;
+      if (ref.current && at && !ref.current.contains(at) && at.closest("[role='dialog']")) return;
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closer.current(); return; }
       if (e.key !== "Tab" || !ref.current) return;
       const els = [...ref.current.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex='0']")];
@@ -280,12 +284,14 @@ export function DrawerSection({ label, testId, children, actions }: { label: str
 }
 
 /** A centred sheet for a form (`+ Add › Host`, `+ Deploy`, `Retire…`). */
-export function Sheet({ title, testId, onClose, children }: { title: string; testId: string; onClose: () => void; children: React.ReactNode }) {
+export function Sheet({ title, testId, onClose, children, wide = false }: { title: string; testId: string; onClose: () => void; children: React.ReactNode;
+  /** A one-screen flow (Add a server) reads at a page's width, not a form's. */
+  wide?: boolean }) {
   const ref = useDialog(onClose);
   return (
     <OnTop>
     <div className="inf-sheet-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <section ref={ref as React.RefObject<HTMLElement>} className="inf-sheet" role="dialog" aria-modal="true"
+      <section ref={ref as React.RefObject<HTMLElement>} className="inf-sheet" data-wide={wide || undefined} role="dialog" aria-modal="true"
                aria-label={title} data-testid={testId}>
         <header className="inf-sheet-head">
           <h2>{title}</h2>

@@ -476,7 +476,7 @@ class AgentService:
             text(
                 """
                 SELECT id, role, content, tool_calls, actions, proposed_actions,
-                       next_steps, agent_role, created_at
+                       next_steps, agent_role, created_at, proposal, citations
                 FROM agent_messages
                 WHERE thread_id = :thread_id
                 -- A TURN'S ROWS SHARE ONE TIMESTAMP, SO THE TIEBREAK DECIDES THE TRANSCRIPT.
@@ -961,6 +961,13 @@ class AgentService:
         cited = self._close_chat_act(connection, project_id=project_id, act_id=act_id,
                                      message_ids=[written["id"], assistant["id"]],
                                      reply=turn.reply)
+        # WHAT THE ANSWER CARRIES BESIDES ITS WORDS (turn_cards): the "New work" card and the
+        # PR / run / file / doc chips — derived from this turn's own offers, decision and reply,
+        # for every surface and every engine; stored with the message so a reopened thread
+        # shows them too.
+        cards = self._turn_cards(connection, project_id=project_id, turn=turn,
+                                 message=user_content, message_id=assistant["id"])
+        assistant = {**assistant, **cards}
         # What the turn used of the graph, named by the message that answered; what the reply
         # cites ([L:…] / [R:…]) is "cited" (knowledge/learning_conversations.turn_done).
         from .knowledge.learning_conversations import turn_done
@@ -1031,7 +1038,76 @@ class AgentService:
             # The signed turn, and the agent's own work it pointed at ([act:…] in the reply).
             "act_id": act_id,
             "cited_acts": cited,
+            # The typed offer to start work ("New work · …", Start / Edit / Not now) and the
+            # records the reply named, as chips (turn_cards).
+            "proposal": cards.get("proposal"),
+            "citations": cards.get("citations") or [],
         }
+
+    @staticmethod
+    def _turn_cards(connection: Connection, *, project_id: str, turn: Any, message: str,
+                    message_id: str) -> dict[str, Any]:
+        from . import turn_cards
+
+        try:
+            with connection.begin_nested():
+                cards = turn_cards.for_turn(
+                    connection, project_id, reply=turn.reply,
+                    tool_calls=getattr(turn, "tool_calls", []) or [],
+                    offers=getattr(turn, "proposed_actions", []) or [],
+                    decision=getattr(turn, "decision", {}) or {}, message=message,
+                    message_id=message_id)
+                connection.execute(
+                    text("UPDATE agent_messages SET proposal = CAST(:p AS JSONB), "
+                         "citations = CAST(:c AS JSONB) WHERE id = :id"),
+                    {"p": json.dumps(cards["proposal"]) if cards["proposal"] else None,
+                     "c": json.dumps(cards["citations"] or []), "id": message_id})
+            return cards
+        except Exception:  # noqa: BLE001 — the answer stands without its chips
+            logging.getLogger(__name__).exception("turn cards failed")
+            return {"proposal": None, "citations": []}
+
+    def record_proposal_outcome(self, connection: Connection, *, thread_id: str,
+                                message_id: str, outcome: str,
+                                run_id: Optional[str] = None,
+                                href: Optional[str] = None) -> dict[str, Any]:
+        """Start or Not now on a "New work" card: the card remembers it (a reopened thread shows
+        "Started · Open work" or nothing), the offer it came from is spent, and a start is
+        written into the conversation so the next turn does not offer it again."""
+        if outcome not in ("started", "dismissed"):
+            raise ValueError("outcome is started or dismissed")
+        row = connection.execute(text(
+            "SELECT proposal FROM agent_messages WHERE id = :id AND thread_id = :t"),
+            {"id": message_id, "t": thread_id}).mappings().first()
+        if row is None or not row["proposal"]:
+            raise LookupError("no such proposal")
+        card = row["proposal"]
+        if isinstance(card, str):
+            card = json.loads(card or "{}")
+        card = {**card, "state": outcome, **({"run_id": run_id} if run_id else {}),
+                **({"href": href} if href else {})}
+        connection.execute(text(
+            "UPDATE agent_messages SET proposal = CAST(:p AS JSONB) WHERE id = :id"),
+            {"p": json.dumps(card), "id": message_id})
+        offer_id = str(card.get("offer_id") or "")
+        if outcome == "started":
+            self.record_action_outcome(
+                connection, thread_id=thread_id, action_id=offer_id, tool="start_work",
+                args=(card.get("start") or {}).get("body") or {},
+                label=f"Start · {card.get('title') or 'new work'}", ok=True,
+                result={"run_id": run_id, "href": href}, error="")
+        elif offer_id:
+            for r in connection.execute(text(
+                    "SELECT id, proposed_actions FROM agent_messages WHERE thread_id = :t "
+                    "AND jsonb_array_length(COALESCE(proposed_actions, '[]'::jsonb)) > 0"),
+                    {"t": thread_id}).mappings().all():
+                offers = self._offers(r["proposed_actions"])
+                kept = [o for o in offers if str(o.get("id") or "") != offer_id]
+                if len(kept) != len(offers):
+                    connection.execute(text(
+                        "UPDATE agent_messages SET proposed_actions = CAST(:p AS JSONB) "
+                        "WHERE id = :id"), {"p": json.dumps(kept), "id": r["id"]})
+        return card
 
     @staticmethod
     def _open_chat_act(connection: Connection, *, project_id: str, actor: str,
@@ -1107,6 +1183,21 @@ class AgentService:
         return out
 
     @staticmethod
+    def _cards_of(row) -> dict[str, Any]:
+        """The stored proposal and citations, when this read selected them."""
+        keys = getattr(row, "keys", lambda: [])()
+        out: dict[str, Any] = {}
+        if "proposal" in keys:
+            raw = row["proposal"]
+            card = json.loads(raw) if isinstance(raw, str) else raw
+            out["proposal"] = card if isinstance(card, dict) and card else None
+        if "citations" in keys:
+            raw = row["citations"]
+            got = json.loads(raw) if isinstance(raw, str) else raw
+            out["citations"] = [c for c in (got or []) if isinstance(c, dict)]
+        return out
+
+    @staticmethod
     def _serialize_message(row) -> dict[str, Any]:
         def value(key: str) -> list[dict[str, Any]]:
             raw = row[key]
@@ -1121,6 +1212,7 @@ class AgentService:
             "actions": value("actions"),
             "proposed_actions": value("proposed_actions"),
             "next_steps": value("next_steps"),
+            **AgentService._cards_of(row),
             "created_at": created_at.isoformat()
             if hasattr(created_at, "isoformat")
             else str(created_at),

@@ -390,9 +390,15 @@ def capabilities() -> list[str]:
         # The code graph of a registered repository (knowledge/repo_index.py): the API fetches
         # the branch and indexes it under this lease. Declared here or it sits queued.
         "knowledge.repository.index",
+        # The onboarding agent (project_experience/onboarding.py): the API checks access, maps
+        # the repository and proposes the backlog under this lease. Declared here or it sits queued.
+        "project.onboarding",
         # Review this PR again (services/pr_review_again.py): the API runs the reviewer on the
         # pull request's real diff and posts the round. Declared here or it sits queued.
         "pull_request.review_again",
+        # A build that finished while GitHub was down (github_outage): the API pushes its branch
+        # from the local mirror and opens its PR under this lease. Declared here or it sits queued.
+        "repo.push_pending",
         "agent.resume",
         "software_factory.propose_pr",
         "github.pull_request.merge",
@@ -889,6 +895,18 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         if result.get("status") == "failed" and result.get("retry"):
             raise RuntimeError(result.get("error") or "Repository index failed.")
         return result
+    if job.kind == "project.onboarding":
+        # One bounded pass of the onboarding agent; the API holds GitHub's credentials and the
+        # graph. A pass that waits on the code graph queues its own next pass, so this completes.
+        result = client.run_project_onboarding({"job_id": job.id, "worker_id": client.worker_id,
+                                                "lease_token": job.lease_token})
+        return result
+    if job.kind == "repo.push_pending":
+        # A build that finished while GitHub was down (github_outage): push its branch from the
+        # local mirror and open its PR. GitHub still down is a recorded wait with its own next
+        # try queued (backoff), never a failure of this job.
+        return client.run_push_pending({"job_id": job.id, "worker_id": client.worker_id,
+                                        "lease_token": job.lease_token})
     if job.kind == "security.scan":
         # The scanners and the sandbox helper are in the api image: the API runs the scan. A
         # scan whose tools failed is a recorded result (status failed, with why), not a retry.

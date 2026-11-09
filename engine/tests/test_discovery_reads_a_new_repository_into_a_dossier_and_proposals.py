@@ -67,8 +67,8 @@ def _advisories(packages):
 def test_the_dossier_says_what_the_repository_is_how_to_run_it_and_where_the_risk_is(checkout):
     facts = dossier.scan_tree(checkout)
     assert facts["stack"]["language"] == "JavaScript" and facts["stack"]["build"] == "npm"
-    assert facts["commands"] == {"test": ["npm test"], "lint": ["npm run lint"],
-                                 "build": ["npm run build"]}
+    assert facts["commands"] == {"install": ["npm ci"], "test": ["npm test"],
+                                 "lint": ["npm run lint"], "build": ["npm run build"], "run": []}
     assert facts["ci"] == [] and facts["tests"]["files"] == 1
     assert facts["owners"]["codeowners"] == "CODEOWNERS"
     assert {"pattern": "/src/orders/", "owners": ["@acme/payments"]} in facts["owners"]["rules"]
@@ -155,3 +155,16 @@ def test_after_an_index_the_dossier_is_built_from_the_same_checkout(eng, project
     built = dossier.after_index(eng, settings, project_id=project, repo=REPO, root=checkout,
                                 head="")
     assert built["repo"] == REPO and built["facts"]["files"] >= 8
+
+
+def test_the_readme_getting_started_fills_what_the_manifests_leave_unsaid(tmp_path):
+    """A README's getting-started block (fenced shell lines under its heading) gives the install
+    and run commands a repo's manifests do not; prose is never read as a command."""
+    (tmp_path / "README.md").write_text(
+        "# App\n\nRun `rm -rf /` never.\n\n## Getting started\n\n```bash\n$ pip install -r "
+        "requirements.txt\npython -m app\n# a comment\n```\n\n## License\n\n```\nmake run\n```\n")
+    (tmp_path / "requirements.txt").write_text("flask\n")
+    got = dossier.commands(tmp_path, ["README.md", "requirements.txt"])
+    assert got["install"] == ["pip install -r requirements.txt"]
+    assert got["run"] == ["python -m app"]
+    assert all("rm -rf" not in c for cs in got.values() for c in cs)

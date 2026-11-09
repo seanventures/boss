@@ -128,6 +128,16 @@ def observe_bindings(connection: Connection, project_id: Optional[str] = None) -
     return int(added or 0) + int(moved or 0) + int(upgraded or 0)
 
 
+def mark_merged(connection: Connection, project_id: str, *, repo: Optional[str] = None) -> int:
+    """A PR MERGED: the repository's code graph — and the dossier read from it (06-22, "re-read
+    on every merge") — is due again now, not at the next recheck. The next worker tick indexes
+    the new head and dossier.after_index re-reads it."""
+    return connection.execute(text(
+        "UPDATE kg_repo_index SET due = true, reason = 'merged', updated_at = now() "
+        "WHERE project_id = :p AND (CAST(:r AS TEXT) IS NULL OR lower(repo) = lower(:r))"),
+        {"p": project_id, "r": repo}).rowcount
+
+
 def mark_stale(connection: Connection, *, recheck_minutes: int, project_id: Optional[str] = None) -> int:
     """Due again: a newer head observed for the base branch, or no look for `recheck_minutes`
     (a failed run is retried on the same clock)."""

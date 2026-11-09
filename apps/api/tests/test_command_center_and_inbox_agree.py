@@ -24,14 +24,21 @@ SEEDED = {
                            "needs_action"),
     "dec_agree_revising": ("revision_requested", "role.autonomy_change", "hold", "NULL",
                            "resolved"),
-    "dec_agree_expired_hold": ("expired", "review_pull_request", "hold",
+    # Off the compliance boundary (an agent decides it), a hold question still expires.
+    "dec_agree_expired_hold": ("expired", "connection_reconciliation", "hold",
                                "now() - interval '20 days'", "expired"),
     "dec_agree_expired_reject": ("expired", "provide_github_token", "reject",
                                  "now() - interval '20 days'", "resolved"),
     # Overdue but not yet swept: the Command Center reads first and must already call it
     # expired, because the inbox's expire_overdue will.
-    "dec_agree_overdue": ("pending", "provide_github_token", "hold",
+    "dec_agree_overdue": ("pending", "connection_reconciliation", "hold",
                           "now() - interval '1 minute'", "expired"),
+    # ON the boundary a hold question never expires (decision_actions.never_expires): past its
+    # deadline it waits on you. One an older build expired that no step waits on stays expired.
+    "dec_agree_merge_overdue": ("pending", "review_pull_request", "hold",
+                                "now() - interval '1 minute'", "needs_action"),
+    "dec_agree_merge_expired": ("expired", "review_pull_request", "hold",
+                                "now() - interval '20 days'", "expired"),
     "dec_agree_approved": ("approved", "provide_github_token", "hold", "NULL", "resolved"),
 }
 
@@ -74,7 +81,11 @@ def test_an_expired_hold_decision_can_still_be_answered_from_its_own_group(engin
     items = client.get("/v1/decisions/inbox", params={"project_id": pid}).json()["items"]
     expired = next(i for i in items if i["id"] == "dec_agree_expired_hold")
     assert expired["attention"] == "expired"
-    assert [a["label"] for a in expired["allowed_actions"]][0] == "Approve and merge"
+    assert "approve" in {a["action"] for a in expired["allowed_actions"]}
+    # A merge an older build expired that nothing waits on stays answerable in this group.
+    merge = next(i for i in items if i["id"] == "dec_agree_merge_expired")
+    assert merge["attention"] == "expired" and merge["status"] == "expired"
+    assert [a["label"] for a in merge["allowed_actions"]][0] == "Approve and merge"
 
 
 def test_the_v2_queue_lists_the_same_decisions_as_needs_action(engine, client):

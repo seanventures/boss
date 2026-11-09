@@ -322,7 +322,7 @@ def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -
     checkout = tmp_path / "checkout"
     helpers = checkout / "scripts/install"
     helpers.mkdir(parents=True)
-    for name in ("restore_preserved_env.sh", "reconcile_api_credentials.py"):
+    for name in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "post_check.sh"):
         shutil.copy2(ROOT / "scripts/install" / name, helpers / name)
     (helpers / "community-compose.yml").write_text("name: boss-community\n")
     subprocess.run(["git", "init", "-q", str(checkout)], check=True)
@@ -371,6 +371,8 @@ def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -
         "    open(out,'w').write('{\"edition\":\"community\"}')\n"
         "    print('200',end='')\n"
         "elif '/v1/providers' in ' '.join(args):\n"
+        "    print('200',end='')\n"
+        "elif '/health' in ' '.join(args):\n"
         "    print('200',end='')\n"
     )
     curl.chmod(0o700)

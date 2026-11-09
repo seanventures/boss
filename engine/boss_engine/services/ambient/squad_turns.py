@@ -48,13 +48,14 @@ LOOP GUARDS (design §6, §9 — in code, never in a prompt)
 """
 from __future__ import annotations
 
+import functools
 import re
 from typing import Any, Callable, Mapping, Optional, Union
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from . import board, collab, ledger, policy, squad_memory, squad_plugins, squads
+from . import asks, board, collab, ledger, policy, squad_memory, squad_plugins, squads
 from . import task_classes as tc
 from ._common import (EvidenceError, clean_text, emit, party, party_id, person,
                       verify_evidence)
@@ -66,7 +67,15 @@ MAX_ROUNDS_PER_RUN = 4
 MAX_PROPOSALS_PER_ITEM = 4
 #: What a squad may spend on one item's turns (the project envelope still applies on top).
 SQUAD_BUDGET_USD_MICROS = 1_500_000
+#: What a person adds with "Give it $1 more" on a spent-budget card (asks.budget_entry).
+BUDGET_STEP_USD_MICROS = 1_000_000
 BOARD_WINDOW = 30
+
+
+def budget_of(item: Mapping[str, Any]) -> int:
+    """The squad's budget for this item: the default, or what a person raised it to."""
+    raised = item.get("squad_budget_usd_micros")
+    return int(raised) if raised else SQUAD_BUDGET_USD_MICROS
 #: What a lead may propose (the board's own moves — findings, questions — are message kinds).
 PROPOSABLE = ("convene_meeting", "start_workflow", "open_draft_pr", "comment", "label", "nudge",
               "staging_rollback", "staging_restart", "silence_rule", "prod_rollback",
@@ -160,6 +169,94 @@ def _citable(connection: Connection, item: Mapping[str, Any]) -> list[str]:
     return refs
 
 
+# ── what a member may read before it moves ───────────────────────────────────────────────────
+#
+# A MEMBER LOOKS WITH THE TOOLS IT HOLDS. Every agent holds BOSS's fundamentals reads (logs,
+# health, run history, diagnoses: agent_baseline, granted in role_skills) and whatever a person
+# gave it on top. A squad turn used to offer none of them — the decision was asked with no read
+# phase — so on boss-dogfood the Infra Steward's squad, holding `boss.fundamentals` (read_logs,
+# system_health, inspect_self), told a person it had "no tool access to host:install logs" and
+# asked them to grant it. Now each turn offers the READ tools of the bundles the member holds
+# (the grant is role_skills, nothing wider), bounded in calls and cost; writes stay the board's
+# moves and the gate's. A model that cannot call tools (a scripted test model) gets none.
+
+#: A member's looks per turn, and what they may cost.
+READ_TURNS = 3
+READ_USD_MICROS = 150_000
+
+
+@functools.lru_cache(maxsize=4)
+def _bundle_reads(edition: Optional[str]) -> dict[str, tuple[str, ...]]:
+    """{bundle skill id: the READ tools it offers on this build} (agent_baseline.bundles)."""
+    from ..agent_baseline import bundles
+
+    registry = _read_registry(edition)
+    names = set(registry.names())
+    return {skill_id: tuple(t for t in tools
+                            if t in names and getattr(registry.get(t), "kind", None) == "read")
+            for skill_id, tools in bundles().items()}
+
+
+@functools.lru_cache(maxsize=4)
+def _read_registry(edition: Optional[str]) -> Any:
+    from ...tools import build_discuss_read_registry
+
+    return build_discuss_read_registry(edition=edition)
+
+
+def held_skill_ids(connection: Connection, project_id: str, member: str) -> set[str]:
+    """The skills granted to the member's role here (role_skills: the grant)."""
+    return {str(s) for s in connection.execute(text(
+        "SELECT skill_id FROM role_skills WHERE project_id = :p AND role_key = :r"),
+        {"p": project_id, "r": party_id(member)}).scalars()}
+
+
+def held_reads(connection: Connection, settings: Any, project_id: str,
+               member: str) -> list[str]:
+    """The read tools the member holds here: those of every bundle skill its role was granted
+    (and that the project can run: agent_steps.holdings, the one reading of a grant)."""
+    from ..agent_steps import holdings
+
+    role = party_id(member)
+    try:
+        with connection.begin_nested():
+            held = (holdings(connection, settings, project_id, role).get(role) or {}).get(
+                "runnable") or []
+    except Exception:  # noqa: BLE001 — a member whose grant cannot be read looks with nothing
+        return []
+    reads = _bundle_reads(getattr(settings, "boss_edition", None) if settings else None)
+    return sorted({t for s in held for t in reads.get(str(s), ())})
+
+
+def read_phase(connection: Connection, settings: Any, project_id: str, member: str) -> Any:
+    """The member's read phase (agent_decision.ReadPhase over the reads it holds), or None."""
+    from ...context import EngineContext
+    from ..agent_service import ReadPhase
+
+    names = held_reads(connection, settings, project_id, member)
+    if not names:
+        return None
+    registry = _read_registry(getattr(settings, "boss_edition", None) if settings else None)
+    allowed = [n for n in names if n in registry.names()]
+    if not allowed:
+        return None
+    ctx = EngineContext(settings=settings, engine=getattr(connection, "engine", None))
+
+    def run(name: str, args: dict) -> dict:
+        if name not in allowed:
+            return {"ok": False, "error": f"'{name}' is not a read tool {member} holds"}
+        return registry.invoke(name, ctx, project_id=project_id, actor=member, args=args or {})
+
+    return ReadPhase(tools=[registry.get(n).openai() for n in allowed], run=run,
+                     max_turns=READ_TURNS, max_usd_micros=READ_USD_MICROS)
+
+
+def _can_read(adapter: Any, decider: Any) -> bool:
+    """A read phase needs a model that can call tools: the routed one (adapter None), or a
+    given adapter with a chat-completion call. A typed decider (Jev) answers without tools."""
+    return decider is None and (adapter is None or hasattr(adapter, "create_chat_completion"))
+
+
 # ── the candidates a member has on its turn ──────────────────────────────────────────────────
 
 def _schema(required: tuple[str, ...], **props: tuple[str, str]) -> dict[str, Any]:
@@ -187,7 +284,22 @@ _SCHEMAS = {
                     reason=("string", "why, one sentence")),
     "hand_lead": _schema(("to", "summary"), to=("string", "agent:<role> on this squad"),
                          summary=("string", "why they should lead now")),
-    "escalate": _schema(("reason",), reason=("string", "what is stuck and what you need")),
+    # An ask a person reads in one line: what the squad cannot do and what it needs from them
+    # (the card says "<squad> can't <blocked> — <need>, or take it?"; `reason` rides behind it).
+    "escalate": _schema(("reason", "blocked", "need", "need_kind"),
+                        reason=("string", "what is stuck and what you need, in full"),
+                        need_kind=("string", "access (a tool or skill you lack: name it in "
+                                             "`grant`) | information (facts only a person "
+                                             "has) | decision (a person's call)"),
+                        blocked=("string", "what the squad cannot do, a few words starting with "
+                                           "a verb, e.g. \"read the install's logs to explain "
+                                           "the restarts\""),
+                        need=("string", "what a person must give, 2-5 words starting with a "
+                                        "verb, e.g. \"grant log access\", \"confirm the "
+                                        "rollback\", \"send the restart times\""),
+                        grant=("string", "only when you lack access: the tool or skill id you "
+                                         "need (one you already hold is offered to you: call "
+                                         "it instead)")),
     "resolve": _schema(("outcome", "summary"), outcome=("string", "resolved | failed"),
                        summary=("string", "how it ended, one sentence")),
 }
@@ -234,6 +346,36 @@ def _choices(*, me: str, seat: str, lead: str, prop: Optional[Mapping[str, Any]]
     return out
 
 
+NEED_KINDS = ("access", "information", "decision")
+
+
+def _check_escalation(connection: Connection, project_id: str, me: str,
+                      args: Mapping[str, Any]) -> str:
+    """A LEAD'S ASK IS CHECKED AGAINST THE TOOL CATALOGUE BEFORE IT REACHES A PERSON. An ask for
+    access names what it lacks (`grant`); one it already holds is refused (call it), and one that
+    exists nowhere in the catalogue is refused with the reads it does hold — so "no squad tool
+    reaches host:install logs" (boss-dogfood 2026-11-07, while install_restarts and read_logs
+    were offered) never becomes a card. "" when it may go to a person."""
+    kind = str(args.get("need_kind") or "")
+    if kind not in NEED_KINDS:
+        return f"need_kind is one of {', '.join(NEED_KINDS)}"
+    if kind != "access":
+        return ""
+    wanted = str(args.get("grant") or "").strip()
+    held = held_reads(connection, None, project_id, me)
+    if not wanted:
+        return ("an ask for access names the tool or skill you need in `grant`; the reads you "
+                f"hold are: {', '.join(held) or 'none'}")
+    if wanted in held or wanted in held_skill_ids(connection, project_id, me):
+        return (f"you already hold {wanted}: call it (it is offered to you) instead of asking a "
+                "person for access")
+    if asks.grantable(connection, project_id, me, wanted) is None:
+        return (f"no tool or skill named {wanted} exists in BOSS's catalogue, so a person cannot "
+                f"grant it. The reads you hold: {', '.join(held) or 'none'}. Call the one that "
+                "answers it; if none can, ask for information or a decision instead")
+    return ""
+
+
 def _check_answer(connection: Connection, item: Mapping[str, Any], *, me: str,
                   squad: Mapping[str, Any], prop: Optional[Mapping[str, Any]]):
     """The caller's check (agent_decision `check`): refuse an answer the board would refuse, so
@@ -267,6 +409,10 @@ def _check_answer(connection: Connection, item: Mapping[str, Any], *, me: str,
         if move == "hand_lead" and (squads.seat_of(squad, str(args.get("to"))) is None
                                     or args.get("to") == me):
             return "hand the lead to another member of this squad (agent:<role>)"
+        if move == "escalate" and me == squad["lead"]:
+            refused = _check_escalation(connection, item["project_id"], me, args)
+            if refused:
+                return refused
         if move == "resolve" and args.get("outcome") not in ("resolved", "failed"):
             return "outcome is resolved or failed"
         if move == "hypothesis":
@@ -307,7 +453,7 @@ def _guard(connection: Connection, item_id: str) -> tuple[dict[str, Any], dict[s
         raise TurnRefused("lease_lost", str(exc)) from None
     if _turns(connection, item) >= MAX_TURNS_PER_ITEM:
         raise TurnRefused("turn_cap", f"{MAX_TURNS_PER_ITEM} squad turns spent on this item")
-    if int(item.get("cost_usd_micros") or 0) >= SQUAD_BUDGET_USD_MICROS:
+    if int(item.get("cost_usd_micros") or 0) >= budget_of(item):
         raise TurnRefused("budget", "the squad's budget for this item is spent")
     if policy.envelope(connection, item["project_id"])["available_usd_micros"] <= 0:
         raise TurnRefused("envelope", "today's ambient envelope is spent")
@@ -409,12 +555,16 @@ def take_turn(connection: Connection, settings: Any, item_id: str, member: str, 
                  "the critic checks, the autonomy gate and the consensus rule decide whether "
                  "anything happens. Read the squad memory first and never repeat what was "
                  "tried and failed. Cite only refs you were given.")
+    adapter = _model(model, member)
+    if read is None and _can_read(adapter, decider):
+        # The tools it holds, to look before it moves (and before it says it cannot see).
+        read = read_phase(connection, settings, item["project_id"], member)
     decision = AgentService(settings).decide(
         connection, project_id=item["project_id"], actor=member, role=party_id(member),
         agent=name, external_ref=f"work_item:{item_id}", situation=situation,
         message="What is your one move on this item now?", choices=choices, context=context,
         hints=[f"{klass.title} · {item.get('autonomy_level')} · seat {seat}"],
-        adapter=_model(model, member), decider=decider, brief=brief,
+        adapter=adapter, decider=decider, brief=brief,
         check=_check_answer(connection, item, me=member, squad=squad, prop=prop), read=read)
     cost = int(decision.cost_usd_micros or 0)
     if cost:
@@ -479,13 +629,20 @@ def _apply(connection: Connection, settings: Any, item: Mapping[str, Any],
         return {"status": "handed", "lead": got["lead"]}
     if move == "escalate":
         if member == squad["lead"]:
-            moved = board.needs_you(connection, item_id, actor=member, token=token,
-                                    question=clean_text(args.get("reason"), 280),
-                                    recommendation={"action": "hold", "squad": squad["title"]},
-                                    options=[{"key": "continue", "label": "Let the squad go on"},
-                                             {"key": "take_over", "label": "I'll take it"}])
+            if asks.refused_launches(connection, item_id) >= asks.MAX_REFUSED_LAUNCHES:
+                # BOSS refused the squad's decided action twice: that is the policy's answer,
+                # recorded on the ledger and the board — never a question to a person.
+                return stop_by_policy(connection, item, squad, token)
+            entry = asks.question_entry(
+                connection, item, actor=member, reason=args.get("reason"),
+                squad_title=squad["title"], blocked=args.get("blocked"), need=args.get("need"),
+                grant=(asks.grantable(connection, item["project_id"], member, args.get("grant"))
+                       if args.get("need_kind") == "access" else None),
+                reads=len(held_reads(connection, settings, item["project_id"], member)))
+            got = asks.ask(connection, settings, item_id, actor=member, token=token,
+                           entry=entry)
             squad_memory.note(connection, item_id, actor=member, phase="Asked a person")
-            return {"status": "needs_you", "decision_id": moved["needs_you_decision_id"]}
+            return {"status": "needs_you", "decision_id": got["needs_you_decision_id"]}
         m = collab.post(connection, item_id, kind="escalate", sender=member,
                         body={"to": squad["lead"], "reason": args.get("reason")})
         return {"status": "posted", "message_id": m["id"]}
@@ -581,7 +738,7 @@ def settle(connection: Connection, settings: Any, item_id: str, *, end_of_round:
                        {**record, "dissent": record["dissent"] + [
                            {"party": "boss", "position": "gate", "reason": verdict["reason"]}]},
                        replies)
-    return _to_person(connection, item, squad, token, prop, record, verdict)
+    return _to_person(connection, item, squad, token, prop, record, verdict, settings)
 
 
 def _approve(connection, item, squad, token, prop, record, replies, launchers):
@@ -611,7 +768,36 @@ def _approve(connection, item, squad, token, prop, record, replies, launchers):
     out: dict[str, Any] = {"state": "decided", "act_id": decision["act_id"],
                            "action": action.key, "dissent": record["dissent"]}
     out["executed"] = _execute(connection, item_id, squad, prop, decision, launchers)
+    if (out["executed"] or {}).get("error") and \
+            asks.refused_launches(connection, item_id) >= asks.MAX_REFUSED_LAUNCHES:
+        out["stopped"] = stop_by_policy(connection, board.get(connection, item_id), squad,
+                                        token, action=action.key)
     return out
+
+
+def stop_by_policy(connection: Connection, item: Mapping[str, Any], squad: Mapping[str, Any],
+                   token: str, *, action: Optional[str] = None) -> dict[str, Any]:
+    """BOSS refused what the squad decided, twice: a POLICY OUTCOME. It is recorded on the
+    ledger (decided by the policy, in plain words) and the item ends — nobody is asked
+    "which workflow is permitted?" (2026-11-07: "A2 gate has twice refused …" cards)."""
+    from .asks import action_words
+
+    what = action_words(action or connection.execute(text(
+        "SELECT action FROM agent_act_decisions WHERE work_item_id = :w AND action IS NOT NULL "
+        "ORDER BY created_at DESC LIMIT 1"), {"w": item["id"]}).scalar())
+    ledger.record_decision(
+        connection, project_id=item["project_id"], decided_by="policy:squad_launch",
+        question=f"BOSS refused to {what} twice: ask a person?", chosen="stop",
+        options=["stop", "ask"], work_item_id=item["id"], task_class=item["task_class"],
+        evidence=asks.item_evidence(connection, item["id"]),
+        rationale=(f"BOSS refused to {what} here twice. That is the policy's answer, so it is "
+                   "recorded as the outcome and nobody is asked."),
+        reversibility="reversible", undo={"action": "reopen", "work_item_id": item["id"]})
+    squad_memory.note(connection, item["id"], actor=squad["lead"],
+                      phase=f"Stopped: BOSS refused to {what} twice")
+    board.finish(connection, item["id"], actor=squad["lead"], lifecycle="failed", token=token,
+                 outcome=f"BOSS refused to {what} twice (policy)")
+    return {"status": "failed", "stopped": "policy"}
 
 
 def _execute(connection, item_id, squad, prop, decision, launchers) -> Optional[dict[str, Any]]:
@@ -646,34 +832,35 @@ def _revise(connection, item, squad, prop, record, replies):
     return {"state": "revise", "act_id": decision["act_id"], "dissent": record["dissent"]}
 
 
-def _to_person(connection, item, squad, token, prop, record, verdict):
+def _to_person(connection, item, squad, token, prop, record, verdict, settings=None):
+    """A person must decide the squad's proposal: through the ONE ambient path (asks.ask) —
+    it joins the project's one card, in plain words built from the item's rows (the package,
+    the app, the action); the squad's own summary and every dissent ride behind it."""
     body = prop["body"]
     action = tc.action(body["action"])
     recommended = "approve" if record["result"] == "approved" else "hold"
     why = record.get("tie_break") or verdict.get("reason") or record["quorum_rule"]
-    moved = board.needs_you(
-        connection, item["id"], actor=squad["lead"], token=token,
-        question=clean_text(f"{action.title}: {body.get('summary')}?", 280),
-        recommendation={"action": action.key, "recommended": recommended,
-                        "proposal_id": prop["id"], "why_a_person": clean_text(why, 300),
-                        "consensus": {k: record.get(k) for k in (
-                            "mode", "result", "votes", "critiques", "dissent", "quorum_rule",
-                            "tie_break")},
-                        "dissent": record["dissent"]},
-        options=[{"key": "approve", "label": f"Approve: {action.title}"},
-                 {"key": "hold", "label": "Hold"}],
-        risk_tier=RISK_TIER.get(action.risk, 2),
-        cost_of_waiting=f"the {squad['title'].lower()} waits")
+    entry = asks.squad_entry(
+        connection, item, actor=squad["lead"], action=action.key, proposal_id=prop["id"],
+        recommended=recommended, why=why, squad_title=squad["title"],
+        consensus={k: record.get(k) for k in ("mode", "result", "votes", "critiques", "dissent",
+                                              "quorum_rule", "tie_break")},
+        dissent=record["dissent"])
+    entry["detail"] = asks.scrub(body.get("summary"), 300)
+    got = asks.ask(connection, settings, item["id"], actor=squad["lead"], token=token,
+                   entry=entry)
     squad_memory.note(connection, item["id"], actor=squad["lead"],
                       phase=f"Needs you: {action.title}")
-    return {"state": "needs_you", "decision_id": moved["needs_you_decision_id"],
-            "recommended": recommended, "dissent": record["dissent"], "result": record["result"]}
+    return {"state": "needs_you", "decision_id": got["needs_you_decision_id"],
+            "asked": got["outcome"], "recommended": recommended, "dissent": record["dissent"],
+            "result": record["result"]}
 
 
 # ── a person answers ─────────────────────────────────────────────────────────────────────────
 
 def person_answered(connection: Connection, item_id: str, *, actor: str, approve: bool,
-                    rationale: str) -> dict[str, Any]:
+                    rationale: str, entry: Optional[Mapping[str, Any]] = None
+                    ) -> dict[str, Any]:
     """A person answered the squad's Needs-you card: record THEIR decision on the ledger (it
     settles the proposal), and move the item back to the squad. The approved action executes
     at the squad's next round (`execute_person_approvals`). The card itself is resolved by the
@@ -686,6 +873,8 @@ def person_answered(connection: Connection, item_id: str, *, actor: str, approve
         "SELECT recommendation FROM decisions WHERE id = :d"),
         {"d": item.get("needs_you_decision_id")}).first()
     rec = dict(row[0]) if row and isinstance(row[0], Mapping) else {}
+    if entry is not None:
+        rec = dict(entry)   # one entry on a card that asks several things
     prop_id = rec.get("proposal_id")
     board.answered(connection, item_id, actor=actor)
     if not prop_id:

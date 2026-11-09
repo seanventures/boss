@@ -363,6 +363,121 @@ def connection_repos(connection: Connection, settings: Any, project_id: str,
             "repos": found["repos"], "connection_id": connection_id}
 
 
+#: Add repo's pick for a repository the org's GitHub App reaches when this project has no App
+#: connection yet: the select makes that connection first (repository_from_app), then binds.
+ORG_APP_PICK = "org_app"
+
+
+def _app_connection_id(connection: Connection, project_id: str) -> Optional[str]:
+    """This project's connection whose credential is the org's GitHub App, whatever its label."""
+    found = connection.execute(
+        text("SELECT id FROM github_connections WHERE project_id = :p AND credential_ref = :r "
+             "AND status NOT IN ('disabled', 'revoked') ORDER BY created_at, id LIMIT 1"),
+        {"p": project_id, "r": APP_CREDENTIAL_REF}).scalar()
+    return str(found) if found else None
+
+
+def _app_repos(connection: Connection) -> list[dict[str, Any]]:
+    """The org App's repositories, refused in Setup's words."""
+    from ..identity import github_setup
+
+    try:
+        return github_setup.installation_repositories(connection)
+    except github_setup.GitHubSetupError as error:
+        if error.code == "app_not_connected":
+            raise SetupActionError(409, "app_not_connected", "Connect the App",
+                                   "Connect a GitHub App in GitHub access first.") from None
+        raise SetupActionError(502, "unreachable", "GitHub unreachable",
+                               "GitHub did not list the App's repositories. Try again.") from None
+    except Exception:  # noqa: BLE001 — a GitHub refusal of any shape is this account's, not the list's
+        raise SetupActionError(502, "unreachable", "GitHub unreachable",
+                               "GitHub did not list the App's repositories. Try again.") from None
+
+
+def available_repositories(connection: Connection, settings: Any, project_id: str, *,
+                           http: Optional[Http] = None) -> dict[str, Any]:
+    """`+ Add repo`: the repositories EVERY connected account can reach, one group per account.
+
+    Add repo listed only one connection's repositories (operator, 2026-11-06: the personal
+    token's, while paramg/helpdesk-ai-demo, newly granted to the BOSS GitHub App, never appeared;
+    "From another account" opened the whole Add-account wizard). Every source is asked here:
+    this project's connections (a pasted token, a sign-in, the App) and the org's GitHub App
+    when this project has no connection to it yet. An account GitHub refuses says so in its own
+    group; the others still list. A repository two accounts reach is listed once, under the
+    first. Each group's `connection_id` is what the select sends (`org_app`: connect the App to
+    this project first, through repository_from_app). Nothing is written here."""
+    from ..identity import github_setup
+    from . import setup_accounts
+
+    groups: list[dict[str, Any]] = []
+    rows = setup_accounts._safely(  # noqa: SLF001 — the same reader the accounts block uses
+        connection, lambda: setup_accounts._project_connections(connection, project_id), [])  # noqa: SLF001
+    has_app = False
+    for row in rows:
+        cid = str(row["id"])
+        ref = str(row.get("credential_ref") or "")
+        kind = ("org_app" if row.get("auth_method") == "github_app" or ref == APP_CREDENTIAL_REF
+                else "personal_signin" if ref.startswith(SIGNIN_REF_PREFIX) else "token")
+        if kind == "org_app" and has_app:
+            continue                     # one App, one group
+        has_app = has_app or kind == "org_app"
+        group: dict[str, Any] = {
+            "id": cid, "connection_id": cid, "kind": kind,
+            "account": row.get("account_login") or row.get("connection_label") or "GitHub",
+            "repos": [], "error": None}
+        try:
+            if kind == "org_app":
+                group["repos"] = _app_repos(connection)
+            else:
+                found = connection_repos(connection, settings, project_id, cid, http=http)
+                group["repos"] = list(found.get("repos") or [])
+                group["account"] = found.get("account_login") or group["account"]
+        except SetupActionError as error:
+            group["error"] = error.detail
+        groups.append(group)
+    if not has_app:
+        cfg = setup_accounts._safely(connection, lambda: github_setup.app_config(connection), None)  # noqa: SLF001
+        ready = bool(cfg) and cfg.get("source") == "setup" and setup_accounts._safely(  # noqa: SLF001
+            connection, lambda: github_setup.app_ready(connection), False)
+        if ready:
+            group = {"id": ORG_APP_PICK, "connection_id": ORG_APP_PICK, "kind": "org_app",
+                     "account": cfg.get("account_login") or "GitHub App", "repos": [], "error": None}
+            try:
+                group["repos"] = _app_repos(connection)
+            except SetupActionError as error:
+                group["error"] = error.detail
+            groups.append(group)
+    bound = {str(r).lower() for r in connection.execute(
+        text("SELECT full_name FROM github_repository_bindings WHERE project_id = :p "
+             "AND status = 'active'"), {"p": project_id}).scalars()}
+    seen: set[str] = set()
+    for group in groups:
+        kept = []
+        for repo in group["repos"]:
+            name = str((repo or {}).get("full_name") or "")
+            if "/" not in name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            kept.append({"full_name": name, "private": bool(repo.get("private")),
+                         "default_branch": repo.get("default_branch"),
+                         "owner_type": repo.get("owner_type"), "in_project": name.lower() in bound})
+        group["repos"] = kept
+    return {"groups": groups}
+
+
+def resolve_pick_connection(connection: Connection, settings: Any, project_id: str, connection_id: str,
+                            *, actor: str = "ceo") -> str:
+    """The connection a picked repository binds through. `org_app` is the org's GitHub App: this
+    project's App connection, made through repository_from_app when it has none yet."""
+    if connection_id != ORG_APP_PICK:
+        return connection_id
+    existing = _app_connection_id(connection, project_id)
+    if existing:
+        return existing
+    return str(repository_from_app(connection, settings, project_id, actor=actor, list_repos=False)
+               ["connection_id"])
+
+
 def _promote(connection: Connection, project_id: str, binding_id: str, actor: str) -> None:
     """Make one binding the project's default (`primary`); the old default becomes `source`."""
     from .core import emit_event
@@ -561,6 +676,12 @@ def check_repository(connection: Connection, settings: Any, project_id: str,
 
     if binding_id == "install":
         return _check_install_repository(connection, settings, project_id, actor=actor, http=http)
+    local = connection.execute(
+        text("SELECT full_name FROM github_repository_bindings WHERE project_id = :p AND id = :b "
+             "AND host = 'local'"), {"p": project_id, "b": binding_id}).mappings().first()
+    if local is not None:
+        return _check_local_repository(connection, settings, project_id, binding_id,
+                                       local["full_name"], actor=actor)
     row = connection.execute(
         text("SELECT b.full_name, b.connection_id, c.api_base_url, c.status "
              "FROM github_repository_bindings b JOIN github_connections c "
@@ -620,6 +741,44 @@ def check_repository(connection: Connection, settings: Any, project_id: str,
                {"state": found["state"], "repository": row["full_name"],
                 "receipt_id": receipt_id})
     return found
+
+
+def _check_local_repository(connection: Connection, settings: Any, project_id: str,
+                            binding_id: str, full_name: str, *, actor: str) -> dict[str, Any]:
+    """A repository BOSS keeps on this machine (BOSSAPP-918): no GitHub to ask. Read = the bare
+    repository answers git; write and pull requests = BOSS owns it (commits and change sets are
+    its own). Recorded like a GitHub probe so the dots, Setup and readiness read one shape."""
+    from . import local_repo
+    from .core import emit_event
+
+    owner, _, name = str(full_name).partition("/")
+    at = iso(now_utc())
+    try:
+        described = local_repo.describe(owner, name, settings)
+        ok, why = bool(described.get("head_sha")) or local_repo.exists(owner, name, settings), ""
+    except Exception as error:  # noqa: BLE001 — a missing or broken repository, in words
+        described, ok, why = {}, False, str(error)[:200]
+    if ok:
+        part = {"ok": True, "state": "working", "at": at, "detail": "local"}
+        checks = {"read": part, "write": dict(part), "pull_requests": dict(part),
+                  "state": "working", "retry_at": None}
+        state = "working"
+    else:
+        part = {"ok": False, "state": "no_access", "at": at,
+                "detail": why or "The repository is not on this machine."}
+        checks = {"read": part, "state": "no_access", "retry_at": None}
+        state = "no_access"
+    connection.execute(
+        text("UPDATE github_repository_bindings SET checks = CAST(:c AS JSONB), "
+             "checked_at = now(), default_branch = COALESCE(:db, default_branch), "
+             "updated_at = now() WHERE id = :b"),
+        {"c": json.dumps(checks), "db": described.get("default_branch"), "b": binding_id})
+    emit_event(connection, project_id, "setup.repository_checked", actor,
+               "github_repository_binding", binding_id,
+               {"state": state, "repository": full_name, "host": "local"})
+    return {"state": state, "expires_at": None, "retry_at": None, "host": "local",
+            "default_branch": described.get("default_branch"), "private": True,
+            "checks": {k: v for k, v in checks.items() if isinstance(v, dict)}}
 
 
 def _check_install_repository(connection: Connection, settings: Any, project_id: str, *,

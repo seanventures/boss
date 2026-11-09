@@ -170,6 +170,20 @@ def median_build_usd(connection: Connection, project_id: str) -> float:
     return round(median(costs), 2) if len(costs) >= 3 else BASELINE_BUILD_USD
 
 
+def ticket_usd(connection: Connection, project_id: str) -> Optional[float]:
+    """What accepting an onboarding proposal (a ticket) costs on THIS project: the same estimate
+    New work and Onboarding's "First work" show (project_experience.new_work.plan: the median
+    of its past runs of that workflow), or None when it has no history — never a made-up number."""
+    from ..project_experience import new_work
+
+    try:
+        est = (new_work.plan(connection, project_id, "ticket") or {}).get("estimate") or {}
+    except LookupError:
+        return None
+    usd = est.get("usd")
+    return round(float(usd), 2) if usd else None
+
+
 def score(group: learning.Group, *, weight: float, build_usd: float,
           at: Optional[datetime] = None) -> dict[str, Any]:
     """The score's parts and the rank key, through work_value_scoring (design §14.3)."""
@@ -406,6 +420,10 @@ def run(connection: Connection, project_id: str, *, settings: Any = None,
 
     report["closed"] = _close_vanished(connection, project_id, found, seen_fps)
     _wake_snoozed(connection, project_id)
+    if only is not None:
+        # A partial pass (an event re-evaluating its own detectors) is not the project's
+        # scheduled run: the 6-hourly cursor stays where it is, so nothing else is delayed.
+        return report
     connection.execute(text(
         "INSERT INTO signal_adapter_cursors (adapter, cursor_at, last_run_at, last_recorded, "
         "last_error) VALUES (:a, :c, now(), :n, :e) ON CONFLICT (adapter) DO UPDATE SET "
@@ -757,14 +775,19 @@ def _one_line(value: str) -> str:
 
 SOURCE_LABEL = {"incident": "Incidents", "code": "Code graph", "review": "Review findings",
                 "design": "PRD decisions", "cost": "Cost", "test": "Test runs",
-                "stage": "Stage timings", "friction": "Overrides"}
+                "stage": "Stage timings", "friction": "Overrides", "alerts": "Live app"}
 KIND_LABEL = {"hardening": "Hardening", "test_gap": "Test gap", "refactor": "Refactor",
               "feature": "Feature", "design_fix": "Design fix", "cost": "Cost",
               "process": "Process"}
 EVIDENCE_TO_SOURCE = {"incident": "incident", "kg_node": "code", "commit": "code",
                       "code_task": "review", "meeting": "design", "decision": "design",
                       "receipt": "cost", "workflow_run": "cost", "step_run": "stage",
-                      "query": "code"}
+                      "query": "code", "deployment_target": "alerts"}
+
+
+#: Who else proposes on the roadmap, in words (never a raw key on a card): the onboarding agent's
+#: ranked backlog (project_experience.onboarding._propose_on_roadmap).
+OTHER_PROPOSERS = {"onboarding": "Onboarding"}
 
 
 def _badges(rec: Mapping[str, Any]) -> dict[str, Any]:
@@ -777,7 +800,10 @@ def _badges(rec: Mapping[str, Any]) -> dict[str, Any]:
             "value": float(rec["value"] or 0), "status": rec["status"],
             "resurfaced": bool(rec.get("resurfaced_from")),
             "detector": learning.DETECTORS[rec["detector"]].title
-            if rec["detector"] in learning.DETECTORS else rec["detector"]}
+            if rec["detector"] in learning.DETECTORS
+            else OTHER_PROPOSERS.get(rec["detector"], rec["detector"]),
+            # The card's "≈ $2" (the roadmap screen): the item's own estimate, in dollars.
+            "cost_usd": round(int(rec.get("estimated_cost_usd_micros") or 0) / 1_000_000, 2)}
 
 
 def node_label(rec: Mapping[str, Any]) -> str:
@@ -814,7 +840,9 @@ def diagram(rec: Mapping[str, Any]) -> dict[str, Any]:
     for key in rec.get("detectors") or [rec["detector"]]:
         det = learning.DETECTORS.get(key)
         did = f"detector:{key}"
-        nodes.append({"id": did, "type": "agent", "label": short_label(det.title if det else key),
+        nodes.append({"id": did, "type": "agent",
+                      "label": short_label(det.title if det else OTHER_PROPOSERS.get(key, key)),
+                      "icon": learning.DETECTOR_ICONS.get(key, "magnifying-glass"),
                       "stage": 1, "badges": [], "ref": {"kind": "detector", "id": key}})
         for n in nodes:
             if n["type"] == "signal":
@@ -860,7 +888,19 @@ def diagram(rec: Mapping[str, Any]) -> dict[str, Any]:
     return {"nodes": nodes, "edges": edges}
 
 
-def _summary(rec: Mapping[str, Any], rank: Optional[int] = None) -> dict[str, Any]:
+def _readable(rec: dict[str, Any]) -> dict[str, Any]:
+    """An onboarding proposal's title and why as the composer says them NOW (rows written with
+    a cut brief in brackets are re-derived on read: onboarding.readable)."""
+    if rec.get("detector") == "onboarding":
+        from ..project_experience.onboarding import readable
+
+        rec["title"], rec["why"] = readable(rec.get("title"), rec.get("why"))
+    return rec
+
+
+def _summary(rec: Mapping[str, Any], rank: Optional[int] = None, *,
+             kinds: Optional[Mapping[str, str]] = None,
+             build_usd: Optional[float] = None) -> dict[str, Any]:
     keys = ("work_item_id", "project_id", "title", "kind", "detector", "detectors", "subject",
             "proposed_shape", "status", "score", "snoozed_until", "accepted_as", "artifact",
             "reject_category", "resurfaced_from", "recurred_at", "created_at", "decided_at",
@@ -868,9 +908,20 @@ def _summary(rec: Mapping[str, Any], rank: Optional[int] = None) -> dict[str, An
     out = {k: rec.get(k) for k in keys}
     out["id"] = rec["work_item_id"]
     out["rank"] = rank
+    # Who would do it (the card's agent pill) and why, for "Why ›" (the drawer has the rest).
+    out["squad"] = list(rec.get("squad") or (learning.DETECTORS[rec["detector"]].squad
+                                             if rec["detector"] in learning.DETECTORS else []))
+    out["why"] = rec.get("why")
     out["badges"] = _badges(rec)
-    out["strip"] = [{"type": n["type"], "label": n["label"], "badges": n["badges"][:2]}
+    out["strip"] = [{"type": n["type"], "label": n["label"], "badges": n["badges"][:2],
+                     **({"icon": n["icon"]} if n.get("icon") else {})}
                     for n in diagram(rec)["nodes"]][:6]
+    # THE CARD'S OWN DIAGRAM (screen 07): concrete evidence → detector → who does it, + ≈ cost.
+    from .roadmap_card import card
+
+    out["card"] = card(rec, kinds=kinds, build_usd=build_usd)
+    if out["card"]["cost_usd"] and not out["badges"]["cost_usd"]:
+        out["badges"]["cost_usd"] = out["card"]["cost_usd"]
     return out
 
 
@@ -882,6 +933,9 @@ def list_roadmap(connection: Connection, project_id: str, *, status: str = "open
     if status not in STATUSES + ("all",):
         raise ValueError(f"status is one of {', '.join(STATUSES + ('all',))}")
     _wake_snoozed(connection, project_id)
+    # THE DETECTORS' OWN NAMES on every card ("Incident patterns", never `incident_cause`): the
+    # registry fills when the detectors module is imported, which a read never did on its own.
+    from . import detectors  # noqa: F401
     rows = connection.execute(text(
         "SELECT * FROM ambient_recommendations WHERE project_id = :p "
         "AND (:s = 'all' OR status = :s) AND (CAST(:k AS TEXT) IS NULL OR kind = :k) "
@@ -890,7 +944,16 @@ def list_roadmap(connection: Connection, project_id: str, *, status: str = "open
         "priority_score DESC, created_at DESC LIMIT :n"),
         {"p": project_id, "s": status, "k": kind, "d": detector,
          "n": max(1, min(int(limit), 100))}).mappings().all()
-    items = [_summary(serialize_row(r), rank=i + 1) for i, r in enumerate(rows)]
+    from .roadmap_card import signal_kinds
+
+    recs = [_readable(serialize_row(r)) for r in rows]
+    kinds = signal_kinds(connection, recs)
+    # Onboarding proposes without an estimate: its cards say what a ticket costs HERE.
+    build_usd = ticket_usd(connection, project_id) if any(
+        r["detector"] == "onboarding" and not r.get("estimated_cost_usd_micros") for r in recs) \
+        else None
+    items = [_summary(r, rank=i + 1, kinds=kinds, build_usd=build_usd)
+             for i, r in enumerate(recs)]
     counts = {r["status"]: int(r["n"]) for r in connection.execute(text(
         "SELECT status, count(*) AS n FROM ambient_recommendations WHERE project_id = :p "
         "GROUP BY status"), {"p": project_id}).mappings()}
@@ -906,13 +969,18 @@ def list_roadmap(connection: Connection, project_id: str, *, status: str = "open
 def get(connection: Connection, item_id: str, *, project_id: str) -> dict[str, Any]:
     """One recommendation: its summary, its diagram, and the drawer's detail (why, evidence,
     the score's parts, the detector's numbers, the ledger rows)."""
-    rec = _rec(connection, item_id, project_id=project_id)
+    rec = _readable(_rec(connection, item_id, project_id=project_id))
     detail = {k: rec.get(k) for k in ("why", "evidence", "facts", "value", "evidence_strength",
                                        "freshness", "effort_units", "risk", "detector_weight",
                                        "priority_score", "estimated_cost_usd_micros", "squad",
                                        "source_kinds", "reject_reason", "proposal_act_id",
                                        "decision_act_id", "decided_by")}
-    return {**_summary(rec), **diagram(rec), "detail": detail}
+    from .roadmap_card import signal_kinds
+
+    build_usd = ticket_usd(connection, project_id) if rec["detector"] == "onboarding" \
+        and not rec.get("estimated_cost_usd_micros") else None
+    return {**_summary(rec, kinds=signal_kinds(connection, [rec]), build_usd=build_usd),
+            **diagram(rec), "detail": detail}
 
 
 def metrics(connection: Connection, project_id: str, *, days: int = 30) -> dict[str, Any]:
@@ -965,6 +1033,50 @@ def metrics(connection: Connection, project_id: str, *, days: int = 30) -> dict[
 
 TICK_SECONDS = 600
 MAX_PROJECTS_PER_TICK = 10
+
+
+# ── event-driven re-evaluation ──────────────────────────────────────────────────────────────
+#
+# The scheduled run is every RUN_EVERY per project. An event that changes what a detector reads
+# re-evaluates THAT detector's family at once: a resolved incident re-runs the detectors whose
+# evidence is incidents (the Incident hotspot), so a second incident with the same cause shows
+# on the Roadmap within the ingest's half minute, not up to six hours later.
+
+def detectors_for(evidence_source: str) -> list[str]:
+    from . import detectors  # noqa: F401 — registers the built-in detectors
+
+    return sorted(k for k, d in learning.DETECTORS.items()
+                  if d.evidence_source == evidence_source)
+
+
+def on_event(engine: Any, *, project_id: str, evidence_source: str,
+             settings: Any = None) -> dict[str, Any]:
+    """Re-evaluate the detectors that read `evidence_source` for one project, now, under the same
+    gates as the tick: the learning switch (always-on mode or BOSS_AMBIENT_LEARNING), the kill
+    switches and the stops. Its own transaction; never raises."""
+    from ...config import get_settings
+
+    settings = settings or get_settings()
+    out: dict[str, Any] = {"project_id": project_id, "evidence_source": evidence_source,
+                           "skipped": None, "report": None}
+    try:
+        if disabled():
+            out["skipped"] = "disabled"
+            return out
+        with engine.begin() as c:
+            if not policy.learning_on(settings, policy.effective_mode(c, settings)):
+                out["skipped"] = "learning is off"
+                return out
+            only = detectors_for(evidence_source)
+            if not only:
+                out["skipped"] = "no detector reads it"
+                return out
+            report = run(c, project_id, settings=settings, only=only)
+            out["report"] = {"opened": report["opened"], "joined": report["joined"],
+                             "skipped": report["skipped"]}
+    except Exception as exc:  # noqa: BLE001 — an event is a nudge; the tick still runs later
+        out["skipped"] = f"{type(exc).__name__}: {exc}"[:300]
+    return out
 
 
 def tick(engine: Any, *, settings: Any = None, max_projects: int = MAX_PROJECTS_PER_TICK,

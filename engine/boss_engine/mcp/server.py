@@ -449,11 +449,16 @@ class MCPServer:
         app = FastAPI(title="boss-engine-mcp")
         server = self
 
-        async def admitted(request: Request) -> Any:
+        async def admitted(request: Request, *, liveness: bool = False) -> Any:
             """Admit the request and return its verified identity. The legacy shared
             BOSS_MCP_HTTP_TOKEN admits but identifies nobody (None), so its tool calls are refused
             under enforce. A BOSS API key or run token is verified by identity, live; one that does
-            not verify is refused, never downgraded to anonymous."""
+            not verify is refused, never downgraded to anonymous.
+
+            `liveness` (GET /health only): the shared token still admits under enforce. A health
+            probe does nothing for anybody, so "nothing is done for nobody" does not apply; the
+            compose healthcheck holds only that token, and refusing it marked a working kg-mcp
+            unhealthy forever (2026-11-06, 401 on every probe)."""
             authorization = request.headers.get("authorization", "")
             scheme, _, candidate = authorization.partition(" ")
             candidate = candidate.strip()
@@ -462,7 +467,7 @@ class MCPServer:
             ):
                 from ..identity.enforcement import AuthzMode  # noqa: PLC0415
 
-                if _mcp_mode() == AuthzMode.ENFORCE:
+                if not liveness and _mcp_mode() == AuthzMode.ENFORCE:
                     # The shared token says the request came from someone holding it, not WHO:
                     # under enforce nothing is done for nobody (M8/H2).
                     raise HTTPException(
@@ -514,7 +519,7 @@ class MCPServer:
 
         @app.get("/health")
         async def health(request: Request):  # type: ignore[no-redef]
-            await admitted(request)
+            await admitted(request, liveness=True)
             return {"status": "ok", "server": SERVER_INFO["name"],
                     "tools": [t["name"] for t in server._tools()]}
 

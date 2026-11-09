@@ -228,6 +228,11 @@ class ReceiptService:
                 "result": json.dumps(result),
             },
         )
+        # A QUESTION THIS EFFECT'S FAILURE RAISED IS MOOT NOW (cleared_causes): "GitHub
+        # integration is not configured" stayed in Needs you after the merge it blocked landed.
+        from .cleared_causes import on_effect_succeeded
+
+        on_effect_succeeded(connection, receipt_id)
 
     def record_completed(
         self,

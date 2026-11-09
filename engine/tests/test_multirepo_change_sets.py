@@ -362,7 +362,7 @@ def test_a_push_after_the_question_withdraws_it_and_asks_again(eng, gh, model, b
     v = _view(eng, cs_id)
     assert v["state"] == "in_review" and v["decision"]["id"] != first
     with eng.begin() as db:
-        assert db.execute(text("SELECT status FROM decisions WHERE id = :d"), {"d": first}).scalar() == "expired"
+        assert db.execute(text("SELECT status FROM decisions WHERE id = :d"), {"d": first}).scalar() == "withdrawn"
     with pytest.raises(MultiRepoError) as err:                   # the old question cannot be approved
         _approve(eng, cs_id, jobs, decision_id=first)
     assert err.value.code == "stale_decision"

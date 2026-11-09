@@ -23,7 +23,7 @@ HELPERS = (
     "community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py",
     "boss.sh", "upgrade.sh", "uninstall.sh", "discover_models.py", "coding_subscriptions.py",
     "console_password.py", "connect_ollama.py", "model_status.py", "local_model.py",
-    "boss_refusal.py",
+    "boss_refusal.py", "post_check.sh",
 )
 # What `docker compose config --format json` would say about the build services (install.sh
 # builds them one image at a time from this answer). Kept equal to the real compose file below.

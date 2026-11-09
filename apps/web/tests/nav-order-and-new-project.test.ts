@@ -33,8 +33,10 @@ describe("the Run group order", () => {
   it("opens with the place work is done, then the path it follows", () => {
     // Workflows and Agents are one row each now: Team structure and Agent Studio are views of
     // Agents, and their old links redirect (tests/legacy-areas.test.ts).
-    expect(runOrder().slice(0, 6)).toEqual([
-      "code_tasks",          // Factory / Projects
+    expect(runOrder().slice(0, 8)).toEqual([
+      "projects",            // Projects (BOSSAPP-914): every project's home, and the first run
+      "project",             // one project's page — under Projects in the rail, never a row of its own
+      "code_tasks",          // Code Tasks (was Factory)
       "agent_ops",           // Agents at work: what BOSS's agents picked up (AUTONOMOUS_AGENTS_SPEC §1)
       "delivery_workflows",  // Workflows
       "workforce",           // Agents
@@ -42,8 +44,8 @@ describe("the Run group order", () => {
       "decisions",           // Approvals
     ]);
     // Infra, then Observability: where it runs, then whether it is alive.
-    expect(runOrder()[6]).toBe("infra");
-    expect(runOrder()[7]).toBe("observability");
+    expect(runOrder()[8]).toBe("infra");
+    expect(runOrder()[9]).toBe("observability");
     expect(runOrder()).not.toContain("org_chart");
     expect(runOrder()).not.toContain("studio");
   });
@@ -74,7 +76,7 @@ describe("the renamed areas", () => {
     ["infra", "Infra"],
     ["observability", "Observability"],
     ["delivery_workflows", "Workflows"],
-    ["code_tasks", "Factory"],
+    ["code_tasks", "Code Tasks"],
   ])("%s is labelled %s", (id, label) => {
     expect(SHELL).toMatch(new RegExp(`id: "${id}", label: "${label}"`));
   });
@@ -105,15 +107,15 @@ describe("New build, from anywhere", () => {
 
   it("is ONE button on the Factory: the area's own, with no second strip of builds (walk D19)", () => {
     expect(SHELL).toMatch(/active !== "code_tasks" \? <(?:button|GatedButton)[\s\S]{0,120}className="bx-new-project"/);
-    expect(SHELL).toMatch(/active !== "code_tasks" && !routeMode \? <ProjectStrip/);
+    expect(SHELL).toMatch(/active !== "code_tasks"[^?]*!routeMode[^?]*\? <ProjectStrip/);
     expect(CT).toContain('data-testid="fx-new-build"');
   });
 
   it("presses the same first door as the Factory: the New project composer", () => {
     // Operator, 2026-10-07 (superseding the 2026-10-04 "Plan it with Juno" door): New build
     // opens the composer; planning with an agent is an option inside it.
-    const btn = SHELL.slice(SHELL.indexOf('data-testid="topbar-new-project"'),
-                            SHELL.indexOf('className="bx-topbar-spacer"'));
+    const at = SHELL.indexOf('data-testid="topbar-new-project"');
+    const btn = SHELL.slice(at, SHELL.indexOf("</GatedButton>", at));
     expect(btn).toContain("openNewProject()");
     expect(btn).not.toContain("openPlan");
     expect(CT).toContain("onClick={openNewProject}");
@@ -238,8 +240,10 @@ describe("watching the outer workflow, step by step", () => {
 
   it("distinguishes a step still running from one that finished", () => {
     // `${text}…` on an unfinished step: "8m" and "8m…" are different facts.
-    const fn = DW.slice(DW.indexOf("function stepDuration"), DW.indexOf("function stepLinks"));
-    expect(fn).toContain("step.completed_at ? text");
+    // The one step clock lives in lib/step-timing.ts (a person-wait is not a timer at all).
+    const clock = readFileSync(new URL("../lib/step-timing.ts", import.meta.url), "utf8");
+    expect(clock).toMatch(/return step\.completed_at\s*\?\s*\{ kind: "working", text,/);
+    expect(clock).toContain("text: `${text}…`");
   });
 
   it("links to what the step produced, for debugging", () => {

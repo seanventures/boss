@@ -1,0 +1,37 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Observability apps</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="observability" data-crumb="Observability|Apps">
+<div id="content">
+<div class="page-h"><span class="ico" data-size="l" data-c="green"><i class="ph ph-pulse"></i></span><div><h1>Observability</h1><span class="muted" style="font-size:.6rem">Every app and BOSS itself — shared alert sources, contact points, Grafana</span></div></div>
+<div class="filters"><span aria-selected="true">Apps 3</span><span>BOSS platform</span><span>Alert sources</span><span>Contact points</span></div>
+
+<section class="card" style="padding:0">
+  <div class="wk">
+    <div class="wk-row" style="grid-template-columns:32px minmax(0,1fr) 140px auto auto"><span class="pj-mark" style="width:28px;height:28px;font-size:.55rem;border-radius:7px">HD</span>
+      <div><div class="wk-t">HelpDesk AI Demo</div><div class="wk-sub"><span>staging</span><span class="mono">99.9% · p95 180ms</span></div></div>
+      <svg width="140" height="26" viewBox="0 0 120 26" preserveAspectRatio="none"><polyline fill="none" stroke="var(--green)" stroke-width="1.6" points="0,18 15,17 30,19 45,16 60,17 75,15 90,16 105,14 120,15"/></svg>
+      <span class="tag" data-tone="green">0 firing</span>
+      <div class="wk-links"><a class="link-chip"><i class="ph ph-heartbeat"></i>Project › Health</a></div></div>
+    <div class="wk-row" style="grid-template-columns:32px minmax(0,1fr) 140px auto auto"><span class="pj-mark" style="width:28px;height:28px;font-size:.55rem;border-radius:7px;background:linear-gradient(135deg,#8b7cf6,#2f6fe0)">NP</span>
+      <div><div class="wk-t">NorthPeak Retail</div><div class="wk-sub"><span>preview</span><span class="mono">97.2% · p95 920ms</span></div></div>
+      <svg width="140" height="26" viewBox="0 0 120 26" preserveAspectRatio="none"><polyline fill="none" stroke="var(--amber)" stroke-width="1.6" points="0,18 15,16 30,12 45,8 60,10 75,6 90,9 105,7 120,5"/></svg>
+      <span class="tag" data-tone="amber">1 firing</span>
+      <div class="wk-links"><a class="link-chip"><i class="ph ph-heartbeat"></i>Project › Health</a></div></div>
+    <div class="wk-row" style="grid-template-columns:32px minmax(0,1fr) 140px auto auto"><span class="pj-mark" style="width:28px;height:28px;font-size:.55rem;border-radius:7px;background:linear-gradient(135deg,#34d399,#2ec5c5)">HW</span>
+      <div><div class="wk-t">Hello World</div><div class="wk-sub"><span>preview</span><span class="mono">100% · p95 40ms</span></div></div>
+      <svg width="140" height="26" viewBox="0 0 120 26" preserveAspectRatio="none"><polyline fill="none" stroke="var(--green)" stroke-width="1.6" points="0,20 30,20 60,19 90,20 120,20"/></svg>
+      <span class="tag" data-tone="green">0 firing</span>
+      <div class="wk-links"><a class="link-chip"><i class="ph ph-heartbeat"></i>Project › Health</a></div></div>
+  </div>
+</section>
+<div class="notes"><b>Design notes</b><ol>
+  <li>Observability keeps the cross-app comparison and everything shared (BOSS's own platform health, alert sources, contact points, Grafana). Each app row links to its Project › Health, which links back to "Observability › this app".</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>

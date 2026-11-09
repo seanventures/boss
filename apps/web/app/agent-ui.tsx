@@ -1,7 +1,8 @@
 "use client";
 
+import { changeHref, isLocalChangeUrl, linkTarget } from "../lib/repo-links";
 import { HERO_BRIEF_PARAM } from "./url-intent";
-import { useCallback, useEffect, useState, useTransition, useRef} from "react";
+import React, { useCallback, useEffect, useState, useTransition, useRef} from "react";
 
 import { landingAnswerArrived } from "../lib/chat-landing";
 import { CitedAnswer } from "./agents/cited-answer";
@@ -23,12 +24,16 @@ import { GatedButton, useGate } from "../components/gated";
 import { CitedActs, citedIds, DockAgentHead, DockGutterFace, dockFaceKey, dockRoleKey, useDockSpeech } from "./agents/dock-agent";
 import { nameOf } from "./agents/run-face";
 import { useIdentityVersion } from "../lib/use-agent-identities";
+import { leadingFlow } from "../lib/answer-flow";
+import { AnswerFlow, CitationChips, ProposalCard, citationsOf, proposalOf } from "./answer-cards";
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
  *  that is sometimes absent reach the render. */
 type RecordedAction = { kind?: string; tool?: string; ok?: boolean };
 
-type Msg = { role: string; content: string; actions?: RecordedAction[]; created_at?: string;
+type Msg = { id?: string; role: string; content: string; actions?: RecordedAction[]; created_at?: string;
+             /** The answer's "New work" card and the records it named (engine turn_cards). */
+             proposal?: unknown; citations?: unknown;
              attachments?: Array<{ name: string; kind: string }>;
              /** A failed turn's technical line, shown only under a collapsed Details. */
              technical?: string };
@@ -243,7 +248,7 @@ async function read<T>(params: Record<string, string>, ms = 12_000): Promise<T |
 
 
 export function AgentChat({ projectId, actor, initialTaskId, initialMessage, roleName,
-                           fresh, roleKey: roleKeyProp, actId }: {
+                           fresh, roleKey: roleKeyProp, actId, placeholder, starters, sendOnOpen }: {
   projectId: string; actor: string; initialTaskId?: string;
   /** Text to seed the composer with, handed in as a PROP rather than read from the URL.
    *
@@ -267,6 +272,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   roleKey?: string;
   /** The work this conversation is about (`?dock_act=`): sent as `context.act_id`. */
   actId?: string;
+  /** The composer's words ("Ask Helm, or describe new work…" in the captain drawer). */
+  placeholder?: string;
+  /** Suggestion chips the opening screen grounded in its own record (the captain drawer's
+   *  "Plan next week" / "Why is PR #3 waiting?"): a tap SENDS the message. */
+  starters?: { label: string; message: string; icon?: React.ReactNode }[];
+  /** A question to send once the conversation has loaded (the Overview's "Plan next week"). */
+  sendOnOpen?: string;
 }) {
   useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   // Pre-greyed for a viewer who may not chat (P1-18): Send, Enter and the proposals do nothing.
@@ -375,6 +387,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     } catch { /* private mode: the general prompts still work */ }
   }, [initialTaskId]);
 
+  // A screen that brought its own chips (`starters`) shows those instead of the general set.
+  const hasStarters = Boolean(starters?.length);
+  useEffect(() => { if (hasStarters) setSuggestions([]); }, [hasStarters]);
   const [loadingThread, setLoadingThread] = useState(false);
   const [busy, startTransition] = useTransition();
   // WHO IS IN THE DOCK, BY KEY, and what they are doing right now. Thinking while a turn is in
@@ -394,6 +409,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [citations, setCitations] = useState<{ thread: string | null; byIndex: Record<number, string[]> }>(
     { thread: null, byIndex: {} });
   const citedHere = citations.thread === threadId ? citations.byIndex : {};
+  // Offers already drawn as an answer's "New work" card (answer-cards): not a second button.
+  const carded = new Set(messages.map((m) => String(proposalOf(m.proposal)?.offer_id ?? "")).filter(Boolean));
   const clearAboutAct = useCallback(() => {
     setAboutAct(null);
     try {
@@ -585,11 +602,15 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // conversation about it came first. An API older than `agent_role` on the list matches by
   // subject, as before.
   const roleKey = (roleName ?? "").trim().toLowerCase();
+  // THE AGENT'S OWN KEY AS WELL AS ITS NAME. The server stores a turn under the role it
+  // resolved ("Helm" → engineering_captain), so a door that addressed the captain by name never
+  // found its own conversation again (the captain drawer reopened empty, 09-02).
   const threadFor = useCallback(
     (id: string, list: Thread[]): Thread | undefined =>
       list.find((t) => (t.external_ref ?? null) === (id === GENERAL ? null : id)
-        && (t.agent_role ?? roleKey) === roleKey),
-    [roleKey],
+        && ((t.agent_role ?? roleKey) === roleKey
+            || (Boolean(roleKeyProp?.trim()) && (t.agent_role ?? "") === roleKeyProp!.trim().toLowerCase()))),
+    [roleKey, roleKeyProp],
   );
 
   /**
@@ -960,6 +981,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     runTurn(fd);
   }, [busy, runTurn]);
 
+  // SENT ONCE, AFTER THE THREAD LOADED: a door that asked a question ("Plan next week") gets its
+  // answer in the conversation it opened, not a prefilled box to press again.
+  const opened = useRef({ seen: false, sent: false });
+  useEffect(() => {
+    if (loadingThread) { opened.current.seen = true; return; }
+    if (!sendOnOpen || opened.current.sent || busy || (roleRef && !opened.current.seen)) return;
+    opened.current.sent = true;
+    takeNextStep({ id: "open", label: "", message: sendOnOpen });
+  }, [loadingThread, busy, sendOnOpen, roleRef, takeNextStep]);
+
   const send = useCallback(() => {
     const msg = input.trim();
     // A SCREENSHOT ON ITS OWN IS A MESSAGE. "Look at this" is the most natural way to report a
@@ -1259,6 +1290,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                  comes with it.</p>
             )}
           </div>
+        ) : sel.startsWith("project:") ? (
+          /* A PROJECT IS NOT A TASK. The captain's drawer is about the whole project (screen
+             09): its header already says "HelpDesk AI Demo only"; a "Task — No projects yet
+             for this task" box above the conversation said something false. */
+          null
         ) : (
           <div className="ct-block" style={{ marginBottom: 10 }}>
             <div className="ct-block-title">
@@ -1270,7 +1306,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                 {context.code_tasks.map((c) => (
                   <span key={c.id}>
                     {c.status}/{c.phase}
-                    {c.pull_request_url ? <>, <a href={c.pull_request_url} target="_blank" rel="noreferrer">PR #{c.pull_request_number}</a></> : null}
+                    {c.pull_request_url ? <>, <a href={changeHref(c.pull_request_url)} {...linkTarget(c.pull_request_url)}>{`${isLocalChangeUrl(c.pull_request_url) ? "Change" : "PR"} #${c.pull_request_number}`}</a></> : null}
                   </span>
                 ))}
               </div>
@@ -1346,8 +1382,25 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                 <>
                   {/* Its citations ([R:…] / [D:…] / [L:…]) as links named by the cited rule,
                       clause or learning, never a raw id (rulebook source G6). */}
-                  <CitedAnswer className="agent-md" projectId={projectId} actor={actor}
-                               text={stripAppFacts(withoutBrief(m.content))} />
+                  {(() => {
+                    // A status answer may lead with its path as one line ("A → B → C"): drawn
+                    // as flow chips, the rest stays the answer (lib/answer-flow).
+                    const lead = leadingFlow(stripAppFacts(withoutBrief(m.content)));
+                    return (
+                      <>
+                        <AnswerFlow nodes={lead.nodes} testId="agent-flow" />
+                        <CitedAnswer className="agent-md" projectId={projectId} actor={actor}
+                                     text={lead.nodes.length ? lead.rest : stripAppFacts(withoutBrief(m.content))} />
+                        {/* The records the answer named (PR, run, file, doc), each opening it. */}
+                        <CitationChips items={citationsOf(m.citations)} />
+                        {/* The turn's offer to start work, as the "New work" card (screen 09). */}
+                        {proposalOf(m.proposal) ? (
+                          <ProposalCard key={`${m.id ?? i}-proposal`} projectId={projectId} threadId={threadId}
+                                        messageId={m.id ?? null} proposal={proposalOf(m.proposal)!} />
+                        ) : null}
+                      </>
+                    );
+                  })()}
                   {m.technical ? (
                     <details className="agent-technical" data-testid="agent-message-technical">
                       <summary>Details</summary>
@@ -1524,12 +1577,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             </div>
           ) : null}
 
-          {proposed.length > 0 ? (
+          {/* An offer drawn as a "New work" card above is not a second button here. */}
+          {proposed.some((a) => !carded.has(a.id)) ? (
             <div className="agent-proposals" data-testid="agent-proposals">
               <p className="detail agent-proposals-head">
                 BOSS can do this for you, nothing runs until you choose:
               </p>
-              {proposed.map((a) => (
+              {proposed.map((a) => carded.has(a.id) ? null : (
                 <div className="agent-proposal" key={a.id}>
                   <GatedButton
                     permission="assistant:chat"
@@ -1585,6 +1639,18 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             ))}
           </div>
         ) : null}
+        {/* THE OPENING SCREEN'S OWN CHIPS (the captain drawer): grounded in its record, a tap sends. */}
+        {starters?.length ? (
+          <div className="agent-suggests agent-suggests-bar agent-starters" data-testid="agent-starters">
+            {starters.map((st) => (
+              <button type="button" className="agent-suggest" key={st.label} title={st.message}
+                      disabled={busy || !chat.allowed} data-testid={`agent-starter-${st.label.slice(0, 14)}`}
+                      onClick={() => takeNextStep({ id: st.label, label: st.label, message: st.message })}>
+                {st.icon}{st.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {/* A TEXTAREA, not a single-line input. The useful questions here are the long ones , 
             "why did this run take 152 minutes and what went wrong" plus the context that makes
@@ -1599,7 +1665,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               select what you wrote to copy it. Only SEND is held. */}
           <textarea className="agent-input" value={input}
             aria-label="Message BOSS"
-            placeholder="Ask BOSS…"
+            placeholder={placeholder ?? "Ask BOSS…"}
             // Three lines, not one. The useful questions here are the long ones, "why did
             // this run take 152 minutes and what went wrong", plus the context that makes it
             // answerable, and a field one line tall says "type something short".

@@ -28,6 +28,8 @@ import { HelpPopover } from "./command-center/help-popover";
 import { nextAction } from "./command-center/next-action";
 import { announcePainted } from "../lib/area-painted";
 import { ReturningBrief } from "./command-center/returning-brief";
+import { PX_PATHS, parseSummary, usePxRead, type ProjectsSummary } from "../lib/project-experience";
+import { FirstRun } from "./projects/first-run";
 
 /**
  * Existing Command Center records lead with the next useful action. The same composer stays
@@ -74,6 +76,12 @@ export function needsOrder(view: CommandCenterView | null, items: AttentionItem[
     lead: [...refusalCard, ...decisions, ...stopped.filter(today), ...system, ...setup],
     olderStopped: stopped.filter((a) => !today(a)),
   };
+}
+
+/** A first-run help row ("Setup: Connect a repository"): what the first-run screen's steps
+ *  already say, so it is not drawn twice while there is no project. */
+export function isSetupRow(a: AttentionItem): boolean {
+  return a.kind === "readiness";
 }
 
 /** Agents on a live run's current step, the same missions In flight draws, so a face glows
@@ -201,7 +209,13 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
     });
   }, [view]);
   const attention = useMemo(() => (view?.attention ?? []).filter((a) => !gone.has(a.id)), [view, gone]);
-  const { lead, olderStopped } = needsOrder(view, attention);
+  // FIRST RUN REPLACES THE SETUP ROWS (00a-34): with no project yet (the install's untouched
+  // bootstrap project is not one), Command Center shows the first-run screen — the same one
+  // Projects shows — instead of its own "Finish setup" hero and "Setup:" rows.
+  const pxSummary = usePxRead<ProjectsSummary>(PX_PATHS.summary(), parseSummary, { everyMs: 60_000 });
+  const noProjects = pxSummary.state === "ready" && !!pxSummary.data && pxSummary.data.items.length === 0;
+  const shownAttention = useMemo(() => (noProjects ? attention.filter((a) => !isSetupRow(a)) : attention), [attention, noProjects]);
+  const { lead, olderStopped } = needsOrder(view, shownAttention);
   const waiting = useMemo(() => waitingOn(attention), [attention]);
   const working = useMemo(() => new Set<string>(), []);
   const refresh = useCallback(() => { polled.refresh(); apps.refresh(); }, [polled, apps]);
@@ -229,7 +243,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
 
   const nowCards = (
       <div className="cc-now" data-fresh={fresh ? "true" : undefined}>
-        <NeedsCard view={view} lead={lead} olderStopped={olderStopped} needsYou={view ? view.counts.needsYou : null}
+        <NeedsCard view={view} lead={lead} olderStopped={olderStopped} needsYou={view ? Math.max(0, view.counts.needsYou - (attention.length - shownAttention.length)) : null}
                    projectId={projectId} actor={actor} orgId={orgId} now={now} reachable={reachable}
                    onGone={(id) => setGone((g) => new Set(g).add(id))} onRefresh={refresh} ambient={ambient} />
         <FlightCard view={view} projectId={projectId} actor={actor} orgId={orgId} now={now}
@@ -244,7 +258,13 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       {/* The only banner: a critical host, in its own words. */}
       {host.show && host.severity === "critical" ? <HostAdviceBanner advice={host} /> : null}
 
-      <section className="cc-hero cc-workspace" aria-label="Next action" data-testid="cc-hero" data-next={action.kind}>
+      {noProjects ? (
+        <div className="cc-first-run" data-testid="cc-first-run">
+          <FirstRun projectId={projectId} actor={actor} cards={[]} />
+        </div>
+      ) : null}
+      <section className="cc-hero cc-workspace" aria-label="Next action" data-testid="cc-hero" data-next={action.kind}
+               hidden={noProjects || undefined}>
         <div className="cc-hero-bg" aria-hidden><div className="cc-aurora" /></div>
         <div className="cc-hero-l">
           <div className="cc-area-name" data-tone={sys.tone} data-key={status.key} data-testid="cc-status" title={statusTip}>

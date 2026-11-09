@@ -60,6 +60,19 @@ _CACHE_TTL_SECONDS = 5.0
 #: the one function every unattended start goes through.
 PER_RULE_ONLY = frozenset({"incident_response"})
 PER_RULE_DOOR = "alert_rule"
+#: THE INCIDENT SQUAD'S DOOR (design §12.5). The squad is itself a per-incident decision: the
+#: Chief of Staff routed ONE incident to it under the project's autonomy matrix, so the squad
+#: starting that incident's fix is not the app-wide switch PER_RULE_ONLY retired. The door's
+#: name is not trusted: `squad_authority` re-derives the authority from the database — the
+#: door_id must be a live ambient incident item of this project, and either the class's level
+#: here lets an agent start a run without a person (the gate: A2+, consensus satisfied), or a
+#: person answered that item's card (consent). Anything else is refused like every other door.
+SQUAD_DOOR = "incident_squad"
+SQUAD_CLASSES = frozenset({"incident_response", "incident_staging_mitigation",
+                           "perf_regression"})
+SQUAD_PERSON_CHOICES = frozenset({"Roll back + fix", "Fix only"})
+SQUAD_WORD = ("The incident squad may start this fix only on an incident routed to it, at an "
+              "autonomy level that lets agents start a run, or after a person approved it")
 PER_RULE_WORD = ("Incident Response starts per alert rule: turn on Respond automatically for "
                  "the rule on the app's Alerts tab")
 _subscription_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
@@ -104,6 +117,46 @@ def _can_cross_boundary(event_boundary: str, sink_boundary: str) -> bool:
     return _BOUNDARY_RANK[sink_boundary] >= _BOUNDARY_RANK[event_boundary]
 
 
+def squad_authority(connection: Connection, *, project_id: str,
+                    item_id: str) -> dict[str, Any]:
+    """Why the incident squad may start Incident Response for this item, or why not.
+
+    {ok, why, basis: level|person, by, task_class, level}. Derived from rows, never from the
+    caller: the item (ambient, an incident class, this project, not closed); then a person's
+    approval on its card (consent), else the gate for `start_workflow` at the class's level here
+    (allowed without a person, so A2+ on a class whose consensus a squad can satisfy)."""
+    from .ambient import policy
+
+    row = connection.execute(text(
+        "SELECT id, task_class, lifecycle, ambient FROM work_items "
+        "WHERE id = :i AND project_id = :p"), {"i": item_id, "p": project_id}).mappings().first()
+    base = {"ok": False, "basis": None, "by": None, "task_class": None, "level": None}
+    if row is None or not row["ambient"]:
+        return {**base, "why": "no ambient work item with that id in this project"}
+    klass = str(row["task_class"] or "")
+    base["task_class"] = klass
+    if klass not in SQUAD_CLASSES:
+        return {**base, "why": f"{klass or 'an unclassified item'} is not an incident"}
+    if row["lifecycle"] in ("done", "dismissed", "failed", "cancelled"):
+        return {**base, "why": f"the item is {row['lifecycle']}"}
+    stopped = policy.stop_state(connection, project_id)
+    if stopped["stopped"]:
+        return {**base, "why": f"agent work is stopped ({stopped['scope']})"}
+    person = connection.execute(text(
+        "SELECT decided_by FROM agent_act_decisions WHERE project_id = :p AND work_item_id = :i "
+        "AND decided_by LIKE 'person:%' AND chosen = ANY(:c) ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "i": item_id, "c": sorted(SQUAD_PERSON_CHOICES)}).scalar()
+    verdict = policy.gate(connection, project_id, klass, "start_workflow")
+    base["level"] = verdict["level"]
+    if person:
+        return {**base, "ok": True, "basis": "person", "by": str(person),
+                "why": f"{person} approved the fix on the incident's card"}
+    if verdict["allowed"] and not verdict["needs_person"]:
+        return {**base, "ok": True, "basis": "level", "by": "agent:sre",
+                "why": verdict["reason"]}
+    return {**base, "why": verdict["reason"]}
+
+
 def start_workflow_on_grant(
     connection: Connection,
     *,
@@ -130,7 +183,19 @@ def start_workflow_on_grant(
 
     extra = {"project_id": project_id, "workflow_key": workflow_key, "door": door,
              "door_id": door_id, **(log_extra or {})}
-    if workflow_key in PER_RULE_ONLY and door != PER_RULE_DOOR:
+    authority: Optional[dict[str, Any]] = None
+    if workflow_key in PER_RULE_ONLY and door == SQUAD_DOOR:
+        authority = squad_authority(connection, project_id=project_id, item_id=door_id)
+        if not authority["ok"]:
+            logger.warning("event_dispatch.squad_refused", extra={**extra,
+                                                                  "why": authority["why"]})
+            return {"run_id": None, "lost_reason": None, "word": SQUAD_WORD,
+                    "authority": authority,
+                    "entry": {"kind": "workflow", "refused": True, "workflow_key": workflow_key,
+                              "reason": "squad_not_authorised", "why": authority["why"]}}
+        logger.info("event_dispatch.squad_authorised",
+                    extra={**extra, "basis": authority["basis"], "by": authority["by"]})
+    elif workflow_key in PER_RULE_ONLY and door != PER_RULE_DOOR:
         logger.warning("event_dispatch.per_rule_only", extra=extra)
         return {"run_id": None, "lost_reason": None, "word": PER_RULE_WORD,
                 "entry": {"kind": "workflow", "refused": True, "workflow_key": workflow_key,
@@ -202,6 +267,7 @@ def start_workflow_on_grant(
             record_started_anyway(connection, project_id, actor, str(run.get("id") or ""),
                                   readiness)
         return {"run_id": run.get("id"), "lost_reason": None, "word": "Started",
+                "authority": authority,
                 "entry": {"kind": "workflow", "run_id": run.get("id"),
                           "workflow_key": workflow_key}}
     except Exception:  # noqa: BLE001 — one door must not take the others down

@@ -39,13 +39,16 @@ function merge(prev: Item[], learnings: KgLearningItem[], rules: KgRule[], edges
 /** The viewer's own zone, labelled (lib/kg-view.ts kgWhen). */
 const clock = kgWhen;
 
-export function LearnedStrip({ projectId, actor, runId, live, orgId }: {
+export function LearnedStrip({ projectId, actor, runId, live, orgId, always = false }: {
   projectId: string; actor: string;
   /** The run: a build (code task run id) or a workflow run id. */
   runId: string;
   /** The run is still going: keep reading. */
   live: boolean;
   orgId?: string | null;
+  /** Drawn even when nothing is learned yet (the work drawer's "What it learned" opens it on
+   *  purpose, so an empty run says so instead of drawing nothing). */
+  always?: boolean;
 }) {
   const w = useMemo(() => ({ projectId, actor }), [projectId, actor]);
   const onScreen = useOnScreen();
@@ -88,9 +91,9 @@ export function LearnedStrip({ projectId, actor, runId, live, orgId }: {
     return () => clearTimeout(t);
   }, [onScreen, state, live, active, tick]);
 
-  if (state === "absent") return null;
-  if (state === "loading" && !items.length) return null;
-  if (state === "ready" && !items.length && !live) return null;
+  if (state === "absent") return always ? <p className="kg-quiet" data-testid="kg-strip-absent">This BOSS doesn&apos;t record what runs learn yet.</p> : null;
+  if (state === "loading" && !items.length) return always ? <p className="kg-quiet" role="status">Reading what it learned…</p> : null;
+  if (state === "ready" && !items.length && !live && !always) return null;
   const learned = items.filter((i) => i.how === "learned").length;
   const used = items.length - learned;
   return (

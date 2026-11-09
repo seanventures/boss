@@ -227,3 +227,62 @@ def test_an_owner_resumes_and_raises_a_level_and_another_projects_item_is_not_fo
         assert raised.json()["class"]["set_by"] == owner.id
         assert client.get(f"/v1/ambient/work-items/{foreign['id']}",
                           params={"project_id": pa}).status_code == 404
+
+
+def test_review_always_on_builds_is_off_by_default_and_set_per_project_class_and_install(
+        client, engine, no_stop):
+    """Always-on builds start on the project's Captain authority unless a person asks to review
+    them first (identity/captain_authority.py): Project › Settings, a class, or Govern's default."""
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM system_state WHERE key = 'ambient_review_builds'"))
+        c.execute(text("UPDATE ambient_autonomy SET review_builds = NULL WHERE project_id = :p"), {"p": HOME})
+    try:
+        state = client.get("/v1/ambient/settings", params={"project_id": HOME}).json()["review_builds"]
+        assert state == {"install": False, "project": None, "classes": {}, "effective": False,
+                         "source": "install"}
+        on = client.put("/v1/ambient/review-builds", json={"project_id": HOME, "actor": "ceo", "review": True})
+        assert on.status_code == 200 and on.json()["review_builds"]["effective"] is True
+        cls = client.put("/v1/ambient/review-builds", json={"project_id": HOME, "actor": "ceo",
+                                                            "review": False, "task_class": "security_patch"})
+        assert cls.status_code == 200 and cls.json()["review_builds"]["classes"] == {"security_patch": False}
+        assert client.put("/v1/ambient/review-builds", json={"project_id": HOME, "actor": "ceo", "review": True,
+                                                             "task_class": "no_such_class"}).status_code == 422
+        cleared = client.put("/v1/ambient/review-builds", json={"project_id": HOME, "actor": "ceo", "review": None})
+        assert cleared.json()["review_builds"]["project"] is None
+        install = client.put("/v1/ambient/review-builds/install", json={"actor": "ceo", "review": True})
+        assert install.status_code == 200 and install.json()["review_builds"]["install"] is True
+        after = client.get("/v1/ambient/settings", params={"project_id": HOME}).json()["review_builds"]
+        assert after["effective"] is True and after["source"] == "install"
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM system_state WHERE key = 'ambient_review_builds'"))
+            c.execute(text("UPDATE ambient_autonomy SET review_builds = NULL WHERE project_id = :p"), {"p": HOME})
+
+
+def test_one_entry_of_an_always_on_card_is_answered_on_its_own(client, engine):
+    """dec_558cbcf6 (2026-11-07): two spent budgets on one card with only "Approve all /
+    Dismiss all". Each entry now has its own answers, sent one by one; the card narrows to what
+    is left, and closes once nothing is."""
+    from boss_engine.services.ambient import asks, board
+
+    a, b = _item(engine), _item(engine)
+    with engine.begin() as c:
+        c.execute(text("UPDATE work_items SET cost_usd_micros = 1600000 WHERE id = ANY(:w)"),
+                  {"w": [a["id"], b["id"]]})
+        card_id = asks.raise_card(c, HOME, [asks.budget_entry(c, board.get(c, i["id"]),
+                                                              actor="agent:docs_writer")
+                                            for i in (a, b)])
+    first = client.post(f"/v1/ambient/cards/{card_id}/entries/{a['id']}/answer",
+                        json={"project_id": HOME, "answer": "approve", "actor": "ceo"})
+    assert first.status_code == 200, first.text
+    assert first.json()["card"] == "narrowed"
+    wrong = client.post(f"/v1/ambient/cards/{card_id}/entries/{b['id']}/answer",
+                        json={"project_id": "helpdesk", "answer": "reject", "actor": "ceo"})
+    assert wrong.status_code in (403, 404), wrong.text
+    last = client.post(f"/v1/ambient/cards/{card_id}/entries/{b['id']}/answer",
+                       json={"project_id": HOME, "answer": "reject", "actor": "ceo"})
+    assert last.status_code == 200, last.text
+    assert last.json()["card"] == "closed"
+    with engine.begin() as c:
+        assert board.get(c, a["id"])["squad_budget_usd_micros"] == 2_500_000
+        assert board.get(c, b["id"])["lifecycle"] == "resolved"

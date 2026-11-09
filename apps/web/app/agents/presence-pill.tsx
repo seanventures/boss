@@ -27,6 +27,7 @@ import { RunFace } from "./run-face";
 import { presenceLine } from "./roster-zones";
 import { ago, decisionPatch, localTime, navigate, useNow } from "./live-util";
 import { useConsoleLive } from "../../lib/console-live";
+import { Bell } from "@phosphor-icons/react";
 
 export type CrewRow = { roleKey: string; name: string; zone: ReturnType<typeof zoneOf>; line: string;
                         state: import("../../lib/agent-world-types").AvatarState; since?: string };
@@ -63,14 +64,33 @@ function openAgents(patch: Record<string, string | null> = {}): void {
 /** Where `Review` goes: Live, on the card, when it can be decided there (or is a run's step or
  *  setup, which only Live draws); otherwise the decision in Approvals. */
 export function reviewPatch(item: AttentionSummary["items"][number]): Record<string, string | null> {
+  // What only a person can set up (a prod host, a value) opens where it is set (X-14).
+  if (item.kind === "setup" && item.href) {
+    const patch: Record<string, string | null> = { view: null, role: null, run: null, focus: null };
+    new URLSearchParams(item.href.replace(/^[^?]*\?/, "")).forEach((v, k) => { patch[k] = v; });
+    return patch;
+  }
   if (item.decideInline || item.id.startsWith("run:") || item.id.startsWith("ready:")) {
     return { area: "workforce", view: null, role: null, run: null, focus: item.id };
   }
   return decisionPatch(item.id);
 }
 
-export function PresencePill({ projectId, live: given, attention: givenAttention }: {
-  projectId: string; live?: LiveMap; attention?: AttentionSummary | null;
+/** The bell's words for a screen reader and its tooltip: what needs you, and who is working. */
+export function bellLabel(working: number, needs: number): string {
+  return pillText(working, needs) || "Nothing needs you";
+}
+
+/**
+ * `variant="bell"` is the top bar's NOTIFICATIONS BELL (BOSSAPP-914 screen 1): the same counts and
+ * the same crew behind it, drawn as a bell with the needs-you count on it (a teal dot while agents
+ * work), and always present — an empty bell is an answer, a missing pill is not.
+ */
+export function PresencePill({ projectId, live: given, attention: givenAttention, variant = "pill", total = null }: {
+  projectId: string; live?: LiveMap; attention?: AttentionSummary | null; variant?: "pill" | "bell";
+  /** The bell's number across every project (X-14, lib/project-experience orgNeedsOf); the list
+   *  stays this project's, with the rest as "N in other projects". */
+  total?: number | null;
 }) {
   const polled = useLivePresence(given ? "" : projectId);
   const polledAttention = useAttention(given ? "" : projectId);
@@ -86,7 +106,9 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
   // running. Only the working and in-panel zones are work.
   const atWork = (r: CrewRow) => r.zone === "working" || r.zone === "in_panel";
   const working = rows.filter(atWork);
-  const needs = attention ? attention.count : rows.filter((r) => r.zone === "needs_you").length;
+  const here = attention ? attention.count : rows.filter((r) => r.zone === "needs_you").length;
+  const needs = variant === "bell" && total !== null ? Math.max(total, 0) : here;
+  const elsewhere = variant === "bell" && total !== null ? Math.max(0, total - here) : 0;
   const workingCount = working.length;
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -119,7 +141,8 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mousedown", onDown); };
   }, [open]);
 
-  if (!workingCount && !needs) return <span className="ag-sr" aria-live="polite">{announced}</span>;
+  const bell = variant === "bell";
+  if (!bell && !workingCount && !needs) return <span className="ag-sr" aria-live="polite">{announced}</span>;
   const faceKeys = [...new Set([...(attention?.items ?? []).map((i) => i.roleKey).filter((k): k is string => !!k),
                                 ...rows.map((r) => r.roleKey)])];
   const states = new Map(rows.map((r) => [r.roleKey, r.state]));
@@ -127,6 +150,16 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
   const crewRows = attention ? working : rows;
   return (
     <div className="ag-pill-wrap" ref={box} data-paused={consoleLive ? undefined : "true"}>
+      {bell ? (
+        <button type="button" className="bx-bell" data-testid="topbar-bell" data-needs={needs > 0 || undefined}
+                data-working={workingCount > 0 || undefined}
+                title="Approvals waiting on you" aria-label={`Approvals waiting on you: ${bellLabel(workingCount, needs)}`}
+                aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen((x) => !x)}>
+          <Bell size={17} weight={needs ? "fill" : "regular"} aria-hidden />
+          {needs ? <b className="bx-bell-n" data-testid="topbar-bell-count">{needs > 99 ? "99+" : needs}</b> : null}
+          {workingCount ? <i className="bx-bell-working" aria-hidden /> : null}
+        </button>
+      ) : (
       <button type="button" className="ag-pill" data-testid="ag-presence-pill" data-needs={needs > 0 || undefined}
               // THE COUNT, ALWAYS (re-check R3): where the words do not fit, CSS draws this.
               data-n={needs || workingCount}
@@ -135,11 +168,12 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
         {faceKeys.length ? <AgFaceStack roleKeys={faceKeys} size={20} max={4} states={states} decorative /> : null}
         <span>{attention ? pillText(workingCount, needs) : pillWords(rows)}</span>
       </button>
+      )}
       <span className="ag-sr" aria-live="polite">{announced}</span>
       {open ? (
         <div className="ag-crew" role="dialog" aria-label="Crew" data-testid="ag-crew">
           <header className="ag-crew-head">
-            <span>Crew</span>
+            <span>{bell ? (pillText(workingCount, needs) || "Crew") : "Crew"}</span>
             <button type="button" className="ag-link" onClick={() => { setOpen(false); openAgents(); }}
                     data-testid="ag-crew-roster">Agents ↗</button>
           </header>
@@ -170,6 +204,16 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
               ) : null}
             </>
           ) : null}
+          {elsewhere ? (
+            <button type="button" className="ag-link ag-crew-more" data-testid="ag-crew-needs-elsewhere"
+                    title="Every project's Needs you, on Projects"
+                    onClick={() => { setOpen(false); navigate({ area: "projects", filter: "needs", project_id: null, view: null, role: null, run: null, focus: null }); }}>
+              {elsewhere} waiting on you in other projects ›
+            </button>
+          ) : null}
+          {bell && !needs && !crewRows.length ? (
+            <p className="ag-crew-empty" data-testid="topbar-bell-empty">Nothing needs you, and no agent is working right now.</p>
+          ) : null}
           {crewRows.length ? (
             <>
               {attention ? <span className="ag-crew-sub">Working</span> : null}
@@ -190,6 +234,13 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
                 ))}
               </ul>
             </>
+          ) : null}
+          {bell ? (
+            <button type="button" className="ag-link ag-crew-more" data-testid="topbar-bell-approvals"
+                    title="Every approval waiting, across this project"
+                    onClick={() => { setOpen(false); navigate({ area: "decisions", view: null, role: null, run: null, focus: null }); }}>
+              Open Approvals ›
+            </button>
           ) : null}
         </div>
       ) : null}

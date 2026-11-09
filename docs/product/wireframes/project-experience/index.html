@@ -1,0 +1,57 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project experience wireframes</title>
+<link rel="stylesheet" href="console.css"><link rel="stylesheet" href="project.css">
+<style>
+  .ix { max-width: 1280px; margin: 0 auto; padding: 28px 16px 60px; }
+  .ix h1 { font-family: var(--display); font-size: 1.3rem; margin: 0 0 4px; }
+  .ix > p { color: var(--muted); margin: 0 0 20px; }
+  .ix-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 16px; }
+  .ix-card { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); color: var(--ink); }
+  .ix-card:hover { border-color: var(--accent-line); }
+  .ix-card img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; border-bottom: 1px solid var(--border); background: var(--void); }
+  .ix-card div { padding: 10px 12px; }
+  .ix-card b { font-size: .72rem; } .ix-card span { display: block; color: var(--muted); font-size: .6rem; margin-top: 2px; }
+  .ix-card small { display: flex; gap: 10px; margin-top: 6px; font-size: .56rem; }
+  .ix-th { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; font-size: .62rem; color: var(--muted); }
+</style></head>
+<body>
+<div class="ix">
+  <h1>Project experience — wireframes</h1>
+  <p>BOSSAPP-913 · for approval before any build. Static pages on the console's real tokens and the avatar kit's real faces; sample project HelpDesk AI Demo. Each page takes <code>?theme=light</code>; PNGs (dark, light, phone) are in <code>png/</code>. Design decisions, parity table and the "where do I find X" map: <a href="README.md">README.md</a>.</p>
+  <div class="ix-th"><a href="?theme=dark" onclick="document.documentElement.dataset.theme='dark';return false">Dark</a><a href="?theme=light" onclick="document.documentElement.dataset.theme='light';return false">Light</a></div>
+  <div class="ix-grid" id="g"></div>
+</div>
+<script>
+const S = [
+  ["00a-first-run-empty", "0a · First run — empty", "A fresh install: add your first project; absorbs Get started's three steps."],
+  ["00b-first-run-guided", "0b · First run — guided", "Six-step guide beside Helm's live onboarding diagram, ending at suggested first work."],
+  ["01-nav", "1 · Left nav", "Projects joins the rail; Factory becomes Code Tasks; collapsed rail and phone drawer."],
+  ["02-projects", "2 · Projects", "Every project as a card: journey strip, health, cost, crew, needs-you first."],
+  ["03-new-project", "3 · Add a project", "New or Existing; pick a repo/folder and the onboarding agent starts reading it live."],
+  ["04-overview", "4 · Project — Overview", "Journey, needs you, at-a-glance tiles, captain card, recent work, what's next."],
+  ["05-work", "5 · Project — Work", "Every task as a station-strip row with links to run, build and PR; New work inline."],
+  ["05b-work-drawer", "5b · Work item drawer", "A row opens here: who did each step, the one action, every link — no navigation."],
+  ["06-repo-knowledge", "6 · Project — Repo & knowledge", "Repos with access checks, the dossier, knowledge-graph snippet, docs and learnings."],
+  ["07-roadmap", "7 · Project — Roadmap", "Now/Next/Later plus the captain's recommendations: accept to work, reject with a reason."],
+  ["08-deployments", "8 · Project — Deployments", "The ship path, environments with health, demo logins with audited reveal, history."],
+  ["09-captain-drawer", "9 · Ask the captain", "A conversation scoped to the project, with cited links and actions you can start."],
+  ["10-onboarding", "10 · Onboarding in progress", "Discover → Ready checklist → Backlog proposed, with what the agent is doing now."],
+  ["11-jump-palette", "11 · Jump to (⌘K)", "One keystroke to any run, PR, deploy, agent or action in the project."],
+  ["12-health", "12 · Project — Health", "Per-environment uptime, errors, p95 and SLO burn; alerts; incidents as mini flows; Beacon's pack."],
+  ["13-settings", "13 · Project — Settings", "Demo logins per environment, deploy values, targets, captain, autonomy & budget, repos, notifications."],
+  ["14-infra-host", "14 · Infra › server", "The shared server stays org-wide: projects on it link to each Project › Deployments."],
+  ["15-observability-app", "15 · Observability › apps", "Cross-app view stays org-wide: each app links to its Project › Health."],
+];
+const light = () => document.documentElement.dataset.theme === "light";
+function draw() {
+  document.getElementById("g").innerHTML = S.map(([f, t, p]) => `<div class="ix-card"><a href="screens/${f}.html${light() ? "?theme=light" : ""}">
+    <img src="png/${f}${light() ? "-light" : ""}.png" alt="${t}" loading="lazy"></a><div><a href="screens/${f}.html"><b>${t}</b></a><span>${p}</span>
+    <small><a href="png/${f}.png">dark</a><a href="png/${f}-light.png">light</a><a href="png/${f}-phone.png">phone</a></small></div></div>`).join("");
+}
+document.documentElement.dataset.theme = new URLSearchParams(location.search).get("theme") === "light" ? "light" : "dark";
+new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+draw();
+</script>
+<script>/* → opens the first screen; then → / ← walk through every screen. */
+document.addEventListener("keydown",e=>{if(e.key==="ArrowRight"||e.key===" "){e.preventDefault();location.href="screens/00a-first-run-empty.html";}});</script>
+</body></html>

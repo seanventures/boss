@@ -1,0 +1,130 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project overview</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-project="1" data-tab="overview" data-crumb="Projects|HelpDesk AI Demo">
+<div id="content">
+
+<!-- JOURNEY: the project's whole life as one strip -->
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="teal"><i class="ph ph-path"></i></span><h3>Journey</h3><span class="pin">1</span>
+    <a class="more" title="What each stage means">How it works <i class="ph ph-info"></i></a></div>
+  <div class="jr" style="overflow-x:auto">
+    <div class="jr-node" data-s="done" title="Onboarded Nov 2 — repo read, stack found, tests run"><span class="jr-shape"><i class="ph-bold ph-check"></i></span><span class="jr-cap">Onboarded</span><span class="jr-meta">Nov 2</span></div>
+    <span class="jr-wire" data-s="done"></span>
+    <div class="jr-node" data-s="done" title="Ready for work: 6 of 6 checks"><span class="jr-shape"><i class="ph-bold ph-check"></i></span><span class="jr-cap">Ready</span><span class="jr-meta">6/6</span></div>
+    <span class="jr-wire" data-s="done"></span>
+    <div class="jr-node" data-s="done" title="Backlog proposed by Marshal, 12 items, you accepted 7"><span class="jr-shape"><i class="ph-bold ph-check"></i></span><span class="jr-cap">Backlog</span><span class="jr-meta">7 of 12</span></div>
+    <span class="jr-wire" data-s="now"></span>
+    <div class="jr-node" data-s="now" title="Working: 3 merged, 1 building, 1 waiting on you"><span class="jr-shape"><i class="ph-fill ph-hammer"></i></span><span class="jr-cap">Working</span><span class="jr-meta">3 merged</span></div>
+    <span class="jr-wire" data-s="done"></span>
+    <div class="jr-node" data-s="done" title="Staging deploys automatically after merge (policy)"><span class="jr-shape"><i class="ph-bold ph-check"></i></span><span class="jr-cap">Staging</span><span class="jr-meta">2h ago</span></div>
+    <span class="jr-wire"></span>
+    <div class="jr-node" data-s="you" title="Production needs a person: pick a host, then approve"><span class="jr-shape"><i class="ph-fill ph-lock-simple"></i></span><span class="jr-cap">Production</span><span class="jr-meta">needs you</span></div>
+  </div>
+</section>
+
+<!-- AT A GLANCE: every tile is a link -->
+<section class="grid g4">
+  <a class="card link tile" title="Open Work"><div class="row"><span class="ico"><i class="ph ph-kanban"></i></span><span class="lbl">Open work</span><span class="wf-spacer"></span><i class="ph ph-caret-right chev"></i></div>
+    <span class="v">9</span>
+    <div class="bar"><span style="width:11%;background:var(--teal)"></span><span style="width:11%;background:var(--amber)"></span><span style="width:45%;background:var(--quiet)"></span><span style="width:33%;background:var(--green)"></span></div>
+    <span class="s"><span class="dot" data-s="run"></span>1 <span class="dot" data-s="you"></span>1 <span class="dot"></span>4 <span class="dot" data-s="done"></span>3</span></a>
+  <a class="card link tile" title="Ticket search filters — Build step; opens its drawer"><div class="row"><span class="ico" data-c="teal"><i class="ph ph-lightning"></i></span><span class="lbl">Running</span><span class="wf-spacer"></span><i class="ph ph-caret-right chev"></i></div>
+    <div class="row"><div class="ring" style="--p:50;--c:var(--teal)"><span>3/6</span></div><div style="min-width:0"><div class="ell" style="font-weight:600">Search filters</div><span class="s"><span class="face" data-a="forge_live" data-size="s"></span>Building · 12m</span></div></div></a>
+  <a class="card link tile" title="Staging — opens Deployments"><div class="row"><span class="ico" data-c="green"><i class="ph ph-heartbeat"></i></span><span class="lbl">Staging</span><span class="wf-spacer"></span><i class="ph ph-caret-right chev"></i></div>
+    <div class="row"><div class="ring" style="--p:99.9"><span>99.9</span></div><div><div style="font-weight:600;color:var(--green)">Healthy</div><span class="s mono">p95 180ms</span></div></div>
+    <svg class="spark" viewBox="0 0 120 26" preserveAspectRatio="none"><polyline fill="none" stroke="var(--green)" stroke-width="1.6" points="0,18 10,17 20,19 30,16 40,17 50,15 60,18 70,16 80,14 90,15 100,13 110,14 120,12"/></svg></a>
+  <a class="card link tile" title="Cost this week — opens Govern for this project"><div class="row"><span class="ico" data-c="violet"><i class="ph ph-coins"></i></span><span class="lbl">Cost · week</span><span class="wf-spacer"></span><i class="ph ph-caret-right chev"></i></div>
+    <div class="row"><span class="v">$14.20</span><span class="tag" data-tone="green">−18%</span></div>
+    <svg class="spark" viewBox="0 0 120 26" preserveAspectRatio="none"><polygon fill="color-mix(in srgb, #8b7cf6 18%, transparent)" points="0,26 0,20 17,12 34,16 51,6 68,14 85,18 102,10 120,15 120,26"/><polyline fill="none" stroke="#8b7cf6" stroke-width="1.6" points="0,20 17,12 34,16 51,6 68,14 85,18 102,10 120,15"/></svg>
+    <span class="s">28% of $50 cap</span></a>
+</section>
+
+<section class="split">
+  <!-- left column -->
+  <div class="grid">
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="amber"><i class="ph ph-hand-waving"></i></span><h3>Needs you</h3><span class="tag" data-tone="amber">2</span><span class="pin">2</span></div>
+      <div class="ny"><span class="ny-ico"><i class="ph-bold ph-git-merge"></i></span><div style="min-width:0;flex:1"><div class="ny-t">Merge PR #3</div>
+        <div class="fl" style="padding:2px 0"><span class="fl-n" data-t="done"><i class="ph ph-check"></i>Tests 148</span><span class="fl-w" data-s="done"></span><span class="fl-n" data-t="done"><i class="ph ph-check"></i>Review</span><span class="fl-w" data-s="done"></span><span class="fl-n" data-t="you">Merge</span></div></div>
+        <span class="btn" data-kind="amber" data-size="s">Review PR</span></div>
+      <div class="ny"><span class="ny-ico"><i class="ph-bold ph-cloud"></i></span><div style="flex:1"><div class="ny-t">Pick a prod host</div><span class="faint" style="font-size:.56rem">Beacon can't choose this</span></div>
+        <span class="btn" data-size="s">Pick host</span></div>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><span class="ico"><i class="ph ph-kanban"></i></span><h3>Recent work</h3><a class="more">All work <i class="ph ph-arrow-right"></i></a></div>
+      <div class="wk">
+        <div class="wk-row" data-s="run"><span class="dot" data-s="run"></span><div><div class="wk-t ell">Ticket search filters</div><div class="wk-sub"><span>Feature</span><span class="mono">12m</span></div></div>
+          <div class="st"><span class="st-n" data-s="done">P</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">D</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="run">B</span><span class="st-w"></span><span class="st-n">R</span><span class="st-w"></span><span class="st-n">PR</span><span class="st-w"></span><span class="st-n">S</span></div>
+          <span class="faces"><span class="face" data-a="juno" data-size="s"></span><span class="face" data-a="forge_live" data-size="s"></span></span><i class="ph ph-caret-right chev"></i></div>
+        <div class="wk-row" data-s="you"><span class="dot" data-s="you"></span><div><div class="wk-t ell">Visual refresh finish</div><div class="wk-sub"><span>PR #3</span><span class="mono">$2.10</span></div></div>
+          <div class="st"><span class="st-n" data-s="done">P</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">D</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">B</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">R</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="you">PR</span><span class="st-w"></span><span class="st-n">S</span></div>
+          <span class="faces"><span class="face" data-a="forge" data-size="s"></span><span class="face" data-a="vera" data-size="s"></span></span><i class="ph ph-caret-right chev"></i></div>
+        <div class="wk-row"><span class="dot" data-s="done"></span><div><div class="wk-t ell">UI refresh</div><div class="wk-sub"><span>PR #2 merged</span><span class="mono">$3.40</span></div></div>
+          <div class="st"><span class="st-n" data-s="done">P</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">D</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">B</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">R</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">PR</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">S</span></div>
+          <span class="faces"><span class="face" data-a="forge" data-size="s"></span><span class="face" data-a="beacon" data-size="s"></span></span><i class="ph ph-caret-right chev"></i></div>
+      </div>
+    </section>
+
+    <section class="card hide-phone">
+      <div class="card-h"><span class="ico" data-c="blue"><i class="ph ph-clock-counter-clockwise"></i></span><h3>This week</h3></div>
+      <svg viewBox="0 0 640 74" width="100%" height="74" role="img" aria-label="Timeline">
+        <line x1="20" y1="30" x2="620" y2="30" stroke="var(--border-strong)" stroke-width="2"/>
+        <g font-size="11" fill="var(--muted)" font-family="var(--sans)">
+          <circle cx="40" cy="30" r="7" fill="var(--green)"/><text x="40" y="56" text-anchor="middle">PR #1 merged</text><text x="40" y="14" text-anchor="middle" font-family="var(--mono)" font-size="10">Mon</text>
+          <circle cx="170" cy="30" r="7" fill="var(--teal)"/><text x="170" y="56" text-anchor="middle">Staging deploy</text><text x="170" y="14" text-anchor="middle" font-family="var(--mono)" font-size="10">Mon</text>
+          <circle cx="300" cy="30" r="7" fill="var(--green)"/><text x="300" y="56" text-anchor="middle">PR #2 merged</text><text x="300" y="14" text-anchor="middle" font-family="var(--mono)" font-size="10">Wed</text>
+          <circle cx="430" cy="30" r="7" fill="#8b7cf6"/><text x="430" y="56" text-anchor="middle">5 ideas found</text><text x="430" y="14" text-anchor="middle" font-family="var(--mono)" font-size="10">Thu</text>
+          <circle cx="580" cy="30" r="8" fill="var(--amber)"/><text x="580" y="56" text-anchor="middle">PR #3 waiting</text><text x="580" y="14" text-anchor="middle" font-family="var(--mono)" font-size="10">Today</text>
+        </g></svg>
+    </section>
+  </div>
+
+  <!-- right column -->
+  <div class="grid">
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="blue"><i class="ph ph-steering-wheel"></i></span><h3>Captain</h3><span class="pin">3</span><a class="more" title="Hand the project to another captain">Change</a></div>
+      <div class="cap"><span class="face" data-a="helm" data-size="l"></span>
+        <div class="cap-body"><div class="cap-name">Helm <span class="tag" data-tone="blue">Engineering Captain</span></div>
+          <div class="cap-now"><span class="dot" data-s="run"></span>Watching 1 build · next: intake</div></div></div>
+      <div class="row" style="margin-top:10px;gap:6px"><span class="btn" data-kind="primary"><i class="ph ph-chat-circle-dots"></i>Ask Helm</span><span class="btn"><i class="ph ph-map-trifold"></i>Plan next week</span></div>
+      <div class="crew">
+        <span class="crew-m"><span class="face" data-a="juno" data-size="s"></span><span>Juno<small>Plans</small></span></span>
+        <span class="crew-m"><span class="face" data-a="forge" data-size="s"></span><span>Forge<small>Builds</small></span></span>
+        <span class="crew-m"><span class="face" data-a="vera" data-size="s"></span><span>Vera<small>Tests</small></span></span>
+        <span class="crew-m"><span class="face" data-a="beacon" data-size="s"></span><span>Beacon<small>Deploys</small></span></span>
+        <span class="crew-m" title="Chief of Staff ranks this project's backlog against the others"><span class="face" data-a="marshal" data-size="s"></span><span>Marshal<small>Ranks</small></span></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="violet"><i class="ph ph-lightbulb"></i></span><h3>What's next</h3><a class="more">Roadmap <i class="ph ph-arrow-right"></i></a></div>
+      <div class="ck">
+        <div class="ck-i"><span class="rc-rank" style="width:22px;height:22px;font-size:.6rem">1</span><span class="ck-t">Email-to-ticket intake<small>Feature · accepted</small></span><span class="tag" data-tone="green">Next</span></div>
+        <div class="ck-i"><span class="rc-rank" style="width:22px;height:22px;font-size:.6rem">2</span><span class="ck-t">SLA weekend pause test<small><i class="ph ph-bug"></i> Incident hotspot</small></span><span class="btn" data-size="s">Accept</span></div>
+        <div class="ck-i"><span class="rc-rank" style="width:22px;height:22px;font-size:.6rem">3</span><span class="ck-t">Alert on /api/tickets 5xx<small><i class="ph ph-bell-slash"></i> Alert gap</small></span><span class="btn" data-size="s">Accept</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="green"><i class="ph ph-key"></i></span><h3>Try it</h3><a class="more"><i class="ph ph-gear"></i> Settings</a></div>
+      <div class="kv"><dt><i class="ph ph-globe"></i> URL</dt><dd><a class="mono">203.0.113.20:8004</a></dd>
+        <dt><i class="ph ph-user"></i> Admin</dt><dd class="row"><span class="mono">admin@demo.test</span><span class="secret">••••••</span><i class="ph ph-eye" title="Reveal (audited)"></i><i class="ph ph-copy" title="Copy"></i></dd></div>
+    </section>
+  </div>
+</section>
+
+<div class="notes"><b>Design notes</b><ol>
+  <li><b>1</b> The journey strip is the project's whole life in one glance — each node opens what happened there (drawer). Pulse = live; amber = only you can move it.</li>
+  <li><b>2</b> "Needs you" is ALSO pinned in the header bar on every tab; here it expands with the mini-diagram of why it's ready.</li>
+  <li><b>3</b> One captain per project (Helm, the Engineering Captain). Marshal (Chief of Staff) ranks the backlog across projects. "Ask Helm" opens the captain drawer (screen 09).</li>
+  <li>Every tile, row and chip is a link: rows/tiles open a side drawer; ↗ opens the external thing (PR, live URL).</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>

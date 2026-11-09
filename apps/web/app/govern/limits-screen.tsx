@@ -10,6 +10,7 @@
  * Writes: `limits` (POST /v1/govern/limits, only the fields changed, with the budget version
  * as If-Match) and `project_limit` per changed project (a project budget envelope).
  */
+import { MovedToProjectSettings } from "../projects/moved";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
@@ -203,6 +204,9 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
     <form className="gv-limits" data-testid="gv-limits" noValidate
           onSubmit={(e) => { e.preventDefault(); void save(); }}>
       <button type="button" className="ag-link gv-back" data-testid="gv-back" onClick={onBack}>← Spend</button>
+      {/* This project's ambient budget lives on Project › Settings now; the org caps stay here
+          (README parity: Ambient budget, 13-30). */}
+      <MovedToProjectSettings section="autonomy" projectId={projectId} testid="gv-limits-moved" />
 
       <section className="gv-card" aria-labelledby="gv-pace-h" data-testid="gv-pace-card">
         <h3 id="gv-pace-h" className="gv-card-title">How fast BOSS works</h3>

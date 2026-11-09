@@ -65,11 +65,13 @@ class DecisionService:
             params["project_id"] = project_id
             project_filter = "AND project_id = :project_id"
         self.hold_plan_gates(connection, project_id)
+        self.reopen_boundary_decisions(connection, project_id)
 
         rows = connection.execute(
             text(
                 f"""
-                SELECT id, project_id, default_action, deadline_at
+                SELECT id, project_id, default_action, deadline_at, question, recommendation,
+                       created_at
                 FROM decisions
                 WHERE status IN ('pending', 'delegated')
                   AND deadline_at IS NOT NULL
@@ -82,6 +84,9 @@ class DecisionService:
 
         expired = 0
         for row in rows:
+            if decision_actions.never_expires(row):
+                self._keep_open_past_deadline(connection, dict(row))
+                continue
             updated = connection.execute(
                 text(
                     """
@@ -127,6 +132,86 @@ class DecisionService:
                 },
             )
         return expired
+
+    def _keep_open_past_deadline(self, connection: Connection, row: dict) -> bool:
+        """A boundary question at its deadline stays open (decision_actions.never_expires): the
+        deadline is cleared, so the question ages from when it was asked, and ONE
+        `decision.overdue` reminder is recorded (the deadline is gone, so it never repeats)."""
+        updated = connection.execute(
+            text(
+                "UPDATE decisions SET deadline_at = NULL, updated_at = :now "
+                "WHERE id = :id AND status IN ('pending', 'delegated') AND deadline_at IS NOT NULL"
+            ),
+            {"id": row["id"], "now": now_utc()},
+        )
+        if updated.rowcount != 1:
+            return False
+        created = row.get("created_at")
+        emit_event(
+            connection, row["project_id"], "decision.overdue", "system", "decision", row["id"],
+            {"deadline_at": row["deadline_at"].isoformat() if row.get("deadline_at") else None,
+             "waiting_since": created.isoformat() if hasattr(created, "isoformat") else created,
+             "default_action": "hold", "still_answerable": True, "reminder": "once",
+             "note": ("Nobody answered by the deadline. Only a person decides this, so it "
+                      "stays open and waits; nothing was applied.")},
+        )
+        return True
+
+    def reopen_boundary_decisions(self, connection: Connection,
+                                  project_id: Optional[str] = None) -> list[str]:
+        """BOUNDARY QUESTIONS THAT EXPIRED WHILE WORK STILL WAITS ON THEM COME BACK.
+
+        An expired, hold-default decision on the compliance boundary is set back to pending with
+        no deadline (`decision.reopened`) when a WAITING workflow step of a run that has not
+        ended references it (its decision, or the decision its await names — a deploy held
+        for its merge). That is exactly the helpdesk merges of 2026-11-08: their runs sat
+        "waiting on PR #3 to be merged". A boundary question nothing waits on any more (a
+        merge question from a build that finished weeks ago) stays expired: it is shown only
+        in Needs you's "older" line and Approvals' Expired view, never as today's work.
+        Runs on every sweep (expire_overdue: the inbox, the status read, the Command Center,
+        the monitor tick) and once at boot, so they reappear on upgrade with no edit to the
+        database. Idempotent: once reopened, nothing is left to find."""
+        from .run_decisions import _closed_run_states, refusal_to_answer
+
+        scope = "AND d.project_id = :project_id" if project_id else ""
+        params: dict[str, Any] = {"closed": sorted(_closed_run_states())}
+        if project_id:
+            params["project_id"] = project_id
+        rows = connection.execute(
+            text(
+                "SELECT d.id, d.project_id, d.status, d.question, d.recommendation, "
+                "d.default_action, d.resolution_note FROM decisions d WHERE d.status = 'expired' "
+                f"AND lower(COALESCE(d.default_action, 'hold')) = 'hold' {scope} "
+                "AND EXISTS (SELECT 1 FROM workflow_step_runs s "
+                "  JOIN workflow_runs r ON r.id = s.workflow_run_id "
+                "  WHERE s.status = 'waiting' AND NOT (r.status = ANY(:closed)) "
+                "  AND (s.decision_id = d.id OR s.output->'await'->>'decision_id' = d.id))"
+            ),
+            params,
+        ).mappings().all()
+        out: list[str] = []
+        for row in rows:
+            decision = dict(row)
+            if not decision_actions.never_expires(decision):
+                continue
+            if refusal_to_answer(connection, decision):
+                continue
+            updated = connection.execute(
+                text(
+                    "UPDATE decisions SET status = 'pending', deadline_at = NULL, "
+                    "updated_at = :now WHERE id = :id AND status = 'expired'"
+                ),
+                {"id": decision["id"], "now": now_utc()},
+            )
+            if updated.rowcount != 1:
+                continue
+            out.append(str(decision["id"]))
+            emit_event(connection, decision["project_id"], "decision.reopened", "system",
+                       "decision", decision["id"],
+                       {"was": "expired",
+                        "why": ("Only a person decides this and its run is still waiting on "
+                                "it: nothing was applied, so it waits for an answer again.")})
+        return out
 
     def hold_plan_gates(self, connection: Connection, project_id: Optional[str] = None) -> list[str]:
         """A BUILD WAITING AT ITS PLAN WAITS FOR A PERSON, SO ITS QUESTION STAYS OPEN.
@@ -519,6 +604,22 @@ class DecisionService:
                                         delegated=delegated)
             except ci_gate.CiGateRefused as refused:
                 raise InvalidDecisionTransitionError(refused.message) from refused
+            # WHERE PEOPLE DECIDE (decide_list.py): an entry on the compliance list in its quiet
+            # window waits, and a named decider answers before their backup — enforced here, at
+            # the approval, not only drawn on the card. A policy approval never reaches an entry
+            # on the list (autonomy.IRREVERSIBLE is the same list), so only people are asked.
+            if not system_policy:
+                from . import decide_list
+
+                approver_ids = {actor}
+                if identity_ctx is not None:
+                    approver_ids.add(identity_ctx.principal.id)
+                if delegated is not None:
+                    approver_ids.add(getattr(delegated, "person_principal_id", "") or "")
+                held = decide_list.refuse_approval(connection, row, approver_ids,
+                                                   at=timestamp)
+                if held:
+                    raise InvalidDecisionTransitionError(held)
             # A RELEASE CARD IS APPROVED AS SHOWN (release_scope): only with the hash of the
             # commit list it showed, and — when that list carries commits from rejected or
             # unreviewed runs — only with the person's stated reason (force + note, as a merge

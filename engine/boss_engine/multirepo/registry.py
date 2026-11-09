@@ -107,20 +107,23 @@ def refresh(db: Any, settings: Any, project_id: str, *, actor: str = "operator",
         seen.add(key)
         db.execute(sql(
             "INSERT INTO github_repos (id, org_id, source, github_repo_id, full_name, description, "
-            "default_branch, language, private, archived, reachable, last_seen_at) "
-            "VALUES (:id, :o, :src, :gid, :full, :desc, :branch, :lang, :priv, :arch, true, now()) "
+            "default_branch, language, private, archived, reachable, last_seen_at, pushed_at) "
+            "VALUES (:id, :o, :src, :gid, :full, :desc, :branch, :lang, :priv, :arch, true, now(), "
+            "CAST(:pushed AS TIMESTAMPTZ)) "
             "ON CONFLICT (org_id, lower(full_name)) DO UPDATE SET source = EXCLUDED.source, "
             "github_repo_id = COALESCE(EXCLUDED.github_repo_id, github_repos.github_repo_id), "
             "full_name = EXCLUDED.full_name, description = COALESCE(EXCLUDED.description, github_repos.description), "
             "default_branch = COALESCE(EXCLUDED.default_branch, github_repos.default_branch), "
             "language = COALESCE(EXCLUDED.language, github_repos.language), private = EXCLUDED.private, "
-            "archived = EXCLUDED.archived, reachable = true, last_seen_at = now(), updated_at = now()"),
+            "archived = EXCLUDED.archived, reachable = true, last_seen_at = now(), updated_at = now(), "
+            "pushed_at = COALESCE(EXCLUDED.pushed_at, github_repos.pushed_at)"),
             {"id": make_id("ghr"), "o": org_id, "src": source,
              "gid": item.get("id") if isinstance(item.get("id"), int) else None, "full": full,
              "desc": (str(item["description"])[:300] if item.get("description") else None),
              "branch": item.get("default_branch"), "lang": item.get("language"),
              "priv": bool(item.get("private")) if item.get("private") is not None else None,
-             "arch": bool(item.get("archived"))})
+             "arch": bool(item.get("archived")),
+             "pushed": str(item["pushed_at"]) if item.get("pushed_at") else None})
     # Gone from the installation: not reachable, never silently still allowed.
     rows = db.execute(sql("SELECT id, full_name FROM github_repos WHERE org_id = :o"), {"o": org_id}).mappings().all()
     gone = [r["id"] for r in rows if norm_repo(r["full_name"]) not in seen]
@@ -167,8 +170,20 @@ def state_of(row: dict[str, Any]) -> str:
     return "needs_fix"
 
 
-def _shape(row: dict[str, Any], used_by: list[dict[str, Any]]) -> dict[str, Any]:
+#: What Add a project says when a repository cannot join a NEW project (03-25): the same refusal
+#: `project_repos._connection_for` gives, said before anything is created.
+NOT_CONNECTED = ("Connect GitHub first: a new project reaches a repository through the "
+                 "organisation's GitHub App (Repo and models › GitHub).")
+
+
+def _shape(row: dict[str, Any], used_by: list[dict[str, Any]], *, app: bool = False) -> dict[str, Any]:
     checks = jload(row.get("checks"), {}) or {}
+    # CAN A NEW PROJECT USE IT (03-25)? A brand-new project has no connection of its own, so it
+    # reaches a repository only through the org's GitHub App (project_repos._connection_for):
+    # the App is ready and lists this repository. Anything else is refused there with
+    # github_not_connected — Add a project says so on the row, before it creates anything.
+    attachable = bool(app and row.get("source") == "app" and row.get("reachable", True)
+                      and row.get("allowed") and not row.get("archived"))
     return {
         "id": row["id"], "full_name": row["full_name"], "description": row.get("description"),
         "default_branch": row.get("default_branch") or "main", "language": row.get("language"),
@@ -178,7 +193,10 @@ def _shape(row: dict[str, Any], used_by: list[dict[str, Any]]) -> dict[str, Any]
         "checks": {k: {"ok": (checks.get(k) or {}).get("ok"), "state": (checks.get(k) or {}).get("state")}
                    for k in ("read", "write", "pull_requests")},
         "checked_at": iso(row.get("checked_at")), "state": state_of(row),
+        "pushed_at": iso(row.get("pushed_at")),
         "used_by": used_by,
+        "new_project": ({"ok": True} if attachable else
+                        {"ok": False, "code": "github_not_connected", "message": NOT_CONNECTED}),
     }
 
 
@@ -224,7 +242,13 @@ def list_registry(db: Any, project_id: str, *, settings: Any = None,
     by_repo: dict[str, list[dict[str, Any]]] = {}
     for u in users:
         by_repo.setdefault(u["f"], []).append({"project_id": u["project_id"], "name": u["name"]})
-    items = [_shape(r, by_repo.get(norm_repo(r["full_name"]), [])) for r in rows]
+    from ..identity import github_setup
+
+    try:
+        app = bool(github_setup.app_ready(db, org_id))
+    except Exception:  # noqa: BLE001 — no identity tables: no App
+        app = False
+    items = [_shape(r, by_repo.get(norm_repo(r["full_name"]), []), app=app) for r in rows]
     counts = {"all": len(items), "allowed": sum(1 for i in items if i["allowed"]),
               "needs_fix": sum(1 for i in items if i["state"] in ("needs_fix", "read_only")),
               "not_allowed": sum(1 for i in items if not i["allowed"])}
@@ -255,6 +279,17 @@ def get_row(db: Any, org_id: str, repo_id: str) -> dict[str, Any]:
     if row is None:
         raise MultiRepoError(404, "unknown_repository", "No such repository in this organization's registry.")
     return dict(row)
+
+
+def projects_using(db: Any, org_id: str, full_name: str) -> list[dict[str, Any]]:
+    """The org's projects already bound to this repository (active bindings), by name: the
+    registry's `used_by`, for one repository."""
+    rows = db.execute(sql(
+        "SELECT DISTINCT p.id AS project_id, p.name FROM github_repository_bindings b "
+        "JOIN projects p ON p.id = b.project_id JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE w.org_id = :o AND b.status = 'active' AND lower(b.full_name) = :f ORDER BY p.name"),
+        {"o": org_id, "f": norm_repo(full_name)}).mappings().all()
+    return [{"project_id": str(r["project_id"]), "name": str(r["name"])} for r in rows]
 
 
 def by_full_name(db: Any, org_id: str, full_name: str) -> Optional[dict[str, Any]]:
@@ -491,9 +526,15 @@ def clone_note(db: Any, org_id: Optional[str], *, full_name: str, binding_status
 
 def mint_allowed(db: Any, org_id: Optional[str], repos: list[str]) -> Optional[list[str]]:
     """The repositories of `repos` the registry REFUSES (unticked, archived, unreachable), or None
-    when the registry is not in use for this org (an install that never refreshed it)."""
+    when the registry is not in use for this org (an install that never refreshed it).
+
+    A repository BOSS keeps on this machine (`local_<project>/<name>`, BOSSAPP-918) is never the
+    GitHub registry's to refuse: nothing is minted or cloned through egress for it."""
+    from ..services.local_repo import is_local
+
+    repos = [r for r in repos if not is_local(r)] if repos else repos
     if not org_id or not repos:
-        return None
+        return None if not org_id else []
     try:
         with db.begin_nested():
             if not _registry_in_use(db, org_id):

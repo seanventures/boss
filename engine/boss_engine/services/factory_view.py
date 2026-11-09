@@ -345,6 +345,8 @@ class Cockpit(TypedDict, total=False):
     now: Optional[Now]
     outputs: dict[str, Any]        # see apps/web/lib/cockpit.ts CockpitOutputs
     summary: dict[str, Any]        # build_detail.now_summary: what it is doing now
+    why: Optional[dict[str, Any]]  # stuck_work.wait_reason: what it waits for, in words
+    diagnosis: Optional[dict[str, Any]]  # stuck_work.public_diagnosis: what the Shepherd found
 
 
 # ── labels and sentences (§5.1) ─────────────────────────────────────────────────────────────
@@ -949,6 +951,20 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
             return out("queued", "Starting", "Cloning the repo", "Working", "plan")
         moved = max([t for t in (_aware(run.get("updated_at")), _last_act_at(acts)) if t],
                     default=None)
+        # HANDED ON, NOT WORKING: a repair round left `repairing` at phase 'done' (the work went
+        # to the next attempt, or its round never started). The same rule as Project › Work
+        # (run_liveness.stalled_since), so the two never disagree about whether it runs.
+        from .run_liveness import stalled_since
+
+        live_job = bool(job) and str((job or {}).get("status") or "") in (
+            "queued", "running", "leased")
+        if phase == "done" and stalled_since(status=status, phase=phase, last_activity=moved,
+                                             live_job=live_job, now=now,
+                                             horizon_seconds=float("inf")):
+            gap = _minutes(now - moved)
+            return out("quiet", f"Stalled · {gap}",
+                       f"Nothing has moved since {moved.strftime('%d %b %H:%M')} UTC; its repair "
+                       "round handed on or never started.", "Stopped")
         if moved and now - moved > timedelta(minutes=QUIET_AFTER_MINUTES):
             gap = _minutes(now - moved)
             verb = agent_acts.work_verb(dict(open_act)) if open_act else \
@@ -2756,6 +2772,24 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
                       "verb": row["verb"], "station": row.get("station"), "k": row["k"],
                       "n": row["n"], "rounds": row["rounds"],
                       "preview": (row.get("preview") or {}).get("status")}
+    # WAITING FOR WHAT (stuck_work.wait_reason): the header's tip, the waiting station's tip and
+    # the Now card say it from real state -- never a bare "Queued" / "Waiting for a worker".
+    from . import stuck_work
+
+    try:
+        with connection.begin_nested():
+            waiting = stuck_work.wait_reason(connection, run, now=now)
+    except Exception:  # noqa: BLE001 — a page without a reason still renders
+        waiting = None
+    if waiting:
+        st["tip"] = waiting["words"]
+        if waiting["who"] == "stuck" and st["state"] in ("queued", "building", "quiet"):
+            st["state"], st["word"], st["verb"] = "quiet", "Stuck", "Stopped"
+        elif waiting["who"] == "you" and st["state"] in ("queued", "building"):
+            st["word"], st["verb"] = "Needs you", "Needs you"
+        for station in row["stations"]:
+            if station.get("status") == "waiting":
+                station["tip"] = waiting["words"]
     comments = _comment_rows(run, acts)
     attention = [a for a in _attention_for_builds(connection, settings, project_id, now)
                  if str((a.get("build") or {}).get("run_id")) == run_id]
@@ -2797,6 +2831,9 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
                                gate_labels=gate_label),
         # WHY THIS MODEL (docs/product/MODEL_ROUTER.md): the router's decision per stage.
         "routes": _routes(connection, run_id),
+        # Why it waits, and what the Shepherd found when it stopped moving (stuck_work).
+        "why": waiting,
+        "diagnosis": stuck_work.public_diagnosis(fctx, connection=connection, run=run),
     }
     for key in ("finalize_ctx", "spec", "state"):
         out["run"].pop(key, None)

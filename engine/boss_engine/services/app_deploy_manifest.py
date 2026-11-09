@@ -245,6 +245,9 @@ class DeployManifest:
     alerts: Optional[dict[str, Any]] = None    # alert rules' starting values (services/app_alerts.py)
     dashboard: Optional[dict[str, Any]] = None  # extra Grafana panels (bundled_monitoring)
     resources: tuple[Any, ...] = ()        # platform.contract.ResourceRequest, in file order
+    # The app's demo users, by name only (BOSSAPP-914 §11): [{user, label, password}] where
+    # `password` names the env key that holds their password (a {generate: password} key).
+    demo_logins: tuple[dict[str, str], ...] = ()
     source_text: str = field(default="", repr=False, compare=False)
 
     def env_keys(self) -> list[str]:
@@ -267,6 +270,7 @@ class DeployManifest:
             "env_keys": self.env_keys(),
             "generated_env_keys": [e.key for e in self.env if e.source == "generate"],
             "secret_env_keys": [e.key for e in self.env if e.source == "secret"],
+            "demo_logins": [dict(d) for d in self.demo_logins],
             # KEY -> the BOSS secret it reads, so whoever approves sees WHICH secret goes to
             # the host, not only that some key does.
             "secret_env": {e.key: e.value for e in self.env if e.source == "secret"},
@@ -617,7 +621,39 @@ def _alerts(raw: Any) -> Optional[dict[str, Any]]:
 _TOP_LEVEL = frozenset({
     "version", "name", "kind", "compose", "env", "install", "update", "health", "open",
     "teardown", "requires", "dir", "metrics", "resources", "signals", "alerts", "dashboard",
+    "demo_logins",
 })
+
+_DEMO_USER = re.compile(r"^[A-Za-z0-9._+@-]{1,120}$")
+
+
+def _demo_logins(raw: Any) -> tuple[dict[str, str], ...]:
+    """`demo_logins:` — the app's demo users so a person can sign in to a preview or a deploy:
+    a list of `{user: agent@demo.test, label: Agent, password: DEMO_PASSWORD}` (label and
+    password optional; password defaults to DEMO_PASSWORD) or plain user names. Names only: a
+    password value never lives in the manifest."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ManifestError("demo_logins must be a list of {user, label, password} or user names.")
+    out: list[dict[str, str]] = []
+    for i, item in enumerate(raw[:20]):
+        if isinstance(item, str):
+            item = {"user": item}
+        if not isinstance(item, dict) or not str(item.get("user") or "").strip():
+            raise ManifestError(f"demo_logins[{i}] needs a user.")
+        extra = set(item) - {"user", "label", "password"}
+        if extra:
+            raise ManifestError(f"demo_logins[{i}] has unknown field(s) {sorted(extra)}.")
+        user = str(item["user"]).strip()
+        if not _DEMO_USER.match(user):
+            raise ManifestError(f"demo_logins[{i}].user {user!r} must be a user name or e-mail.")
+        password = str(item.get("password") or "DEMO_PASSWORD").strip()
+        if not re.match(r"^[A-Z][A-Z0-9_]{0,63}$", password):
+            raise ManifestError(f"demo_logins[{i}].password must name an env key, e.g. DEMO_PASSWORD.")
+        label = str(item.get("label") or user.split("@", 1)[0].replace(".", " ").title()).strip()
+        out.append({"user": user, "label": label[:40], "password": password})
+    return tuple(out)
 
 
 def _dashboard(raw: Any) -> Optional[dict[str, Any]]:
@@ -747,7 +783,8 @@ def parse_manifest(data: Any, *, source_text: str = "") -> DeployManifest:
         compose_project=compose_project, metrics=_metrics(data.get("metrics")),
         signals=_signals(data.get("signals")), alerts=_alerts(data.get("alerts")),
         dashboard=_dashboard(data.get("dashboard")),
-        resources=_resources(data.get("resources")), source_text=source_text,
+        resources=_resources(data.get("resources")),
+        demo_logins=_demo_logins(data.get("demo_logins")), source_text=source_text,
     )
 
 

@@ -5620,7 +5620,9 @@ export type KgNodeDetailResponse = {
   language: string | null;
   connections: KgConnectionGroup[];
   vector: KgVectorInfo;
-  usage: { shown: number; consulted_runs: number; reused_runs: number };
+  /** `incidents`: the incidents that taught a lesson (`taught`) or applied it (`reused`). */
+  usage: { shown: number; consulted_runs: number; reused_runs: number;
+           incidents?: { id: string; label: string; how: "taught" | "reused" }[] };
   provenance: KgProvenance;
   /** Learned items only. */
   lineage: KgLineage | null;

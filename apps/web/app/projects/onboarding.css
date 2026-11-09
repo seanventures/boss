@@ -1,0 +1,85 @@
+/* Onboarding (screens 10 and 00b): what px.css does not already draw — the live diagram
+   ("Helm is reading your repo"), the read-only workspace row, the re-read line, the Ready card's
+   amber pin, and the stage strip that scrolls sideways on a phone instead of wrapping. */
+
+.px-ob-view .px-card-h h2 { white-space: nowrap; }
+
+/* The stage strip: five stages, never wrapped, never a trailing arrow (10-03..08). */
+.px-ob { overflow-x: auto; scrollbar-width: none; }
+.px-ob::-webkit-scrollbar { display: none; }
+
+.px-ob-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.px-ob-ws { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-meta); }
+.px-ob-ws .px-chip { color: var(--amber); }
+.px-ob-ws .px-chip[data-ok] { color: var(--green); }
+.px-ob-ws .px-chip .px-faint { color: var(--faint); font-weight: 400; }
+.px-ob-error { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; color: var(--red); font-size: var(--fs-meta); }
+
+/* 10-13: the Ready card's teal border. */
+.px-ob-ready { border-color: color-mix(in srgb, var(--teal) 45%, transparent); }
+
+/* The backlog rows read like the wireframe's checklist rows (rank, title + source · why, tag). */
+.px-ob-bl .px-rank { width: 22px; height: 22px; font-size: var(--fs-tag); }
+.px-ob-bl small a { color: var(--accent-text); text-decoration: none; }
+button.px-ob-more { width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+
+/* 00b-24: First work, suggested — the violet border; its title and Marshal's reason. */
+.px-ob-first { border-color: color-mix(in srgb, #8b7cf6 55%, transparent); }
+.px-ob-first-t { display: block; font-size: var(--fs-body); }
+.px-ob-why { margin: 4px 0 0; font-size: var(--fs-tag); line-height: 1.45; }
+
+/* 00b-13..19: the live diagram. */
+.px-ob-livecard { background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--teal) 9%, var(--surface)) 0%, var(--surface) 60%); }
+.px-live { position: relative; width: 100%; max-width: 620px; margin: 0 auto; }
+.px-live > svg { display: block; width: 100%; height: auto; }
+.px-live-helm { fill: color-mix(in srgb, var(--accent) 22%, var(--surface)); stroke: var(--accent); stroke-width: 2.5; }
+.px-live-face { position: absolute; left: calc(78 / 640 * 100%); top: calc(126 / 250 * 100%); transform: translate(-50%, -50%); }
+.px-live-face > * { width: clamp(30px, 8.6vw, 56px) !important; height: clamp(30px, 8.6vw, 56px) !important; }
+.px-live-cap { font-family: var(--sans); font-size: var(--fs-row); font-weight: 600; fill: var(--ink); }
+.px-live-node { fill: var(--surface); stroke-width: 1.6; }
+.px-live-node[data-s="done"] { fill: color-mix(in srgb, var(--green) 10%, var(--surface)); }
+.px-live-node[data-s="now"] { fill: color-mix(in srgb, var(--teal) 12%, var(--surface)); animation: px-live-pulse 1.8s ease-in-out infinite; }
+.px-live-node[data-s="todo"], .px-live-node[data-s="skipped"] { stroke-dasharray: 5 4; }
+.px-live-label { font-family: var(--sans); font-size: var(--fs-row); font-weight: 600; fill: var(--ink); }
+.px-live-label[data-faint] { fill: var(--faint); font-weight: 500; }
+.px-live-sub { font-family: var(--mono); font-size: var(--fs-meta); fill: var(--faint); }
+.px-live-ready { fill: none; stroke: var(--border-strong); stroke-width: 1.4; stroke-dasharray: 5 4; }
+.px-live-ready[data-s="done"] { stroke: var(--green); stroke-dasharray: none; fill: color-mix(in srgb, var(--green) 10%, var(--surface)); }
+.px-live-ready[data-s="now"] { stroke: var(--teal); }
+/* 00b-19 / X-82: a done edge turns green in 200 ms. */
+.px-live-edge { transition: stroke .2s ease, stroke-dasharray .2s ease; }
+@keyframes px-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+
+.px-live-list { display: none; list-style: none; margin: 0; padding: 0; }
+.px-live-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1.5px dashed var(--border-strong); border-radius: 10px; font-size: var(--fs-ui); }
+.px-live-list li + li { margin-top: 14px; position: relative; }
+.px-live-list li + li::before { content: ""; position: absolute; left: 20px; top: -15px; height: 14px; border-left: 2px dashed var(--border-strong); }
+.px-live-list li[data-s="done"] { border-style: solid; border-color: var(--green); }
+.px-live-list li[data-s="done"]::before { border-left-style: solid; border-color: var(--green); }
+.px-live-list li[data-s="now"] { border-color: var(--teal); }
+.px-live-list li[data-s="now"]::before { border-color: var(--teal); }
+.px-live-list li:first-child { border-color: var(--accent); border-style: solid; }
+.px-live-list small { margin-left: auto; color: var(--faint); font-size: var(--fs-tag); }
+.px-live-dot { width: 18px; text-align: center; color: var(--green); font-weight: 700; }
+.px-live-list li[data-s="now"] .px-live-dot { color: var(--teal); }
+
+@media (max-width: 760px) {
+  .px-live > svg, .px-live-face { display: none; }
+  .px-live-list { display: block; }
+  /* 390: the stage strip scrolls sideways, 56 px a stage at least; cards stack (px.css). */
+  .px-ob { grid-template-columns: repeat(5, minmax(3.39rem, 1fr)); }
+  .px-ob-foot { align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .px-live-node[data-s="now"] { animation: none; }
+  .px-live-edge { transition: none; }
+}
+
+/* 10-09: the Now line is teal only while something moves; Watch opens the agent's log below it. */
+.px-now:not([data-live]) { border-color: var(--border); background: var(--surface-2, var(--surface)); }
+.px-ob-log { list-style: none; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; max-height: 240px; overflow-y: auto; font-size: var(--fs-meta); }
+.px-ob-log li { display: grid; grid-template-columns: auto auto auto 1fr; align-items: center; gap: 8px; padding: 4px 0; }
+.px-ob-log li + li { border-top: 1px solid var(--border); }
+.px-ob-log li span { color: var(--ink-soft); min-width: 0; }
+.px-ob-log li[data-s="failed"] b { color: var(--red); }
+@media (max-width: 760px) { .px-ob-log li { grid-template-columns: auto auto 1fr; } .px-ob-log li span { grid-column: 1 / -1; } }

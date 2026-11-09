@@ -19,6 +19,7 @@ import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
+import { STRIP_NOTICE_SLOT } from "./strip-notice";
 import { useFullPage } from "./workflows/full-page";
 import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { useDetailsDismiss } from "../lib/details-dismiss";
@@ -27,10 +28,14 @@ import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
 import { setConsoleLive } from "../lib/console-live";
 import { PAINTED_EVENT } from "../lib/area-painted";
 import { useAttention } from "../lib/agents-live";
+import { useOrgNeeds } from "../lib/project-experience";
 import { useTitleCount } from "../lib/tab-title";
 import { ConverseHost } from "./agents/converse-host";
 import { useLoadIdentities } from "../lib/use-agent-identities";
 import { CONVERSE_COMMANDS } from "../lib/agent-converse";
+import { ProjectsNav } from "./projects/nav";
+import { JumpResults } from "./projects/jump";
+import { ShellCrumbs } from "./shell-crumbs";
 
 import React, {
   useCallback,
@@ -61,6 +66,7 @@ import {
   List,
   MagnifyingGlass,
   CaretRight,
+  Folders,
   FlowArrow,
   Heartbeat,
   Siren,
@@ -73,13 +79,17 @@ import {
   SlidersHorizontal,
   TerminalWindow,
   TreeStructure,
-  UserCircle,
   Users,
   UsersThree,
   Plus,
   Wallet,
   Wrench,
   Bandaids,
+  SignOut,
+  SealCheck,
+  PuzzlePiece,
+  Scales,
+  IdentificationCard,
   ShareNetwork,
   X,
   type Icon,
@@ -101,6 +111,8 @@ import { allRoleLabels, primaryRoleLabel } from "../lib/identity/role-label";
 import { AccessDenied } from "../components/identity/access-denied";
 import { AccountMenu, IdentityBanners, signOut } from "../components/identity/account-menu";
 import { ConsentHost } from "../components/identity/consent-sheet";
+import { Face } from "../components/identity/kit";
+import { avatarTone } from "../lib/identity/avatar";
 import { shellHeading, shownArea } from "../lib/shell-heading";
 
 export type { AreaId };
@@ -202,43 +214,50 @@ const ICONS = {
 //  and nobody should. The chat agent starts a WORKFLOW now (see start_workflow in builtin.py),
 //  so the dossier is a step's output and the run is what you open.
 const OFF_THE_NAV = new Set<AreaId>(["discovery", "meetings"]);
+/** The Project page (BOSSAPP-914) is reached from Projects (its rail list), never as a row of its own. */
+const UNDER_PROJECTS = new Set<AreaId>(["project"]);
 /** Get started has its own rail button above the groups, shown only while setup is unfinished. */
 const OWN_RAIL_BUTTON = new Set<AreaId>(["welcome"]);
 
 const AREAS: AreaDef[] = [
-  { id: "overview", label: "Command Center", sub: "What needs you, what's moving", group: "Platform", icon: ICONS.overview },
+  { id: "overview", label: "Command Center", sub: "What needs you, across every project", group: "Platform", icon: SquaresFour },
   // THE ORDER IS THE ARGUMENT. The Run group opens with the place work is DONE and the path it
   // follows, Factory, then the workflow governing it, then who does it and who approves it,
   // then where it ships and whether it is alive. Discovery and Meetings are ways IN and follow
   // after; they were first only because they come first chronologically, which is not the same
   // as being what an operator opens the console to look at.
-  { id: "code_tasks", label: "Factory", sub: "Builds, apps and gated PRs", group: "Run", icon: ICONS.code_tasks },
+  // PROJECTS FIRST (BOSSAPP-914): one home per project — its work, repo, deploys and health —
+  // with the projects listed under it in the rail. First run lives here too (Get started's steps).
+  { id: "projects", label: "Projects", sub: "Every project: its work, crew, repo and deploys", group: "Run", icon: Folders },
+  { id: "project", label: "Project", sub: "One project's work, repo, deploys and health", group: "Run", icon: Folders },
+  // CODE TASKS, was Factory (BOSSAPP-914): the same area id, tabs and links; only the name changed.
+  { id: "code_tasks", label: "Code Tasks", sub: "Builds, apps and gated PRs (was Factory)", group: "Run", icon: ICONS.code_tasks },
   // AGENTS AT WORK (autonomous agents, design §11.3): what agents noticed and resolved on their
   // own, each as a flow chart. Beside the Factory: the other place work is done.
-  { id: "agent_ops", label: "Agents at work", sub: "What agents resolved on their own, as diagrams", group: "Run", icon: ICONS.agent_ops },
+  { id: "agent_ops", label: "Agents at work", sub: "What agents resolved on their own", group: "Run", icon: Robot },
   // ONE HOME PER OBJECT. Workflow, Agent work, Team structure and Agent Studio were four rows
   // for two things: workflows (built, run and watched in one area) and the agents that work
   // them (roster, team and panels in one area). Old links to the retired two still land , 
   // app/legacy-areas.ts.
   { id: "delivery_workflows", label: "Workflows", sub: "Build, run and watch workflows", group: "Run", icon: ICONS.delivery_workflows },
-  { id: "workforce", label: "Agent Studio", sub: "Who does the work", group: "Run", icon: ICONS.org },
+  { id: "workforce", label: "Agent Studio", sub: "Who does the work", group: "Run", icon: UsersThree },
   // THE GRAPH (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.1): after who does the work, what they work
   // ON and what they learned doing it. Scoped to the active project like every area.
   // NAMED FOR WHAT IT IS (operator, 2026-10-24): "Graph" told nobody it was a knowledge graph.
   { id: "knowledge", label: "Knowledge Graph", sub: "Code, rules and what agents learned", group: "Run", icon: ICONS.knowledge },
-  { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
+  { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: SealCheck },
   // TWO SCREENS, TWO QUESTIONS (infra-observability spec §0, §4.1). Infra is where it runs and
   // how it got there; Observability is whether it is alive, how fast, and what thinking costs.
   // The ids say so now: `delivery` (labelled Infra) and `monitoring` (labelled Observability)
   // redirect here (app/legacy-areas.ts), and System Configuration's contents moved into Infra ›
   // Cloud, Repo and models, Skills & MCP and Observability, so it has no rail entry.
-  { id: "infra", label: "Infra", sub: "Where your apps run and how they got there", group: "Run", icon: ICONS.infra },
-  { id: "observability", label: "Observability", sub: "Is it alive, how fast, what thinking costs", group: "Run", icon: ICONS.observability },
+  { id: "infra", label: "Infra", sub: "Where your apps run", group: "Run", icon: ICONS.infra },
+  { id: "observability", label: "Observability", sub: "Is it alive, how fast, what it costs", group: "Run", icon: Pulse },
   { id: "activity", label: "Activity log", sub: "Every line BOSS wrote, searchable", group: "Run", icon: ICONS.activity },
   // BOSS FIXES ITSELF (docs/product/BOSS_FIXES_ITSELF.md §10.3): every fix BOSS made to its own
   // code, from the problem to the release, and the autonomy it bought. After the log: what BOSS
   // did about what went wrong.
-  { id: "self_fixes", label: "Self-fixes", sub: "Bugs in BOSS that BOSS fixed itself", group: "Run", icon: ICONS.self_fixes },
+  { id: "self_fixes", label: "Self-fixes", sub: "Bugs in BOSS that BOSS fixed itself", group: "Run", icon: Wrench },
   { id: "discovery", label: "Research", sub: "Cited dossiers, a verdict, outcomes and the evidence", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Panels", sub: "Agents debate it, a decision or a PRD", group: "Run", icon: ICONS.meetings },
   // ONE ENTRY, NOT TWO. "Metatron" was an always-on captain whose session table does not exist
@@ -263,8 +282,8 @@ const AREAS: AreaDef[] = [
   { id: "welcome", label: "Get started", sub: "Get BOSS working in 3 steps", group: "Settings", icon: Rocket },
   // WHAT YOUR CREW CAN DO (skills-mcp spec §5.1): the Kit of abilities, who holds them, and every
   // skill and MCP server. Second in Settings: a repo and a model come first.
-  { id: "skills", label: "Skills & MCP", sub: "What your crew can do", group: "Settings", icon: ICONS.capabilities },
-  { id: "budget", label: "Govern", sub: "Spend caps, pace and limits", group: "Settings", icon: ICONS.budget },
+  { id: "skills", label: "Skills & MCP", sub: "What your crew can do", group: "Settings", icon: PuzzlePiece },
+  { id: "budget", label: "Govern", sub: "Spend caps, pace and limits", group: "Settings", icon: Scales },
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Settings", icon: ICONS.comms },
   { id: "ops", label: "Operations", sub: "Health, audit, replay, and self-improvement", group: "Settings", icon: ICONS.ops },
   { id: "assurance", label: "Assurance", sub: "Ground truth, proof gates, and security scanning", group: "Settings", icon: ICONS.assurance },
@@ -280,9 +299,9 @@ const AREAS: AreaDef[] = [
     // second in the sidebar, under Command Center, ahead of everything an operator actually
     // does, and called "SSO", which names one protocol rather than the thing it configures.
     label: "Identity",
-    sub: "Who can do what, and for whom",
+    sub: "People, roles, agents and sign-in",
     group: "Settings",
-    icon: ICONS.enterprise,
+    icon: IdentificationCard,
   },
 ];
 
@@ -459,7 +478,10 @@ function ConsoleShellInner({
   // THE TAB TITLE'S `(n)` HAS ONE OWNER: the shell, from the decisions that need you (the
   // pill's own count), re-applied whenever a navigation rewrites the title (lib/tab-title.ts).
   const titleAttention = useAttention(scope.projectId ?? scope.project);
-  useTitleCount(titleAttention?.count ?? 0);
+  // X-14 ONE NUMBER: what waits on you across every project (the Projects page's Need-you tile),
+  // for the bell, the rail's Approvals badge and the tab title alike.
+  const orgNeeds = useOrgNeeds();
+  useTitleCount(orgNeeds ?? titleAttention?.count ?? 0);
   const switchOrg = () => {
     try {
       window.localStorage.removeItem("boss.area");
@@ -485,6 +507,8 @@ function ConsoleShellInner({
     if (navTarget && navTarget === active) setNavTarget(null);
   }, [navTarget, active]);
   const [navOpen, setNavOpen] = useState(false);
+  // The rail's collapse, for the ⌘\ shortcut (set below, where the toggle is defined).
+  const toggleDockRef = useRef<() => void>(() => undefined);
   // Open by default. A section that starts closed hides the areas inside it from anyone who
   // does not already know they are there, which for a newly-added area is indistinguishable
   // from not having shipped it.
@@ -1242,6 +1266,10 @@ function ConsoleShellInner({
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
+        // ⌘\ docks the rail to icons and back (BOSSAPP-914 screen 1): the same press as its button.
+        e.preventDefault();
+        toggleDockRef.current();
       } else if (e.key === "Escape") {
         setPaletteOpen(false);
         setNavOpen(false);
@@ -1256,6 +1284,9 @@ function ConsoleShellInner({
       const t = setTimeout(() => paletteInput.current?.focus(), 20);
       return () => clearTimeout(t);
     }
+    // 11-13 A CLOSED PALETTE FORGETS ITS QUERY (Esc, the scrim, a row taken): it reopens empty.
+    setQuery("");
+    return undefined;
   }, [paletteOpen]);
 
   const areasForEdition = useMemo(() => {
@@ -1276,7 +1307,7 @@ function ConsoleShellInner({
   // cannot still lands, on <AccessDenied> naming the permission, never a blank page.
   const navAreas = useMemo(
     () => areasForEdition.filter(
-      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
+      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !UNDER_PROJECTS.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
     [areasForEdition, resolvedEdition, areaCan],
   );
 
@@ -1301,6 +1332,14 @@ function ConsoleShellInner({
     return () => window.removeEventListener(SETUP_BADGE_EVENT, onBadge);
   }, []);
   // GET STARTED (BOSSAPP-808): shown while GitHub, a model or a first PR is missing.
+  // The rail's project list: open by default, the operator's choice remembered.
+  const [projectsOpen, setProjectsOpen] = useState(true);
+  useEffect(() => {
+    try { if (localStorage.getItem("boss.nav.projects") === "0") setProjectsOpen(false); } catch { /* private mode */ }
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem("boss.nav.projects", projectsOpen ? "1" : "0"); } catch { /* private mode */ }
+  }, [projectsOpen]);
   const [getStarted, setGetStarted] = useState(Boolean(status.getStarted));
   useEffect(() => { setGetStarted(Boolean(status.getStarted)); }, [status.getStarted]);
   useEffect(() => {
@@ -1309,7 +1348,13 @@ function ConsoleShellInner({
     return () => window.removeEventListener(GET_STARTED_EVENT, on);
   }, []);
   const badgeFor = (id: AreaId): number | undefined => {
-    if (id === "decisions" && status.pendingDecisions > 0) return status.pendingDecisions;
+    // X-14 ONE COUNT: the rail's Approvals badge is the bell's number and Approvals' Needs action
+    // (decisions + what only a person can set up), from the same poll; the server's count is the
+    // first paint only.
+    if (id === "decisions") {
+      const n = orgNeeds ?? (titleAttention ? titleAttention.count : status.pendingDecisions);
+      return n > 0 ? n : undefined;
+    }
     if (id === "ops" && status.deadletters > 0) return status.deadletters;
     if (id === "setup" && setupBadge && setupBadge.count > 0) return setupBadge.count;
     return undefined;
@@ -1347,6 +1392,7 @@ function ConsoleShellInner({
       return next;
     });
   };
+  toggleDockRef.current = toggleDock;
 
   // ONE WORKFLOW, OR ONE RUN, WITH THE WHOLE WINDOW (`page=full`, app/workflows/full-page.ts):
   // the sidebar, the top bar and the project strip step aside; the area draws its own way back.
@@ -1359,6 +1405,8 @@ function ConsoleShellInner({
          data-rail-for-dock={railed && !docked ? "true" : undefined}>
       <a className="skip-link" href="#decision-inbox">Skip to decision inbox</a>
 
+      {/* The rail's colour runs the full height of the page, however long the page is. */}
+      <div className="bx-rail-bg" aria-hidden />
       <aside className="bx-sidebar">
         <div className="bx-brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1389,12 +1437,14 @@ function ConsoleShellInner({
           data-edition={resolvedEdition}
           data-community={community ? "true" : "false"}
         >
-          {getStarted && areaCan("welcome").allowed ? (
-            <button type="button" className={`bx-nav-item bx-nav-get-started${railSelected === "welcome" ? " active" : ""}`}
-                    data-testid="nav-get-started" data-area-nav="welcome"
-                    aria-current={railSelected === "welcome" ? "page" : undefined}
-                    data-label="Get started" title="Get BOSS working in 3 steps"
-                    onClick={() => go("welcome")}>
+          {/* GET STARTED IS PART OF PROJECTS NOW (BOSSAPP-914): while setup is unfinished the rail's
+              Projects opens the first run (its 3 steps, then Helm onboarding the first project). The
+              old Welcome stays reachable by URL (`?area=welcome`) for its quick-PR row. */}
+          {getStarted && areaCan("projects").allowed && !navAreas.some((a) => a.id === "projects") ? (
+            <button type="button" className={`bx-nav-item bx-nav-get-started${railSelected === "projects" ? " active" : ""}`}
+                    data-testid="nav-get-started" data-area-nav="projects"
+                    data-label="Get started" title="Get BOSS working: GitHub, a model, your first project"
+                    onClick={() => go("projects")}>
               <Rocket size={17} aria-hidden />
               <span>Get started</span>
             </button>
@@ -1463,6 +1513,13 @@ function ConsoleShellInner({
                     </div>
                   );
                 }
+                if (a.id === "projects") {
+                  return (
+                    <ProjectsNav key="projects" items={projects?.items ?? []} active={railSelected ?? ""}
+                                 activeProjectId={scope.projectId ?? null} onGo={() => go("projects")}
+                                 open={projectsOpen} onToggle={() => setProjectsOpen((v) => !v)} />
+                  );
+                }
                 const badge = badgeFor(a.id);
                 const Icon = a.icon;
                 const paidBadge = shouldShowPaidNavBadge(a.id, resolvedEdition);
@@ -1476,8 +1533,8 @@ function ConsoleShellInner({
                     aria-current={a.id === railSelected ? "page" : undefined}
                     data-area-nav={a.id}
                     // The label survives docking as a tooltip, icons alone are a memory test.
-                    data-label={labelFor(a)}
-                    title={a.sub}
+                    data-label={`${labelFor(a)} — ${a.sub}`}
+                    title={`${labelFor(a)} — ${a.sub}`}
                     data-paid-badge={paidBadge ? "true" : undefined}
                     data-sso-visible={a.id === "enterprise" ? "true" : undefined}
                     onClick={() => go(a.id)}
@@ -1520,26 +1577,31 @@ function ConsoleShellInner({
         <div className="bx-sidebar-foot">
           {/* WHO IS SIGNED IN, the person, from the session, never a claimed actor string. */}
           <div className="bx-operator" data-testid="signed-in-as">
-            <span className="bx-operator-avatar" aria-hidden>{(me?.display_name ?? scope.actor).slice(0, 1).toUpperCase()}</span>
+            {/* The person's own face (the identity kit's, as in the avatar menu), then "Name · Role". */}
+            {me ? <Face name={me.display_name} tone={avatarTone(me.principal_id, me.avatar_seed)} size={22} />
+              : <span className="bx-operator-avatar" aria-hidden>{scope.actor.slice(0, 1).toUpperCase()}</span>}
             <span>
               <strong>{me?.display_name ?? scope.actor}</strong>
+              <span className="bx-operator-dot" aria-hidden>·</span>
               {/* The highest role, from /v1/identity/me (lib/identity/role-label); never a guess. */}
               <small data-testid="signed-in-role" title={me ? allRoleLabels(me.access_roles) : undefined}>
                 {me ? primaryRoleLabel(me.access_roles) : "Signed in"}
               </small>
             </span>
           </div>
-          <div className="bx-control-status">
-            <span className={`dot ${status.apiReachable ? "green" : "red"}`} />
-            <span>{status.apiReachable ? "Control plane online" : "Control plane offline"}</span>
-          </div>
-          {status.controlPlane && !isInternalPlane(status.controlPlane) ? (
-            <div className="bx-control-host" title={status.controlPlane}
-                 data-local={isLocalPlane(status.controlPlane) || undefined}
-                 data-testid="control-plane-host">
-              {planeLabel(status.controlPlane)}
+          <div className="bx-control-line">
+            <div className="bx-control-status">
+              <span className={`dot ${status.apiReachable ? "green" : "red"}`} />
+              <span>{status.apiReachable ? "Control plane online" : "Control plane offline"}</span>
             </div>
-          ) : null}
+            {status.controlPlane && !isInternalPlane(status.controlPlane) ? (
+              <div className="bx-control-host" title={status.controlPlane}
+                   data-local={isLocalPlane(status.controlPlane) || undefined}
+                   data-testid="control-plane-host">
+                {planeLabel(status.controlPlane)}
+              </div>
+            ) : null}
+          </div>
         </div>
       </aside>
 
@@ -1556,8 +1618,49 @@ function ConsoleShellInner({
             <List size={18} aria-hidden />
           </button>
 
+          <div className="bx-topbar-title" id="boss-console-title">
+            {heading.label}
+            <small>{heading.sub}</small>
+          </div>
+
+          {/* WHERE YOU ARE (BOSSAPP-914 screen 1): Projects / <Project ▾> / <Tab> on a project's page,
+              <Project ▾> / <Area> elsewhere. The project crumb IS the project menu (switch, New
+              project, archive), so scope is said once, here — no "Project: X ← Back to Y" banner. */}
+          <ShellCrumbs active={active} areaLabel={heading.label} routeMode={routeMode}
+                       projects={projects} projectId={scope.projectId}
+                       onProjects={() => go("projects")} />
+
+          <div className="bx-topbar-spacer" />
+
+          <button type="button" className="bx-jump" data-testid="topbar-jump" onClick={() => setPaletteOpen(true)}
+                  aria-label="Jump to… (⌘K)" title="Jump to any project, run, PR, deploy or agent">
+            <MagnifyingGlass size={15} aria-hidden />
+            <span className="bx-jump-text">Jump to…</span>
+            <kbd>⌘K</kbd>
+          </button>
+
+          <RefreshState coordinator={refreshCoordinator} fallback={refreshing}>{(refreshing) => (
+          <button
+            type="button"
+            className="bx-live-status"
+            data-live={(live && status.apiReachable) || undefined}
+            title={live
+              ? (refreshing
+                 ? "Fetching the latest data, click to pause live updates"
+                 : "Live: auto-refreshing, click to pause")
+              : "Paused, click to resume live updates"}
+            onClick={() => setLive((v) => !v)}
+            style={{ cursor: "pointer" }}
+          >
+            {/* A refresh in flight shows HERE: same chip, no layout shift, gone when it
+                lands. Enough to answer "is it updating?" without occupying the page. */}
+            {/* Grey and "Offline" when the control plane does not answer: Live is never claimed then. */}
+            <span className={live && status.apiReachable ? "dot green bx-pulse" : "dot"} />
+            <span className="bx-live-word">{!status.apiReachable ? "Offline" : live ? (refreshing ? "Syncing" : "Live") : "Paused"}</span>
+          </button>)}</RefreshState>
+
           {/* START A BUILD FROM ANYWHERE (factory spec §4.1). The same first press as the
-              Factory's `+ New build`: the New project composer, a new app, or a feature added to
+              Factory's `+ New build`: the New project composer — a new app, or a feature added to
               one (operator, 2026-10-07; it replaced the 2026-10-04 "Plan it with Juno" door).
               "Plan it with an agent" is an option inside the composer. */}
           {/* ONE PRODUCT (walk D19): on the Factory its own header holds `+ New build`. */}
@@ -1570,70 +1673,49 @@ function ConsoleShellInner({
             title={NEW_BUILD_TIP}
             onClick={() => openNewProject()}
           >
-            {/* Below 1480 px the label goes and the + stays, with the tooltip (KG round 6:
-                at 1280-1440 the button ran past the window's edge). */}
-            <span aria-hidden>+</span><span className="bx-new-label">New build</span>
+            {/* An icon button with its tooltip (BOSSAPP-914 top bar); the avatar menu and ⌘K say
+                "New build" in words. */}
+            <Plus size={15} weight="bold" aria-hidden /><span className="bx-new-label">New build</span>
           </GatedButton> : null}
 
-          <div className="bx-topbar-title" id="boss-console-title">
-            {heading.label}
-            <small>{heading.sub}</small>
-          </div>
+          {/* BUILDS, A CHIP BESIDE THE BELL (BOSSAPP-914 round 3): the old strip under the bar is in no
+              wireframe and cost a row of every screen (a tenth of a phone's). Same list, from the chip.
+              The Factory's Floor IS the list of builds (walk D19); a project's page has its Work tab. */}
+          {active !== "code_tasks" && active !== "projects" && active !== "project" && !routeMode && !fullPage ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} chip /> : null}
 
-          <div className="bx-topbar-spacer" />
+          {/* THE BELL: what needs you (the count) and who is working (the teal dot), with the crew
+              and the way to Approvals behind it — the old "1 working · 2 need you" pill, folded in. */}
+          <PresencePill projectId={scope.projectId ?? scope.project} variant="bell" total={orgNeeds} />
 
-          {org ? (
-            <button type="button" className="bx-org-chip" onClick={switchOrg} title="Switch organization">
-              <span className="bx-org-name">{org.name}</span>
-              <span className="bx-org-switch" aria-hidden>⌄</span>
-            </button>
-          ) : null}
-          {projects && scope.projectId ? (
-            <ProjectMenu projects={projects.items} activeId={scope.projectId} homeId={projects.homeId} orgId={org?.id} />
-          ) : null}
-
-          <RefreshState coordinator={refreshCoordinator} fallback={refreshing}>{(refreshing) => (
-          <button
-            type="button"
-            className="bx-live-status"
-            title={live
-              ? (refreshing
-                 ? "Fetching the latest data, click to pause live updates"
-                 : "Live: auto-refreshing, click to pause")
-              : "Paused, click to resume live updates"}
-            onClick={() => setLive((v) => !v)}
-            style={{ cursor: "pointer" }}
-          >
-            {/* A refresh in flight shows HERE: same chip, no layout shift, gone when it
-                lands. Enough to answer "is it updating?" without occupying the page. */}
-            <span className={live ? "dot green bx-pulse" : "dot"} />
-            {live ? (refreshing ? "Syncing" : "Live") : "Paused"}
-          </button>)}</RefreshState>
-
-          <button type="button" className="bx-kbd" onClick={() => setPaletteOpen(true)}>
-            <span>Jump to</span>
-            <kbd>⌘K</kbd>
-          </button>
-          <PresencePill projectId={scope.projectId ?? scope.project} />
-          <AccountMenu />
-          <MenuDetails className="bx-system-menu">
-            <summary aria-label="System details">System</summary>
-            <div className="bx-system-panel">
-              <div><span>Edition</span><EditionChip editionId={resolvedEdition} /></div>
-              <div><span>Budget</span><strong className={`bx-system-budget ${tone}`}>
-                {status.budgetState || "unknown"}</strong></div>
-              <div><span>Signed in</span><strong><UserCircle size={15} aria-hidden /> {me?.display_name ?? scope.actor}</strong></div>
-              <div><span>Console</span><ConsoleToggle current="v1" orgId={org?.id} /></div>
-              {/* SIGN OUT. /api/auth/logout existed and nothing called it, so the only way to
-                  end a console session on a shared machine was to clear the browser's cookies.
-                  Shown only when sign-in is configured: there is no session to end otherwise. */}
-              {signOutAvailable || me ? (
-                <div data-testid="bx-sign-out">
-                  <button type="button" className="cap-btn" onClick={signOut}>Sign out</button>
-                </div>
-              ) : null}
-            </div>
-          </MenuDetails>
+          {/* THE AVATAR MENU: you, your account, the organization (switch), New build, and the old
+              System menu (edition, budget, console version, sign out). */}
+          {me ? (
+            <AccountMenu compact>
+              <ShellMenuRows org={org} onSwitchOrg={switchOrg} edition={resolvedEdition}
+                             budgetState={status.budgetState} tone={tone}
+                             projects={projects} projectId={scope.projectId} />
+            </AccountMenu>
+          ) : (
+            <MenuDetails className="idn-me bx-user-fallback">
+              <summary aria-label={`Signed in as ${scope.actor}`} title={scope.actor}>
+                <span className="bx-operator-avatar" aria-hidden>{scope.actor.slice(0, 1).toUpperCase()}</span>
+              </summary>
+              <div className="idn-me-menu" role="menu">
+                <div className="idn-me-who"><b>{scope.actor}</b><small>Signed in</small></div>
+                <ShellMenuRows org={org} onSwitchOrg={switchOrg} edition={resolvedEdition}
+                               budgetState={status.budgetState} tone={tone}
+                             projects={projects} projectId={scope.projectId} />
+                {/* SIGN OUT. /api/auth/logout existed and nothing called it, so the only way to
+                    end a console session on a shared machine was to clear the browser's cookies.
+                    Shown only when sign-in is configured: there is no session to end otherwise. */}
+                {signOutAvailable ? (
+                  <div data-testid="bx-sign-out">
+                    <button type="button" role="menuitem" onClick={signOut}><SignOut size={16} aria-hidden /> Sign out</button>
+                  </div>
+                ) : null}
+              </div>
+            </MenuDetails>
+          )}
         </header>
 
         {/* EVERY PROJECT, WITHOUT LEAVING THE AREA YOU ARE IN.
@@ -1686,8 +1768,8 @@ function ConsoleShellInner({
           </div>
         ) : null}
 
-        {/* The Factory's Floor IS the list of builds (walk D19): no second strip of them. */}
-        {active !== "code_tasks" && !routeMode && !fullPage ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} /> : null}
+        {/* The open project's archived notice, when the Builds chip in the top bar has one. */}
+        <div id={STRIP_NOTICE_SLOT} className="bx-strip-notice" />
 
         {/* The console gets out of the panel's way rather than hiding behind it. The dock is
             fixed-position, so without this inset the right-hand column of cards sat underneath
@@ -1833,16 +1915,20 @@ function ConsoleShellInner({
                   </button>
                 );
               })}
+              {/* PROJECT RECORDS (BOSSAPP-914 §9): runs, PRs, builds, deploys and agents of the open
+                  project, and the other projects — one keystroke from anywhere. */}
+              <JumpResults query={query} projectId={scope.projectId ?? scope.project}
+                           projects={projects?.items ?? []} onDone={() => setPaletteOpen(false)} />
               {/* START SOMETHING: the New project composer, like the top bar's New build. */}
-              {!query.trim() || "new build new project".includes(query.trim().toLowerCase()) ? (
+              {!query.trim() || "add project add a project new project new build new app".includes(query.trim().toLowerCase()) ? (
                 <button type="button" className={`bx-palette-item${filtered.length ? "" : " active"}`}
                         data-testid="palette-new-build"
                         title={NEW_BUILD_TIP}
                         onClick={() => { setPaletteOpen(false); openNewProject(); }}>
                   <Plus size={17} aria-hidden />
                   <span>
-                    <span style={{ fontWeight: 600 }}>New build</span>
-                    <span style={{ display: "block", fontSize: "0.78rem", color: "var(--muted)" }}>A new app or a feature</span>
+                    <span style={{ fontWeight: 600 }}>Add project</span>
+                    <span style={{ display: "block", fontSize: "0.78rem", color: "var(--muted)" }}>An idea, a repo or a folder</span>
                   </span>
                 </button>
               ) : null}
@@ -1879,3 +1965,45 @@ function MenuDetails({ className, children }: { className: string; children: Rea
   const { onToggle } = useDetailsDismiss(ref);
   return <details ref={ref} className={className} onToggle={onToggle}>{children}</details>;
 }
+
+/** The avatar menu's rows beyond your account: the organization (and switching it), New build, and
+ *  what the old System menu held — edition, budget state and the console version. */
+function ShellMenuRows({ org, onSwitchOrg, edition, budgetState, tone, projects, projectId }: {
+  org?: { id: string; name: string }; onSwitchOrg: () => void; edition: string;
+  budgetState: string; tone: "green" | "amber" | "red";
+  projects?: { items: ProjectMenuItem[]; homeId: string }; projectId?: string;
+}) {
+  return (
+    <>
+      {projects && projectId ? (
+        <>
+          {/* THE PROJECT MENU (switch, + New project, Archive project…, Show archived): moved here
+              from the bar, where the breadcrumb and the rail's list now say which project is open. */}
+          <div className="bx-menu-sep" role="separator">Project</div>
+          <div className="bx-menu-project">
+            <ProjectMenu projects={projects.items} activeId={projectId} homeId={projects.homeId} orgId={org?.id} />
+          </div>
+        </>
+      ) : null}
+      <div className="bx-menu-sep" role="separator">Organization</div>
+      {org ? (
+        <button type="button" role="menuitem" className="bx-menu-org" data-testid="menu-switch-org"
+                onClick={onSwitchOrg} title="Switch organization">
+          <Buildings size={16} aria-hidden /><span className="bx-menu-org-name">{org.name}</span>
+          <span className="bx-menu-aside">Switch</span>
+        </button>
+      ) : null}
+      <GatedButton permission="workflow_run:start" type="button" role="menuitem" data-testid="menu-new-build"
+                   title={NEW_BUILD_TIP} onClick={() => openNewProject()}>
+        <Plus size={16} aria-hidden /> New build
+      </GatedButton>
+      <div className="bx-menu-sep" role="separator">System</div>
+      <div className="bx-system-panel" data-testid="menu-system">
+        <div><span>Edition</span><EditionChip editionId={edition} /></div>
+        <div><span>Budget</span><strong className={`bx-system-budget ${tone}`}>{budgetState || "unknown"}</strong></div>
+        <div><span>Console</span><ConsoleToggle current="v1" orgId={org?.id} /></div>
+      </div>
+    </>
+  );
+}
+

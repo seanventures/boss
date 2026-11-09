@@ -7,7 +7,10 @@ import { apiWrite } from "../../lib/api-write";
 import { askConsent, consentFromBody } from "../../lib/identity/consent";
 import { identityRefusal, identitySentence } from "../../lib/identity/guarded-action";
 
-export type WriteResult<T = Record<string, unknown>> = { ok: boolean; status: number; body: T | null; error: string | null };
+export type WriteResult<T = Record<string, unknown>> = { ok: boolean; status: number; body: T | null; error: string | null;
+  /** A refusal's own body (e.g. THE start door's 409 `{detail: {message, readiness}}`), for a
+   *  caller that acts on it; `error` is already its sentence. */
+  refusal?: unknown };
 
 /** The API's own sentence, never its raw code. apiWrite already opened "Confirm it's you" and
  *  retried once for a step_up_required (lib/api-write.ts); one that still reaches here was
@@ -16,8 +19,11 @@ export type WriteResult<T = Record<string, unknown>> = { ok: boolean; status: nu
 function said(body: unknown, status: number): string {
   const identity = identityRefusal(status, body);
   if (identity) return identitySentence(identity);
-  const o = (body && typeof body === "object" ? body : {}) as { detail?: unknown; error?: unknown };
-  const d = typeof o.detail === "string" ? o.detail : typeof o.error === "string" ? o.error : "";
+  const o = (body && typeof body === "object" ? body : {}) as { detail?: unknown; error?: unknown; message?: unknown };
+  // A structured refusal says its sentence in `detail.message` (or `message` beside `error`).
+  const dm = o.detail && typeof o.detail === "object" ? (o.detail as { message?: unknown }).message : undefined;
+  const d = typeof o.detail === "string" ? o.detail : typeof dm === "string" ? dm
+    : typeof o.error === "string" ? o.error : typeof o.message === "string" ? o.message : "";
   if (d === "consent_required") return "Needs your consent";
   return d || `The API answered ${status}.`;
 }
@@ -42,7 +48,7 @@ export async function obsWrite<T = Record<string, unknown>>(
       try { parsed = await r.json(); } catch { /* empty */ }
     }
     return r.ok ? { ok: true, status: r.status, body: parsed as T, error: null }
-                : { ok: false, status: r.status, body: null, error: said(parsed, r.status) };
+                : { ok: false, status: r.status, body: null, error: said(parsed, r.status), refusal: parsed };
   } catch (e) {
     return { ok: false, status: 0, body: null, error: e instanceof Error ? e.message : String(e) };
   }

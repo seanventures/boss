@@ -494,6 +494,29 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
                 engine, lambda c: notify.plan(c, settings, pid, now))) or {}).get("enqueued", 0)
         out["enqueued"] = planned
     guard("plan", plan)
+
+    # Project › Settings › Notifications: Needs-you and PR-ready messages to the channels a
+    # person routed them to (notify_routes), queued in the same outbox, delivered just below.
+    def routes():
+        from .project_experience import notify_routes
+
+        return notify_routes.plan_all(engine, settings, now)
+    # DECISION DEADLINES ON THE TICK: hold-default questions past their deadline are swept
+    # without waiting for someone to open Approvals, and a boundary question is kept open
+    # (one `decision.overdue` reminder) or reopened, never silently expired
+    # (DecisionService.expire_overdue / decision_actions.never_expires).
+    def deadlines():
+        from .cleared_causes import reconsider_merge_questions
+        from .decisions import DecisionService
+
+        # A merge question whose PR was merged or closed on GitHub (or whose change set
+        # settled) withdraws itself first, rate-limited; GitHub unreachable leaves it standing.
+        with begin(engine) as c:
+            reconsider_merge_questions(c, settings)
+        with begin(engine) as c:
+            return DecisionService(settings).expire_overdue(c)
+    out["decisions_expired"] = guard("deadlines", deadlines) or 0
+    out["routed"] = guard("routes", routes)
     out["delivery"] = guard("deliver", lambda: notify.deliver_due(engine, settings, now=now))
     from . import bundled_monitoring
 
@@ -509,6 +532,15 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
         with begin(engine) as c:
             return person_wait.poll_due(c, settings, now=now)
     out["person_wait_resumed"] = guard("person_wait", person_wait_sweep) or 0
+
+    # ALWAYS-ON DIAGNOSIS: every build that stopped moving, failed or waits on a person is
+    # investigated by the Shepherd without anyone asking (stuck_work): cause with evidence, the
+    # safe move taken, ONE card only when a person must act.
+    def stuck_sweep():
+        from . import stuck_work
+
+        return stuck_work.sweep(engine, settings, now=now, adapter=adapter)
+    out["stuck_work"] = guard("stuck_work", stuck_sweep)
     return out
 
 

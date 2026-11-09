@@ -518,11 +518,14 @@ def build_templates_router() -> APIRouter:
         except TemplateError as exc:
             return _refused(exc)
 
-    # The demo login passwords BOSS generated for this app (secrets.demo_login_values): shown to
-    # whoever may set the app's secrets, so a preview's reviewer and a deploy's owner can sign
-    # in as the demo users. A value a person set is never returned.
+    # The demo login passwords BOSS generated for this app (secrets.demo_login_values). THE SAME
+    # BAR AS Project › Settings' reveal (GET /v1/projects/{id}/demo-logins/reveal, BOSSAPP-914
+    # §11): owner/admin with a fresh step-up (`secret:manage`), never cached, and every reveal
+    # audited as `project.demo_logins_revealed`. It was `app_secret:write`, which an operator
+    # holds: two doors to the same passwords with two different bars. A value a person set is
+    # never returned.
     @router.get("/v1/apps/{app_key}/demo-logins")
-    @permit(P.APP_SECRET_WRITE, scope=Scope.project(query="project_id"))
+    @permit(P.SECRET_MANAGE, scope=Scope.project(query="project_id"))
     def app_demo_logins(request: Request, app_key: str, project_id: str, env: str = "preview") -> Any:
         ctx = _ctx(request)
         if env not in secrets_service.ENVS:
@@ -540,11 +543,26 @@ def build_templates_router() -> APIRouter:
                 targets = (secrets_service.deploy_target_demo_logins(
                     db, get_settings(), project_id=project_id, app_key=app_key)
                     if env == "deploy" else [])
+                # WHO signs in with each password (BOSSAPP-914 §11: the sheet showed a password
+                # and no user name): the app's demo users, by name, from its boss.deploy.yaml
+                # `demo_logins:` or the users onboarding found in its seed file.
+                from boss_engine.services.project_experience import demo_logins as demo_users
+
+                people, users_from = demo_users.users(db, project_id)
+                from . import identity_guard
+
+                # Audited like Project › Settings' reveal: who, which environment, how many
+                # values (never a value).
+                demo_users.record_reveal(db, project_id, identity_guard.actor_for(ctx), env,
+                                         len(values) + len(targets))
         except TemplateError as exc:
             return _refused(exc)
-        return JSONResponse({"app_key": app_key, "env": env,
-                             "demo_logins": [{"name": k, "value": v} for k, v in values.items()]
-                             + targets},
+        rows = [{"name": k, "value": v} for k, v in values.items()] + targets
+        for row in rows:
+            row["users"] = [p for p in people if p["password_key"] == row["name"]] or (
+                people if len(rows) == 1 or len({p["password_key"] for p in people}) == 1 else [])
+        return JSONResponse({"app_key": app_key, "env": env, "demo_logins": rows,
+                             "users": people, "users_from": users_from},
                             headers={"Cache-Control": "no-store"})
 
     @router.delete("/v1/apps/{app_key}/secrets/{name}")

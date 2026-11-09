@@ -1,5 +1,6 @@
 "use client";
 
+import { changeHref, linkTarget } from "../../lib/repo-links";
 import Link from "next/link";
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
 // so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
@@ -307,9 +308,8 @@ function RunRow({ run }: { run: V2Run }) {
               {run.pull_request_url ? (
                 <a
                   className="v2-meta-link"
-                  href={run.pull_request_url}
-                  target="_blank"
-                  rel="noreferrer"
+                  href={changeHref(run.pull_request_url)}
+                  {...linkTarget(run.pull_request_url)}
                   data-testid={`v2-run-pr-${run.id}`}
                 >
                   PR #{run.pull_request_number} ↗

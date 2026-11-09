@@ -4,6 +4,7 @@
  * ③ Try it: one sentence becomes a pull request on the default repository. The finish line of
  * setup, and on the board a one-line Quick PR for small work.
  */
+import { changeHref, linkTarget } from "../../lib/repo-links";
 import { GatedButton } from "../../components/gated";
 import React, { forwardRef, useEffect, useRef, useState } from "react";
 
@@ -77,8 +78,8 @@ export const TryRow = forwardRef<HTMLElement, {
             <div className="su-line" data-testid="su-try-progress">
               {last.pr_url ? (
                 <>
-                  <a className="su-pill su-tone-green" href={last.pr_url} target="_blank"
-                     rel="noreferrer noopener" title={last.pill.tip} data-tip={last.pill.tip}
+                  <a className="su-pill su-tone-green" href={changeHref(last.pr_url)} {...linkTarget(last.pr_url)}
+                     title={last.pill.tip} data-tip={last.pill.tip}
                      data-testid="su-try-pr">{last.pill.label}</a>
                   {justOpened ? <span>Your first PR is open.</span> : null}
                 </>

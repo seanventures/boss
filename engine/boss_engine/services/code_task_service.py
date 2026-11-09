@@ -1660,6 +1660,69 @@ def refuse_finished_retry(prev: dict, fix_note: str = "") -> None:
     )
 
 
+def extend_title(engine, run_id: str, what: Any) -> Optional[str]:
+    """"Follow-up: More tests — <the work's own name>" for an extend that says what it is, or
+    None (retry_code_task's own naming) when it says nothing. The "Follow-up: … —" lead is the
+    one every surface already strips to group the pass under its build (project_experience.work
+    .clean_title, naming.LABELS)."""
+    what = " ".join(str(what or "").split())[:60]
+    if not what:
+        return None
+    try:
+        with _transaction(engine) as c:
+            prev = load_code_task_run(c, run_id) or {}
+    except Exception:  # noqa: BLE001 — a missing name is not worth failing the pass for
+        prev = {}
+    from .project_experience.work import clean_title
+
+    base = clean_title(prev.get("title") or "")
+    return (f"Follow-up: {what} — {base}" if base else what)[:160]
+
+
+class BranchOwned(RetryRefused):
+    """Another run of the same lineage is already working on its branch and pull request."""
+
+
+def lineage_branch_owner(connection, project_id: str, root: str,
+                         exclude: tuple[str, ...] = ()) -> Optional[dict]:
+    """The run of lineage `root` that is working on its branch right now, or None.
+
+    ONE OWNER PER PULL REQUEST. Every continuation of a lineage (a retry, an extend, More
+    tests, a deferred-findings follow-up) works on the one branch `boss/code/<root>` and opens
+    or updates the one pull request on it. helpdesk-ai-v3 (2026-11-07): the build's
+    deferred-findings follow-up (crun_c45a6960) and the workflow's More tests pass
+    (crun_d2316785, then titled "· retry 1") started 25 seconds apart on that branch, both
+    pushed to it, and both claimed PR #2 — two merge questions for one PR in Needs you, and a
+    deploy of a head neither run's review had seen. `exclude`: the runs that hand the branch
+    on (the attempt being continued, a parent finishing)."""
+    if not root or connection is None or not hasattr(connection, "execute") \
+            or hasattr(connection, "get_run"):
+        return None
+    try:
+        rows = connection.execute(sql(
+            "SELECT id, title, pull_request_number FROM code_task_runs WHERE project_id = :p "
+            "AND status = 'running' AND (id = :r OR finalize_ctx->>'root_run_id' = :r) "
+            "ORDER BY created_at DESC"), {"p": project_id, "r": root}).mappings().all()
+    except Exception:  # noqa: BLE001 — an unreadable lineage never blocks the work
+        logger.debug("lineage_branch_owner_failed", exc_info=True)
+        return None
+    for r in rows:
+        if str(r["id"]) not in exclude:
+            return dict(r)
+    return None
+
+
+def refuse_second_owner(owner: Optional[dict]) -> None:
+    """Raise BranchOwned when `owner` (lineage_branch_owner) is already on the branch."""
+    if not owner:
+        return
+    pr = f" (PR #{owner['pull_request_number']})" if owner.get("pull_request_number") else ""
+    raise BranchOwned(
+        f"{owner['id']} “{str(owner.get('title') or '')[:80]}” is already working on this "
+        f"branch{pr}. One run owns a pull request at a time: wait for it to finish, then "
+        "continue from it.")
+
+
 #: How many lines of the previous attempt's verify output a retry is shown.
 PREVIOUS_FAILURE_LINES = 60
 
@@ -1895,6 +1958,10 @@ def retry_code_task(
     attempt = int(fctx_prev.get("attempt", 1)) + 1
     root = fctx_prev.get("root_run_id") or run_id
     refuse_finished_retry(prev, fix_note)
+    # ONE OWNER PER PULL REQUEST (lineage_branch_owner): never a second run on the branch.
+    with _transaction(engine) as c:
+        refuse_second_owner(lineage_branch_owner(c, prev["project_id"], root,
+                                                 exclude=(run_id,)))
 
     # ---- Failure-loop guardrails (release blocker fix) -----------------------------------
     # An `infra` failure is NOT the task's fault, so re-running the same task on the same
@@ -2105,6 +2172,12 @@ def retry_code_task(
                           # Carried across every attempt: a retry is the same outcome, and a
                           # console that loses that shows one app as several.
                           **({"origin": fctx_prev["origin"]} if fctx_prev.get("origin") else {}),
+                          # A RETRY OF A FOLLOW-UP IS STILL A FOLLOW-UP. Without the mark the
+                          # recursion guard ("a follow-up never spawns its own follow-up") saw a
+                          # fresh build: every repair round of a checks-failing follow-up spawned
+                          # another, and boss-platform grew chains titled "Follow-up: checks
+                          # failing — Follow-up: checks failing — Follow-up: …" (2026-10-28..11-03).
+                          **({"is_followup": True} if fctx_prev.get("is_followup") else {}),
                           # The same BUILDER across every attempt (runs.code_task_builder): the
                           # agent the parent ran as, which the carried grant names.
                           **({"agent": fctx_prev["agent"]} if fctx_prev.get("agent") else {}),
@@ -2450,7 +2523,10 @@ def open_parked_with_checks_failing(engine, settings: Settings, jobs, run_id: st
                 spec=dict(run.get("spec") or {}), base_branch=branch,
                 findings=cf.followup_findings(record), parent_run_id=run_id,
                 parent_title=run["title"], parent_root=root_run,
-                parent_origin=fctx.get("origin"), checks_failing=record)
+                parent_origin=fctx.get("origin"), checks_failing=record,
+                # The workflow run it belongs to, as the gate path passes it: the follow-up is
+                # listed (and its merge approval shown) on that run, not as work of its own.
+                parent_workflow_run_id=fctx.get("workflow_run_id"))
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.deferred_findings_task", "boss",
                            "code_task_run", run_id,
@@ -2832,6 +2908,10 @@ def authority_refusal_words(reason: str, agent_name: Optional[str] = None) -> st
         return (f"The grant this build runs under does not let {who} act, and {who} is the agent "
                 "that builds it. Retry it from the console (in a workflow run, Retry on the build "
                 f"step): you will be asked to consent again, this time for {who} too.")
+    if "captain_review" in r:
+        return ("Always-on builds in this project wait for a person's review before they start "
+                "(Project ▸ Settings ▸ Autonomy & budget). Approve the card to let it start on the "
+                "project's Captain authority, or reject it to drop it.")
     if "no_grant" in r or "no grant" in r or r == "noauthority":
         return ("No one's authority covers this build: it was started by BOSS itself (or a key) and no "
                 "person's grant lets its builder act. Start it again from the console as a person "
@@ -2964,21 +3044,51 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
                 # (L2b) instead of failing the run outright.
                 from . import person_wait
 
-                budget = get_engine_ports().budget
+                ports = get_engine_ports()
+                budget = ports.budget if ports is not None else None
                 reservation_id = run.get("reservation_id")
                 budget_adapter = SimpleNamespace(
-                    release=lambda **_: _release(
+                    release=lambda **_: (_release(
                         budget, c, run["project_id"], reservation_id, words, run_id=run_id,
-                    ),
+                    ) if budget is not None else None),
                 )
-                person_wait.enter_waiting_on_person(
-                    c, budget_adapter, run_id=run_id, project_id=run["project_id"],
-                    task_id=run.get("task_id"), reason=exc.reason, question=words,
-                )
+                try:
+                    with c.begin_nested():
+                        waited = person_wait.enter_waiting_on_person(
+                            c, budget_adapter, run_id=run_id, project_id=run["project_id"],
+                            task_id=run.get("task_id"), reason=exc.reason, question=words,
+                            refused_grant_id=_refused_grant(c, run_id),
+                        )
+                except Exception as wait_exc:  # noqa: BLE001
+                    # Pausing failed: never a 500 the worker cannot report (the run would be
+                    # re-leased for ever, saying "Queued"). Block it in words instead.
+                    logger.exception("person_wait_failed run_id=%s", run_id)
+                    _fail(c, run_id, run["project_id"],
+                          f"{words} (BOSS could not pause it to ask: {type(wait_exc).__name__})",
+                          status="blocked", failure_class="needs_human", reason_code="no_authority")
+                    return {"status": "blocked", "done": True, "reason": "no_authority",
+                            "authority": exc.reason, "message": words}
+                if waited.get("resumed"):
+                    # A standing grant already covers it: re-queued under that grant, no ask.
+                    return {"status": "running", "done": True, "reason": "authority_found",
+                            "grant_id": waited.get("grant_id")}
         return {"status": "waiting_on_person", "done": True, "reason": "no_authority",
                 "authority": exc.reason, "message": words}
     finally:
         owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
+
+
+def _refused_grant(c, run_id: str) -> Optional[str]:
+    """The grant the refused attempt carried (its build's recorded authority), so a refusal under
+    a grant is never 'resumed' under that same grant in a loop."""
+    try:
+        from boss_engine.identity.runs import original_build_authority
+
+        with c.begin_nested():
+            acting = original_build_authority(c, run_id)
+        return getattr(acting, "grant_id", None)
+    except Exception:  # noqa: BLE001 — unknown: treat as none
+        return None
 
 
 def _run_project(engine, run_id: str) -> Optional[str]:

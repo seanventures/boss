@@ -40,6 +40,8 @@ export function clearStepParam(): void {
     const url = new URL(window.location.href);
     if (!url.searchParams.has(NEW_PROJECT_PARAM)) return;
     url.searchParams.delete(NEW_PROJECT_PARAM);
+    // A "Build it" prefill (brief, title) is consumed with the sheet.
+    url.searchParams.delete("brief"); url.searchParams.delete("title");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   } catch { /* non-browser */ }
 }
@@ -122,9 +124,11 @@ export type RepoFacts = {
            runs_as: string | null };
   read_from: "graph" | "github" | "given" | null;
   mapping: Mapping; in_project: boolean; suggested_name: string;
+  /** How many files the repository has (Map code "0 / 214 files"). */
+  files_total?: number | null;
 };
 export type Mapping = { state: "not_started" | "queued" | "running" | "done" | "failed"; percent: number; done: boolean;
-                        error?: string | null };
+                        error?: string | null; files?: number | null; parsed?: number | null };
 
 /** The rows of "BOSS reads it", each said or left as "At first build". */
 export function factRows(f: RepoFacts): { label: string; value: string; known: boolean }[] {
@@ -238,11 +242,23 @@ export const startProjectApi = {
   },
 };
 
+/** The slugs of the projects that exist (GET /v1/projects). */
+async function takenSlugs(): Promise<Set<string>> {
+  const r = await idGet<{ items?: { slug?: string; id?: string }[] }>("/v1/projects");
+  return new Set((r.items ?? []).map((p) => String(p.slug ?? p.id ?? "")));
+}
+
 /** Create a project under `name`, or `name 2`, `name 3`… when the name is taken (the sample and
  *  the presets: pressing Try a sample twice makes a second Hello World, never an error). */
 export async function createFresh(name: string, opts: { description?: string; type?: "app" | "knowledge_graph" } = {},
-                                  create = startProjectApi.create): Promise<CreatedProject> {
-  for (let n = 1; n <= 20; n++) {
+                                  create = startProjectApi.create,
+                                  taken: () => Promise<Set<string>> = takenSlugs): Promise<CreatedProject> {
+  // The free name is read from the project list first, so the press does not probe the API with
+  // refused creates (each was a 409 in the browser's console); a list that can't be read, or a
+  // race, still falls back to the next number.
+  const used = await taken().catch(() => new Set<string>());
+  const first = Array.from({ length: 20 }, (_, i) => i + 1).find((n) => !used.has(slugOf(n === 1 ? name : `${name} ${n}`))) ?? 1;
+  for (let n = first; n <= 20; n++) {
     try {
       return await create(n === 1 ? name : `${name} ${n}`, opts);
     } catch (e) {
@@ -253,11 +269,44 @@ export async function createFresh(name: string, opts: { description?: string; ty
 }
 
 /** Where a project opens (its page), keeping the org. */
-export function projectPageHref(projectId: string, homeId: string): string {
+export function projectPageHref(projectId: string, homeId: string, area: "project" | "overview" = "project",
+                                tab: "onboarding" | null = null): string {
   const url = typeof window === "undefined" ? new URL("http://x/") : new URL(window.location.href);
   const p = new URLSearchParams(url.search);
   for (const k of [NEW_PROJECT_PARAM, "task", "run", "build", "role", "kg_tab", "kg_node", "kg_scan", "kg_sub", "wfr"]) p.delete(k);
   if (projectId === homeId) p.delete("project_id"); else p.set("project_id", projectId);
-  p.set("area", "overview");
+  // THE PROJECT PAGE (BOSSAPP-914): a new project opens where Helm's onboarding shows. From the
+  // first run (`first_run=1`) it opens the guided first run beside it instead.
+  if (p.get("first_run") === "1" && p.get("area") === "projects") { p.set("project_id", projectId); return `/?${p.toString()}`; }
+  p.set("area", area);
+  p.delete("tab"); p.delete("drawer");
+  // A project made from a repository lands on Helm's onboarding (screen 10), which starts by itself.
+  if (tab && area === "project") p.set("tab", tab);
   return `/?${p.toString()}`;
+}
+
+// ── The sample's install-wide check, BEFORE anything is created (00a-26) ───────────────────
+
+/** Needs a new project cannot bring with it: the install's model. A sample started without one
+ *  used to create its project (201) and then be refused (409), leaving an empty project behind. */
+export const INSTALL_WIDE_NEEDS = ["model"] as const;
+
+type ReadinessWire = { ready?: boolean; checked?: { key: string; ok: boolean }[]; missing?: { key: string }[]; [k: string]: unknown };
+
+/** The workflow's readiness on the home project, cut to the install-wide needs that are missing
+ *  (null when none is, or when the check cannot be read — the start's own refusal still guards).
+ *  The sheet shows it as the same refusal panel, and creates nothing. */
+export async function installWideRefusal(homeId: string, workflowKey: string,
+                                         get: <T>(path: string) => Promise<T> = idGet,
+                                         accepted: string[] = []): Promise<ReadinessWire | null> {
+  let wire: ReadinessWire;
+  try {
+    wire = await get<ReadinessWire>(`/v1/delivery-workflows/${enc(workflowKey)}/readiness?project_id=${enc(homeId)}`);
+  } catch {
+    return null;
+  }
+  const wide = new Set<string>(INSTALL_WIDE_NEEDS);
+  const missing = (wire.missing ?? []).filter((m) => wide.has(m.key) && !accepted.includes(m.key));
+  if (!missing.length) return null;
+  return { ...wire, ready: false, missing, checked: (wire.checked ?? []).filter((c) => wide.has(c.key)) };
 }

@@ -211,7 +211,8 @@ def apply_changeset(engine: Engine, service: ResourcePlaneService, *, changeset_
         c.execute(text("UPDATE changeset_operations SET status='applying', updated_at=now() WHERE changeset_id=:id"),
                   {"id": changeset_id})
         decision_id = create_blocking_decision(
-            c, project, None, f"Reconcile provider apply {changeset_id} if completion is lost",
+            c, project, None, f"Check whether the provider change “{changeset.get('title') or 'its ChangeSet'}” "
+            "finished applying, if its completion is lost",
             {"action": "reconcile_provider_changeset", "changeset_id": changeset_id,
              "reservation_id": changeset['reservation_id']},
             {"held_usd_micros": int(changeset['expected_cost_usd_micros'])},

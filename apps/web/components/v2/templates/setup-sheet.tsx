@@ -21,6 +21,7 @@
  * viewer sees every control greyed with the reason (components/gated.tsx). An address inside BOSS
  * (api:3001) is never offered as one to register.
  */
+import { MovedToProjectSettings } from "../../../app/projects/moved";
 import React, { useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import { GatedButton, useGate } from "../../gated";
@@ -655,6 +656,7 @@ function SettingsView({ ctx, cards }: { ctx: Ctx; cards: ConnectorCard[] }) {
 
       <div className="tpl-set-group" data-testid="tpl-deploy-values">
         <h3 title="Settings you set: the app reads them at deploy (and preview, when its own files declare them). Write-only.">Your settings</h3>
+        <MovedToProjectSettings section="deploy_values" testid="tpl-deploy-values-moved" />
         {yours.length ? (
           <ul className="tpl-rows">
             {yours.map((r) => (
@@ -719,7 +721,8 @@ function SettingsView({ ctx, cards }: { ctx: Ctx; cards: ConnectorCard[] }) {
 
 /** DEMO LOGINS: the password the app's demo users sign in with, which BOSS generated for its
  *  previews and its deploy (its seed refuses to run without one). Hidden until asked for, behind
- *  the same check as setting a secret; a value a person set is never shown here. */
+ *  the same bar as Project › Settings' reveal — owner/admin with a fresh step-up (secret:manage),
+ *  audited; a value a person set is never shown here. */
 export function DemoLogins({ projectId, appKey, compact = false }: { projectId: string; appKey: string; compact?: boolean }) {
   const [shown, setShown] = useState<DemoLogin[] | null>(null);
   const [why, setWhy] = useState("");
@@ -738,8 +741,10 @@ export function DemoLogins({ projectId, appKey, compact = false }: { projectId: 
   return (
     <div className="tpl-demo" data-testid={compact ? "tpl-demo-logins-row" : "tpl-demo-logins"}>
       {compact ? null : <h4 title="The password BOSS generated for the app's demo users, for its previews and its deploy">Demo logins</h4>}
+      {/* Demo logins live on Project › Settings now, with their user names (contract §11). */}
+      <MovedToProjectSettings section="demo_logins" testid={compact ? "tpl-demo-logins-moved-row" : "tpl-demo-logins-moved"} />
       {shown === null ? (
-        <GatedButton permission="app_secret:write" projectId={projectId} type="button" className="cap-btn"
+        <GatedButton permission="secret:manage" projectId={projectId} type="button" className="cap-btn"
                      data-testid={compact ? "tpl-demo-logins-row-show" : "tpl-demo-logins-show"} onClick={() => void show()}
                      title="Show the demo login passwords BOSS generated (asks you to confirm it is you)">
           {compact ? "Show password" : "Show demo login passwords"}

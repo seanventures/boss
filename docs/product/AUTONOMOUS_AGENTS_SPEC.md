@@ -12,7 +12,7 @@ BOSS notices problems on its own, decides who should work them, and its agents w
 
 The autonomous agents ship as a **preview, off by default**. With nothing set, the worker's minute tick only expires leases: no signal sweep, no Chief-of-Staff triage, no squad turn, no automatic Discovery dossier and no Recommended-roadmap tick. The **Agents at work** area still shows, **Load demo** still works on a demo project, and a person's **Triage now** runs once in `propose` mode (every handover is a Needs-you card).
 
-To turn it on, set in the install's `.env` and restart the API and worker:
+To turn it on, open **Govern › Autonomy › Always-on agents** (`PUT /v1/ambient/mode`, `autonomy:manage`, audited as `ambient.mode_changed`) and choose **Ask first** (`propose`) or **Act within levels** (`route`). The choice is install-wide (`system_state['ambient_mode']`) and takes effect on the next tick; no restart. To pin the mode on the server instead, set it in the install's `.env` and run `boss update` (or recreate the api and worker); the community compose forwards every `BOSS_AMBIENT_*` key (`engine/tests/test_compose_forwards_every_setting_an_operator_is_told_to_set.py` pins that), and a pinned mode shows as pinned in the console:
 
 ```sh
 BOSS_AMBIENT_COS=propose   # safe: every handover asks a person first (route = act on A2+ classes)
@@ -21,7 +21,7 @@ BOSS_AMBIENT_COS=propose   # safe: every handover asks a person first (route = a
 # BOSS_AMBIENT_LEARNING=1  # the Recommended-roadmap tick, even with the Chief of Staff off
 ```
 
-`BOSS_AMBIENT_DISABLED=1`, **Stop all** and a project's **Stop** still win over every setting. The gates live in `services/ambient/policy.py` (`cos_mode`, `signals_on`, `learning_on`); `engine/tests/test_the_autonomous_agents_ship_off_by_default.py` pins them.
+`BOSS_AMBIENT_DISABLED=1`, **Stop all** and a project's **Stop** still win over every setting. The gates live in `services/ambient/policy.py` (`mode_state`, `cos_mode`, `signals_on`, `learning_on`); `engine/tests/test_the_autonomous_agents_ship_off_by_default.py` pins them.
 
 ## 1. How to see it
 
@@ -347,7 +347,7 @@ reserve(c, settings, *, project_id, work_item_id, amount_usd_micros, reason,
 
 **Task classes** (key · default · ceiling · risk · owner role): `ci_setup A1/A2 low operations_engineer` (909) · `ci_fix_boss_pr A2/A3 low software_engineer` · `red_main A1/A2 medium sre` · `security_patch A2/A3 medium security_reviewer` · `dependency_upgrade A1/A3 low` · `flaky_test A1/A3 low qa` · `missing_tests A1/A2 low qa` · `doc_drift A1/A2 low docs_writer` · `todo_triage A0/A1 low chief_of_staff` · `dead_code A1/A2 medium` · `issue_triage A1/A2 low` · `incident_response A1/A3 high sre` · `incident_staging_mitigation A2/A3 medium sre` · `perf_regression A1/A2 medium sre` · `stale_handoff A1/A2 low chief_of_staff` · `cost_anomaly A1/A3 low finops_sentinel` · `platform_self_fix A1/A2 medium` · `release_notes A1/A2 low docs_writer` · `knowledge_refresh A1/A3 low archivist` · `iac_drift A1/A1 high infra_steward` · `workflow_failure A1/A2 medium` · `system_health A1/A2 medium infra_steward`.
 
-**Actions** (key · min level · risk · reversibility): `observe`, `record_finding` A0 · `propose`, `ask_question`, `comment` (compensable), `convene_meeting` A1 · `label`, `nudge` (compensable), `start_workflow`, `open_draft_pr`, `staging_rollback`, `staging_restart`, `silence_rule` A2 · `prod_rollback`, `prod_restart` A3 high · `quarantine_test` A3 low · **`merge`, `deploy_prod`, `send_external`, `pay` — always a person**.
+**Actions** (key · min level · risk · reversibility): `observe`, `record_finding` A0 · `propose`, `ask_question`, `comment` (compensable), `convene_meeting`, `route`, `nudge` (the Chief of Staff's own act inside BOSS, not on the compliance boundary) A1 · `label`, `start_workflow`, `open_draft_pr`, `staging_rollback`, `staging_restart`, `silence_rule` A2 · `prod_rollback`, `prod_restart` A3 high · `quarantine_test` A3 low · **`merge`, `deploy_prod`, `send_external`, `pay` — always a person**.
 
 Gate semantics: stopped → not allowed. Always-a-person action → `needs_person`. Level below the action's → `needs_person` if the class is ≥ A1 (propose it), else observe only. Otherwise allowed; `needs_person` is still true when the consensus mode is `squad_vote_and_person` or `recommend_only`. The class's risk raises the risk only for acting actions (A2+).
 
@@ -479,7 +479,43 @@ Seats (labels on the diagram): **SRE lead** `agent:sre` · **Investigator** `age
 | `tick(c, *, project_id, …)` | incidents watching recovery |
 | `incident_class(environment)` | `incident_staging_mitigation` for staging/preview/dev…, else `incident_response` |
 | `Mind` (`AgentMind` through the one agent path ≤ 6 calls a pass · `RuleMind` · `ScriptedMind`) and `Effects` (`BossEffects` · `FixtureEffects`) | judgement and side effects are separately testable |
-| Demo | `incident_squad_demo.run_through_chief_of_staff(c, project_id, …)` (the integrated path), `run_scenario` (the squad's own intake stand-in), the scenario clock re-times demo rows to the D2 pace (`MILESTONES`) |
+| Demo | `incident_squad_demo.run_through_chief_of_staff(c, project_id, …)` (the integrated path), `run_scenario` (the squad's own intake stand-in), the scenario clock re-times demo rows to the D2 pace (`MILESTONES`). No hand-seeded lesson: with none yet, the same fault first runs once on staging and its close-out writes the lesson (`learn_first`) |
+| The fix's start door | `event_dispatch.SQUAD_DOOR` (`incident_squad`): Incident Response stays per-rule-only for every other door; the squad's door is admitted only when `squad_authority` re-derives it from the item — a live ambient incident item of this project, and either the class's level allows `start_workflow` without a person (staging mitigation at A2+) or a person approved on its card (production). A refused start is never recorded as "Start fix build" |
+| Classification | `chief_of_staff.alert_facts` reads the alert's rows (target environment, rule metric, severity, apps firing): staging + one app → `incident_staging_mitigation`; production, unknown or a wide blast radius → `incident_response`; latency alerts reach the squad too. The model, when asked, sees the same facts |
+| The learning loop | recall: `similar_incidents` → the investigator's context and "Seen before INC-n"; apply: `consulted`/`reused` edges + `kg_usage` rows anchored on the incident (`learning_writeback.log_incident_use`), the fix brief cites `[L:<id>]`; keep: the lead judges "same lesson?" (`Mind`, kind `same_lesson`) → `learning_writeback.reinforce` (seen again, the incident added, count kept) or a new precedent (`correlates_with` the old one; precedents are never superseded by subject). Shown as an "INC-n lesson" node in both flow diagrams and as "Learned in INC-1 · applied in INC-2" on the lesson's Graph panel. A resolved incident re-runs the incident detectors at once (`roadmap.on_event`, from the KG ingest) |
+| Where and what | `app_place(c, project_id, item, alert=None) -> (name, environment)`: the app by the name a person knows (the deployment target's, else the monitored service's) and the environment a row names — `""` when none does. Words a person reads use `Ctx.app_name` / `Ctx.env_known`; only gating treats an unnamed environment as production (`Ctx.environment`). A raw id (`svc_…`) is never a name |
+| Recovery with no BOSS monitor | `alert_recovery`: the item's own alerts are the evidence — all cleared (or only BOSS's own self-check) → recovered; still firing → waiting (the tick looks again) until `RECOVERY_ALERT_MINUTES` (30) → failing; no alert at all → `unknown`, which is never "still fails": it is "not confirmed — check it or close it?". The escalation goes through `asks.ask` (the project's one card) |
+
+### 7.15 One card per project — `ambient.asks` (2026-11-07)
+
+THE ONE WAY an always-on agent asks a person. The Chief of Staff (`ask_batch`, an incident hand-off in `propose` mode), a squad (`squad_turns._to_person`, the lead's `escalate`) and the SRE squad (`_Pass.escalate`) all call `asks.ask` / `asks.place`; none calls `board.needs_you` any more. Only the production-mitigation card (roll back prod? three answers) is its own card.
+
+```python
+asks.ask(c, settings, item_id, *, actor, token, entry) -> {outcome: joined|asked|parked, needs_you_decision_id}
+asks.place(c, settings, project_id, entries, *, actor, manual=False, urgent=False) -> {decision_id, asked} | {held}
+asks.squad_entry / question_entry / incident_entry(c, item, ...) -> entry   # plain words from rows
+asks.verdict(c, card, entry, mode) -> ('ask'|'off'|'backlog'|'policy'|'healthy'|'moot', item)
+asks.settle(c, project_id, card_id, item, entry, why)    # the item a withdrawn entry asked about
+asks.backlog_twin(c, item) / defer_to_backlog(c, item_id) / refused_launches(c, item_id)
+policy.grace(c, project_id, settings=None) -> {since, hours, open, reason} | None
+```
+
+- **One card.** A project has at most one open ambient card (`recommendation.card = "ambient"`, `batch` = its entries, each with `ask_kind` `handoff | squad | question | incident`). A new ask JOINS it; only with none open is a card raised, and only while `policy.ask_room` has room (`ASKS_PER_PROJECT_HOUR` cards an hour; an incident hand-off is exempt). With no room the ask is PARKED (the item waits on a person with no card, an `escalate` message carries the entry) and `ask_batch` carries it on the next card. A one-entry card lifts the entry's fields to the top (`proposal_id`, `recommended`, `dissent`, `asked_by` …), so it reads as before.
+- **Plain words from rows.** `subject_words`: a dependency → "body-parser has a known security hole (GHSA-27r3…) · upgrade past 2.3.0" (the package from the item, version and advisory from its OSV signal); an incident → "HelpDesk AI Demo (staging)"; else the file / repo / app name. The action → "open a draft PR", "start a fix run". The card: "Open a draft PR? body-parser has …", several → "Agents ask about 3 things: 2 security patches, an incident". What an agent wrote rides as `detail` with raw ids scrubbed (`asks.scrub`). `board.plain_subject` never returns a raw id.
+- **One answer, every entry.** `answers.on_answered` for a `card = ambient` decision: `chief_of_staff.carry_card` for the hand-offs, `asks.carry_card` for the rest — `squad` → `squad_turns.person_answered(entry=…)`, `question` → the squad goes on (approve) or the person takes it (reject), `incident` → take it over (approve, `incident_squad.on_needs_you_answered`) or close it (reject).
+- **Re-judged every tick** (`chief_of_staff.reconsider`, every open ambient card, including those squads raised on their own before this rule): settled in any mode — `healthy` (an incident whose alerts cleared, or only BOSS's own self-check → item resolved), `backlog` (onboarding's backlog proposes the same signal → item dismissed "Left to the onboarding backlog: Add CI", the agents' findings added to that backlog item as evidence), `policy` (BOSS refused the squad's decided action `MAX_REFUSED_LAUNCHES` = 2 times → a `policy:squad_launch` ledger row "BOSS refused to open a draft PR twice", item failed — never a question); then `off` withdraws what would still ask. A legacy card that still asks is withdrawn and its entry moves onto the one card (`rebatch`).
+- **Policy, not a question.** `squad_turns.stop_by_policy`: after the second refused launch (in `_approve`, or when the lead escalates about it) the outcome is recorded and the item ends. "Two consensus-approved attempts …" / "A2 gate has twice refused …" cards are no longer possible.
+- **BOSS's own self-check is not an app.** The `app_alerts` adapter leaves out meta alerts (`rule_kind = 'meta'`, `labels.boss_meta`, `labels.layer = 'boss'`), as every app-health surface already did; `alert_facts.meta` → `system_health` if one ever arrives.
+
+**New-project grace (design §4 L1/L5; the operator: "no squad acts within minutes of project creation without the person having seen the onboarding backlog").** Onboarding (L1 Discover) turns a new repository into a proposed backlog the person reviews; autonomy is earned per class (L5), and a project BOSS met minutes ago has earned nothing yet. So, from the onboarding run's start until a person has decided any backlog item, for at most `policy.NEW_PROJECT_GRACE_HOURS` (24 hours):
+
+1. the Chief of Staff leaves the dossier's own `scan.*` signals new (onboarding owns them); advisories and alerts are triaged at once;
+2. `policy.gate` answers `needs_person` for every A2+ action on a non-incident class — a squad may deliberate, but acting is a card;
+3. `owners.due_items` seats no squad for the kinds of work onboarding proposes (`ONBOARDING_CLASSES`: CI, tests, docs, TODOs);
+4. at any time, an item whose signal onboarding's backlog already proposes (open, snoozed, accepted or rejected) is never worked: `defer_to_backlog` at triage, at seating, on a waiting suggestion and on a card;
+5. incidents are exempt — a failing app does not wait for a backlog review. The grace lifts by itself after the window, so an unreviewed project never stalls.
+
+Tests: `engine/tests/test_a_fresh_project_gets_one_plain_card_not_a_flood.py` (the 2026-11-07 replay: mode on → fresh project → one card in plain words, nothing duplicating the backlog, the seven legacy cards settled in `route` and `off`, BOSS's self-check never an incident, a healthy app never asked "take over?").
 
 
 ---

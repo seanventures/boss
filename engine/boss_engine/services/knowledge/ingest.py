@@ -83,6 +83,12 @@ def _ingest_one(engine: Any, project_id: str, source_kind: str, source_id: str) 
         connection.execute(text(
             "DELETE FROM kg_ingest_queue WHERE project_id = :p AND source_kind = :k AND source_id = :i"),
             {"p": project_id, "k": source_kind, "i": source_id})
+    if record is not None and source_kind == "incident":
+        # A resolved incident is new evidence for the Recommended roadmap: re-evaluate the
+        # incident detectors now (event-driven), whoever resolved it.
+        from ..ambient import roadmap
+
+        roadmap.on_event(engine, project_id=project_id, evidence_source="incident")
     return "captured" if record is not None else "gone"
 
 

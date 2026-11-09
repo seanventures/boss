@@ -151,7 +151,8 @@ describe("a background refresh is visible without hunting for it", () => {
     // and conflating them is what produced the indicator that never turned off.
     expect(SHELL).toContain("{settling ? (");
     const settlingBlock = SHELL.slice(SHELL.indexOf("{settling ? ("),
-                                      SHELL.indexOf("<ProjectStrip"));
+                                      SHELL.indexOf("id={STRIP_NOTICE_SLOT}"));
+    expect(settlingBlock.length).toBeGreaterThan(20);
     expect(settlingBlock).not.toContain("refreshPending");
     expect(settlingBlock).not.toContain("refreshing");
   });

@@ -30,6 +30,10 @@ NOW = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
 ROOT = Path(__file__).resolve().parents[2]
 
 
+#: An action agents decide (not on decide_list): its hold-default decisions still expire.
+OFF_THE_LIST = "connection_reconciliation"
+
+
 def decision(did: str, status: str, *, action: str = "provide_github_token",
              default: str = "hold", deadline=None, **extra) -> dict:
     return {"id": did, "task_id": None, "question": f"q {did}", "status": status,
@@ -49,11 +53,24 @@ CASES = [
     (decision("revising", "revision_requested", action="role.autonomy_change"), "resolved"),
     # Expired on a hold default: nothing was applied and it can still be answered, but it is
     # not today's work.
-    (decision("expired_hold", "expired"), "expired"),
-    (decision("expired_reject", "expired", default="reject"), "resolved"),
+    (decision("expired_hold", "expired", action=OFF_THE_LIST), "expired"),
+    (decision("expired_reject", "expired", action=OFF_THE_LIST, default="reject"), "resolved"),
     # Overdue by a minute but not yet swept by expire_overdue: the inbox would show it as
     # expired, so it is expired everywhere.
-    (decision("overdue", "pending", deadline=NOW - timedelta(minutes=1)), "expired"),
+    (decision("overdue", "pending", action=OFF_THE_LIST, deadline=NOW - timedelta(minutes=1)),
+     "expired"),
+    # ON THE COMPLIANCE BOUNDARY a hold-default question never expires (never_expires): past
+    # its deadline it still waits on you — the four helpdesk merges (dec_409e473b…,
+    # 2026-11-08) vanished from Needs you by expiring. One an older build already expired
+    # stays in the expired group unless the sweep reopens it because work still waits on it.
+    (decision("merge_overdue", "pending", action="review_pull_request",
+              deadline=NOW - timedelta(minutes=1)), "needs_action"),
+    (decision("merge_expired", "expired", action="review_pull_request",
+              deadline=NOW - timedelta(days=1)), "expired"),
+    (decision("secret_expired", "expired"), "expired"),
+    # A boundary question whose default really applied something is not reopened.
+    (decision("merge_expired_reject", "expired", action="review_pull_request",
+              default="reject"), "resolved"),
     (decision("not_yet_due", "pending", deadline=NOW + timedelta(hours=2)), "needs_action"),
     (decision("approved", "approved"), "resolved"),
     (decision("rejected", "rejected"), "resolved"),
@@ -90,9 +107,10 @@ def test_the_command_center_counts_exactly_the_decisions_the_inbox_shows_under_n
                           == "needs_action"}
     inbox_expired = {r["id"] for r in rows if da.describe(r, NOW)["attention"] == "expired"}
     listed = {n["decision_id"] for n in out["needs_you"] if n["kind"] == "approval"}
-    assert listed == inbox_needs_action == {"pending", "delegated", "stuck_pr", "not_yet_due"}
+    assert listed == inbox_needs_action == {"pending", "delegated", "stuck_pr", "not_yet_due",
+                                            "merge_overdue"}
     assert out["counts"]["approvals"] == len(inbox_needs_action)
-    assert out["counts"]["expired_answerable"] == len(inbox_expired) == 2
+    assert out["counts"]["expired_answerable"] == len(inbox_expired) == 4
 
 
 def test_the_v2_queue_lists_the_same_decisions_with_their_buttons():
@@ -109,7 +127,8 @@ def test_the_v2_queue_lists_the_same_decisions_with_their_buttons():
             return _R()
 
     out = decision_queue(Conn(), "p", now=NOW)
-    assert {i["id"] for i in out["items"]} == {"pending", "delegated", "stuck_pr", "not_yet_due"}
+    assert {i["id"] for i in out["items"]} == {
+        r["id"] for r, where in CASES if where == "needs_action"}
     stuck = next(i for i in out["items"] if i["id"] == "stuck_pr")
     assert stuck["kind"] == "pull_request"
     assert [a["label"] for a in stuck["allowed_actions"]][0] == "Approve and merge"
@@ -155,6 +174,17 @@ NOT_READERS = {
         "unless another run holds it",
     ("engine/boss_engine/services/decisions.py", "expire_overdue"):
         "the writer that expires overdue pending and delegated decisions",
+    ("engine/boss_engine/services/decisions.py", "_keep_open_past_deadline"):
+        "a writer: clears the deadline of a boundary question that reached it, so it stays "
+        "open (decision_actions.never_expires) instead of expiring",
+    ("engine/boss_engine/services/decisions.py", "reopen_boundary_decisions"):
+        "a writer: sets a boundary question an older build expired back to pending",
+    ("engine/boss_engine/services/budget.py", "_reconcile_expired"):
+        "a writer: resolves the open reconciliation cards of holds that are no longer active",
+    ("engine/boss_engine/services/stack_deploy.py", "rollback_approval"):
+        "a guard: a rollback's authority is its own pending or approved mitigation decision",
+    ("engine/boss_engine/services/workflows.py", "advance_run"):
+        "a writer: takes back an approval a separation-of-duties gate forbids (sets pending)",
     ("engine/boss_engine/services/decisions.py", "hold_plan_gates"):
         "a writer: keeps a build's plan question open (pending, no deadline) while its build "
         "waits at the plan, so every reader counts it",

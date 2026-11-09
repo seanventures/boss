@@ -6,10 +6,12 @@
  */
 import { CSRF_HEADER, ME_PATH } from "./contract";
 import { isPermission, type Permission } from "./permissions.gen";
-import { apiWrite, isAborted, type WriteMethod } from "../api-write";
+import { apiWrite, isAborted, stepUpNotConfirmedSentence, type WriteMethod } from "../api-write";
+import { currentMirror, liveMirror } from "./mirror";
 import { sendToEnrolment } from "./enrolment";
 import { humanise, needsWords, permissionName } from "./words";
 import { refusalCode } from "./refusal-code";
+import { detailText } from "../api-error";
 
 export type IdentityErrorCode =
   | "unauthenticated" | "step_up_required" | "forbidden" | "csrf_failed" | "not_found" | "invalid_credentials"
@@ -37,7 +39,8 @@ export class IdentityError extends Error {
     this.attemptsLeft = typeof extra.attempts_left === "number" ? extra.attempts_left : null;
     this.retryAfter = extra.retryAfter ?? null;
     this.body = extra.body ?? {};
-    this.detail = typeof this.body.detail === "string" && typeof this.body.error === "string" ? this.body.detail : null;
+    // An internal error's `detail` is the exception class for the log reader (X-73): never shown.
+    this.detail = typeof this.body.detail === "string" && typeof this.body.error === "string" && this.body.error !== "internal_error" ? this.body.detail : null;
   }
   get stepUp(): boolean { return this.status === 401 && this.code === "step_up_required"; }
 }
@@ -134,6 +137,8 @@ export const REFUSAL_WORDS: Readonly<Record<string, (body: Body) => string>> = {
   run_token_required: () => "Only a running agent can do this",
   unknown_provider: () => "BOSS doesn't know that provider",
   vault_error: () => "The vault couldn't do that",
+  // A 500 names its exception class in `detail` for the log reader; a person reads this instead.
+  internal_error: (b) => `BOSS hit an error it didn't expect${strOf(b.request_id) ? ` (request ${strOf(b.request_id)}, in BOSS's API log)` : ""}. Try again in a moment.`,
   rate_limited: () => "Too many tries",
 };
 
@@ -145,6 +150,9 @@ export function errorSentence(status: number, code: string, permission?: unknown
   // The API's own sentence, when it wrote one (refusalCode takes a bare `detail` as the code).
   if (/\s/.test(code)) return code;
   if (strOf(body.detail) && /\s/.test(strOf(body.detail))) return strOf(body.detail);
+  // A refusal said as an object ({headline, action}, {message}): its words, never "Check the fields".
+  const said = body.detail && typeof body.detail === "object" && !Array.isArray(body.detail) ? detailText(body.detail) : "";
+  if (said && /\s/.test(said) && !said.startsWith("{")) return said;
   if (strOf(body.message)) return strOf(body.message);
   if (status === 429) return "Too many tries";
   if (status === 404) return "Not found";
@@ -161,6 +169,20 @@ export function errorSentence(status: number, code: string, permission?: unknown
  * so no screen ever says only "That didn't work" when the API gave a reason
  * (tests/every-identity-refusal-has-words.test.ts keeps the literal in this function alone).
  */
+export type RefusalFix = { label: string; href?: string; command?: string };
+
+/** The next step a refusal names (`fix` in the body: a console place, or a command for the BOSS
+ *  host), so an error line carries its fix action (X-73). */
+export function refusalFix(e: unknown): RefusalFix | null {
+  if (!(e instanceof IdentityError)) return null;
+  const f = e.body.fix;
+  if (!f || typeof f !== "object") return null;
+  const r = f as Record<string, unknown>;
+  const label = strOf(r.label);
+  if (!label) return null;
+  return { label, ...(strOf(r.href) ? { href: strOf(r.href) } : {}), ...(strOf(r.command) ? { command: strOf(r.command) } : {}) };
+}
+
 export function refusalSentence(e: unknown): string {
   // The API's own sentence when it wrote one (a bare code in `detail` is never shown).
   if (e instanceof IdentityError) return e.detail && /\s/.test(e.detail) ? e.detail : e.message;
@@ -191,7 +213,40 @@ async function refreshCsrf(): Promise<void> {
   } catch { /* the retry is skipped: the refusal stands */ }
 }
 
-export async function idFetch<T>(method: string, path: string, body?: unknown, init: { signal?: AbortSignal } = {}): Promise<T> {
+/** The reason the step-up sheet gives for an identity write sent inside useGuardedCall. Read
+ *  SYNCHRONOUSLY when idFetch is called (a guarded call's write is sent in the same tick). */
+let guardedReason: string | null = null;
+/** Run `call` with `reason` as the step-up sheet's words for the identity writes it sends. */
+export function withStepUpReason<T>(reason: string, call: () => Promise<T>): Promise<T> {
+  const was = guardedReason;
+  guardedReason = reason;
+  try { return call(); } finally { guardedReason = was; }
+}
+
+/**
+ * EVERY IDENTITY WRITE GETS "CONFIRM IT'S YOU", never a silent refusal. A write the API refuses
+ * `401 step_up_required` (a step-up permission, a second factor over ten minutes old) opens the
+ * one step-up sheet of the provider on the page and is sent once more when the person confirms;
+ * cancelled, or no press started it (lib/user-gesture.ts), it is refused as `step_up_cancelled`
+ * with words. Before this, idFetch told the one write path "the caller handles it" for every
+ * call, so a write no caller wrapped in useGuardedCall (Add a project's Enter on an idea,
+ * 2026-11-08) came back as a bare refusal and the screen just waited. `background` writes (an
+ * effect, a timer) opt out and keep the refusal.
+ */
+export async function idFetch<T>(method: string, path: string, body?: unknown, init: { signal?: AbortSignal; background?: boolean } = {}): Promise<T> {
+  const reason = guardedReason;
+  try {
+    return await idFetchFresh<T>(method, path, body, init);
+  } catch (e) {
+    if (!(e instanceof IdentityError && e.stepUp && WRITE.has(method) && !init.background)) throw e;
+    const mirror = currentMirror() ?? liveMirror();
+    if (!mirror) throw e;  // no console on the page to ask through: the caller's own handling
+    if (await mirror.stepUp(reason ?? "Confirm it's you to continue.")) return idFetchFresh<T>(method, path, body, init);
+    throw new IdentityError(401, "step_up_cancelled", { body: { error: "step_up_cancelled", detail: stepUpNotConfirmedSentence() } });
+  }
+}
+
+async function idFetchFresh<T>(method: string, path: string, body?: unknown, init: { signal?: AbortSignal } = {}): Promise<T> {
   // COMPARED WITH WHAT WAS SENT, not with what is held now. After a step-up the provider re-reads
   // /me on its own (the sheet closing, the tab coming back), so by the time the refusal arrives the
   // held token is often already the new one; comparing the fresh token with it said "unchanged"
@@ -217,7 +272,7 @@ async function idFetchOnce<T>(method: string, path: string, body?: unknown, init
     const payload = body === undefined ? undefined : JSON.stringify(body);
     // A write is one press (lib/api-write.ts): an Idempotency-Key, and a double click sends once.
     res = WRITE.has(method)
-      // useGuardedCall answers step_up_required for identity writes (with its own reason).
+      // idFetch answers step_up_required for identity writes (with useGuardedCall's reason).
       ? await apiWrite(path, { method: method as WriteMethod, headers, body: payload, credentials: "same-origin", cache: "no-store", signal: init.signal }, { noStepUp: true })
       : await fetch(path, { headers, credentials: "same-origin", cache: "no-store", signal: init.signal });
   } catch (error) {

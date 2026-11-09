@@ -102,7 +102,10 @@ def test_no_template_promises_a_person_signs_the_prd(key):
 
 def test_the_prd_approval_says_it_is_automatic_and_is_not_counted_as_yours():
     spec_review = caps.get("spec_review")
-    assert "automatic" in spec_review.label.lower()
+    # "(automatic)" where the install approves it itself; a person's sign-off under enforcement
+    # is not called automatic (test_a_step_label_says_what_the_run_does).
+    assert "automatic" in caps.label_for("spec_review", prd_auto_approve=True).lower()
+    assert "automatic" not in caps.label_for("spec_review", prd_auto_approve=False).lower()
     assert "a person reads" not in spec_review.summary.lower()
     assert caps.stops_for_a_person("spec_review") is False
     for key in ("deploy", "ux_review", "security_review"):

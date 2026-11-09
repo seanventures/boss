@@ -1,5 +1,6 @@
 "use client";
 
+import { changeHref, changeSubHref, isLocalChangeUrl } from "../../lib/repo-links";
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { GatedButton } from "../../components/gated";
 import { postJson } from "./cockpit-actions";
@@ -74,9 +75,11 @@ export function ResultReview({ runId, onChangeRequested }: {
   }
 
   const snapshot = data?.snapshot;
-  const pr = safeLink(snapshot?.pull_request_url ?? null);
+  const rawPr = snapshot?.pull_request_url ?? null;
+  // A local change set (boss-local) opens in BOSS's own change-set view (lib/repo-links.ts).
+  const pr = isLocalChangeUrl(rawPr) ? changeHref(rawPr) ?? undefined : safeLink(rawPr);
   // /pull/N/commits/SHA is pinned to the saved PR revision; /files alone can move.
-  const revision = pr && snapshot?.delivered_head ? `${pr.replace(/\/$/, "")}/commits/${snapshot.delivered_head}` : undefined;
+  const revision = pr && snapshot?.delivered_head ? changeSubHref(isLocalChangeUrl(rawPr) ? rawPr : pr, `commits/${snapshot.delivered_head}`) ?? undefined : undefined;
   return <section className="fx-result-review fx-out-body" aria-labelledby={headingId}>
     <h2 id={headingId} className="fx-sec-title">Review the result</h2>
     {error ? <div role="alert">{error} <button type="button" className="ag-link" onClick={() => void load()}>Reload result</button></div> : null}

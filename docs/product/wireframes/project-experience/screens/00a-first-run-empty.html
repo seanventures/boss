@@ -1,0 +1,69 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Add your first project</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-empty="1" data-crumb="Projects">
+<div id="content">
+
+<section class="card" style="padding:0;overflow:hidden;background:radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--accent) 16%, var(--surface)), var(--surface) 70%)">
+  <div class="empty" style="padding:34px 20px 22px">
+    <!-- illustration: a project folder with the crew orbiting, joined by the journey path -->
+    <svg width="360" height="150" viewBox="0 0 360 150" aria-hidden="true">
+      <ellipse cx="180" cy="80" rx="150" ry="52" fill="none" stroke="var(--border-strong)" stroke-dasharray="3 5"/>
+      <path d="M140 62 h28 l8 10 h44 a8 8 0 0 1 8 8 v40 a8 8 0 0 1 -8 8 h-80 a8 8 0 0 1 -8 -8 v-50 a8 8 0 0 1 8 -8z" fill="color-mix(in srgb, var(--accent) 24%, var(--surface))" stroke="var(--accent)" stroke-width="2"/>
+      <path d="M160 100 h40 M160 110 h26" stroke="var(--accent-text)" stroke-width="3" stroke-linecap="round"/>
+      <image href="../faces/helm.svg" x="38" y="58" width="40" height="40"/>
+      <image href="../faces/juno.svg" x="110" y="16" width="34" height="34"/>
+      <image href="../faces/forge.svg" x="220" y="14" width="34" height="34"/>
+      <image href="../faces/vera.svg" x="288" y="64" width="38" height="38"/>
+      <image href="../faces/beacon.svg" x="240" y="112" width="32" height="32"/>
+      <circle cx="180" cy="24" r="4" fill="var(--teal)"/><circle cx="96" cy="120" r="3" fill="var(--green)"/><circle cx="320" cy="40" r="3" fill="#8b7cf6"/>
+    </svg>
+    <h2>Add your first project</h2>
+    <p>Point the crew at a repo or an idea. Helm, your captain, reads it, gets it ready, and suggests the first piece of work.</p>
+    <!-- the whole first run as one strip: absorbs Get started's 3 steps -->
+    <div class="jr" style="margin:6px 0 4px;max-width:720px;width:100%">
+      <div class="jr-node" data-s="now"><span class="jr-shape"><i class="ph-bold ph-github-logo"></i></span><span class="jr-cap">Connect GitHub</span></div><span class="jr-wire"></span>
+      <div class="jr-node" data-s="todo"><span class="jr-shape"><i class="ph ph-brain"></i></span><span class="jr-cap">Add a model</span></div><span class="jr-wire"></span>
+      <div class="jr-node" data-s="todo"><span class="jr-shape"><i class="ph ph-folder-plus"></i></span><span class="jr-cap">Add project</span></div><span class="jr-wire"></span>
+      <div class="jr-node" data-s="todo"><span class="jr-shape"><i class="ph ph-compass"></i></span><span class="jr-cap">Helm onboards</span></div><span class="jr-wire"></span>
+      <div class="jr-node" data-s="todo"><span class="jr-shape"><i class="ph ph-git-pull-request"></i></span><span class="jr-cap">First PR</span></div>
+    </div>
+    <span class="faint" style="font-size:.56rem">About 10 minutes · change anything later in Repo and models</span>
+  </div>
+</section>
+
+<section class="grid g3">
+  <div class="door" data-primary>
+    <div class="row"><span class="ico" data-c="teal" data-size="l"><i class="ph ph-github-logo"></i></span><span class="tag" data-tone="blue">Step 1</span></div>
+    <h3>Connect GitHub</h3><span class="muted" style="font-size:.6rem">Pick the repos the crew may work on.</span>
+    <span class="wf-spacer"></span><span class="btn" data-kind="primary" style="align-self:flex-start"><i class="ph ph-plug"></i>Connect</span></div>
+  <div class="door">
+    <div class="row"><span class="ico" data-c="violet" data-size="l"><i class="ph ph-brain"></i></span><span class="tag">Step 2</span></div>
+    <h3>Add a model</h3><span class="muted" style="font-size:.6rem">A subscription, an API key, or a local model.</span>
+    <span class="wf-spacer"></span><span class="btn" style="align-self:flex-start"><i class="ph ph-plus"></i>Add model</span></div>
+  <div class="door">
+    <div class="row"><span class="ico" data-c="green" data-size="l"><i class="ph ph-folder-plus"></i></span><span class="tag">Step 3</span></div>
+    <h3>Add a project</h3>
+    <div class="grid g2" style="gap:8px">
+      <span class="btn" style="justify-content:center"><i class="ph ph-git-branch"></i>Existing repo</span>
+      <span class="btn" style="justify-content:center"><i class="ph ph-lightbulb"></i>From an idea</span></div>
+    <div class="row" style="font-size:.56rem;gap:12px"><a><i class="ph ph-flask"></i> Try a sample</a><a><i class="ph ph-lightning"></i> One small PR</a></div></div>
+</section>
+
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="blue"><i class="ph ph-path"></i></span><h3>What happens to each piece of work</h3></div>
+  <div class="fl"><span class="fl-n"><i class="ph ph-lightbulb"></i>Idea</span><span class="fl-w"></span><span class="fl-n" data-t="agent"><span class="face" data-a="juno" data-size="s"></span>Plan</span><span class="fl-w"></span><span class="fl-n" data-t="you">You approve</span><span class="fl-w"></span><span class="fl-n" data-t="agent"><span class="face" data-a="forge" data-size="s"></span>Build</span><span class="fl-w"></span><span class="fl-n" data-t="agent"><span class="face" data-a="vera" data-size="s"></span>Review</span><span class="fl-w"></span><span class="fl-n"><i class="ph ph-git-pull-request"></i>Pull request</span><span class="fl-w"></span><span class="fl-n" data-t="agent"><span class="face" data-a="beacon" data-size="s"></span>Live preview</span></div>
+</section>
+
+<div class="notes"><b>Design notes</b><ol>
+  <li>This is what a fresh install opens on (replaces the separate "Get started" rail button and Command Center's first-run rows). The same 5-node strip turns into the guided flow (00b) the moment step 1 is done.</li>
+  <li>Only the current step is primary (one action per view); later steps are visible but quiet. Already-done steps tick and collapse.</li>
+  <li>Every Get started capability keeps a place here — see the README parity table (sample, one small PR, add another account/model, last sample run's PR).</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>

@@ -1747,6 +1747,13 @@ def execute_ci_status(context: "SkillExecutorContext", inputs: dict[str, Any]) -
     if not state["connected"] or not state["repo"]:
         raise SkillExecutorConfigurationError(
             "this project has no GitHub repository connected. Connect it in Setup.")
+    if state.get("host") == "local":
+        # BOSSAPP-918: no hosted CI for a repository on this machine; BOSS's sandbox ran the
+        # checks of each change set (ci_gate's local reader says so in the same words).
+        from .local_repo_host import LOCAL_CHECKS_SUMMARY
+
+        return {"ref": str(inputs.get("ref") or "").strip() or "main", "total": 0, "failing": [],
+                "checks": [], "host": "local", "note": LOCAL_CHECKS_SUMMARY}
     base, repo = state["api_base"], state["repo"]
     token = github_token(context.connection, context.settings, context.project_id, repo)
     ref = str(inputs.get("ref") or "").strip()

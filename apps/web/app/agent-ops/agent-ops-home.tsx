@@ -17,6 +17,7 @@
  * The acceptance test (§11.0 rule 6): a stranger says what happened, who did it and how it ended
  * within 10 seconds, without reading a paragraph.
  */
+import { WhyLine } from "../../components/stuck-work";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { GatedButton, useGate } from "../../components/gated";
@@ -36,18 +37,21 @@ import { NodeDrawer, type Target } from "./drawer";
 import { FlowCanvas } from "./flow-canvas";
 import { FlowThumb } from "./flow-thumb";
 import { Roadmap } from "./roadmap";
+import { StalledWork } from "./stalled-work";
+import { AgentLanes } from "./agent-lanes";
 import { ScorecardStrip } from "./scorecard";
 import "./agent-ops.css";
 
 export const LIST_POLL_MS = 10_000;
 export const ITEM_POLL_MS = 5_000;
 
-type Place = { view: "work" | "roadmap"; tab: Tab; item: string | null; act: string | null };
+type Place = { view: "work" | "roadmap" | "stalled"; tab: Tab; item: string | null; act: string | null };
 
 function readPlace(): Place {
   const q = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
   const tab = q.get("aat") as Tab | null;
-  return { view: q.get("aav") === "roadmap" ? "roadmap" : "work", tab: tab && (TABS as readonly string[]).includes(tab) ? tab : "needs_you",
+  const aav = q.get("aav");
+  return { view: aav === "roadmap" ? "roadmap" : aav === "stalled" ? "stalled" : "work", tab: tab && (TABS as readonly string[]).includes(tab) ? tab : "needs_you",
            item: q.get("item"), act: q.get("act") };
 }
 function writePlace(p: Place): void {
@@ -55,7 +59,7 @@ function writePlace(p: Place): void {
     const q = new URLSearchParams(window.location.search);
     q.set("area", AREA);
     const set = (k: string, v: string | null) => (v ? q.set(k, v) : q.delete(k));
-    set("aav", p.view === "roadmap" ? "roadmap" : null);
+    set("aav", p.view === "work" ? null : p.view);
     set("aat", p.tab === "needs_you" ? null : p.tab);
     set("item", p.item);
     set("act", p.act);
@@ -81,6 +85,8 @@ function ItemCard({ it, onOpen }: { it: ListItem; onOpen: () => void }) {
             title="Open the flow chart">
       <FlowThumb strip={it.strip} live={live} />
       <span className="aa-card-title" data-user-text>{it.title}</span>
+      {/* "Running" alone hid a build crash-looping behind it: what it waits for, in words. */}
+      {it.why ? <WhyLine why={it.why} testId={`aa-item-why-${it.id}`} compact /> : null}
       <ItemBadgeRow b={it.badges} compact />
     </button>
   );
@@ -258,10 +264,10 @@ export function AgentOpsHome({ projectId, orgId }: { projectId: string; actor?: 
         <StopPill projectId={projectId} />
         {demo ? <span className="aa-pill" data-tone="amber" data-testid="aa-sample" title="Sample data, not your project">Sample data</span> : null}
         <span className="aa-views" role="tablist" aria-label="View">
-          {(["work", "roadmap"] as const).map((v) => (
+          {(["work", "stalled", "roadmap"] as const).map((v) => (
             <button key={v} type="button" role="tab" aria-selected={place.view === v} className="aa-view" data-testid={`aa-view-${v}`}
-                    title={v === "work" ? "What agents did, as diagrams" : "What agents recommend you build next"}
-                    onClick={() => setPlace({ view: v, item: null, act: null })}>{v === "work" ? "Work" : "Roadmap"}</button>
+                    title={v === "work" ? "What agents did, as diagrams" : v === "stalled" ? "Work that stopped: what the Shepherd fixed, is trying, and needs you for" : "What agents recommend you build next"}
+                    onClick={() => setPlace({ view: v, item: null, act: null })}>{v === "work" ? "Work" : v === "stalled" ? "Stalled work" : "Roadmap"}</button>
           ))}
         </span>
         <span className="aa-spacer" />
@@ -274,11 +280,13 @@ export function AgentOpsHome({ projectId, orgId }: { projectId: string; actor?: 
         <button type="button" className="ag-btn" data-testid="aa-ask" title="Ask BOSS what the agents did and why" onClick={() => askAboutItem(null)}>Ask BOSS</button>
       </header>
 
-      {place.view === "roadmap" ? <Roadmap projectId={projectId} orgId={orgId} refresh={roadmapRefresh} /> : place.item ? (
+      {place.view === "roadmap" ? <Roadmap projectId={projectId} orgId={orgId} refresh={roadmapRefresh} />
+        : place.view === "stalled" ? <StalledWork projectId={projectId} /> : place.item ? (
         <ItemView projectId={projectId} orgId={orgId} id={place.item} focusAct={place.act} onBack={() => setPlace({ item: null, act: null })} />
       ) : (
         <>
           <ScorecardStrip card={score.data} />
+          {!demo ? <AgentLanes projectId={projectId} /> : null}
           {missing ? (
             <div className="aa-empty" data-testid="aa-missing">
               <b>Autonomous agents aren't on this install yet</b>

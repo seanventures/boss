@@ -12,6 +12,7 @@ import { mapActivityLog } from "../../lib/activity-log";
 import { parseToolCalls, type ToolCalls } from "../../lib/agents-live-board";
 import { stepLogSentence } from "../workflows/step-run";
 import { declareAction } from "../../lib/identity/guarded-action";
+import { detailText } from "../../lib/api-error";
 import { apiWrite } from "../../lib/api-write";
 
 export type Posted<T = Record<string, unknown>> = { ok: boolean; data?: T; error?: string; status?: number };
@@ -20,8 +21,8 @@ async function said(r: Response): Promise<string> {
   try {
     const body = (await r.json()) as { detail?: unknown; error?: unknown };
     const d = body.detail ?? body.error;
-    if (typeof d === "string" && d) return d;
-    if (d && typeof d === "object") return JSON.stringify(d);
+    const words = detailText(d);
+    if (words) return words;
   } catch { /* no body */ }
   return `The API answered ${r.status}.`;
 }

@@ -8,6 +8,7 @@
  * them from here and replaces them one at a time.
  */
 
+import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import { useSearchParams } from "next/navigation";
 import { PROJECT_ID } from "../../lib/client";
 import { PrMadeBy, useBuildWork, useStageFaces } from "../agents/build-faces";
@@ -292,8 +293,9 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
               </a>
               {p.demo_logins?.length ? (
                 <span className="detail" data-testid="preview-demo-logins"
-                      title="BOSS generated this password for the app's demo users; read it in the app's Setup › Demo logins">
-                  Demo login: {p.demo_logins.join(", ")} (Setup › Demo logins)
+                      title="BOSS generated this password for the app's demo users; reveal it in Project › Settings › Demo logins">
+                  Demo login: {p.demo_logins.join(", ")} · <a href={consoleHref({ area: "project", tab: "settings", section: "demo_logins", app: undefined, build: undefined })}
+                                                             data-testid="preview-demo-logins-moved">Moved to Project › Settings</a>
                 </span>
               ) : null}
             </>
@@ -2276,8 +2278,9 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
         <div className="ct-block-title">Outcome</div>
         <div className="ct-outcome">
           {run.pull_request_url ? (
-            <a className="cap-btn" href={run.pull_request_url} target="_blank" rel="noreferrer">
-              View PR #{run.pull_request_number}</a>
+            <a className="cap-btn" href={changeHref(run.pull_request_url)} {...linkTarget(run.pull_request_url)}>
+              {`${isLocalChangeUrl(run.pull_request_url) ? "View change set" : "View PR"} #${run.pull_request_number}`}
+            </a>
           ) : <span className="detail">No PR opened.</span>}
           {run.pull_request_url ? (
             <PrMadeBy chain={buildWork.chain} runId={originRunId} projectId={PROJECT_ID}

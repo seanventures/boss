@@ -9,8 +9,8 @@
  *
  * The class, by label: every control in app/ or components/ that reads "New build" or
  * "New project" names no planner (openPlan, onPlan, a `plan` callback) in its opening tag.
- * Then the doors that matter are pressed: the Floor's empty state opens the composer and starts
- * no conversation.
+ * Then the doors that matter are pressed: the Floor's empty state opens Add a project (v2: one
+ * screen that absorbed New build's new app) and starts no conversation.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -89,14 +89,20 @@ describe("no New build door opens the agent chat", () => {
     // project:create), not a build (tests/new-project-in-the-org.test.tsx holds it).
     // BOSSAPP-810: the menu's New project opens the start flow's sheet (three doors), whose
     // "New app from an idea" is the project sheet.
-    const PROJECT_DOORS = ["app/project-menu.tsx", "app/new-project-sheet.tsx", "app/start-project/start-sheet.tsx"];
+    // BOSSAPP-913: the start flow's sheets moved into one host (start-project/start-host.tsx) that
+    // the menu, the Projects page and its first run all mount; the menu opens it, it opens the
+    // project sheet.
+    const PROJECT_DOORS = ["app/project-menu.tsx", "app/new-project-sheet.tsx", "app/start-project/start-sheet.tsx",
+                           "app/start-project/start-host.tsx"];
     const labels = newProjectLabels();
     expect(labels.map((l) => l.split(":")[0]).every((f) => PROJECT_DOORS.includes(f)), labels.join(", "))
       .toBe(true);
     expect(labels.some((l) => l.startsWith("app/project-menu.tsx:"))).toBe(true);
     const menu = readFileSync(join(ROOT, "app", "project-menu.tsx"), "utf8");
-    // The menu's New project door opens the project sheet, never the build composer.
-    expect(menu).toMatch(/<NewProjectSheet\b/);
+    // The menu's New project door opens the start host, whose idea door is the project sheet —
+    // never the build composer.
+    expect(menu).toMatch(/<StartProjectHost\b/);
+    expect(readFileSync(join(ROOT, "app", "start-project", "start-host.tsx"), "utf8")).toMatch(/<NewProjectSheet\b/);
     for (const f of PROJECT_DOORS) {
       expect(readFileSync(join(ROOT, f), "utf8"), f).not.toMatch(/openNewProject|compose=/);
     }
@@ -132,38 +138,25 @@ describe("no New build door opens the agent chat", () => {
     window.removeEventListener("boss:converse", on);
     expect(talks).toEqual([]);
     const url = new URLSearchParams(window.location.search);
-    expect([url.get("area"), url.get("compose")]).toEqual(["delivery_workflows", "new"]);
+    // Add a project v2: a new app is the one Add a project screen, opened where you are.
+    expect([url.get("area"), url.get("new_project"), url.get("compose")]).toEqual(["code_tasks", "idea", null]);
   });
 });
 
-describe("New build starts at the document origin", () => {
-  it("resets both axes after announcing the composer, without changing its route", () => {
-    const frames: FrameRequestCallback[] = [];
+describe("a New build door opens Add a project where you are (Add a project v2)", () => {
+  it("keeps the org and the area, asks for the sheet, and drops the old composer's command", () => {
     const order: string[] = [];
-    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      order.push("frame queued");
-      frames.push(callback);
-      return frames.length;
-    });
-    const scroll = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
-    const onPop = () => order.push("composer announced");
+    const onPop = () => order.push("sheet announced");
     window.addEventListener("popstate", onPop);
-    window.history.replaceState(null, "", "/?org=org_boss&area=setup&compose=add&app=old&build=old");
+    window.history.replaceState(null, "", "/?org=org_boss&area=setup&compose=add&app=old");
     try {
       openNewProject();
       const params = new URLSearchParams(window.location.search);
-      expect([params.get("org"), params.get("area"), params.get("compose")])
-        .toEqual(["org_boss", "delivery_workflows", "new"]);
-      expect([params.get("app"), params.get("build")]).toEqual([null, null]);
-      expect(order).toEqual(["composer announced", "frame queued"]);
-      expect(scroll).not.toHaveBeenCalled();
-      expect(frames).toHaveLength(1);
-      frames[0](0);
-      expect(scroll.mock.calls).toEqual([[{ top: 0, left: 0, behavior: "instant" }]]);
+      expect([params.get("org"), params.get("area"), params.get("new_project")]).toEqual(["org_boss", "setup", "idea"]);
+      expect([params.get("compose"), params.get("app")]).toEqual([null, null]);
+      expect(order).toEqual(["sheet announced"]);
     } finally {
       window.removeEventListener("popstate", onPop);
-      scroll.mockRestore();
-      raf.mockRestore();
     }
   });
 });

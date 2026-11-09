@@ -196,6 +196,8 @@ ENV PATH=$PATH:/opt/toolchains/bin
 # A login shell (`sh -lc`, how previews start) resets PATH from /etc/profile: put it back there too.
 RUN mkdir -p /var/lib/boss/toolchain-cache && chown boss:boss /var/lib/boss/toolchain-cache \
     && chmod 700 /var/lib/boss/toolchain-cache \
+    && mkdir -p /var/lib/boss/repos /var/lib/boss/import && chown boss:boss /var/lib/boss/repos \
+    && chmod 700 /var/lib/boss/repos \
     && printf 'PATH="$PATH:/opt/toolchains/bin"\nexport PATH\n' > /etc/profile.d/boss-toolchains.sh
 
 # These are the Community runtime directories. The reviewed export tree omits

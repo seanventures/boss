@@ -336,12 +336,14 @@ export function parseSources(w: unknown): Sources {
 
 export type ObsTab = "apps" | "alerts" | "notify" | "models" | "system" | "sources" | "scorecards" | "installs";
 export const OBS_TABS: { key: ObsTab; label: string; tip: string }[] = [
-  { key: "apps", label: "Apps", tip: "Is each app up, and how fast" },
+  // Screen 15's filters first — Apps · BOSS platform · Alert sources · Contact points — then the
+  // rest of what Observability already does (§13: nothing is removed).
+  { key: "apps", label: "Apps", tip: "Every app: is it up, how fast, what is firing" },
+  { key: "system", label: "BOSS platform", tip: "BOSS's own machine, its queue and stalls" },
+  { key: "sources", label: "Alert sources", tip: "Monitoring stack, telemetry and alert sources" },
+  { key: "notify", label: "Contact points", tip: "Who is told, how, and when" },
   { key: "alerts", label: "Alerts", tip: "Every app's alerts: firing now and recent" },
-  { key: "notify", label: "Notify", tip: "Who is told, how, and when" },
   { key: "models", label: "Models", tip: "Every model call: tokens, time, errors, spend" },
-  { key: "system", label: "System", tip: "BOSS's own machine, its queue and stalls" },
-  { key: "sources", label: "Sources", tip: "Monitoring stack and telemetry sources" },
   { key: "scorecards", label: "Scorecards", tip: "How every run turned out, by role, workflow, harness, model" },
   // Collector mode only (obs-home filters it): installs reporting to this BOSS.
   { key: "installs", label: "Installs", tip: "Installs reporting to this collector" },

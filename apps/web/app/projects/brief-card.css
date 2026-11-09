@@ -1,0 +1,61 @@
+/* THE BRIEF CARD (brief-card.tsx: "Task" · "Project brief" · "Repo summary"): the one card New work and Add a project draw.
+   Moved here from new-work.css so both surfaces load it with the component. */
+.px-ub { border: 1.5px solid color-mix(in srgb, var(--teal) 45%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--teal) 5%, var(--surface));
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; animation: px-rise .15s ease-out; }
+.px-ub[data-ok] { border-color: color-mix(in srgb, var(--green) 55%, transparent); background: color-mix(in srgb, var(--green) 5%, var(--surface)); }
+.px-ub[data-edit] { border-color: var(--accent-line); }
+.px-ub[data-state="fallback"] { border-color: color-mix(in srgb, var(--amber) 55%, transparent); background: color-mix(in srgb, var(--amber) 5%, var(--surface)); }
+.px-ub-h { display: flex; align-items: center; gap: 10px; }
+.px-ub-h > div { flex: 1 1 0; min-width: 0; }
+.px-ub-h b { font-family: var(--display); font-size: var(--fs-body); }
+.px-ub-h small { display: block; color: var(--faint); font-size: var(--fs-tag); margin-top: 1px; }
+.px-ub-h small.px-ub-ok { color: var(--green); display: flex; align-items: center; gap: 4px; }
+.px-ub-key { display: inline-flex; gap: 10px; font-size: var(--fs-tag); color: var(--faint); flex: none; }
+.px-ub-key i { font-style: normal; }
+.px-ub-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
+.px-ub-f { display: grid; grid-template-columns: 5.81rem minmax(0, 1fr) .95rem; gap: 8px; align-items: start; padding: 6px 0; border-top: 1px solid var(--border);
+  font-size: var(--fs-meta); color: var(--ink-soft); min-width: 0; }
+.px-ub-f > .px-lbl { padding-top: 2px; font-size: var(--fs-tag); display: flex; flex-direction: column; gap: 1px; }
+.px-ub-f > .px-lbl small { letter-spacing: 0; text-transform: none; font-size: var(--fs-tag); }
+.px-ub-f[data-new] { box-shadow: inset 3px 0 0 var(--green); padding-left: 6px; }
+.px-ub-f[data-new] > .px-lbl { color: var(--green); }
+.px-ub-f[data-q] > .px-lbl { color: var(--amber); }
+.px-ub-v { min-width: 0; line-height: 1.5; }
+.px-ub-v ul { margin: 0; padding-left: 14px; display: flex; flex-direction: column; gap: 2px; }
+.px-ub-v .px-input { font-size: var(--fs-meta); }
+.px-ub-ttl { font-family: var(--display); font-weight: 700; color: var(--ink); font-size: var(--fs-row); }
+.px-ub-ed { opacity: 0; border: 0; background: none; color: var(--faint); cursor: pointer; padding: 0; transition: opacity .12s; }
+.px-ub-f:hover > .px-ub-ed, .px-ub-ed:focus-visible { opacity: 1; }
+.px-ub-mark { background: none; color: inherit; border-bottom: 1.5px dotted var(--accent-text); padding: 0; }
+.px-ub-files { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-tag); }
+.px-ub-files > span { display: flex; gap: 6px; align-items: center; min-width: 0; flex-wrap: wrap; }
+.px-ub-files > span[data-new] { color: var(--faint); }
+.px-ub-files em { font-style: normal; color: var(--faint); }
+.px-ub-files em::before { content: "· "; }
+.px-ub-act { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--border); }
+.px-ub-hint { flex: 1 1 200px; display: flex; align-items: center; gap: 6px; padding: 4px 9px; border: 1px dashed var(--border-strong); border-radius: 8px;
+  font-size: var(--fs-tag); color: var(--faint); min-width: 0; }
+.px-ub-hint[data-filled] { border-style: solid; border-color: var(--accent-line); color: var(--ink); }
+.px-ub-hint input { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; color: var(--ink); outline: none; padding: 2px 0; }
+.px-ub-foot { font-size: var(--fs-tag); }
+.px-ub-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.px-ub-open { margin-left: auto; }
+.px-ub-sks { display: flex; flex-direction: column; gap: 5px; padding-top: 4px; }
+.px-ub-sk { height: 9px; border-radius: 5px; background: linear-gradient(90deg, var(--border) 0%, var(--border-strong) 50%, var(--border) 100%);
+  background-size: 200% 100%; animation: px-ub-sh 1.4s infinite linear; }
+@keyframes px-ub-sh { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  .px-ub { padding: 10px 12px; }
+  .px-ub-f { grid-template-columns: minmax(0, 1fr) .84rem; }
+  .px-ub-f > .px-lbl { grid-column: 1 / -1; flex-direction: row; gap: 6px; }
+  .px-ub-ed { opacity: 1; }
+  .px-ub, .px-nw-pop, .px-nw-typing i, .px-ub-sk { animation: none !important; }
+
+/* Two columns where the card is wide (Add a project's brief); one on a phone. */
+.px-ub-grid[data-cols="2"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 18px; align-items: start; }
+.px-ub-col { min-width: 0; }
+@media (max-width: 760px) { .px-ub-grid[data-cols="2"] { grid-template-columns: minmax(0, 1fr); } }
+.px-ub-sugs { display: flex; gap: 4px; flex-wrap: wrap; margin: 3px 0 6px; }
+.px-ub-sug { font: inherit; font-size: var(--fs-tag); padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink-soft); cursor: pointer; }
+.px-ub-sug:hover { border-color: var(--accent-line); }
+.px-ub-sug[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--ink); font-weight: 600; }
+.px-ub-f[data-on] { background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 8px; box-shadow: 0 0 0 1.5px var(--accent-line); padding: 6px; }

@@ -1,0 +1,14 @@
+/* The station strip (app/stations.tsx): one look on every surface that lists work. */
+@keyframes st-ring { 0% { opacity: .7; transform: scale(.96); } 100% { opacity: 0; transform: scale(1.12); } }
+.px-st { display: flex; align-items: center; flex: none; }
+.px-st-n { min-width: 1.5em; height: 1.5em; padding: 0 3px; border-radius: 5px; display: grid; place-items: center; font-size: var(--fs-tag); font-weight: 800;
+  border: 1.5px solid var(--border-strong); background: var(--surface-3); color: var(--faint); position: relative; }
+.px-st-n[data-s="done"] { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+.px-st-n[data-s="now"] { border-color: var(--teal); color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, transparent); }
+.px-st-n[data-s="now"]::after { content: ""; position: absolute; inset: -4px; border-radius: 7px; border: 1.5px solid var(--teal); animation: st-ring 1.8s ease-out infinite; }
+.px-st-n[data-s="waiting"] { border-color: var(--amber); background: var(--amber); color: #1b1300; border-radius: 50%; }
+.px-st-n[data-s="failed"] { border-color: var(--red); color: var(--red); background: var(--red-soft); }
+.px-st-n[data-s="skipped"] { opacity: .45; border-style: dotted; }
+.px-st-n[data-s="todo"] { border-style: dashed; }
+.px-st-w { width: 10px; height: 2px; background: var(--border-strong); } .px-st-w[data-s="done"] { background: var(--green); }
+@media (prefers-reduced-motion: reduce) { .px-st-n[data-s="now"]::after { animation: none; } }

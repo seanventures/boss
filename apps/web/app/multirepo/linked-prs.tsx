@@ -9,6 +9,7 @@
  * "Run the check again" (code_task:steer) re-runs the cross-repo check now; the API refuses it
  * (409 not_ready) until every repository has its PR open, and that sentence is shown as is.
  */
+import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import React, { useState } from "react";
 import { ArrowRight, ArrowsClockwise, Check, GitPullRequest, LinkSimple, Warning, X } from "@phosphor-icons/react";
 
@@ -96,8 +97,8 @@ function PrCard({ lane, others, title }: { lane: Lane; others: number; title: st
         {lane.findings.length ? lane.findings.map((f, i) => <FindingCard key={i} f={f} i={i} lane={lane} />)
           : <p className="mr-ui-sub" style={{ margin: 0 }}>{lane.pr_number ? "No review findings." : "Reviewed once its PR is open."}</p>}
         {lane.pr_url ? (
-          <a className="mr-ui-link" href={lane.pr_url} target="_blank" rel="noreferrer" data-testid={`mr-pr-open-${lane.order}`}
-             style={{ marginTop: "auto" }}>Open on GitHub <ArrowRight size={11} aria-hidden /></a>
+          <a className="mr-ui-link" href={changeHref(lane.pr_url)} {...linkTarget(lane.pr_url)} data-testid={`mr-pr-open-${lane.order}`}
+             style={{ marginTop: "auto" }}>{isLocalChangeUrl(lane.pr_url) ? "Open change set" : "Open on GitHub"} <ArrowRight size={11} aria-hidden /></a>
         ) : null}
       </div>
     </article>

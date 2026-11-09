@@ -1023,8 +1023,12 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
           die "Recovery backup failed; existing source, credentials and volumes were left unchanged. Check the backup error above, start the installed database if needed, then retry."
         fi
         rm -rf "$_backup_bundle"
+        # A manifest that names a local repositories volume (BOSSAPP-915) must carry repos.tar:
+        # until a local project is published, that archive is its code's only other copy.
         [[ -s "$_recovery_backup/.env" && -s "$_recovery_backup/boss.dump" &&
            -s "$_recovery_backup/artifacts.tar" &&
+           ( ! -f "$_recovery_backup/manifest.json" || -s "$_recovery_backup/repos.tar" ||
+             -z "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("repos_volume") or "")' "$_recovery_backup/manifest.json" 2>/dev/null)" ) &&
            "$(cat "$_recovery_backup/source-commit" 2>/dev/null)" == "$_installed_commit" ]] ||
           die "Recovery backup is incomplete or for another source commit; existing checkout left unchanged."
         ui_ok "Private recovery backup: $_recovery_backup"
@@ -1439,6 +1443,8 @@ fi
 # directory exists before Compose mounts it, so Docker never creates it as root. Empty until
 # `boss self-fix seed`; nothing in it is secret.
 mkdir -p .boss/selfsrc && chmod 755 .boss .boss/selfsrc
+# Import local code (BOSSAPP-923) reads folders put here, mounted read-only into the API.
+mkdir -p .boss/import && chmod 755 .boss/import
 # >>> self-fix mirror refresh
 # A SEEDED MIRROR FOLLOWS THE RELEASE (brec_069e56332d714ad08c01): an upgrade reruns this
 # installer at the new commit, and a mirror left on the old one makes a self-fix diagnose and
@@ -1610,21 +1616,24 @@ ui_ok "Containers started"
 # ---- post checks -----------------------------------------------------------
 ui_step "Verifying Community independence"
 
-set +e
-EDITION_BODY="$(mktemp)"
-EDITION_CODE="$(curl -sS -o "$EDITION_BODY" -w '%{http_code}' \
-  -H "Authorization: Bearer ${BOSS_API_KEY}" \
-  "${API_URL}/v1/edition?project_id=boss-dogfood" 2>/dev/null || echo 000)"
-set -e
-if [[ "$EDITION_CODE" == "200" ]]; then
-  ui_ok "GET /v1/edition → 200"
-  grep -q '"community"' "$EDITION_BODY" ||
-    die "Edition response did not report Community; see $EDITION_BODY."
-  ui_ok "Edition reports community"
-else
-  die "Edition probe returned HTTP $EDITION_CODE. BOSS was started but is not ready; see $EDITION_BODY."
-fi
-rm -f "$EDITION_BODY"
+# The check authenticates with the host tools' key (BOSS_HOST_API_KEY, a service account that
+# does not retire), never the shared BOSS_API_KEY: Identity retires that key 30 days after its
+# first use, and every upgrade and rollback of an older install then died here with HTTP 401.
+bash "$INSTALL_DIR/scripts/install/post_check.sh" --dir "$INSTALL_DIR" --api-url "$API_URL" \
+  --project boss-dogfood -- "${COMPOSE[@]}" </dev/null ||
+  die "BOSS was started but is not ready; the reason is above."
+# Every later call from this installer uses the same key (the shared one only on an API too old
+# to issue a host key), and the helper file for humans carries it.
+CHECK_KEY="$(env_value BOSS_HOST_API_KEY || true)"
+CHECK_KEY="${CHECK_KEY:-$BOSS_API_KEY}"
+cat > "$INSTALL_DIR/boss-community.env.sh" <<EOF
+# Source me:  source $INSTALL_DIR/boss-community.env.sh
+export BOSS_API_URL="${API_URL}"
+export BOSS_API_KEY="${CHECK_KEY}"
+export BOSS_PROJECT_ID="boss-dogfood"
+export BOSS_EDITION="community"
+EOF
+chmod 600 "$INSTALL_DIR/boss-community.env.sh"
 
 # ---- models and subscriptions already on this machine ----------------------
 # Finding is read only and prints found / not found, never a value. Exported API keys were
@@ -1658,7 +1667,7 @@ fi
 if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
   ui_step "Checking coding subscription connections"
   _subscriptions() {
-    BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/coding_subscriptions.py --api-url "$API_URL" "$@" </dev/null
+    BOSS_API_KEY="$CHECK_KEY" python3 scripts/install/coding_subscriptions.py --api-url "$API_URL" "$@" </dev/null
   }
   _claude_ok=1
   if [[ "$CONNECT_CLAUDE" -eq 1 || "$CONNECT_CLAUDE_LOCAL" -eq 1 ]]; then
@@ -1729,9 +1738,8 @@ fi
 [[ -z "$_found" ]] || rm -f "$_found"
 
 set +e
-PROV_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
-  -H "Authorization: Bearer ${BOSS_API_KEY}" \
-  "${API_URL}/v1/providers?project_id=boss-dogfood" 2>/dev/null || echo 000)"
+PROV_CODE="$(printf 'Authorization: Bearer %s\n' "$CHECK_KEY" | curl -sS -o /dev/null -w '%{http_code}' \
+  -H @- "${API_URL}/v1/providers?project_id=boss-dogfood" 2>/dev/null || echo 000)"
 set -e
 if [[ "$PROV_CODE" == "200" ]]; then
   ui_ok "ProviderOps surface reachable (Community kernel)"
@@ -1842,7 +1850,7 @@ fi
 # The repository is connected in the console, not here; say which, or that it is still to do.
 _repo_row=""
 if [[ -f "$INSTALL_DIR/scripts/install/setup_state.py" ]]; then
-  _repo_row="$(BOSS_API_URL="$API_URL" BOSS_API_KEY="$(grep -m 1 '^BOSS_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)" \
+  _repo_row="$(BOSS_API_URL="$API_URL" BOSS_API_KEY="$CHECK_KEY" \
     python3 "$INSTALL_DIR/scripts/install/setup_state.py" repository 2>/dev/null </dev/null || true)"
 fi
 if [[ -z "$_repo_row" || "$_repo_row" == "not connected" ]]; then

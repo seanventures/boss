@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { declarations } from "./a-page-width-is-a-layout-token.test";
+import { declarations } from "./_helpers/css-declarations";
 
 const ROOT = join(__dirname, "..");
 const scale = readFileSync(join(ROOT, "app/layout-scale.css"), "utf8");

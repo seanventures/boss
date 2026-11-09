@@ -32,6 +32,7 @@ import { ago, plainClick, useNow } from "../agents/live-util";
 import type { ObsTabProps } from "./obs-home";
 import { IncidentCard } from "./incident-card";
 import { AppAlertsTab } from "./alerts-tab";
+import { projectHealthHref } from "./pulse";
 import { DashboardLink } from "./grafana-link";
 import { LatencyChart } from "./latency-chart";
 import { obsWrite } from "./obs-write";
@@ -149,6 +150,8 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
       <span className="inf-faint inf-num" data-testid="obs-app-since" title={since ? lt.full(since) : "Never probed"}>
         {since && now !== null ? `since ${dur((now - Date.parse(since)) / 1000)}` : since ? "since , " : "No signal"}
       </span>
+      <a className="inf-link" href={projectHealthHref()} data-testid="obs-app-drawer-project-health"
+         title="This app's project: its Health tab (alerts, incidents, monitoring)">Project › Health</a>
       <button type="button" className="ag-icon-btn" aria-label="Copy link" title="Copy link" data-testid="obs-app-copy" onClick={copyLink}>⋯</button>
     </span>
   );

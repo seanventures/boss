@@ -539,6 +539,11 @@ def make_pipeline_adapter(
     *,
     github: Optional[GitHubAdapter] = None,
 ) -> PipelineAdapter:
+    if getattr(github, "kind", "") == "local":
+        # BOSSAPP-918: a local repository's CI is BOSS's own sandbox, which already ran.
+        from .local_repo_host import LocalSandboxPipeline
+
+        return LocalSandboxPipeline(settings, github)
     provider = settings.pipeline_provider.strip().lower()
     if provider == "github_actions":
         return GitHubActionsPipeline(settings, github=github)

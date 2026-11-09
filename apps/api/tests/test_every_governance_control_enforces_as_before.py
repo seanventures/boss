@@ -302,7 +302,9 @@ def test_daily_and_monthly_caps_refuse_as_before(engine, ledger):
     with engine.begin() as c:
         title = c.execute(text("SELECT question FROM decisions WHERE id = :d"),
                           {"d": refused["decision_id"]}).scalar()
-    assert title == "Budget reservation denied"
+    # A spend boundary in plain words, naming the work and the cap (decision_words guard).
+    assert title == ("An agent's model call would spend past today's budget cap of $10 — raise "
+                     "the cap, or wait for it to reset?")
 
     # Other work's holds fill the cap: transient headroom, no decision.
     ledger(10, 200)

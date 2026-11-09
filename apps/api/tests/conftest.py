@@ -307,6 +307,8 @@ def clean_tables(engine):
             # Hosts reference their key via secret_refs, so they must go first. Added with the
             # deployment-fleet work and never listed here, which is the same omission as
             # deployment_health_samples above.
+            "server_setups",
+            "app_watches",
             "deployment_hosts",
             "secret_material",
             "secret_refs",

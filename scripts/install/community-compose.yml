@@ -262,9 +262,36 @@ services:
       # release as it is), and BOSS's own source, mirrored read-only for its fix builds.
       BOSS_STACK_HEAD: ${BOSS_STACK_HEAD:-}
       BOSS_SELF_FIX_SOURCE: /var/lib/boss/selfsrc/boss.git
+      # LOCAL-FIRST PROJECTS (BOSSAPP-915): one bare git repository per local project, and the
+      # mirrors GitHub builds fall back to during an outage, in a named volume shared by the API
+      # and the worker (where sandboxes clone). Import local code reads only from the import
+      # directory: .boss/import beside the install, mounted read-only.
+      BOSS_LOCAL_REPO_ROOT: /var/lib/boss/repos
+      BOSS_LOCAL_IMPORT_ROOT: /var/lib/boss/import
       # KG P6b: the external_agent step refuses to run without this — the Knowledge-Graph MCP
       # endpoint handed to a bank's connected agent, served by this install's own kg-mcp service.
       BOSS_KG_MCP_URL: http://kg-mcp:8790/mcp
+      # ALWAYS-ON AGENTS (docs/product/AUTONOMOUS_AGENTS_SPEC.md §0; config.py "AUTONOMOUS AGENTS'
+      # TICK"). Off unless .env says otherwise; every default equals config.py's, so an install
+      # that sets nothing behaves like a stock one. Console › Govern › Always-on agents sets the
+      # mode too; a value here pins it. BOSS_AMBIENT_DISABLED=1 wins over everything.
+      BOSS_AMBIENT_COS: ${BOSS_AMBIENT_COS:-}
+      BOSS_AMBIENT_SIGNALS: ${BOSS_AMBIENT_SIGNALS:-}
+      BOSS_AMBIENT_LEARNING: ${BOSS_AMBIENT_LEARNING:-}
+      BOSS_AMBIENT_DISABLED: ${BOSS_AMBIENT_DISABLED:-}
+      BOSS_ROADMAP_DISABLED: ${BOSS_ROADMAP_DISABLED:-}
+      BOSS_AMBIENT_COS_MODEL_CALLS: ${BOSS_AMBIENT_COS_MODEL_CALLS:-3}
+      BOSS_AMBIENT_COS_CARDS: ${BOSS_AMBIENT_COS_CARDS:-3}
+      BOSS_AMBIENT_SQUADS: ${BOSS_AMBIENT_SQUADS:-1}
+      BOSS_AMBIENT_SQUAD_ITEMS: ${BOSS_AMBIENT_SQUAD_ITEMS:-3}
+      BOSS_DOSSIER_OSV: ${BOSS_DOSSIER_OSV:-1}
+      # Demo switches (sample data and scripted scenarios; never on a real project by default).
+      BOSS_AMBIENT_DEMO: ${BOSS_AMBIENT_DEMO:-}
+      BOSS_DEMO_SCENARIOS: ${BOSS_DEMO_SCENARIOS:-}
+      BOSS_DEMO_DATA: ${BOSS_DEMO_DATA:-}
+      # Governance knobs the docs tell an operator to set in .env (IDENTITY_ADMIN.md).
+      BOSS_MEETING_PRD_AUTO_APPROVE: ${BOSS_MEETING_PRD_AUTO_APPROVE:-}
+      BOSS_ARGON2_PROFILE: ${BOSS_ARGON2_PROFILE:-default}
       # Improve BOSS / daily heartbeat (docs/product/RUN_SCORECARDS.md). BOSS_TELEMETRY=off or
       # DO_NOT_TRACK=1 in .env turns every send off, the heartbeat included.
       BOSS_TELEMETRY: ${BOSS_TELEMETRY:-}
@@ -293,6 +320,17 @@ services:
       # in (install.sh --with-mailpit); mail otherwise goes through the Email (SMTP) connector.
       BOSS_EMAIL_DEV_INBOX: ${BOSS_EMAIL_DEV_INBOX:-}
       BOSS_EMAIL_DEV_INBOX_URL: ${BOSS_EMAIL_DEV_INBOX_URL:-}
+      # Email through .env (docs/community/SIGN_IN_SETUP.md §2, EMAIL.md): the SMTP settings the
+      # docs tell an operator to set. The password is optional, never defaulted.
+      BOSS_EMAIL_SMTP_HOST: ${BOSS_EMAIL_SMTP_HOST:-}
+      BOSS_EMAIL_SMTP_PORT: ${BOSS_EMAIL_SMTP_PORT:-587}
+      BOSS_EMAIL_SMTP_USERNAME: ${BOSS_EMAIL_SMTP_USERNAME:-}
+      BOSS_EMAIL_SMTP_PASSWORD: ${BOSS_EMAIL_SMTP_PASSWORD:-}
+      BOSS_EMAIL_SMTP_USE_TLS: ${BOSS_EMAIL_SMTP_USE_TLS:-true}
+      BOSS_EMAIL_SMTP_USE_SSL: ${BOSS_EMAIL_SMTP_USE_SSL:-false}
+      BOSS_EMAIL_FROM_ADDRESS: ${BOSS_EMAIL_FROM_ADDRESS:-}
+      BOSS_EMAIL_FROM_NAME: ${BOSS_EMAIL_FROM_NAME:-}
+      BOSS_EMAIL_REAL_SEND_ALLOWED: ${BOSS_EMAIL_REAL_SEND_ALLOWED:-false}
       # The console's real port, for links printed before any public origin is bound (the claim
       # link of a laptop install): identity/authn_support.local_console_origin.
       BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
@@ -446,6 +484,10 @@ services:
       # BOSS's own source for self-fix builds, read-only (`boss self-fix seed` fills it on the
       # host; install.sh creates the directory so Docker never makes it as root).
       - ../../.boss/selfsrc:/var/lib/boss/selfsrc:ro
+      # Local projects' repositories and GitHub mirrors (services/local_repo.py), and the one
+      # folder Import local code may read from this machine (read-only).
+      - boss_community_repos:/var/lib/boss/repos
+      - ../../.boss/import:/var/lib/boss/import:ro
       - boss_community_build_services_secret:/run/boss-build-services
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
       # credential: every refresh revokes the previous one, so two containers each holding
@@ -513,12 +555,39 @@ services:
       # release as it is), and BOSS's own source, mirrored read-only for its fix builds.
       BOSS_STACK_HEAD: ${BOSS_STACK_HEAD:-}
       BOSS_SELF_FIX_SOURCE: /var/lib/boss/selfsrc/boss.git
+      # LOCAL-FIRST PROJECTS (BOSSAPP-915): one bare git repository per local project, and the
+      # mirrors GitHub builds fall back to during an outage, in a named volume shared by the API
+      # and the worker (where sandboxes clone). Import local code reads only from the import
+      # directory: .boss/import beside the install, mounted read-only.
+      BOSS_LOCAL_REPO_ROOT: /var/lib/boss/repos
+      BOSS_LOCAL_IMPORT_ROOT: /var/lib/boss/import
       BOSS_WORKER_API_KEY: ${BOSS_WORKER_API_KEY:?generated by install.sh}
       BOSS_CONTROL_PLANE_URL: http://api:8000
       BOSS_WORKER_ID: community-worker-1
       # KG P6b: same reasoning as the api service above — the external_agent step refuses to
       # run without a configured Knowledge-Graph MCP endpoint.
       BOSS_KG_MCP_URL: http://kg-mcp:8790/mcp
+      # ALWAYS-ON AGENTS (docs/product/AUTONOMOUS_AGENTS_SPEC.md §0; config.py "AUTONOMOUS AGENTS'
+      # TICK"). Off unless .env says otherwise; every default equals config.py's, so an install
+      # that sets nothing behaves like a stock one. Console › Govern › Always-on agents sets the
+      # mode too; a value here pins it. BOSS_AMBIENT_DISABLED=1 wins over everything.
+      BOSS_AMBIENT_COS: ${BOSS_AMBIENT_COS:-}
+      BOSS_AMBIENT_SIGNALS: ${BOSS_AMBIENT_SIGNALS:-}
+      BOSS_AMBIENT_LEARNING: ${BOSS_AMBIENT_LEARNING:-}
+      BOSS_AMBIENT_DISABLED: ${BOSS_AMBIENT_DISABLED:-}
+      BOSS_ROADMAP_DISABLED: ${BOSS_ROADMAP_DISABLED:-}
+      BOSS_AMBIENT_COS_MODEL_CALLS: ${BOSS_AMBIENT_COS_MODEL_CALLS:-3}
+      BOSS_AMBIENT_COS_CARDS: ${BOSS_AMBIENT_COS_CARDS:-3}
+      BOSS_AMBIENT_SQUADS: ${BOSS_AMBIENT_SQUADS:-1}
+      BOSS_AMBIENT_SQUAD_ITEMS: ${BOSS_AMBIENT_SQUAD_ITEMS:-3}
+      BOSS_DOSSIER_OSV: ${BOSS_DOSSIER_OSV:-1}
+      # Demo switches (sample data and scripted scenarios; never on a real project by default).
+      BOSS_AMBIENT_DEMO: ${BOSS_AMBIENT_DEMO:-}
+      BOSS_DEMO_SCENARIOS: ${BOSS_DEMO_SCENARIOS:-}
+      BOSS_DEMO_DATA: ${BOSS_DEMO_DATA:-}
+      # Governance knobs the docs tell an operator to set in .env (IDENTITY_ADMIN.md).
+      BOSS_MEETING_PRD_AUTO_APPROVE: ${BOSS_MEETING_PRD_AUTO_APPROVE:-}
+      BOSS_ARGON2_PROFILE: ${BOSS_ARGON2_PROFILE:-default}
       # The worker runs no builds (it leases jobs and asks the API to run them), but BOSS code in
       # it is never allowed to run one unisolated either: fail closed, like the api.
       BOSS_SANDBOX_ISOLATION: ${BOSS_SANDBOX_ISOLATION:-required}
@@ -585,6 +654,17 @@ services:
       BOSS_MONITORING_DASHBOARDS_DIR: /var/lib/boss/grafana-dashboards
       BOSS_EMAIL_DEV_INBOX: ${BOSS_EMAIL_DEV_INBOX:-}
       BOSS_EMAIL_DEV_INBOX_URL: ${BOSS_EMAIL_DEV_INBOX_URL:-}
+      # Email through .env (docs/community/SIGN_IN_SETUP.md §2, EMAIL.md): the SMTP settings the
+      # docs tell an operator to set. The password is optional, never defaulted.
+      BOSS_EMAIL_SMTP_HOST: ${BOSS_EMAIL_SMTP_HOST:-}
+      BOSS_EMAIL_SMTP_PORT: ${BOSS_EMAIL_SMTP_PORT:-587}
+      BOSS_EMAIL_SMTP_USERNAME: ${BOSS_EMAIL_SMTP_USERNAME:-}
+      BOSS_EMAIL_SMTP_PASSWORD: ${BOSS_EMAIL_SMTP_PASSWORD:-}
+      BOSS_EMAIL_SMTP_USE_TLS: ${BOSS_EMAIL_SMTP_USE_TLS:-true}
+      BOSS_EMAIL_SMTP_USE_SSL: ${BOSS_EMAIL_SMTP_USE_SSL:-false}
+      BOSS_EMAIL_FROM_ADDRESS: ${BOSS_EMAIL_FROM_ADDRESS:-}
+      BOSS_EMAIL_FROM_NAME: ${BOSS_EMAIL_FROM_NAME:-}
+      BOSS_EMAIL_REAL_SEND_ALLOWED: ${BOSS_EMAIL_REAL_SEND_ALLOWED:-false}
       # The console's real port, for links printed before any public origin is bound (the claim
       # link of a laptop install): identity/authn_support.local_console_origin.
       BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
@@ -644,6 +724,10 @@ services:
       # BOSS's own source for self-fix builds, read-only (`boss self-fix seed` fills it on the
       # host; install.sh creates the directory so Docker never makes it as root).
       - ../../.boss/selfsrc:/var/lib/boss/selfsrc:ro
+      # Local projects' repositories and GitHub mirrors (services/local_repo.py), and the one
+      # folder Import local code may read from this machine (read-only).
+      - boss_community_repos:/var/lib/boss/repos
+      - ../../.boss/import:/var/lib/boss/import:ro
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
       # credential: every refresh revokes the previous one, so two containers each holding
       # their own copy revoke each other — api detects, worker builds, and whichever runs
@@ -861,5 +945,7 @@ volumes:
   boss_community_artifacts:
   boss_community_identity:
   boss_community_toolchain_cache:
+  # Local projects' bare repositories and GitHub mirrors: their only copy until published.
+  boss_community_repos:
   # Independent of restored database and identity/key archives.
   boss_community_recovery:

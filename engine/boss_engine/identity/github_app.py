@@ -276,7 +276,7 @@ def mint_for_run(claims: RunTokenClaims, *, task: TaskBinding, db: Any):
             raise GitHubRefused("repo_outside_grant")
         # At run start the guard asks GitHub NOW (no 15-minute cache): access the person lost a
         # minute ago is not lent to their agent.
-        grants.check_user_repo_access(claims.org_id, claims.sub, gh, db=db, use_cache=False)
+        grants.check_grant_repo_access(grant, claims.org_id, claims.sub, gh, db=db, use_cache=False)
     perms = run_permissions(claims, db=db)
     if set(perms) == {"metadata"}:
         raise GitHubRefused("no_github_permissions")

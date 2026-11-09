@@ -51,7 +51,7 @@ describe("the change's cockpit (screen 5)", () => {
     const calls = api();
     await mount();
     expect(calls[0]).toMatchObject({ method: "GET", path: "/v1/change-sets/rcs_1", search: "?project_id=p1" });
-    expect(tid("mr-csc-crumb")?.textContent?.trim()).toBe("Factory›Storefront›Add saved carts");
+    expect(tid("mr-csc-crumb")?.textContent?.trim()).toBe("Code Tasks›Storefront›Add saved carts");
     expect(tid("mr-csc-title")?.textContent).toBe("Add saved carts");
     expect(tid("mr-csc-repos")?.textContent).toBe("3 repositories");
     expect(tid("mr-csc-minutes")?.textContent).toBe("38 min");

@@ -10,9 +10,11 @@ the only place that decides who acts on that answer:
     recommendation                       carried to
     action = incident_squad.mitigate     incident_squad.on_needs_you_answered (SRE squad resumes:
                                          approve = roll back + fix, revise = fix only, else hold)
-    asked_by = agent:chief_of_staff      chief_of_staff.carry_answer (approve → handoff to the
-                                         owner, whose squad works it on the next tick; reject →
-                                         dismissed, cools down)
+    card = ambient (the project's one   asks.carry_card per entry by its kind, and
+      card, asks.py)                     chief_of_staff.carry_card for its hand-offs
+    asked_by = agent:chief_of_staff      chief_of_staff.carry_card (approve → handoff to the
+                                         owner of EVERY item on the card, whose squad works it
+                                         on the next tick; reject → dismissed, cools down)
     proposal_id (a squad's card)         squad_turns.person_answered (the person's ledger row;
                                          the squad carries it out at its next round)
     anything else                        board.answered (the item goes back to its holder)
@@ -54,6 +56,16 @@ def on_answered(connection: Connection, settings: Any, decision: Mapping[str, An
     item = board.get(connection, str(item_id))
     if item is None:
         return None
+    if rec.get("card") == "ambient":
+        # THE PROJECT'S ONE CARD (asks.py): one answer reaches every entry, each by its own
+        # carrier — the Chief of Staff's hand-offs, a squad's proposal, a stuck squad, the SRE
+        # squad's escalation.
+        from .asks import carry_card as carry_entries
+        from .chief_of_staff import carry_card
+
+        carry_card(connection, decision_id=str(decision["id"]), recommendation=rec)
+        carry_entries(connection, settings, decision, actor, verdict, note)
+        return "card"
     if rec.get("action") == "incident_squad.mitigate":
         from ..incident_squad import on_needs_you_answered
 
@@ -62,9 +74,10 @@ def on_answered(connection: Connection, settings: Any, decision: Mapping[str, An
         on_needs_you_answered(connection, settings, decision, actor, verdict, note)
         return "incident"
     if rec.get("asked_by") == COS:
-        from .chief_of_staff import carry_answer
+        from .chief_of_staff import carry_card
 
-        carry_answer(connection, item_id=str(item_id), decision_id=str(decision["id"]))
+        # One card may ask about several items (a batched card): the answer reaches each.
+        carry_card(connection, decision_id=str(decision["id"]), recommendation=rec)
         return "chief_of_staff"
     if item["lifecycle"] != "needs_you" or item.get("needs_you_decision_id") != decision["id"]:
         return "already"
@@ -85,7 +98,8 @@ def sweep(connection: Connection, settings: Any, project_id: str) -> list[dict[s
         "SELECT d.id, d.project_id, d.status, d.recommendation, d.approved_by, d.executed_by, "
         "d.resolution_note FROM work_items w JOIN decisions d ON d.id = w.needs_you_decision_id "
         "WHERE w.project_id = :p AND w.ambient AND w.lifecycle = 'needs_you' "
-        "AND d.status = ANY(:a) AND COALESCE(d.recommendation->>'asked_by', '') <> :cos "
+        "AND d.status = ANY(:a) AND (COALESCE(d.recommendation->>'asked_by', '') <> :cos "
+        "  OR d.recommendation->>'card' = 'ambient') "
         "ORDER BY d.updated_at LIMIT 50"),
         {"p": project_id, "a": list(ANSWERED), "cos": COS}).mappings().all()
     done = []

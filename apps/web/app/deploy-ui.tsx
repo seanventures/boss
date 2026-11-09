@@ -22,6 +22,7 @@ import {
 } from "./actions";
 
 import { callAction } from "../lib/call-action";
+import { detailText } from "../lib/api-error";
 import { GatedButton } from "../components/gated";
 type Step = {
   step: string; label: string; status: "pending" | "running" | "ok" | "failed" | "skipped";
@@ -422,7 +423,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
     const out = await callAction(deployTargetAction, undefined, "deployment:create")(targetId, ref);
     setStarting(false);
     if (out?.error) {
-      setErr(typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 220));
+      setErr(typeof out.error === "string" ? out.error : detailText(out.error) || "It did not go through.");
       return;
     }
     const nextPlan = plannedDeploymentFrom(out);

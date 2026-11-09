@@ -299,7 +299,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
             if row is None:
                 return {"ok": False, "error": "project_not_found", "project": project_id}
             repos = c.execute(_text(
-                "SELECT full_name, role, status, default_branch, connection_id, created_at "
+                "SELECT full_name, role, status, default_branch, connection_id, "
+                "COALESCE(host, 'github') AS host, created_at "
                 "  FROM github_repository_bindings WHERE project_id = :p "
                 " ORDER BY (role = 'primary') DESC, full_name"),
                 {"p": project_id}).mappings().all()
@@ -1457,6 +1458,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "instructions": {"type": "string",
                                  "description": "what to add or change, in plain language"},
                 "profile": {"type": "string", "enum": ["lean", "balanced", "strict", "vag"]},
+                "title": {"type": "string",
+                          "description": "what this pass is, in two or three words (e.g. "
+                                         "'More tests'); the work's own name follows it"},
             },
             ["run_id", "instructions"],
         ),
@@ -1469,6 +1473,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             fix_note=(args.get("instructions") or ""),
             profile=(args.get("profile") or None),
             allow_test_retirement=bool(args.get("allow_test_retirement")),
+            # A PASS IS NAMED FOR WHAT IT IS. The title the caller gave (More tests, launch
+            # readiness) was dropped, so retry_code_task named the pass "<build> · retry 1" —
+            # and a successful, merged build read as one being run again (helpdesk-ai-v3,
+            # crun_d2316785, 2026-11-07).
+            title=cts.extend_title(ctx.engine, args["run_id"], args.get("title")),
         )
         return {"status": "extending", "result": _json_safe(result),
                 "note": ("continues the existing lineage: same branch, same PR, "
@@ -3246,6 +3255,24 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         return self_snapshot()
 
     @reg.tool(
+        "install_restarts",
+        "Why BOSS's own services restarted, with timestamps: every start of the api and worker "
+        "in the window, each classified — `upgrade` (the running commit changed: from → to, "
+        "by which install method), `rebuild` (same commit, new image), `recreate` (same image, "
+        "new container), `restart` (the same container again: the process died — the "
+        "crash-loop signature) — plus the OOM-kill count and the builds those starts "
+        "interrupted. Use it to settle 'was that restart our upgrade, or a crash?' (the system "
+        "doctor's 'Updates restarted a build'). Read-only; no docker socket.",
+        _obj({"hours": {"type": "number", "minimum": 0.1, "maximum": 336, "default": 24,
+                        "description": "how far back to look"}}),
+        kind="read", permission="system:read")
+    def install_restarts(ctx, *, project_id, actor, args):
+        from ..services.install_history import restarts
+
+        with ctx.begin() as c:
+            return restarts(c, hours=float(args.get("hours") or 24))
+
+    @reg.tool(
         "set_job_priority",
         "Move a job between priority bands. LOWER runs sooner. Bands: 'urgent' (delay costs "
         "money or safety), 'interactive' (a person is watching), 'requested' (a person asked "
@@ -3306,8 +3333,17 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 "       EXTRACT(EPOCH FROM (now() - updated_at))/60 AS running_min "
                 "FROM jobs WHERE project_id = :p AND status IN ('running','leased') "
                 "ORDER BY priority ASC LIMIT 25"), {"p": project_id}).mappings().all()
+            # Work that is DONE but waits on GitHub to come back (github_outage, BOSSAPP-922).
+            try:
+                from ..services.github_outage import waiting as _gh_waiting
+
+                with c.begin_nested():
+                    on_github = _gh_waiting(c, project_id)
+            except Exception:  # noqa: BLE001
+                on_github = []
         return {
             "threshold_minutes": threshold,
+            "waiting_for_github": on_github,
             "starved": [{**dict(r), "waited_min": round(float(r["waited_min"]), 1)}
                         for r in waiting],
             "holding_a_slot": [{**dict(r), "running_min": round(float(r["running_min"]), 1)}
@@ -8163,7 +8199,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 raw = str(row["pull_request_url"])
 
         if not number:
-            m = _re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", raw)
+            # github.com, or a local change set's http://boss-local/local_<project>/<name>/pull/N.
+            m = _re.search(r"(?:github\.com|//boss-local)/([^/]+)/([^/]+)/pull/(\d+)", raw)
             if m:
                 repo_full = repo_full or f"{m.group(1)}/{m.group(2)}"
                 number = m.group(3)
@@ -8184,6 +8221,32 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         # authority to inspect an arbitrary private repository.
         if not run_repo and not _project_repository_bound(ctx, pid, repo_full):
             return {"ok": False, "error": "repository unavailable in this project"}
+        from boss_engine.services.local_repo import is_local as _is_local_repo
+
+        if _is_local_repo(repo_full):
+            # BOSSAPP-919: a repository BOSS keeps on this machine — its pull requests are local
+            # change sets, read from the bare repository, never from api.github.com.
+            from boss_engine.services.local_repo_host import LocalGitAdapter
+            from boss_engine.services.repo_links import change_view_path
+
+            l_owner, _, l_name = repo_full.partition("/")
+            try:
+                adapter = LocalGitAdapter(ctx.settings, owner=l_owner, repo=l_name, project_id=pid,
+                                          engine=ctx.engine)
+                meta = adapter.pull_request_meta(int(number))
+                files = adapter.pull_request_files(int(number))
+                diff = adapter.get_pull_request_diff(int(number)) if args.get("with_diff") else ""
+            except Exception as exc:  # noqa: BLE001 — a missing change set is an answer
+                return {"ok": False, "error": f"could not read {repo_full}#{number}: {exc}"[:250]}
+            listed = [{"path": f.get("path") or f.get("filename"), "status": f.get("status"),
+                       "additions": f.get("additions"), "deletions": f.get("deletions")}
+                      for f in files]
+            return {"repo": repo_full, "number": int(number), "host": "local",
+                    "title": meta.get("title"), "state": meta.get("state"),
+                    "merged": meta.get("state") == "merged", "branch": meta.get("head_ref"),
+                    "changed_files": len(listed), "files": listed,
+                    **({"diff": diff[:20000]} if diff else {}),
+                    "view": change_view_path(meta.get("url"))}
         if _community_restricted(ctx.settings):
             token = _github_token_for(ctx, pid, repo_full)
         else:
@@ -8612,6 +8675,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # (operator_only, project:delete), the same service as the project menu's (BOSSAPP-768 S5).
     "archive_project",
     "restore_project",
+    # "Delete northpeak-bank-b": offered as a button only (irreversible, operator_only); the
+    # person presses it with the name typed back (Where people decide › Deleting data).
+    "delete_project",
     # "Put the architect and the SRE on it": the project's team, stated (agent_assignment
     # .set_team), the same service as Knowledge Graph › Setup › Assign the team.
     "set_project_team",

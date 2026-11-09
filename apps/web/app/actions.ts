@@ -11,7 +11,7 @@ import { apiWrite, pressToken } from "../lib/api-write";
 import { act, apiFetch } from "../lib/server-action";
 import { missingInput, okResult, type ActionResult } from "../lib/action-result";
 import { previewWebHref } from "../lib/browser-links";
-import { apiErrorTechnical } from "../lib/api-error";
+import { apiErrorTechnical, detailText } from "../lib/api-error";
 import { declareAction } from "../lib/identity/guarded-action";
 
 export async function setPipelineDefaultAction(formData: FormData): Promise<ActionResult> { return act(async () => {
@@ -2707,8 +2707,8 @@ function failureText(detail: unknown, status: number): string {
       return (detail as { loc?: unknown[]; msg?: string }[])
         .map((e) => `${(e.loc || []).slice(-1)}: ${e.msg}`).join("; ");
     }
-    const text = JSON.stringify(detail);
-    if (text && text !== "{}") return text.slice(0, 300);
+    const text = detailText(detail);
+    if (text && text !== "{}") return text;
   }
   return `${status}`;
 }

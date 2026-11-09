@@ -396,6 +396,10 @@ class PostgresLease:
     password: str = field(repr=False)
     ledger_handle: str = ""
     missing_extensions: tuple[str, ...] = ()
+    #: BOSS's catalog comment (no secret): what a restored role/database carries again.
+    comment: str = ""
+    #: How many times BOSS found the role/database gone mid-run and made it again (`ensure`).
+    restored: int = 0
 
     def env(self) -> dict[str, str]:
         url = (f"postgresql://{quote(self.name)}:{quote(self.password, safe='')}"
@@ -447,34 +451,20 @@ def provision(run_id: str, *, install: str = "", server_url: Optional[str] = Non
             f"this run declared services: [postgres], but no build-services server is "
             f"configured ({SERVER_URL_ENV} is not set). Start the build-services container "
             "or remove the declaration")
-    from psycopg import sql
-
     name = f"{prefix()}{secrets.token_hex(8)}"
     password = secrets.token_hex(24)
     comment = json.dumps({"boss": "build-services", "run": run_tag(run_id),
                           "install": install or "", "created": int(time.time())})
-    ident = sql.Identifier(name)
     host, port = _run_endpoint(srv)
     lease = PostgresLease(run_id=run_id, name=name, host=host, port=port, password=password,
-                          ledger_handle=f"pg:{srv.host}:{srv.port}/{name}")
+                          ledger_handle=f"pg:{srv.host}:{srv.port}/{name}", comment=comment)
     # Registered for scrubbing BEFORE the password exists anywhere else.
     _remember_secret(password)
     try:
         with contextlib.closing(_connect(srv)) as conn:
             try:
                 _harden_shared_databases(conn)
-                conn.execute(sql.SQL(
-                    "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOINHERIT "
-                    "NOREPLICATION NOBYPASSRLS CONNECTION LIMIT {} PASSWORD {}").format(
-                        ident, sql.Literal(CONNECTION_LIMIT),
-                        sql.Literal(scram_verifier(password))))
-                conn.execute(sql.SQL("COMMENT ON ROLE {} IS {}").format(ident, sql.Literal(comment)))
-                conn.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(ident, ident))
-                conn.execute(sql.SQL("REVOKE ALL ON DATABASE {} FROM PUBLIC").format(ident))
-                conn.execute(sql.SQL("GRANT CONNECT, TEMPORARY ON DATABASE {} TO {}").format(
-                    ident, ident))
-                conn.execute(sql.SQL("COMMENT ON DATABASE {} IS {}").format(
-                    ident, sql.Literal(comment)))
+                _create(conn, name, password, comment)
             except Exception as exc:  # noqa: BLE001
                 try:
                     _drop(conn, name)
@@ -513,6 +503,7 @@ def provision(run_id: str, *, install: str = "", server_url: Optional[str] = Non
         raise
     with _LOCK:
         _LEASES[run_id] = lease
+        _ENSURED[name] = time.monotonic()        # just made: the first check can wait
     with contextlib.suppress(Exception):
         from . import resource_ledger
 
@@ -521,6 +512,89 @@ def provision(run_id: str, *, install: str = "", server_url: Optional[str] = Non
                                      "install": install or ""})
     _log.info("build-services run=%s %s", run_id, lease.describe())
     return lease
+
+
+def _create(conn: Any, name: str, password: str, comment: str) -> None:
+    """The run's role and database, as `provision` describes them (admin connection)."""
+    from psycopg import sql
+
+    ident = sql.Identifier(name)
+    conn.execute(sql.SQL(
+        "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOINHERIT "
+        "NOREPLICATION NOBYPASSRLS CONNECTION LIMIT {} PASSWORD {}").format(
+            ident, sql.Literal(CONNECTION_LIMIT), sql.Literal(scram_verifier(password))))
+    conn.execute(sql.SQL("COMMENT ON ROLE {} IS {}").format(ident, sql.Literal(comment)))
+    conn.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(ident, ident))
+    conn.execute(sql.SQL("REVOKE ALL ON DATABASE {} FROM PUBLIC").format(ident))
+    conn.execute(sql.SQL("GRANT CONNECT, TEMPORARY ON DATABASE {} TO {}").format(ident, ident))
+    conn.execute(sql.SQL("COMMENT ON DATABASE {} IS {}").format(ident, sql.Literal(comment)))
+
+
+# --------------------------------------------------------------------------------- staying alive
+#: THE LEASE MUST STILL BE THERE WHEN THE TESTS USE IT (crun_de96bf12, helpdesk-ai-demo,
+#: 2026-11-06). The build-services server keeps its data on tmpfs (community-compose.yml) and is
+#: the host's preferred OOM victim (oom_score_adj 300, mem_limit 1g): when it restarts — an OOM
+#: kill under memory pressure, an upgrade, `docker compose up` — it comes back EMPTY. Every live
+#: run still held its lease in memory and kept handing the same DATABASE_URL to its commands, and
+#: Postgres answered each with "password authentication failed for user boss_test_run_…"
+#: (SQLSTATE 28P01; it says that for a role that does not exist). The suite's setup hook failed,
+#: and 119 of 190 tests "failed" — none of them the app's fault.
+#: So before a run's process gets its database variables, BOSS checks (at most every
+#: ENSURE_EVERY seconds per lease) that the role and database still exist, and makes them again,
+#: same name and password, when they do not. The run's data is gone either way (the server lost
+#: it); its schema is the tests' own setup, which runs again.
+ENSURE_EVERY = 15.0
+_ENSURED: dict[str, float] = {}
+
+
+def ensure(lease: Optional[PostgresLease], *, server_url: Optional[str] = None,
+           force: bool = False) -> str:
+    """"ok" | "restored" | "skipped" (checked recently, or no server) | "unreachable".
+    Never raises and never says the password: the caller is about to start a process."""
+    if lease is None or not lease.password:
+        return "skipped"
+    now = time.monotonic()
+    with _LOCK:
+        if not force and now - _ENSURED.get(lease.name, -1e9) < ENSURE_EVERY:
+            return "skipped"
+        _ENSURED[lease.name] = now
+        held = _LEASES.get(lease.run_id) is lease
+    if not held:
+        return "skipped"                     # ended: never brought back
+    try:
+        srv = server(server_url)
+    except BuildServicesUnavailable:
+        return "unreachable"
+    if srv is None:
+        return "skipped"
+    try:
+        with contextlib.closing(_connect(srv)) as conn:
+            present = conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=%s), "
+                "EXISTS(SELECT 1 FROM pg_roles WHERE rolname=%s)",
+                (lease.name, lease.name)).fetchone()
+            if tuple(present) == (True, True):
+                return "ok"
+            with _LOCK:
+                if _LEASES.get(lease.run_id) is not lease:
+                    return "skipped"
+            _drop(conn, lease.name)              # a half left behind, if any
+            _harden_shared_databases(conn)
+            _create(conn, lease.name, lease.password, lease.comment or json.dumps(
+                {"boss": "build-services", "run": run_tag(lease.run_id), "install": "",
+                 "created": int(time.time())}))
+        db_srv = _Server(host=srv.host, port=srv.port, user=srv.user, password=srv.password,
+                         dbname=lease.name)
+        with contextlib.closing(_connect(db_srv)) as dconn:
+            lease.missing_extensions = _install_extensions(dconn, lease.name, lease.name)
+    except Exception as exc:  # noqa: BLE001 — the reason, never the conninfo or server text
+        _log.warning("build-services run=%s could not check/restore %s (%s)",
+                     lease.run_id, lease.name, type(exc).__name__)
+        return "unreachable"
+    lease.restored += 1
+    _log.warning("build-services run=%s: %s had vanished from the server (it restarted empty); "
+                 "BOSS made it again", lease.run_id, lease.name)
+    return "restored"
 
 
 def _available_extensions(conn: Any, names: Iterable[str]) -> set[str]:
@@ -553,12 +627,17 @@ def _install_extensions(conn: Any, name: str, role: str) -> tuple[str, ...]:
 #: after `sameuser` lets the authentication attempt proceed). Superuser connections (BOSS's own)
 #: are never subject to this grant. Done once per process, best-effort: it hardens a shared
 #: resource outside any one run's database and must never block a run's own provisioning.
-_SHARED_DATABASES_HARDENED = False
+#: Per server INCARNATION (pg_postmaster_start_time): a build-services server that restarted on
+#: its tmpfs came back with PUBLIC's CONNECT on those databases again, so it is hardened again.
+_SHARED_DATABASES_HARDENED: Any = False
 
 
 def _harden_shared_databases(conn: Any) -> None:
     global _SHARED_DATABASES_HARDENED
-    if _SHARED_DATABASES_HARDENED:
+    incarnation: Any = True
+    with contextlib.suppress(Exception):
+        incarnation = str(conn.execute("SELECT pg_postmaster_start_time()").fetchone()[0])
+    if _SHARED_DATABASES_HARDENED == incarnation:
         return
     from psycopg import sql
 
@@ -566,7 +645,7 @@ def _harden_shared_databases(conn: Any) -> None:
         with contextlib.suppress(Exception):
             conn.execute(sql.SQL("REVOKE CONNECT ON DATABASE {} FROM PUBLIC").format(
                 sql.Identifier(shared)))
-    _SHARED_DATABASES_HARDENED = True
+    _SHARED_DATABASES_HARDENED = incarnation
 
 
 def _created_roles(conn: Any, name: str) -> list[str]:
@@ -609,6 +688,7 @@ def teardown(run_id: str, *, server_url: Optional[str] = None, reason: str = "ru
         lease = _LEASES.pop(run_id, None) or _PENDING_CLEANUP.get(run_id)
         if lease is not None:
             _PENDING_CLEANUP[run_id] = lease
+            _ENSURED.pop(lease.name, None)
     if lease is None:
         return False
     try:
@@ -643,11 +723,12 @@ def env_for_owner(owner: Any) -> dict[str, str]:
         return {}
     ids = owner.ids() if hasattr(owner, "ids") else (str(owner),)
     with _LOCK:
-        for oid in reversed(ids):
-            lease = _LEASES.get(oid)
-            if lease is not None:
-                return lease.env()
-    return {}
+        lease = next((_LEASES[oid] for oid in reversed(ids) if oid in _LEASES), None)
+    if lease is None:
+        return {}
+    # The credentials handed out must still open the database (ensure: a restarted server).
+    ensure(lease)
+    return lease.env()
 
 
 def brief(lease: Optional[PostgresLease]) -> str:

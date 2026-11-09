@@ -80,6 +80,43 @@ def _restore(ctx, *, project_id, actor, args):
                      else f"{done['name']} was not archived.")}
 
 
+_DELETE_ARG = {
+    "type": "object",
+    "properties": {
+        "target": {"type": "string",
+                   "description": "the project to delete: its id (its slug, e.g. northpeak-bank-a)"},
+        "confirm_name": {"type": "string",
+                         "description": "the project's name, exactly as the person typed it"},
+        "also_production": {"type": "boolean",
+                            "description": "the person also asked to take down its production app"},
+    },
+    "required": ["target", "confirm_name"],
+    "additionalProperties": False,
+}
+
+
+def _delete(ctx, *, project_id, actor, args):
+    from ..services import projects_delete as service
+    from .registry import CURRENT_TOOL_AUTH
+
+    auth = CURRENT_TOOL_AUTH.get()
+    target = _target(args, project_id)
+    with ctx.begin() as c:
+        row = service._project(c, target)
+    if row is None or not _org_matches(row, auth):
+        return {"ok": False, "error": f"There is no project {target}."}
+    try:
+        done = service.delete_project(ctx.engine, ctx.settings, target, actor=actor, auth=auth,
+                                      confirm_name=args.get("confirm_name"),
+                                      also_production=bool(args.get("also_production")))
+    except service.DeleteRefused as refused:
+        return {"ok": False, "error": str(refused)}
+    return {"ok": True, "project_id": done["id"], "name": done["name"], "counts": done["counts"],
+            "href": "/?area=projects",
+            "note": f"Deleted {done['name']}: {done['rows']} records, its apps on servers and its "
+                    "knowledge graph. The repository on GitHub is untouched."}
+
+
 #: name -> (description, handler)
 PROJECT_ARCHIVE_TOOLS: dict[str, tuple] = {
     "archive_project": (
@@ -106,3 +143,20 @@ def register_project_archive_tools(reg) -> None:
             # stops every schedule and monitor of a project at once.
             reversibility="safe", operator_only=True,
             requires_durable_workspace=True, permission="project:delete", org_scope=True))
+    # DELETING IS ON THE LIST WHERE PEOPLE DECIDE (decide_list "Deleting data"): irreversible and
+    # operator_only, so the model can only OFFER it; a person's press runs it, with their own
+    # context (project:delete, owner, step-up) and the project's name typed back.
+    reg.register(ToolSpec(
+        name="delete_project",
+        description=(
+            "Delete a BOSS PROJECT for good (the person asked to delete, remove or wipe a "
+            "project): its workflow runs, builds, jobs, decisions, work items, previews, apps on "
+            "servers, alerts and knowledge graph. The GitHub repository and the security audit "
+            "log stay. Prefer archive_project when they may want it back. Offer it with the "
+            "project's name as the person typed it; it runs only when the person presses it. "
+            "The install's home project cannot be deleted; a live production app must be retired "
+            "first unless they asked to take production down too."),
+        parameters=_DELETE_ARG, handler=_delete, kind="write",
+        reversibility="irreversible", operator_only=True, requires_durable_workspace=True,
+        permission="project:delete", org_scope=True,
+        offer_note="everything the project holds in BOSS goes; its GitHub repository stays"))

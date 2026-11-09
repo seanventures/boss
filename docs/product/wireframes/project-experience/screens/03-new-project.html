@@ -1,0 +1,50 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Add a project</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-crumb="Projects|Add project">
+<div id="content"><section class="grid g3" style="opacity:.4"><div class="card" style="height:260px"></div><div class="card"></div><div class="card"></div></section></div>
+<div id="overlay">
+<div class="scrim"></div>
+<div class="sheet" role="dialog" aria-label="Add a project">
+  <div class="sheet-h"><span class="ico"><i class="ph ph-folder-plus"></i></span><h2>Add a project</h2>
+    <div class="seg" style="margin-left:12px"><span><i class="ph ph-lightbulb"></i>New · from an idea</span><span aria-selected="true"><i class="ph ph-git-branch"></i>Existing · repo or folder</span></div>
+    <span class="wf-spacer"></span><a class="faint" style="font-size:.6rem"><i class="ph ph-flask"></i> Try a sample</a><i class="ph ph-x" style="margin-left:10px"></i></div>
+  <div class="cols3">
+    <section><div class="row"><span class="stepn">1</span><b>Pick it</b></div>
+      <div class="seg" style="align-self:flex-start"><span aria-selected="true"><i class="ph ph-github-logo"></i>GitHub</span><span><i class="ph ph-folder-open"></i>Folder on host</span></div>
+      <div class="row"><span class="tag"><i class="ph ph-user"></i>paramg</span><a style="font-size:.56rem">+ account</a></div>
+      <div class="input" data-ph><i class="ph ph-magnifying-glass"></i>Search repos</div>
+      <div class="pick" aria-selected="true"><i class="ph ph-git-branch"></i><span class="mono">helpdesk-ai-demo</span><span class="wf-spacer"></span><span class="faint mono" style="font-size:.54rem">3h</span></div>
+      <div class="pick"><i class="ph ph-git-branch"></i><span class="mono">hello-world</span><span class="wf-spacer"></span><span class="tag" style="font-size:.5rem">in use</span></div>
+      <div class="pick"><i class="ph ph-git-branch"></i><span class="mono">kaizen-notes</span><span class="wf-spacer"></span><span class="faint mono" style="font-size:.54rem">12d</span></div>
+      <div class="pick"><i class="ph ph-git-branch"></i><span class="mono">ledger-api</span><span class="wf-spacer"></span><span class="faint mono" style="font-size:.54rem">1mo</span></div>
+    </section>
+    <section style="background:color-mix(in srgb, var(--teal) 4%, transparent)"><div class="row"><span class="stepn">2</span><b>Helm reads it</b><span class="tag" data-tone="blue"><span class="dot" data-s="run"></span>live</span></div>
+      <div class="row"><span class="face" data-a="helm_live" data-size="m"></span><span class="muted" style="font-size:.6rem">Reading <span class="mono">helpdesk-ai-demo</span>…</span></div>
+      <div class="ck">
+        <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t">Access<small>read · branch · PR</small></span><span></span></div>
+        <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t">Stack<small>Python 3.11 · FastAPI · React</small></span><span></span></div>
+        <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t">Build &amp; test<small>make setup · make test</small></span><span></span></div>
+        <div class="ck-i" data-s="run"><span class="ck-b"></span><span class="ck-t">Map code<small>118 / 214 files</small></span><span></span></div>
+      </div>
+      <div class="bar"><span style="width:55%;background:var(--teal)"></span></div>
+    </section>
+    <section><div class="row"><span class="stepn">3</span><b>Name &amp; captain</b></div>
+      <span class="lbl">Name</span><div class="input">HelpDesk AI Demo</div>
+      <span class="lbl">Captain</span>
+      <div class="pick" aria-selected="true"><span class="face" data-a="helm" data-size="s"></span><b>Helm</b><span class="faint">Engineering Captain</span><span class="wf-spacer"></span><i class="ph ph-caret-down"></i></div>
+      <span class="lbl">Crew</span><div class="row"><span class="faces"><span class="face" data-a="juno" data-size="s"></span><span class="face" data-a="forge" data-size="s"></span><span class="face" data-a="vera" data-size="s"></span><span class="face" data-a="beacon" data-size="s"></span></span><span class="faint" style="font-size:.56rem">default crew · change later</span></div>
+      <label class="row" style="font-size:.6rem"><i class="ph ph-check-square"></i>Map business rules too (Knowledge Graph)</label>
+      <span class="wf-spacer"></span>
+      <span class="btn" data-kind="primary" style="justify-content:center;padding:10px"><i class="ph ph-rocket"></i>Start onboarding</span>
+      <span class="faint" style="font-size:.54rem;text-align:center">Helm takes it from here · ≈ 5 min · ≈ $1</span>
+    </section>
+  </div>
+</div>
+</div>
+<script src="../shell.js"></script>
+</body></html>

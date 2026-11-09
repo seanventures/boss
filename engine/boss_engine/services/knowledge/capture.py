@@ -94,6 +94,21 @@ def capture_lifecycle(
         trust_tier, actor_kind = "governed", "person"
     else:
         trust_tier, actor_kind = "observed", "system"
+    # A NODE ANOTHER WRITER OWNS keeps its words: the incident squad's incident node carries its
+    # narrative (cause, learning applied, resolution). The record's text is added once, below
+    # it, and the node keeps its writer; the store merges attrs either way.
+    source = "lifecycle"
+    owned = connection.execute(text(
+        "SELECT name, body, source FROM kg_nodes WHERE project_id = :p AND kind = :k "
+        "AND node_key = :key"), {"p": project_id, "k": kind, "key": f"{kind}:{source_id}"}
+    ).mappings().first()
+    if owned is not None and owned["source"] not in (None, "lifecycle"):
+        source, title = str(owned["source"]), str(owned["name"] or title)
+        kept = str(owned["body"] or "")
+        if body and body not in kept:
+            body = f"{kept}\n\n{body}" if kept else body
+        else:
+            body = kept
     node_id = store.upsert_node(
         connection,
         project_id=project_id,
@@ -103,7 +118,7 @@ def capture_lifecycle(
         body=body,
         trust_tier=trust_tier,
         actor_kind=actor_kind,
-        source="lifecycle",
+        source=source,
         attrs={"source_id": source_id, "capture_id": captured["id"]},
     )
     linked: list[str] = []

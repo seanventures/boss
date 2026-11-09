@@ -85,6 +85,10 @@ REQUIRED_ANY: dict[str, tuple[str, ...]] = {
 #: (archivist's same-predicate rule): a newer decision on the same question, precedent for the
 #: same symptom or workaround for the same problem, on the same code, closes the older one.
 SUBJECT_FIELDS: dict[str, str] = {"decision": "question", "precedent": "symptom", "workaround": "problem"}
+#: Kinds where a new item on the same subject ADDS to what is known rather than contradicting it
+#: (two incidents with one symptom are two precedents). The same lesson seen again is
+#: `reinforce`d; a different one is linked (`correlates_with`), never superseded.
+CUMULATIVE_KINDS = frozenset({"precedent"})
 LIST_FIELDS = frozenset({"tried", "ruled_out", "files", "reasons", "alternatives", "applies_to"})
 
 MAX_TITLE = 200
@@ -674,6 +678,81 @@ def record(
     return item_payload(connection, project_id, node_id)
 
 
+def reinforce(
+    connection: Connection,
+    *,
+    project_id: str,
+    node_id: str,
+    incident_id: str,
+    incident_ref: Optional[str] = None,
+    evidence: Sequence[Mapping[str, Any]] = (),
+    actor_role: Optional[str] = None,
+) -> dict[str, Any]:
+    """THE SAME LESSON, LEARNED AGAIN (a squad judged today's incident to have the precedent's
+    cause): strengthen it instead of writing a second one. ``seen_count`` + 1, the evidence is
+    merged, the incident joins ``attrs.incidents``, confidence may rise within its evidence cap,
+    and the node stays the one every earlier reuse points at (its reuse count is kept)."""
+    row = connection.execute(text(
+        "SELECT id, kind, attrs, valid_to FROM kg_nodes WHERE project_id = :p AND id = :i"),
+        {"p": project_id, "i": node_id}).mappings().first()
+    if row is None or row["kind"] not in CUMULATIVE_KINDS:
+        raise LearningRefused(f"'{node_id}' is not a precedent of this project.")
+    old = _attrs(row["attrs"])
+    kept = _evidence(evidence) if evidence else []
+    merged = list(old.get("evidence") or [])
+    for item in kept:
+        if not any(e.get("type") == item["type"] and e.get("ref") == item["ref"] for e in merged):
+            merged.append(item)
+    merged = merged[-MAX_KEPT_EVIDENCE:]
+    incidents = [dict(i) for i in old.get("incidents") or [] if isinstance(i, Mapping)]
+    if old.get("incident_id") and not any(i.get("id") == old["incident_id"] for i in incidents):
+        incidents.insert(0, {"id": old["incident_id"], "ref": old.get("incident_ref")})
+    fresh = not any(i.get("id") == incident_id for i in incidents)
+    if fresh:
+        incidents.append({"id": incident_id, "ref": incident_ref})
+    conf = max(float(old.get("confidence") or 0.0),
+               min(1.0, float(old.get("confidence") or 0.0) + 0.05, confidence_cap(merged)))
+    patch = {"evidence": merged, "incidents": incidents[-50:], "confidence": round(conf, 3),
+             "injectable": conf >= INJECT_BELOW,
+             "seen_count": int(old.get("seen_count") or 1) + (1 if fresh else 0),
+             "last_seen_at": _now_iso(), "last_seen_run": incident_id}
+    connection.execute(text(
+        "UPDATE kg_nodes SET attrs = attrs || CAST(:patch AS JSONB), last_seen = clock_timestamp(), "
+        "valid_to = NULL WHERE id = :id"), {"patch": json.dumps(patch), "id": node_id})
+    who = actor_role or "system"
+    _STORE.audit(connection, project_id=project_id, action="knowledge.learning.reinforce", entity_id=node_id,
+                 actor_kind="agent" if actor_role else "system", actor_ref=who,
+                 detail={"incident_id": incident_id, "seen_count": patch["seen_count"]})
+    _emit(connection, project_id, who, {"node_id": node_id, "learning_kind": row["kind"],
+                                        "run_id": incident_id, "step": "postmortem", "repeat": True})
+    return item_payload(connection, project_id, node_id)
+
+
+def log_incident_use(
+    connection: Connection,
+    *,
+    project_id: str,
+    incident_id: str,
+    ids: Iterable[str],
+    use_kind: str,
+    agent_role: Optional[str] = None,
+    step: str = "incident_squad",
+) -> list[str]:
+    """An incident used these learnings (``kg_usage``): the incident is the unit of work, as a
+    run is for a build — "Learned on the job" counts it as one reuse, and the Graph's usage line
+    and edges read the same rows. Only learnings of this project are logged."""
+    wanted = [str(i) for i in ids if str(i or "").strip()]
+    if not wanted:
+        return []
+    found = [str(r) for r in connection.execute(text(
+        "SELECT id FROM kg_nodes WHERE project_id = :p AND id = ANY(:ids) AND kind = ANY(:kinds)"),
+        {"p": project_id, "ids": wanted, "kinds": sorted(LEARNING_KINDS)}).scalars()]
+    if found:
+        _STORE.log_usage(connection, project_id=project_id, run_id=str(incident_id), step=step,
+                         fact_ids=found, use_kind=use_kind, agent_role=agent_role)
+    return found
+
+
 def _ruled_out_target(connection: Connection, project_id: str, entry: Mapping[str, Any]) -> Optional[str]:
     ref = str(entry.get("id") or entry.get("symbol") or "").strip()
     if not ref:
@@ -702,10 +781,20 @@ def _contradicted(connection: Connection, project_id: str, node_id: str, kind: s
             raise LearningRefused(f"'{named}' is not an open learning of this project.")
         targets.append(row["id"])
     if subject_key:
-        targets += [str(i) for i in connection.execute(text(
+        same_subject = [str(i) for i in connection.execute(text(
             "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = :k AND id <> :i AND valid_to IS NULL "
             "AND trust_tier = 'inferred' AND attrs->>'subject_key' = :s"),
             {"p": project_id, "k": kind, "i": node_id, "s": subject_key}).scalars().all()]
+        if kind in CUMULATIVE_KINDS:
+            # A precedent is what happened in ONE incident: a second incident with the same
+            # symptom and another cause does not make the first wrong. Both stay open, linked,
+            # and the first keeps its reuse count (it used to be closed and read "reused 0").
+            for other in same_subject:
+                _STORE.upsert_edge(connection, project_id=project_id, src_id=node_id, dst_id=other,
+                                   kind="correlates_with", actor_kind=actor_kind,
+                                   attrs={"why": "same symptom, another cause"})
+        else:
+            targets += same_subject
     for old in dict.fromkeys(targets):
         _STORE.close_validity(connection, project_id=project_id, valid_to=datetime.now(timezone.utc),
                               actor_kind=actor_kind, node_id=old, superseded_by=node_id)

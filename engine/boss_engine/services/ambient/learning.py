@@ -100,6 +100,15 @@ class Detector:
 
 
 DETECTORS: dict[str, Detector] = {}
+#: THE DETECTOR'S NODE (screen 07): its name is its title ("Incident hotspot", "Alert gap",
+#: wireframe 07's words) and this is its icon (Phosphor names; the console draws them).
+DETECTOR_ICONS: dict[str, str] = {
+    "incident_cause": "detective", "alert_gap": "bell-slash", "hotspot": "fire",
+    "missing_tests": "test-tube", "review_repeat": "magnifying-glass", "design_drift": "compass",
+    "cost_spike": "coins", "flaky_test": "shuffle", "slow_stage": "gauge",
+    "user_friction": "hand-pointing", "feature_demand": "trend-up", "slow_query": "gauge",
+    "onboarding": "compass",
+}
 
 
 def detector(key: str, *, title: str, kind: str, shape: str, source: str,

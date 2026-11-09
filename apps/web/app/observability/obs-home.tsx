@@ -26,6 +26,8 @@ import {
 import type { Polled } from "../../lib/factory-floor";
 import { AreaHead, FindBox, NeedsYou, PartialLine, useUrlState, writeUrl } from "../infra/kit";
 import { AppsTab, ObsAskBoss } from "./pulse";
+import { useAppsAll } from "./apps-rows";
+import { Pulse as PulseIcon } from "@phosphor-icons/react";
 import { AlertsTab } from "./alerts";
 import { GrafanaHeaderLink } from "./grafana-link";
 import { ModelsTab } from "./models";
@@ -73,6 +75,8 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
   const band = useBand();
   const cells = band === "phone" ? 24 : band === "narrow" ? 48 : undefined;
   const pulse = usePulse(projectId, url.win, cells);
+  // Screen 15: every app across the projects you may read (the Apps rows and their count).
+  const all = useAppsAll(url.win);
   const onSystem = useRef(url.view === "system");
   onSystem.current = url.view === "system";
   const system = usePolled(projectId ? systemUrl(projectId) : null, parseSystem,
@@ -86,11 +90,14 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
     read: polledImprove<SharingView>("sharing", { project_id: projectId }),
   });
   const collector = Boolean(sharing.data?.switches?.collector?.on) || url.view === "installs";
-  const c = pulse.data?.counts;
+  // The head's counts follow what Apps shows: every app across your projects on the rows view.
+  const rowsView = url.view === "apps" && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("apps") !== "pulse";
+  const c = rowsView && all.data ? all.data.counts : pulse.data?.counts;
   const sys = system.data;
   const tabs = OBS_TABS.filter((t) => t.key !== "installs" || collector).map((t) => ({
     ...t,
-    count: t.key === "apps" && pulse.data ? pulse.data.rows.length || undefined
+    count: t.key === "apps" && all.data ? all.data.rows.length || undefined
+      : t.key === "apps" && pulse.data ? pulse.data.rows.length || undefined
       : t.key === "alerts" && pulse.data ? pulse.data.alertsFiring || undefined : undefined,
     dot: t.key === "system" && sys && sys.state !== "ok"
       ? { tone: (sys.state === "critical" ? "red" : "amber") as "red" | "amber", tip: `BOSS's machine: ${sys.reason ?? sys.state}` }
@@ -99,7 +106,7 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
   }));
   const props: ObsTabProps = { projectId, actor, orgId: orgId ?? null, url, go, query, pulse, system };
   const panel: Record<ObsTab, React.ReactNode> = {
-    apps: <AppsTab {...props} />,
+    apps: <AppsTab {...props} all={all} />,
     alerts: <AlertsTab {...props} onConnect={() => setConnecting(true)} />,
     notify: <NotifyTab {...props} />,
     models: <ModelsTab {...props} />,
@@ -117,6 +124,15 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
 
   return (
     <div className="inf obs" data-testid="obs" data-paused={live ? undefined : ""}>
+      {/* Screen 15's page head: the green pulse tile, the name, what this area holds. */}
+      <div className="obs-page-h" data-testid="obs-page-h">
+        <span className="obs-page-ico" aria-hidden><PulseIcon size={22} weight="bold" /></span>
+        <div className="obs-page-t">
+          <h1>Observability</h1>
+          {/* The wireframe's own subtitle (15-01, approved copy). */}
+          <span data-wireframe-copy="15-01">Every app and BOSS itself — shared alert sources, contact points, Grafana</span>
+        </div>
+      </div>
       <AreaHead area="obs" title="Observability" tabs={tabs} active={url.view} onTab={setTab}
                 counts={c ? (
                   <>

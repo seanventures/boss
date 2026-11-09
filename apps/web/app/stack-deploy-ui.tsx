@@ -367,13 +367,19 @@ export function StackDeploymentView({ deploymentId, actor, initial, onChanged, o
   onClose?: () => void; pollMs?: number;
 }) {
   const [d, setD] = useState<StackDeployment | null>(initial);
-  const [error, setError] = useState<string | null>(null);
+  // A READ's problem and a PRESS's refusal are kept apart: the re-read that follows every press
+  // (and the poll) used to clear the one error line, so a refused Approve — "confirm it's you",
+  // a decision already answered — vanished the instant it was shown (boss-1, 2026-11-06). A
+  // press's refusal stays until the next press.
+  const [readError, setReadError] = useState<string | null>(null);
+  const [pressError, setError] = useState<string | null>(null);
+  const error = pressError ?? readError;
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     const r = await getStackDeployment(deploymentId);
-    if (r.ok) { setD(r.data); onChanged?.(r.data); setError(null); }
-    else setError(r.error);
+    if (r.ok) { setD(r.data); onChanged?.(r.data); setReadError(null); }
+    else setReadError(r.error);
     return r.ok ? r.data : null;
     // onChanged is a parent callback; re-creating the poll for it would restart the timer.
     // eslint-disable-next-line react-hooks/exhaustive-deps

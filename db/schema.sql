@@ -3809,6 +3809,21 @@ CREATE TABLE IF NOT EXISTS app_logs (
 CREATE INDEX IF NOT EXISTS idx_app_logs_project ON app_logs (project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_logs_run ON app_logs (run_id, created_at DESC);
 
+-- Every start of a BOSS service, with the commit it runs (services/install_history.py): a start
+-- whose commit differs from the one before it is an upgrade. Install-wide, not secret.
+CREATE TABLE IF NOT EXISTS boss_starts (
+  id TEXT PRIMARY KEY,
+  service TEXT NOT NULL,        -- api | worker
+  source_commit TEXT,           -- BOSS_SOURCE_SHA (NULL when the image carries no stamp)
+  previous_commit TEXT,         -- the same service's commit at its previous start
+  built_at TEXT,                -- BOSS_BUILT_AT
+  host TEXT,                    -- container hostname: new on recreate, kept on restart
+  oom_kills INTEGER,            -- the cgroup's OOM-kill count at boot
+  install_method TEXT,          -- BOSS_INSTALL_METHOD
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_boss_starts_service ON boss_starts (service, started_at DESC);
+
 CREATE TABLE IF NOT EXISTS app_previews (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
@@ -6645,6 +6660,37 @@ ALTER TABLE deployment_hosts ADD COLUMN IF NOT EXISTS host_key_pinned_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_deployment_hosts_project
   ON deployment_hosts(project_id, status, created_at DESC);
 
+-- ADD A SERVER (agentic-factory 3-add-a-server.html; services/add_server.py): a server that sets
+-- itself up. One row per host added through Add a server: what it is for (a ROLE, never an app),
+-- how access was handed over, what to set up, and where the agent is — key landed, read, install,
+-- verify, ready, watching — with a short log. The host itself stays in deployment_hosts; this is
+-- the agent's progress on it and, once ready, the Infra agent's watch of its health.
+CREATE TABLE IF NOT EXISTS server_setups (
+  host_id TEXT PRIMARY KEY REFERENCES deployment_hosts(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'ssh',
+  role TEXT NOT NULL DEFAULT 'staging',
+  access TEXT NOT NULL DEFAULT 'boss_key',
+  setup JSONB NOT NULL DEFAULT '{}'::jsonb,
+  watch JSONB NOT NULL DEFAULT '{}'::jsonb,
+  owner TEXT NOT NULL DEFAULT 'infra',
+  phase TEXT NOT NULL DEFAULT 'key',
+  blocked TEXT,
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  steps JSONB NOT NULL DEFAULT '{}'::jsonb,
+  log JSONB NOT NULL DEFAULT '[]'::jsonb,
+  probe JSONB NOT NULL DEFAULT '{}'::jsonb,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ,
+  watch_next_at TIMESTAMPTZ,
+  key_landed_at TIMESTAMPTZ,
+  ready_at TIMESTAMPTZ,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_server_setups_due ON server_setups(phase, next_attempt_at);
+
 -- The app -> VM edge. Nullable so existing targets keep working before backfill.
 ALTER TABLE deployment_targets
   ADD COLUMN IF NOT EXISTS host_id TEXT REFERENCES deployment_hosts(id);
@@ -8179,6 +8225,14 @@ CREATE TABLE IF NOT EXISTS identity_delegation_grants (
 CREATE INDEX IF NOT EXISTS identity_delegation_grants_user ON identity_delegation_grants (user_principal_id, status);
 -- §7.3: "BOSS reminds the user 3 days before expiry" — once per grant (extending clears it).
 ALTER TABLE identity_delegation_grants ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
+-- THE PROJECT'S CAPTAIN AUTHORITY (identity/captain_authority.py): a standing authority BOSS
+-- creates for every project, sponsored by the project's Owner, so always-on squads' builds run as
+-- the project's Captain without a person's grant. 'captain' marks it (NULL: a person's own grant);
+-- build and pull-request permissions only, never merge, production deploy, secrets or admin.
+-- One per project, whatever its status: one a person revoked stays revoked.
+ALTER TABLE identity_delegation_grants ADD COLUMN IF NOT EXISTS authority_kind TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS identity_delegation_grants_one_captain
+  ON identity_delegation_grants ((project_ids[1])) WHERE authority_kind = 'captain';
 -- §7.3 2, ASKED WHERE NO SHEET CAN OPEN: a consent request raised in an agent turn, an MCP call or
 -- a key-authenticated start, kept for an hour so the console can open the same sheet from a link
 -- (/account/agents?consent=<id>). The link carries only this id; only the person it names reads it.
@@ -9566,6 +9620,8 @@ CREATE TABLE IF NOT EXISTS github_repos (
   checked_at       TIMESTAMPTZ,
   -- false: the installation no longer lists it (removed from the App, or deleted on GitHub).
   reachable        BOOLEAN NOT NULL DEFAULT true,
+  -- GitHub's last push (Add a project lists repos with how long ago: "3h", "12d").
+  pushed_at        TIMESTAMPTZ,
   last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -10204,6 +10260,18 @@ CREATE TABLE IF NOT EXISTS notification_policies (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_policies_root
   ON notification_policies(project_id) WHERE parent_id IS NULL;
+
+-- Project › Settings › Notifications (BOSSAPP-914 §11): who is told when something needs a
+-- person, or a pull request is ready, per project (project_experience/notify_routes.py).
+-- Incidents use the routing tree's root above; these two events route here.
+CREATE TABLE IF NOT EXISTS project_notification_routes (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  event TEXT NOT NULL CHECK (event IN ('needs_you', 'pr_ready')),
+  contact_point_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  updated_by TEXT NOT NULL DEFAULT 'boss',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, event)
+);
 
 -- One row per (group, contact point): what was last sent and when, so group_interval and
 -- repeat_interval apply and an incident is ONE thread.
@@ -10902,6 +10970,9 @@ ALTER TABLE work_items ADD COLUMN IF NOT EXISTS needs_you_decision_id TEXT;
 ALTER TABLE work_items ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ;
 ALTER TABLE work_items ADD COLUMN IF NOT EXISTS cost_usd_micros BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE work_items ADD COLUMN IF NOT EXISTS squad JSONB NOT NULL DEFAULT '[]'::jsonb;
+-- A person's extra squad budget for this item, on top of the default (squad_turns.budget_of):
+-- "Give it $1 more" on a spent-budget card raises it. NULL = the default.
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS squad_budget_usd_micros BIGINT;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_lifecycle_check'
                  AND conrelid = 'work_items'::regclass) THEN
@@ -11092,6 +11163,8 @@ CREATE TABLE IF NOT EXISTS ambient_autonomy (
   PRIMARY KEY (project_id, task_class),
   CHECK (level <= ceiling)
 );
+-- A class's own answer to "review always-on builds before they start" (NULL: the project's).
+ALTER TABLE ambient_autonomy ADD COLUMN IF NOT EXISTS review_builds BOOLEAN;
 -- Every change of level and every promotion BOSS suggests, with the track record behind it.
 CREATE TABLE IF NOT EXISTS ambient_autonomy_changes (
   id TEXT PRIMARY KEY,
@@ -11129,6 +11202,9 @@ CREATE TABLE IF NOT EXISTS ambient_settings (
   updated_by TEXT NOT NULL DEFAULT 'boss',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- "Review always-on builds before they start" (Project › Settings › Autonomy & budget): NULL
+-- follows the install's default (system_state['ambient_review_builds']), which is off.
+ALTER TABLE ambient_settings ADD COLUMN IF NOT EXISTS review_squad_builds BOOLEAN;
 -- DISCOVERY DOSSIER (BOSSAPP-909; design §4 L1 "give it a directory and it starts working").
 -- When a repository is registered (its first code-graph index) or on request, BOSS reads it with
 -- no instructions and keeps ONE current dossier per project repository: stack, structure,
@@ -11215,3 +11291,219 @@ CREATE INDEX IF NOT EXISTS idx_ambient_recommendations_fp
   ON ambient_recommendations (project_id, fingerprint, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ambient_recommendations_detector
   ON ambient_recommendations (project_id, detector, status);
+
+-- ============================================================================================
+-- PROJECT EXPERIENCE (BOSSAPP-913 / 914; docs/product/PROJECT_EXPERIENCE_CONTRACT.md §7, §8).
+-- code: engine/boss_engine/services/project_experience/{captain,onboarding}.py
+-- ============================================================================================
+-- THE PROJECT'S CAPTAIN: the agent that takes a project over once it is created (default the
+-- project's engineering_captain, "Helm"); Marshal (chief_of_staff) stays cross-project.
+CREATE TABLE IF NOT EXISTS project_captains (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  assigned_by TEXT NOT NULL DEFAULT 'boss',
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- ONE ONBOARDING RUN of a project: the onboarding agent's checklist, each item's state and why,
+-- the live discover nodes, the proposed backlog and the first work it suggests. Written stage by
+-- stage by the `project.onboarding` job, so the console can draw it while it runs.
+CREATE TABLE IF NOT EXISTS project_onboarding_runs (
+  id TEXT PRIMARY KEY,                               -- 'onb_' + hex
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  state TEXT NOT NULL DEFAULT 'running'
+    CHECK (state IN ('running', 'ready', 'needs_you', 'failed')),
+  trigger TEXT NOT NULL DEFAULT 'manual',            -- created | manual | repo_added
+  started_by TEXT NOT NULL DEFAULT 'boss',
+  job_id TEXT,
+  checklist JSONB NOT NULL DEFAULT '{}'::jsonb,      -- key -> {state, owner, detail, sub, action}
+  discover JSONB NOT NULL DEFAULT '[]'::jsonb,       -- [{label, state, sub}]
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,          -- {repo, commands, demo_users, secrets, ...}
+  backlog JSONB NOT NULL DEFAULT '[]'::jsonb,        -- proposed, ranked
+  first_work JSONB,
+  error TEXT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_project_onboarding_runs_project
+  ON project_onboarding_runs (project_id, started_at DESC);
+-- The Project page's Work tab reads a project's builds by their workflow run and its own
+-- builds newest first; both were sequential scans of code_task_runs (39 ms + 28 ms on the
+-- laptop's 23-run project).
+CREATE INDEX IF NOT EXISTS idx_code_task_runs_workflow_run
+  ON code_task_runs ((finalize_ctx->>'workflow_run_id'));
+CREATE INDEX IF NOT EXISTS idx_code_task_runs_project_created
+  ON code_task_runs (project_id, created_at DESC);
+
+-- FOLDER ON HOST (Add a project, screen 03): a project's source can be a folder on one of the
+-- organisation's verified servers. BOSS only READS it (project_experience/host_folder.py: one
+-- ssh session of read-only commands); the row records which server, which path and what the
+-- read found (git remote without credentials, branch, file count, stack).
+CREATE TABLE IF NOT EXISTS project_host_folders (
+  id BIGSERIAL PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, host_id, path)
+);
+
+-- AN ANSWER'S CARDS (screen 09, services/turn_cards.py): the typed "New work" offer a turn made
+-- (title, text, estimate, plan strip, Start / Edit / Not now and what was chosen) and the
+-- records its reply named (PR / run / file / doc chips). Stored per message, like
+-- `proposed_actions`, so a reopened thread shows them.
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS proposal JSONB;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS citations JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- ADD A PROJECT v2 (new-project-v2 wireframes; services/project_experience/add_project.py):
+-- what the person confirmed on the one screen, kept as the project's SEED. `brief` is Helm's
+-- rewrite as confirmed (title, problem, who uses it, must-haves, out of scope, done when, open
+-- questions with the answers picked); `picks` the six boxes (captain, stack, connectors,
+-- workflow, code, staging), the Tell choice and a repository's note to Helm. The PRD meeting
+-- reads the brief as the start's directive; onboarding shows the note and hands it to Marshal.
+CREATE TABLE IF NOT EXISTS project_seeds (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'idea' CHECK (kind IN ('idea', 'repo', 'folder', 'sample')),
+  words TEXT NOT NULL DEFAULT '',
+  brief JSONB NOT NULL DEFAULT '{}'::jsonb,
+  picks JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- WHERE PEOPLE DECIDE (Govern; services/decide_list.py, the ONE source of the compliance list).
+-- `decide_rules` is each list entry's rule as a card or "change a rule in plain words" saved it,
+-- for the install (scope 'install') or one project (scope = the project id). A rule only ever
+-- makes an entry stricter than the backstop in code (decide_list.validate). Every change is
+-- kept in `decide_rule_changes`, with who made it, how (card | words) and the words they typed.
+CREATE TABLE IF NOT EXISTS decide_rules (
+  scope TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  rule JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_by TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (scope, kind)
+);
+CREATE TABLE IF NOT EXISTS decide_rule_changes (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  before JSONB,
+  after JSONB NOT NULL,
+  actor TEXT NOT NULL,
+  via TEXT NOT NULL DEFAULT 'card' CHECK (via IN ('card', 'words')),
+  words TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_decide_rule_changes_kind ON decide_rule_changes (kind, created_at DESC);
+
+-- WATCH THIS APP (agentic-factory 2-watch-an-app.html, Project › Health): one row per app the
+-- SRE agent was asked to watch. The watches themselves are the app's alert rules
+-- (app_alert_rules), the channels its contact points and the routing its notification
+-- policies; this row only remembers what the person asked for and the outside channel that
+-- waits for its code, so the Health page can draw the landing.
+CREATE TABLE IF NOT EXISTS app_watches (
+  target_id TEXT PRIMARY KEY REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  words TEXT NOT NULL DEFAULT '',
+  night TEXT NOT NULL DEFAULT 'wake' CHECK (night IN ('wake', 'wait', 'alone')),
+  alone BOOLEAN NOT NULL DEFAULT true,
+  tell_cp_id TEXT,
+  plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+  started_by TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_app_watches_project ON app_watches (project_id);
+
+-- LOCAL-FIRST PROJECTS (BOSSAPP-915, services/local_repo.py, services/local_repo_host.py).
+-- A repository binding says which host holds the code: github (the default, every existing row),
+-- or local — a bare git repository BOSS keeps on this machine, named local_<project_id>/<name>.
+-- A local binding has NO connection (there is nothing to authenticate to), so it never shows up
+-- as a GitHub account, and every GitHub-only reader (which joins its connection) skips it.
+ALTER TABLE github_repository_bindings ADD COLUMN IF NOT EXISTS host TEXT NOT NULL DEFAULT 'github';
+ALTER TABLE github_repository_bindings ALTER COLUMN connection_id DROP NOT NULL;
+ALTER TABLE github_repository_bindings DROP CONSTRAINT IF EXISTS github_repository_bindings_host_check;
+ALTER TABLE github_repository_bindings ADD CONSTRAINT github_repository_bindings_host_check
+  CHECK (host IN ('github', 'local') AND (host = 'local' OR connection_id IS NOT NULL));
+
+-- A LOCAL CHANGE SET is a local repository's pull request: a branch, its diff against the base,
+-- the review panel's comments, the sandbox checks, and a person's Merge into the default branch.
+-- The pipeline opens one through the same create_pull_request call it uses for GitHub; its URL
+-- is http://boss-local/<owner>/<repo>/pull/<number>, which every PR-URL reader parses as usual.
+-- `pending_push` (BOSSAPP-922): a GitHub project's change made while GitHub was down, held in
+-- the repository's local mirror until the push-pending job pushes it and opens the real PR.
+CREATE TABLE IF NOT EXISTS local_change_sets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository TEXT NOT NULL,
+  number INT NOT NULL,
+  branch TEXT NOT NULL,
+  base_branch TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'open',
+  draft BOOLEAN NOT NULL DEFAULT false,
+  labels JSONB NOT NULL DEFAULT '[]'::jsonb,
+  head_sha TEXT,
+  base_sha TEXT,
+  merged_sha TEXT,
+  merged_by TEXT,
+  merged_at TIMESTAMPTZ,
+  run_id TEXT,
+  pending_push BOOLEAN NOT NULL DEFAULT false,
+  github_pr_url TEXT,
+  github_pr_number INT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (repository, number),
+  CHECK (state IN ('open', 'merged', 'closed', 'published'))
+);
+CREATE INDEX IF NOT EXISTS idx_local_change_sets_project ON local_change_sets (project_id, state, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_local_change_sets_branch ON local_change_sets (repository, branch, state);
+CREATE TABLE IF NOT EXISTS local_change_set_notes (
+  id TEXT PRIMARY KEY,
+  change_set_id TEXT NOT NULL REFERENCES local_change_sets(id) ON DELETE CASCADE,
+  number INT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'comment',
+  event TEXT,
+  body TEXT NOT NULL DEFAULT '',
+  comments JSONB NOT NULL DEFAULT '[]'::jsonb,
+  in_reply_to INT,
+  author TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (kind IN ('review', 'comment', 'reply'))
+);
+CREATE SEQUENCE IF NOT EXISTS local_change_set_note_ids;
+CREATE INDEX IF NOT EXISTS idx_local_change_set_notes_cs ON local_change_set_notes (change_set_id, created_at);
+
+-- PUSH PENDING (BOSSAPP-922): a GitHub project's branch whose commits landed in the local mirror
+-- while GitHub was down. The worker's push-pending job pushes it and opens the pull request when
+-- GitHub answers again, with backoff; the build waits "waiting for GitHub", never failed.
+CREATE TABLE IF NOT EXISTS repo_push_pending (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  owner TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  base_branch TEXT NOT NULL DEFAULT 'main',
+  run_id TEXT,
+  change_set_id TEXT,
+  status TEXT NOT NULL DEFAULT 'waiting',
+  attempts INT NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_error TEXT,
+  reason TEXT NOT NULL DEFAULT '',
+  pull_request_url TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (status IN ('waiting', 'pushing', 'done', 'failed'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_repo_push_pending_open
+  ON repo_push_pending (owner, repo, branch) WHERE status IN ('waiting', 'pushing');
+CREATE INDEX IF NOT EXISTS idx_repo_push_pending_due ON repo_push_pending (status, next_attempt_at);

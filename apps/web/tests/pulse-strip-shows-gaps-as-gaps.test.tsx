@@ -54,7 +54,7 @@ describe("the Pulse strip", () => {
   });
 
   it("on the Pulse, View as table lists every bucket of that app", async () => {
-    await openObs("?view=apps");
+    await openObs("?view=apps&apps=pulse");
     const row = $("[data-testid='obs-pulse-row'][data-target='t_live']");
     expect(row).not.toBeNull();
     expect(row!.querySelectorAll("rect.obs-cell")).toHaveLength(96);
@@ -66,7 +66,7 @@ describe("the Pulse strip", () => {
   });
 
   it("a target with no probes at all reads No signal over an all-gap strip", async () => {
-    await openObs("?view=apps");
+    await openObs("?view=apps&apps=pulse");
     const row = $("[data-testid='obs-pulse-row'][data-target='t_quiet']")!;
     expect(row.querySelector(".inf-state-word")?.textContent).toBe("No signal");
     const cells = [...row.querySelectorAll("rect.obs-cell")];

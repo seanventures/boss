@@ -32,8 +32,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from .. import decide_list as _decide_list
+
+_on_the_list = _decide_list.on_the_list
+
 LEVELS = ("A0", "A1", "A2", "A3")
-LEVEL_NAMES = {"A0": "Observe", "A1": "Propose", "A2": "Act to draft", "A3": "Act and report"}
+#: THE ONE NAMING of the autonomy levels (BOSSAPP-913 13-20): Settings, Govern, every tooltip and
+#: badge read these words (the wireframe's A0 Ask · A1 Propose · A2 Act · A3 Ship); what a level
+#: lets an agent do is LEVEL_MEANINGS, said beside the name, never a second name.
+LEVEL_NAMES = {"A0": "Ask", "A1": "Propose", "A2": "Act", "A3": "Ship"}
+LEVEL_MEANINGS = {"A0": "Watches and asks; changes nothing",
+                  "A1": "Proposes the change; a person decides",
+                  "A2": "Acts up to a draft (a branch or draft PR); a person approves",
+                  "A3": "Acts and ships on its own, then reports"}
 RISKS = ("low", "medium", "high")
 REVERSIBILITY = ("reversible", "compensable", "irreversible")
 
@@ -127,9 +138,19 @@ ACTIONS: dict[str, Action] = {a.key: a for a in (
     Action("ask_question", "Ask a question", "A1", "low", "reversible"),
     Action("comment", "Comment", "A1", "low", "compensable"),
     Action("convene_meeting", "Convene a panel", "A1", "low", "reversible"),
+    # Handing an item to the agent that owns its class changes nothing outside BOSS: the owner
+    # still acts only within the class's level (its own gate). A routine hand-off is what an
+    # always-on agent does by itself from A1; it shows on the board and in the digest.
+    Action("route", "Hand to its owner", "A1", "low", "reversible"),
+    # A nudge is the Chief of Staff asking the agent that holds stalled work (the Shepherd, for
+    # a build) to look at it again: a note inside BOSS, nothing outside it changes, and it is
+    # not on the compliance boundary (production deploy, merge, spend, secrets, external
+    # communication, deletion, identity). It is an agent's to do from A1, like a hand-off;
+    # whatever the woken agent then does passes its own gate (2026-11-07, helpdesk's "2 nudges"
+    # card asked a person for two nudges the Chief of Staff could have sent itself).
+    Action("nudge", "Nudge", "A1", "low", "reversible"),
     # A2: do the work up to a reviewable artifact or a reversible staging change.
     Action("label", "Label", "A2", "low", "reversible"),
-    Action("nudge", "Nudge", "A2", "low", "compensable"),
     Action("start_workflow", "Start a run", "A2", "medium", "reversible"),
     Action("open_draft_pr", "Open draft PR", "A2", "medium", "reversible"),
     Action("staging_rollback", "Roll back staging", "A2", "medium", "reversible"),
@@ -140,16 +161,20 @@ ACTIONS: dict[str, Action] = {a.key: a for a in (
     Action("prod_rollback", "Roll back prod", "A3", "high", "reversible"),
     Action("prod_restart", "Restart prod", "A3", "high", "reversible"),
     Action("quarantine_test", "Quarantine test", "A3", "low", "reversible"),
-    # Never a level's call.
-    Action("merge", "Merge", "A3", "high", "irreversible", always_a_person=True),
-    Action("deploy_prod", "Deploy to prod", "A3", "high", "irreversible", always_a_person=True),
+    # Never a level's call: these are entries on the ONE compliance list (decide_list.py,
+    # Govern › Where people decide), which says so, not this catalogue.
+    Action("merge", "Merge", "A3", "high", "irreversible", always_a_person=_on_the_list("merge")),
+    Action("deploy_prod", "Deploy to prod", "A3", "high", "irreversible",
+           always_a_person=_on_the_list("deploy_prod")),
     Action("send_external", "Send externally", "A3", "high", "irreversible",
-           always_a_person=True),
-    Action("pay", "Pay", "A3", "high", "irreversible", always_a_person=True),
+           always_a_person=_on_the_list("send_external")),
+    Action("pay", "Pay", "A3", "high", "irreversible", always_a_person=_on_the_list("pay")),
 )}
 
-#: The actions no autonomy level can take (autonomy.IRREVERSIBLE's ambient image).
+#: The actions no autonomy level can take: the list's own (decide_list.AMBIENT_ACTIONS).
 ALWAYS_A_PERSON = frozenset(k for k, a in ACTIONS.items() if a.always_a_person)
+assert ALWAYS_A_PERSON == _decide_list.AMBIENT_ACTIONS, (
+    "every ambient action on the compliance list is in this catalogue, and only those")
 
 
 def task_class(key: str) -> TaskClass:

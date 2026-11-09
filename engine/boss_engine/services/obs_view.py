@@ -475,6 +475,33 @@ def _strips(connection: Any, ids: list[str], w: dict[str, Any]
     return strips, rollup
 
 
+#: THE window every "uptime · p95" on a project page and on Observability's 24 h Pulse reads.
+P95_WINDOW = "24h"
+
+
+def probe_window(connection: Any, ids: list[str], *, win: str = P95_WINDOW,
+                 now: Optional[datetime] = None) -> dict[str, dict[str, Any]]:
+    """ONE SOURCE for an app's uptime and p95 (15-03 / PX-09): BOSS's own health probes over
+    the window — the same rows, window bounds and percentile_cont as the Pulse rollup
+    (`_strips`), so the project tile, the header tooltip, Deployments, Health and Observability's
+    app row all print the same number. {target: {uptime (0..1|None), p95_ms, n, window}}."""
+    w = window_bounds(win, now=now)
+    out = {i: {"uptime": None, "p95_ms": None, "n": 0, "window": w["win"]} for i in ids}
+    if not ids:
+        return out
+    for r in connection.execute(text(
+            "SELECT deployment_target_id AS t, count(*) AS n, "
+            "       sum(CASE WHEN ok THEN 1 ELSE 0 END) AS okn, "
+            "       percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) "
+            "         FILTER (WHERE ok AND latency_ms IS NOT NULL) AS p95 "
+            "FROM deployment_health_samples WHERE deployment_target_id = ANY(:ids) "
+            "AND checked_at >= :a AND checked_at < :z GROUP BY deployment_target_id"),
+            {"ids": list(ids), "a": w["start"], "z": w["end"]}).mappings():
+        out[str(r["t"])] = {"uptime": _ratio(int(r["okn"] or 0), int(r["n"])),
+                            "p95_ms": _int(r["p95"]), "n": int(r["n"]), "window": w["win"]}
+    return out
+
+
 def _opened_sql() -> tuple[str, str]:
     """An incident OPENS on the k-th consecutive failed probe (deployment_health.incidents'
     rule): the k-1 probes before it failed and the k-th before it did not, or does not exist.
@@ -666,6 +693,70 @@ def pulse(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
         "partial": partial,
     }
     return _sealed(body)  # type: ignore[return-value]
+
+
+# ── Apps across projects (screen 15) ───────────────────────────────────────────────────────
+
+
+def apps_across(connection: Any, settings: Any, projects: list[dict[str, Any]], *,
+                win: str = "24h", cells: Optional[int] = None) -> dict[str, Any]:
+    """OBSERVABILITY › APPS, ORG-WIDE (BOSSAPP-914 screen 15): every app of every project the
+    viewer may read, one row each — the project's mark and name, the app and environment,
+    uptime and p95 over the window, its health strip (the Pulse's own cells, for the
+    sparkline), the alerts firing on it now, and the link to that project's Health tab.
+    `projects` is [{id, name}] (already filtered to what the caller may read). The same
+    queries as the Pulse, per project; a project that fails to read is named in `partial`."""
+    from .project_experience.common import href, initials
+
+    now = _now()
+    w = window_bounds(win, cells, now=now)
+    rows: list[dict[str, Any]] = []
+    partial: list[str] = []
+    for p in projects:
+        pid = str(p["id"])
+        try:
+            with connection.begin_nested():
+                targets = _targets(connection, pid)
+                ids = [t["id"] for t in targets]
+                deployed = _deployed(connection, ids)
+                samples = _newest_samples(connection, ids, now)
+                strips, rollup = _strips(connection, ids, w)
+                firing = {str(r["t"]): int(r["n"]) for r in connection.execute(text(
+                    "SELECT target_id AS t, count(*) AS n FROM app_alerts WHERE project_id = :p "
+                    "AND state = 'firing' AND inhibited_by IS NULL AND silenced_by IS NULL "
+                    "AND target_id = ANY(:ids) GROUP BY target_id"),
+                    {"p": pid, "ids": ids}).mappings()} if ids else {}
+        except Exception:  # noqa: BLE001 — one project's store never blanks the others
+            log.exception("obs_view: apps across failed for %s", pid)
+            partial.append(pid)
+            continue
+        for t in targets:
+            tid = t["id"]
+            state, since = _state_of(samples[tid], tid in deployed)
+            word = _health_word(state)
+            rows.append({
+                "target_id": tid, "app": t["app_name"], "env": t["environment"],
+                "project": {"id": pid, "name": p.get("name") or pid,
+                            "initials": initials(p.get("name") or pid)},
+                "host": ({"id": t["host_id"], "name": t["host_name"] or t["host_id"]}
+                         if t["host_id"] else None),
+                "state": state, "word": word["word"], "tone": word["tone"], "since": since,
+                "uptime": _ratio(rollup[tid]["ok"], rollup[tid]["n"]),
+                "p95_ms": rollup[tid]["p95"], "strip": strips[tid], "pins": [],
+                "incidents": rollup[tid]["incidents"], "firing": firing.get(tid, 0),
+                # This app's own page: its project's Health tab (which links back here).
+                "health_href": href(pid, area="project", tab="health", app=tid),
+                "drawer_href": href(pid, area="observability", app=tid),
+            })
+    rows.sort(key=lambda r: (_ORDER.get(r["state"], 9), -r["firing"], r["project"]["name"].lower(),
+                             r["app"].lower(), r["env"]))
+    counts = {"up": 0, "slow": 0, "down": 0, "no_signal": 0, "not_deployed": 0}
+    key = {"up": "up", "degraded": "slow", "down": "down", "unknown": "no_signal",
+           "not_deployed": "not_deployed"}
+    for r in rows:
+        counts[key[r["state"]]] += 1
+    return _sealed({"rows": rows, "counts": counts, "window": _window_wire(w),
+                    "projects": len(projects), "partial": partial})
 
 
 # ── Apps: one app's drawer ──────────────────────────────────────────────────────────────────

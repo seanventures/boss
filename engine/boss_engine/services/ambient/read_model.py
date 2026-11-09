@@ -34,7 +34,7 @@ from ._common import party_id, party_kind, serialize_row, short_label
 FILTERS = ("needs_you", "running", "resolved_by_agents", "overridden", "failed", "dismissed",
            "all")
 STAGES = {"signal": 0, "boss": 1, "agent": 1, "person": 1, "policy": 1, "squad": 1,
-          "action": 2, "decision": 3, "needs_you": 3, "run": 4, "outcome": 5}
+          "learning": 2, "action": 2, "decision": 3, "needs_you": 3, "run": 4, "outcome": 5}
 MAX_SIGNAL_NODES = 5
 _ACRONYMS = {"Sre": "SRE", "Qa": "QA", "Pm": "PM", "Cto": "CTO", "Coo": "COO", "Cao": "CAO",
              "Vp": "VP", "Aml": "AML", "Dq": "DQ"}
@@ -266,6 +266,24 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
     for who, n in findings.items():
         nodes[who]["badges"].append(f"{n} finding{'s' if n > 1 else ''}")
 
+    # APPLIED LEARNING (design §12.4): a lesson from a past incident the squad reused is a node
+    # of its own — "INC-1 lesson" — with an arrow into the decision that applied it.
+    lesson_rows = connection.execute(text(
+        "SELECT n.id, n.name, n.attrs->>'incident_ref' AS ref, e.attrs->>'agent_role' AS role "
+        "FROM kg_edges e JOIN kg_nodes s ON s.id = e.src_id JOIN kg_nodes n ON n.id = e.dst_id "
+        "WHERE e.project_id = :p AND e.kind = 'reused' AND s.kind = 'incident' "
+        "AND s.attrs->>'work_item_id' = :w ORDER BY e.recorded_at"),
+        {"p": project_id, "w": item_id}).mappings().all()
+    lesson_nodes: list[str] = []
+    for r in lesson_rows:
+        ref = str(r["ref"] or "")
+        lid = node(f"learning:{r['id']}", "learning",
+                   f"{ref} lesson" if ref.startswith("INC-") else "Past lesson",
+                   ref={"kind": "kg_node", "id": r["id"]},
+                   detail=f"Applied learning: {r['name']}" + (f" from {ref}" if ref else ""))
+        nodes[lid]["badges"] = ["applied"]
+        lesson_nodes.append(lid)
+
     last_decision: Optional[str] = None
     for d in decisions:
         # The chosen OPTION's label when the decider gave one ("Hand to SRE"), then the action's
@@ -283,6 +301,9 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
             badges.append(d["outcome"])
         nodes[did]["badges"] = [b for b in badges if b]
         edge(actor(d["decided_by"]), did, "decided", "decided")
+        if lesson_nodes and d["question"] == "Have we seen this before?":
+            for lid in lesson_nodes:
+                edge(lid, did, "applied", "applied")
         if d.get("proposal_id") and f"proposal:{d['proposal_id']}" in nodes:
             edge(f"proposal:{d['proposal_id']}", did, "settles", "settles")
         if d.get("overrides_act_id"):
@@ -290,6 +311,9 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
                  dissent=True)
         last_decision = did
 
+    for lid in lesson_nodes:
+        if not any(e["from"] == lid for e in edges):
+            edge(lid, last_actor, "applied", "applied")
     anchor = last_decision or last_actor
     for l in links:
         if l["kind"] in _RUN_WORDS:
@@ -393,8 +417,12 @@ def list_view(connection: Connection, project_id: str, *, filter_: str = "all",
     for item_id in rows:
         g = graph(connection, item_id, project_id=project_id)
         owner = owner_of(connection, g["item"])
+        from .. import stuck_work
+
+        # What its build waits for, and what the Shepherd found (stuck_work): "Running" alone
+        # hid four builds crash-looping behind a squad's item (2026-11-07).
         items.append({**g["item"], "badges": g["badges"], "owner": owner,
-                      "strip": _strip(g, owner)})
+                      "strip": _strip(g, owner), **stuck_work.item_status(connection, item_id)})
     counts = {f: int(connection.execute(text(
         f"SELECT count(*) FROM work_items w WHERE w.project_id = :p AND w.ambient AND "
         f"{_FILTER_SQL[f]} AND (CAST(:c AS TEXT) IS NULL OR w.task_class = :c)"),

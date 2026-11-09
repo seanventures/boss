@@ -3,8 +3,9 @@
 Every signal reaches the Chief of Staff first. It joins duplicates instead of raising them twice,
 reads what kind of problem each is (rules first, the model only when the rules are ambiguous, a
 question when nobody is sure), ranks by value, and decides per autonomy level: observe (A0),
-propose on a Needs-you card (A1, and every class in the default `propose` mode), or hand straight
-to the owning agent (A2+ in `route` mode). Every call is a ledger row with its evidence and
+propose on a Needs-you card (every class in `propose` mode, one card per project per tick), or
+hand straight to the owning agent (A1+ in `route` mode; see
+test_turning_always_on_on_never_floods_people_with_asks.py). Every call is a ledger row with its evidence and
 confidence, and every step is a typed board message, so the console draws signal → Chief of
 Staff → owner → outcome. A person's answer on the card is carried through on the next tick, and
 becomes the decision's outcome — the track record autonomy is earned from. The stop, the loop
@@ -75,7 +76,7 @@ def test_a_firing_alert_becomes_one_item_the_chief_of_staff_proposes_to_the_sre(
         assert ledger.sentences(row["rationale"]) <= 3
         card = c.execute(text("SELECT question, recommendation FROM decisions WHERE id = :d"),
                          {"d": item["needs_you_decision_id"]}).mappings().one()
-        assert card["question"].startswith("Hand to SRE?")
+        assert card["question"].startswith("Hand to SRE: the incident on order-api")
         assert card["recommendation"]["owner"] == "agent:sre"
         assert card["recommendation"]["asked_by"] == cos.PARTY
         assert signals.get(c, sig["id"])["status"] == "triaged"
