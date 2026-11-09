@@ -36,6 +36,7 @@ import { ConfirmSheet } from "./confirm-sheet";
 import { AddRepoDrawer } from "./add-repo";
 import { DangerZone } from "../project-delete";
 import { isLocalRepo, repoHostLabel, repoHref } from "../../lib/repo-links";
+import { LocalCodePanel } from "./publish-sheet";
 
 /** The section nav and card icons, in the wireframe's order and colours (13-01). */
 const SECTION_ICON: Record<string, { icon: Icon; c: Tone | "grey" }> = {
@@ -143,7 +144,7 @@ export function SettingsTab({ ctx }: { ctx: PxCtx }) {
               <nav className="px-set-nav" aria-label="Settings sections">
                 {st.sections.map((sec) => {
                   const I = SECTION_ICON[sec.key]?.icon ?? GearSix;
-                  return <button key={sec.key} type="button" aria-current={active === sec.key} onClick={() => goTo(sec.key)} data-testid={`px-set-nav-${sec.key}`}><I size={14} aria-hidden />{sec.label}</button>;
+                  return <button key={sec.key} type="button" aria-current={active === sec.key} onClick={() => goTo(sec.key)} data-testid={`px-set-nav-${sec.key}`}><I size={14} aria-hidden />{sec.key === "repos" ? "Code" : sec.label}</button>;
                 })}
               </nav>
               <div className="px-stack">
@@ -189,7 +190,7 @@ function SectionCard({ sec, ctx, onChanged, setRef }: { sec: SettingsSection; ct
       <div className="px-card-h">
         {meta?.c === "grey" ? <span className="px-ico" aria-hidden><GithubLogo size={16} weight="duotone" /></span>
           : <Ico icon={meta?.icon ?? GearSix} c={(meta?.c as Tone) ?? "blue"} />}
-        <h2 id={`px-set-${sec.key}`}>{sec.label}</h2>
+        <h2 id={`px-set-${sec.key}`}>{sec.key === "repos" ? "Code" : sec.label}</h2>
         {sec.key === "demo_logins" ? <DemoEnvSwitch sec={sec} picked={env} onPick={setEnv} /> : null}
         {head.length && sec.key !== "deploy_values" ? <span className="px-spacer" /> : null}
         {head}
@@ -538,11 +539,13 @@ function Autonomy({ ctx, sec, onChanged }: { ctx: PxCtx; sec: SettingsSection; o
 
 // ── repos (13-23 / 13-24) ───────────────────────────────────────────────────────────────────
 
-function Repos({ sec }: { sec: SettingsSection }) {
+function Repos({ sec, projectId = "", onChanged }: { sec: SettingsSection; projectId?: string; onChanged?: () => void }) {
   const rows = a(o(sec.raw).items).map(o);
   if (!rows.length) return <p className="px-faint" style={{ margin: 0 }}>No repo yet. Add the one this project builds in.</p>;
   return (
     <div data-testid="px-set-repos">
+      {/* CODE ON THIS MACHINE (BOSSAPP-921): where it lives, and Publish to GitHub. */}
+      {projectId && rows.some((r) => isLocalRepo(s(r.full_name))) ? <LocalCodePanel projectId={projectId} onPublished={onChanged} /> : null}
       {rows.map((r) => (
         <div key={s(r.full_name)} className="px-row px-set-repo">
           <GitBranch size={13} aria-hidden />
@@ -619,7 +622,7 @@ function SectionBody({ ctx, sec, onChanged, adding, setAdding, env }: { ctx: PxC
   if (sec.key === "targets") return <Targets ctx={ctx} sec={sec} />;
   if (sec.key === "captain") return <CaptainSection ctx={ctx} sec={sec} />;
   if (sec.key === "autonomy") return <Autonomy ctx={ctx} sec={sec} onChanged={onChanged} />;
-  if (sec.key === "repos") return <Repos sec={sec} />;
+  if (sec.key === "repos") return <Repos sec={sec} projectId={ctx.demo ? "" : ctx.projectId} onChanged={onChanged} />;
   if (sec.key === "notifications") return <Notifications ctx={ctx} sec={sec} onChanged={onChanged} />;
   if (!sec.items.length) return <p className="px-faint" style={{ margin: 0 }}>Nothing set here yet.</p>;
   return (

@@ -8,7 +8,7 @@
  *   env:<key>     an environment's full picture;  deploy:<id>  one deploy
  * Prose lives here, never on the page.
  */
-import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
+import { changeHref, isLocalChangeUrl, linkTarget, reviewChangeWords } from "../../lib/repo-links";
 import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
 import React, { useEffect, useState } from "react";
 import {
@@ -148,7 +148,7 @@ function AskBox({ ctx, about, placeholder }: { ctx: PxCtx; about: string; placeh
 function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () => void }) {
   const l = w.links;
   // The PR a merge waits on: the engine's merge_pr; an older payload's "Merge" row its pr.
-  const mp = l.merge_pr ?? (w.action_label === "Merge" ? l.pr : null);
+  const mp = l.merge_pr ?? (w.action_label === "Merge" && l.pr ? { ...l.pr, follow_up_of: null, failed: "" } : null);
   const story = useWorkStory(ctx, w.id).data;
   const full = l.build || l.workflow_run;
   return (
@@ -195,7 +195,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
         <div className="px-row px-wrap" style={{ marginTop: 6 }} data-testid="px-drawer-work-links">
           {l.workflow_run ? <PxLink href={l.workflow_run} testid="px-drawer-link-run"><FlowArrow size={11} aria-hidden /> Workflow run</PxLink> : null}
           {l.build ? <PxLink href={l.build} testid="px-drawer-link-build"><Code size={11} aria-hidden /> Build in Code Tasks</PxLink> : null}
-          {l.pr ? <PxLink href={changeHref(l.pr.external_url) ?? ""} testid="px-drawer-link-pr"><GitPullRequest size={11} aria-hidden /> PR #{l.pr.number}</PxLink> : null}
+          {l.pr ? <PxLink href={changeHref(l.pr.external_url) ?? ""} testid="px-drawer-link-pr"><GitPullRequest size={11} aria-hidden /> {isLocalChangeUrl(l.pr.external_url) ? `Change #${l.pr.number}` : `PR #${l.pr.number}`}</PxLink> : null}
           {l.deploy ? <PxLink href={l.deploy}><RocketLaunch size={11} aria-hidden /> Deploy</PxLink> : null}
           {l.log ? <PxLink href={l.log} testid="px-drawer-link-log"><Terminal size={11} aria-hidden /> Live log</PxLink> : null}
           {/* THIS RUN'S OWN LESSONS (05b-16): what its agents learned, consulted and reused —

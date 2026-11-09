@@ -83,3 +83,21 @@ button.px-ob-more { width: 100%; background: none; border-left: 0; border-right:
 .px-ob-log li span { color: var(--ink-soft); min-width: 0; }
 .px-ob-log li[data-s="failed"] b { color: var(--red); }
 @media (max-width: 760px) { .px-ob-log li { grid-template-columns: auto auto 1fr; } .px-ob-log li span { grid-column: 1 / -1; } }
+
+/* BOSSAPP-924: a local project's machine checks — five dots on a wire, a word under each. */
+.px-ob-mc { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.px-ob-mc-row { list-style: none; margin: 0; padding: 0; display: flex; align-items: flex-start; max-width: 26rem; }
+.px-ob-mc-i { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; flex: 1 1 0; }
+.px-ob-mc-i[data-w]::before { content: ""; position: absolute; top: 9px; right: 50%; width: 100%; height: 2px; background: var(--border); }
+.px-ob-mc-i[data-w="on"]::before { background: color-mix(in srgb, var(--green) 55%, var(--border)); }
+.px-ob-mc-dot { position: relative; z-index: 1; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; padding: 0; cursor: pointer;
+  border: 2px solid var(--border-strong, var(--border)); background: var(--surface); color: var(--surface); font-size: var(--fs-tag); font-weight: 800; }
+.px-ob-mc-dot[data-ok="true"] { background: var(--green); border-color: var(--green); }
+.px-ob-mc-dot[data-ok="false"] { background: var(--amber); border-color: var(--amber); color: #1b1300; }
+.px-ob-mc-dot[aria-expanded="true"] { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.px-ob-mc-l { font-size: var(--fs-tag); color: var(--muted); white-space: nowrap; }
+.px-ob-mc-words { margin: 0; font-size: var(--fs-meta); color: var(--muted); overflow-wrap: anywhere; }
+.px-ob-mc-fixed, .px-ob-mc-cant { margin: 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.px-ob-mc-fixed { color: var(--green); }
+.px-ob-mc-cant { color: var(--amber); }
+.px-ob-mc-cant a { color: var(--accent-text); font-weight: 600; white-space: nowrap; }

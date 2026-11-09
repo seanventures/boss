@@ -11,7 +11,7 @@
  */
 import React, { useRef, useState } from "react";
 import {
-  ArrowSquareOut, BellRinging, CaretDown, Check, CheckSquare, Envelope, GitBranch, Globe, HardDrives,
+  ArrowSquareOut, BellRinging, CaretDown, Check, CheckSquare, Envelope, FolderPlus, GitBranch, GithubLogo, Globe, HardDrives,
   LockKey, PencilSimple, Plus, PuzzlePiece, Square, Trash, X, CreditCard, PaypalLogo, Hand,
 } from "@phosphor-icons/react";
 
@@ -21,7 +21,7 @@ import type { TemplateCard } from "../../lib/templates";
 import type { StackAdapter } from "../../lib/templates";
 import { workflowInputFields, type WorkflowInputField } from "../../lib/workflow-inputs";
 import { WIZARD_COLLECTS } from "../workflow-readiness-ui";
-import { hostPort, type Candidate, type Host, type Kind, type Pick, type Preview, type Workflow } from "../../lib/add-project";
+import { hostPort, repoCheckFix, type Candidate, type Host, type Kind, type Pick, type Preview, type RepoCheck, type Where, type Workflow } from "../../lib/add-project";
 import type { RegistryRepo } from "../../lib/multirepo";
 
 export type BoxKey = "captain" | "stack" | "connectors" | "workflow" | "code" | "staging" | "tell" | "more";
@@ -49,6 +49,12 @@ export type PlanState = {
   mapRules: boolean;
   /** The hosts the connectors' app talks to, allowed out loud (the templates' consent). */
   egressOk: boolean;
+  /** WHERE A NEW APP'S CODE LIVES (BOSSAPP-917/918): this machine, a new GitHub repo, or a
+   *  folder in a repo you have (repoIds, `layout`). */
+  where: Where;
+  /** The new GitHub repo: owner (an account BOSS can reach), name ("" = from the project's
+   *  name), private by default. */
+  newRepo: { owner: string; name: string; private: boolean };
 };
 
 export const WHEN = [
@@ -136,7 +142,7 @@ export function usedBy(r: { used_by?: { project_id: string; name: string }[] }):
 export function InUseTag({ used }: { used: { name: string }[] }) {
   return (
     <span className="npx-tag npx-inuse-tag" data-tone="amber" title={`Already in ${used.map((u) => u.name).join(", ")}: opens it`}>
-      in {used[0].name}{used.length > 1 ? ` +${used.length - 1}` : ""} · Open ›
+      in {used[0].name}{used.length > 1 ? ` +${used.length - 1}` : ""} ›
     </span>
   );
 }
@@ -190,15 +196,22 @@ export function StepStrip({ w, testid = "ap-strip" }: { w: Workflow | null; test
   );
 }
 
-export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, accountLogin, homeHref, inUse }: {
+export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, accountLogin, accounts = [], homeHref, inUse, newRepo, codeWhere = null }: {
   kind: Kind; preview: Preview | null; plan: PlanState; set: (patch: Partial<PlanState>) => void;
   cards: TemplateCard[] | null; adapters: StackAdapter[]; helmPicks: { stack: Pick | null; connectors: Pick[]; workflow: Pick | null };
   workflow: Workflow | null; registry: RegistryRepo[]; repoLabel: { v: string; s: string };
   /** The picked repository's name or the folder's path (the Code box). */
   codeName?: string;
-  live: boolean; accountLogin: string; homeHref: (p: Record<string, string>) => string;
+  live: boolean; accountLogin: string;
+  /** The GitHub accounts BOSS reaches (the new repo's owner picker). */
+  accounts?: string[];
+  homeHref: (p: Record<string, string>) => string;
   /** A repo already in a project (the Code box's list): open it, add work to it, or share it. */
   inUse: InUseActions;
+  /** The new GitHub repo's name as it will be made, and the engine's answer to "can BOSS make it?". */
+  newRepo?: { name: string; check: RepoCheck | null; checking: boolean };
+  /** Existing code: where it lives once added (a repo, this machine, or read in place). */
+  codeWhere?: { name: string; sub: string; local: boolean } | null;
 }) {
   const [open, setOpen] = usePopover();
   const toggle = (k: BoxKey) => setOpen(open === k ? null : k);
@@ -421,14 +434,36 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
         {/* 5 CODE */}
         <div className="npx-node-wrap">
           <button type="button" className="npx-node" data-testid="ap-box-code" aria-expanded={open === "code"} data-open={open === "code" || undefined}
-                  title="Where the code lives · one repo or several" onClick={() => toggle("code")}>
-            <span className="npx-lbl">Code<CaretDown size={11} aria-hidden /></span>
-            <CodeLabel kind={kind} plan={plan} registry={registry} preview={preview} name={codeName} />
+                  data-where={kind === "idea" ? plan.where : codeWhere?.local ? "local" : "repo"}
+                  data-t={kind === "idea" && plan.where === "github_new" && newRepo?.check && !newRepo.check.ok ? "you" : undefined}
+                  title="Where the code lives · this machine, a new GitHub repo, or a repo you have" onClick={() => toggle("code")}>
+            <span className="npx-lbl">Code{kind === "idea" && plan.where === "local" ? <span className="npx-auto" data-tone="local">LOCAL</span> : null}<CaretDown size={11} aria-hidden /></span>
+            <CodeLabel kind={kind} plan={plan} registry={registry} preview={preview} name={codeName} newRepo={newRepo} codeWhere={codeWhere} />
           </button>
           {open === "code" ? (
-            <Pop title="Where the code lives" icon={<GitBranch size={14} />} anchor="Code" testid="code" onDone={() => setOpen(null)}>
+            <Pop title="Where the code lives" icon={<GitBranch size={14} />} anchor="Code" testid="code" onDone={() => setOpen(null)} wide={kind === "idea"}>
               {kind === "idea" ? (
                 <>
+                  <div className="npx-where" role="radiogroup" aria-label="Where the code lives" data-testid="ap-where">
+                    <button type="button" role="radio" aria-checked={plan.where === "local"} className="npx-where-opt" data-testid="ap-where-local"
+                            onClick={() => set({ where: "local" })}>
+                      <HardDrives size={16} weight="duotone" aria-hidden /><span><b>On this machine</b><small>BOSS keeps the repo · publish to GitHub any time</small></span>
+                    </button>
+                    <button type="button" role="radio" aria-checked={plan.where === "github_new"} className="npx-where-opt" data-testid="ap-where-github"
+                            onClick={() => set({ where: "github_new" })} title={accounts.length ? "A new repo on GitHub, made by BOSS when you press Create" : "Connect a GitHub account first (Repo and models)"}>
+                      <GithubLogo size={16} weight="fill" aria-hidden /><span><b>New GitHub repo</b><small>made by BOSS when you press Create</small></span>
+                    </button>
+                    <button type="button" role="radio" aria-checked={plan.where === "repo"} className="npx-where-opt" data-testid="ap-where-repo"
+                            onClick={() => set({ where: "repo" })}>
+                      <FolderPlus size={16} weight="duotone" aria-hidden /><span><b>A folder in a repo you have</b><small>a monorepo · one PR</small></span>
+                    </button>
+                  </div>
+                  {plan.where === "local" ? (
+                    <p className="npx-faint npx-small" data-testid="ap-where-local-note">Works offline. Changes are reviewed and merged here; Publish to GitHub moves it whole, history included.</p>
+                  ) : plan.where === "github_new" ? (
+                    <NewRepoForm plan={plan} set={set} accounts={accounts} newRepo={newRepo} homeHref={homeHref} />
+                  ) : null}
+                  {plan.where === "repo" ? (<>
                   <div className="npx-seg" role="tablist" aria-label="Repos">
                     <button type="button" role="tab" aria-selected={plan.layout === "one"} data-testid="ap-code-one" onClick={() => set({ layout: "one", repoIds: plan.repoIds.slice(0, 1) })}>One repo</button>
                     <button type="button" role="tab" aria-selected={plan.layout === "several"} data-testid="ap-code-several" onClick={() => set({ layout: "several" })}>Several repos</button>
@@ -460,9 +495,13 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
                     })}
                   </div>
                   {plan.layout === "several" ? <p className="npx-faint">Several repos: BOSS maps the app&apos;s parts to them; linked PRs, approved as a set.</p> : null}
+                  </>) : null}
                 </>
               ) : (
-                <p className="npx-faint">{codeName ? <>The {kind === "folder" ? "folder" : "repo"} you picked, <span className="npx-mono">{codeName}</span>: builds land on its branch as pull requests.</> : "Pick a repo above."}</p>
+                <p className="npx-faint" data-testid="ap-code-existing">{codeWhere ? (codeWhere.local
+                  ? <>On <b>this machine</b> ({codeWhere.sub}): builds become change sets you review and merge here. Publish to GitHub any time.</>
+                  : <>The {kind === "folder" ? "folder" : "repo"} you picked, <span className="npx-mono">{codeWhere.name}</span>: {codeWhere.sub}.</>)
+                  : codeName ? <>The {kind === "folder" ? "folder" : "repo"} you picked, <span className="npx-mono">{codeName}</span>.</> : "Pick a repo or a folder above."}</p>
               )}
               <p className="npx-faint">Account <b>{accountLogin || "—"}</b> is global — <a className="npx-link" href={homeHref({ area: "setup", focus: "repository" })}>Repo and models</a></p>
             </Pop>
@@ -560,9 +599,60 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
   );
 }
 
-function CodeLabel({ kind, plan, registry, preview, name }: { kind: Kind; plan: PlanState; registry: RegistryRepo[]; preview: Preview | null; name: string }) {
+/** The new GitHub repo: owner, name (from the brief, editable), private; the engine's answer to
+ *  "can BOSS make it?" with its one fix; and the line that makes the person's decision explicit. */
+function NewRepoForm({ plan, set, accounts, newRepo, homeHref }: {
+  plan: PlanState; set: (p: Partial<PlanState>) => void; accounts: string[];
+  newRepo?: { name: string; check: RepoCheck | null; checking: boolean }; homeHref: (p: Record<string, string>) => string;
+}) {
+  const check = newRepo?.check ?? null;
+  const fix = repoCheckFix(check);
+  const owner = plan.newRepo.owner;
+  if (!accounts.length) {
+    return <p className="npx-faint npx-small" data-testid="ap-newrepo-noaccount">No GitHub account yet · <a className="npx-link" href={homeHref({ area: "setup", focus: "repository" })}>Connect one in Repo and models ›</a></p>;
+  }
+  return (
+    <div className="npx-newrepo" data-testid="ap-newrepo">
+      <div className="npx-newrepo-row">
+        <label className="npx-field npx-newrepo-owner"><span>Owner</span>
+          <select className="npx-input" data-testid="ap-newrepo-owner" value={owner} onChange={(e) => set({ newRepo: { ...plan.newRepo, owner: e.target.value } })}>
+            {accounts.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select></label>
+        <span className="npx-newrepo-slash" aria-hidden>/</span>
+        <label className="npx-field npx-newrepo-name"><span>Repo name</span>
+          <input className="npx-input npx-mono" data-testid="ap-newrepo-name" maxLength={100} spellCheck={false} value={plan.newRepo.name || newRepo?.name || ""}
+                 onChange={(e) => set({ newRepo: { ...plan.newRepo, name: e.target.value.replace(/\s+/g, "-") } })} /></label>
+      </div>
+      <label className="npx-keep" data-testid="ap-newrepo-private-row">
+        <input type="checkbox" data-testid="ap-newrepo-private" checked={plan.newRepo.private} onChange={(e) => set({ newRepo: { ...plan.newRepo, private: e.target.checked } })} />
+        <LockKey size={12} aria-hidden /> Private
+      </label>
+      <p className="npx-newrepo-check" data-testid="ap-newrepo-check" data-ok={newRepo?.checking ? "checking" : check ? String(check.ok) : "unknown"} role="status">
+        {newRepo?.checking ? <span className="npx-faint">Asking GitHub…</span>
+          : check ? <>{check.ok ? <Check size={12} weight="bold" className="npx-ok" aria-hidden /> : <Hand size={12} weight="fill" className="npx-amber" aria-hidden />}
+            <span>{check.words}</span>
+            {fix ? <> <a className="npx-link" data-testid="ap-newrepo-fix" href={fix.external ? fix.href : homeHref(Object.fromEntries(new URLSearchParams(fix.href.replace(/^\?/, ""))))}
+                         {...(fix.external ? { target: "_blank", rel: "noreferrer" } : {})}>{fix.label} ›</a></> : null}</>
+          : null}
+      </p>
+      <p className="npx-faint npx-small" data-testid="ap-newrepo-decision"><Hand size={11} aria-hidden /> Making a repo in <b>{owner || "GitHub"}</b> is your decision: it happens when you press Create.</p>
+    </div>
+  );
+}
+
+function CodeLabel({ kind, plan, registry, preview, name, newRepo, codeWhere }: {
+  kind: Kind; plan: PlanState; registry: RegistryRepo[]; preview: Preview | null; name: string;
+  newRepo?: { name: string; check: RepoCheck | null; checking: boolean }; codeWhere?: { name: string; sub: string; local: boolean } | null;
+}) {
   if (kind !== "idea") {
-    return <><span className="npx-v npx-mono">{name ? name.split("/").pop() : "—"}</span><span className="npx-s">{kind === "folder" ? "a folder · read-only" : "its branch · PRs"}</span></>;
+    if (codeWhere) return <><span className="npx-v npx-mono">{codeWhere.local ? "This machine" : codeWhere.name.split("/").pop()}</span><span className="npx-s">{codeWhere.sub}</span></>;
+    return <><span className="npx-v npx-mono">{name ? name.split("/").pop() : "—"}</span><span className="npx-s">{kind === "folder" ? "a folder" : "its branch · PRs"}</span></>;
+  }
+  if (plan.where === "local") return <><span className="npx-v">This machine</span><span className="npx-s">local · publish any time</span></>;
+  if (plan.where === "github_new") {
+    const full = `${plan.newRepo.owner || "?"}/${plan.newRepo.name || newRepo?.name || "…"}`;
+    const refused = newRepo?.check && !newRepo.check.ok;
+    return <><span className="npx-v npx-mono">{full}</span><span className="npx-s">{refused ? "GitHub can’t make it yet" : `new · ${plan.newRepo.private ? "private" : "public"} · made at Create`}</span></>;
   }
   const picked = plan.repoIds.map((id) => registry.find((r) => r.id === id)?.full_name).filter(Boolean) as string[];
   if (picked.length > 1) return <><span className="npx-v npx-mono">{picked.length} repos</span><span className="npx-s">linked PRs</span></>;

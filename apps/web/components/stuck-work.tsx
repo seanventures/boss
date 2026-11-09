@@ -10,6 +10,8 @@
 import React, { useState } from "react";
 
 import { diagnosedBy, type Diagnosis, type WaitReason } from "../lib/stuck-work";
+import { isWaitingForGitHub } from "../lib/github-wait";
+import { GitHubWait } from "./github-wait";
 import "./stuck-work.css";
 
 const WHO_WORD: Record<string, string> = { you: "Your move", boss: "BOSS is on it", queue: "In the queue", stuck: "Stuck" };
@@ -17,6 +19,10 @@ const STEP_WORD: Record<string, string> = { stuck: "Stuck", checked: "Checked", 
 
 export function WhyLine({ why, testId = "why-line", compact = false }: { why: WaitReason | null | undefined; testId?: string; compact?: boolean }) {
   if (!why) return null;
+  // WAITING FOR GITHUB (BOSSAPP-922): the one drawing, on every surface WhyLine is on.
+  if (isWaitingForGitHub(why.code)) {
+    return <span className="sw-why" data-who={why.who} data-code={why.code} data-testid={testId}><GitHubWait nextAt={why.nextAt} compact={compact} /></span>;
+  }
   return (
     <span className="sw-why" data-who={why.who} data-code={why.code} data-testid={testId}
           title={[why.words, why.detail].filter(Boolean).join("\n")} data-compact={compact || undefined}>

@@ -866,3 +866,6 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-hchip-deploy[data-s="deploying"], .px-hchip-deploy[data-s="waiting"] { color: var(--teal); }
 .px-hchip-deploy[data-s="failed"] { color: var(--red); }
 @media (prefers-reduced-motion: reduce) { .px-deploy-live .px-spin { animation: none; } }
+/* Needs you › an FYI row (BOSSAPP-922 waiting for GitHub): calm blue, no action, not counted. */
+.px-ny.px-ny-fyi { background: color-mix(in srgb, var(--blue) 7%, var(--surface)); }
+.px-ny-ico.px-ny-ico-fyi { background: var(--blue); color: var(--surface); }

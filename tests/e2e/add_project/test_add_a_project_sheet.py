@@ -35,12 +35,25 @@ def _repo_id(full_name: str) -> str:
 
 def test_every_door_opens_the_one_sheet(person: Person):
     p = person
-    # 1 the Projects page's button
+    # 1 the Projects page's button: the TWO DOORS (BOSSAPP-916), the first one focused
     p.go()
-    p.tid("px-add-project").click()
+    # The button pushes ?new_project=1 (no navigation to wait for).
+    p.tid("px-add-project").click(no_wait_after=True, timeout=90_000)
     p.sheet.wait_for()
+    p.tid("ap-doors").wait_for()
+    assert p.door() == "choose"
+    assert p.tid("ap-door-new").evaluate("el => el === document.activeElement"), "Start a new app has the focus"
+    assert "Start a new app" in p.tid("ap-door-new").inner_text() and "Bring existing code" in p.tid("ap-door-existing").inner_text()
+    assert p.tid("ap-create").count() == 0, "no Create before a door is picked"
+    p.check("the two doors")
+    p.pick_door("new")
     assert p.box.evaluate("el => el === document.activeElement"), "the input has the focus"
-    assert p.kind() == "idea", "an empty box reads as an idea (the wireframe's default)"
+    assert p.kind() == "idea", "Start a new app is an idea: nothing guessed"
+    p.tid("ap-back").click()
+    p.tid("ap-doors").wait_for()
+    p.pick_door("existing")
+    assert p.kind() == "repo"
+    p.tid("ap-results").wait_for()
     assert "new_project=" in p.p.url
     p.tid("ap-close").click()
     p.sheet.wait_for(state="detached")
@@ -53,13 +66,14 @@ def test_every_door_opens_the_one_sheet(person: Person):
         p.p.keyboard.press("Escape")
         p.sheet.wait_for(state="detached")
 
-    # 3 ⌘K › Add project
+    # 3 ⌘K › Add project: the two doors
     p.p.keyboard.press("Meta+k")
     door = p.tid("palette-new-build")
     door.wait_for()
     assert "Add project" in door.inner_text(), door.inner_text()
     door.click()
     p.sheet.wait_for()
+    p.tid("ap-doors").wait_for()
     p.p.keyboard.press("Escape")
     p.sheet.wait_for(state="detached")
 
@@ -70,13 +84,14 @@ def test_every_door_opens_the_one_sheet(person: Person):
     assert p.kind() == "idea"
     p.p.keyboard.press("Escape")
 
-    # 5 the links: idea, import (a repo hint), sample (the sample chip lit), 1
-    for door, kind in (("idea", "idea"), ("import", "repo"), ("sample", "idea"), ("1", "idea")):
+    # 5 the links: idea / new (Start a new app), import / existing (Bring existing code), sample
+    #   (the doors, the sample chip lit), 1 (the doors)
+    for door, kind in (("idea", "idea"), ("new", "idea"), ("import", "repo"), ("existing", "repo"), ("sample", ""), ("1", "")):
         p.open_sheet(door)
         assert p.kind() == kind, f"?new_project={door} opened as {p.kind()}"
         if door == "sample":
             assert p.tid("ap-sample").get_attribute("data-lit") is not None
-        if door == "import":
+        if door in ("import", "existing"):
             p.tid("ap-results").wait_for()
             assert p.p.locator("[data-testid^='ap-repo-']").count() >= 1, "the recent repos are listed"
     p.check("doors")
@@ -86,7 +101,7 @@ def test_every_door_opens_the_one_sheet(person: Person):
 
 def test_typing_one_line_ten_lines_and_pasting(person: Person):
     p = person
-    p.open_sheet("import")          # the door that read a sentence as a repo
+    p.open_sheet("idea")
     p.type(IDEA, delay=8)           # key by key: React's update loop showed here
     assert p.kind() == "idea", f"a sentence is an idea, never a {p.kind()}"
     assert p.tid("ap-results").count() == 0, "no repo or folder results for a sentence"
@@ -108,28 +123,36 @@ def test_typing_one_line_ten_lines_and_pasting(person: Person):
     p.p.keyboard.press("Meta+v" if "Mac" in p.p.evaluate("navigator.platform") else "Control+v")
     p.p.wait_for_timeout(300)
     assert p.box.input_value() == "https://github.com/acme/ledger-api"
-    assert p.kind() == "repo"
+    # Start a new app never guesses: the URL stays words, with one quiet way across.
+    assert p.kind() == "idea"
+    p.tid("ap-looks-like-code").click()
+    assert p.door() == "existing" and p.kind() == "repo"
+    assert p.box.input_value() == "https://github.com/acme/ledger-api", "the words go along"
+    p.tid("ap-results").wait_for()
     p.check("paste")
 
 
-@pytest.mark.parametrize("words,kind", [
-    (IDEA, "idea"),
-    ("Fix: the login page is slow", "idea"),
-    ("acme/ledger-api", "repo"),
-    ("https://github.com/acme/ledger-api", "repo"),
-    ("github.com/acme/ledger-api.git", "repo"),
-    ("/srv/apps/ledger-api", "folder"),
-    ("helpdesk", "repo"),              # one bare word: a repo search
-    ("/srv/apps/my app for: the team", "idea"),   # a path with a sentence in it is a sentence
+@pytest.mark.parametrize("door,words,kind", [
+    ("new", IDEA, "idea"),
+    ("new", "Fix: the login page is slow", "idea"),
+    ("new", "acme/ledger-api", "idea"),              # Start a new app never reads code: a hint, no guess
+    ("new", "/srv/apps/ledger-api", "idea"),
+    ("existing", "acme/ledger-api", "repo"),
+    ("existing", "https://github.com/acme/ledger-api", "repo"),
+    ("existing", "github.com/acme/ledger-api.git", "repo"),
+    ("existing", "/srv/apps/ledger-api", "folder"),
+    ("existing", "helpdesk", "repo"),              # one bare word: a repo search
 ])
-def test_kind_detection(person: Person, words: str, kind: str):
+def test_kind_detection(person: Person, door: str, words: str, kind: str):
     p = person
-    p.open_sheet("idea")
+    p.open_sheet(door)
     p.type(words)
     p.p.wait_for_timeout(200)
     assert p.kind() == kind, f"{words!r} read as {p.kind()}, not {kind}"
-    if kind == "idea":
+    if door == "new":
         assert p.tid("ap-results").count() == 0
+        looks = p.tid("ap-looks-like-code").count()
+        assert looks == (1 if ("/" in words and " " not in words) else 0), f"{words!r}: the way across shows only for code"
     if kind == "repo" and "acme" in words:
         first = p.p.locator("[data-testid='ap-results'] [role='option']").first
         assert ACME.split("/")[1] in first.inner_text(), "the exact repo is the top match"
@@ -140,22 +163,27 @@ def test_kind_detection(person: Person, words: str, kind: str):
     p.check(f"detect {words}")
 
 
-def test_a_manual_kind_switch_holds_and_lets_go(person: Person):
+def test_each_door_keeps_its_own_words(person: Person):
+    """Two doors, two inputs: an idea typed in one and a repo in the other both stay as the
+    person goes back and forth (Back, the doors, the other door)."""
     p = person
-    p.open_sheet("idea")
-    p.type("helpdesk")
-    assert p.kind() == "repo"
-    p.tid("ap-kind-idea").click()
-    assert p.kind() == "idea", "the pill forces another reading"
-    assert "Reading it as an idea" in p.tid("ap-detect-line").inner_text()
-    p.type("helpdesk ai")
-    assert p.kind() == "idea"
-    p.tid("ap-kind-repo").click()
-    assert p.kind() == "repo"
-    assert p.tid("ap-kind-repo").get_attribute("aria-checked") == "true"
-    p.tid("ap-kind-folder").click()
-    assert p.kind() == "folder"
-    p.check("kind switch")
+    p.open_sheet("1")
+    p.pick_door("new")
+    p.type("A rota planner for the night shift")
+    p.tid("ap-back").click()
+    p.tid("ap-doors").wait_for()
+    assert p.tid("ap-door-draft").is_visible(), "the doors say the idea is kept"
+    p.pick_door("existing")
+    assert p.box.input_value() == "", "existing code starts empty"
+    p.type("acme/")
+    p.tid("ap-results").wait_for()
+    p.tid("ap-back").click()
+    p.pick_door("new")
+    assert p.box.input_value() == "A rota planner for the night shift"
+    p.tid("ap-back").click()
+    p.pick_door("existing")
+    assert p.box.input_value() == "acme/"
+    p.check("door words")
 
 
 def test_enter_reads_shift_enter_adds_a_line_cmd_enter_creates(person: Person):
@@ -218,7 +246,7 @@ def test_full_screen_ideas_and_undo(person: Person):
 
 def test_repo_search_arrows_enter_and_add_account(person: Person):
     p = person
-    p.open_sheet("idea")
+    p.open_sheet("existing")
     p.type("acme/")
     rows = p.p.locator("[data-testid='ap-results'] [role='option']")
     rows.first.wait_for()
@@ -258,10 +286,15 @@ def test_repo_search_arrows_enter_and_add_account(person: Person):
 def test_a_folder_on_a_host_reads_without_a_step_up(person: Person):
     p = person
     dev(mfa="lapsed")
-    p.open_sheet("idea")
+    p.open_sheet("existing")
     p.type("/srv/apps/ledger-api")
     p.p.locator("[data-testid^='ap-folder-']").first.wait_for()
     p.box.press("Enter")
+    # Its GitHub remote is a repo BOSS knows: Keep using GitHub is offered (and picked); read it
+    # in place on its server here, the read-only way it came in before.
+    p.tid("ap-bring").wait_for(timeout=30_000)
+    assert p.tid("ap-bring-github").count() and p.tid("ap-bring-copy").count() and p.tid("ap-bring-in_place").count()
+    p.tid("ap-bring-in_place").click()
     p.p.wait_for_function("() => /42 files/.test(document.querySelector(\"[data-testid='ap-found']\")?.innerText || '')", timeout=30_000)
     text = p.tid("ap-found").inner_text()
     assert "Python" in text and "src" in text, text
@@ -276,6 +309,8 @@ def test_every_read_needs_no_step_up(person: Person):
     dev(mfa="lapsed")
     p.open_sheet("idea")
     p.idea_with_brief()
+    p.tid("ap-back").click()
+    p.pick_door("existing")
     p.pick_repo(ACME)
     p.p.wait_for_selector("[data-testid='ap-onboarding-will']", timeout=30_000)
     assert p.tid("step-up-sheet").count() == 0
@@ -393,9 +428,10 @@ def test_each_popover_changes_what_is_created(person: Person):
     wf.click()
     p.tid("ap-pop-workflow-done").click()
 
-    # Code: an existing repo
+    # Code: a folder in a repo you have (a monorepo)
     p.tid("ap-box-code").click()
     p.tid("ap-pop-code").wait_for()
+    p.tid("ap-where-repo").click()
     repo_btn = p.p.locator("button.npx-opt[data-testid^='ap-code-repo-']").first
     repo_name = repo_btn.locator(".npx-mono").inner_text().strip()
     if repo_btn.get_attribute("data-in-use") is None:
@@ -723,7 +759,7 @@ def test_create_an_idea_lands_on_planning(person: Person):
 
 def test_create_a_repo_lands_on_onboarding(person: Person):
     p = person
-    p.open_sheet("idea")
+    p.open_sheet("existing")
     p.pick_repo(ACME)
     p.p.wait_for_selector("[data-testid='ap-onboarding-will']", timeout=30_000)
     name = unique("Ledger")
@@ -772,13 +808,13 @@ def _on_project(p: Person, project_id: str) -> None:
 def test_the_same_repo_again_opens_its_project_and_creates_nothing(person: Person):
     p = person
     rid, used = _in_use(ACME)
-    p.open_sheet("idea")
+    p.open_sheet("existing")
     p.type(ACME)
     row = p.tid(f"ap-repo-{rid}")
     row.wait_for()
     assert row.get_attribute("data-in-use") == ""
     said = row.inner_text()
-    assert f"in {used[0]['name']}" in said and "Open ›" in said, said
+    assert f"in {used[0]['name']}" in said and "›" in said, said
     block = p.tid(f"ap-repo-{rid}-inuse")
     assert f"Add work to {used[0]['name']} instead" in block.inner_text()
     assert "Make a separate project anyway" in block.inner_text()
@@ -794,7 +830,7 @@ def test_the_same_repo_again_opens_its_project_and_creates_nothing(person: Perso
 def test_add_work_to_that_project_instead_carries_the_words(person: Person):
     p = person
     rid, used = _in_use(ACME)
-    p.open_sheet("idea")
+    p.open_sheet("existing")
     p.type(f"{ACME}\nfix the SLA timer on reopened tickets")
     p.tid(f"ap-repo-{rid}-addwork").click()
     _on_project(p, used[0]["project_id"])
@@ -806,7 +842,7 @@ def test_add_work_to_that_project_instead_carries_the_words(person: Person):
 def test_a_separate_project_on_the_same_repo_is_asked_once(person: Person):
     p = person
     rid, _used = _in_use(ACME)
-    p.open_sheet("idea")
+    p.open_sheet("existing")
     p.type(ACME)
     p.tid(f"ap-repo-{rid}-separate").click()
     yes = p.tid(f"ap-repo-{rid}-separate-yes")
@@ -835,6 +871,7 @@ def test_the_code_popover_follows_the_same_rules(person: Person):
         p.understood()
         p.tid("ap-box-code").click()
         p.tid("ap-pop-code").wait_for()
+        p.tid("ap-where-repo").click()
         p.tid("ap-code-search").fill(ACME.split("/")[1])
         opt = p.tid(f"ap-code-repo-{rid}")
         opt.wait_for()

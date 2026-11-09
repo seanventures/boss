@@ -21,7 +21,7 @@ import { nameOf } from "../agents/run-face";
 import { actorWords } from "../../lib/actor-words";
 
 /** States whose face never moves: motion would claim work that is not happening. */
-export const STILL_STATES = new Set(["quiet", "budget_wait", "blocked", "budget_refused", "needs_waiver", "needs_person", "queued"]);
+export const STILL_STATES = new Set(["quiet", "budget_wait", "blocked", "budget_refused", "needs_waiver", "needs_person", "queued", "github_wait"]);
 
 /** Whether this row's face would move (it counts against the Floor's ring budget). */
 export function buildAnimates(b: Build): boolean {

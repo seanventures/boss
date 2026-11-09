@@ -14,8 +14,13 @@ Environment (the suite is skipped without the first two):
   BOSS_E2E_API        the API it proxies to, e.g. http://127.0.0.1:8843 (read-backs of what
                       Create and start made: GET /v1/projects/{id}/add-project/started)
   BOSS_E2E_DEV_SEAMS  "1" when the API is the dev launcher with its /__dev/state seam (second
-                      factor fresh/lapsed, model cli/none/slow, readiness refusal). Tests that
-                      need a seam are skipped without it.
+                      factor fresh/lapsed, model cli/none/slow, readiness refusal; local-first:
+                      GitHub through the e2e fake, offline). Tests that need a seam are skipped
+                      without it.
+
+TWO DOORS (BOSSAPP-916): `open_sheet("idea"|"new")` opens Start a new app, `("import"|
+"existing")` Bring existing code, `("1"|"sample")` the two doors; `pick_door()` presses one.
+tests/e2e/local_first reuses this harness for the local-first use cases.
   BOSS_E2E_DATABASE_URL  optional: the API's database, to count projects by name (one press,
                       one project). Never printed.
   BOSS_E2E_VIEWPORTS  default "1440,390".
@@ -219,7 +224,9 @@ class Person:
         return self.width < 600
 
     def go(self, query: str = "", area: str = "projects", wait: str = "[data-testid='px-projects'], [data-testid='px-add-project']") -> None:
-        q = f"?org={ORG}&project_id={PROJECT}&area={area}" + (f"&{query}" if query else "")
+        # A query naming its own project opens that one (the default project is only the context).
+        own = "project_id=" in (query or "")
+        q = f"?org={ORG}" + ("" if own else f"&project_id={PROJECT}") + f"&area={area}" + (f"&{query}" if query else "")
         try:
             self.p.goto(f"{CONSOLE}/{q}", wait_until="domcontentloaded", timeout=120_000)
         except Exception:  # noqa: BLE001 — a dev server that stalled once (next dev, swap): once more
@@ -227,9 +234,29 @@ class Person:
         if wait:
             self.p.wait_for_selector(wait, timeout=180_000)
 
+    #: TWO DOORS (BOSSAPP-916): the URL's door, and the sheet's door it opens on.
+    DOORS = {"idea": ("idea", "new"), "new": ("new", "new"), "import": ("import", "existing"),
+             "existing": ("existing", "existing"), "1": ("1", "choose"), "sample": ("sample", "choose")}
+
     def open_sheet(self, door: str = "idea") -> None:
-        self.go(f"new_project={door}", wait="[data-testid='add-project']")
-        self.p.wait_for_selector("[data-testid='ap-input']", timeout=60_000)
+        """Open Add a project at a door: "idea"/"new" (Start a new app), "import"/"existing"
+        (Bring existing code), "1"/"sample" (the two doors)."""
+        query, want = self.DOORS.get(door, (door, "choose"))
+        self.go(f"new_project={query}", wait="[data-testid='add-project']")
+        if want == "choose":
+            self.p.wait_for_selector("[data-testid='ap-doors']", timeout=60_000)
+        else:
+            self.p.wait_for_selector("[data-testid='ap-input']", timeout=60_000)
+        assert self.door() == want, f"?new_project={query} opened the {self.door()} door, not {want}"
+
+    def door(self) -> str:
+        return self.sheet.get_attribute("data-door") or ""
+
+    def pick_door(self, door: str) -> None:
+        """On the two doors, press one (new | existing)."""
+        self.tid(f"ap-door-{door}").click()
+        self.p.wait_for_selector("[data-testid='ap-input']", timeout=30_000)
+        assert self.door() == door
 
     def tid(self, testid: str):
         return self.p.locator(f"[data-testid='{testid}']")
@@ -320,9 +347,15 @@ class Person:
             # The first start asks the person to let the crew act for them (the consent sheet):
             # they allow it, once.
             allow = self.p.locator("[data-testid='consent-durations'] button, [data-testid='consent-mr-allow']")
-            if allow.count() and allow.first.is_visible() and allow.first.is_enabled():
-                self.consented += 1
-                allow.first.click()
+            try:
+                # The sheet can close between looking and pressing (the start went on): a short
+                # look, never a 30 s wait on a button that is gone.
+                ready = allow.count() and allow.first.is_visible() and allow.first.is_enabled(timeout=2000)
+                if ready:
+                    allow.first.click(timeout=30_000)
+                    self.consented += 1
+            except Exception:  # noqa: BLE001 — gone meanwhile: the loop looks again
+                pass
             # What this dev install lacks (a mail server for an email channel …) is refused with
             # the readiness checklist: the person ticks each item and presses Start anyway.
             panel = self.tid("ap-readiness")
@@ -405,7 +438,10 @@ def _person(request, browser, width: int, height: int):
     page.set_default_timeout(30_000)
     who = Person(page, width)
     if SEAMS:
-        api("POST", "/__dev/state", {"mfa": "fresh", "model": "cli", "refuse": False})
+        api("POST", "/__dev/state", {"mfa": "fresh", "model": "cli", "refuse": False, "github": "fake", "offline": False})
+        # GitHub is the plumbing gate's fake: the org's repos exist only once BOSS makes them (a dev
+        # API without the local-first seams answers 404 here, and the default is then local).
+        api("POST", "/__dev/lf/github", {"owners": [{"login": "acme", "type": "Organization"}], "outage": False})
     yield who
     if SEAMS:
         api("POST", "/__dev/state", {"mfa": "fresh", "model": "cli", "refuse": False})

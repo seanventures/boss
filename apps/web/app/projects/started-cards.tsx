@@ -62,8 +62,9 @@ export function StartedCards({ ctx }: { ctx: PxCtx }) {
         <ol className="px-st-path" aria-label="From the idea to the pull request" data-testid="px-started-path">
           <li data-state="done"><span className="px-st-n">1</span>Add project</li>
           <li data-state="done"><span className="px-st-n">2</span>Create and start</li>
-          {nodes.map((n) => (
-            <li key={n.key} data-state={n.state} data-you={n.type === "you" || undefined} title={n.agent?.name ? `${n.label} · ${n.agent.name}` : n.label}>
+          {/* A workflow can visit a station twice (Standard builds again after review): one key each. */}
+          {nodes.map((n, i) => (
+            <li key={`${n.key}-${i}`} data-state={n.state} data-you={n.type === "you" || undefined} title={n.agent?.name ? `${n.label} · ${n.agent.name}` : n.label}>
               {n.state === "done" ? <Check size={12} weight="bold" aria-hidden /> : n.type === "you" ? <Hand size={12} weight="fill" aria-hidden />
                 : n.agent ? <Face agent={n.agent} size={16} state={n.state === "now" ? "working" : "idle"} /> : null}
               {n.type === "you" ? (n.key === "approve" ? "Approve PRD" : n.label) : n.label}

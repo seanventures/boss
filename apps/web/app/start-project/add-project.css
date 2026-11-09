@@ -232,6 +232,8 @@
 .npx-pop-ico { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-text); }
 .npx-pop-anchor { font-size: var(--fs-label); color: var(--faint); margin-left: auto; }
 .npx-pop-b { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
+/* A long popover scrolls; its parts never shrink to slivers (the Code popover's One · Several tabs did). */
+.npx-pop-b > * { flex-shrink: 0; }
 .npx-pop-b p { margin: 0; font-size: var(--fs-meta); }
 .npx-pop-f { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); padding-top: 8px; font-size: var(--fs-tag); }
 .npx-list { display: flex; flex-direction: column; gap: 4px; }
@@ -382,3 +384,82 @@
 .npx-inuse-tag { flex: 0 1 auto; min-width: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; display: inline-block; }
 .npx-opt .npx-mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .npx-scroll:has(.npx-inuse) { max-height: 280px; }
+
+/* THE IN-USE TAG NEVER EATS THE NAME (walk 2026-11-08 at 1440: the Code popover showed "acme/le…"
+   beside a long tag): the repo's name keeps its room; the tag shrinks first, then ellipsizes. */
+.npx-opt > .npx-mono { flex: 0 1 auto; }
+.npx-opt > .npx-inuse-tag, .npx-pick > .npx-inuse-tag { flex: 0 100 auto; max-width: none; min-width: 3ch; }
+
+/* ── TWO DOORS (BOSSAPP-916) ─────────────────────────────────────────────────────────────── */
+.npx-back { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; border: 1px solid var(--border-strong);
+  background: var(--surface); color: var(--muted); cursor: pointer; flex: none; }
+.npx-back:hover { color: var(--ink); border-color: var(--accent-line); }
+.npx-crumb { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-ui); color: var(--muted); font-weight: 600; min-width: 0; white-space: nowrap; }
+.npx-crumb svg:not(:first-child) { color: var(--accent-text); }
+.npx-doors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 6px 0 2px; }
+.npx-door { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left; padding: 18px 18px 16px;
+  border-radius: 16px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink); font: inherit; cursor: pointer; min-width: 0;
+  transition: border-color .15s ease, transform .12s ease, box-shadow .15s ease; animation: npx-rise .2s ease-out; }
+.npx-door:hover, .npx-door:focus-visible { border-color: var(--accent-line); box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 16%, transparent); transform: translateY(-1px); }
+.npx-door:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.npx-door > b { font-family: var(--display); font-size: var(--fs-title); font-weight: 700; }
+.npx-door > small { font-size: var(--fs-body); color: var(--muted); line-height: 1.45; }
+.npx-door-ico { width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; color: var(--accent-text);
+  background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.npx-door-ico[data-t="existing"] { color: var(--teal); background: color-mix(in srgb, var(--teal) 12%, transparent); border-color: color-mix(in srgb, var(--teal) 40%, transparent); }
+.npx-door-flow { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 2px; color: var(--faint); }
+.npx-door-flow i { font-style: normal; font-size: var(--fs-tag); font-weight: 600; color: var(--ink-soft); padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--surface); white-space: nowrap; }
+.npx-door-flow i[data-you] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 50%, transparent); background: var(--amber-soft); }
+.npx-door-where { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
+.npx-doors-note { display: inline-flex !important; align-items: center; gap: 5px; min-width: 0; }
+@media (max-width: 760px) {
+  .npx-doors { grid-template-columns: minmax(0, 1fr); gap: 10px; } .npx-door { padding: 14px; }
+  /* A phone's head inside a door: ← · the door's name · Try a sample · ✕ (the sheet's title stays
+     for screen readers; the door's name says where you are). */
+  .npx-sheet:not([data-door="choose"]) .npx-head h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .npx-crumb > svg:first-child { display: none; }
+  .npx-crumb { font-size: var(--fs-ui); color: var(--ink); }
+}
+
+/* How a picked folder comes in: Keep using GitHub · Copy it here · Read it in place. */
+.npx-bring { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 3%, var(--surface)); animation: npx-rise .16s ease-out; }
+.npx-bring-from { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--fs-meta); min-width: 0; }
+.npx-bring-from .npx-mono { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; min-width: 0; }
+.npx-bring-opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 8px; }
+.npx-bring-opt { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-strong);
+  background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.npx-bring-opt > span { display: flex; flex-direction: column; min-width: 0; }
+.npx-bring-opt b { font-size: var(--fs-ui); font-weight: 700; }
+.npx-bring-opt small { font-size: var(--fs-tag); color: var(--faint); overflow-wrap: anywhere; }
+.npx-bring-opt:hover { border-color: var(--accent-line); }
+.npx-bring-opt[aria-checked="true"] { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.npx-bring-opt[data-blocked] small { color: var(--amber); }
+.npx-bring-opt > svg:first-child { flex: none; color: var(--accent-text); }
+.npx-bring p { margin: 0; }
+.npx-keep { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--ink-soft); cursor: pointer; }
+
+/* Where a new app's code lives (the Code box's popover). */
+.npx-auto[data-tone="local"] { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+.npx-where { display: flex; flex-direction: column; gap: 6px; }
+.npx-where-opt { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 11px; border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.npx-where-opt > span { display: flex; flex-direction: column; min-width: 0; }
+.npx-where-opt b { font-size: var(--fs-ui); font-weight: 700; }
+.npx-where-opt small { font-size: var(--fs-tag); color: var(--faint); }
+.npx-where-opt > svg { flex: none; color: var(--muted); }
+.npx-where-opt:hover { border-color: var(--accent-line); }
+.npx-where-opt[aria-checked="true"] { border-color: var(--accent-line); background: var(--accent-soft); }
+.npx-where-opt[aria-checked="true"] > svg { color: var(--accent-text); }
+.npx-newrepo { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 11px; border: 1px dashed var(--border-strong); }
+.npx-newrepo p { margin: 0; }
+.npx-newrepo-row { display: flex; align-items: flex-end; gap: 6px; min-width: 0; }
+.npx-newrepo-owner { flex: 0 1 40%; min-width: 0; }
+.npx-newrepo-name { flex: 1 1 60%; min-width: 0; }
+.npx-newrepo-slash { padding-bottom: 7px; color: var(--faint); font-family: var(--mono); }
+.npx-newrepo-check { display: flex; gap: 6px; align-items: flex-start; font-size: var(--fs-meta); color: var(--ink-soft); flex-wrap: wrap; }
+.npx-newrepo-check .npx-ok { margin-left: 0; flex: none; margin-top: 2px; }
+.npx-newrepo-check[data-ok="false"] { color: var(--amber); }
+.npx-newrepo-check > span { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.npx-node[data-where="local"] .npx-v::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: middle; }

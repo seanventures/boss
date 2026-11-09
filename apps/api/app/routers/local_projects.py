@@ -13,6 +13,8 @@ POST /v1/projects/{id}/local-changes/{n}/merge       Merge into the default bran
                                                      approval of the change's review decision)
 POST /v1/projects/{id}/publish                       Publish to GitHub (a person's decision)
 POST /v1/projects/{id}/github-repository             make an empty GitHub repository (BOSSAPP-917)
+GET  /v1/projects/{id}/github-repository/check       can BOSS make it (or publish into it)? reads only
+GET  /v1/projects/{id}/local-folders                 the import directory's folders, with their facts
 GET  /v1/projects/{id}/push-pending                  work waiting for GitHub, and why
 POST /v1/repos/push-pending/execute                  the worker's leased push-pending job
 """
@@ -351,6 +353,36 @@ def create_github_repository(project_id: str, request: Request, payload: CreateR
                                            api_base_url=reach.api_base_url,
                                            token_kind=reach.create_token_kind)
     return JSONResponse(made.as_dict(), status_code=200 if made.ok else 409)
+
+
+@router.get("/v1/projects/{project_id}/github-repository/check")
+@permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
+def check_github_repository(project_id: str, request: Request, owner: str, repo: str,
+                            purpose: str = "create") -> dict[str, Any]:
+    """Can BOSS make `owner/repo` on GitHub (or publish into it, purpose=existing)? Reads only:
+    the sheet says the engine's words while the person is still choosing (BOSSAPP-917/921)."""
+    from boss_engine.services import local_publish
+
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        reach = local_publish.default_reach(connection, _settings, project_id, actor=_actor(request),
+                                            owner=owner, repo=repo)
+    return local_publish.check_repository(
+        owner=owner.strip(), name=repo.strip(), token=reach.create_token,
+        purpose="existing" if purpose == "existing" else "create",
+        api_base_url=reach.api_base_url, token_kind=reach.create_token_kind)
+
+
+@router.get("/v1/projects/{project_id}/local-folders")
+@permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
+def local_folders(project_id: str, q: Optional[str] = None) -> dict[str, Any]:
+    """Bring existing code › This machine: the folders in the install's import directory, each
+    with its history, its GitHub remote (if any) and its size (BOSSAPP-923)."""
+    from boss_engine.services import local_projects
+
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+    return local_projects.list_import_folders(_settings, q or "")
 
 
 # ── waiting for GitHub ──────────────────────────────────────────────────────────────────────

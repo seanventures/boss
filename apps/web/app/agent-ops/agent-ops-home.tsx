@@ -18,7 +18,7 @@
  * within 10 seconds, without reading a paragraph.
  */
 import { WhyLine } from "../../components/stuck-work";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { GatedButton, useGate } from "../../components/gated";
 import { useConsoleLive } from "../../lib/console-live";
@@ -219,9 +219,15 @@ export function AgentOpsHome({ projectId, orgId }: { projectId: string; actor?: 
   const [place, setPlaceState] = useState<Place>({ view: "work", tab: "needs_you", item: null, act: null });
   const [arrived, setArrived] = useState(false);
   useEffect(() => { setPlaceState(readPlace()); setArrived(true); }, []);
+  // The URL follows the place AFTER the render: written inside the state updater, Next's patched
+  // history.replaceState updated the Router while this component rendered (React's
+  // "Cannot update a component while rendering a different component").
+  const moved = useRef(false);
   const setPlace = useCallback((patch: Partial<Place>) => {
-    setPlaceState((p) => { const next = { ...p, ...patch }; writePlace(next); return next; });
+    moved.current = true;
+    setPlaceState((p) => ({ ...p, ...patch }));
   }, []);
+  useEffect(() => { if (moved.current) writePlace(place); }, [place]);
   // ?act= resolves to the item it belongs to.
   useEffect(() => {
     if (!place.act || place.item || !projectId) return;

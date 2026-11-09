@@ -374,6 +374,10 @@ def attempt_state(r: Mapping[str, Any], now: datetime, horizon: float
         state = "done"
     elif status == "queued":
         state = "planned"
+    elif status == "waiting_for_github":
+        # BOSSAPP-922: built and committed on this machine, the push waits for GitHub. Never
+        # failed, never stalled: BOSS pushes it on its own (the row says when it tries next).
+        return "running", None
     else:
         state = "running"
     if r.get("merge_open") and state != "failed":
@@ -980,7 +984,11 @@ def _with_why(connection: Connection, found: list[dict[str, Any]]) -> None:
         w["why"] = why
         w["diagnosis"] = stuck_work.public_diagnosis(run.get("finalize_ctx"),
                                                      connection=connection, run=run)
-        if why and w.get("state") in ("running", "planned"):
+        if why and why.get("code") == "github":
+            # Waiting for GitHub: running (BOSS pushes it itself), never stalled or failed.
+            w["state"], w["stalled_since"] = "running", None
+            w["github_wait"] = {"words": why["words"], "next_at": why.get("next_at")}
+        elif why and w.get("state") in ("running", "planned"):
             if why["who"] == "you":
                 w["state"] = "needs_you"
             elif why["who"] == "stuck":

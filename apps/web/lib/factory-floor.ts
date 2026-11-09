@@ -58,7 +58,9 @@ export type Station = {
 export type BuildStateKey =
   | "cancelled" | "failed" | "needs_plan" | "needs_waiver" | "needs_person" | "budget_refused"
   | "blocked" | "budget_wait" | "quiet" | "queued" | "building" | "pr_open" | "merged"
-  | "deployed" | "done_no_pr";
+  | "deployed" | "done_no_pr"
+  /** BOSSAPP-922: finished here; the push and its PR wait for GitHub (never failed). */
+  | "github_wait";
 
 export type PreviewFlag = { status: "starting" | "running" | "failed"; url?: string };
 export type Origin = { kind: "workflow_run" | "meeting" | "discovery" | string; id: string; label: string };

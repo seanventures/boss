@@ -87,6 +87,13 @@ export function repoHostLabel(nameOrHost: string | null | undefined): "Local rep
   return v === "local" || isLocalRepo(v) ? "Local repo" : "GitHub";
 }
 
+/** "Review change #3 ›" — the words on every link to a LOCAL change set (the build page, Work,
+ *  Needs you); null for a GitHub pull request, whose surfaces keep their own words. */
+export function reviewChangeWords(url: string | null | undefined): string | null {
+  const local = parseLocalChange(url);
+  return local ? `Review change #${local.number} ›` : null;
+}
+
 /** The words on a PR link. */
 export function prLinkLabel(url: string | null | undefined): string {
   return isLocalChangeUrl(url) ? "Open change set" : "Open PR on GitHub";
@@ -102,8 +109,12 @@ export type ChangeSet = {
   url: string; body: string; github_pr_url: string | null; merged_by: string | null; merged_sha: string | null;
   files: ChangeSetFile[]; diff: string; diff_error: string | null; commits: { sha: string; message: string }[];
   review: ChangeSetNote[];
-  checks: { where: string; run_status: string | null; tests_passed: string | null } | null;
+  checks: { where: string; run_status: string | null; tests_passed: string | null; gates?: unknown } | null;
   merge: { how: string; decision_id: string } | null;
+  /** The review decision whose approval merges it (pending while it is open). */
+  decision: { id: string; status: string; question: string } | null;
+  draft: boolean; labels: string[]; pending_push: boolean; run_id: string | null; head_sha: string | null;
+  created_at: string | null; updated_at: string | null; merged_at: string | null;
 };
 
 export function changeSetPath(projectId: string, number: number | string): string {
@@ -120,6 +131,7 @@ export function parseChangeSet(raw: unknown): ChangeSet {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const checks = r.checks && typeof r.checks === "object" ? r.checks as Record<string, unknown> : null;
   const merge = r.merge && typeof r.merge === "object" ? r.merge as Record<string, unknown> : null;
+  const decision = r.decision && typeof r.decision === "object" ? r.decision as Record<string, unknown> : null;
   return {
     number: num(r.number), title: str(r.title), state: str(r.state, "open"), repository: str(r.repository),
     branch: str(r.branch), base_branch: str(r.base_branch, "main"), url: str(r.url), body: str(r.body),
@@ -133,8 +145,13 @@ export function parseChangeSet(raw: unknown): ChangeSet {
       comments: arr(n.comments).map((c) => ({ path: str(c.path) || undefined, line: c.line == null ? undefined : num(c.line), body: str(c.body) })),
     })),
     checks: checks ? { where: str(checks.where, "BOSS's sandbox"), run_status: str(checks.run_status) || null,
-                       tests_passed: checks.tests_passed == null ? null : str(checks.tests_passed) } : null,
+                       tests_passed: checks.tests_passed == null ? null : str(checks.tests_passed),
+                       ...(checks.gates !== undefined ? { gates: checks.gates } : {}) } : null,
     merge: merge && str(merge.decision_id) ? { how: str(merge.how), decision_id: str(merge.decision_id) } : null,
+    decision: decision && str(decision.id) ? { id: str(decision.id), status: str(decision.status, "pending"), question: str(decision.question) } : null,
+    draft: r.draft === true, labels: Array.isArray(r.labels) ? r.labels.map((l) => str(l)).filter(Boolean) : [],
+    pending_push: r.pending_push === true, run_id: str(r.run_id) || null, head_sha: str(r.head_sha) || null,
+    created_at: str(r.created_at) || null, updated_at: str(r.updated_at) || null, merged_at: str(r.merged_at) || null,
   };
 }
 

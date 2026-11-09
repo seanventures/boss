@@ -24,6 +24,7 @@ import { useAreaShown } from "./area-shown";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
 import { isHydrated, localWith, markHydrated } from "./local-time";
 import { isLocalRepo, repoHref } from "./repo-links";
+import { parseMachine, type MachineChecks } from "./machine-checks";
 
 // ── shared enums (§ Shared enums) ────────────────────────────────────────────────────────────
 
@@ -112,6 +113,7 @@ export type NeedsYou = {
   /** A meeting's PRD to approve (BOSSAPP-929): the document, its meeting, its file in the repo. */
   prd?: PrdRecord | null;
 };
+export type GitHubWaitItem = { id: string; label: string; href: string; words: string; next_at: string | null };
 export type NeedsAnswer = { action: "approve" | "reject" | "revise"; label: string };
 export type NeedsEntry = { work_item_id: string; question: string; detail: string; answers: { key: string; label: string }[] };
 function parseAnswers(v: unknown): NeedsAnswer[] | undefined {
@@ -230,6 +232,9 @@ export type Overview = {
     /** The deploy moving now, or the last one that failed ("Deploying · 2/7"). */
     deploy?: DeployChip | null };
   journey: Node[]; needs_you: NeedsYou[];
+  /** Work waiting for GitHub (BOSSAPP-922): an FYI under Needs you, never a card to act on and
+   *  never counted as one — BOSS pushes it on its own. */
+  github_waits?: GitHubWaitItem[];
   /** Cards that could not load this time ({card: words}): each shows "Couldn't load · Retry". */
   errors?: Record<string, string>;
   /** The Roadmap tab's count (open + accepted). */
@@ -367,7 +372,9 @@ export type Roadmap = { now: NextItem[]; next: NextItem[]; later: NextItem[]; re
 /** An item's one action: a link (`href`), or — with `do` — a job the page does in place
  *  (`do: "staging_target"`: the confirm sheet that POSTs `post` for `host_id`; `href` is Infra). */
 export type OnboardingAction = { label: string; href: string; do?: "staging_target"; host_id?: string; post?: string };
-export type OnboardingItem = { key: string; label: string; state: StepState; owner: "agent" | "you"; action: OnboardingAction | null; detail: string; sub: string };
+export type OnboardingItem = { key: string; label: string; state: StepState; owner: "agent" | "you"; action: OnboardingAction | null; detail: string; sub: string;
+  /** A local project's repo_access: the machine checks as dots (BOSSAPP-924, lib/machine-checks). */
+  machine?: MachineChecks | null };
 /** What onboarding's "Use for staging" will make (GET …/onboarding/deploy-target). */
 export type StagingProposal = { project: string; app_name: string; repository: string; environment: string; host_id: string; host: string;
                                 address: string; shared: boolean; port: number | null; manifest_path: string };
@@ -644,6 +651,10 @@ export const parseOverview = (v: unknown): Overview => {
     journey: a(x.journey).map(parseNode),
     roadmap_count: nn(x.roadmap_count),
     still_answerable: parseStillAnswerable(x.still_answerable),
+    github_waits: a(x.github_waits).map((it) => {
+      const y = o(it);
+      return { id: s(y.id), label: s(y.label), href: s(y.href), words: s(y.words), next_at: s(y.next_at) || null };
+    }).filter((g) => g.id),
     needs_you: a(x.needs_you).map((it) => {
       const y = o(it); const act = o(y.action);
       return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup"] as const, "question"), label: s(y.label),
@@ -797,7 +808,7 @@ export const parseOnboarding = (v: unknown): Onboarding => {
     return { key: s(y.key), label: label4(y.label), state: oneOf(y.state, STEP_STATES, "todo"), owner: y.owner === "you" ? "you" : "agent",
              action: act.label || act.href ? { label: s(act.label, "Do it"), href: s(act.href),
                                                ...(act.do === "staging_target" && s(act.post) ? { do: "staging_target" as const, host_id: s(act.host_id), post: s(act.post) } : {}) } : null,
-             detail: s(y.detail), sub: s(y.sub) };
+             detail: s(y.detail), sub: s(y.sub), machine: parseMachine(y.machine) };
   };
   const checklist = a(x.checklist).map(item);
   const onlyYou = a(x.only_you).length ? a(x.only_you).map(item) : checklist.filter((c) => c.owner === "you" && c.state !== "done");
