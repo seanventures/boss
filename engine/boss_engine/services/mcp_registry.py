@@ -40,6 +40,7 @@ from urllib.parse import urlparse
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .argument_binding import held_call_matches
 from .core import create_blocking_decision, emit_event, make_id, normalize_data_boundary
 from .tool_call_audit import record_tool_call
 from .tool_catalog import (
@@ -458,6 +459,12 @@ class McpToolOff(McpServerError):
     retryable = False
 
 
+class McpArgumentsChanged(McpServerError):
+    """The arguments are not the call a person approved. Not retryable."""
+
+    retryable = False
+
+
 def review_mcp_server(connection: Connection, project_id: str, server_id: str, *,
                       actor: str) -> Optional[dict[str, Any]]:
     """A person vouches for a server: trusted, with who, when, and the URL they looked at.
@@ -619,6 +626,34 @@ def approval_stands(connection: Connection, project_id: str,
     if not isinstance(recommendation, dict):
         return False
     return all(str(recommendation.get(k) or "") == v for k, v in scope.items())
+
+
+def approved_arguments_match(
+    connection: Connection,
+    project_id: str,
+    decision_id: Optional[str],
+    tool_name: str,
+    arguments: Any,
+) -> bool:
+    """True when this call is the one the approval digested.
+
+    A missing decision, or a decision with no args_sha256, still matches. Older
+    approvals did not store a digest, and a caller that does not pass one is
+    unchanged. A present digest matches only the same canonical arguments.
+    """
+    wanted = str(decision_id or "").strip()
+    if not wanted:
+        return True
+    row = connection.execute(
+        text("SELECT recommendation FROM decisions WHERE id = :id AND project_id = :p"),
+        {"id": wanted, "p": project_id},
+    ).mappings().first()
+    if row is None:
+        return True
+    recommendation = _loads(row["recommendation"], {}) or {}
+    if not isinstance(recommendation, dict):
+        return True
+    return held_call_matches(tool_name, arguments, recommendation.get("args_sha256"))
 
 
 def _name_taken(
@@ -1376,6 +1411,13 @@ def call_tool_with_receipt(
         raise McpServerUnreviewed(
             f"Did not call {tool_name}: it is set to ask a person each time, and this call "
             "carried no approval about it.")
+    if str(approved_by or "").strip() and not approved_arguments_match(
+        connection, project_id, approved_by, tool_name, inputs,
+    ):
+        _audit_tool_call("refused", "arguments")
+        raise McpArgumentsChanged(
+            f"Did not call {tool_name}: arguments do not match the approved call."
+        )
     headers = auth_headers(connection, settings, project_id, server)
     org_id, workspace_id = tenant_scope
     receipts = ReceiptService()

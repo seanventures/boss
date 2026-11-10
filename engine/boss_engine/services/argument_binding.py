@@ -54,7 +54,8 @@ def bind_held_call(tool_name: str, arguments: Any) -> dict:
     """Digest and redacted preview stored on an Ask decision.
 
     A non-dict adds nothing, so a hold still opens when the arguments are
-    not a map. The signature and the receipt check are a later slice.
+    not a map. The HMAC signature is a later slice. The receipt check is
+    approved_arguments_match.
     """
     if not isinstance(arguments, dict):
         return {}
