@@ -2,6 +2,28 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.13]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.13.md](docs/community/RELEASE_NOTES_v1.0-rc10.13.md).
+
+### Added
+
+- A held tool call stores the digest of the arguments that were shown. Resume refuses a different call. The decision card shows the redacted arguments. The tool receipt refuses when that digest does not match. A decision with no digest still runs.
+- Tool results are screened for instruction-override phrases. A hit holds the next write.
+- A reachable probe quarantines a tool whose schema or description hash changed and opens one decision.
+- Each receipt-path tool call is appended to an audit row. One project's rows can be listed.
+- An always-allow row can be granted and revoked. The live allow/ask/off read is unchanged.
+- Local changes review like a git change, on this machine and on GitHub.
+
+### Changed
+
+- The always-on agents ship on. Off remains one Govern choice, or `BOSS_AMBIENT_COS=off`.
+- The community candidate version is `1.0.0-rc.10.13`.
+
+### Release scope
+
+- This is the git tag of public main after rc10.12. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`.
+
 ## [v1.0-rc8]
 
 Friends-and-family preparation. Notes: [docs/community/RELEASE_NOTES_v1.0-rc8.md](docs/community/RELEASE_NOTES_v1.0-rc8.md).

@@ -1,6 +1,6 @@
 # Getting started
 
-Use the [quickstart](QUICKSTART.md) for the path: install v1.0-rc10.12, [claim the install](QUICKSTART.md#claim-the-install), connect one repository, connect one model, and open one pull request.
+Use the [quickstart](QUICKSTART.md) for the path: install v1.0-rc10.13, [claim the install](QUICKSTART.md#claim-the-install), connect one repository, connect one model, and open one pull request.
 
 To inspect a run's state or evidence after that, use the [first change](FIRST_USEFUL_CHANGE.md). HTTPS on a hostname you control is [separate](hostname.md). Sign-in details are in [sign in](CONSOLE_AUTH.md).
 

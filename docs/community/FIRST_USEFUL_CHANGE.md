@@ -1,8 +1,8 @@
 # Your first useful software change
 
-The [path](QUICKSTART.md) installs v1.0-rc10.12, claims the Owner, and connects one repository and one model. This page continues from there: one change you would otherwise make yourself, small enough to review, from the plan to the exact revision.
+The [path](QUICKSTART.md) installs v1.0-rc10.13, claims the Owner, and connects one repository and one model. This page continues from there: one change you would otherwise make yourself, small enough to review, from the plan to the exact revision.
 
-This is an operator guide for the release candidate. It describes the controls and the evidence to collect. It is not a transcript of a completed live-provider result. The [v1.0-rc10.12 notes](RELEASE_NOTES_v1.0-rc10.12.md) and the [validation records](RC9_VALIDATION.md) say what has been checked, and what has not.
+This is an operator guide for the release candidate. It describes the controls and the evidence to collect. It is not a transcript of a completed live-provider result. The [v1.0-rc10.13 notes](RELEASE_NOTES_v1.0-rc10.13.md) and the [validation records](RC9_VALIDATION.md) say what has been checked, and what has not.
 
 ## 1. Check your installation and access
 

@@ -1,10 +1,10 @@
 # The path
 
-Install [v1.0-rc10.12](https://github.com/seanventures/boss/releases/tag/v1.0-rc10.12), claim the install, connect one repository, connect one model, and open one pull request.
+Install [v1.0-rc10.13](https://github.com/seanventures/boss/releases/tag/v1.0-rc10.13), claim the install, connect one repository, connect one model, and open one pull request.
 
 This is the short path on a machine you administer. [Your hostname](hostname.md) covers HTTPS. [Sign in](CONSOLE_AUTH.md) covers passkeys, passwords, and an SSH tunnel. The [first change](FIRST_USEFUL_CHANGE.md) is what you do with the pull request after it exists.
 
-This is a release candidate. The bounded installed checks behind it are an owned Linux arm64 machine that already had Docker. A clean-host install and useful provider work are separate checks. The [release notes](RELEASE_NOTES_v1.0-rc10.12.md) say what this tag changed and what was not run.
+This is a release candidate. The bounded installed checks behind it are an owned Linux arm64 machine that already had Docker. A clean-host install and useful provider work are separate checks. The [release notes](RELEASE_NOTES_v1.0-rc10.13.md) say what this tag changed and what was not run.
 
 ## Before you begin
 
@@ -25,14 +25,14 @@ Install this tag from its checkout. You need Git. If GitHub asks you to sign in,
 ```bash
 (
   set -e
-  git clone --branch v1.0-rc10.12 https://github.com/seanventures/boss.git boss-rc10.12
-  cd boss-rc10.12
+  git clone --branch v1.0-rc10.13 https://github.com/seanventures/boss.git boss-rc10.13
+  cd boss-rc10.13
   BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
 
-Use a new directory named `boss-rc10.12`. The command stops if the clone fails. It records the checked-out commit and stays on that source when you rerun it. Continue from `cd boss-rc10.12`. To move later, on purpose, use `boss upgrade --to REF`.
+Use a new directory named `boss-rc10.13`. The command stops if the clone fails. It records the checked-out commit and stays on that source when you rerun it. Continue from `cd boss-rc10.13`. To move later, on purpose, use `boss upgrade --to REF`.
 
 The script at `https://boss.sean.network/install.sh` is published separately. Do not treat it as this tag.
 
