@@ -223,7 +223,7 @@ describe("Deployments speak in words (screen 08)", () => {
     expect(host.textContent).toContain("runs on Staging server");
     expect(host.getAttribute("title")).toContain("shared by 3 projects");
     const card = tid("px-env-staging")!;
-    expect(card.querySelector('a[href="https://github.com/acme/helpdesk/pull/2"]')).not.toBeNull();
+    expect(card.querySelector('a[href="/changes/github/acme/helpdesk/2"]')).not.toBeNull();   // BOSSAPP-954: the PR opens in BOSS
     expect(card.querySelector("dt")!.getAttribute("title")).toContain("app's own requests");
     await press(tid("px-env-redeploy-staging"));
     // 08-05: nothing is sent before the confirm sheet says what, where, which commit, who approves.

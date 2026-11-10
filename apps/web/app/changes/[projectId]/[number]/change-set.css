@@ -56,13 +56,8 @@
 .cs-tabs b { font-size: var(--fs-tag); color: var(--muted); background: var(--surface-2); border-radius: 999px; padding: 0 6px; }
 
 /* layout */
-.cs-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
-.cs-main, .cs-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.cs-side { order: -1; }
-@media (min-width: 1024px) {
-  .cs-grid { grid-template-columns: minmax(0, 1fr) minmax(250px, 300px); align-items: start; }
-  .cs-side { order: 0; position: sticky; top: 52px; }
-}
+.cs-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
 
 .cs-card { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-lg, 12px); padding: 12px 14px; min-width: 0; scroll-margin-top: 56px; }
 .cs-card-h { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; font-size: var(--fs-ui); color: var(--ink); }

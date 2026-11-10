@@ -33,6 +33,7 @@ import { getTree, type Thread, type Tree } from "../../../../lib/local-review";
 import { highlight, langOf, parseUnifiedDiff, type DiffFile, type DiffHunk, type DiffLine } from "../../../../lib/diff-view";
 import type { ChangeSet, ChangeSetNote } from "../../../../lib/repo-links";
 import { Markdown } from "../../../markdown";
+import { whenLocal } from "../../../../lib/local-time";
 import { FileTree } from "./file-tree";
 import { AgentActions, CommentCode, CopyButton, ThreadView, WhereItLives, Who, useLineReview, type LineReview } from "./local-review";
 import { DockPane, FullScreenButton, useReviewLayout } from "./review-dock";
@@ -480,11 +481,7 @@ function useLineReviewReadOnly(at: ChangeAt, threads: Thread[]): LineReview {
 }
 
 function shortWhen(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toDateString() === new Date().toDateString()
-    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : d.toLocaleDateString([], { day: "numeric", month: "short" });
+  return iso ? whenLocal(iso) : "";
 }
 
 // ── Conversation ─────────────────────────────────────────────────────────────────────────────

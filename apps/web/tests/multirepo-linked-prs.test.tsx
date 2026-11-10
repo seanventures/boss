@@ -59,7 +59,8 @@ describe("linked pull requests (screen 6)", () => {
     expect(tid("mr-finding-2-0")?.dataset.blocking).toBe("true");
     expect(tid("mr-finding-2-1")?.textContent).toContain("fixed");
     expect(tid("mr-finding-1-0")?.textContent).toContain("Pass");
-    expect((tid("mr-pr-open-2") as HTMLAnchorElement).href).toBe("https://github.com/acme/api/pull/412");
+    // BOSSAPP-954: a GitHub PR opens in BOSS (its project's change page; GitHub when none).
+    expect((tid("mr-pr-open-2") as HTMLAnchorElement).getAttribute("href")).toBe("/changes/github/acme/api/412");
   });
 
   it("the cross-repo check: rows, k of n pass, set blocked, the whole set waits", async () => {

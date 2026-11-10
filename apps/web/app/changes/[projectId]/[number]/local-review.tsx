@@ -32,6 +32,7 @@ import {
 import { fixComments } from "../../../../lib/change-review";
 import type { ChangeSet } from "../../../../lib/repo-links";
 import { Markdown } from "../../../markdown";
+import { whenLocal } from "../../../../lib/local-time";
 import { Breadcrumb, FileTree, GoToFile } from "./file-tree";
 import { DockPane, FullScreenButton, useReviewLayout } from "./review-dock";
 
@@ -214,13 +215,7 @@ export function Composer({ where, onSubmit, onCancel, busy, error, reply = false
 const STATE_WORDS: Record<string, string> = { open: "Open", addressed: "Answered", disputed: "Disputed", resolved: "Resolved" };
 
 function when(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const today = new Date();
-  return d.toDateString() === today.toDateString()
-    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleDateString([], { day: "numeric", month: "short" });
+  return iso ? whenLocal(iso) : "";
 }
 
 const ORIGIN_WORDS: Record<string, string> = { git_notes: "from git", cli: "from the terminal", mcp: "from MCP" };
