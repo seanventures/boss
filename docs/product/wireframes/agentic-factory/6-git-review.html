@@ -1,0 +1,196 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Change review, git style</title>
+<link rel="stylesheet" href="../project-experience/console.css"><link rel="stylesheet" href="../project-experience/project.css"><link rel="stylesheet" href="af.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<style>
+:root{--line:var(--border);--addbg:var(--green-soft);--delbg:var(--red-soft);--fs-ui:.875rem;--fs-meta:.8125rem;--fs-tag:.75rem}
+*{box-sizing:border-box}.wf-content{max-width:none!important;padding:0!important}#gr{font:var(--fs-ui)/1.45 var(--sans);color:var(--ink)}
+.cap{max-width:none;margin:22px 16px 8px;font-weight:600;color:var(--faint);font-size:var(--fs-meta)}
+.pin{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:#e8590c;color:#fff;font-size:11px;font-weight:700;margin-left:4px;vertical-align:middle}
+.shell{display:grid;grid-template-columns:1fr;min-height:640px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.rail{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:16px;padding-top:14px;color:var(--faint);font-size:18px}
+.page{display:flex;flex-direction:column;min-width:0}
+/* header: two lines, no prose */
+.hd{background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.hd h1{margin:0;font-size:1.05rem}.hd h1 .n{color:var(--faint);font-weight:400}
+.tag{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-size:var(--fs-tag);white-space:nowrap}
+.tag.g{color:var(--green);background:var(--green-soft);border-color:transparent}.tag.a{color:var(--amber);background:var(--amber-soft);border-color:transparent}
+.chip{font:var(--fs-tag) var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.sp{flex:1}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:5px 10px;font-size:var(--fs-meta);font-weight:500;cursor:pointer;white-space:nowrap}
+.btn.p{background:var(--accent);color:#fff;border-color:var(--accent)}.btn{color:var(--ink)}
+.where{font-size:var(--fs-tag);color:var(--faint);display:flex;gap:14px;flex-wrap:wrap;width:100%}
+.where span{display:inline-flex;gap:4px;align-items:center}.where code{font-family:var(--mono);color:var(--ink)}
+.tabs{display:flex;gap:2px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line);overflow-x:auto}
+.tabs span{padding:8px 12px;font-size:var(--fs-meta);color:var(--faint);border-bottom:2px solid transparent;white-space:nowrap;display:inline-flex;gap:6px;align-items:center}
+.tabs span[aria-selected]{color:var(--ink);border-color:var(--accent);font-weight:600}
+.tabs b{font-weight:500;background:var(--bg);border-radius:999px;padding:0 6px;font-size:var(--fs-tag)}
+/* 3 panes: tree | diff | agent */
+.panes{flex:1;display:grid;grid-template-columns:minmax(200px,17rem) minmax(0,1fr) minmax(280px,22rem);min-height:0}
+.tree,.agent{background:var(--panel);overflow:auto}.tree{border-right:1px solid var(--line)}.agent{border-left:1px solid var(--line);display:flex;flex-direction:column}
+.tree .f{display:flex;align-items:center;gap:6px;padding:4px 10px;font-size:var(--fs-meta);white-space:nowrap}
+.tree .f.d{color:var(--faint)}.tree .f.on{background:var(--accent-soft);font-weight:600}
+.tree .f .st{margin-left:auto;font:var(--fs-tag) var(--mono)}.tree .f .c{color:var(--amber);font-size:var(--fs-tag)}
+.tree .find{margin:8px;display:flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:4px 8px;color:var(--faint);font-size:var(--fs-meta)}
+.tree .tg{display:flex;gap:4px;margin:0 8px 6px}.tree .tg span{flex:1;text-align:center;font-size:var(--fs-tag);border:1px solid var(--line);border-radius:6px;padding:2px}.tree .tg span.on{background:var(--bg);font-weight:600}
+.main{overflow:auto;padding:12px 16px;min-width:0}
+.cmp{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;font-size:var(--fs-meta)}
+.sel{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:4px 8px;font-family:var(--mono);font-size:var(--fs-tag)}
+.fh{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-bottom:0;border-radius:8px 8px 0 0;padding:6px 10px;font-size:var(--fs-meta)}
+.fh b{font-family:var(--mono)}
+table.diff{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);font:12.5px/1.6 var(--mono);table-layout:fixed}
+.diff td{padding:0 8px;white-space:pre;overflow:hidden;text-overflow:ellipsis}.diff td.ln{width:3.2rem;color:var(--faint);text-align:right;user-select:none}
+.diff tr.a td{background:var(--addbg)}.diff tr.r td{background:var(--delbg)}.diff tr.h td{color:var(--faint);background:var(--bg)}
+.diff tr.cm td{background:var(--bg);white-space:normal;font-family:var(--sans);font-size:var(--fs-meta);padding:8px 10px}
+.th{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:8px 10px;max-width:46rem}
+.th .who{display:flex;gap:6px;align-items:center;font-size:var(--fs-tag);color:var(--faint)}
+.av{width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;color:#fff;font-size:10px;font-weight:700}
+.reply{margin-top:6px;display:flex;gap:6px}.reply input{flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font:inherit;background:var(--bg);color:var(--ink)}
+.plus{color:var(--accent);font-weight:700;cursor:pointer}
+/* agent pane */
+.ah{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+.ah small{display:block;color:var(--faint);font-size:var(--fs-tag)}
+.oc{padding:10px 12px;border-bottom:1px solid var(--line)}
+.oc .row{display:flex;gap:6px;align-items:flex-start;font-size:var(--fs-meta);padding:4px 0}
+.oc .row .st{margin-left:auto;font-size:var(--fs-tag);white-space:nowrap}
+.chat{flex:1;padding:10px 12px;display:flex;flex-direction:column;gap:8px;font-size:var(--fs-meta)}
+.msg{border-radius:10px;padding:7px 10px;max-width:92%}.msg.me{align-self:flex-end;background:var(--accent-soft)}.msg.ag{background:var(--bg)}
+.msg small{display:block;color:var(--faint);font-size:var(--fs-tag)}
+.compose{border-top:1px solid var(--line);padding:8px;display:flex;gap:6px}.compose input{flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;background:var(--bg);color:var(--ink)}
+/* commits view */
+.cl{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.cl .c{display:grid;grid-template-columns:22px 1fr auto auto;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:var(--fs-meta)}
+.cl .c:first-child{border-top:0}.cl .c.on{background:var(--accent-soft)}.cl code{font:var(--fs-tag) var(--mono);color:var(--faint)}
+.notes{margin:18px 16px 40px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;font-size:var(--fs-meta)}
+.notes li{margin:4px 0}
+@media (max-width:1100px){.panes{grid-template-columns:minmax(180px,14rem) minmax(0,1fr)}.agent{display:none}}
+@media (max-width:700px){.shell{grid-template-columns:1fr}.rail{display:none}.panes{grid-template-columns:1fr}.tree{display:none}}
+</style></head><body data-active="projects" data-crumb="Projects|helpdesk-laptop|Change #1" data-base="../project-experience/">
+<div id="content"><div id="gr">
+
+<div class="cap">1 · Files changed: tree on the left, diff in the middle, the PR agent on the right. Full width, no side gutters <span class="pin">1</span></div>
+<div class="shell">
+<div class="page">
+  <div class="hd">
+    <h1>Add an SLA timer to the inbox <span class="n">#1</span></h1>
+    <span class="tag g"><i class="ph-fill ph-git-pull-request"></i>Open</span>
+    <span class="chip">boss/ct-41a-sla-timer</span><i class="ph ph-arrow-right" style="color:var(--faint)"></i><span class="chip">main</span>
+    <span class="tag g"><i class="ph ph-check"></i>Tests</span><span class="tag g"><i class="ph ph-check"></i>Review</span>
+    <span class="tag a" title="Open comments from people"><i class="ph ph-chat-circle-dots"></i>2 open</span>
+    <span class="sp"></span>
+    <span class="btn" title="Clone URL, branch and where the bare repo is stored"><i class="ph ph-terminal-window"></i>Clone <span class="pin">2</span></span>
+    <span class="btn"><i class="ph ph-arrow-u-up-left"></i>Request changes</span>
+    <span class="btn p"><i class="ph ph-git-merge"></i>Merge</span>
+  </div>
+  <div class="tabs">
+    <span><i class="ph ph-chat-text"></i>Conversation <b>5</b></span>
+    <span><i class="ph ph-git-commit"></i>Commits <b>3</b></span>
+    <span aria-selected><i class="ph ph-file-code"></i>Files changed <b>4</b></span>
+    <span><i class="ph ph-folder-simple"></i>Code</span>
+    <span><i class="ph ph-shield-check"></i>Checks <b>2</b></span>
+  </div>
+  <div class="panes">
+    <aside class="tree" aria-label="Files">
+      <div class="find"><i class="ph ph-magnifying-glass"></i>Filter files… <span class="sp"></span><kbd>t</kbd></div>
+      <div class="tg"><span class="on">Changed 4</span><span>All files</span></div>
+      <div class="f d"><i class="ph ph-caret-down"></i><i class="ph ph-folder-open"></i>src</div>
+      <div class="f on" style="padding-left:30px"><i class="ph ph-file-js"></i>app.js<span class="c">● 1</span><span class="st"><span style="color:var(--green)">+14</span> <span style="color:var(--red)">−2</span></span></div>
+      <div class="f" style="padding-left:30px"><i class="ph ph-file-js"></i>sla.js<span class="c">● 1</span><span class="st" style="color:var(--green)">+38</span></div>
+      <div class="f d" style="padding-left:30px"><i class="ph ph-caret-down"></i><i class="ph ph-folder-open"></i>inbox</div>
+      <div class="f" style="padding-left:50px"><i class="ph ph-file-js"></i>list.js<span class="st"><span style="color:var(--green)">+6</span> <span style="color:var(--red)">−1</span></span></div>
+      <div class="f d"><i class="ph ph-caret-down"></i><i class="ph ph-folder-open"></i>test</div>
+      <div class="f" style="padding-left:30px"><i class="ph ph-check-circle" style="color:var(--green)"></i>sla.test.js<span class="st" style="color:var(--green)">+41</span></div>
+    </aside>
+
+    <main class="main">
+      <div class="cmp" aria-label="Compare">
+        <span style="color:var(--faint)">Showing</span>
+        <span class="sel"><i class="ph ph-git-commit"></i>main <i class="ph ph-caret-down"></i></span>…<span class="sel">9e4f1c2 · latest <i class="ph ph-caret-down"></i></span>
+        <span class="btn" title="Only what changed since you last left a comment"><i class="ph ph-clock-counter-clockwise"></i>Since my review</span>
+        <span class="sp"></span>
+        <span class="btn"><i class="ph ph-columns"></i>Split</span><span class="btn"><i class="ph ph-rows"></i>Unified</span>
+        <span style="color:var(--faint)">1 of 4 viewed</span> <span class="pin">3</span>
+      </div>
+      <div class="fh"><i class="ph ph-caret-down"></i><b>src/app.js</b><span style="color:var(--green)">+14</span><span style="color:var(--red)">−2</span><span class="sp"></span><span class="btn"><i class="ph ph-file"></i>View file</span><label><input type="checkbox"> Viewed</label></div>
+      <table class="diff">
+        <tr class="h"><td class="ln"></td><td class="ln"></td><td>@@ -38,6 +38,18 @@ export function renderInbox(tickets) {</td></tr>
+        <tr><td class="ln">38</td><td class="ln">38</td><td>  const rows = tickets.map(toRow);</td></tr>
+        <tr class="r"><td class="ln">39</td><td class="ln"></td><td>- rows.sort(byCreated);</td></tr>
+        <tr class="a"><td class="ln"></td><td class="ln"><span class="plus" title="Comment on this line">+</span>39</td><td>+ rows.sort(bySlaDue);</td></tr>
+        <tr class="a"><td class="ln"></td><td class="ln">40</td><td>+ const timer = startSlaTimer(rows, { every: 30_000 });</td></tr>
+        <tr class="cm"><td colspan="3"><div class="th">
+          <div class="who"><span class="av" style="background:#2b8a3e">PG</span><b style="color:var(--ink)">Param</b> · 4 min ago <span class="sp"></span><span class="tag a">open</span></div>
+          <div style="margin:4px 0">30 seconds is too frequent for 500 tickets; tick once a minute and only for tickets due today.</div>
+          <div class="reply"><input placeholder="Reply…"><span class="btn"><i class="ph ph-robot"></i>Ask agent to fix</span><span class="btn">Resolve</span></div>
+        </div></td></tr>
+        <tr class="a"><td class="ln"></td><td class="ln">41</td><td>+ window.addEventListener("unload", () => timer.stop());</td></tr>
+        <tr><td class="ln">40</td><td class="ln">42</td><td>  return html`&lt;ul class="inbox"&gt;${rows}&lt;/ul&gt;`;</td></tr>
+      </table>
+      <div class="fh" style="margin-top:12px;border-radius:8px;border-bottom:1px solid var(--line)"><i class="ph ph-caret-right"></i><b>src/sla.js</b><span style="color:var(--green)">+38</span><span class="sp"></span><span class="tag a">1 comment</span></div>
+    </main>
+
+    <aside class="agent" aria-label="PR agent">
+      <div class="ah"><span class="av" style="background:var(--accent);width:28px;height:28px"><i class="ph-fill ph-robot"></i></span><div><b>Forge</b> · builder of this change<small>Idle · last run 12 min ago · $0.41</small></div> <span class="pin">4</span></div>
+      <div class="oc">
+        <div style="display:flex;align-items:center;gap:6px;font-weight:600;font-size:var(--fs-meta)">Comments <span class="tag a">2 open</span><span class="tag g">3 fixed</span></div>
+        <div class="row"><i class="ph ph-chat-circle-dots" style="color:var(--amber)"></i><span>app.js:39 · tick once a minute</span><span class="st" style="color:var(--amber)">open</span></div>
+        <div class="row"><i class="ph ph-chat-circle-dots" style="color:var(--amber)"></i><span>sla.js:12 · use the business-hours calendar</span><span class="st" style="color:var(--amber)">open</span></div>
+        <div class="row" style="color:var(--faint)"><i class="ph ph-check-circle" style="color:var(--green)"></i><span>list.js:8 · empty state copy</span><span class="st">fixed in 9e4f1c2</span></div>
+        <span class="btn p" style="width:100%;justify-content:center;margin-top:6px"><i class="ph ph-robot"></i>Fix 2 open comments</span>
+      </div>
+      <div class="chat">
+        <div class="msg ag"><small>Forge · 12 min ago</small>Fixed the empty-state copy (9e4f1c2). Tests pass.</div>
+        <div class="msg me"><small>You</small>Why does the timer start before the first render?</div>
+        <div class="msg ag"><small>Forge</small>So the first SLA badge is right on load. I can move it after render; it costs one repaint. <span style="color:var(--accent)">src/app.js:40</span></div>
+      </div>
+      <div class="compose"><input placeholder="Ask Forge about this change, or tell it what to fix…"><span class="btn p"><i class="ph ph-paper-plane-right"></i></span></div>
+    </aside>
+  </div>
+</div></div>
+
+<div class="cap">2 · Commits: pick any two to compare; one click shows a single commit <span class="pin">5</span></div>
+<div style="padding:0 16px"><div class="cl">
+  <div class="c on"><input type="checkbox" checked><span><b>Fix the empty-state copy</b> <span class="tag">fixes 1 comment</span></span><code>9e4f1c2</code><span style="color:var(--faint);font-size:var(--fs-tag)">Forge · 12 min</span></div>
+  <div class="c"><input type="checkbox"><span><b>Add SLA timer and sort by due time</b></span><code>4b7a0d1</code><span style="color:var(--faint);font-size:var(--fs-tag)">Forge · 40 min</span></div>
+  <div class="c on"><input type="checkbox" checked><span><b>Add sla.js with business-hours maths</b></span><code>c21e9f8</code><span style="color:var(--faint);font-size:var(--fs-tag)">Forge · 52 min</span></div>
+</div>
+<div style="display:flex;gap:8px;margin-top:8px"><span class="btn p"><i class="ph ph-git-diff"></i>Compare c21e9f8 … 9e4f1c2</span><span class="btn">Clear</span></div></div>
+
+<div class="cap">3 · Conversation: summary in 3 lines, then the timeline <span class="pin">6</span></div>
+<div style="padding:0 16px;max-width:none"><div class="th" style="max-width:none">
+  <div style="font-size:var(--fs-meta)">Sorts the inbox by SLA due time and shows a live countdown per ticket. <a href="#" style="color:var(--accent)">More</a></div>
+  <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;font-size:var(--fs-meta)">
+    <div><i class="ph ph-git-commit"></i> Forge pushed 2 commits · 52 min</div>
+    <div><i class="ph ph-shield-check" style="color:var(--green)"></i> Tests passed · Review passed (Opus) · 38 min</div>
+    <div><i class="ph ph-chat-circle-dots" style="color:var(--amber)"></i> Param commented on app.js:39 · 4 min</div>
+  </div></div></div>
+
+<div class="cap">4 · Same page for a GitHub project: only the source line differs <span class="pin">7</span></div>
+<div style="padding:0 16px"><div class="hd" style="border:1px solid var(--line);border-radius:10px">
+  <h1>Add an SLA timer to the inbox <span class="n">#41</span></h1>
+  <span class="tag g"><i class="ph-fill ph-git-pull-request"></i>Open</span>
+  <span class="chip">boss/ct-41a-sla-timer</span><i class="ph ph-arrow-right" style="color:var(--faint)"></i><span class="chip">main</span>
+  <span class="tag"><i class="ph-fill ph-github-logo"></i>seanventures/helpdesk</span>
+  <span class="tag g" title="Comments, commits and checks match GitHub"><i class="ph ph-arrows-clockwise"></i>In sync · 20 s ago</span>
+  <span class="sp"></span>
+  <span class="btn"><i class="ph ph-arrow-square-out"></i>Open on GitHub</span>
+  <span class="btn"><i class="ph ph-arrow-u-up-left"></i>Request changes</span>
+  <span class="btn p"><i class="ph ph-git-merge"></i>Merge</span>
+</div>
+<div class="th" style="max-width:none;margin-top:8px;font-size:var(--fs-meta)"><i class="ph ph-chat-circle-dots" style="color:var(--amber)"></i> <b>octo-reviewer</b> commented on GitHub · app.js:39 · shows here, and Forge can fix it like any other comment</div></div>
+
+<div class="notes"><b>Design notes</b><ol>
+<li><b>1</b> Full width: the page drops the console's max-width and side padding. Three panes: changed-file tree (filter, Changed/All files, comment dots, +/−), the diff in the middle (Shiki, split or unified), and the PR agent on the right. Under 1100px the agent pane folds into a button; on a phone it's just the diff.</li>
+<li><b>2</b> The header is two lines with no prose. "Where it lives" (clone URL, branch, bare repo path, <code>boss clone</code>) moves into the Clone popover, like GitHub's Code button.</li>
+<li><b>3</b> Compare any base…head: main, any commit, or "Since my review". "Viewed" ticks are kept per person.</li>
+<li><b>4</b> The PR agent is the agent that built the change. The chat goes to that change's task (steer). "Fix 2 open comments" sends every open human comment and starts a fix run on the same branch. Each comment shows "fixed in &lt;sha&gt;" when the agent closes it. Comments made with git (<code>boss review</code>) show up here too.</li>
+<li><b>5</b> Commits: one click shows that commit's diff; ticking two compares them. Each commit says which comments it fixed.</li>
+<li><b>6</b> Conversation: the summary is cut to 3 lines, then a timeline of short events. The long checklist the page shows today becomes the Checks tab.</li>
+<li>Code tab: the same tree on the left with all files, a file view on the right, at this change or any commit.</li>
+<li>New API: <code>/local-changes/{n}/compare?base=&amp;head=</code>, <code>/commits/{sha}</code>, and the change's agent thread (reusing the task steer endpoint). Comments already exist.</li>
+<li><b>7</b> One page, two sources. The same tabs, tree, compare, comments and agent work for a GitHub PR. BOSS reads the files, commits, compares, checks and review comments from GitHub, and writes comments, resolves and merges back to it. A comment added in BOSS is posted on GitHub as you when your GitHub account is linked, otherwise by the BOSS app "for Param". Comments made on GitHub appear here within seconds (webhook, with polling as a backup). Open on GitHub stays one click away. If GitHub is down, the page shows the last copy and queues new comments.</li>
+</ol></div>
+</div></div>
+<script src="../project-experience/shell.js"></script>
+</body></html>
