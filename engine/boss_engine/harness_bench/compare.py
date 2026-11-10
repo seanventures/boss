@@ -211,6 +211,8 @@ def _per_task(base: list[dict], cand: list[dict], tasks: list[str]) -> dict[str,
 def _fmt(name: str, v: Optional[float]) -> str:
     if v is None:
         return "-"
+    if abs(v) < _EPS:
+        v = 0.0     # never "-0.0%"
     if name in ("success_rate", "cache_share"):
         return f"{v * 100:.1f}%"
     if name == "cost_usd":
