@@ -1928,7 +1928,7 @@ class NativeCodeAgent:
                 _turn({"direction": "tool_call", "tool_name": name, "content": args})
                 # Checked before the tool runs. Ask waits: nothing in this turn runs after it.
                 # Off does not run, and the model is told so it can continue without the effect.
-                decision = verdict(name, getattr(self, "tool_policy", None))
+                decision = verdict(name, getattr(self, "tool_policy", None), args)
                 if decision == DENY:
                     note = f"error: '{name}' is turned off and did not run."
                     _turn({"direction": "tool_result", "tool_name": name, "content": note,
