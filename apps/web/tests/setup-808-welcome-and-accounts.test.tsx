@@ -186,7 +186,7 @@ describe("Try it is not part of Setup", () => {
     mounted?.unmount(); mounted = null;
     const welcome = await mount(view, "?area=welcome", "welcome");
     expect(q(welcome.container, "su-wl-quick-pr")!.querySelector('[data-testid="su-try-input"]')).not.toBeNull();
-    expect(q(welcome.container, "su-wl-last-pr")!.getAttribute("href")).toBe("https://github.com/owner/app/pull/12");
+    expect(q(welcome.container, "su-wl-last-pr")!.getAttribute("href")).toBe("/changes/github/owner/app/12");   // BOSSAPP-954
   });
 
   it("focus=try opens Get started with Quick PR open", async () => {

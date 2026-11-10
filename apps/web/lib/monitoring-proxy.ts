@@ -12,7 +12,7 @@
  *
  * Only the headers the senders authenticate with pass (Authorization, X-BOSS-Signature, …): the
  * API checks each source's own credential. The call goes out on the platform fetch
- * (protocol-proxy directFetch): the server-side wrapper strips Authorization and X-BOSS-* and
+ * (lib/direct-fetch.ts): the server-side wrapper strips Authorization and X-BOSS-* and
  * would re-attach the person's cookie.
  *
  * Only a PLAIN spelling is a machine route (no `%`, no `//`, no dot segment): middleware.ts
@@ -21,7 +21,7 @@
 import { clientHop, proxyHops } from "./client-hop";
 import { readCapped } from "./read-capped";
 import { normalisePath } from "./identity/forward";
-import { directFetch } from "./identity/protocol-proxy";
+import { directFetch } from "./direct-fetch";
 import { rawRequestUrl } from "./raw-request-url";
 
 export const MONITORING_BODY_CAP = 4 * 1024 * 1024;

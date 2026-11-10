@@ -63,7 +63,7 @@ describe("the cards", () => {
     const card = $("[data-testid='ag-att-dec_pr842']")!;
     expect(card.querySelector("[data-testid=ag-att-review]")?.textContent).toContain("Review");
     expect(card.querySelector("[data-testid=ag-att-approve]")).toBeNull();
-    expect(card.querySelector("[data-testid=ag-att-open-pr]")?.getAttribute("href")).toBe("https://github.com/acme/app/pull/842");
+    expect(card.querySelector("[data-testid=ag-att-open-pr]")?.getAttribute("href")).toBe("/changes/github/acme/app/842");   // BOSSAPP-954
     expect(card.querySelector("[data-testid=ag-att-build]")?.textContent).toBe("Invoice export, PR open");
   });
 

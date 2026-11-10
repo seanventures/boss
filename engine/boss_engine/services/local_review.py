@@ -337,15 +337,104 @@ def _root_of(c: Any, change_set_id: str, comment_id: int) -> dict[str, Any]:
     return row
 
 
+# ── who signs a comment ───────────────────────────────────────────────────────────────────────
+
+#: The host tools' service account (identity/host_tools.HOST_TOOLS_PRINCIPAL) and the names it
+#: signs with. Its key belongs to a MACHINE: a comment it authored would read as a person's while
+#: no person wrote it, so it never authors one (only a system note).
+HOST_TOOLS_PRINCIPAL = "sva_host_tools"
+_HOST_TOOLS_NAMES = {HOST_TOOLS_PRINCIPAL, "host tools", "boss host tools"}
+HOST_TOOLS_REFUSAL = ("The host tools' key cannot sign a review comment: comments are signed by "
+                      "a person. Run `boss clone <project>` or `boss login` first.")
+
+
+def is_host_tools(author: Any, principal_id: Optional[str] = None) -> bool:
+    if principal_id and str(principal_id) == HOST_TOOLS_PRINCIPAL:
+        return True
+    return str(author or "").strip().lower() in _HOST_TOOLS_NAMES
+
+
+def signer(auth: Any, fallback: str) -> dict[str, Any]:
+    """How every surface (the console's routes, `boss review`, MCP) signs a comment: the
+    verified principal's name, whether it is a person (a person's comment is a required input of
+    the fix round; an agent's or a service's is not), and its id (for the host-tools check).
+    No verified identity (authz off): `fallback`, as a person, as the routes always did."""
+    principal = getattr(auth, "principal", None)
+    if principal is None:
+        return {"author": fallback, "author_kind": "human", "principal_id": None}
+    name = str(getattr(principal, "display_name", "") or "").strip()
+    kind = getattr(getattr(principal, "kind", None), "value", "")
+    return {"author": name or fallback, "author_kind": "human" if kind in ("user", "") else "agent",
+            "principal_id": str(getattr(principal, "id", "") or "") or None}
+
+
+def person_refusal(auth: Any, what: str) -> Optional[ReviewError]:
+    """A person's decision (resolving a thread): an agent's, a service's or a bridge's credential
+    is refused, in words. No verified identity (authz off): allowed, as the route always did."""
+    if auth is None:
+        return None
+    from ..identity.legacy import is_bridge_principal
+
+    if not getattr(auth, "is_human_session", False) or is_bridge_principal(auth.principal.id):
+        return ReviewError(f"{what} is a person's decision: sign in and do it from the console.",
+                           403, "people_only")
+    return None
+
+
+def change_number_for_run(c: Any, project_id: str, run_id: Any) -> Optional[int]:
+    """The open local change set a build proposed (a code task on a local project)."""
+    if not run_id:
+        return None
+    n = c.execute(text(
+        "SELECT number FROM local_change_sets WHERE project_id = :p AND run_id = :r "
+        "AND state = 'open' ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "r": str(run_id)}).scalar()
+    return int(n) if n else None
+
+
+def comment_number(value: Any) -> int:
+    """A comment id as the tools and finalize_ctx write it: 12, "12" or "lcc_12"."""
+    raw = str(value or "").strip()
+    if raw.startswith(REF_PREFIX):
+        raw = raw[len(REF_PREFIX):]
+    if not raw.isdigit():
+        raise ReviewError(f"{value!r} is not a comment on a local change (they are numbers).",
+                          404, "no_comment")
+    return int(raw)
+
+
+#: The tools' status words on this store's states (open → addressed | disputed → resolved).
+_STATUS_STATES = {"open": ("open", "disputed"), "addressed": ("addressed",),
+                  "resolved": ("resolved",), "dismissed": ("resolved",)}
+
+
+def list_threads(c: Any, *, project_id: str, number: int, status: str = "all") -> dict[str, Any]:
+    """Every thread on change #N (what the console's Review panel and `boss review list` show),
+    optionally only those in a state."""
+    row = change_row(c, project_id, number)
+    items = threads(c, row["id"])
+    want = str(status or "all").lower()
+    if want != "all":
+        states = _STATUS_STATES.get(want, (want,))
+        items = [t for t in items if t["state"] in states]
+    return {"number": int(row["number"]), "items": items, "summary": summary(c, row["id"])}
+
+
 def add_comment(c: Any, settings: Any, *, project_id: str, number: int, body: Any, author: str,
                 author_kind: str = "human", path: Any = None, line: Any = None,
                 end_line: Any = None, side: str = "new", commit_sha: Optional[str] = None,
                 severity: Any = None, origin: str = "console", reply_to: Optional[int] = None,
                 run_round: Optional[str] = None, response_commit: Optional[str] = None,
-                state: Optional[str] = None, emit: bool = True) -> dict[str, Any]:
+                state: Optional[str] = None, emit: bool = True,
+                principal_id: Optional[str] = None, system_note: bool = False) -> dict[str, Any]:
     """THE ONE WRITER of local_change_set_comments. A root comment is anchored to a line of a
     commit (the change's head by default; `side=old` reads the base); a reply inherits its
-    thread's anchor. Refused, in words, for an unknown file or line."""
+    thread's anchor. Refused, in words, for an unknown file or line, and for an author that is
+    the host tools' key (a machine) unless it is a system note — which is never a person's."""
+    if system_note:
+        author_kind = "agent"
+    elif is_host_tools(author, principal_id):
+        raise ReviewError(HOST_TOOLS_REFUSAL, 403, "host_tools_author")
     row = change_row(c, project_id, number)
     words = str(body or "").strip()
     if not words:
@@ -729,8 +818,10 @@ def start_fix_round(c: Any, settings: Any, *, change: Mapping[str, Any], note: s
 
 # ── the agent's replies ───────────────────────────────────────────────────────────────────────
 
-def _agent_name(entry: Mapping[str, Any], fctx: Mapping[str, Any]) -> str:
-    return str(fctx.get("builder_name") or "builder")
+def _agent_name(c: Any, project_id: Optional[str], fctx: Mapping[str, Any]) -> str:
+    """The builder by its real name, whatever shape the run stored it in (agent_reference)."""
+    from .agent_reference import agent_name
+    return agent_name(c, project_id, fctx.get("builder_name") or fctx.get("agent"))
 
 
 def sync_agent_replies(c: Any, run_id: str, *, settings: Any = None) -> int:
@@ -779,7 +870,7 @@ def sync_agent_replies(c: Any, run_id: str, *, settings: Any = None) -> int:
         lead = (f"Changed in commit {head[:7]}: " if kind == "addressed" and head else
                 "Fixed: " if kind == "addressed" else "Disputed: ")
         add_comment(c, settings, project_id=change["project_id"], number=int(change["number"]),
-                    body=lead + words, author=_agent_name(e, fctx), author_kind="agent",
+                    body=lead + words, author=_agent_name(c, run["project_id"], fctx), author_kind="agent",
                     origin="agent", reply_to=cid, run_round=round_key,
                     response_commit=head or None, emit=False)
         c.execute(text("UPDATE local_change_set_comments SET state = :s, response_commit = :h, "
@@ -1051,9 +1142,11 @@ def export_notes(c: Any, settings: Any, change: Mapping[str, Any]) -> int:
     return len(lines)
 
 
-__all__ = ["FILE_CAP_BYTES", "ReviewError", "add_comment", "change_for_url", "change_row",
-           "clean_path", "comment", "export_notes", "fix_brief", "import_notes", "map_line",
-           "merge_hold", "merge_hold_for_url", "on_review_sent_back", "read_file",
-           "record_working_copy", "remap", "request_changes", "required_inputs", "resolve",
-           "resolve_ref", "start_fix_round", "summary", "sync_agent_replies", "threads", "tree",
+__all__ = ["FILE_CAP_BYTES", "HOST_TOOLS_REFUSAL", "ReviewError", "add_comment",
+           "change_for_url", "change_number_for_run", "change_row", "clean_path", "comment",
+           "comment_number", "export_notes", "fix_brief", "import_notes", "is_host_tools",
+           "list_threads", "map_line", "merge_hold", "merge_hold_for_url",
+           "on_review_sent_back", "person_refusal", "read_file", "record_working_copy", "remap",
+           "request_changes", "required_inputs", "resolve", "resolve_ref", "signer",
+           "start_fix_round", "summary", "sync_agent_replies", "threads", "tree",
            "unanswered_required", "where"]

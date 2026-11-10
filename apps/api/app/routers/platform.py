@@ -223,6 +223,10 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .local_projects import router as local_projects_router
 
     app.include_router(local_projects_router)
+    # The change page as a git-style review, local and GitHub alike (BOSSAPP-954).
+    from .change_review import router as change_review_router
+
+    app.include_router(change_review_router)
     # The local git remote (BOSSAPP-948): /git/<project>.git over git's smart HTTP.
     from .local_git import router as local_git_router
 

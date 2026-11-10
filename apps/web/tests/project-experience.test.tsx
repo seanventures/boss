@@ -218,7 +218,8 @@ describe("the first run (screens 0a, 0b) keeps every Get started item", () => {
     expect($$("[data-testid='px-fr-strip'] [data-s='done']").map((n) => n.dataset.testid)).toEqual(expect.arrayContaining(["px-fr-strip-github", "px-fr-strip-model"]));
     expect(tid("px-fr-strip-project")!.dataset.s).toBe("now");
     expect(tid("px-fr-existing")!.dataset.kind).toBe("primary");
-    expect(tid("px-fr-last-pr")!.getAttribute("href")).toBe("https://github.com/x/y/pull/1");
+    // BOSSAPP-954: a GitHub PR opens BOSS's change page for it (GitHub when it is in no project).
+    expect(tid("px-fr-last-pr")!.getAttribute("href")).toBe("/changes/github/x/y/1");
   });
 
   it("0a: while the status loads, and when it can't be read, nothing claims Configured", async () => {
@@ -356,7 +357,8 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
     expect(tid("px-drawer-needs")).not.toBeNull();
     // It acts in place (PX-05): the primary is named for the action; the PR is a link beside it.
     expect(tid("px-drawer-needs-approve")!.textContent).toContain("Merge PR #3");
-    expect(tid("px-drawer-needs-review")!.getAttribute("href")).toBe("https://github.com/paramg/helpdesk-ai-demo/pull/3");
+    // BOSSAPP-954: a GitHub PR opens BOSS's change page for it (GitHub when it is in no project).
+    expect(tid("px-drawer-needs-review")!.getAttribute("href")).toBe("/changes/github/paramg/helpdesk-ai-demo/3");
     await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     await settle();
     expect(params().get("drawer")).toBeNull();
@@ -456,7 +458,8 @@ describe("Work (screens 5, 5b)", () => {
     await press(tid("px-compose-start"));
     expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body).toEqual({ kind: "bug", text: "SLA ignores weekends" });
     expect(tid("px-said")!.textContent).toMatch(/Started/);
-    expect(tid("px-work-pr-wi_visual")!.getAttribute("href")).toBe("https://github.com/paramg/helpdesk-ai-demo/pull/3");
+    // BOSSAPP-954: a GitHub PR opens BOSS's change page for it (GitHub when it is in no project).
+    expect(tid("px-work-pr-wi_visual")!.getAttribute("href")).toBe("/changes/github/paramg/helpdesk-ai-demo/3");
     expect(tid("px-work-run-wi_visual")!.getAttribute("href")).toContain("area=delivery_workflows");
     await press(tid("px-work-act-wi_visual"));
     expect(tid("px-drawer-work")).not.toBeNull();
@@ -539,7 +542,7 @@ describe("Work (screens 5, 5b)", () => {
                             "Follow-up 1 · retry 1", "Follow-up 1 · checks failing", "Retry 1", "Build"]);
     expect(tid("px-attempt-crun_aml_f3")!.textContent).toContain("Stalled");
     expect(tid("px-attempt-crun_aml_f2")!.textContent).toContain("Handed on");
-    expect(tid("px-attempt-pr-crun_aml_r1")!.getAttribute("href")).toContain("/pull/6");
+    expect(tid("px-attempt-pr-crun_aml_r1")!.getAttribute("href")).toMatch(/\/6$/);
     // An attempt opens as itself in the drawer.
     await press(tid("px-attempt-open-crun_aml_r1"));
     expect(params().get("drawer")).toBe("work:crun_aml_r1");

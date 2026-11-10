@@ -199,7 +199,8 @@ describe("v2 project workspace", () => {
           pull_request_url: "https://github.com/example-user/boss-sandbox/pull/111",
         })],
       }));
-      expect(out).toContain('href="https://github.com/example-user/boss-sandbox/pull/111"');
+      // BOSSAPP-954: a GitHub PR opens BOSS's change page for it.
+      expect(out).toContain('href="/changes/github/example-user/boss-sandbox/111"');
       expect(out).toContain("#111");
     });
 

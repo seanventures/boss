@@ -16,7 +16,7 @@
  */
 import { LOCAL } from "../../lib/local-time";
 import { useAreaKeydown } from "../../lib/area-keys";
-import { changeHref } from "../../lib/repo-links";
+import { changeHref, isLocalChangeUrl } from "../../lib/repo-links";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -43,7 +43,7 @@ export function parseJumpRows(v: unknown): JumpRow[] {
   return items.map((z) => {
     const y = (z && typeof z === "object" ? z : {}) as Record<string, unknown>;
     return { label: s(y.label), kind: s(y.kind), href: s(y.href), sub: s(y.sub), hint: s(y.hint), needs_you: y.needs_you === true,
-             external_url: changeHref(s(y.external_url)) ?? "", role_key: s(y.role_key), project_id: s(y.project_id), at: s(y.at) || undefined };
+             external_url: (isLocalChangeUrl(s(y.external_url)) ? changeHref(s(y.external_url)) : s(y.external_url)) ?? "", role_key: s(y.role_key), project_id: s(y.project_id), at: s(y.at) || undefined };
   }).filter((j) => j.label && (j.href || j.external_url));
 }
 

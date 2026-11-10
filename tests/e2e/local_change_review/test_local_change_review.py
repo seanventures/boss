@@ -37,6 +37,33 @@ def _comment_on(p: Person, row, body: str, severity: str = "Must fix") -> None:
     composer.wait_for(state="detached", timeout=30_000)
 
 
+def _tab(p: Person, name: str) -> None:
+    """A tab switches the main view in place: no anchor scroll, the URL says which tab."""
+    p.tid(f"change-set-tab-{name}").click()
+    p.p.wait_for_function(f"() => document.querySelector(\"[data-testid='change-set-tab-{name}']\")?.getAttribute('aria-selected') === 'true'")
+
+
+def _tree(p: Person) -> None:
+    """The Code tab's tree: a column from 700px; on a phone a sheet opened from the header (BOSSAPP-954)."""
+    if p.width < 700 and not p.tid("gr-drawer-tree").count():
+        p.tid("gr-tree-toggle").click()
+        p.tid("gr-drawer-tree").wait_for()
+
+
+def _agent_says(p: Person, pattern: str) -> None:
+    """The agent pane's comments say this. Docked from 1100px; below, a drawer or sheet the person
+    opens from the header and closes again (BOSSAPP-954)."""
+    small = p.width < 1100
+    if small:
+        p.tid("gr-agent-toggle").click()
+        p.tid("gr-drawer-agent").wait_for()
+    p.p.wait_for_function("(re) => new RegExp(re).test(document.querySelector(\"[data-testid='gr-agent-comments']\")?.textContent || '')",
+                          arg=pattern, timeout=30_000)
+    if small:
+        p.tid("gr-drawer-close-agent").click()
+        p.tid("gr-drawer-agent").wait_for(state="detached")
+
+
 def _thread(p: Person, text: str):
     return p.p.locator("[data-testid='lr-thread']").filter(has_text=text).first
 
@@ -49,7 +76,9 @@ def test_review_a_local_change_comment_request_changes_and_resolve(person: Perso
     n = staged["number"]
     _open_change(p, pid, n)
 
-    # (a) Where it lives: the bare repository, the branch, the clone URL — each with Copy.
+    # (a) Where it lives: in the Clone popover (two-line header, no prose).
+    p.tid("gr-clone").click()
+    p.tid("gr-clone-pop").wait_for()
     where = p.tid("lr-where")
     assert pid in p.tid("lr-storage").inner_text() and p.tid("lr-storage").inner_text().endswith(".git")
     assert p.tid("lr-remote").inner_text().endswith(f"/git/{pid}.git")
@@ -63,6 +92,8 @@ def test_review_a_local_change_comment_request_changes_and_resolve(person: Perso
     assert "Copied" in p.tid("lr-copy-command").inner_text()
     p.p.keyboard.press("Escape")
     sheet.wait_for(state="detached")
+    p.p.keyboard.press("Escape")
+    p.tid("gr-clone-pop").wait_for(state="detached")
 
     # (c) A comment on a line of the diff: it holds Merge, and says so on the button.
     _comment_on(p, _line(p, "app.js", 3), "Check the amount is a number before adding it.")
@@ -70,19 +101,21 @@ def test_review_a_local_change_comment_request_changes_and_resolve(person: Perso
     t1.wait_for()
     assert t1.locator("[data-testid='lr-thread-state']").inner_text() == "Open"
     p.tid("change-set-open-comments").wait_for()
-    assert "1 open comment" in p.tid("change-set-open-comments").inner_text()
+    assert "1 open" in p.tid("change-set-open-comments").inner_text()
     merge = p.tid("change-set-merge")
     assert merge.is_disabled() and "1 open comment" in merge.inner_text()
+    _tab(p, "checks")
     assert "no reply yet" in p.tid("change-set-held").inner_text()
 
-    # (b) The Code tab: the tree with the change's status and comment counts, the whole file.
-    p.tid("change-set-tab-code").click()
+    # (b) The Code tab: a folder tree with the change's status and comment counts, the whole file.
+    _tab(p, "code")
     p.tid("lr-code").wait_for()
+    _tree(p)
     item = p.p.locator("[data-testid='lr-tree-item'][data-path='app.js']")
     item.wait_for()
     assert "A" in item.inner_text() and "1" in item.inner_text()
     item.click()
-    p.p.wait_for_function("() => document.querySelector(\"[data-testid='lr-file-path']\")?.textContent === 'app.js'")
+    p.p.wait_for_function("() => document.querySelector(\"[data-testid='lr-file-path']\")?.dataset.path === 'app.js'")
     body = p.p.locator(".lr-filebody")
     body.wait_for()
     assert "export function add" in body.inner_text()
@@ -96,24 +129,30 @@ def test_review_a_local_change_comment_request_changes_and_resolve(person: Perso
     p.tid("lr-send").click()
     p.tid("lr-composer").wait_for(state="detached")
     _thread(p, "Return the new item").wait_for()
-    # The base: README.md as it is on main.
-    p.p.locator("[data-testid='lr-tree-item'][data-path='README.md']").click()
+    # The base: README.md as it is on main (Go to file, fuzzy, then Enter).
+    _tree(p)                                                            # Go to file is the tree's
+    p.tid("lr-goto").fill("readme")
+    p.tid("gr-goto-results").wait_for()
+    p.tid("lr-goto").press("Enter")
+    p.p.wait_for_function("() => document.querySelector(\"[data-testid='lr-file-path']\")?.dataset.path === 'README.md'")
     p.tid("lr-ref-base").click()
-    p.p.wait_for_function("() => /main/.test(document.querySelector(\"[data-testid='lr-ref-base']\")?.getAttribute('aria-checked') === 'true' ? 'main' : '')")
+    p.p.wait_for_function("() => document.querySelector(\"[data-testid='lr-ref-base']\")?.getAttribute('aria-checked') === 'true'")
     body.wait_for()
     assert "#" in body.inner_text()
 
-    # The review rail lists both, people first; one is resolved here by the person.
-    p.tid("change-set-tab-files").click()
-    rail = p.tid("lr-rail")
-    assert "2 open" in rail.inner_text()
+    # The agent pane lists both, people first; one is resolved here by the person.
+    _tab(p, "files")
+    _agent_says(p, r"2 open")
+    second = _thread(p, "Return the new item")
+    if not second.is_visible():
+        _tab(p, "conversation")
     second = _thread(p, "Return the new item")
     second.wait_for()
     second.locator("[data-testid='lr-resolve']").click()
-    p.p.wait_for_function("() => /1 open/.test(document.querySelector(\"[data-testid='lr-rail']\")?.textContent || '')")
-    assert _thread(p, "Return the new item").locator("[data-testid='lr-thread-state']").inner_text() == "Resolved"
+    _agent_says(p, r"1 open")
+    _thread(p, "Return the new item").locator("[data-testid='lr-thread-state']", has_text="Resolved").wait_for(timeout=15_000)
 
-    # (d) Request changes: the fix round on this branch, the person's open comment its required input.
+    # (d) Request changes: the fix run on this branch, the person's open comment its required input.
     # Its build acts for the person: the first one asks for their consent (409, then the sheet).
     p.expect(r"^409 POST /v1/projects/[^/]+/local-changes/\d+/request-changes \{\"error\":\"consent_required\"")
     p.tid("change-set-request-changes").click()
@@ -126,6 +165,7 @@ def test_review_a_local_change_comment_request_changes_and_resolve(person: Perso
         p.consented += 1
     except Exception:  # noqa: BLE001 — a grant already covers the builder
         pass
+    _tab(p, "checks")
     p.tid("lr-agent-actions").wait_for(timeout=60_000)
     actions = p.tid("lr-agent-actions")
     assert "Agent actions" in actions.inner_text() and "Check the amount is a number" in actions.inner_text()
@@ -138,12 +178,17 @@ def test_review_a_local_change_comment_request_changes_and_resolve(person: Perso
     assert answered["answered"] == 1 and answered["replied"] == 1
     p.p.reload(wait_until="domcontentloaded")
     p.tid("change-set-title").wait_for(timeout=120_000)
+    _tab(p, "conversation")
     t1 = _thread(p, "Check the amount is a number")
     t1.wait_for()
     assert re.search(r"Changed in commit [0-9a-f]{7}: checks the amount", t1.inner_text())
     assert t1.locator("[data-testid='lr-thread-state']").inner_text() == "Answered"
+    assert t1.locator("[data-testid='lr-fixed-in']").is_visible()           # "fixed in <sha>"
+    _agent_says(p, r"fixed in [0-9a-f]{7}")
+    _tab(p, "checks")
     assert "fixed" in p.tid("lr-agent-actions").inner_text()
-    t1.locator("[data-testid='lr-resolve']").click()
+    _tab(p, "conversation")
+    _thread(p, "Check the amount is a number").locator("[data-testid='lr-resolve']").click()
     p.p.wait_for_function("() => !document.querySelector(\"[data-testid='change-set-open-comments']\")")
     p.check("local change review")
 
@@ -185,5 +230,7 @@ def test_plain_git_through_the_console_clone_push_a_branch_refused_main(person: 
     _open_change(p, pid, int(m.group(1)))
     assert p.tid("change-set-title").inner_text().startswith("Inbox: clearer empty state")
     assert "pushed" in p.p.locator(".cs-head").inner_text()
+    p.tid("gr-clone").click()
     assert p.tid("lr-remote").inner_text().endswith(f"/git/{pid}.git")
+    p.p.keyboard.press("Escape")
     p.check("a pushed branch is a change")

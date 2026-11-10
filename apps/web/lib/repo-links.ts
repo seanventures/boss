@@ -11,6 +11,7 @@
 import { repoUrl } from "./github-urls";
 import { parseCiHold, type CiHold } from "./ci-hold";
 import { parseSummary, parseThreads, parseWhere, type CommentSummary, type Thread, type Where } from "./local-review-data";
+import { githubChangePath, parseGithubPr } from "./change-review";
 
 const LOCAL_OWNER_PREFIX = "local_";
 const LOCAL_PR_HOST = "boss-local";
@@ -40,26 +41,31 @@ export function changeViewPath(projectId: string, number: number | string): stri
   return `/changes/${encodeURIComponent(projectId)}/${encodeURIComponent(String(number))}`;
 }
 
-/** Where a PR link goes: BOSS's change-set view for a local change set, else the URL itself. */
+/** Where a PR link goes: BOSS's change page — for a local change set, and for a GitHub pull
+ *  request too (BOSSAPP-954: /changes/github/<owner>/<repo>/<n> opens its project's page, or
+ *  GitHub when the repository is in none of the person's projects). Any other URL is itself. */
 export function changeHref(url: string): string;
 export function changeHref(url: string | null | undefined): string | null;
 export function changeHref(url: string | null | undefined): string | null {
   if (!url) return null;
   const local = parseLocalChange(url);
-  return local ? changeViewPath(local.projectId, local.number) : url;
+  if (local) return changeViewPath(local.projectId, local.number);
+  const gh = parseGithubPr(url);
+  return gh ? githubChangePath(gh, gh.rest) : url;
 }
 
-/** A link to one of the PR's sub-pages (`files`, `commits/<sha>`): GitHub only. A local change
- *  set's view already shows its files and commits, so it is the change set itself. */
+/** A link to one of the PR's sub-pages (`files`, `commits/<sha>`): the change page's tab. */
 export function changeSubHref(url: string | null | undefined, suffix: string): string | null {
   if (!url) return null;
   if (isLocalChangeUrl(url)) return changeHref(url);
+  const gh = parseGithubPr(url);
+  if (gh) return githubChangePath(gh, suffix);
   return `${url.replace(/\/+$/, "")}/${suffix.replace(/^\/+/, "")}`;
 }
 
-/** A local link opens in this tab; GitHub opens in a new one. */
+/** A link inside BOSS (a change page, a local repository) opens in this tab; the rest in a new one. */
 export function linkTarget(url: string | null | undefined): { target?: string; rel?: string } {
-  return isLocalChangeUrl(url) || isLocalRepo(url ?? "") || String(url ?? "").startsWith("/")
+  return isLocalChangeUrl(url) || isLocalRepo(url ?? "") || String(url ?? "").startsWith("/") || parseGithubPr(url)
     ? {}
     : { target: "_blank", rel: "noreferrer" };
 }
@@ -119,7 +125,7 @@ export function changeWords(local: boolean): { short: string; set: string; stati
 
 /** The words on a PR link. */
 export function prLinkLabel(url: string | null | undefined): string {
-  return isLocalChangeUrl(url) ? "Open change set" : "Open PR on GitHub";
+  return isLocalChangeUrl(url) ? "Open change set" : parseGithubPr(url) ? "Review PR" : "Open PR on GitHub";
 }
 
 // ── the change-set view's data (GET /v1/projects/{project_id}/local-changes/{number}) ──────────
@@ -130,9 +136,11 @@ export type ChangeSetNote = { id: string | number; kind: string; event: string; 
 export type ChangeSet = {
   number: number; title: string; state: string; repository: string; branch: string; base_branch: string;
   url: string; body: string; github_pr_url: string | null; merged_by: string | null; merged_sha: string | null;
-  files: ChangeSetFile[]; diff: string; diff_error: string | null; commits: { sha: string; message: string }[];
+  files: ChangeSetFile[]; diff: string; diff_error: string | null;
+  commits: { sha: string; message: string; author?: string; date?: string | null; fixes?: number[] }[];
   review: ChangeSetNote[];
-  checks: { where: string; run_status: string | null; tests_passed: string | null; gates?: unknown } | null;
+  checks: { where: string; run_status: string | null; tests_passed: string | null; gates?: unknown;
+            items?: { name: string; status: string | null; conclusion: string | null; app: string | null }[] } | null;
   merge: { how: string; decision_id: string; held?: CiHold | null } | null;
   /** The review decision whose approval merges it (pending while it is open). */
   decision: { id: string; status: string; question: string } | null;
@@ -140,6 +148,11 @@ export type ChangeSet = {
   created_at: string | null; updated_at: string | null; merged_at: string | null;
   /** BOSSAPP-948: where the code lives, and the line-comment threads (lib/local-review.ts). */
   where: Where | null; comments: Thread[]; comment_summary: CommentSummary;
+  /** BOSSAPP-954: which source answered (a local change set, or a GitHub PR), its clone line,
+   *  and — for GitHub — whether this is the last copy because GitHub did not answer. */
+  source: "local" | "github"; base_sha: string | null; author: string | null;
+  clone: { url: string; branch: string | null; web_url: string; fetch: string } | null;
+  stale: boolean; fetched_at: string | null; queued: number;
 };
 
 export function changeSetPath(projectId: string, number: number | string): string {
@@ -164,20 +177,27 @@ export function parseChangeSet(raw: unknown): ChangeSet {
     files: arr(r.files).map((f) => ({ path: str(f.path ?? f.filename), status: str(f.status, "modified"),
                                        additions: num(f.additions), deletions: num(f.deletions) })),
     diff: str(r.diff), diff_error: str(r.diff_error) || null,
-    commits: arr(r.commits).map((c) => ({ sha: str(c.sha), message: str(c.message) })),
+    commits: arr(r.commits).map((c) => ({ sha: str(c.sha), message: str(c.message), author: str(c.author),
+                                          date: str(c.date) || null, fixes: Array.isArray(c.fixes) ? c.fixes.map(num) : [] })),
     review: arr(r.review).map((n) => ({
       id: str(n.id), kind: str(n.kind), event: str(n.event), body: str(n.body), author: str(n.author),
       comments: arr(n.comments).map((c) => ({ path: str(c.path) || undefined, line: c.line == null ? undefined : num(c.line), body: str(c.body) })),
     })),
     checks: checks ? { where: str(checks.where, "BOSS's sandbox"), run_status: str(checks.run_status) || null,
                        tests_passed: checks.tests_passed == null ? null : str(checks.tests_passed),
-                       ...(checks.gates !== undefined ? { gates: checks.gates } : {}) } : null,
+                       ...(checks.gates !== undefined ? { gates: checks.gates } : {}),
+                       ...(Array.isArray(checks.items) ? { items: arr(checks.items).map((i) => ({ name: str(i.name),
+                         status: str(i.status) || null, conclusion: str(i.conclusion) || null, app: str(i.app) || null })) } : {}) } : null,
     merge: merge && str(merge.decision_id) ? { how: str(merge.how), decision_id: str(merge.decision_id), held: parseCiHold(merge.held) } : null,
     decision: decision && str(decision.id) ? { id: str(decision.id), status: str(decision.status, "pending"), question: str(decision.question) } : null,
     draft: r.draft === true, labels: Array.isArray(r.labels) ? r.labels.map((l) => str(l)).filter(Boolean) : [],
     pending_push: r.pending_push === true, run_id: str(r.run_id) || null, head_sha: str(r.head_sha) || null,
     created_at: str(r.created_at) || null, updated_at: str(r.updated_at) || null, merged_at: str(r.merged_at) || null,
     where: parseWhere(r.where), comments: parseThreads(r.comments), comment_summary: parseSummary(r.comment_summary),
+    source: r.source === "github" ? "github" : "local", base_sha: str(r.base_sha) || null, author: str(r.author) || null,
+    clone: r.clone && typeof r.clone === "object" ? (() => { const c = r.clone as Record<string, unknown>;
+      return { url: str(c.url), branch: str(c.branch) || null, web_url: str(c.web_url), fetch: str(c.fetch) }; })() : null,
+    stale: r.stale === true, fetched_at: str(r.fetched_at) || null, queued: num(r.queued),
   };
 }
 

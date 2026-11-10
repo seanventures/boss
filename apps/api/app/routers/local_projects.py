@@ -242,67 +242,21 @@ def _change_row(connection, project_id: str, number: int) -> dict[str, Any]:
 
 @router.get("/v1/projects/{project_id}/local-changes/{number}")
 @permit(P.CODE_TASK_READ, scope=Scope.project(path="project_id"))
-def local_change(project_id: str, number: int) -> dict[str, Any]:
-    from boss_engine.services import local_repo
-    from boss_engine.services.local_repo_host import LocalGitAdapter
+def local_change(project_id: str, number: int) -> Any:
+    """The change: branch, diff, files, commits, review comments, checks and its decision — the
+    one change-review service's local source (services/change_review.py, BOSSAPP-954)."""
+    from boss_engine.services import change_review
 
     with begin(_engine) as connection:
         _require(connection, project_id)
-        row = _change_row(connection, project_id, number)
-        owner, _, name = row["repository"].partition("/")
-        git_dir = local_repo.bare_path(owner, name, _settings)
-        adapter = LocalGitAdapter(_settings, owner=owner, repo=name, project_id=project_id,
-                                  git_dir=git_dir, engine=_engine)
-        view = _row_view(row)
-        view["body"] = row["body"]
         try:
-            view["files"] = adapter.pull_request_files(number)
-            view["diff"] = adapter.get_pull_request_diff(number)[:400_000]
-            base = row["base_branch"] if row["state"] == "open" else (row["base_sha"] or row["base_branch"])
-            # A merged or closed change set is what it was when it closed: its recorded head,
-            # never its branch, which a later build on the same branch moves on.
-            head = (row["branch"] if row["state"] == "open"
-                    and local_repo.branch_exists(git_dir, row["branch"])
-                    else row["head_sha"] or row["branch"])
-            view["commits"] = local_repo.commits_between(git_dir, base, head)
-        except Exception as error:  # noqa: BLE001 — the record still shows
-            view.update({"files": [], "diff": "", "commits": [],
-                         "diff_error": f"{type(error).__name__}: {str(error)[:200]}"})
-        # WHERE IT LIVES and the comment threads (BOSSAPP-948, local_review).
-        from boss_engine.services import local_review
-
-        try:
-            view["where"] = local_review.where(connection, _settings, row)
-        except Exception as error:  # noqa: BLE001 — the record still shows
-            view["where"] = {"error": f"{type(error).__name__}: {str(error)[:200]}"}
-        view["comments"] = local_review.threads(connection, row["id"])
-        view["comment_summary"] = local_review.summary(connection, row["id"])
-        view["review"] = [{"id": n["number"], "kind": n["kind"], "event": n["event"],
-                           "body": n["body"], "comments": n["comments"] or [],
-                           "in_reply_to": n["in_reply_to"], "author": n["author"],
-                           "created_at": _iso(n["created_at"])} for n in adapter.notes(number)]
-        checks = None
-        if row.get("run_id"):
-            run = connection.execute(text(
-                "SELECT status, phase, state->'gates' AS gates, state->>'tests_passed' AS tests "
-                "FROM code_task_runs WHERE id = :r"), {"r": row["run_id"]}).mappings().first()
-            if run:
-                checks = {"where": "BOSS's sandbox", "run_status": run["status"],
-                          "tests_passed": run["tests"], "gates": run["gates"]}
-        view["checks"] = checks
-        decision = _decision_for(connection, view["url"])
-        view["decision"] = decision
-        view["merge"] = ({"how": "approve the review decision", "decision_id": decision["id"]}
-                         if decision and decision["status"] == "pending" and row["state"] == "open"
-                         else None)
-        if view["merge"] is not None:
-            # HELD BY CI (BOSSAPP-946): the same answer the gate gives, before the press.
-            from boss_engine.services import ci_gate
-
-            view["merge"]["held"] = ci_gate.approval_hold(connection, project_id, {
-                "action": "review_pull_request", "pull_request_url": view["url"],
-                "head_sha": row.get("head_sha") or ""})
-        return view
+            # Published to GitHub: the same page reads its pull request (BOSSAPP-954).
+            return change_review.summary_of(change_review.source_for(
+                connection, _settings, project_id, number, engine=_engine))
+        except change_review.ChangeReviewError as error:
+            if error.status == 404:
+                raise HTTPException(status_code=404, detail=error.body()) from None
+            return _refused(error)
 
 
 class MergeBody(BaseModel):
@@ -379,11 +333,9 @@ def local_change_comments(project_id: str, number: int) -> Any:
     with begin(_engine) as connection:
         _require(connection, project_id)
         try:
-            row = local_review.change_row(connection, project_id, number)
+            return local_review.list_threads(connection, project_id=project_id, number=number)
         except local_review.ReviewError as error:
             return _review_refused(error)
-        return {"number": int(number), "items": local_review.threads(connection, row["id"]),
-                "summary": local_review.summary(connection, row["id"])}
 
 
 class CommentBody(BaseModel):
@@ -399,24 +351,17 @@ class CommentBody(BaseModel):
     origin: str = Field(default="console", pattern="^(console|cli)$")
 
 
+def _signer(request: Request) -> dict[str, Any]:
+    """How a comment is signed (local_review.signer, the one rule MCP uses too): the person's
+    name, person or agent, and the principal id (the host tools' key never signs one)."""
+    from apps.api.app import identity_guard
+    from boss_engine.services import local_review
+
+    return local_review.signer(identity_guard.request_auth(request), _actor(request))
+
+
 def _author(request: Request) -> str:
-    """How a comment is signed: the person's name (the page and Publish show it), else the actor."""
-    from apps.api.app import identity_guard
-
-    ctx = identity_guard.request_auth(request)
-    name = str(getattr(getattr(ctx, "principal", None), "display_name", "") or "").strip()
-    return name or _actor(request)
-
-
-def _author_kind(request: Request) -> str:
-    """A person's comment is a required input of the fix round; an agent's is not."""
-    from apps.api.app import identity_guard
-
-    ctx = identity_guard.request_auth(request)
-    if ctx is None:
-        return "human"
-    kind = getattr(getattr(getattr(ctx, "principal", None), "kind", None), "value", "")
-    return "human" if kind in ("user", "") else "agent"
+    return str(_signer(request)["author"])
 
 
 @router.post("/v1/projects/{project_id}/local-changes/{number}/comments")
@@ -429,8 +374,7 @@ def local_change_comment(project_id: str, number: int, request: Request, payload
         try:
             return local_review.add_comment(
                 connection, _settings, project_id=project_id, number=number, body=payload.body,
-                author=_author(request), author_kind=_author_kind(request),
-                path=payload.path, line=payload.line, end_line=payload.end_line,
+                **_signer(request), path=payload.path, line=payload.line, end_line=payload.end_line,
                 side=payload.side, commit_sha=payload.commit_sha, severity=payload.severity,
                 origin=payload.origin)
         except local_review.ReviewError as error:
@@ -454,8 +398,7 @@ def local_change_comment_reply(project_id: str, number: int, comment_id: int, re
         try:
             return local_review.add_comment(
                 connection, _settings, project_id=project_id, number=number, body=payload.body,
-                author=_author(request), author_kind=_author_kind(request),
-                origin=payload.origin, reply_to=comment_id)
+                **_signer(request), origin=payload.origin, reply_to=comment_id)
         except local_review.ReviewError as error:
             return _review_refused(error)
 
@@ -495,17 +438,18 @@ def local_change_request_changes(project_id: str, number: int, request: Request,
     """REQUEST CHANGES: a person sends the review decision back; that starts the fix round on
     the change's branch with their open line comments as required inputs."""
     from apps.api.app.main import decisions, jobs
-    from boss_engine.services import local_review
+    from boss_engine.services import change_review
     from boss_engine.services.decisions import InvalidDecisionTransitionError
 
     _people_only(request, "Requesting changes")
     with begin(_engine) as connection:
         _require(connection, project_id)
         try:
-            return local_review.request_changes(
-                connection, _settings, project_id=project_id, number=number, note=payload.note,
-                actor=_actor(request), jobs=jobs, decisions=decisions)
-        except local_review.ReviewError as error:
+            # The PR agent's chat left while it was idle goes with the fix round (BOSSAPP-954).
+            return change_review.LocalSource(connection, _settings, project_id, number,
+                                             engine=_engine).request_changes(
+                note=payload.note or "", actor=_actor(request), jobs=jobs, decisions=decisions)
+        except change_review.ChangeReviewError as error:
             return _review_refused(error)
         except InvalidDecisionTransitionError as error:
             return JSONResponse({"error": "not_pending", "message": str(error)}, status_code=409)

@@ -11585,6 +11585,61 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_repo_push_pending_open
   ON repo_push_pending (owner, repo, branch) WHERE status IN ('waiting', 'pushing');
 CREATE INDEX IF NOT EXISTS idx_repo_push_pending_due ON repo_push_pending (status, next_attempt_at);
 
+-- CHANGE REVIEW (BOSSAPP-954): one git-style review page for a local change set and a GitHub pull
+-- request (services/change_review.py). GitHub reads are cached briefly and shown stale when GitHub
+-- does not answer; comments written then are queued; "Viewed" and "Since my review" are per person;
+-- the PR agent's chat is kept per change.
+CREATE TABLE IF NOT EXISTS change_review_cache (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  cache_key TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, cache_key)
+);
+CREATE TABLE IF NOT EXISTS change_review_outbox (
+  id BIGSERIAL PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  change_key TEXT NOT NULL,
+  repository TEXT NOT NULL,
+  number INT NOT NULL,
+  kind TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  author TEXT NOT NULL,
+  person TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  attempts INT NOT NULL DEFAULT 0,
+  last_error TEXT,
+  posted_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (kind IN ('comment', 'reply', 'resolve', 'reopen')),
+  CHECK (status IN ('queued', 'posted', 'failed'))
+);
+CREATE INDEX IF NOT EXISTS idx_change_review_outbox_change ON change_review_outbox (project_id, change_key, status);
+CREATE TABLE IF NOT EXISTS change_review_viewed (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  change_key TEXT NOT NULL,
+  person TEXT NOT NULL,
+  path TEXT NOT NULL,
+  sha TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, change_key, person, path)
+);
+CREATE TABLE IF NOT EXISTS change_review_chat (
+  id BIGSERIAL PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  change_key TEXT NOT NULL,
+  author TEXT NOT NULL,
+  author_kind TEXT NOT NULL DEFAULT 'human',
+  body TEXT NOT NULL,
+  delivery TEXT NOT NULL DEFAULT 'queued',
+  run_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (author_kind IN ('human', 'agent')),
+  CHECK (delivery IN ('steered', 'queued', 'sent'))
+);
+CREATE INDEX IF NOT EXISTS idx_change_review_chat_change ON change_review_chat (project_id, change_key, id);
+
 -- TOOL CALL AUDIT (BOSSAPP-819): one append-only row per receipt-path call.
 -- Update and delete raise. The export route and the Activity tab are a later slice.
 CREATE TABLE IF NOT EXISTS tool_call_audit (

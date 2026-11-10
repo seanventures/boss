@@ -18,7 +18,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowCounterClockwise, ChatCircleDots, Check, CheckCircle, CircleNotch, Code, Copy, Database, FileCode,
-  FolderOpen, GitBranch, LinkSimple, MagnifyingGlass, Plus, Robot, Terminal, X,
+  FolderOpen, GitBranch, LinkSimple, MagnifyingGlass, Plus, Robot, Terminal, Wrench, X,
 } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../../agent-avatar";
@@ -27,16 +27,63 @@ import { CanButton } from "../../../../components/identity/identity-provider";
 import { refusalSentence } from "../../../../lib/identity/api";
 import {
   addComment, cloneCommand, cloneUrl, colourise, getFile, getTree, replyTo, resolveThread,
-  type FileView, type Thread, type Tok, type Tree, type Where,
+  anchorWords, snippetFocus, type ChangeAt, type FileView, type Thread, type Tok, type Tree, type Where,
 } from "../../../../lib/local-review";
+import { fixComments } from "../../../../lib/change-review";
 import type { ChangeSet } from "../../../../lib/repo-links";
 import { Markdown } from "../../../markdown";
+import { whenLocal } from "../../../../lib/local-time";
+import { Breadcrumb, FileTree, GoToFile } from "./file-tree";
+import { DockPane, FullScreenButton, useReviewLayout } from "./review-dock";
 
 // ── people and agents ─────────────────────────────────────────────────────────────────────────
 
 /** An agent's name or role key gets its face; a person's name gets initials. */
+// ── a comment's code, shown wherever the comment is out of the diff ──────────────────────────
+
+/** file:line (or "on the whole change"), and 3-5 lines of the code with the commented line
+ *  marked — as it was when the comment was made. Outdated: says so and links that commit. A click
+ *  opens Files changed at that line. */
+export function CommentCode({ thread, onOpen, commitHref, small = false }: {
+  thread: Pick<Thread, "path" | "line" | "outdated" | "snippet" | "made_on" | "commit_sha"> & { id: number };
+  onOpen?: (t: never) => void; commitHref?: (sha: string) => string; small?: boolean;
+}) {
+  const s = thread.snippet;
+  const focus = s ? snippetFocus(s) : -1;
+  const madeOn = thread.made_on || thread.commit_sha;
+  const where = anchorWords(thread);
+  const open = onOpen && thread.path ? () => (onOpen as (t: unknown) => void)(thread) : undefined;
+  return (
+    <div className="gr-code" data-small={small || undefined} data-testid="gr-comment-code">
+      <div className="gr-code-h">
+        {open ? <button type="button" className="lr-link cs-mono" onClick={open} data-testid="gr-comment-anchor">{where}</button>
+          : <span className={thread.path ? "cs-mono" : "cs-faint"} data-testid="gr-comment-anchor">{where}</span>}
+        {thread.outdated ? <span className="lr-tag" data-tone="amber" data-testid="gr-outdated">outdated</span> : null}
+        {thread.outdated && madeOn ? (commitHref
+          ? <a className="cs-small" href={commitHref(madeOn)} data-testid="gr-made-on">made on <code>{madeOn.slice(0, 7)}</code></a>
+          : <span className="cs-small cs-faint">made on <code>{madeOn.slice(0, 7)}</code></span>) : null}
+      </div>
+      {s ? (
+        <table className="gr-snip" onClick={open} data-testid="gr-snippet"><tbody>
+          {s.lines.map((text, i) => (
+            <tr key={i} data-focus={i === focus || undefined} data-mark={s.marks?.[i] || undefined}>
+              <td className="cs-no">{s.start != null ? s.start + i : ""}</td><td className="cs-code">{text || " "}</td></tr>))}
+        </tbody></table>) : null}
+    </div>
+  );
+}
+
 export function looksLikeAgent(name: string): boolean {
   return !name || /^(agent:|boss\b|[a-z]+(_[a-z]+)+$)|captain|reviewer|panel|engineer|helm|marshal|builder|forge/i.test(name);
+}
+
+/** A role key reads as words (engineering_captain → Engineering captain); a name or an id is
+ *  shown exactly as stored — nothing is title-cased in CSS any more. */
+export function whoLabel(name: string): string {
+  const bare = name.replace(/^agent:/, "");
+  if (!/^[a-z]+(_[a-z]+)+$/.test(bare)) return bare;
+  const words = bare.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 export function Who({ name, size = 22, agent }: { name: string; size?: number; agent?: boolean }) {
@@ -46,7 +93,7 @@ export function Who({ name, size = 22, agent }: { name: string; size?: number; a
     <span className="cs-who">
       {isAgent ? <AgentAvatar agent={name.replace(/^agent:/, "") || "engineering_captain"} size={size} aiBadge={false} />
         : <span className="cs-initials" style={{ width: size, height: size }} aria-hidden>{label.slice(0, 1).toUpperCase()}</span>}
-      <b>{label.replace(/^agent:/, "").replace(/_/g, " ")}</b>
+      <b>{whoLabel(label)}</b>
     </span>
   );
 }
@@ -177,20 +224,17 @@ export function Composer({ where, onSubmit, onCancel, busy, error, reply = false
 const STATE_WORDS: Record<string, string> = { open: "Open", addressed: "Answered", disputed: "Disputed", resolved: "Resolved" };
 
 function when(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const today = new Date();
-  return d.toDateString() === today.toDateString()
-    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleDateString([], { day: "numeric", month: "short" });
+  return iso ? whenLocal(iso) : "";
 }
 
 const ORIGIN_WORDS: Record<string, string> = { git_notes: "from git", cli: "from the terminal", mcp: "from MCP" };
 
-export function ThreadView({ thread, projectId, number, onChanged, compact = false }: {
-  thread: Thread; projectId: string; number: string | number; onChanged: () => void; compact?: boolean;
+export function ThreadView({ thread, at, onChanged, compact = false, withCode, onOpen, commitHref }: {
+  thread: Thread; at: ChangeAt; onChanged: () => void; compact?: boolean;
+  /** Out of the diff (the Conversation tab): show the code it is about, a click opens it. */
+  withCode?: boolean; onOpen?: (t: Thread) => void; commitHref?: (sha: string) => string;
 }) {
+  const projectId = at.projectId;
   const [replying, setReplying] = useState(false);
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
@@ -200,7 +244,8 @@ export function ThreadView({ thread, projectId, number, onChanged, compact = fal
   };
   const resolved = thread.state === "resolved";
   return (
-    <div className="lr-thread" data-s={thread.state} data-testid="lr-thread" data-thread={thread.id}>
+    <div className="lr-thread" data-s={thread.state} data-testid="lr-thread" data-thread={thread.id} tabIndex={-1}>
+      {withCode ? <CommentCode thread={thread} onOpen={onOpen} commitHref={commitHref} /> : null}
       {[thread, ...thread.replies].map((c) => (
         <div className="lr-c" key={c.id}>
           <div className="lr-c-b">
@@ -211,6 +256,11 @@ export function ThreadView({ thread, projectId, number, onChanged, compact = fal
               {ORIGIN_WORDS[c.origin] ? <span className="lr-tag">{ORIGIN_WORDS[c.origin]}</span> : null}
               {when(c.created_at)}
               {c.id === thread.id && thread.outdated ? <span className="lr-tag" data-tone="amber">outdated</span> : null}
+              {c.id === thread.id && thread.kept ? <span className="lr-tag" data-testid="lr-kept"
+                title={thread.in_review_body ? "GitHub could not take it on a line: it is in the pull request's review body"
+                  : "Not on the pull request"}>kept from before publish</span> : null}
+              {c.queued ? <span className="lr-tag" data-tone="amber" title="GitHub did not answer: BOSS posts it when GitHub is back"
+                                data-testid="lr-queued">queued</span> : null}
             </div>
             {c.id === thread.id && thread.outdated && thread.line_text && !compact
               ? <pre className="lr-quote" aria-label="The line it was about">{thread.line_text}</pre> : null}
@@ -222,19 +272,25 @@ export function ThreadView({ thread, projectId, number, onChanged, compact = fal
         {resolved ? <CheckCircle size={14} weight="fill" className="lr-ok" aria-hidden /> : <ChatCircleDots size={14} aria-hidden />}
         <b data-testid="lr-thread-state">{STATE_WORDS[thread.state]}</b>
         {resolved && thread.resolved_by ? <span className="cs-faint">by {thread.resolved_by} · {when(thread.resolved_at)}</span> : null}
+        {thread.fixed_in ? <span className="lr-tag" data-tone="green" data-testid="lr-fixed-in">fixed in <code>{thread.fixed_in.slice(0, 7)}</code></span> : null}
         <span className="cs-spacer" />
-        {!resolved ? <CanButton permission="code_task:steer" projectId={projectId} className="lr-link" onClick={() => setReplying(true)}
+        {!resolved && !thread.queued && !thread.kept ? <CanButton permission="code_task:steer" projectId={projectId} className="lr-link" onClick={() => setReplying(true)}
                                 data-testid="lr-reply">Reply</CanButton> : null}
-        {resolved
+        {!resolved && !thread.queued && !thread.kept && thread.author_kind === "human" && thread.state === "open" ? (
+          <CanButton permission="decision:approve" projectId={projectId} className="lr-link" disabled={busy}
+                     tip="Start a fix run on this branch with this comment (and the other open ones)"
+                     onClick={() => void act(() => fixComments(at, `Fix this one first: ${thread.path ? `${thread.path}${thread.line ? `:${thread.line}` : ""} — ` : ""}${thread.body.split("\n")[0]}`))}
+                     data-testid="lr-ask-fix"><Wrench size={12} aria-hidden />Ask agent to fix</CanButton>) : null}
+        {thread.queued || thread.kept || thread.kind === "conversation" ? null : resolved
           ? <CanButton permission="code_task:steer" projectId={projectId} className="lr-link" disabled={busy}
-                       onClick={() => void act(() => resolveThread(projectId, number, thread.id, true))} data-testid="lr-reopen">
+                       onClick={() => void act(() => resolveThread(at, thread.id, true))} data-testid="lr-reopen">
               <ArrowCounterClockwise size={12} aria-hidden />Reopen</CanButton>
           : <CanButton permission="code_task:steer" projectId={projectId} className="lr-link" disabled={busy}
-                       onClick={() => void act(() => resolveThread(projectId, number, thread.id))} data-testid="lr-resolve">
+                       onClick={() => void act(() => resolveThread(at, thread.id))} data-testid="lr-resolve">
               <Check size={12} aria-hidden />Resolve</CanButton>}
       </div>
       {replying ? <Composer reply busy={busy} error={said} onCancel={() => setReplying(false)}
-                            onSubmit={(body) => void act(() => replyTo(projectId, number, thread.id, body))} /> : null}
+                            onSubmit={(body) => void act(() => replyTo(at, thread.id, body))} /> : null}
       {said && !replying ? <p className="cs-error" role="alert">{said}</p> : null}
     </div>
   );
@@ -253,8 +309,10 @@ export type LineReview = {
   has: (a: Anchor) => boolean;
 };
 
-export function useLineReview({ projectId, number, threads, commitFor, onChanged, open = true }: {
-  projectId: string; number: string | number; threads: Thread[];
+export function useLineReview({ at, threads, commitFor, onChanged, open = true, anyLine = false }: {
+  at: ChangeAt; threads: Thread[];
+  /** A commit's own view: its comments sit on the line they were made on, outdated or not. */
+  anyLine?: boolean;
   /** The commit a new comment on this side is anchored to (the head, or the base). */
   commitFor: (side: "new" | "old") => string | null; onChanged: () => void; open?: boolean;
 }): LineReview {
@@ -264,23 +322,23 @@ export function useLineReview({ projectId, number, threads, commitFor, onChanged
   const byLine = useMemo(() => {
     const m = new Map<string, Thread[]>();
     for (const t of threads) {
-      if (!t.path || t.line == null || t.outdated) continue;
+      if (!t.path || t.line == null || (t.outdated && !anyLine)) continue;
       const k = keyOf({ path: t.path, line: t.line, side: t.side });
       m.set(k, [...(m.get(k) ?? []), t]);
     }
     return m;
-  }, [threads]);
+  }, [threads, anyLine]);
   const submit = useCallback(async (a: Anchor, body: string, severity: string) => {
     setBusy(true); setSaid(null);
     try {
-      await addComment(projectId, number, { body, severity, path: a.path, line: a.line, side: a.side, commit_sha: commitFor(a.side) });
+      await addComment(at, { body, severity, path: a.path, line: a.line, side: a.side, commit_sha: commitFor(a.side) });
       setComposing(null); onChanged();
     } catch (e) { setSaid(refusalSentence(e)); } finally { setBusy(false); }
-  }, [projectId, number, commitFor, onChanged]);
+  }, [at, commitFor, onChanged]);
   return {
     has: (a) => byLine.has(keyOf(a)) || composing === keyOf(a),
     gutter: (a) => !open ? null : (
-      <CanButton permission="code_task:steer" projectId={projectId} className="lr-plus" aria-label={`Comment on ${a.path} line ${a.line}`}
+      <CanButton permission="code_task:steer" projectId={at.projectId} className="lr-plus" aria-label={`Comment on ${a.path} line ${a.line}`}
                  tip="Comment on this line" onClick={() => { setComposing(keyOf(a)); setSaid(null); }} data-testid="lr-plus">
         <Plus size={11} weight="bold" aria-hidden /></CanButton>),
     under: (a) => {
@@ -289,7 +347,7 @@ export function useLineReview({ projectId, number, threads, commitFor, onChanged
       if (!list.length && !writing) return null;
       return (
         <div className="lr-under">
-          {list.map((t) => <ThreadView key={t.id} thread={t} projectId={projectId} number={number} onChanged={onChanged} />)}
+          {list.map((t) => <ThreadView key={t.id} thread={t} at={at} onChanged={onChanged} />)}
           {writing ? <Composer where={`${a.path}:${a.line} · ${a.side === "old" ? "old side" : "new side"}`} busy={busy} error={said}
                                onCancel={() => setComposing(null)} onSubmit={(b, s) => void submit(a, b, s)} /> : null}
         </div>
@@ -298,81 +356,92 @@ export function useLineReview({ projectId, number, threads, commitFor, onChanged
   };
 }
 
-// ── (b) the Code tab ──────────────────────────────────────────────────────────────────────────
+// ── (b) the Code tab: the whole tree and a file at this change, its base, or any commit ──────
 
-export function CodeTab({ cs, projectId, number, startPath, onChanged }: {
-  cs: ChangeSet; projectId: string; number: string; startPath: string | null; onChanged: () => void;
+export function CodeTab({ cs, at, startPath, onChanged, commits = [] }: {
+  cs: ChangeSet; at: ChangeAt; startPath: string | null; onChanged: () => void;
+  /** The change's commits (newest first): the file at any of them. */
+  commits?: { sha: string; message: string }[];
 }) {
-  const [ref, setRef] = useState<"head" | "base">("head");
+  const [ref, setRef] = useState<string>("head");
   const [tree, setTree] = useState<Tree | null>(null);
   const [path, setPath] = useState<string | null>(startPath);
   const [file, setFile] = useState<FileView | null>(null);
   const [toks, setToks] = useState<Tok[][] | null>(null);
-  const [q, setQ] = useState("");
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { if (startPath) setPath(startPath); }, [startPath]);
   useEffect(() => {
     let alive = true;
-    getTree(projectId, number, ref).then((t) => {
+    getTree(at, ref).then((t) => {
       if (!alive) return;
       setTree(t);
       setPath((p) => p ?? (t.items.find((i) => i.status && i.status !== "D")?.path ?? t.items[0]?.path ?? null));
     }).catch((e: unknown) => { if (alive) setErr(refusalSentence(e)); });
     return () => { alive = false; };
-  }, [projectId, number, ref, cs.comment_summary.threads, cs.head_sha]);
+  }, [at, ref, cs.comment_summary.threads, cs.head_sha]);
   useEffect(() => {
     if (!path) return undefined;
     let alive = true;
     setFile(null); setToks(null); setErr(null);
-    getFile(projectId, number, path, ref).then(async (f) => {
+    getFile(at, path, ref).then(async (f) => {
       if (!alive) return;
       setFile(f);
       if (f.text) { const t = await colourise(f.text, f.language); if (alive) setToks(t); }
     }).catch((e: unknown) => { if (alive) setErr(refusalSentence(e)); });
     return () => { alive = false; };
-  }, [projectId, number, path, ref]);
-  const items = useMemo(() => (tree?.items ?? []).filter((i) => !q || i.path.toLowerCase().includes(q.toLowerCase())), [tree, q]);
-  const threads = useMemo(() => cs.comments.filter((t) => t.path === path && (ref === "head" ? t.side === "new" : t.side === "old")), [cs.comments, path, ref]);
-  const review = useLineReview({ projectId, number, threads, onChanged, open: cs.state === "open",
-                                 commitFor: () => (ref === "head" ? tree?.head_sha : tree?.base_sha) ?? null });
-  const side: "new" | "old" = ref === "head" ? "new" : "old";
+  }, [at, path, ref]);
+  const items = tree?.items ?? [];
+  const { layout, picked } = useReviewLayout();
+  const openFile = (p: string, reveal = false) => { setPath(p); if (reveal) setReveal({ path: p, n: Date.now() }); picked("tree"); };
+  const [reveal, setReveal] = useState<{ path: string; n: number } | null>(null);
+  // Comments sit on the head (new side) or the base (old side); at another commit, the ones made
+  // on that commit show (read-only), under their line.
+  const side: "new" | "old" = ref === "base" ? "old" : "new";
+  const threads = useMemo(() => (ref === "head" || ref === "base")
+    ? cs.comments.filter((t) => t.path === path && t.side === side && !t.outdated)
+    : cs.comments.filter((t) => t.path === path && (t.made_on ?? t.commit_sha ?? "").startsWith(ref)), [cs.comments, path, ref, side]);
+  const review = useLineReview({ at, threads, onChanged, open: cs.state === "open" && (ref === "head" || ref === "base"),
+                                 anyLine: ref !== "head" && ref !== "base",
+                                 commitFor: () => (ref === "base" ? tree?.base_sha : tree?.head_sha) ?? null });
   const lines = useMemo(() => (file?.text ?? "").replace(/\n$/, "").split("\n"), [file?.text]);
+  const label = ref === "head" ? "this change" : ref === "base" ? cs.base_branch : ref.slice(0, 7);
   return (
-    <section className="cs-card lr-code" aria-label="Code" data-testid="lr-code">
-      <nav className="lr-tree" aria-label="Files">
-        <label className="lr-goto"><MagnifyingGlass size={13} aria-hidden />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Go to file" aria-label="Go to file" data-testid="lr-goto" /></label>
-        <ul>
-          {items.map((i) => (
-            <li key={i.path}>
-              <button type="button" aria-current={i.path === path ? "true" : undefined} title={i.path}
-                      onClick={() => setPath(i.path)} data-testid="lr-tree-item" data-path={i.path}>
-                <span className="cs-ell">{i.path}</span>
-                {i.comments ? <span className="lr-count" title={`${i.comments} comment thread${i.comments === 1 ? "" : "s"}`}>{i.comments}</span> : null}
-                {i.status ? <span className="lr-st" data-s={i.status}>{i.status}</span> : null}
-              </button>
-            </li>))}
-          {tree && !items.length ? <li className="cs-empty">No file matches.</li> : null}
-        </ul>
-      </nav>
+    <section className="lr-code" aria-label="Code" data-testid="lr-code">
+      <DockPane pane="tree" label="Files" icon={<FolderOpen size={15} aria-hidden />} testid="gr-dock-tree">
+        <nav className="lr-tree gr-tree" aria-label="Files">
+          <GoToFile paths={items.map((i) => i.path)} onPick={(p) => openFile(p, true)} />
+          <FileTree files={items.map((i) => ({ path: i.path, name: i.path.split("/").pop() ?? i.path, status: i.status,
+                                               additions: 0, deletions: 0, comments: i.comments, open: i.open_comments, changed: !!i.status }))}
+                    current={path} onPick={(p) => openFile(p)} testid="lr-tree-item" reveal={reveal} width={layout.treeW} />
+          {tree && !items.length ? <p className="cs-empty">No files.</p> : null}
+        </nav>
+      </DockPane>
       <div className="lr-file">
         <div className="lr-file-h">
-          <FileCode size={14} aria-hidden /><b className="cs-ell cs-mono" data-testid="lr-file-path">{path ?? "—"}</b>
+          <FileCode size={14} aria-hidden /><span className="gr-crumb-w" data-testid="lr-file-path" data-path={path ?? ""}>
+            {path ? <Breadcrumb path={path} onFolder={(f) => setReveal({ path: f, n: Date.now() })} /> : "—"}</span>
           <span className="lr-seg" role="radiogroup" aria-label="Which version of the file">
             <button type="button" role="radio" aria-checked={ref === "head"} onClick={() => setRef("head")} data-testid="lr-ref-head">
               This change · {(tree?.head_sha ?? cs.head_sha ?? "").slice(0, 7)}</button>
             <button type="button" role="radio" aria-checked={ref === "base"} onClick={() => setRef("base")} data-testid="lr-ref-base">
               {cs.base_branch} · {(tree?.base_sha ?? "").slice(0, 7)}</button>
           </span>
+          {commits.length ? (
+            <select className="gr-select" aria-label="The file at a commit" data-testid="lr-ref-commit"
+                    value={ref !== "head" && ref !== "base" ? ref : ""} onChange={(e) => setRef(e.target.value || "head")}>
+              <option value="">At a commit…</option>
+              {commits.map((c) => <option key={c.sha} value={c.sha}>{c.sha.slice(0, 7)} · {c.message.slice(0, 48)}</option>)}
+            </select>) : null}
           <span className="cs-spacer" />
           {file?.text != null ? <span className="cs-faint cs-small">{file.language} · {file.lines} lines</span> : null}
           {path ? <CopyButton value={path} label="Copy the path" /> : null}
+          <FullScreenButton />
         </div>
         {err ? <p className="cs-error" role="alert">{err}</p> : null}
         {!file && !err && path ? <div className="cs-loading" role="status" aria-label="Loading the file"><i /><i /></div> : null}
         {file && file.text == null ? <p className="cs-empty" data-testid="lr-file-note">{file.message}</p> : null}
         {file && file.text != null ? (
-          <div className="cs-diff lr-filebody" role="region" aria-label={`${path} at ${ref === "head" ? "this change" : cs.base_branch}`} tabIndex={0}>
+          <div className="cs-diff lr-filebody" role="region" aria-label={`${path} at ${label}`} tabIndex={0}>
             <table><tbody>
               {lines.map((text, i) => {
                 const a = { path: path!, line: i + 1, side };
@@ -396,34 +465,7 @@ export function CodeTab({ cs, projectId, number, startPath, onChanged }: {
   );
 }
 
-// ── the review rail and (d) Agent actions ─────────────────────────────────────────────────────
-
-export function ReviewRail({ cs, onJump }: { cs: ChangeSet; onJump: (t: Thread) => void }) {
-  const open = cs.comment_summary.human_open;
-  const people = cs.comments.filter((t) => t.author_kind === "human");
-  const panel = cs.review.reduce((a, n) => a + n.comments.length, 0);
-  return (
-    <section className="cs-card" aria-label="Review" data-testid="lr-rail">
-      <div className="cs-card-h"><ChatCircleDots size={15} aria-hidden /><b>Review</b><span className="cs-spacer" />
-        {open ? <span className="cs-pill" data-tone="amber" data-testid="lr-open-count">{open} open</span>
-          : people.length ? <span className="cs-pill" data-tone="green">all resolved</span> : null}</div>
-      {people.length ? (
-        <ul className="lr-rail">
-          {people.map((t) => (
-            <li key={t.id} data-s={t.state}>
-              <button type="button" onClick={() => onJump(t)}>
-                {t.state === "resolved" ? <CheckCircle size={13} weight="fill" className="lr-ok" aria-hidden />
-                  : <ChatCircleDots size={13} className="lr-warn" aria-hidden />}
-                <span className="lr-rail-t"><span className="cs-ell">{t.body.split("\n")[0]}</span>
-                  <small className="cs-faint">{t.path ? `${t.path}${t.line ? `:${t.line}` : ""} · ` : ""}{t.author} · {t.state === "resolved" ? "resolved" : t.severity_words}</small></span>
-              </button>
-            </li>))}
-        </ul>
-      ) : <p className="cs-empty">No comments from people yet. Press + on a line to leave one.</p>}
-      {panel ? <p className="cs-faint cs-small">{panel} review-panel note{panel === 1 ? "" : "s"} · after yours</p> : null}
-    </section>
-  );
-}
+// ── Agent actions: the fix round's required inputs (the Checks tab) ──────────────────────────
 
 export function AgentActions({ cs }: { cs: ChangeSet }) {
   const round = cs.run_id;

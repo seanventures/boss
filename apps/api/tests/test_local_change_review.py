@@ -430,3 +430,126 @@ def test_mcp_add_review_comment_on_a_local_change_writes_the_same_store(engine, 
         t = local_review.threads(db, local_review.change_row(db, pid, 1)["id"])
     assert [(x["origin"], x["author_kind"], x["path"], x["line"]) for x in t] == [
         ("mcp", "human", "src/sla.js", 1)]
+
+
+# ── MCP list / resolve on a local change, and who may sign a comment (BOSSAPP-948 gaps) ─────────
+
+class _ToolCtx:
+    def __init__(self, engine):
+        from boss_engine.config import Settings
+
+        self.settings = Settings()
+        self._engine = engine
+
+    def begin(self):
+        return self._engine.begin()
+
+
+def _tool(engine, world, auth, name, pid, args):
+    from boss_engine.tools.builtin import build_default_registry
+
+    with world.acting_as(auth):
+        return build_default_registry().invoke(name, _ToolCtx(engine), project_id=pid,
+                                               actor="param", args=args, auth=auth)
+
+
+def test_mcp_review_tools_read_write_and_resolve_the_local_store_like_the_console(
+        client, engine, world, repo_root):
+    pid, _b, _bare, _branch, _pr, _r = _project_with_change(engine, world)
+    owner = world.ctx(world.owner, mfa=True)
+    made = _tool(engine, world, owner, "add_review_comment", pid,
+                 {"change_number": 1, "path": "src/app.js", "line": 5, "body": "Skip weekends."})
+    assert made["ok"] is True, made
+    with _owner(world):
+        console = client.post(f"/v1/projects/{pid}/local-changes/1/comments",
+                              json={"path": "src/sla.js", "line": 1, "body": "Name it."})
+    assert console.status_code == 200, console.text
+
+    # list: the console's threads, by change number — both surfaces, one store, signed alike.
+    listed = _tool(engine, world, owner, "list_review_comments", pid, {"change_number": 1})
+    assert listed["ok"] is True and listed["count"] == 2, listed
+    assert {(t["origin"], t["author"], t["author_kind"]) for t in listed["comments"]} == {
+        ("mcp", "lr-owner", "human"), ("console", "lr-owner", "human")}
+    assert listed["summary"]["human_open"] == 2
+    with _owner(world):
+        api = client.get(f"/v1/projects/{pid}/local-changes/1/comments").json()
+    assert [t["id"] for t in api["items"]] == [t["id"] for t in listed["comments"]]
+
+    # Same permissions as the console: a viewer reads but cannot comment or resolve.
+    viewer = world.ctx(world.viewer)
+    assert _tool(engine, world, viewer, "list_review_comments", pid,
+                 {"change_number": 1})["ok"] is True
+    denied = _tool(engine, world, viewer, "add_review_comment", pid,
+                   {"change_number": 1, "path": "src/app.js", "line": 1, "body": "viewer"})
+    assert denied["ok"] is False and denied["error"] == "forbidden", denied
+    denied = _tool(engine, world, viewer, "resolve_review_comment", pid,
+                   {"change_number": 1, "comment_id": str(made["comment_id"]),
+                    "status": "addressed"})
+    assert denied["ok"] is False and denied["error"] == "forbidden", denied
+
+    # Resolving is a person's decision, as on the console: a key (no session) is refused.
+    key = world.key_ctx(world.owner, ("code_task:read", "code_task:steer"))
+    refused = _tool(engine, world, key, "resolve_review_comment", pid,
+                    {"change_number": 1, "comment_id": str(made["comment_id"]),
+                     "status": "addressed"})
+    assert refused["ok"] is False and refused["error"] == "people_only", refused
+
+    # A person resolves through the tool (the id as finalize_ctx writes it, no change number);
+    # the dismissal's note is their reply in the thread.
+    done = _tool(engine, world, owner, "resolve_review_comment", pid,
+                 {"comment_id": f"lcc_{made['comment_id']}", "status": "dismissed",
+                  "note": "Weekends are counted on purpose."})
+    assert done["ok"] is True and done["state"] == "resolved" and done["change_number"] == 1, done
+    still_open = _tool(engine, world, owner, "list_review_comments", pid,
+                       {"change_number": 1, "status": "open"})
+    assert [t["id"] for t in still_open["comments"]] == [console.json()["id"]]
+    with engine.begin() as db:
+        t = {x["id"]: x for x in local_review.threads(db, local_review.change_row(db, pid, 1)["id"])}
+    root = t[made["comment_id"]]
+    assert root["state"] == "resolved" and root["resolved_by"] == "lr-owner"
+    assert [r["body"] for r in root["replies"]] == ["Dismissed: Weekends are counted on purpose."]
+
+
+def test_mcp_review_tools_find_the_local_change_by_its_run(engine, world, repo_root):
+    pid, _b, _bare, _branch, _pr, run_id = _project_with_change(engine, world, run=True)
+    owner = world.ctx(world.owner, mfa=True)
+    made = _tool(engine, world, owner, "add_review_comment", pid,
+                 {"run_id": run_id, "path": "src/sla.js", "line": 1, "body": "Four hours?"})
+    assert made["ok"] is True and made["change_number"] == 1, made
+    listed = _tool(engine, world, owner, "list_review_comments", pid, {"run_id": run_id})
+    assert listed["change_number"] == 1 and [t["id"] for t in listed["comments"]] == [
+        made["comment_id"]]
+    done = _tool(engine, world, owner, "resolve_review_comment", pid,
+                 {"run_id": run_id, "comment_id": str(made["comment_id"]), "status": "addressed"})
+    assert done["ok"] is True and done["state"] == "resolved", done
+
+
+def test_the_host_tools_key_never_signs_a_persons_comment(client, engine, world, repo_root):
+    from boss_engine.identity.principal import PrincipalKind
+
+    pid, _b, _bare, _branch, _pr, _r = _project_with_change(engine, world)
+    host = world.principal("Host tools", kind=PrincipalKind.SERVICE_ACCOUNT)
+    world.bind(host, "operator")
+    with world.acting_as(world.key_ctx(host, ("code_task:read", "code_task:steer"))):
+        said = client.post(f"/v1/projects/{pid}/local-changes/1/comments",
+                           json={"path": "src/app.js", "line": 5, "body": "From a machine.",
+                                 "origin": "cli"})
+    assert said.status_code == 403, said.text
+    assert said.json()["error"] == "host_tools_author"
+    assert "boss login" in said.json()["message"] and "signed by a person" in said.json()["message"]
+
+    # The service enforces it whoever calls: by principal id or by the name it signs with …
+    with engine.begin() as db:
+        for author, principal in (("anything", "sva_host_tools"), ("Host tools", None),
+                                  ("sva_host_tools", None)):
+            with pytest.raises(local_review.ReviewError) as refused:
+                local_review.add_comment(db, get_settings(), project_id=pid, number=1,
+                                         body="x", author=author, principal_id=principal,
+                                         path="src/app.js", line=1)
+            assert refused.value.error == "host_tools_author"
+        # … and a system note is the one thing it may write, never as a person's.
+        note = local_review.add_comment(db, get_settings(), project_id=pid, number=1,
+                                        body="Mirrored to GitHub.", author="Host tools",
+                                        principal_id="sva_host_tools", system_note=True)
+        assert note["author_kind"] == "agent"
+        assert local_review.summary(db, local_review.change_row(db, pid, 1)["id"])["human_open"] == 0

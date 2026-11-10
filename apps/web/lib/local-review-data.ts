@@ -12,7 +12,16 @@ export type ReviewComment = {
   severity_words: string; body: string; state: ThreadState; reply_to: number | null; origin: string;
   outdated: boolean; line_text: string | null; run_round: string | null; response_commit: string | null;
   resolved_by: string | null; resolved_at: string | null; created_at: string | null;
+  /** BOSSAPP-954: the commit the agent's fix landed in; a GitHub comment still waiting to be
+   *  posted (GitHub did not answer); a GitHub conversation comment (not on a line). */
+  fixed_in?: string | null; queued?: boolean; kind?: "line" | "conversation";
+  /** A local comment of a change later published to GitHub that is not a line comment there. */
+  kept?: boolean; in_review_body?: boolean;
+  /** The comment's code (2 lines either side, as it was at `commit`), and the commit it was made
+   *  on (an outdated comment links it). GitHub's come from the comment's diff_hunk. */
+  snippet?: Snippet | null; made_on?: string | null;
 };
+export type Snippet = { start: number | null; line: number | null; lines: string[]; commit: string | null; marks?: string[] };
 export type Thread = ReviewComment & { replies: ReviewComment[] };
 export type CommentSummary = { threads: number; unresolved: number; human_open: number; human_unreplied: number };
 export type WorkingCopy = { path: string; branch: string | null; machine: string; recorded_by: string; updated_at: string | null };
@@ -45,7 +54,32 @@ function parseComment(raw: unknown): ReviewComment {
     line_text: str(r.line_text) || null, run_round: str(r.run_round) || null,
     response_commit: str(r.response_commit) || null, resolved_by: str(r.resolved_by) || null,
     resolved_at: str(r.resolved_at) || null, created_at: str(r.created_at) || null,
+    fixed_in: str(r.fixed_in) || null, queued: r.queued === true, kind: r.kind === "conversation" ? "conversation" : "line",
+    kept: r.kept === true, in_review_body: r.in_review_body === true,
+    snippet: parseSnippet(r.snippet), made_on: str(r.made_on) || str(r.commit_sha) || null,
   };
+}
+
+export function parseSnippet(raw: unknown): Snippet | null {
+  const r = (raw && typeof raw === "object" ? raw : null) as Record<string, unknown> | null;
+  if (!r || !Array.isArray(r.lines) || !r.lines.length) return null;
+  return { start: numOrNull(r.start), line: numOrNull(r.line), lines: r.lines.map((x) => str(x)), commit: str(r.commit) || null,
+           ...(Array.isArray(r.marks) ? { marks: r.marks.map((x) => str(x)) } : {}) };
+}
+
+/** Which snippet row is the commented line: by number, else the last (a GitHub hunk ends there). */
+export function snippetFocus(s: Snippet): number {
+  if (s.start != null && s.line != null) {
+    const i = s.line - s.start;
+    if (i >= 0 && i < s.lines.length) return i;
+  }
+  return s.lines.length - 1;
+}
+
+/** Where a comment sits, in words: "src/app.js:39", "src/app.js", or "on the whole change". */
+export function anchorWords(t: { path: string | null; line: number | null }): string {
+  if (!t.path) return "on the whole change";
+  return t.line ? `${t.path}:${t.line}` : t.path;
 }
 
 export function parseThreads(raw: unknown): Thread[] {
