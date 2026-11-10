@@ -1,0 +1,4 @@
+#!/bin/sh
+# BOSS's local git remote (BOSSAPP-948): a pushed branch becomes a change. See
+# services/local_git_hooks.py.
+exec "${BOSS_HOOK_PYTHON:-python3}" -m boss_engine.services.local_git_hooks post-receive

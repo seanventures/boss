@@ -1281,6 +1281,12 @@ class Settings(BaseSettings):
     # The one directory on this machine whose folders "Import local code" may read ("" = no
     # import from this machine; a verified host still works). Never an arbitrary path.
     local_import_root: str = Field(default="", alias="BOSS_LOCAL_IMPORT_ROOT")
+    # THE GIT REMOTE (BOSSAPP-948, services/local_git_http.py): who may reach /git/<project>.git.
+    # "local" (the default): only this machine — a client on loopback, naming localhost. "network":
+    # any client the console itself serves (a tailnet), still signed in with a BOSS token.
+    git_remote_reach: str = Field(default="local", alias="BOSS_GIT_REMOTE_REACH")
+    # The largest push the remote takes (receive.maxInputSize), in MB.
+    git_remote_max_push_mb: int = Field(default=200, alias="BOSS_GIT_REMOTE_MAX_PUSH_MB")
     # GITHUB OUTAGES (services/github_outage.py, BOSSAPP-922): every GitHub build refreshes a bare
     # mirror of its repository under the local repo root at build start, and continues on it when
     # GitHub stops answering. Off: a GitHub outage fails the build as before.

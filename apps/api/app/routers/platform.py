@@ -223,6 +223,10 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .local_projects import router as local_projects_router
 
     app.include_router(local_projects_router)
+    # The local git remote (BOSSAPP-948): /git/<project>.git over git's smart HTTP.
+    from .local_git import router as local_git_router
+
+    app.include_router(local_git_router)
     # Infra › Add a server (agentic-factory 3): read + probe, Add and set up, the setup page.
     from .add_server import router as add_server_router
 

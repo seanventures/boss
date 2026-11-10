@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "d77834c93d07bae9"
+CATALOGUE_FINGERPRINT = "9cb59a9882803edb"
 
 
 class Permission(StrEnum):
@@ -78,6 +78,7 @@ class Permission(StrEnum):
     REPOSITORY_READ = "repository:read"
     REPOSITORY_REGISTER = "repository:register"
     REPOSITORY_MANAGE = "repository:manage"
+    REPOSITORY_PUSH = "repository:push"
     GITHUB_READ = "github:read"
     GITHUB_CONNECT = "github:connect"
     GITHUB_MANAGE = "github:manage"
@@ -285,6 +286,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "repository:read": PermissionMeta(key="repository:read", title="View repositories", description="See registered repositories and their health.", category="Factory and code", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "repository:register": PermissionMeta(key="repository:register", title="Register repositories", description="Register a repository with BOSS.", category="Factory and code", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "repository:manage": PermissionMeta(key="repository:manage", title="Manage repositories", description="Change or remove repository bindings and the default repo.", category="Factory and code", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "repository:push": PermissionMeta(key="repository:push", title="Push to local repositories", description="Push branches to a local project's repository over git (each becomes a change); never its default branch.", category="Factory and code", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "github:read": PermissionMeta(key="github:read", title="View GitHub", description="See GitHub connections, branches, leases, sync and merge state.", category="Factory and code", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "github:connect": PermissionMeta(key="github:connect", title="Connect GitHub", description="Connect a GitHub App or account to the org.", category="Factory and code", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "github:manage": PermissionMeta(key="github:manage", title="Manage GitHub connections", description="Enable, disable, test and revoke GitHub connections; edit branch policies.", category="Factory and code", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
@@ -437,7 +439,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 194
+    "owner": frozenset({  # 195
         "directory:read",
         "user:read",
         "user:invite",
@@ -502,6 +504,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "repository:read",
         "repository:register",
         "repository:manage",
+        "repository:push",
         "github:read",
         "github:connect",
         "github:manage",
@@ -633,7 +636,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "admin": frozenset({  # 185
+    "admin": frozenset({  # 186
         "directory:read",
         "user:read",
         "user:invite",
@@ -692,6 +695,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "repository:read",
         "repository:register",
         "repository:manage",
+        "repository:push",
         "github:read",
         "github:connect",
         "github:manage",
@@ -820,7 +824,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "operator": frozenset({  # 95
+    "operator": frozenset({  # 96
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
@@ -839,6 +843,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "code_task:cancel",
         "code_task:retry",
         "repository:read",
+        "repository:push",
         "github:read",
         "github:sync",
         "github:merge",
