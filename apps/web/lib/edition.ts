@@ -62,8 +62,8 @@ export function editionDisplayName(editionId?: string | null): string {
  * `enterprise` is NOT hidden: Community self-hosted SSO / IdP packs live there.
  * Only the Enterprise *label* is stripped via `communityNavCopy`.
  *
- * V1 Community home is a small cut (see docs/product/UI_V1_CUT.md). Areas are
- * not deleted — they stay reachable via ⌘K and `?area=`.
+ * V1 Community home is a small cut (`V1_COMMUNITY_PRIMARY_NAV`). Areas are
+ * not deleted — palette and `?area=` keep every area reachable.
  */
 const COMMUNITY_HIDDEN_PRIMARY_NAV = new Set(["foundations", "components"]);
 

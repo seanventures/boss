@@ -33,45 +33,68 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
         return {"ok": False, "error": "steps must be a non-empty list"}
     if len(steps) > 24:
         return {"ok": False, "error": "24 steps is the most a workflow may have"}
+    # Ids are reserved up front only when a typed decision names later steps as its arms.
+    # Otherwise the loop below assigns them exactly as it always has.
+    branching = any(
+        isinstance(item, dict) and isinstance(item.get("typed_decision"), dict)
+        for item in steps)
+    planned = _listed_step_ids(steps) if branching else []
+    known_ids = {step_id for step_id in planned if step_id}
     built: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[str] = set(known_ids) if branching else set()
+    arm_ids: set[str] = set()
+    decision_ids: set[str] = set()
     for index, raw in enumerate(steps):
         if isinstance(raw, str):
             raw = {"capability": raw}
         if not isinstance(raw, dict):
             return {"ok": False, "error": f"step {index + 1} is not an object"}
-        capability = str(raw.get("capability") or raw.get("kind") or "").strip().lower()
-        # THE SHAPES THE BUILDER CAN DRAW, so the agent can draft them too. Only built-in
-        # capabilities and skill-bound custom steps were expressible here, so a workflow the
-        # agent drafted could never leave the agent to BOSS, scope a step's skills, call an MCP
-        # tool, or stop for a person — and "agent_work" was refused as "not a capability".
-        if raw.get("agent") is True or capability in _AGENT_STEP_WORDS:
-            capability = "agent_work"
-        elif isinstance(raw.get("gate"), dict) or raw.get("gate") is True \
-                or capability in _GATE_WORDS:
-            capability = "gate"
-        elif raw.get("wait_seconds") is not None or capability in _WAIT_WORDS:
-            capability = "wait"
-        elif raw.get("run_workflow") or capability in _SUBWORKFLOW_WORDS:
-            capability = "run_workflow"
-        elif isinstance(raw.get("mcp_tool"), dict):
-            capability = "mcp_tool"
-        elif raw.get("skill") and not capability:
-            # `{id, skill}` is a shape the tool documents; it was refused here as "has no
-            # capability" because only the other shapes were mapped before this check.
-            capability = "custom"
+        if isinstance(raw.get("typed_decision"), dict):
+            refusal = _typed_decision_error(raw, index, known_ids)
+            if refusal:
+                return {"ok": False, "error": refusal}
+            step_id = planned[index]
+            # The condition is its own step. `next` on it would be a third edge: `_targets`
+            # unions `next` with on_true and on_false.
+            condition_id = _clean_step_id(f"{step_id}_branch", index, seen)
+            true_to = _step_ref(raw.get("on_true"))
+            false_to = _step_ref(raw.get("on_false"))
+            built.append({
+                "id": step_id, "kind": "capability", "next": [condition_id],
+                "binding": _typed_decision_binding(raw["typed_decision"], raw.get("state")),
+            })
+            built.append({
+                "id": condition_id, "kind": "condition", "next": [], "binding": {},
+                "expression": {
+                    "path": f"steps.{step_id}.output.answer",
+                    "op": "eq",
+                    "value": raw.get("true_value"),
+                },
+                "on_true": true_to, "on_false": false_to,
+            })
+            decision_ids.add(step_id)
+            arm_ids.add(true_to)
+            arm_ids.add(false_to)
+            continue
+        if "typed_decision" in raw:
+            return {"ok": False,
+                    "error": f"step {index + 1} typed_decision must be an object"}
+        capability = _draft_capability(raw)
         if not capability:
             return {"ok": False, "error": f"step {index + 1} has no capability"}
-        step_id = re.sub(r"[^a-z0-9_]+", "_",
-                         str(raw.get("id") or capability).strip().lower()) or f"step_{index}"
-        # A repeated id silently overwrites a step in the graph, so it is renamed rather than
-        # refused: the operator asked for two previews and should get two.
-        base = step_id
-        suffix = 2
-        while step_id in seen:
-            step_id = f"{base}_{suffix}"
-            suffix += 1
-        seen.add(step_id)
+        if branching:
+            step_id = planned[index]
+        else:
+            step_id = re.sub(r"[^a-z0-9_]+", "_",
+                             str(raw.get("id") or capability).strip().lower()) or f"step_{index}"
+            # A repeated id silently overwrites a step in the graph, so it is renamed rather than
+            # refused: the operator asked for two previews and should get two.
+            base = step_id
+            suffix = 2
+            while step_id in seen:
+                step_id = f"{base}_{suffix}"
+                suffix += 1
+            seen.add(step_id)
         # THE RUNTIME'S OWN SHAPE, not a plausible-looking one. Every step is
         # kind="capability" with what it runs inside `binding` — a custom step names the step
         # key it defined, a standard one names the capability. Writing `kind: "preview"` would
@@ -122,8 +145,25 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
     # THE CHAIN, BUILT NOT ASKED FOR. `next` is a LIST in the runtime's format; a bare string
     # is accepted by the validator and normalised, but emitting the real shape means the spec
     # the agent wrote and the spec the builder draws are byte-comparable.
-    for index, entry in enumerate(built[:-1]):
-        entry["next"] = [built[index + 1]["id"]]
+    #
+    # A typed decision is not a link in that chain. Its arms are reached by the condition, and
+    # chaining one arm into the other would be a straight line that also happens to carry
+    # on_true and on_false. The decision's own next is the condition, set when it was built,
+    # even when the decision itself is somebody else's arm.
+    if arm_ids:
+        spine = [entry for entry in built if entry["id"] not in arm_ids]
+        for index, entry in enumerate(spine[:-1]):
+            if entry.get("kind") == "condition" or entry["id"] in decision_ids:
+                continue
+            entry["next"] = [spine[index + 1]["id"]]
+        for entry in built:
+            if entry.get("kind") == "condition":
+                entry["next"] = []
+            elif entry["id"] in arm_ids and entry["id"] not in decision_ids:
+                entry["next"] = []
+    else:
+        for index, entry in enumerate(built[:-1]):
+            entry["next"] = [built[index + 1]["id"]]
 
     # AND THE DATA FLOW, FOR THE SAME REASON THE CHAIN IS.
     #
@@ -203,6 +243,96 @@ _GATE_WORDS = frozenset({"gate", "approval", "approval_gate", "decision", "human
 _WAIT_WORDS = frozenset({"wait", "timer", "delay"})
 #: Words for "run another workflow here". All mean a `subworkflow` step.
 _SUBWORKFLOW_WORDS = frozenset({"run_workflow", "subworkflow"})
+
+
+def _draft_capability(raw: dict) -> str:
+    """The capability word a sequence item maps to, or "" when it names none.
+
+    THE SHAPES THE BUILDER CAN DRAW, so the agent can draft them too. Only built-in
+    capabilities and skill-bound custom steps were expressible here, so a workflow the
+    agent drafted could never leave the agent to BOSS, scope a step's skills, call an MCP
+    tool, or stop for a person — and "agent_work" was refused as "not a capability".
+    """
+    capability = str(raw.get("capability") or raw.get("kind") or "").strip().lower()
+    if raw.get("agent") is True or capability in _AGENT_STEP_WORDS:
+        return "agent_work"
+    if isinstance(raw.get("gate"), dict) or raw.get("gate") is True or capability in _GATE_WORDS:
+        return "gate"
+    if raw.get("wait_seconds") is not None or capability in _WAIT_WORDS:
+        return "wait"
+    if raw.get("run_workflow") or capability in _SUBWORKFLOW_WORDS:
+        return "run_workflow"
+    if isinstance(raw.get("mcp_tool"), dict):
+        return "mcp_tool"
+    if raw.get("skill") and not capability:
+        # `{id, skill}` is a shape the tool documents; it was refused here as "has no
+        # capability" because only the other shapes were mapped before this check.
+        return "custom"
+    return capability
+
+
+def _clean_step_id(basis: str, index: int, seen: set[str]) -> str:
+    """A step id unique within `seen`. A repeated id is renamed, not refused: two previews
+    are two steps."""
+    step_id = re.sub(r"[^a-z0-9_]+", "_", str(basis).strip().lower()) or f"step_{index}"
+    base = step_id
+    suffix = 2
+    while step_id in seen:
+        step_id = f"{base}_{suffix}"
+        suffix += 1
+    seen.add(step_id)
+    return step_id
+
+
+def _listed_step_ids(steps: list) -> list[str]:
+    """The id each sequence item will take, in order. Inserted condition steps are not here."""
+    seen: set[str] = set()
+    ids: list[str] = []
+    for index, raw in enumerate(steps):
+        if isinstance(raw, str):
+            raw = {"capability": raw}
+        if not isinstance(raw, dict):
+            ids.append("")
+            continue
+        if isinstance(raw.get("typed_decision"), dict):
+            basis = str(raw.get("id") or "typed_decision")
+        else:
+            basis = str(raw.get("id") or _draft_capability(raw))
+        ids.append(_clean_step_id(basis, index, seen))
+    return ids
+
+
+def _step_ref(value: Any) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower())
+
+
+def _typed_decision_error(raw: dict, index: int, known_ids: set[str]) -> Optional[str]:
+    """Why this item is not a typed decision followed by a real branch, or None."""
+    spec = raw.get("typed_decision")
+    if not isinstance(spec, dict):
+        return f"step {index + 1} typed_decision must be an object"
+    options = spec.get("options")
+    if not isinstance(options, dict) or raw.get("true_value") not in options:
+        return f"step {index + 1} true_value must be one of its options"
+    if "state" not in raw:
+        return f"step {index + 1} must wire 'state' — the thing being judged"
+    for arm in ("on_true", "on_false"):
+        if not str(raw.get(arm) or "").strip():
+            return f"step {index + 1} {arm} must name a step in this workflow"
+        target = _step_ref(raw.get(arm))
+        if not target or target not in known_ids:
+            return f"step {index + 1} {arm} must name a step in this workflow"
+    return None
+
+
+def _typed_decision_binding(spec: dict, state: Any) -> dict[str, Any]:
+    decision: dict[str, Any] = {
+        "question": spec.get("question"),
+        "options": spec.get("options"),
+    }
+    if "min_confidence" in spec and spec.get("min_confidence") is not None:
+        decision["min_confidence"] = spec["min_confidence"]
+    return {"typed_decision": decision, "inputs": {"state": state}}
 
 
 def _agent_step_binding(raw: dict[str, Any]) -> dict[str, Any]:
@@ -596,6 +726,9 @@ STEP_SHAPES = (
     "produces?: [...]} lets an agent work it out (instructions default to the run's "
     "'instructions' input; leave captain out and BOSS picks the agent holding the skills); "
     "{id, gate: {question, guidance}} stops for a person; {id, wait_seconds} pauses. "
+    "{id, typed_decision: {question, options, min_confidence?}, state, true_value, on_true, "
+    "on_false} asks one question and then branches. true_value is the option key that takes "
+    "on_true; on_true and on_false name other steps in this list. min_confidence is optional. "
     "`captain` is one of the project's agents. `approval` is 'manual' or 'auto'. Do NOT wire "
     "inputs: a step's required input is connected to the nearest earlier step that makes it."
 )

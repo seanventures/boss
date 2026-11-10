@@ -14,25 +14,37 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_ui_v1_cut_doc_exists_and_names_the_home_nav():
-    path = ROOT / "docs/product/UI_V1_CUT.md"
-    assert path.is_file(), "docs/product/UI_V1_CUT.md must exist"
-    text = path.read_text(encoding="utf-8")
-    assert "Not public GA" in text
-    for nav in (
-        "activity",
-        "work",
+    edition = (ROOT / "apps/web/lib/edition.ts").read_text(encoding="utf-8")
+    shell = (ROOT / "apps/web/app/ConsoleShell.tsx").read_text(encoding="utf-8")
+    assert "UI_V1_CUT.md" not in edition
+    assert "UI_V1_CUT.md" not in shell
+
+    start = edition.index("V1_COMMUNITY_PRIMARY_NAV = new Set([")
+    nav = edition[start:edition.index("]);", start)]
+    for area in (
+        "overview",
+        "projects",
+        "project",
+        "setup",
+        "skills",
         "decisions",
-        "reliability",
+        "self_fixes",
+        "agent_ops",
         "code_tasks",
-        "reports",
         "budget",
         "enterprise",
+        "workforce",
+        "discovery",
+        "meetings",
+        "infra",
+        "observability",
+        "knowledge",
+        "delivery_workflows",
+        "activity",
     ):
-        assert f"`{nav}`" in text, nav
-    assert "Cloud Easy Connect" in text
-    assert "PaidSurfaceGate" in text
-    assert "host.connected" in text
-    assert "Areas are not deleted" in text or "not deleted" in text.lower()
+        assert f'"{area}"' in nav, area
+    for absent in ("work", "reliability", "reports"):
+        assert f'"{absent}"' not in nav, absent
 
 
 def test_create_droplet_fail_closes_before_adapter_when_flag_off():

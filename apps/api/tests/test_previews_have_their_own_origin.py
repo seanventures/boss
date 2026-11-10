@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from apps.api.app.preview_origin import is_preview_capability_path, listen_settings, preview_only
 from apps.api.serve import preview_listen_env
 from boss_engine.services.preview_service import (
-    PREVIEW_ORIGIN_SANDBOX_CSP, operator_preview_open_url, preview_origin_for,
+    PREVIEW_ORIGIN_SANDBOX_CSP, operator_preview_open_url, preview_host_label, preview_origin_for,
 )
 
 SESSION = "__Host-boss_session"
@@ -60,7 +60,7 @@ def test_only_the_preview_capability_paths_are_served():
 
 def test_every_credential_is_stripped_and_no_cookie_is_ever_set():
     inner, seen = _recorder()
-    client = TestClient(preview_only(inner))
+    client = TestClient(preview_only(inner), base_url="http://p1.localhost")
     answer = client.post("/v1/previews/p1/web/api/save", content=b"{}", headers={
         "cookie": f"{SESSION}=bss_secret; __Host-boss_preauth=x; other=1",
         "authorization": "Bearer boss_pat_x", "proxy-authorization": "Basic x",
@@ -95,7 +95,7 @@ def test_the_real_preview_handlers_answer_on_the_preview_origin(client):
     from apps.api.app.main import app
 
     preview_id = _fixture_preview(client)
-    previews = TestClient(preview_only(app))
+    previews = TestClient(preview_only(app), base_url=f"http://{preview_host_label(preview_id)}.localhost")
     page = previews.get(f"/v1/previews/{preview_id}/web/",
                         headers={"cookie": f"{SESSION}=bss_whatever"})
     assert page.status_code == 200, page.text
@@ -113,7 +113,8 @@ def test_the_api_sends_a_signed_in_browser_to_the_preview_origin(client, monkeyp
     client.cookies.set(SESSION, "bss_whatever")
     moved = client.get(f"/v1/previews/{preview_id}/web/x?y=1", follow_redirects=False)
     assert moved.status_code == 307, moved.text
-    assert moved.headers["location"] == f"http://testserver:3001/v1/previews/{preview_id}/web/x?y=1"
+    label = preview_host_label(preview_id)
+    assert moved.headers["location"] == f"http://{label}.testserver:3001/v1/previews/{preview_id}/web/x?y=1"
     _sandboxed(moved)
     monkeypatch.setenv("BOSS_PREVIEW_PORT", "off")
     refused = client.get(f"/v1/previews/{preview_id}/web/", follow_redirects=False)
@@ -132,7 +133,7 @@ def test_the_preview_origin_is_another_port_on_the_consoles_host(monkeypatch):
     monkeypatch.setenv("BOSS_PREVIEW_ORIGIN", "http://localhost:3001/ignored/path")
     assert preview_origin_for("anything") == "http://localhost:3001"
     # A loopback preview origin IS a separate origin from a loopback console: it is allowed.
-    assert operator_preview_open_url("prev_1") == "http://localhost:3001/v1/previews/prev_1/web/"
+    assert operator_preview_open_url("prev_1") == "http://prev-1.localhost:3001/v1/previews/prev_1/web/"
 
 
 def test_only_a_single_server_process_binds_the_preview_port(monkeypatch):
@@ -151,7 +152,7 @@ def test_only_a_single_server_process_binds_the_preview_port(monkeypatch):
 
 def test_a_previews_preflight_is_answered_without_credentials():
     inner, seen = _recorder()
-    client = TestClient(preview_only(inner))
+    client = TestClient(preview_only(inner), base_url="http://p1.localhost")
     ok = client.options("/v1/previews/p1/feedback", headers={
         "origin": "null", "access-control-request-method": "POST",
         "access-control-request-headers": "content-type, x-boss-csrf, authorization, x-request-id"})
@@ -199,6 +200,6 @@ def test_the_preview_origin_shows_the_app_at_its_own_paths(client, monkeypatch):
 
     monkeypatch.setattr(preview_service, "proxy_preview", proxy)
     monkeypatch.setattr(api_main, "database_is_reachable", lambda _e: True)
-    TestClient(preview_only(api_main.app)).get("/v1/previews/prv_x/web/")
+    TestClient(preview_only(api_main.app), base_url="http://prv-x.localhost").get("/v1/previews/prv_x/web/")
     client.get("/v1/previews/prv_x/web/")
     assert asked == [True, False]

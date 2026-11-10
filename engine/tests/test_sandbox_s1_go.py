@@ -62,7 +62,7 @@ def _settings(**kwargs):
 def test_config_default_keeps_microvm_claims_frozen():
     field = Settings.model_fields["microvm_claims_frozen"]
     assert field.default is True
-    tmpl = (REPO_ROOT / "app.env.tmpl").read_text(encoding="utf-8")
+    tmpl = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
     assert "BOSS_MICROVM_CLAIMS_FROZEN=true" in tmpl
     assert "BOSS_MICROVM_CLAIMS_FROZEN=false" not in tmpl
 

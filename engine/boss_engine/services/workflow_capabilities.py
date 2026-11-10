@@ -1318,6 +1318,16 @@ def validate_step_fields(step: Mapping[str, Any],
     key = str(binding.get("capability") or "").strip()
     step_id = step.get("id", "?")
 
+    # A typed decision binds no capability. The runner answers it before the capability lookup,
+    # and a step with no captain is not a step that failed to name one — nobody runs it but the
+    # decision model. Judge the question, not the missing capability.
+    if isinstance(binding, Mapping) and "typed_decision" in binding:
+        from .typed_decisions import step_problems
+
+        problems.extend(
+            ("binding", detail) for detail in step_problems(str(step_id), dict(binding)))
+        return problems
+
     if not key:
         problems.append(("binding", f"step '{step_id}' has no capability."))
         return problems

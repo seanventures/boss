@@ -43,7 +43,7 @@ def _app_that_signs_in(preview_id: str):
 def test_on_the_preview_origin_the_page_has_a_real_origin_and_keeps_its_cookie():
     assert "allow-same-origin" in _tokens(PREVIEW_ORIGIN_SANDBOX_CSP)
     assert "allow-scripts" in _tokens(PREVIEW_ORIGIN_SANDBOX_CSP)
-    edge = TestClient(preview_only(_app_that_signs_in("prev_hd1")), base_url="http://localhost:3001")
+    edge = TestClient(preview_only(_app_that_signs_in("prev_hd1")), base_url="http://prev-hd1.localhost:3001")
     page = edge.post("/v1/previews/prev_hd1/web/api/login", content=b"{}")
     assert page.status_code == 200
     assert page.headers["content-security-policy"] == PREVIEW_ORIGIN_SANDBOX_CSP

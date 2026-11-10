@@ -11,7 +11,9 @@ port is the default preview origin, BOSS_PREVIEW_ORIGIN overrides it) and:
 
   - serves ONLY the preview capability paths, `/v1/previews/<id>/web[/...]` and
     `/v1/previews/<id>/feedback`, judged on the DECODED path as the router will see it, and on
-    the raw path too; anything else is a 404 that never reaches the API;
+    the raw path too; anything else is a 404 that never reaches the API. A preview page is
+    served only on that preview's own host (`<label>.localhost`); the shared host redirects
+    there, and another preview's host is a 404 (BOSSAPP-947);
   - STRIPS every credential before the request reaches anything: Authorization, every X-Boss-*
     header, every header a proxy uses to assert identity, and every cookie but the previewed
     app's OWN (cookies are not port-scoped, so the browser DOES send the console's session cookie
@@ -21,6 +23,10 @@ port is the default preview origin, BOSS_PREVIEW_ORIGIN overrides it) and:
     whatever the handler said. A preview PAGE's sandbox here includes allow-same-origin
     (page_csp, BOSSAPP-946), so a login app keeps its session cookie: safe only because this
     origin is never BOSS's own (preview_service.preview_origin_for refuses that).
+
+Each preview is its own host on that port (`<label>.localhost`, BOSSAPP-947), so one preview's
+script cannot read another's pages or cookies. The shared host redirects to that host; a host
+labeled for a different preview is a 404.
 
 It delegates to the API's own preview handlers (apps/api/app/main.py preview_web_proxy,
 preview_websocket_proxy, submit_preview_feedback_endpoint), so there is one preview gateway.
@@ -38,6 +44,7 @@ from typing import Any, Awaitable, Callable, Optional
 from boss_engine.services.preview_cookies import is_relayable_set_cookie, own_cookie_pairs
 from boss_engine.services.preview_service import (
     PREVIEW_ORIGIN_SANDBOX_CSP, PREVIEW_SANDBOX_CSP, PREVIEW_TAB_NAME, is_boss_origin,
+    preview_host_label,
 )
 
 Scope = dict[str, Any]
@@ -85,6 +92,45 @@ def _is_page_navigation(scope: Scope) -> bool:
     return (scope.get("method") == "GET"
             and headers.get(b"sec-fetch-mode") == b"navigate"
             and headers.get(b"sec-fetch-dest") in (b"document", b"iframe"))
+
+
+def _host_of(scope: Scope) -> tuple[str, str]:
+    """(hostname, ':port' or '') from the request's Host header."""
+    headers = {k.lower(): v for k, v in scope.get("headers") or []}
+    raw = headers.get(b"host", b"").decode("latin-1").strip()
+    if raw.startswith("["):
+        end = raw.find("]")
+        host = raw[1:end].lower() if end > 1 else ""
+        port = raw[end + 1:] if end > 0 and len(raw) > end + 1 and raw[end + 1] == ":" else ""
+        return host, port
+    host, sep, port = raw.partition(":")
+    return host.lower(), (":" + port) if sep and port else ""
+
+
+def _host_decision(scope: Scope, preview_id: str) -> str:
+    """serve on this preview's own host, refuse another preview's host, else redirect the shared one."""
+    label = preview_host_label(preview_id)
+    host, _port = _host_of(scope)
+    if not label or not host:
+        return "refuse"
+    first, dot, rest = host.partition(".")
+    if dot and first == label:
+        return "serve"
+    # `prev-bbb.localhost` (or any other labeled localhost host) is a different preview.
+    if dot and ("-" in first or rest == "localhost" or rest.endswith(".localhost")):
+        return "refuse"
+    return "redirect"
+
+
+def _redirect_location(scope: Scope, preview_id: str, path: str) -> str:
+    label = preview_host_label(preview_id)
+    host, port = _host_of(scope)
+    parent = "localhost" if (":" in host or (host.count(".") == 3 and all(
+        part.isdigit() and int(part) <= 255 for part in host.split(".")))) else host
+    scheme = "https" if scope.get("scheme") in ("https", "wss") else "http"
+    qs = scope.get("query_string") or b""
+    suffix = ("?" + qs.decode("latin-1")) if qs else ""
+    return f"{scheme}://{label}.{parent}{port}{path}{suffix}"
 
 
 def is_preview_capability_path(path: str) -> bool:
@@ -201,12 +247,35 @@ def preview_only(app: ASGIApp) -> ASGIApp:
             ]})
             await send({"type": "http.response.body", "body": _NOT_FOUND})
             return
+        # The id both spellings agree on: the browser scoped the preview's cookies to the raw path.
+        preview_id = preview_id_of(path) if preview_id_of(path) == preview_id_of(raw) else None
+        # One host for every preview is one origin (BOSSAPP-947). Serve the page only on this
+        # preview's host. The shared host redirects there; another preview's host is a 404.
+        decision = _host_decision(scope, preview_id or "")
+        if decision != "serve":
+            if kind == "websocket" or decision == "refuse" or not preview_id:
+                if kind == "websocket":
+                    await send({"type": "websocket.close", "code": 4404})
+                    return
+                await send({"type": "http.response.start", "status": 404, "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"cache-control", b"no-store"),
+                    (b"content-security-policy", PREVIEW_SANDBOX_CSP.encode()),
+                ]})
+                await send({"type": "http.response.body", "body": _NOT_FOUND})
+                return
+            location = _redirect_location(scope, preview_id, path).encode("latin-1")
+            await send({"type": "http.response.start", "status": 307, "headers": [
+                (b"location", location),
+                (b"cache-control", b"no-store"),
+                (b"content-security-policy", PREVIEW_SANDBOX_CSP.encode()),
+            ]})
+            await send({"type": "http.response.body", "body": b""})
+            return
         if kind == "http" and scope.get("method") == "OPTIONS":
             await _preflight(scope, send)
             return
         inner = dict(scope)
-        # The id both spellings agree on: the browser scoped the preview's cookies to the raw path.
-        preview_id = preview_id_of(path) if preview_id_of(path) == preview_id_of(raw) else None
         inner["headers"] = stripped_headers(list(scope.get("headers") or []),
                                             preview_id if kind == "http" else None)
         # The previewed app answers here, never the API's authenticated surface: mark the scope so

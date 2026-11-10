@@ -241,7 +241,7 @@ def test_the_setup_guide_gives_the_preview_origin_never_the_internal_port(world,
     guide = g["guides"][0]
     blob = json.dumps(guide)
     assert "127.0.0.1" not in blob and "19769" not in blob
-    base = f"https://previews.example.test/v1/previews/{preview_id}/web"
+    base = f"https://{preview_id.replace('_', '-')}.previews.example.test/v1/previews/{preview_id}/web"
     assert guide["copy"]["preview_url"] == base
     assert guide["copy"]["redirect_uri"] == base + "/auth/callback"
     assert guide["copy"]["webhook_url:stripe"] == base + "/webhooks/stripe"

@@ -1302,8 +1302,9 @@ function ConsoleShellInner({
     });
   }, [community]);
 
-  // Sidebar only: Community v1 home is a small cut (UI_V1_CUT.md). Palette +
-  // `?area=` keep every AreaId reachable (SSO stays in the sidebar).
+  // Sidebar only: Community v1 home is a small cut (V1_COMMUNITY_PRIMARY_NAV).
+  // Areas are not deleted. Palette and `?area=` keep every area reachable
+  // (SSO stays in the sidebar).
   // THE RAIL SHOWS ONLY WHAT THE VIEWER CAN OPEN (IDENTITY.md §6.5). A direct URL to one they
   // cannot still lands, on <AccessDenied> naming the permission, never a blank page.
   const navAreas = useMemo(

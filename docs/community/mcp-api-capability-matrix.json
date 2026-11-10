@@ -4,12 +4,12 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 1821,
+  "operation_count": 1823,
   "counts": {
-    "api_policy_gated": 1560,
-    "excluded": 107,
+    "api_policy_gated": 1562,
+    "excluded": 108,
     "human_confirmation_gated": 73,
-    "operator_only_unavailable": 81
+    "operator_only_unavailable": 80
   },
   "operations": [
     {
@@ -24332,6 +24332,24 @@
     },
     {
       "method": "GET",
+      "path": "/v1/projects/{project_id}/add-project/name",
+      "alias": "get_v1_projects_project_id_add_project_name_654ec035",
+      "domain": "workspace",
+      "summary": "Add Project Free Name",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": true
+    },
+    {
+      "method": "GET",
       "path": "/v1/projects/{project_id}/add-project/preview",
       "alias": "get_v1_projects_project_id_add_project_preview_ffcd7d72",
       "domain": "workspace",
@@ -24365,6 +24383,24 @@
       "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/{project_id}/add-project/start",
+      "alias": "post_v1_projects_project_id_add_project_start_3ee8c8b1",
+      "domain": "workspace",
+      "summary": "Add Project Resume",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "typed_json_body",
+      "mounted_input_schema_quality": "typed_json_body",
+      "request_body_type_enforcement": "pydantic_fields",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
     },
     {
       "method": "GET",
@@ -26802,16 +26838,16 @@
       "alias": "post_v1_repos_push_pending_execute_ec6f47b6",
       "domain": "delivery",
       "summary": "Push Pending Execute",
-      "mcp_status": "operator_only_unavailable",
-      "reason": "trusted_operator_confirmation_unavailable",
+      "mcp_status": "excluded",
+      "reason": "push_pending_worker_lease_protocol",
       "input_schema_quality": "typed_json_body",
       "mounted_input_schema_quality": "typed_json_body",
       "request_body_type_enforcement": "pydantic_fields",
       "curated_input_fields": false,
-      "typed_input_schema": true,
-      "runtime_validated_input_schema": true,
+      "typed_input_schema": false,
+      "runtime_validated_input_schema": false,
       "domain_scoped_direct_tool": false,
-      "requires_explicit_bound_api_credential": true,
+      "requires_explicit_bound_api_credential": false,
       "read_only_available": false
     },
     {

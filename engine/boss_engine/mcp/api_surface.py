@@ -78,6 +78,10 @@ _EXCLUDED_EXACT = {
     # not an operator action. Held as `execute`, it answered the worker 409 and every Community
     # discovery sat queued until its job deadlettered.
     "/v1/discoveries/{run_id}/execute": "discovery_worker_lease_protocol",
+    # The worker hands its leased repo.push_pending job to the API, which holds the
+    # GitHub credential and pushes when GitHub answers (services/github_outage.py).
+    # Held as `execute`, it answered the worker 409 and the waiting push never ran.
+    "/v1/repos/push-pending/execute": "push_pending_worker_lease_protocol",
     # The worker hands its leased deployment.stack_apply job to the API, which applies the
     # approved ChangeSet. Only the job's live lease may start it: a worker protocol.
     "/v1/deployments/stack/{deployment_id}/execute": "stack_deploy_worker_lease_protocol",

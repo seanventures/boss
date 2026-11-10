@@ -74,24 +74,24 @@ class SignInError(Exception):
 
 # ---- where the app is served -----------------------------------------------------------------------
 
-def _preview_origin(db: Any, org_id: str) -> str:
-    """The absolute origin browsers open previews at, or ""."""
+def _preview_origin(db: Any, org_id: str, preview_id: str = "") -> str:
+    """The absolute origin browsers open this preview at, or ""."""
     from ..identity.authn_support import public_origin
-    from ..services.preview_service import configured_preview_origin, preview_origin_for
+    from ..services.preview_service import configured_preview_origin, per_preview_origin, preview_origin_for
 
     configured = configured_preview_origin()
     if configured:
-        return configured
+        return per_preview_origin(configured, preview_id) if preview_id else configured
     origin = public_origin(db, org_id) or ""
     if not origin:
         return ""
     parts = urlsplit(origin)
     return preview_origin_for(parts.netloc.rsplit(":", 1)[0] if parts.port else parts.netloc,
-                              scheme=parts.scheme)
+                              scheme=parts.scheme, preview_id=preview_id or None)
 
 
 def preview_base(db: Any, org_id: str, preview_id: str) -> str:
-    origin = _preview_origin(db, org_id)
+    origin = _preview_origin(db, org_id, preview_id)
     return f"{origin}{_PREVIEW_MARK}{preview_id}/web" if origin else ""
 
 

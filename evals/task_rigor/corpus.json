@@ -1,0 +1,46 @@
+{
+  "sensitivity": [
+    {"instructions": "Add authentication to the API", "label": true},
+    {"instructions": "Store user passwords hashed", "label": true},
+    {"instructions": "Rotate API tokens and secrets", "label": true},
+    {"instructions": "Add OAuth sign-in with Google", "label": true},
+    {"instructions": "Add Stripe checkout", "label": true},
+    {"instructions": "Run the database migrations", "label": true},
+    {"instructions": "Change the button label to Save", "label": false},
+    {"instructions": "Rename the heading on the about page", "label": false},
+    {"instructions": "Add auth to the admin API", "label": true},
+    {"instructions": "Rotate the api key before billing", "label": true},
+    {"instructions": "Encrypt customer data at rest", "label": true},
+    {"instructions": "Deploy the service", "label": true},
+    {"instructions": "Restyle the login button colour", "label": false},
+    {"instructions": "Fix a typo in the readme", "label": false},
+    {"instructions": "Update the invoice template copy", "label": false}
+  ],
+  "rigor": [
+    {"instructions": "Restyle the login button colour", "label": 0},
+    {"instructions": "Adjust the existing theme: drop the CSRF middleware", "label": 3},
+    {"instructions": "Fix a typo in the readme", "label": 0},
+    {"instructions": "Add a small validation rule to the existing form", "label": 1},
+    {"instructions": "Build a new status page for the existing app", "label": 2},
+    {"instructions": "Add authentication to the API", "label": 3},
+    {"instructions": "Add auth to the admin panel", "label": 3},
+    {"instructions": "Tweak the existing padding on the card", "label": 0},
+    {"instructions": "Create a new billing service from scratch", "label": 3},
+    {"instructions": "Change the button label to Save", "label": 0},
+    {"instructions": "Migrate the user table", "label": 3},
+    {"instructions": "Add a payment form", "label": 3},
+    {"instructions": "Update the existing endpoint to cache results", "label": 1}
+  ],
+  "look": [
+    {"text": "Why is it stuck? Stop, do not touch anything, just tell me", "label": "look"},
+    {"text": "As I said, it is slow. What is going on?", "label": "look"},
+    {"text": "I told you it was slow yesterday too, why?", "label": "look"},
+    {"text": "Can you check why the build is slow?", "label": "look"},
+    {"text": "Fix and retry the deployment", "label": "act"},
+    {"text": "Why is the preview blank?", "label": "look"},
+    {"text": "Please deploy the hotfix now", "label": "act"},
+    {"text": "What is the status of the last run?", "label": "look"},
+    {"text": "Just tell me what failed", "label": "look"},
+    {"text": "Do not change anything, explain the error", "label": "look"}
+  ]
+}

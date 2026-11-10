@@ -8,7 +8,7 @@ SHELL := /bin/sh
 DOCKER := $(shell if docker info >/dev/null 2>&1; then printf 'docker'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then printf 'sudo -n docker'; fi)
 COMPOSE := $(DOCKER) compose -f scripts/install/community-compose.yml --env-file .env
 
-.PHONY: help dev seed status check stop metatron mcp-setup mcp docker-ready e2e e2e-selftest
+.PHONY: help dev seed status check stop metatron mcp-setup mcp docker-ready e2e e2e-selftest eval-decisions
 
 docker-ready:
 	@test -n '$(DOCKER)' || { printf '%s\n' 'Docker is unavailable to this user. Start Docker or grant noninteractive sudo access to Docker; a new login also activates docker-group access.' >&2; exit 1; }
@@ -77,3 +77,8 @@ e2e:
 
 e2e-selftest:
 	scripts/e2e.sh selftest
+
+# Keyword decision eval only. No .env, no docker, no model: model rows stay unmeasured.
+PYTHON ?= python3
+eval-decisions:
+	PYTHONPATH=engine:. $(PYTHON) evals/task_rigor/run.py
