@@ -2391,6 +2391,10 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     # rebuilds from that plus any tool message that still carries the mark.
     _untrusted = Ledger.load(finalize_ctx.get("untrusted_spans"))
     _untrusted.absorb_messages(messages)
+    from .tool_result_screen import carried_untrusted, next_write_must_ask
+
+    # A phrase-screen hit on a tool result holds the next write. A read keeps its policy.
+    screen_hold = bool(finalize_ctx.get("tool_screen_untrusted"))
     on_demand_loader: Optional[str] = None
     if skill_resolution["on_demand"]:
         on_demand_loader = _unique_tool_name(
@@ -2590,7 +2594,12 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 unreviewed = needs_person(server)
                 # ASK IS THE OPERATOR'S RULE, and tier >= 2 always asks (spec E7): a tier-2 tool
                 # waits for a person even on an install that raised the autonomy threshold.
-                asks = _mcp_tool_policy(server, tool) == "ask"
+                policy = next_write_must_ask(
+                    {"untrusted": screen_hold},
+                    write=risk >= 2,
+                    policy=_mcp_tool_policy(server, tool),
+                )
+                asks = policy == "ask"
                 if risk > threshold or unreviewed or asks:
                     decision_id = create_blocking_decision(
                         connection,
@@ -2607,6 +2616,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                             "tool_name": tool_name,
                             "args": args,
                             "task_id": task_id,
+                            **({"tool_screen": "untrusted"} if screen_hold and risk >= 2 else {}),
                         },
                         {},
                         "agent_mcp_requires_approval",
@@ -2622,6 +2632,9 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         ),
                     }
                     is_deferred = True
+                    if screen_hold and risk >= 2:
+                        screen_hold = False
+                        finalize_ctx["tool_screen_untrusted"] = False
                     deferred = {
                         "kind": "mcp",
                         "tool": name,
@@ -2846,15 +2859,25 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                     )
             elif name in _WRITE_FNS:
                 _, risk = _WRITE_FNS[name]
-                if risk > threshold:
+                policy = next_write_must_ask(
+                    {"untrusted": screen_hold},
+                    write=True,
+                    policy="ask" if risk > threshold else "allow",
+                )
+                if policy == "ask":
                     decision_id = create_blocking_decision(
                         connection, project_id, task_id,
                         f"Approve agent action: {name}",
-                        {"action": "resume_agent_run", "run_id": run_id, "tool": name, "args": args, "task_id": task_id},
+                        {"action": "resume_agent_run", "run_id": run_id, "tool": name,
+                         "args": args, "task_id": task_id,
+                         **({"tool_screen": "untrusted"} if screen_hold else {})},
                         {}, "agent_tool_requires_approval", risk_tier=risk,
                     )
                     result = {"status": "deferred_for_approval", "decision_id": decision_id, "message": f"'{name}' (risk tier {risk}) requires human approval; the run is paused and resumes on approval."}
                     is_deferred = True
+                    if screen_hold:
+                        screen_hold = False
+                        finalize_ctx["tool_screen_untrusted"] = False
                     deferred = {"tool": name, "args": args, "decision_id": decision_id}
                     emit_event(connection, project_id, "agent.tool_deferred", "agent_loop", "decision", decision_id, {"tool": name, "risk_tier": risk, "step": step})
                 else:
@@ -2862,6 +2885,9 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             else:
                 result = _dispatch(connection, project_id, settings, name, args)
                 emit_event(connection, project_id, "agent.tool_invoked", "agent_loop", "task", task_id or project_id, {"tool": name, "step": step})
+            if carried_untrusted(result):
+                screen_hold = True
+                finalize_ctx["tool_screen_untrusted"] = True
             arrived = _origin_for_call(name, mcp_map, skill_map)
             if (
                 arrived
