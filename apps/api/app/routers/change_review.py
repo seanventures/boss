@@ -34,7 +34,7 @@ from boss_engine.identity import P, Scope, permit
 
 from .local_projects import (
     CommentBody, MergeBody, ReplyBody, RequestChangesBody, ResolveBody, _actor, _author,
-    _author_kind, _people_only, _require,
+    _people_only, _require, _signer,
 )
 
 router = APIRouter(tags=["projects"])
@@ -295,7 +295,8 @@ def github_comment(project_id: str, owner: str, repo: str, number: int, request:
                    payload: CommentBody) -> Any:
     token = _person_token(request)
     return _run(project_id, number, owner, repo, lambda c, s: s.add_comment(
-        body=payload.body, author=_author(request), author_kind=_author_kind(request),
+        body=payload.body, author=_author(request), author_kind=_signer(request)["author_kind"],
+        principal_id=_signer(request)["principal_id"],
         path=payload.path, line=payload.line, end_line=payload.end_line, side=payload.side,
         commit_sha=payload.commit_sha, severity=payload.severity, origin=payload.origin,
         person_token=token, person=_person(request)))
@@ -308,7 +309,8 @@ def github_comment_reply(project_id: str, owner: str, repo: str, number: int, co
     token = _person_token(request)
     return _run(project_id, number, owner, repo, lambda c, s: s.reply(
         comment_id, body=payload.body, author=_author(request),
-        author_kind=_author_kind(request), person_token=token, person=_person(request)))
+        author_kind=_signer(request)["author_kind"], principal_id=_signer(request)["principal_id"],
+        person_token=token, person=_person(request)))
 
 
 @router.post(GITHUB + "/comments/{comment_id}/resolve")

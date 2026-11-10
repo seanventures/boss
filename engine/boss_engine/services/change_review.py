@@ -421,21 +421,25 @@ class LocalSource:
     # writes
     def add_comment(self, *, body: str, author: str, author_kind: str, path: Any, line: Any,
                     side: str, commit_sha: Optional[str], severity: Any, origin: str = "console",
-                    end_line: Any = None, person_token: Any = None) -> dict[str, Any]:
+                    end_line: Any = None, person_token: Any = None,
+                    principal_id: Optional[str] = None) -> dict[str, Any]:
         try:
             return local_review.add_comment(
                 self.c, self.settings, project_id=self.project_id, number=self.number, body=body,
                 author=author, author_kind=author_kind, path=path, line=line, end_line=end_line,
-                side=side, commit_sha=commit_sha, severity=severity, origin=origin)
+                side=side, commit_sha=commit_sha, severity=severity, origin=origin,
+                principal_id=principal_id)
         except local_review.ReviewError as error:
             raise ChangeReviewError(str(error), error.status, error.error) from None
 
     def reply(self, comment_id: int, *, body: str, author: str, author_kind: str,
-              origin: str = "console", person_token: Any = None) -> dict[str, Any]:
+              origin: str = "console", person_token: Any = None,
+              principal_id: Optional[str] = None) -> dict[str, Any]:
         try:
             return local_review.add_comment(
                 self.c, self.settings, project_id=self.project_id, number=self.number, body=body,
-                author=author, author_kind=author_kind, origin=origin, reply_to=comment_id)
+                author=author, author_kind=author_kind, origin=origin, reply_to=comment_id,
+                principal_id=principal_id)
         except local_review.ReviewError as error:
             raise ChangeReviewError(str(error), error.status, error.error) from None
 
@@ -1062,8 +1066,10 @@ class GitHubSource:
 
     def add_comment(self, *, body: str, author: str, author_kind: str, path: Any, line: Any,
                     side: str, commit_sha: Optional[str], severity: Any, origin: str = "console",
-                    end_line: Any = None, person_token: Any = None, person: Optional[str] = None
-                    ) -> dict[str, Any]:
+                    end_line: Any = None, person_token: Any = None, person: Optional[str] = None,
+                    principal_id: Optional[str] = None) -> dict[str, Any]:
+        if local_review.is_host_tools(author, principal_id):
+            raise ChangeReviewError(local_review.HOST_TOOLS_REFUSAL, 403, "host_tools_author")
         words = str(body or "").strip()
         if not words:
             raise ChangeReviewError("Write the comment first.", 422, "empty_comment")
@@ -1088,8 +1094,10 @@ class GitHubSource:
                 "author": author, "body": words, "path": rel, "line": payload["line"]}
 
     def reply(self, comment_id: int, *, body: str, author: str, author_kind: str,
-              origin: str = "console", person_token: Any = None, person: Optional[str] = None
-              ) -> dict[str, Any]:
+              origin: str = "console", person_token: Any = None, person: Optional[str] = None,
+              principal_id: Optional[str] = None) -> dict[str, Any]:
+        if local_review.is_host_tools(author, principal_id):
+            raise ChangeReviewError(local_review.HOST_TOOLS_REFUSAL, 403, "host_tools_author")
         words = str(body or "").strip()
         if not words:
             raise ChangeReviewError("Write the reply first.", 422, "empty_comment")
