@@ -40,6 +40,7 @@ from typing import Any, Callable, Mapping, Optional
 from sqlalchemy import text
 
 from . import local_repo, local_review
+from .agent_reference import agent_display
 from .core import emit_event
 
 log = logging.getLogger(__name__)
@@ -112,8 +113,8 @@ _RUNNING = ("running", "queued", "pending", "leased", "in_progress", "provisioni
 def _run_view(c: Any, run_id: Optional[str]) -> Optional[dict[str, Any]]:
     if not run_id:
         return None
-    r = c.execute(text("SELECT id, title, status, phase, usage, finalize_ctx, updated_at, "
-                       "created_at FROM code_task_runs WHERE id = :r"), {"r": run_id}
+    r = c.execute(text("SELECT id, project_id, title, status, phase, usage, finalize_ctx, "
+                       "updated_at, created_at FROM code_task_runs WHERE id = :r"), {"r": run_id}
                   ).mappings().first()
     if r is None:
         return None
@@ -124,9 +125,10 @@ def _run_view(c: Any, run_id: Optional[str]) -> Optional[dict[str, Any]]:
     if isinstance(fctx, str):
         fctx = json.loads(fctx or "{}")
     micros = int(usage.get("cost_usd_micros") or 0)
+    who = agent_display(c, r["project_id"], fctx.get("builder_name") or fctx.get("agent"))
     return {"run_id": r["id"], "title": r["title"], "status": r["status"], "phase": r["phase"],
             "running": str(r["status"] or "").lower() in _RUNNING,
-            "builder": str(fctx.get("builder_name") or fctx.get("agent") or "builder"),
+            "builder": who["name"], "builder_role": who["role"],
             "cost_usd": round(micros / 1_000_000, 2), "updated_at": _iso(r["updated_at"]),
             "created_at": _iso(r["created_at"])}
 
@@ -1275,7 +1277,9 @@ def agent_pane(c: Any, src: Any, person: str) -> dict[str, Any]:
                              "about": {"path": t.get("path"), "line": t.get("line"),
                                        "thread": t["id"]}})
     msgs.sort(key=lambda m: str(m.get("created_at") or ""))
-    return {"run": run, "builder": builder, "agent": (builder or run or {}).get("builder"),
+    who = builder or run or {}
+    return {"run": run, "builder": builder, "agent": who.get("builder"),
+            "agent_role": who.get("builder_role"),
             "comments": [{"id": t["id"], "path": t.get("path"), "line": t.get("line"),
                           "body": t["body"].split("\n")[0][:200], "state": t["state"],
                           "fixed_in": t.get("fixed_in"), "author": t["author"],

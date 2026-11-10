@@ -117,6 +117,14 @@ def test_the_tree_go_to_file_breadcrumb_and_resize(person: Person, review_projec
     # Names only, never full paths; folders collapse and expand.
     for name in tree.locator("[data-testid='gr-tree-name']").all_inner_texts():
         assert "/" not in name
+    # The name keeps priority (BOSSAPP-954): every row's tail (extension + end) is wholly inside
+    # its row — never hard-cut at the right edge, whatever the counts and the status take.
+    clipped = tree.evaluate("""t => [...t.querySelectorAll("[data-testid='gr-tree-file']")].filter(r => {
+        const tail = r.querySelector("[data-testid='gr-name-tail']"); if (!tail) return true;
+        const a = tail.getBoundingClientRect(), b = r.getBoundingClientRect();
+        return a.width > 0 && (a.right > b.right + 0.5 || tail.scrollWidth > tail.clientWidth + 0.5);
+    }).map(r => r.getAttribute("data-path"))""")
+    assert clipped == [], clipped
     dirs = tree.locator("[data-testid='gr-tree-dir']")
     if dirs.count():
         d = dirs.first
@@ -234,6 +242,8 @@ def test_the_pr_agent_and_dockable_panes(person: Person, review_project: str):
         p.tid("gr-drawer-agent").wait_for()
     agent = p.tid("gr-agent")
     assert "builder of this change" in agent.inner_text()
+    name = p.tid("gr-agent-name").inner_text()                        # a name, never a stored dict or id
+    assert name and "{" not in name and "agt_" not in name.lower() and "Agent Id" not in name, name
     # The chat: kept for the next fix run while the task is idle.
     p.tid("gr-chat-input").fill("Why does the total round down?")
     p.tid("gr-chat-send").click()

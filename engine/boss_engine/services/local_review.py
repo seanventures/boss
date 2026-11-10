@@ -818,8 +818,10 @@ def start_fix_round(c: Any, settings: Any, *, change: Mapping[str, Any], note: s
 
 # ── the agent's replies ───────────────────────────────────────────────────────────────────────
 
-def _agent_name(entry: Mapping[str, Any], fctx: Mapping[str, Any]) -> str:
-    return str(fctx.get("builder_name") or "builder")
+def _agent_name(c: Any, project_id: Optional[str], fctx: Mapping[str, Any]) -> str:
+    """The builder by its real name, whatever shape the run stored it in (agent_reference)."""
+    from .agent_reference import agent_name
+    return agent_name(c, project_id, fctx.get("builder_name") or fctx.get("agent"))
 
 
 def sync_agent_replies(c: Any, run_id: str, *, settings: Any = None) -> int:
@@ -868,7 +870,7 @@ def sync_agent_replies(c: Any, run_id: str, *, settings: Any = None) -> int:
         lead = (f"Changed in commit {head[:7]}: " if kind == "addressed" and head else
                 "Fixed: " if kind == "addressed" else "Disputed: ")
         add_comment(c, settings, project_id=change["project_id"], number=int(change["number"]),
-                    body=lead + words, author=_agent_name(e, fctx), author_kind="agent",
+                    body=lead + words, author=_agent_name(c, run["project_id"], fctx), author_kind="agent",
                     origin="agent", reply_to=cid, run_round=round_key,
                     response_commit=head or None, emit=False)
         c.execute(text("UPDATE local_change_set_comments SET state = :s, response_commit = :h, "

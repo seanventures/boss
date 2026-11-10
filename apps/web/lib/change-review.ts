@@ -45,13 +45,14 @@ export type CommitView = FilesView & { sha: string; parent: string | null; autho
 export type CheckItem = { name: string; status: string | null; conclusion: string | null; app: string | null };
 export type Viewed = { person: string; paths: Record<string, string>; reviewed_sha: string | null };
 export type AgentRun = { run_id: string; title: string; status: string; phase: string; running: boolean; builder: string;
-                         cost_usd: number; updated_at: string | null; created_at: string | null };
+                         builder_role: string | null; cost_usd: number; updated_at: string | null; created_at: string | null };
 export type AgentComment = { id: number; path: string | null; line: number | null; body: string; state: string;
                              fixed_in: string | null; author: string; queued: boolean };
 export type AgentMessage = { id: number | string; author: string; author_kind: "human" | "agent"; body: string;
                              delivery: string; run_id: string | null; created_at: string | null;
                              about?: { path: string | null; line: number | null; thread: number } };
-export type AgentPane = { run: AgentRun | null; builder: AgentRun | null; agent: string | null; comments: AgentComment[];
+export type AgentPane = { run: AgentRun | null; builder: AgentRun | null; agent: string | null; agent_role: string | null;
+                          comments: AgentComment[];
                           open: number; fixable: number; messages: AgentMessage[]; viewed: Viewed };
 
 const str = (v: unknown, d = ""): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : d);
@@ -79,7 +80,7 @@ function parseRun(raw: unknown): AgentRun | null {
   const r = raw as Record<string, unknown>;
   if (!str(r.run_id)) return null;
   return { run_id: str(r.run_id), title: str(r.title), status: str(r.status), phase: str(r.phase), running: r.running === true,
-           builder: str(r.builder, "builder"), cost_usd: num(r.cost_usd), updated_at: str(r.updated_at) || null,
+           builder: str(r.builder, "builder"), builder_role: str(r.builder_role) || null, cost_usd: num(r.cost_usd), updated_at: str(r.updated_at) || null,
            created_at: str(r.created_at) || null };
 }
 
@@ -93,7 +94,7 @@ export function parseViewed(raw: unknown): Viewed {
 export function parseAgent(raw: unknown): AgentPane {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   return {
-    run: parseRun(r.run), builder: parseRun(r.builder), agent: str(r.agent) || null,
+    run: parseRun(r.run), builder: parseRun(r.builder), agent: str(r.agent) || null, agent_role: str(r.agent_role) || null,
     comments: arr(r.comments).map((c) => ({ id: num(c.id), path: str(c.path) || null, line: c.line == null ? null : num(c.line),
                                             body: str(c.body), state: str(c.state, "open"), fixed_in: str(c.fixed_in) || null,
                                             author: str(c.author), queued: c.queued === true })),
@@ -467,6 +468,46 @@ export function middleEllipsis(name: string, max: number): string {
   const keep = max - 1;
   const tail = Math.ceil(keep / 2);
   return `${name.slice(0, keep - tail)}…${name.slice(name.length - tail)}`;
+}
+
+/** A tree row's name as a HEAD that may shrink (CSS ellipsis at its end, i.e. in the middle of
+ *  the name) and a TAIL that never does: the extension and the end of the name always show, so
+ *  a narrow pane reads "packa…lock.json", never "package-" (BOSSAPP-954). */
+export function nameParts(name: string): { head: string; tail: string } {
+  if (name.length <= 10) return { head: "", tail: name };
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.length - dot : 0;
+  const keep = Math.min(name.length - 1, Math.max(8, ext + 4));
+  return { head: name.slice(0, name.length - keep), tail: name.slice(name.length - keep) };
+}
+
+/** Large counts in a short form: 87 → 87, 1517 → 1.5k, 23400 → 23k. */
+export function shortCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return `${Math.round(n / 1000)}k`;
+}
+
+/** The pixels a tree row spends on everything but the name, at the tree's type scale (--fs-meta /
+ *  --fs-tag): pane border + scrollbar, row padding, caret gap, icon and gaps. */
+export const TREE_ROW = { chrome: 82, indent: 12, char: 6.6, tagChar: 6.2, status: 20, dot: 26, gap: 6 };
+export type CountsMode = "full" | "compact" | "hidden";
+
+/** Who gives way on a tight tree row: the NAME keeps priority. The +/− counts show in full when
+ *  the whole name fits beside them, else in a compact form ("±396"), else not at all (the row's
+ *  title still says them). The name itself is never hard-cut: see nameParts. */
+export function treeRowFit(name: string, o: { width: number; depth: number; additions?: number; deletions?: number;
+                                               stats?: boolean; status?: boolean; open?: boolean }):
+  { counts: CountsMode; full: string; compact: string } {
+  const a = o.additions ?? 0, d = o.deletions ?? 0;
+  const full = `+${a}${d ? ` −${d}` : ""}`;
+  const compact = d ? `±${shortCount(a + d)}` : `+${shortCount(a)}`;
+  if (!o.stats || (!a && !d)) return { counts: "hidden", full, compact };
+  const room = o.width - TREE_ROW.chrome - o.depth * TREE_ROW.indent - (o.status ? TREE_ROW.status : 0)
+    - (o.open ? TREE_ROW.dot : 0) - name.length * TREE_ROW.char;
+  const cost = (s: string) => s.length * TREE_ROW.tagChar + TREE_ROW.gap;
+  const counts: CountsMode = cost(full) <= room ? "full" : cost(compact) <= room ? "compact" : "hidden";
+  return { counts, full, compact };
 }
 
 /** A path's breadcrumb: each folder with the path it opens, then the file. */

@@ -9,7 +9,9 @@
  *   open        the folders of the open file and of changed files start expanded
  *   changed     +/− and a dot for open comments
  *   width       the pane (review-dock.tsx) is resized by dragging its edge, remembered per person;
- *               a long name is cut in the MIDDLE so its start and extension both show
+ *               the NAME keeps priority: its start shrinks to an ellipsis while the extension and
+ *               the end of the name always show (nameParts); the +/− counts give way first,
+ *               compact then hidden (treeRowFit), and the row's title always carries them
  *   go to file  fuzzy on the full path; results are the name and a faint folder; ↑ ↓ ↵
  *   breadcrumb  above the file: each folder segment opens that folder in the tree
  */
@@ -20,7 +22,7 @@ import {
 } from "@phosphor-icons/react";
 
 import {
-  ancestorsOf, buildTree, crumbs, defaultExpanded, fuzzyFiles, middleEllipsis, type TreeFile, type TreeNode,
+  ancestorsOf, buildTree, crumbs, defaultExpanded, fuzzyFiles, nameParts, treeRowFit, type TreeFile, type TreeNode,
 } from "../../../../lib/change-review";
 
 const LETTER: Record<string, string> = { added: "A", removed: "D", deleted: "D", renamed: "R", modified: "M",
@@ -38,9 +40,16 @@ export function iconFor(name: string): Icon {
   return BY_EXT[ext] ?? (/^(dockerfile|makefile|\..+rc|.*\.(json|ya?ml|toml|sh|go|java|kt|rb|php|swift|xml))$/i.test(name) ? FileCode : File);
 }
 
-/** The letters a row has room for at this pane width and depth (≈7px a letter). */
-const budget = (width: number, depth: number, stats: boolean) =>
-  Math.max(8, Math.floor((width - 44 - depth * 12 - (stats ? 64 : 22)) / 7));
+/** The name: a head that shrinks to "…" and a tail (extension + end) that never does. */
+function Name({ name, testid }: { name: string; testid?: string }) {
+  const { head, tail } = nameParts(name);
+  return (
+    <span className="gr-name" data-testid={testid}>
+      {head ? <span className="gr-name-h" data-testid="gr-name-head">{head}</span> : null}
+      <span className="gr-name-t" data-testid="gr-name-tail">{tail}</span>
+    </span>
+  );
+}
 
 export function FileTree({ files, current, onPick, testid = "gr-tree-file", stats = false, reveal = null, width = 260 }: {
   files: TreeFile[]; current: string | null; onPick: (path: string) => void; testid?: string;
@@ -83,7 +92,6 @@ function Node({ node, depth, current, onPick, testid, stats, open, toggle, width
   open: Set<string>; toggle: (p: string) => void; width: number;
 }) {
   const pad = { paddingLeft: `${0.5 + depth * 0.75}rem` };
-  const fit = budget(width, depth, stats);
   if (node.kind === "dir") {
     const isOpen = open.has(node.path);
     const Icon = isOpen ? FolderOpen : Folder;
@@ -92,7 +100,7 @@ function Node({ node, depth, current, onPick, testid, stats, open, toggle, width
         <button type="button" className="gr-tree-row" data-k="dir" style={pad} onClick={() => toggle(node.path)}
                 data-testid="gr-tree-dir" data-path={node.path} title={node.path}>
           {isOpen ? <CaretDown size={11} aria-hidden /> : <CaretRight size={11} aria-hidden />}
-          <Icon size={13} aria-hidden /><span className="gr-name">{middleEllipsis(node.name, fit)}</span>
+          <Icon size={13} aria-hidden /><Name name={node.name} />
         </button>
         {isOpen ? <ul role="group">{node.children.map((c) =>
           <Node key={`${c.kind}:${c.path}`} node={c} depth={depth + 1} current={current} onPick={onPick} testid={testid}
@@ -102,19 +110,24 @@ function Node({ node, depth, current, onPick, testid, stats, open, toggle, width
   }
   const st = node.status ? LETTER[node.status] ?? node.status.slice(0, 1).toUpperCase() : "";
   const Icon = iconFor(node.name);
+  const fit = treeRowFit(node.name, { width, depth, stats: stats && node.changed, additions: node.additions,
+                                      deletions: node.deletions, status: !!st, open: !!(node.open || node.comments) });
+  const counts = stats && node.changed ? ` · ${fit.full}` : "";
   return (
     <li role="treeitem" aria-selected={node.path === current}>
       <button type="button" className="gr-tree-row" data-k="file" data-changed={node.changed || undefined} style={pad}
-              aria-current={node.path === current ? "true" : undefined} title={node.path}
+              aria-current={node.path === current ? "true" : undefined} title={node.path + counts}
               onClick={() => onPick(node.path)} data-testid={testid} data-path={node.path}>
         <span className="gr-caret-gap" aria-hidden /><Icon size={13} aria-hidden />
-        <span className="gr-name" data-testid="gr-tree-name">{middleEllipsis(node.name, fit)}</span>
+        <Name name={node.name} testid="gr-tree-name" />
         {node.open ? <span className="gr-dot" title={`${node.open} open comment${node.open === 1 ? "" : "s"}`}
                            data-testid="gr-comment-dot">●<i>{node.open}</i></span>
           : node.comments ? <span className="lr-count" title={`${node.comments} comment thread${node.comments === 1 ? "" : "s"}`}>{node.comments}</span> : null}
         <span className="cs-spacer" />
-        {stats && node.changed ? <span className="gr-pm"><span className="cs-add">+{node.additions}</span>
-          {node.deletions ? <span className="cs-del">−{node.deletions}</span> : null}</span> : null}
+        {fit.counts === "full" ? <span className="gr-pm" data-testid="gr-tree-pm" data-mode="full"><span className="cs-add">+{node.additions}</span>
+          {node.deletions ? <span className="cs-del">−{node.deletions}</span> : null}</span>
+          : fit.counts === "compact" ? <span className="gr-pm" data-testid="gr-tree-pm" data-mode="compact" aria-label={fit.full}>
+            <span className={node.deletions ? "cs-faint" : "cs-add"}>{fit.compact}</span></span> : null}
         {st ? <span className="lr-st" data-s={st}>{st}</span> : null}
       </button>
     </li>

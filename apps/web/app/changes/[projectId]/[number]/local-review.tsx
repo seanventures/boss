@@ -77,6 +77,15 @@ export function looksLikeAgent(name: string): boolean {
   return !name || /^(agent:|boss\b|[a-z]+(_[a-z]+)+$)|captain|reviewer|panel|engineer|helm|marshal|builder|forge/i.test(name);
 }
 
+/** A role key reads as words (engineering_captain → Engineering captain); a name or an id is
+ *  shown exactly as stored — nothing is title-cased in CSS any more. */
+export function whoLabel(name: string): string {
+  const bare = name.replace(/^agent:/, "");
+  if (!/^[a-z]+(_[a-z]+)+$/.test(bare)) return bare;
+  const words = bare.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 export function Who({ name, size = 22, agent }: { name: string; size?: number; agent?: boolean }) {
   const label = name || "BOSS";
   const isAgent = agent ?? looksLikeAgent(name);
@@ -84,7 +93,7 @@ export function Who({ name, size = 22, agent }: { name: string; size?: number; a
     <span className="cs-who">
       {isAgent ? <AgentAvatar agent={name.replace(/^agent:/, "") || "engineering_captain"} size={size} aiBadge={false} />
         : <span className="cs-initials" style={{ width: size, height: size }} aria-hidden>{label.slice(0, 1).toUpperCase()}</span>}
-      <b>{label.replace(/^agent:/, "").replace(/_/g, " ")}</b>
+      <b>{whoLabel(label)}</b>
     </span>
   );
 }

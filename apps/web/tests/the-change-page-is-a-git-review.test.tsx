@@ -11,12 +11,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   agentStatus, ancestorsOf, buildTree, changeBase, changedFiles, changeUrl, commentCounts, crumbs, defaultExpanded, filterFiles,
-  fuzzyFiles, middleEllipsis, neighbours, parseAgent, rangeLabel, rangeOfTicked, readChangeUrl, sinceMyReview, tick, totals,
-  treeFiles, viewedCount, withoutWhatChanged, type Commit, type TreeNode,
+  fuzzyFiles, middleEllipsis, nameParts, neighbours, parseAgent, rangeLabel, rangeOfTicked, readChangeUrl, sinceMyReview, tick, totals,
+  treeFiles, treeRowFit, viewedCount, withoutWhatChanged, type Commit, type TreeNode,
 } from "../lib/change-review";
 import { anchorWords, parseThreads, snippetFocus } from "../lib/local-review-data";
 import { parseChangeSet } from "../lib/repo-links";
-import { columns, DEFAULT_LAYOUT, effective, keyAction, layoutKey, loadLayout, parseLayout, reduce, type Layout } from "../lib/review-layout";
+import { columns, DEFAULT_LAYOUT, effective, TREE_W, keyAction, layoutKey, loadLayout, parseLayout, reduce, type Layout } from "../lib/review-layout";
 import { ReviewLayoutProvider } from "../app/changes/[projectId]/[number]/review-dock";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -70,6 +70,71 @@ describe("the file tree", () => {
                            [{ path: "src/app.js", state: "open" }, { path: "src/app.js", state: "resolved" }], "all");
     expect(rows.find((r) => r.path === "src/app.js")).toMatchObject({ changed: true, additions: 14, open: 1, comments: 2 });
     expect(rows.find((r) => r.path === "README.md")).toMatchObject({ changed: false, open: 0 });
+  });
+
+  // helpdesk-laptop/6 on the laptop: the names that read "package-" and "esbuildO…e.te" at the
+  // default width, at their real depths (the chain local_helpdesk-laptop/helpdesk-laptop is one
+  // row; server/tests another) and with their real counts.
+  const REAL = [
+    { path: "local_helpdesk-laptop/helpdesk-laptop/package-lock.json", additions: 240, deletions: 156, depth: 1 },
+    { path: "local_helpdesk-laptop/helpdesk-laptop/package.json", additions: 3, deletions: 0, depth: 1 },
+    { path: "local_helpdesk-laptop/helpdesk-laptop/server/tests/esbuildOverride.test.js", additions: 87, deletions: 0, depth: 2 },
+  ];
+  const nameOf = (p: string) => p.split("/").pop()!;
+
+  it("a name keeps its extension and its end; the head alone gives way, in the middle", () => {
+    expect(nameParts("package-lock.json")).toEqual({ head: "package-", tail: "lock.json" });
+    expect(nameParts("esbuildOverride.test.js")).toEqual({ head: "esbuildOverride", tail: ".test.js" });
+    expect(nameParts("package.json")).toEqual({ head: "pac", tail: "kage.json" });
+    expect(nameParts("app.js")).toEqual({ head: "", tail: "app.js" });         // short: never split
+    for (const r of REAL) {
+      const { head, tail } = nameParts(nameOf(r.path));
+      expect(head + tail).toBe(nameOf(r.path));
+      expect(tail).toMatch(/\.[a-z]+$/);                                         // the extension is in the part that never shrinks
+    }
+  });
+
+  it("the +/− counts give way first: full, then compact, then hidden — at the default and the minimum width", () => {
+    const fit = (w: number) => REAL.map((r) => treeRowFit(nameOf(r.path), { width: w, depth: r.depth, stats: true, status: true,
+                                                                             additions: r.additions, deletions: r.deletions }).counts);
+    expect(DEFAULT_LAYOUT.treeW).toBe(264);
+    expect(fit(TREE_W.initial)).toEqual(["compact", "full", "hidden"]);
+    expect(fit(TREE_W.min)).toEqual(["hidden", "hidden", "hidden"]);
+    expect(fit(TREE_W.max)).toEqual(["full", "full", "full"]);
+    expect(treeRowFit("package-lock.json", { width: 264, depth: 1, stats: true, additions: 240, deletions: 156 }))
+      .toMatchObject({ full: "+240 −156", compact: "±396" });
+    expect(treeRowFit("app.js", { width: 264, depth: 0, stats: false, additions: 3 }).counts).toBe("hidden");   // the Code tree
+  });
+
+  for (const [label, width, stats] of [["Files changed, default width", TREE_W.initial, true], ["Files changed, minimum width", TREE_W.min, true],
+                                       ["Code, default width", TREE_W.initial, false], ["Code, minimum width", TREE_W.min, false]] as const) {
+    it(`renders the real names whole, split head|tail, with the counts on the title — ${label}`, async () => {
+      const files = REAL.map((r) => ({ path: r.path, name: nameOf(r.path), status: r.path.endsWith("lock.json") ? "M" : "A",
+                                       additions: r.additions, deletions: r.deletions, comments: 0, open: 0, changed: true }));
+      await mountAs(<FileTree files={files} current={null} onPick={() => undefined} stats={stats} width={width} />);
+      const rows = $$("[data-testid='gr-tree-file']");
+      expect(rows.map((r) => r.querySelector("[data-testid='gr-tree-name']")?.textContent))
+        .toEqual(["esbuildOverride.test.js", "package-lock.json", "package.json"]);            // never a cut string
+      expect(rows.map((r) => r.querySelector("[data-testid='gr-name-tail']")?.textContent)).toEqual([".test.js", "lock.json", "kage.json"]);
+      const lock = rows[1];
+      expect(lock.getAttribute("title")).toBe(stats ? `${REAL[0].path} · +240 −156` : REAL[0].path);
+      const pm = lock.querySelector("[data-testid='gr-tree-pm']");
+      if (!stats || width === TREE_W.min) expect(pm).toBeNull();
+      else expect(pm?.getAttribute("data-mode")).toBe("compact");
+      expect(lock.textContent).not.toContain("…");                                   // the ellipsis is CSS's, at the head's end
+      unmount();
+    });
+  }
+
+  it("the row's CSS: the head shrinks with an ellipsis, the tail and the counts never shrink", () => {
+    const css = readFileSync(join(__dirname, "../app/changes/[projectId]/[number]/change-set.css"), "utf8");
+    const d = declarations(css);
+    const v = (sel: string, prop: string) => d.find((x) => x.selector === sel && x.prop === prop)?.value;
+    expect(v(".gr-name-h", "text-overflow")).toBe("ellipsis");
+    expect(v(".gr-name-h", "min-width")).toBe("0");
+    expect(v(".gr-name-t", "flex")).toBe("none");
+    expect(v(".gr-tree-row > :not(.gr-name):not(.cs-spacer)", "flex")).toBe("none");
+    expect(d.filter((x) => /gr-ah-t b|cs-who/.test(x.selector) && x.prop === "text-transform")).toEqual([]);   // ids are never title-cased
   });
 
   it("a reveal focuses its file, unless the person moved focus elsewhere meanwhile", async () => {
@@ -260,6 +325,7 @@ describe("the PR agent pane", () => {
       : undefined));
     await mountAs(<AgentPane cs={cs} at={{ projectId: "p1", number: 1 }} onJump={() => undefined} onChanged={() => undefined} />);
     expect(tid("gr-agent-name")?.textContent).toBe("Forge");
+    expect(tid("gr-agent-role")).toBeNull();                                   // no role given, none shown
     expect(tid("lr-open-count")?.textContent).toBe("2 open");
     expect(tid("gr-fix-open")?.textContent).toContain("Fix 2 open comments");
     await click(tid("gr-fix-open"));

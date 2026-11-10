@@ -676,7 +676,9 @@ export function AgentPane({ cs, at, onJump, onChanged, onClose, refreshKey, comm
   const status = agentStatus(data);
   const counts = commentCounts(data?.comments ?? []);
   const fixable = data?.fixable ?? 0;
+  // The API names the agent (agent_reference.agent_display): shown as given, never re-cased.
   const name = data?.agent || data?.builder?.builder || "builder";
+  const role = data?.agent_role || data?.builder?.builder_role || null;
   const send = async () => {
     const body = draft.trim();
     if (!body || busy) return;
@@ -694,8 +696,8 @@ export function AgentPane({ cs, at, onJump, onChanged, onClose, refreshKey, comm
     <aside className="gr-agent" aria-label="The PR agent" data-testid="gr-agent">
       <div className="gr-ah">
         <Robot size={20} aria-hidden />
-        <div className="gr-ah-t"><b data-testid="gr-agent-name">{name.replace(/_/g, " ")}</b>
-          <small className="cs-faint">builder of this change · <span data-tone={status.tone} data-testid="gr-agent-status">{status.label}</span>
+        <div className="gr-ah-t"><b data-testid="gr-agent-name">{name}</b>
+          <small className="cs-faint">{role ? <span data-testid="gr-agent-role">{role} · </span> : null}builder of this change · <span data-tone={status.tone} data-testid="gr-agent-status">{status.label}</span>
             {data?.run?.cost_usd ? ` · $${data.run.cost_usd.toFixed(2)}` : ""}</small></div>
         {onClose ? <button type="button" className="lr-icon" aria-label="Close the agent" onClick={onClose}><X size={14} aria-hidden /></button> : null}
       </div>
@@ -728,7 +730,7 @@ export function AgentPane({ cs, at, onJump, onChanged, onClose, refreshKey, comm
               {m.delivery === "queued" ? " · for the next fix run" : m.delivery === "steered" ? " · sent to the running task" : ""}</small>
             <div className="cs-md" data-user-text><Markdown text={m.body} /></div>
           </div>))}
-        {data && !data.messages.length ? <p className="cs-empty">{data.run ? `Ask ${name.replace(/_/g, " ")} about this change.` : "No task built this change, so there is no agent to ask."}</p> : null}
+        {data && !data.messages.length ? <p className="cs-empty">{data.run ? `Ask ${name} about this change.` : "No task built this change, so there is no agent to ask."}</p> : null}
       </div>
       {said ? <p className="cs-faint cs-small gr-said" role="status">{said}</p> : null}
       {err ? <p className="cs-error" role="alert">{err}</p> : null}

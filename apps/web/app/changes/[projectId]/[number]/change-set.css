@@ -132,7 +132,7 @@
 .cs-commits li + li::before { content: ""; position: absolute; left: 4px; top: -8px; height: 16px; border-left: 2px solid var(--border-strong); }
 
 /* review */
-.cs-who { display: inline-flex; align-items: center; gap: 6px; min-width: 0; text-transform: capitalize; font-size: var(--fs-ui); }
+.cs-who { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--fs-ui); }
 .cs-initials { display: inline-grid; place-items: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-tag); font-weight: 700; flex: none; }
 .cs-note { border-left: 3px solid var(--accent-line); padding: 4px 0 4px 10px; margin: 10px 0; }
 .cs-note-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -375,7 +375,7 @@
 .gr-mode button { flex: 1; }
 .gr-tree-l, .gr-tree-l ul { list-style: none; margin: 0; padding: 0; }
 .gr-tree-row { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 10px;
-  font-size: var(--fs-meta); color: var(--ink-soft); cursor: pointer; min-width: 0; }
+  font-size: var(--fs-meta); color: var(--ink-soft); cursor: pointer; min-width: 0; overflow: hidden; }
 .gr-tree-row[data-k="dir"] { color: var(--faint); }
 .gr-tree-row:hover { background: var(--surface-2); }
 .gr-tree-row[aria-current="true"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
@@ -383,7 +383,7 @@
 .gr-tree-row:not([data-changed]) { opacity: .8; }
 .gr-dot { color: var(--amber); font-size: var(--fs-tag); display: inline-flex; gap: 2px; align-items: center; }
 .gr-dot i { font-style: normal; }
-.gr-pm { display: inline-flex; gap: 4px; }
+.gr-pm { display: inline-flex; gap: 4px; white-space: nowrap; }
 .gr-pm .cs-add, .gr-pm .cs-del { font-size: var(--fs-tag); }
 
 .gr-main { min-width: 0; }
@@ -434,7 +434,7 @@
   max-height: calc(100vh - 16px); min-width: 0; overflow: hidden; }
 .gr-ah { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
 .gr-ah-t { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.gr-ah-t b { font-size: var(--fs-ui); text-transform: capitalize; }
+.gr-ah-t b { font-size: var(--fs-ui); }
 .gr-ah-t small { font-size: var(--fs-tag); }
 .gr-ah [data-tone="amber"] { color: var(--amber); }
 .gr-ah [data-tone="green"] { color: var(--green); }
@@ -485,6 +485,13 @@
 
 /* the tree's names, go to file, the breadcrumb */
 .gr-name { min-width: 0; white-space: nowrap; overflow: hidden; }
+/* A tree row's name (BOSSAPP-954): the head shrinks to "…" (in the middle of the name), the tail
+   with the extension never shrinks, and everything else on the row is fixed-size (treeRowFit
+   already dropped the counts that would not fit), so the name is never hard-cut at the edge. */
+.gr-tree-row .gr-name { display: inline-flex; flex: 0 1 auto; overflow: visible; }
+.gr-name-h { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-name-t { flex: none; white-space: nowrap; }
+.gr-tree-row > :not(.gr-name):not(.cs-spacer) { flex: none; }
 .gr-caret-gap { display: inline-block; width: 11px; flex: none; }
 .gr-goto { position: relative; margin: 0 0 6px; }
 .gr-goto .lr-goto { margin: 0 8px; }
