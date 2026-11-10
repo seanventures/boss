@@ -1,14 +1,16 @@
 """A build agent's tool call is checked against policy before it runs.
 
 Allow runs the tool. Ask does not: the session waits, and the tool's effect
-never happens. Off does not run the tool either. Selectors, argument hashes,
-always-allow rules and an audit log are later slices, not this one.
+never happens. Off does not run the tool either. A wait is bound to the exact
+arguments. Selectors, always-allow rules and an audit log are later slices,
+not this one.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
+from boss_engine.services.argument_binding import args_sha256
 from boss_engine.services.code_agent import NativeCodeAgent
 from boss_engine.services.engine_contract import normalise_result
 
@@ -57,6 +59,11 @@ def test_a_call_that_needs_approval_waits_and_does_not_run(tmp_path: Path, monke
     assert out["awaiting_approval"] is True
     assert out["stop_reason"] == "awaiting_approval"
     assert out["pending_tool"] == "write_file"
+    held = {"path": "ran.py", "content": "ran = True\n"}
+    assert (out["pending_args_sha256"], out["pending_args_preview"]) == (
+        args_sha256("write_file", held),
+        {"path": "ran.py", "content": "ran = True\n"},
+    )
     assert out["turns"] == 1
     assert len(llm._turns) == 1
     assert normalise_result(out, engine="native")["stop_reason"] == "awaiting_approval"

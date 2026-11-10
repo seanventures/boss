@@ -1840,6 +1840,7 @@ class NativeCodeAgent:
         capped = True
         stop_reason = "turn_cap"
         pending_tool: Optional[str] = None
+        pending_args: Optional[dict] = None
         # THE STAGE'S WALL-TIME DEADLINE bounds this session as it bounds a CLI session
         # (_cap_to_deadline): checked before every model turn.
         deadline = None if read_only else _stage_deadline()
@@ -1945,6 +1946,7 @@ class NativeCodeAgent:
                     summary = note
                     stop_reason = "awaiting_approval"
                     pending_tool = name
+                    pending_args = args
                     capped = False
                     held = True
                     break
@@ -1975,7 +1977,7 @@ class NativeCodeAgent:
 
         if not summary:
             summary = f"(no summary; {tool_calls_made} tool call(s) made)"
-        return {
+        result = {
             "summary": summary.strip(),
             "usage": usage_last,
             "cost_usd_micros": total_cost,
@@ -1987,6 +1989,12 @@ class NativeCodeAgent:
             "awaiting_approval": stop_reason == "awaiting_approval",
             "pending_tool": pending_tool,
         }
+        if stop_reason == "awaiting_approval":
+            from .argument_binding import args_sha256, redacted_preview
+
+            result["pending_args_sha256"] = args_sha256(pending_tool, pending_args)
+            result["pending_args_preview"] = redacted_preview(pending_args)
+        return result
 
     @tidies_workspace
     def run_role(
