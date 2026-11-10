@@ -40,9 +40,15 @@ from urllib.parse import urlparse
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .core import emit_event, make_id, normalize_data_boundary
+from .core import create_blocking_decision, emit_event, make_id, normalize_data_boundary
 from .tool_call_audit import record_tool_call
-from .tool_catalog import description_sha256, schema_sha256
+from .tool_catalog import (
+    apply_quarantine,
+    changed_tool_decisions,
+    compare_catalog,
+    description_sha256,
+    schema_sha256,
+)
 from .tool_result_screen import apply_screen
 
 
@@ -1161,7 +1167,36 @@ def record_reachability(
     error: Optional[str] = None,
 ) -> None:
     """Write down what a probe found. A failed probe keeps the last-known tool list, because an
-    operator fixing a server wants to see which tools it HAD, not an empty box."""
+    operator fixing a server wants to see which tools it HAD, not an empty box.
+
+    A reachable probe compares the new summary with the stored tools first. A same-named tool
+    whose schema or description hash changed is stored as ask, and one decision is opened per
+    such tool before the update. An unreachable probe does not compare and does not open a
+    decision. A decision that cannot be opened is not swallowed, so the new list is not stored
+    without it.
+    """
+    summaries = _tool_summary(tools or [])
+    stored = summaries
+    if reachable:
+        row = connection.execute(
+            text("SELECT name, tools FROM mcp_servers WHERE id = :id AND project_id = :p"),
+            {"id": server_id, "p": project_id},
+        ).mappings().first()
+        previous = _loads(row["tools"], []) if row is not None else None
+        quarantined = compare_catalog(previous, summaries)["quarantined"]
+        stored = apply_quarantine(summaries, quarantined)
+        server_name = str(row["name"]) if row is not None and row["name"] else ""
+        for decision in changed_tool_decisions(server_name, quarantined):
+            create_blocking_decision(
+                connection,
+                project_id,
+                None,
+                decision["question"],
+                decision["recommendation"],
+                {},
+                "tool_schema_changed",
+                risk_tier=2,
+            )
     connection.execute(
         text(
             "UPDATE mcp_servers SET reachable = :r, last_checked_at = now(), last_error = :e"
@@ -1169,7 +1204,7 @@ def record_reachability(
             + " WHERE id = :id AND project_id = :p"
         ),
         {"r": bool(reachable), "e": None if reachable else (error or "no answer")[:500],
-         "t": json.dumps(_tool_summary(tools or [])), "id": server_id, "p": project_id},
+         "t": json.dumps(stored), "id": server_id, "p": project_id},
     )
 
 

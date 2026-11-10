@@ -2,7 +2,8 @@
 
 The hashes travel on the probe summary. A same-named tool whose schema or
 description digest changed is quarantined to ask. A first sight is not a
-change. This does not write the catalog table or open a decision.
+change. This does not write the catalog table or open a decision: it marks
+a copy of the observed list and names the decision a reachable probe opens.
 """
 from __future__ import annotations
 
@@ -87,3 +88,62 @@ def compare_catalog(previous: Any, observed: Any) -> dict[str, list]:
             "description_sha256": new_description,
         })
     return {"quarantined": quarantined}
+
+
+def _quarantined_names(quarantined: Any) -> set[str]:
+    names: set[str] = set()
+    for item in quarantined or []:
+        if isinstance(item, dict):
+            name = item.get("name")
+        elif isinstance(item, str):
+            name = item
+        else:
+            continue
+        if name:
+            names.add(str(name))
+    return names
+
+
+def apply_quarantine(observed: Any, quarantined: Any) -> list:
+    """Copy of the observed tools. A tool named in ``quarantined`` is ask.
+
+    Entries are the dicts :func:`compare_catalog` returns, or bare names.
+    Neither the lists nor the tool dicts are mutated.
+    """
+    names = _quarantined_names(quarantined)
+    marked: list = []
+    for tool in observed or []:
+        if not isinstance(tool, dict):
+            marked.append(tool)
+            continue
+        copied = dict(tool)
+        name = copied.get("name")
+        if name and str(name) in names:
+            copied["quarantine"] = "ask"
+        marked.append(copied)
+    return marked
+
+
+def changed_tool_decisions(server_name: str, quarantined: Any) -> list[dict]:
+    """One decision payload per quarantined tool. Nothing is written here."""
+    decisions: list[dict] = []
+    for item in quarantined or []:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        name = str(item["name"])
+        decisions.append({
+            "question": f"Tool changed: {server_name} / {name}",
+            "recommendation": {
+                "action": "review_tool_change",
+                "server": server_name,
+                "tool": name,
+                "quarantine": "ask",
+                "schema_changed": item.get("schema_changed"),
+                "description_changed": item.get("description_changed"),
+                "previous_schema_sha256": item.get("previous_schema_sha256"),
+                "schema_sha256": item.get("schema_sha256"),
+                "previous_description_sha256": item.get("previous_description_sha256"),
+                "description_sha256": item.get("description_sha256"),
+            },
+        })
+    return decisions
