@@ -11626,3 +11626,17 @@ BEGIN
   END IF;
 END;
 $$;
+
+-- ALWAYS-ALLOW (BOSSAPP-817): a revocable always-allow row for one tool.
+CREATE TABLE IF NOT EXISTS tool_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  server_id TEXT,
+  tool TEXT NOT NULL,
+  schema_sha256 TEXT,
+  source_decision_id TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  CHECK (status IN ('active', 'revoked'))
+);
