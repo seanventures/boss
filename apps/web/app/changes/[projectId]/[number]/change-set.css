@@ -2,7 +2,8 @@
    token, every font size a --fs-* step, every class `cs-` (tk-* for the diff's token colours).
    One column on a phone; main + a decision rail from 1024. A long diff scrolls inside its box. */
 
-.cs { --cs-violet: #8b7cf6; max-width: min(1240px, 100%); margin: 0 auto; padding: 20px 16px 48px; color: var(--ink);
+/* FULL WIDTH (BOSSAPP-954): no width cap anywhere on the page; a 16px gutter only. */
+.cs { --cs-violet: #8b7cf6; width: 100%; margin: 0; padding: 12px 16px 32px; color: var(--ink);
   font-size: var(--fs-body); display: flex; flex-direction: column; gap: 14px; min-width: 0; box-sizing: border-box; }
 .cs *, .cs *::before, .cs *::after { box-sizing: border-box; }
 .cs a { color: var(--accent-text); text-decoration: none; }
@@ -59,11 +60,9 @@
 .cs-main, .cs-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .cs-side { order: -1; }
 @media (min-width: 1024px) {
-  .cs { padding: 24px 24px 56px; }
   .cs-grid { grid-template-columns: minmax(0, 1fr) minmax(250px, 300px); align-items: start; }
   .cs-side { order: 0; position: sticky; top: 52px; }
 }
-@media (min-width: 1900px) { .cs { max-width: 1560px; } .cs-grid { grid-template-columns: minmax(0, 1fr) 340px; } }
 
 .cs-card { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-lg, 12px); padding: 12px 14px; min-width: 0; scroll-margin-top: 56px; }
 .cs-card-h { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; font-size: var(--fs-ui); color: var(--ink); }
@@ -229,7 +228,6 @@
 
 /* (b) the Code tab */
 .lr-code { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px; }
-@media (min-width: 900px) { .lr-code { grid-template-columns: minmax(11.25rem, 15rem) minmax(0, 1fr); } }
 .lr-tree { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-height: 40vh; overflow: auto; }
 @media (min-width: 900px) { .lr-tree { max-height: 72vh; } }
 .lr-goto { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); color: var(--muted); }
@@ -311,3 +309,186 @@
 .lr-required li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 6px 8px; border-radius: 8px; background: var(--surface-2); }
 .lr-required li .cs-dot { margin-top: 5px; }
 @media (prefers-reduced-motion: reduce) { .lr-steps li[data-s="run"] > i { animation: none; } }
+
+/* ── THE GIT-STYLE REVIEW (BOSSAPP-954; wireframe 6-git-review.html) ──────────────────────────
+   Full width, edge to edge with a 16px gutter: the tree and the agent take rem/clamp widths and
+   the diff takes the rest. Under 1100px the agent pane folds into a button (a sheet); on a phone
+   the tree goes and the diff is alone; nothing scrolls the page sideways. */
+.gr { gap: 10px; overflow-x: clip; }
+.gr-hd { gap: 4px; }
+.gr-hd-1 { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; min-width: 0; }
+.gr-hd-1 h1 { font-size: var(--fs-title); }
+.gr-hd-acts { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gr-anchor { position: relative; display: inline-flex; }
+.gr-decide { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gr-decide .cs-primary { width: auto; padding: 5px 12px; }
+.gr-where { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: var(--fs-tag); color: var(--faint); min-width: 0; }
+.gr-where > span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.gr-where code { color: var(--ink-soft); }
+.gr-stale { color: var(--amber); font-weight: 600; }
+.gr-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.gr-tabs a[aria-selected="true"] { color: var(--ink); background: var(--surface-2); box-shadow: inset 0 -2px 0 var(--accent); }
+.gr-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; width: min(34rem, calc(100vw - 32px)); background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: 10px; padding: 10px 12px; box-shadow: var(--shadow-lg, 0 10px 30px rgb(0 0 0 / 18%));
+  display: flex; flex-direction: column; gap: 8px; }
+.gr-clone .lr-where { grid-template-columns: minmax(0, 1fr); }
+.gr-select { font: inherit; font-size: var(--fs-meta); border: 1px solid var(--border-strong); border-radius: 8px; padding: 3px 6px;
+  background: var(--surface); color: var(--ink); max-width: 100%; min-width: 0; }
+
+/* The panes: the tree and the agent take the widths the dock state gives (px when docked, a
+   2.25rem rail, 0 on a phone); the code takes the rest. Never a cap on the page. */
+.gr-layout { --gr-tree-col: 264px; --gr-agent-col: 340px; min-width: 0; }
+.gr-body { display: grid; grid-template-columns: minmax(0, 1fr) var(--gr-agent-col); gap: 12px; align-items: start; min-width: 0; }
+.gr-tab { min-width: 0; }
+.gr-files, .lr-code { display: grid; grid-template-columns: var(--gr-tree-col) minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; }
+.gr-dock { position: sticky; top: 8px; min-width: 0; align-self: start; }
+.gr-dock[data-state="docked"] { position: sticky; }
+.gr-dock[data-state="sheet"] { position: static; width: 0; }
+.gr-edge { all: unset; position: absolute; top: 6px; z-index: 3; width: 18px; height: 18px; display: grid; place-items: center; cursor: pointer;
+  border-radius: 6px; color: var(--faint); background: var(--surface); border: 1px solid var(--border); }
+.gr-edge:hover { color: var(--ink); }
+.gr-edge:focus-visible { outline: 2px solid var(--accent-text); }
+.gr-dock[data-pane="tree"] > .gr-edge { right: -9px; }
+.gr-dock[data-pane="agent"] > .gr-edge { left: -9px; }
+.gr-resize { position: absolute; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; }
+.gr-resize:hover, .gr-resize:focus-visible { background: color-mix(in srgb, var(--accent) 25%, transparent); outline: none; }
+.gr-dock[data-pane="tree"] > .gr-resize { right: -10px; }
+.gr-dock[data-pane="agent"] > .gr-resize { left: -10px; }
+.gr-rail { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 0; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px; width: 2.25rem; }
+.gr-drawer { position: fixed; top: 8px; bottom: 8px; z-index: 40; background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 12px; box-shadow: var(--shadow-lg, 0 14px 40px rgb(0 0 0 / 24%)); display: flex; flex-direction: column; overflow: hidden; }
+.gr-drawer[data-pane="tree"] { left: 8px; }
+.gr-drawer[data-pane="agent"] { right: 8px; }
+.gr-drawer-h { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-ui); }
+.gr-drawer > .gr-tree, .gr-drawer > .gr-agent { position: static; border: 0; border-radius: 0; flex: 1; max-height: none; }
+.gr-tree { position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow: auto; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px; padding: 6px 0; min-width: 0; }
+.gr-dock > .gr-tree { position: static; }
+.gr-layout[data-focus] .gr-crumb-w { font-weight: 600; }
+.gr-tree .lr-goto { margin: 0 8px 6px; }
+.gr-mode { display: flex; margin: 0 8px 6px; }
+.gr-mode button { flex: 1; }
+.gr-tree-l, .gr-tree-l ul { list-style: none; margin: 0; padding: 0; }
+.gr-tree-row { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 10px;
+  font-size: var(--fs-meta); color: var(--ink-soft); cursor: pointer; min-width: 0; }
+.gr-tree-row[data-k="dir"] { color: var(--faint); }
+.gr-tree-row:hover { background: var(--surface-2); }
+.gr-tree-row[aria-current="true"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.gr-tree-row:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.gr-tree-row:not([data-changed]) { opacity: .8; }
+.gr-dot { color: var(--amber); font-size: var(--fs-tag); display: inline-flex; gap: 2px; align-items: center; }
+.gr-dot i { font-style: normal; }
+.gr-pm { display: inline-flex; gap: 4px; }
+.gr-pm .cs-add, .gr-pm .cs-del { font-size: var(--fs-tag); }
+
+.gr-main { min-width: 0; }
+.gr-cmp { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; font-size: var(--fs-meta); }
+.gr-range { position: relative; display: inline-flex; min-width: 0; }
+.gr-range .gr-pop { left: 0; right: auto; }
+.gr-sel { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong);
+  border-radius: 8px; padding: 3px 8px; font-family: var(--mono); font-size: var(--fs-tag); cursor: pointer; background: var(--surface); max-width: 100%; }
+.gr-sel:focus-visible { outline: 2px solid var(--accent-text); }
+.gr-viewed-n { color: var(--faint); font-size: var(--fs-tag); }
+.gr-fh { display: flex; align-items: center; gap: 8px; background: var(--surface-2); padding-right: 10px; min-width: 0; }
+.gr-fh .cs-file-h { flex: 1 1 auto; min-width: 0; }
+.gr-viewed { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-tag); color: var(--ink-soft); white-space: nowrap; cursor: pointer; }
+.cs-file[data-viewed] .cs-path { color: var(--faint); }
+.gr .cs-diff { max-height: none; }
+
+/* the split diff */
+.gr-split { table-layout: fixed; }
+.gr-split td.cs-no { width: 3.2rem; }
+.gr-split td.cs-code { width: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gr-split td[data-k="del"] { background: color-mix(in srgb, var(--red) 11%, transparent); }
+.gr-split td[data-k="add"] { background: color-mix(in srgb, var(--green) 11%, transparent); }
+
+/* commits */
+.gr-cl { list-style: none; margin: 6px 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.gr-cl li { display: grid; grid-template-columns: 1.4rem minmax(0, 1fr) auto auto auto; gap: 10px; align-items: center; padding: 6px 12px;
+  border-top: 1px solid var(--border); font-size: var(--fs-meta); min-width: 0; }
+.gr-cl li:first-child { border-top: 0; }
+.gr-cl li[data-on] { background: var(--accent-soft); }
+.gr-c-msg { all: unset; display: inline-flex; gap: 8px; align-items: center; min-width: 0; cursor: pointer; color: var(--ink); }
+.gr-c-msg:hover { text-decoration: underline; }
+.gr-cmpbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--accent-line);
+  background: var(--accent-soft); border-radius: 10px; font-size: var(--fs-meta); }
+.gr-commit-view { margin-top: 10px; }
+.gr-commit-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--fs-ui); }
+
+/* conversation */
+.gr-conv { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.cs-body[data-clamp3] .cs-body-md { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.gr-timeline { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 2px solid var(--border-strong); display: flex; flex-direction: column; gap: 6px;
+  font-size: var(--fs-meta); }
+.gr-checks { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* the PR agent */
+.gr-agent { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  max-height: calc(100vh - 16px); min-width: 0; overflow: hidden; }
+.gr-ah { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.gr-ah-t { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.gr-ah-t b { font-size: var(--fs-ui); text-transform: capitalize; }
+.gr-ah-t small { font-size: var(--fs-tag); }
+.gr-ah [data-tone="amber"] { color: var(--amber); }
+.gr-ah [data-tone="green"] { color: var(--green); }
+.gr-oc { padding: 8px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+.gr-oc-h { display: flex; gap: 6px; align-items: center; font-size: var(--fs-meta); }
+.gr-oc-h b { margin-right: auto; }
+.gr-oc-row { all: unset; box-sizing: border-box; display: flex; gap: 6px; align-items: baseline; padding: 3px 0; font-size: var(--fs-meta); cursor: pointer; min-width: 0; }
+.gr-oc-row:hover .cs-ell { text-decoration: underline; }
+.gr-oc-row[data-s="resolved"] { opacity: .65; }
+.gr-oc-st { margin-left: auto; font-size: var(--fs-tag); white-space: nowrap; color: var(--amber); }
+.gr-oc-row[data-s="resolved"] .gr-oc-st, .gr-oc-row[data-s="addressed"] .gr-oc-st { color: var(--green); }
+.gr-fix { margin-top: 4px; justify-content: center; }
+.gr-chat { flex: 1; overflow: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-meta); min-height: 6rem; }
+.gr-msg { border-radius: 10px; padding: 6px 10px; max-width: 92%; background: var(--surface-2); overflow-wrap: anywhere; }
+.gr-msg[data-me] { align-self: flex-end; background: var(--accent-soft); }
+.gr-msg small { display: block; font-size: var(--fs-tag); }
+.gr-said { padding: 0 12px; }
+.gr-compose { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
+.gr-compose input { flex: 1; min-width: 0; border: 1px solid var(--border-strong); border-radius: 8px; padding: 5px 8px; font: inherit;
+  font-size: var(--fs-meta); background: var(--bg); color: var(--ink); }
+
+@media (max-width: 699px) {
+  /* A phone: the code alone; the tree and the agent open as sheets from the header. */
+  .gr-files, .lr-code, .gr-body { grid-template-columns: minmax(0, 1fr); }
+  .gr-drawer { inset: auto 0 0 0; top: 20vh; width: 100vw !important; border-radius: 14px 14px 0 0; }
+  .gr-cl li { grid-template-columns: 1.4rem minmax(0, 1fr); }
+  .gr-cl li > code, .gr-c-who { display: none; }
+}
+.gr-c-stat { font-size: var(--fs-tag); white-space: nowrap; }
+.gr-what { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 0; font-size: var(--fs-meta); }
+.gr-commit-view .gr-commit-h { width: 100%; }
+@media (max-width: 699px) { .gr-c-stat { display: none; } }
+
+/* a comment's code, out of the diff */
+.gr-code { margin: 4px 0 6px; min-width: 0; }
+.gr-code-h { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-meta); }
+.gr-snip { width: 100%; border-collapse: collapse; margin-top: 4px; font-family: var(--mono); font-size: var(--fs-tag); line-height: 1.5;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; table-layout: fixed; }
+.gr-snip td { padding: 0 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.gr-snip td.cs-no { width: 3rem; }
+.gr-snip tr[data-focus] td { background: var(--amber-soft); color: var(--ink); }
+.gr-snip tr[data-mark="+"] td.cs-code { color: var(--green); }
+.gr-snip tr[data-mark="-"] td.cs-code { color: var(--red); }
+.gr-code[data-small] .gr-snip { font-size: var(--fs-tag); }
+.gr-oc-item { border-top: 1px solid var(--border); padding: 4px 0; }
+.gr-oc-item:first-of-type { border-top: 0; }
+.gr-timeline li { min-width: 0; }
+
+/* the tree's names, go to file, the breadcrumb */
+.gr-name { min-width: 0; white-space: nowrap; overflow: hidden; }
+.gr-caret-gap { display: inline-block; width: 11px; flex: none; }
+.gr-goto { position: relative; margin: 0 0 6px; }
+.gr-goto .lr-goto { margin: 0 8px; }
+.gr-goto-l { list-style: none; margin: 4px 8px 0; padding: 4px 0; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface);
+  max-height: 18rem; overflow: auto; }
+.gr-goto-l button { all: unset; box-sizing: border-box; display: flex; flex-direction: column; width: 100%; padding: 3px 10px; cursor: pointer; font-size: var(--fs-meta); }
+.gr-goto-l [aria-selected="true"] button { background: var(--accent-soft); }
+.gr-goto-l .cs-faint { font-size: var(--fs-tag); }
+.gr-goto-none { margin: 4px 10px; }
+.gr-crumb { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: var(--fs-meta); min-width: 0; }
+.gr-crumb-w { min-width: 0; }
+.gr-c-box { width: 13px; }
+.gr-layout[data-focus] .gr-hd, .gr-layout[data-focus] .gr-tabs, .gr-layout[data-focus] .cs-crumb { display: none; }

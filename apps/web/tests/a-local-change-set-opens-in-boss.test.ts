@@ -27,16 +27,20 @@ describe("repo-links", () => {
     expect(parseLocalChange("https://github.com/acme/store/pull/3")).toBeNull();
   });
 
-  it("opens a local change set in BOSS and a GitHub PR on GitHub", () => {
+  it("opens a local change set in BOSS, and a GitHub PR in BOSS too (BOSSAPP-954)", () => {
     expect(changeHref(LOCAL_PR)).toBe("/changes/prj_notes/3");
     expect(changeSubHref(LOCAL_PR, "files")).toBe("/changes/prj_notes/3");
-    expect(changeHref("https://github.com/acme/store/pull/3")).toBe("https://github.com/acme/store/pull/3");
-    expect(changeSubHref("https://github.com/acme/store/pull/3", "files")).toBe("https://github.com/acme/store/pull/3/files");
+    // A github.com PR opens BOSS's page for it (its project's change page, or GitHub when none).
+    expect(changeHref("https://github.com/acme/store/pull/3")).toBe("/changes/github/acme/store/3");
+    expect(changeSubHref("https://github.com/acme/store/pull/3", "files")).toBe("/changes/github/acme/store/3?tab=files");
+    expect(changeSubHref("https://github.com/acme/store/pull/3", "commits/abcdef1")).toBe("/changes/github/acme/store/3?tab=commits&commit=abcdef1");
+    expect(changeHref("https://github.example.com/acme/store/pull/3")).toBe("https://github.example.com/acme/store/pull/3");
     expect(changeHref(null)).toBeNull();
     expect(linkTarget(LOCAL_PR)).toEqual({});
-    expect(linkTarget("https://github.com/acme/store/pull/3")).toEqual({ target: "_blank", rel: "noreferrer" });
+    expect(linkTarget("https://github.com/acme/store/pull/3")).toEqual({});
+    expect(linkTarget("https://github.com/acme/store")).toEqual({ target: "_blank", rel: "noreferrer" });
     expect(prLinkLabel(LOCAL_PR)).toBe("Open change set");
-    expect(prLinkLabel("https://github.com/acme/store/pull/3")).toBe("Open PR on GitHub");
+    expect(prLinkLabel("https://github.com/acme/store/pull/3")).toBe("Review PR");
     expect(reviewChangeWords(LOCAL_PR)).toBe("Review change #3 ›");
     expect(reviewChangeWords("https://github.com/acme/store/pull/3")).toBeNull();
   });

@@ -8483,9 +8483,6 @@ def code_task_steer_endpoint(run_id: str, payload: CodeTaskSteerBody):
     actor = str((payload or {}).get("actor") or "").strip()
     if not actor:
         raise HTTPException(status_code=422, detail="actor is required")
-    from datetime import datetime as _dt, timezone as _tz
-    entry = {"text": guidance[:4000], "actor": actor,
-             "at": _dt.now(_tz.utc).isoformat()}
     with begin(engine) as connection:
         row = connection.execute(
             text("SELECT project_id, status FROM code_task_runs WHERE id=:id"),
@@ -8501,12 +8498,10 @@ def code_task_steer_endpoint(run_id: str, payload: CodeTaskSteerBody):
             raise HTTPException(
                 status_code=409,
                 detail=f"run is {row['status']}; steering only applies to a running task")
-        connection.execute(
-            text("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
-                 "|| jsonb_build_object('pending_guidance', "
-                 "COALESCE(finalize_ctx->'pending_guidance','[]'::jsonb) || CAST(:e AS JSONB)), "
-                 "updated_at=now() WHERE id=:id AND project_id=:p"),
-            {"e": json.dumps([entry]), "id": run_id, "p": row["project_id"]})
+        # The one steer path: the change page's PR agent chat steers through it too (BOSSAPP-954).
+        from boss_engine.services.change_review import queue_guidance
+
+        entry = queue_guidance(connection, run_id, guidance, actor)
     return {"status": "queued", "run_id": run_id,
             "applies": "at the next stage boundary", "guidance": guidance[:200]}
 

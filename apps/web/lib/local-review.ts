@@ -3,7 +3,7 @@
  * the data the change page's review reads and writes. The engine is services/local_review.py —
  * ONE comment store, whoever writes (this page, `boss review`, git notes, MCP).
  *
- *   GET  …/local-changes/{n}/tree?ref=head|base          the Code tab's tree
+ *   GET  …/local-changes/{n}/tree?ref=head|base|<sha>    the Code tab's tree
  *   GET  …/local-changes/{n}/file?path=&ref=             one whole file (1 MB cap)
  *   POST …/local-changes/{n}/comments                    a comment on a line
  *   POST …/local-changes/{n}/comments/{id}/reply         a reply in its thread
@@ -13,29 +13,33 @@
  */
 import { idGet, idPost } from "./identity/api";
 import { withConsent } from "./identity/consent";
-import { changeSetPath } from "./repo-links";
+import { changeBase, type ChangeAt } from "./change-review";
 
 export * from "./local-review-data";
 import type { FileView, ReviewComment, Tree } from "./local-review-data";
 
-export const getTree = (projectId: string, n: number | string, ref: "head" | "base") =>
-  idGet<Tree>(`${changeSetPath(projectId, n)}/tree?ref=${ref}`);
-export const getFile = (projectId: string, n: number | string, path: string, ref: "head" | "base") =>
-  idGet<FileView>(`${changeSetPath(projectId, n)}/file?path=${encodeURIComponent(path)}&ref=${ref}`);
+/** BOSSAPP-954: every call names its change (ChangeAt): a local change set, or a GitHub pull
+ *  request of the project — the same calls, the same shapes (lib/change-review.ts). */
+export type { ChangeAt } from "./change-review";
+
+/** `head`, `base`, or a commit of the change. */
+export type Ref = string;
+export const getTree = (at: ChangeAt, ref: Ref) => idGet<Tree>(`${changeBase(at)}/tree?ref=${encodeURIComponent(ref)}`);
+export const getFile = (at: ChangeAt, path: string, ref: Ref) =>
+  idGet<FileView>(`${changeBase(at)}/file?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}`);
 
 export type NewComment = { body: string; path?: string | null; line?: number | null; side?: "new" | "old";
                            commit_sha?: string | null; severity?: string };
-export const addComment = (projectId: string, n: number | string, c: NewComment) =>
-  idPost<ReviewComment>(`${changeSetPath(projectId, n)}/comments`, c);
-export const replyTo = (projectId: string, n: number | string, id: number, body: string) =>
-  idPost<ReviewComment>(`${changeSetPath(projectId, n)}/comments/${id}/reply`, { body });
-export const resolveThread = (projectId: string, n: number | string, id: number, reopen = false) =>
-  idPost<ReviewComment>(`${changeSetPath(projectId, n)}/comments/${id}/resolve`, { reopen });
+export const addComment = (at: ChangeAt, c: NewComment) => idPost<ReviewComment>(`${changeBase(at)}/comments`, c);
+export const replyTo = (at: ChangeAt, id: number, body: string) =>
+  idPost<ReviewComment>(`${changeBase(at)}/comments/${id}/reply`, { body });
+export const resolveThread = (at: ChangeAt, id: number, reopen = false) =>
+  idPost<ReviewComment>(`${changeBase(at)}/comments/${id}/resolve`, { reopen });
 /** Request changes starts a build: the consent sheet first when no grant covers it. */
-export const requestChanges = (projectId: string, n: number | string, note: string) =>
-  withConsent(() => idPost<{ status: string; run_id: string | null }>(`${changeSetPath(projectId, n)}/request-changes`, { note }));
-export const runReview = (projectId: string, n: number | string) =>
-  withConsent(() => idPost<{ run_id: string | null }>(`${changeSetPath(projectId, n)}/review`, {}));
+export const requestChanges = (at: ChangeAt, note: string) =>
+  withConsent(() => idPost<{ status: string; run_id: string | null }>(`${changeBase(at)}/request-changes`, { note }));
+export const runReview = (at: ChangeAt) =>
+  withConsent(() => idPost<{ run_id: string | null }>(`${changeBase(at)}/review`, {}));
 
 // ── syntax colour: Shiki, loaded only when a whole file is shown ───────────────────────────
 

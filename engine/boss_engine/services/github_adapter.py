@@ -1201,6 +1201,199 @@ class GitHubAdapter:
         )
         return int(response["id"])
 
+    # -- the change page's reads and writes (services/change_review.py, BOSSAPP-954) ----------
+
+    def pull_request_view(self, pull_number: int) -> dict:
+        """One read of the pull request for the change page: title, body, refs, state, merged."""
+        r = self._request("GET", f"/repos/{self.repository_full_name}/pulls/{pull_number}")
+        head = r.get("head") or {}
+        base = r.get("base") or {}
+        return {"number": int(r["number"]), "url": str(r.get("html_url") or ""),
+                "title": str(r.get("title") or ""), "body": str(r.get("body") or ""),
+                "state": str(r.get("state") or ""), "draft": bool(r.get("draft", False)),
+                "merged": bool(r.get("merged", False)),
+                "mergeable_state": str(r.get("mergeable_state") or ""),
+                "head_ref": str(head.get("ref") or ""), "head_sha": str(head.get("sha") or ""),
+                "base_ref": str(base.get("ref") or ""), "base_sha": str(base.get("sha") or ""),
+                "user": str((r.get("user") or {}).get("login") or ""),
+                "created_at": r.get("created_at"), "updated_at": r.get("updated_at")}
+
+    def pull_request_commits(self, pull_number: int, *, limit: int = 250) -> list[dict]:
+        """The pull request's commits, newest first (like `git log`): {sha, message, author, date}."""
+        out: list[dict] = []
+        page = 1
+        while len(out) < limit:
+            batch = self._request(
+                "GET", f"/repos/{self.repository_full_name}/pulls/{pull_number}/commits"
+                       f"?per_page=100&page={page}")
+            if not batch:
+                break
+            for c in batch:
+                info = c.get("commit") or {}
+                out.append({"sha": str(c.get("sha") or ""),
+                            "message": str(info.get("message") or "").split("\n")[0][:300],
+                            "author": str(((c.get("author") or {}).get("login"))
+                                          or (info.get("author") or {}).get("name") or ""),
+                            "date": (info.get("author") or {}).get("date")})
+            if len(batch) < 100:
+                break
+            page += 1
+        return list(reversed(out[:limit]))
+
+    def pull_request_review_comments(self, pull_number: int, *, limit: int = 1000) -> list[dict]:
+        """Every inline review comment on the pull request, replies included."""
+        out: list[dict] = []
+        page = 1
+        while len(out) < limit:
+            batch = self._request(
+                "GET", f"/repos/{self.repository_full_name}/pulls/{pull_number}/comments"
+                       f"?per_page=100&page={page}")
+            if not batch:
+                break
+            for c in batch:
+                user = c.get("user") or {}
+                out.append({"id": int(c["id"]), "in_reply_to_id": c.get("in_reply_to_id"),
+                            "path": c.get("path"), "line": c.get("line"),
+                            "original_line": c.get("original_line"), "side": c.get("side"),
+                            "commit_id": c.get("commit_id"),
+                            "original_commit_id": c.get("original_commit_id"),
+                            "diff_hunk": str(c.get("diff_hunk") or "")[-4000:],
+                            "body": str(c.get("body") or ""),
+                            "user": str(user.get("login") or ""),
+                            "bot": str(user.get("type") or "") == "Bot",
+                            "created_at": c.get("created_at"), "updated_at": c.get("updated_at")})
+            if len(batch) < 100:
+                break
+            page += 1
+        return out[:limit]
+
+    def pull_request_issue_comments(self, pull_number: int, *, limit: int = 300) -> list[dict]:
+        """The pull request's conversation comments (not on a line)."""
+        batch = self._request(
+            "GET", f"/repos/{self.repository_full_name}/issues/{pull_number}/comments"
+                   "?per_page=100") or []
+        return [{"id": int(c["id"]), "body": str(c.get("body") or ""),
+                 "user": str((c.get("user") or {}).get("login") or ""),
+                 "bot": str((c.get("user") or {}).get("type") or "") == "Bot",
+                 "created_at": c.get("created_at"), "updated_at": c.get("updated_at")}
+                for c in batch[:limit] if c.get("id") is not None]
+
+    def _graphql(self, query: str, variables: dict) -> dict:
+        base = self.api_base_url
+        url = (base[: -len("/v3")] + "/graphql") if base.endswith("/api/v3") else base + "/graphql"
+        return self._send("POST", url, headers=self._headers(),
+                          json={"query": query, "variables": variables}).json() or {}
+
+    def _review_threads(self, pull_number: int) -> list[dict]:
+        owner, _, repo = self.repository_full_name.partition("/")
+        found = self._graphql(
+            "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, "
+            "name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { "
+            "id isResolved comments(first: 1) { nodes { databaseId } } } } } } }",
+            {"owner": owner, "repo": repo, "number": int(pull_number)})
+        return ((((((found.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+                  .get("reviewThreads") or {}).get("nodes")) or [])
+
+    def review_thread_states(self, pull_number: int) -> dict[int, bool]:
+        """{the thread's first comment id: resolved?} (GraphQL; REST does not say)."""
+        out: dict[int, bool] = {}
+        for n in self._review_threads(pull_number):
+            first = ((n.get("comments") or {}).get("nodes") or [{}])[0]
+            if first.get("databaseId"):
+                out[int(first["databaseId"])] = bool(n.get("isResolved"))
+        return out
+
+    def set_review_thread_resolved(self, pull_number: int, comment_id: int, resolved: bool) -> bool:
+        """Resolve (or unresolve) the review thread that starts with `comment_id`."""
+        if resolved:
+            return self.resolve_review_thread(pull_number, comment_id)
+        thread = next((n for n in self._review_threads(pull_number) if any(
+            int(x.get("databaseId") or 0) == int(comment_id)
+            for x in ((n.get("comments") or {}).get("nodes") or []))), None)
+        if thread is None:
+            return False
+        if not thread.get("isResolved"):
+            return True
+        done = self._graphql("mutation($id: ID!) { unresolveReviewThread(input: {threadId: $id}) "
+                             "{ thread { id isResolved } } }", {"id": thread["id"]})
+        return not bool(((((done.get("data") or {}).get("unresolveReviewThread") or {})
+                          .get("thread") or {}).get("isResolved")))
+
+    def create_review_comment(self, pull_number: int, *, body: str, commit_id: str, path: str,
+                              line: int, side: str = "RIGHT") -> int:
+        """A comment on one line of the pull request's diff."""
+        response = self._request(
+            "POST", f"/repos/{self.repository_full_name}/pulls/{pull_number}/comments",
+            {"body": body, "commit_id": commit_id, "path": path, "line": int(line),
+             "side": "LEFT" if str(side).upper() == "LEFT" else "RIGHT"})
+        return int(response["id"])
+
+    def branch_commits(self, branch: str, *, limit: int = 50) -> list[dict]:
+        """A branch's commits, newest first: {sha, parents, message, author, date}."""
+        batch = self._request(
+            "GET", f"/repos/{self.repository_full_name}/commits?sha={quote(branch, safe='')}"
+                   f"&per_page={max(1, min(int(limit), 100))}") or []
+        out = []
+        for c in batch:
+            info = c.get("commit") or {}
+            out.append({"sha": str(c.get("sha") or ""),
+                        "parents": [str(p.get("sha") or "") for p in (c.get("parents") or [])],
+                        "message": str(info.get("message") or "").split("\n")[0][:300],
+                        "author": str(((c.get("author") or {}).get("login"))
+                                      or (info.get("author") or {}).get("name") or ""),
+                        "date": (info.get("author") or {}).get("date")})
+        return out
+
+    def compare_diff(self, base_sha: str, head_sha: str) -> str:
+        """The unified diff between two commits (base...head)."""
+        return self._request(
+            "GET", f"/repos/{self.repository_full_name}/compare/"
+                   f"{quote(base_sha, safe='')}...{quote(head_sha, safe='')}",
+            accept="application/vnd.github.v3.diff", response_text=True)
+
+    def commit_detail(self, sha: str) -> dict:
+        """One commit: its message, author, parent, files and unified diff."""
+        path = f"/repos/{self.repository_full_name}/commits/{quote(sha, safe='')}"
+        r = self._request("GET", path)
+        diff = self._request("GET", path, accept="application/vnd.github.v3.diff",
+                             response_text=True)
+        info = r.get("commit") or {}
+        parents = r.get("parents") or []
+        return {"sha": str(r.get("sha") or sha),
+                "parent": (parents[0] or {}).get("sha") if parents else None,
+                "parents": [str((p or {}).get("sha") or "") for p in parents],
+                "author": str(((r.get("author") or {}).get("login"))
+                              or (info.get("author") or {}).get("name") or ""),
+                "date": (info.get("author") or {}).get("date"),
+                "message": str(info.get("message") or ""),
+                "files": [{"path": str(f.get("filename") or ""), "status": str(f.get("status") or ""),
+                           "additions": int(f.get("additions") or 0),
+                           "deletions": int(f.get("deletions") or 0)}
+                          for f in (r.get("files") or [])[:300]],
+                "diff": str(diff)[:400_000]}
+
+    def read_blob(self, ref: str, path: str) -> Optional[bytes]:
+        """A file's bytes at a ref, or None when it is not there."""
+        where = (f"/repos/{self.repository_full_name}/contents/{quote(path)}"
+                 f"?ref={quote(ref, safe='')}")
+        try:
+            payload = self._request("GET", where)
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                return None
+            raise
+        if isinstance(payload, list):
+            return None
+        encoded = payload.get("content")
+        if isinstance(encoded, str) and encoded:
+            return base64.b64decode(encoded)
+        if int(payload.get("size") or 0) > 0:
+            # Over 1 MB the contents API sends no content: the raw media type does.
+            raw = self._request("GET", where, accept="application/vnd.github.raw",
+                                response_text=True)
+            return str(raw).encode("utf-8")
+        return b""
+
     def get_pull_request_diff(self, pull_number: int) -> str:
         return self._request(
             "GET",

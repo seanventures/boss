@@ -29,6 +29,7 @@ import { whenLocal } from "../../lib/local-time";
 import { isLocalRepo, repoHref } from "../../lib/repo-links";
 import type { PxCtx } from "./project-page";
 import { AddRepoDrawer } from "./add-repo";
+import { RepoHistory } from "./repo-history";
 
 /** THIS APP OR THE WHOLE REPO (BOSSAPP-931): `?kscope=repo` on the page's URL, so the tab and its
  *  drawers read the same scope; the engine's default is this app. */
@@ -77,6 +78,7 @@ export function KnowledgeTab({ ctx }: { ctx: PxCtx }) {
         {(k) => (
           <>
             <Repos ctx={ctx} repos={k.repos.length ? k.repos : []} onChecked={read.refresh} />
+            <RepoHistory projectId={ctx.projectId} />
             <ScopeSwitch scope={k.scope} onPick={pick} />
             <div className="px-split px-kn-split">
               <div className="px-stack">
