@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# The BOSS harness benchmark (BOSSAPP-959): scripts/harness_bench.py with the import path set.
+#
+#   scripts/harness-bench run --engine scripted --baseline scripted          (no model, ~2 min)
+#   scripts/harness-bench run --engine claude_code --budget-usd 20 --repeat 3 --allow-unisolated
+#   scripts/harness-bench compare <run-id | report.json> --baseline scripted
+#   scripts/harness-bench report
+#
+# It runs only on a database named boss_test* (--db-url, else BOSS_BENCH_DATABASE_URL, else
+# DATABASE_URL). docs/architecture/HARNESS_BENCHMARK.md says how, what each number means and how
+# the guards decide.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export PYTHONPATH="$ROOT:$ROOT/engine:$ROOT/apps/api:$ROOT/apps/worker${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
+exec "${PYTHON:-python3}" "$ROOT/scripts/harness_bench.py" "$@"

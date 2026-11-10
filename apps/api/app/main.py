@@ -31739,6 +31739,9 @@ from .routers.architecture import build_architecture_router
 
 app.include_router(build_architecture_router(engine=engine,
                                              require_reader=require_project_reader))
+from .routers.harness_bench import build_harness_bench_router
+
+app.include_router(build_harness_bench_router(engine=engine))
 from .routers.deliverable_review import build_deliverable_review_router
 
 app.include_router(build_deliverable_review_router(

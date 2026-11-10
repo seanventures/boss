@@ -11695,3 +11695,74 @@ CREATE TABLE IF NOT EXISTS tool_policies (
   revoked_at TIMESTAMPTZ,
   CHECK (status IN ('active', 'revoked'))
 );
+
+-- THE HARNESS BENCHMARK (BOSSAPP-959; engine/boss_engine/harness_bench, scripts/harness-bench,
+-- docs/architecture/HARNESS_BENCHMARK.md). One row per benchmark run: the suite it ran (pinned by
+-- sha256), the engine and scaffold level, the BOSS commit and the harness settings it ran under
+-- (config + its fingerprint), and its verdict against the baseline it was compared with. Rows are
+-- written by the benchmark on a boss_test* database only; the runner refuses any other.
+CREATE TABLE IF NOT EXISTS harness_bench_runs (
+  id TEXT PRIMARY KEY,
+  suite_name TEXT NOT NULL,
+  suite_version TEXT NOT NULL,
+  suite_sha256 TEXT NOT NULL,
+  engine TEXT NOT NULL,                       -- scripted | claude_code | codex | native:<model>
+  model TEXT,
+  level TEXT NOT NULL DEFAULT 'delegate',     -- the scaffold level (delegate today)
+  boss_sha TEXT,
+  boss_dirty BOOLEAN NOT NULL DEFAULT false,  -- the checkout had uncommitted changes
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,  -- repair retries, review rounds, profile, routing ...
+  config_fingerprint TEXT NOT NULL,
+  rules JSONB NOT NULL DEFAULT '{}'::jsonb,   -- the noise and guard rules it was judged by
+  task_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  repeat INTEGER NOT NULL DEFAULT 1,
+  budget_usd_micros BIGINT,
+  status TEXT NOT NULL DEFAULT 'running',     -- running | completed | incomplete | failed
+  baseline_name TEXT,                         -- saved as a named baseline (--save-baseline)
+  compared_to TEXT,                           -- the baseline it was compared with (--baseline)
+  verdict TEXT,                               -- better | same | worse | not_comparable
+  comparison JSONB NOT NULL DEFAULT '{}'::jsonb,
+  summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+  report_path TEXT,
+  project_id TEXT,                            -- the throwaway project its builds ran in
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_harness_bench_runs_engine
+  ON harness_bench_runs (engine, level, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_harness_bench_runs_baseline
+  ON harness_bench_runs (baseline_name, started_at DESC) WHERE baseline_name IS NOT NULL;
+
+-- One row per task run of a benchmark run: the code task it started, whether it succeeded (every
+-- component in `components`), and what it cost, read from llm_calls / agent_turns / quality_gates
+-- / events / decisions — never from the agent's own account. `detail` is the full result.
+CREATE TABLE IF NOT EXISTS harness_bench_results (
+  id TEXT PRIMARY KEY,
+  bench_run_id TEXT NOT NULL REFERENCES harness_bench_runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL,
+  task_kind TEXT,                             -- fix | feature | new_app
+  iteration INTEGER NOT NULL DEFAULT 1,
+  code_task_run_id TEXT,
+  success BOOLEAN NOT NULL DEFAULT false,
+  skipped BOOLEAN NOT NULL DEFAULT false,     -- not run: the budget was spent
+  status TEXT,                                -- the code task's end status
+  wall_ms BIGINT NOT NULL DEFAULT 0,
+  tokens_in BIGINT NOT NULL DEFAULT 0,
+  tokens_out BIGINT NOT NULL DEFAULT 0,
+  cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+  cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+  cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  model_calls INTEGER NOT NULL DEFAULT 0,
+  turns INTEGER NOT NULL DEFAULT 0,
+  tool_calls INTEGER NOT NULL DEFAULT 0,
+  repair_rounds INTEGER NOT NULL DEFAULT 0,
+  interventions INTEGER NOT NULL DEFAULT 0,
+  components JSONB NOT NULL DEFAULT '{}'::jsonb,
+  gates JSONB NOT NULL DEFAULT '{}'::jsonb,
+  acceptance JSONB NOT NULL DEFAULT '{}'::jsonb,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_harness_bench_results_run
+  ON harness_bench_results (bench_run_id, iteration, task_id);
