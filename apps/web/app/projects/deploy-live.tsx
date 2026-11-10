@@ -11,11 +11,12 @@
  * workflow's deploy step use. The phases themselves are the engine's (deploy_truth.progress).
  */
 import React, { useState } from "react";
-import { ArrowCounterClockwise, CaretDown, CaretRight, Check, CircleNotch, Minus, Wrench, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowCounterClockwise, CaretDown, CaretRight, Check, CircleNotch, Minus, Wrench, X } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { useDeployDetail } from "../../lib/infra-view";
-import { parseDeployProgress, type DeployPhaseRow, type DeployProgress, type Environment } from "../../lib/project-experience";
+import { parseDeployProgress, pxHref, type DeployPhaseRow, type DeployProgress, type Environment } from "../../lib/project-experience";
+import { RUN_ANSWER_PERMISSION, sendRunAnswer } from "../delivery-workflows-ui";
 import { rollbackDeploy } from "../infra/infra-actions";
 import { Said } from "./kit";
 
@@ -116,6 +117,53 @@ export function DeployLive({ e, projectId, actor, onFix, onChanged }: {
           <Said text={said.text} tone={said.ok ? "green" : "red"} />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * A DEPLOY THAT FAILED BEFORE IT HAD A RECORD (engine deploy_truth.step_failures): the workflow's
+ * deploy step stopped while it resolved the source or planned, so there is no deploy to follow —
+ * and the card used to say "Not deployed yet". It says "Last deploy failed: <reason>" with Fix
+ * (the project's agent) and Retry (the run's own retry-step, the run page's Retry), and links the run.
+ */
+export function DeployStepFailed({ projectId, actor, where, reason, runId, stepId, runHref, onFix, onChanged, testid }: {
+  projectId: string; actor: string; where: string; reason: string;
+  runId: string; stepId: string; runHref: string;
+  onFix: (question: string) => void; onChanged?: () => void; testid: string;
+}) {
+  const [said, setSaid] = useState<{ text: string; ok: boolean }>({ text: "", ok: true });
+  const [busy, setBusy] = useState(false);
+  const fix = () => onFix(`The deploy of ${where} failed before it started: ${reason || "no reason recorded"}. Find the cause and fix it, then deploy again.`);
+  const retry = async () => {
+    setBusy(true);
+    try {
+      const r = await sendRunAnswer(projectId, actor, runId, { key: "retry_step", label: "Retry", enabled: true, reason: null, step_id: stepId });
+      setSaid(r.ok ? { text: "Retrying the deploy step.", ok: true } : { text: `Not retried: ${r.error || "the run refused it"}`, ok: false });
+      if (r.ok) onChanged?.();
+    } catch (err) {
+      setSaid({ text: `Not retried: ${err instanceof Error ? err.message : String(err)}`, ok: false });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="px-deploy-live" data-state="failed" data-testid={testid}>
+      <div className="px-deploy-fail" role="alert">
+        <span><b>Last deploy failed:</b> {reason}</span>
+        <div className="px-row px-wrap" style={{ gap: 6 }}>
+          <button type="button" className="px-btn" data-size="s" data-kind="primary" onClick={fix} data-testid={`${testid}-fix`}
+                  title="Hand this failure to the project's agent: it finds the cause, fixes it and deploys again">
+            <Wrench size={12} aria-hidden /> Fix</button>
+          {runId && stepId ? (
+            <GatedButton permission={RUN_ANSWER_PERMISSION} projectId={projectId} className="px-btn" data-size="s" disabled={busy}
+                         data-testid={`${testid}-retry`} title="Run the workflow's deploy step again" onClick={retry}>
+              <ArrowClockwise size={12} aria-hidden /> Retry</GatedButton>
+          ) : null}
+          {runHref ? <a className="px-more" href={pxHref(runHref)} data-testid={`${testid}-run`}>Open the run</a> : null}
+        </div>
+        <Said text={said.text} tone={said.ok ? "green" : "red"} />
+      </div>
     </div>
   );
 }

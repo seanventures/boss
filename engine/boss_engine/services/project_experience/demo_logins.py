@@ -248,9 +248,9 @@ def backfill_deployed_users(engine: Any, settings: Any, *, read_for: Any = None,
         try:
             with engine.connect() as c:
                 if read_for is None:
-                    from ..stack_deploy import github_source_for
+                    from ..stack_deploy import source_for
 
-                    source = github_source_for(c, settings, r["project_id"], owner, repo)
+                    source = source_for(c, settings, r["project_id"], owner, repo)
                     read = lambda path, _s=source: _s.read_file(owner, repo, path, r["commit_sha"])
                 else:
                     read = read_for(c, r["project_id"], owner, repo)

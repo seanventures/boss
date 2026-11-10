@@ -94,11 +94,12 @@ def _state_words(status: Any, decision_status: Any) -> tuple[str, str]:
 def _pr_by_commit(connection: Connection, project_id: str) -> dict[str, dict[str, Any]]:
     """commit → {number, title}: the pull request whose recorded merge it is, and its short
     title (titles.short_title of the build's title and brief)."""
-    from ..repo_links import pr_link
+    from ..repo_links import change_title, pr_link
     from .common import pr_number
     from .titles import short_title
 
     out: dict[str, dict[str, Any]] = {}
+    titled: dict[str, Optional[str]] = {}
     for r in connection.execute(text(
             "SELECT finalize_ctx->'merge'->>'sha' AS sha, pull_request_number AS n, "
             "pull_request_url AS u, title, spec->>'instructions' AS brief FROM code_task_runs "
@@ -107,8 +108,14 @@ def _pr_by_commit(connection: Connection, project_id: str) -> dict[str, dict[str
         n = r["n"] or pr_number(r["u"])
         if n and str(r["sha"]) not in out:
             # A local change set's URL (http://boss-local/…) opens BOSS's change-set view.
+            # The CHANGE SET's own title, never the follow-up build's that recorded the merge.
+            url = str(r["u"] or "")
+            if url and url not in titled:
+                titled[url] = change_title(connection, url)
+            own = titled.get(url)
             out[str(r["sha"])] = {"number": int(n), "url": pr_link(r["u"]),
-                                  "title": short_title(r["title"], r["brief"])}
+                                  "title": short_title(own) if own
+                                  else short_title(r["title"], r["brief"])}
     return out
 
 
@@ -185,6 +192,34 @@ def _history(connection: Connection, project_id: str, limit: int = 10) -> list[d
                     "href": href(project_id, area="infra", view="deploys", deploy=f"stack:{r['id']}")})
         if len(out) >= limit:
             break
+    # A DEPLOY THAT FAILED BEFORE IT HAD A RECORD (deploy_truth.step_failures) is history too:
+    # History said "No deploys yet" beside a dead-lettered deploy step.
+    from ..deploy_truth import step_failures
+
+    failed = step_failures(connection, project_id=project_id, limit=limit)
+    if failed:
+        envs = {str(r["id"]): r for r in connection.execute(text(
+            "SELECT id, environment, app_name FROM deployment_targets WHERE id = ANY(:i)"),
+            {"i": sorted({str(f["target_id"]) for f in failed if f["target_id"]})}).mappings()}
+        for f in failed:
+            t = envs.get(str(f["target_id"] or "")) or {}
+            commit = str(f["commit"] or "")[:7] or None
+            pr = prs.get(str(f["commit"] or ""))
+            what = (f"PR #{pr['number']} {pr['title']}".strip() if pr else commit or "deploy")
+            label = f"{env_label(t['environment'])} · {what}" if t else what
+            out.append({"id": f"step:{f['id']}", "label": label.strip(" ·"),
+                        "env": t.get("environment"), "app": t.get("app_name"),
+                        "status": "failed", "state": "failed", "state_word": "Failed",
+                        "tone": "red", "pr": pr["number"] if pr else None,
+                        "title": pr["title"] if pr else None, "commit": commit,
+                        "duration": None, "smoke": None,
+                        "reason": f["reason"][:110].rstrip(".") or None, "recovered": False,
+                        "by": None, "by_agent": True, "at": iso(f["created_at"]),
+                        "workflow_run_id": f["workflow_run_id"], "step_id": f["step_id"],
+                        "href": href(project_id, area="delivery_workflows",
+                                     wfr=f["workflow_run_id"])})
+        out.sort(key=lambda h: str(h.get("at") or ""), reverse=True)
+        out = out[:limit]
     return out
 
 
@@ -337,7 +372,16 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
            "servers": servers, "add_server_href": href(project_id, area="infra", add="server"),
            "preview": ({"demo_logins": preview["logins"]} if preview else None),
            "demo_logins": logins, "history": _history(connection, project_id)}
-    if not envs:
+    failed_first = next((h for h in out["history"] if h["state"] == "failed"
+                         and str(h["id"]).startswith("step:")), None)
+    if not envs and failed_first:
+        # The first deploy failed before it had a target or a record: say so, never "Not
+        # deployed yet", with the run whose step a Retry puts back (deploy_truth.step_failures).
+        out["empty"] = {"label": "Last deploy failed", "detail": failed_first["reason"] or "",
+                        "href": failed_first["href"], "failed": True,
+                        "workflow_run_id": failed_first["workflow_run_id"],
+                        "step_id": failed_first["step_id"]}
+    elif not envs:
         out["empty"] = {"label": "Not deployed yet",
                         "detail": "The first merged work deploys to staging by the project's "
                                   "policy; production always waits for a person.",

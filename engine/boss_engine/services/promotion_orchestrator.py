@@ -30,6 +30,20 @@ class PromotionOrchestrator:
         self.rollout_engine = rollout_engine or DeploymentRolloutEngine(settings)
         self.pipeline = pipeline or make_pipeline_adapter(settings)
 
+    def _pipeline_for(self, repository: Any) -> Any:
+        """The repository's own pipeline: a local project's is BOSS's sandbox (it already ran),
+        never GitHub Actions — a local project's promotion makes no GitHub call."""
+        from . import local_repo
+
+        full = str(repository or "")
+        if local_repo.is_local(full) and "/" in full:
+            from .local_repo_host import LocalGitAdapter, LocalSandboxPipeline
+
+            owner, _, repo = full.partition("/")
+            return LocalSandboxPipeline(self.settings,
+                                        LocalGitAdapter(self.settings, owner=owner, repo=repo))
+        return self.pipeline
+
     @staticmethod
     def _serialize(row: Any) -> dict[str, Any]:
         return dict(row)
@@ -142,6 +156,7 @@ class PromotionOrchestrator:
             raise ValueError("production_target_id must reference a production target.")
         if staging["app_name"] != production["app_name"] or staging["repo"] != production["repo"]:
             raise ValueError("Promotion targets must belong to the same app and repository.")
+        pipeline = self._pipeline_for(staging["repo"])
 
         promotion_id = make_id("prom")
         connection.execute(
@@ -167,7 +182,7 @@ class PromotionOrchestrator:
                 "commit_ref": normalized_ref,
                 "staging_target_id": staging_target_id,
                 "production_target_id": production_target_id,
-                "pipeline_provider": self.pipeline.provider,
+                "pipeline_provider": pipeline.provider,
                 "actor": actor,
             },
         )
@@ -200,7 +215,7 @@ class PromotionOrchestrator:
                 reason=production_policy_reason,
             )
 
-        descriptor = self.pipeline.discover(staging["repo"])
+        descriptor = pipeline.discover(staging["repo"])
         descriptor_data = descriptor.to_dict()
         if not descriptor.configured:
             return self._block(
@@ -211,7 +226,7 @@ class PromotionOrchestrator:
                 reason="pipeline_missing_generate_config_pr_first",
                 descriptor=descriptor_data,
             )
-        verdict = self.pipeline.wait_for_verdict(
+        verdict = pipeline.wait_for_verdict(
             normalized_ref,
             timeout_seconds=self.settings.sandbox_ci_timeout_seconds,
             poll_interval_seconds=self.settings.sandbox_ci_poll_interval_seconds,

@@ -1031,11 +1031,22 @@ def _in_local_words(found: list[dict[str, Any]]) -> None:
             if isinstance(s, dict) and s.get("key") == "pr":
                 s.update(LOCAL_PR_STATION)
 
+    from ..repo_links import local_words
+
+    def words(item: dict[str, Any]) -> None:
+        # A title an agent wrote ("Open a draft PR bumping esbuild") reads in the project's own
+        # words; a URL or a name is never rewritten.
+        for key in ("label", "title", "detail", "action_label"):
+            if isinstance(item.get(key), str):
+                item[key] = local_words(item[key])
+
     for w in found:
         fix(w.get("stages"))
+        words(w)
         for a in w.get("attempts") or []:
             if isinstance(a, dict):
                 fix(a.get("stages"))
+                words(a)
 
 
 def matching(found: list[dict[str, Any]], *, state: Optional[str] = None,

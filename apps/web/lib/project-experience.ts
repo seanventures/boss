@@ -327,9 +327,14 @@ export type DeployProgress = { phases: DeployPhaseRow[]; index: number; total: n
 export type TargetDeployState = "not_deployed" | "setting_up" | "deploying" | "waiting" | "live" | "failed";
 export type TargetDeploy = {
   state: TargetDeployState; word: string; live: boolean; reason: string;
-  attempt: { id: string; kind: string; status: string; commit: string; at: string } | null;
+  attempt: DeployAttempt | null;
   progress: DeployProgress | null;
 };
+/** The newest deploy attempt. `kind` "step" is a deploy that failed BEFORE it had a record (in
+ *  source resolution or planning, engine deploy_truth.step_failures): its run's step is what a
+ *  Retry puts back in the queue, and `run_href` opens that run. */
+export type DeployAttempt = { id: string; kind: string; status: string; commit: string; at: string;
+  workflow_run_id: string; step_id: string; run_href: string };
 const DEPLOY_STATES = ["not_deployed", "setting_up", "deploying", "waiting", "live", "failed"] as const;
 const PHASE_STATES = ["done", "running", "failed", "pending", "skipped"] as const;
 export const parseDeployProgress = (v: unknown): DeployProgress | null => {
@@ -344,7 +349,8 @@ export const parseTargetDeploy = (v: unknown): TargetDeploy | null => {
   if (!x.state) return null;
   const at = o(x.attempt);
   return { state: oneOf(x.state, DEPLOY_STATES, "not_deployed"), word: s(x.word), live: x.live === true, reason: s(x.reason),
-           attempt: s(at.id) ? { id: s(at.id), kind: s(at.kind), status: s(at.status), commit: s(at.commit), at: s(at.at) } : null,
+           attempt: s(at.id) ? { id: s(at.id), kind: s(at.kind), status: s(at.status), commit: s(at.commit), at: s(at.at),
+                                  workflow_run_id: s(at.workflow_run_id), step_id: s(at.step_id), run_href: s(at.run_href) } : null,
            progress: parseDeployProgress(x.progress) };
 };
 /** The header's deploy chip (engine overview._chip): the deploy moving now, or the one that failed. */
@@ -367,6 +373,9 @@ export type Deployments = {
   history: { id: string; label: string; sub: string; at: string; state: StepState; href: string; word: string; by: string; by_agent: boolean;
     /** A deploy that failed and an agent recovered (a later deploy went live): amber ↺. */
     recovered: boolean }[];
+  /** No environment yet. `failed`: the first deploy failed before it had a target or a record —
+   *  "Last deploy failed: <reason>" with the run whose step a Retry puts back. */
+  empty: { label: string; detail: string; href: string; failed: boolean; workflow_run_id: string; step_id: string } | null;
 };
 export type Recommendation = {
   id: string; title: string; kind: string; strip: { label: string; type: string }[]; value: number; effort: string; cost_usd: number | null;
@@ -802,6 +811,9 @@ export const parseDeployments = (v: unknown): Deployments => {
       return { id: s(y.id), label: s(y.label), sub, at: s(y.at), state: recovered ? "failed" : deployState(y.status, y.state), href: s(y.href),
                word: s(y.state_word), by: s(y.by), by_agent: y.by_agent === true, recovered };
     }),
+    empty: s(o(x.empty).label) ? { label: s(o(x.empty).label), detail: s(o(x.empty).detail), href: s(o(x.empty).href),
+                                   failed: o(x.empty).failed === true, workflow_run_id: s(o(x.empty).workflow_run_id),
+                                   step_id: s(o(x.empty).step_id) } : null,
   };
 };
 

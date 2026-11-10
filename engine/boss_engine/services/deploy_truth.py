@@ -309,7 +309,80 @@ def _attempts(connection: Connection, target_ids: list[str]) -> dict[str, dict[s
         "         created_at, started_at AS apply_started_at, finished_at, NULL AS workflow_run_id "
         "  FROM deployment_runs WHERE deployment_target_id = ANY(:ids)"
         ") a ORDER BY t, created_at DESC"), {"ids": list(target_ids)}).mappings().all()
-    return {str(r["t"]): dict(r) for r in rows}
+    out = {str(r["t"]): dict(r) for r in rows}
+    # A DEPLOY THAT FAILED BEFORE IT HAD A RECORD is an attempt too: the step stopped while it
+    # resolved the source or planned (helpdesk-laptop, wfr_e9d48d68: "GitHub has no ref …"), so
+    # no stack deployment exists — and the tab said "Not deployed yet" over a dead-lettered
+    # deploy. The newest attempt wins, whichever kind it is.
+    for f in step_failures(connection, target_ids=target_ids):
+        tid = str(f["target_id"] or "")
+        have = out.get(tid)
+        if have is None or (_ts(f["created_at"]) or datetime.min.replace(tzinfo=timezone.utc)) \
+                > (_ts(have.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)):
+            out[tid] = {"t": tid, "id": f["id"], "kind": "step", "status": "failed",
+                        "commit": f["commit"], "steps": [], "log_tail": "",
+                        "failure_reason": f["reason"], "error": None, "open_url": None,
+                        "created_at": f["created_at"], "apply_started_at": None,
+                        "finished_at": f["created_at"], "workflow_run_id": f["workflow_run_id"],
+                        "step_id": f["step_id"]}
+    return out
+
+
+#: The target a deploy step was for, from what the step recorded (its refusal, its result) or
+#: what it was bound to (the stack gate's target, a bound target).
+_STEP_TARGET_SQL = (
+    "COALESCE(NULLIF(s.output->'deploy_failure'->>'target_id', ''), "
+    "NULLIF(s.output->>'stack_target_id', ''), "
+    "NULLIF(s.binding_snapshot->>'stack_gate_target_id', ''), "
+    "NULLIF(s.binding_snapshot->>'target_id', ''))")
+
+
+def step_failures(connection: Connection, *, target_ids: Optional[list[str]] = None,
+                  project_id: Optional[str] = None, limit: int = 50) -> list[dict[str, Any]]:
+    """Deploy steps that FAILED BEFORE A DEPLOY RECORD EXISTED — in source resolution or
+    planning, so there is no stack deployment to show: per step (its newest iteration), the
+    target it was for (None when it never got that far), the reason in its own words, and the
+    run and step a Retry addresses. A step that is retried is `ready` again and drops out."""
+    if not target_ids and not project_id:
+        return []
+    where = ["s.status IN ('failed', 'deadlettered')",
+             "(s.binding_snapshot->>'capability' = 'deploy' OR s.output->>'capability' = 'deploy')",
+             "NOT (s.output ? 'stack_deployment_id')"]
+    params: dict[str, Any] = {"n": int(limit)}
+    if target_ids:
+        where.append(f"{_STEP_TARGET_SQL} = ANY(:ids)")
+        params["ids"] = list(target_ids)
+    if project_id:
+        where.append("s.project_id = :p")
+        params["p"] = project_id
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(text(
+                "SELECT * FROM ("
+                "  SELECT DISTINCT ON (s.workflow_run_id, s.step_id) s.id, s.project_id, "
+                "         s.workflow_run_id, s.step_id, s.status, "
+                f"        {_STEP_TARGET_SQL} AS target_id, "
+                "         COALESCE(NULLIF(s.last_error, ''), s.output->>'error') AS reason, "
+                "         COALESCE(s.output->'deploy_failure'->>'commit', s.output->>'commit') "
+                "           AS commit, COALESCE(s.completed_at, s.updated_at) AS created_at "
+                "  FROM workflow_step_runs s WHERE " + " AND ".join(where) +
+                "  ORDER BY s.workflow_run_id, s.step_id, s.iteration DESC"
+                ") f ORDER BY created_at DESC LIMIT :n"), params).mappings().all()
+    except Exception:  # noqa: BLE001 — an install without workflows has no failed deploy steps
+        return []
+    out = []
+    for r in rows:
+        said = " ".join(str(r["reason"] or "").split()) or "the deploy step failed"
+        out.append({**dict(r), "reason": said})
+    return out
+
+
+def _run_href(project_id: Any, workflow_run_id: Any) -> Optional[str]:
+    if not workflow_run_id:
+        return None
+    from .project_experience.common import href
+
+    return href(str(project_id or "") or None, area="delivery_workflows", wfr=workflow_run_id)
 
 
 def _reason(attempt: Mapping[str, Any]) -> Optional[str]:
@@ -379,6 +452,11 @@ def truth(connection: Connection, targets: list[Mapping[str, Any]], *,
             "attempt": ({"id": a["id"], "kind": a["kind"], "status": status,
                          "commit": (str(a.get("commit") or "")[:7] or None),
                          "workflow_run_id": a.get("workflow_run_id"),
+                         # A deploy that failed before it had a record: the run's step a Retry
+                         # puts back in the queue (retry-step), and where that run is.
+                         **({"step_id": a.get("step_id"),
+                             "run_href": _run_href(t.get("project_id"), a.get("workflow_run_id"))}
+                            if a["kind"] == "step" else {}),
                          "at": (_ts(a.get("finished_at") or a.get("apply_started_at")
                                     or a.get("created_at")) or now or datetime.now(timezone.utc)
                                 ).isoformat()} if a else None),
@@ -418,4 +496,4 @@ def targets_view(connection: Connection, project_id: str) -> list[dict[str, Any]
 
 __all__ = ["PHASES", "adopt_slot", "adoptable_slot", "is_repo_slot", "phase_of", "progress",
            "project_deploy", "project_targets", "retire_superseded", "superseded", "targets_view",
-           "truth", "why_not_found"]
+           "step_failures", "truth", "why_not_found"]

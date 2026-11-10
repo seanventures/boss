@@ -105,13 +105,17 @@ class StackDeployError(Exception):
     what the host was found to have, when it was asked."""
 
     def __init__(self, headline: str, action: str, *, status_code: int = 422,
-                 cause: Optional[str] = None, facts: Optional[dict] = None):
+                 cause: Optional[str] = None, facts: Optional[dict] = None,
+                 outage: bool = False):
         super().__init__(headline)
         self.headline = headline
         self.action = action
         self.status_code = status_code
         self.cause = cause
         self.facts = dict(facts or {})
+        #: The repository host did not answer (a network error, a 5xx) — never a 4xx. A GitHub
+        #: source reads its local mirror on this (DeploySource), as the preview does.
+        self.outage = outage
 
     def to_dict(self) -> dict[str, str]:
         return {"headline": self.headline, "action": self.action}
@@ -171,7 +175,8 @@ class GitHubSource:
         except httpx.HTTPError as exc:
             raise StackDeployError(
                 f"BOSS could not reach GitHub ({type(exc).__name__}).",
-                "Check the API container's network access to api.github.com, then try again.")
+                "Check the API container's network access to api.github.com, then try again.",
+                outage=True)
 
     def _refused(self, response, what: str) -> StackDeployError:
         code = response.status_code
@@ -186,7 +191,8 @@ class GitHubSource:
                 "Check the repository name and ref; a private repository also answers 404 "
                 "when the connection's token cannot see it.")
         return StackDeployError(f"GitHub answered HTTP {code} while reading {what}.",
-                                "Try again in a minute; if it persists, check githubstatus.com.")
+                                "Try again in a minute; if it persists, check githubstatus.com.",
+                                outage=code >= 500 or code == 429)
 
     def resolve_commit(self, owner: str, repo: str, ref: str) -> str:
         ref = str(ref or "").strip()
@@ -252,12 +258,190 @@ class GitHubSource:
             raise StackDeployError(
                 f"Downloading {owner}/{repo}@{commit[:12]} from GitHub failed "
                 f"({type(exc).__name__}).",
-                "Try again; if it persists, check the API container's network access.")
+                "Try again; if it persists, check the API container's network access.",
+                outage=True)
 
 
-def github_source_for(connection: Connection, settings: Settings, project_id: str,
-                      owner: str, repo: str) -> GitHubSource:
-    """The token this project registered for owner/repo, falling back to its connection."""
+class LocalSource:
+    """The same four reads as GitHubSource, from a bare repository on this machine.
+
+    A LOCAL PROJECT's repository (`local_<project>/<name>`, local_repo / local_repo_host) has no
+    GitHub at all: its commits, its boss.deploy.yaml and its tree are read from the bare
+    repository BOSS keeps. A GitHub repository's MIRROR is read the same way while GitHub is
+    down (MirroredSource). Nothing here reaches the network."""
+
+    kind = "local"
+
+    def __init__(self, git_dir: Any, *, settings: Any = None, label: str = "",
+                 change_sets: bool = True):
+        from pathlib import Path
+
+        self.git_dir = Path(git_dir)
+        self._settings = settings
+        self._label = label or "the local repository"
+        #: Whether `pull/N` names a local change set (a local project) — a mirror has none.
+        self._change_sets = change_sets
+
+    def __repr__(self) -> str:
+        return f"LocalSource({self._label!r})"
+
+    def _require(self, owner: str, repo: str):
+        if not (self.git_dir / "HEAD").is_file():
+            raise StackDeployError(
+                f"The local repository {owner}/{repo} is missing on this machine.",
+                "Open the project in BOSS: onboarding makes its repository again, or import "
+                "the code into it.")
+        return self.git_dir
+
+    def resolve_commit(self, owner: str, repo: str, ref: str) -> str:
+        from . import local_repo
+
+        ref = str(ref or "").strip()
+        if not ref:
+            raise StackDeployError("No ref was given.",
+                                   "Name a branch, a tag, a commit or a change (pull/N).")
+        git_dir = self._require(owner, repo)
+        pr = _PR_REF.match(ref)
+        sha: Optional[str] = None
+        if pr and self._change_sets:
+            from .local_repo_host import LocalGitAdapter, _head_of
+
+            number = int(pr.group(1))
+            try:
+                row = LocalGitAdapter(self._settings, owner=owner, repo=repo,
+                                      git_dir=git_dir).change_set(number)
+                sha = local_repo.rev_parse(git_dir, _head_of(row, git_dir))
+            except Exception:  # noqa: BLE001 — no such change is said below, in words
+                sha = None
+            if not sha:
+                raise StackDeployError(f"There is no change #{number} in {owner}/{repo}.",
+                                       "Deploy a branch or a commit of the repository instead.")
+        elif not pr:
+            try:
+                sha = local_repo.rev_parse(git_dir, ref)
+            except local_repo.LocalRepoError:
+                sha = None
+        if not sha or not _SHA.match(sha):
+            raise StackDeployError(
+                f"{self._label[:1].upper()}{self._label[1:]} has no ref {ref!r}.",
+                "Check the branch or commit; a merged change's commit is on the default branch.")
+        return sha
+
+    def compare(self, owner: str, repo: str, base: str, head: str) -> dict[str, Any]:
+        from . import local_repo
+
+        git_dir = self._require(owner, repo)
+        try:
+            behind = int(local_repo.git(["rev-list", "--count", f"{head}..{base}"],
+                                        git_dir=git_dir) or 0)
+            out = local_repo.git(["log", "--reverse", "--max-count=250",
+                                  "--format=%H%x1f%B%x1e", f"{base}..{head}"], git_dir=git_dir)
+        except local_repo.LocalRepoError as exc:
+            raise StackDeployError(f"Cannot compare {base[:12]}...{head[:12]} in {self._label}: "
+                                   f"{exc}", "Deploy again; if it persists, check the repository.")
+        commits = []
+        for record in out.split("\x1e"):
+            record = record.strip("\n")
+            if not record:
+                continue
+            sha, _, message = record.partition("\x1f")
+            message = message.strip()
+            commits.append({"sha": sha.strip(),
+                            "message": message.splitlines()[0][:200] if message else "",
+                            "full_message": message[:4000]})
+        return {"behind_by": behind, "commits": commits}
+
+    def read_file(self, owner: str, repo: str, path: str, commit: str) -> Optional[str]:
+        from . import local_repo
+
+        return local_repo.read_file(self._require(owner, repo), commit, path)
+
+    def download_tarball(self, owner: str, repo: str, commit: str, dest: str) -> None:
+        """`git archive`, gzipped, under one top folder — the shape GitHub's tarball has, so the
+        upload's `--strip-components=1` reads both the same."""
+        from . import local_repo
+
+        git_dir = self._require(owner, repo)
+        try:
+            data = local_repo.git(["archive", "--format=tar.gz",
+                                   f"--prefix={repo}-{commit[:12]}/", commit],
+                                  git_dir=git_dir, raw=True, timeout=600)
+        except local_repo.LocalRepoError as exc:
+            raise StackDeployError(f"Packing {owner}/{repo}@{commit[:12]} failed: {exc}",
+                                   "Deploy again; if it persists, check the repository.")
+        with open(dest, "wb") as handle:
+            handle.write(data)
+
+
+class MirroredSource:
+    """A GitHub repository's source, with its local mirror behind it for an outage.
+
+    GitHub first, always. When GitHub does not ANSWER (a network error, a 5xx — never a 4xx,
+    which is an answer), the same read goes to the repository's bare mirror
+    (local_repo.mirror_path, refreshed by every build: github_outage), as the preview already
+    does (preview_service.github_wait_mirror). A mirror that lacks what was asked re-raises
+    GitHub's own error, so the words still say what failed."""
+
+    kind = "github"
+
+    def __init__(self, primary: Any, *, owner: str, repo: str, settings: Any = None):
+        self.primary = primary
+        self._owner, self._repo, self._settings = owner, repo, settings
+        self.used_mirror = False
+
+    def __repr__(self) -> str:
+        return f"MirroredSource({self._owner}/{self._repo})"
+
+    def _mirror(self) -> Optional[LocalSource]:
+        from . import local_repo
+
+        if not getattr(self._settings, "github_outage_mirror", True):
+            return None
+        try:
+            path = local_repo.mirror_path(self._owner, self._repo, self._settings)
+        except Exception:  # noqa: BLE001 — no usable mirror is no fallback
+            return None
+        if not (path / "HEAD").is_file():
+            return None
+        return LocalSource(path, settings=self._settings, change_sets=False,
+                           label=f"the local mirror of {self._owner}/{self._repo}")
+
+    def _call(self, name: str, *args: Any) -> Any:
+        try:
+            return getattr(self.primary, name)(*args)
+        except StackDeployError as exc:
+            if not getattr(exc, "outage", False):
+                raise
+            mirror = self._mirror()
+            if mirror is None:
+                raise
+            try:
+                result = getattr(mirror, name)(*args)
+            except StackDeployError:
+                raise exc
+            if not self.used_mirror:
+                log.warning("stack deploy: GitHub is not answering (%s); reading %s/%s from "
+                            "its local mirror", exc.headline, self._owner, self._repo)
+            self.used_mirror = True
+            return result
+
+    def resolve_commit(self, owner: str, repo: str, ref: str) -> str:
+        return self._call("resolve_commit", owner, repo, ref)
+
+    def compare(self, owner: str, repo: str, base: str, head: str) -> dict[str, Any]:
+        return self._call("compare", owner, repo, base, head)
+
+    def read_file(self, owner: str, repo: str, path: str, commit: str) -> Optional[str]:
+        return self._call("read_file", owner, repo, path, commit)
+
+    def download_tarball(self, owner: str, repo: str, commit: str, dest: str) -> None:
+        return self._call("download_tarball", owner, repo, commit, dest)
+
+
+def github_source(connection: Connection, settings: Settings, project_id: str,
+                  owner: str, repo: str) -> GitHubSource:
+    """GitHub's reader with the token this project registered for owner/repo, falling back to
+    its connection. Only `source_for` calls this: every deploy reads code through that."""
     from .github_connections import GitHubConnectionService, github_token_for
 
     token = None
@@ -269,6 +453,28 @@ def github_source_for(connection: Connection, settings: Settings, project_id: st
     if not token:
         token = github_token_for(connection, settings, project_id, owner, repo)
     return GitHubSource(token or "")
+
+
+def source_for(connection: Connection, settings: Settings, project_id: str,
+               owner: str, repo: str) -> Any:
+    """THE ONE SOURCE every deploy, preflight and smoke check reads code through (BOSSAPP-946).
+
+    Where the repository lives decides it, never the caller: a local project's repository
+    (`local_<project>/<name>`) is read from its bare repository on this machine and NOTHING
+    reaches GitHub; a GitHub repository is read from GitHub, with its local mirror behind it
+    while GitHub is down. Every source answers resolve_commit / compare / read_file /
+    download_tarball alike."""
+    from . import local_repo
+
+    if local_repo.is_local_owner(owner):
+        try:
+            path = local_repo.bare_path(owner, repo, settings)
+        except local_repo.LocalRepoError as exc:
+            raise StackDeployError(str(exc), "Check the project's repository in Setup.")
+        return LocalSource(path, settings=settings,
+                           label=f"the local repository {owner}/{repo}")
+    return MirroredSource(github_source(connection, settings, project_id, owner, repo),
+                          owner=owner, repo=repo, settings=settings)
 
 
 # ── The host ─────────────────────────────────────────────────────────────────────────────────
@@ -1853,7 +2059,7 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             raise StackDeployError(
                 f"This target deploys {target_repo}, not {owner}/{repo}.",
                 "Deploy the target's own repository, or create a target for this one.")
-        github = github_source_for(connection, settings, project_id, owner, repo)
+        github = source_for(connection, settings, project_id, owner, repo)
         access = host_access_for(connection, settings, host)
 
     commit = github.resolve_commit(owner, repo, ref)
@@ -2703,7 +2909,7 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
                 rendered["retire_mount"] = f"{REMOTE_BASE}/{legacy}/"
             owner, repo = split_repository(deployment["repository"])
             access = host_access_for(connection, settings, host, adapter)
-            github = github_source_for(connection, settings, project_id, owner, repo)
+            github = source_for(connection, settings, project_id, owner, repo)
             env_values, hidden = _environment(connection, settings, deployment=deployment,
                                               manifest=manifest, rendered=rendered)
             app_env = app_deploy_env(connection, project_id, target,
@@ -3521,7 +3727,11 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
             person_required=person_required)
     except StackDeployError as exc:
         refused: dict[str, Any] = {"capability": "deploy", "tool": None, "status": "failed",
-                                   "error": f"{exc.headline} {exc.action}"}
+                                   "error": f"{exc.headline} {exc.action}",
+                                   # Which target it failed for — the Deployments tab says
+                                   # "Last deploy failed" on it (deploy_truth.step_failures).
+                                   "stack_target_id": target.get("id"),
+                                   "stack_target_name": target.get("app_name")}
         if exc.cause:
             manifest_text = str(getattr(exc, "manifest_text", "") or "")
             # WHOSE FIX IT IS, for the runner (deploy_repair): an app-side refusal — a program

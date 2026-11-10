@@ -341,3 +341,102 @@ def _build(c, pid, files, *, app):
               {"i": run_id, "p": pid, "t": app, "s": json.dumps(spec),
                "st": json.dumps({"impl_files": files}), "f": json.dumps({"app_name": app})})
     return run_id
+
+
+# ── a deploy that failed before it had a record ──────────────────────────────────────────────
+
+def _failed_deploy_step(c, db, *, target_id=None, reason, at=None):
+    """A workflow whose deploy step failed in source resolution — no stack deployment exists
+    (helpdesk-laptop, wfr_e9d48d68: "… has no ref '47e8687…' in local_…", dead-lettered)."""
+    at = at or T0
+    did, vid, rid = (f"wfd_{uuid.uuid4().hex[:10]}", f"wfv_{uuid.uuid4().hex[:10]}",
+                     f"wfr_{uuid.uuid4().hex[:10]}")
+    c.execute(text("INSERT INTO workflow_definitions (id, project_id, workflow_key, name, "
+                   " created_by) "
+                   "VALUES (:i, :p, :k, 'Ship', 'ceo')"), {"i": did, "p": db.project, "k": did})
+    c.execute(text("INSERT INTO workflow_versions (id, project_id, workflow_definition_id, "
+                   " version, spec, content_hash, created_by) VALUES (:i, :p, :d, 1, "
+                   " '{}'::jsonb, 'h', 'ceo')"), {"i": vid, "p": db.project, "d": did})
+    c.execute(text("INSERT INTO workflow_runs (id, project_id, workflow_definition_id, "
+                   " workflow_version_id, actor, status) VALUES (:i, :p, :d, :v, 'ceo', "
+                   " 'deadlettered')"), {"i": rid, "p": db.project, "d": did, "v": vid})
+    snapshot = {"capability": "deploy", **({"stack_gate_target_id": target_id} if target_id
+                                           else {})}
+    c.execute(text(
+        "INSERT INTO workflow_step_runs (id, project_id, workflow_run_id, step_id, step_kind, "
+        " status, output, binding_snapshot, attempt, last_error, completed_at, updated_at) "
+        "VALUES (:i, :p, :r, 'deploy', 'capability', 'deadlettered', CAST(:o AS JSONB), "
+        " CAST(:b AS JSONB), 3, :e, :at, :at)"),
+        {"i": f"wsr_{uuid.uuid4().hex[:10]}", "p": db.project, "r": rid, "at": at, "e": reason,
+         "o": json.dumps({"capability": "deploy", "status": "failed", "error": reason}),
+         "b": json.dumps(snapshot)})
+    return rid
+
+
+def _forget_workflows(c, db):
+    for table in ("workflow_step_runs", "workflow_runs", "workflow_versions",
+                  "workflow_definitions"):
+        c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": db.project})
+
+
+def test_a_deploy_that_failed_before_its_record_says_last_deploy_failed_with_retry(db):
+    from boss_engine.services.project_experience import deployments
+
+    reason = ("The local repository local_x/app has no ref '47e8687'. Check the branch or "
+              "commit.")
+    try:
+        with db.engine.begin() as c:
+            target = _target(c, db, "Helpdesk", 8020, repo="local_x/app", kind="stack")
+            rid = _failed_deploy_step(c, db, target_id=target, reason=reason)
+            told = truth(c, deploy_truth.project_targets(c, db.project))[target]
+            view = deployments.view(c, db.project)
+        assert told["state"] == "failed" and told["word"] == "Last deploy failed", told
+        assert told["reason"] == reason
+        assert told["attempt"]["kind"] == "step" and told["attempt"]["step_id"] == "deploy"
+        assert told["attempt"]["workflow_run_id"] == rid
+        assert rid in told["attempt"]["run_href"]
+        env = view["environments"][0]
+        assert env["deploy"]["state"] == "failed" and env["deploy"]["reason"] == reason
+        failed = [h for h in view["history"] if h["state"] == "failed"]
+        assert failed and failed[0]["step_id"] == "deploy" and failed[0]["workflow_run_id"] == rid
+        assert failed[0]["reason"].startswith("The local repository local_x/app has no ref")
+
+        # Retried: the step is ready again, so it is no longer the newest failure.
+        with db.engine.begin() as c:
+            c.execute(text("UPDATE workflow_step_runs SET status = 'ready' WHERE "
+                           "workflow_run_id = :r"), {"r": rid})
+            again = truth(c, deploy_truth.project_targets(c, db.project))[target]
+        assert again["state"] == "not_deployed"
+    finally:
+        with db.engine.begin() as c:
+            _forget_workflows(c, db)
+
+
+def test_a_first_deploy_that_failed_before_any_target_is_not_not_deployed_yet(db):
+    from boss_engine.services.project_experience import deployments
+
+    try:
+        with db.engine.begin() as c:
+            rid = _failed_deploy_step(c, db, reason="The build opened no change, so there is "
+                                                    "no commit to deploy.")
+            view = deployments.view(c, db.project)
+        assert view["environments"] == []
+        assert view["empty"]["label"] == "Last deploy failed" and view["empty"]["failed"]
+        assert view["empty"]["workflow_run_id"] == rid and view["empty"]["step_id"] == "deploy"
+        assert view["history"] and view["history"][0]["state"] == "failed"
+    finally:
+        with db.engine.begin() as c:
+            _forget_workflows(c, db)
+
+
+def test_a_newer_stack_deployment_outranks_an_older_failed_step(db):
+    try:
+        with db.engine.begin() as c:
+            target = _target(c, db, "Helpdesk", 8021, kind="stack")
+            _failed_deploy_step(c, db, target_id=target, reason="no ref", at=T0)
+            _sdep(c, db, target, "healthy", at=T0 + timedelta(hours=1))
+            told = truth(c, deploy_truth.project_targets(c, db.project))[target]
+        assert told["state"] == "live", told
+    finally:
+        with db.engine.begin() as c:
+            _forget_workflows(c, db)

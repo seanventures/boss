@@ -870,6 +870,10 @@ LOCAL_FIRST_SUITES = [
     "apps/api/tests/test_publish_and_github_outage.py::"
     "test_a_github_outage_finishes_the_build_locally_then_pushes_and_opens_the_pr",
     "apps/api/tests/test_local_project_in_every_view.py",
+    # A local project's STACK deploy (plan → approved apply → health) with zero GitHub calls:
+    # its commit, manifest and tree come from the bare repository (stack_deploy.source_for).
+    "apps/api/tests/test_a_local_project_stack_deploys_without_github.py::"
+    "test_a_local_project_plans_applies_and_is_healthy_with_zero_github_calls",
 ]
 
 
@@ -897,7 +901,7 @@ def run_local_first_suites() -> int:
                             "--rootdir", "/boss", *[f"/boss/{n}" for n in LOCAL_FIRST_SUITES]]))
 
 
-@check("local-first: builds commit locally, a person merges, preview and deploy use local, "
+@check("local-first: builds commit locally, a person merges, preview and stack deploy use local, "
        "zero GitHub calls; an outage ends waiting_for_github, then pushes", bug="10")
 def check_local_first(bg: Optional[Background]) -> str:
     if bg is None:
@@ -941,8 +945,9 @@ def check_retry_regressions(bg: Optional[Background]) -> str:
 def check_deploy(g: Gate) -> str:
     """The stack deploy with the host's transport swapped for this container: the manifest read
     and rendered (app_deploy_manifest), the host preflight, the PR's tree fetched from GitHub
-    (GitHubSource), and StackApplier's own steps, health check included. The app's generated
-    SESSION_SECRET comes from the deploy's own generators."""
+    (GitHubSource; a local project reads its bare repository: stack_deploy.source_for), and
+    StackApplier's own steps, health check included. The app's generated SESSION_SECRET comes
+    from the deploy's own generators."""
     if g.pr_number is None:
         raise Skip("no pull request to deploy")
     from boss_engine.services import app_deploy_manifest as adm

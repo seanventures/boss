@@ -915,7 +915,7 @@ def stack_deploy_for_step(
             return None
         target_id = str(target.get("id") or "")
     row = connection.execute(
-        text("SELECT t.id, t.app_name, t.environment, h.name AS host_name, "
+        text("SELECT t.id, t.app_name, t.environment, t.repo, h.name AS host_name, "
              "       h.address AS host_address "
              "FROM deployment_targets t LEFT JOIN deployment_hosts h ON h.id = t.host_id "
              "WHERE t.id = :t AND t.project_id = :p"),
@@ -927,6 +927,9 @@ def stack_deploy_for_step(
         # A first deploy's target is named before it is made (stack_deploy._first_target).
         "target_name": (row or {}).get("app_name") or (target or {}).get("app_name"),
         "environment": (row or {}).get("environment") or (target or {}).get("environment"),
+        # Which repository it ships, so the step names its source in that host's words (a
+        # local project's change, never its "pull request").
+        "repository": (row or {}).get("repo") or (target or {}).get("repo"),
         "host": (row or {}).get("host_name"),
         "host_address": (row or {}).get("host_address"),
         "deployment": deployment,
@@ -1916,7 +1919,7 @@ def pass_one_head(connection: Connection, settings: Any, project_id: str, base_r
             {"i": base_run, "p": project_id}).mappings().first()
         if not row or not row["pull_request_number"]:
             return None
-        from .stack_deploy import build_repository, github_source_for, split_repository
+        from .stack_deploy import build_repository, source_for, split_repository
 
         repository = build_repository(row["spec"], str(getattr(settings, "target_github_owner", "")
                                                        or ""))
@@ -1925,7 +1928,7 @@ def pass_one_head(connection: Connection, settings: Any, project_id: str, base_r
         owner, repo = split_repository(repository)
         ref = f"pull/{int(row['pull_request_number'])}"
         return (resolve(owner, repo, ref) if resolve is not None else
-                github_source_for(connection, settings, project_id, owner, repo)
+                source_for(connection, settings, project_id, owner, repo)
                 .resolve_commit(owner, repo, ref))
     except Exception as error:  # noqa: BLE001 — unpinned: the deploy plans the PR's head
         log.warning("could not read pass 1's head for %s: %s", base_run, error)
@@ -6096,14 +6099,30 @@ def _merge_question(connection: Connection, project_id: str,
     return dict(row) if row else None
 
 
-def _merge_note(seen: dict[str, Any], question: Optional[dict[str, Any]]) -> str:
-    pr = f"PR #{seen.get('number')}" if seen.get("number") else "The pull request"
+def _merge_note(seen: dict[str, Any], question: Optional[dict[str, Any]],
+                url: Optional[str] = None) -> str:
+    from .local_repo_host import is_local_pr_url
+    from .repo_links import change_ref
+
+    pr = change_ref(url, seen.get("number"))
     if seen.get("state") == "merge_pending" or (question or {}).get("status") in (
             "approved", "executed"):
+        if is_local_pr_url(url):
+            return (f"Waiting for the merge: {pr} is approved but not merged yet. Merge it in "
+                    "BOSS; this step goes on by itself once it is merged.")
         return (f"Waiting for the merge: {pr} is approved but not merged yet. Merge it in "
                 "GitHub; this step goes on by itself once GitHub shows it merged.")
     return (f"Waiting for the merge: approve {pr} to merge it. Nothing is deployed until it is "
             "merged.")
+
+
+def _closed_words(connection: Connection, build_run_id: str, number: Any) -> str:
+    from .repo_links import change_ref
+
+    url = connection.execute(text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
+                             {"i": build_run_id}).scalar() if connection is not None else None
+    return (f"{change_ref(url, number)} was closed without merging, so there is nothing to "
+            "deploy. Reopen and merge it, then Try again.")
 
 
 def _merge_wait(connection: Connection, project_id: str,
@@ -6115,19 +6134,18 @@ def _merge_wait(connection: Connection, project_id: str,
     from . import pr_merge
 
     if seen.get("state") == pr_merge.CLOSED:
-        raise SettledCapabilityError(
-            f"PR #{seen.get('number')} was closed without merging, so there is nothing to "
-            "deploy. Reopen and merge it, then Try again.")
+        raise SettledCapabilityError(_closed_words(connection, build_run_id, seen.get("number")))
     question = _merge_question(connection, project_id, build_run_id)
+    url = connection.execute(
+        text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
+        {"i": build_run_id}).scalar() if connection is not None else None
     return {"capability": "deploy", "tool": None, "status": workflow_outcomes.AWAITING,
             "await": {"kind": MERGE_AWAIT_KIND, "id": build_run_id,
                       "decision_id": (question or {}).get("id"),
                       "looked_at": now_utc().isoformat()},
             "merge": {"state": seen.get("state"), "pull_request_number": seen.get("number"),
-                      "pull_request_url": connection.execute(
-                          text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
-                          {"i": build_run_id}).scalar() if connection is not None else None},
-            "note": _merge_note(seen, question)}
+                      "pull_request_url": url},
+            "note": _merge_note(seen, question, url)}
 
 
 def _follow_merge(connection: Connection, *, project_id: str, run_id: str, step: Any,
@@ -6159,10 +6177,12 @@ def _follow_merge(connection: Connection, *, project_id: str, run_id: str, step:
     if seen and seen.get("state") == pr_merge.CLOSED:
         workflows.force_fail_waiting_step(
             connection, project_id=project_id, step_run_id=step["id"],
-            error=(f"PR #{seen.get('number')} was closed without merging, so there is nothing "
-                   "to deploy. Reopen and merge it, then Try again."))
+            error=_closed_words(connection, build_run_id, seen.get("number")))
         return {"run_id": run_id, "step_id": step["step_id"], "outcome": "merge_closed"}
     if seen:
+        url = connection.execute(
+            text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
+            {"i": build_run_id}).scalar()
         connection.execute(
             text("UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) || "
                  "CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND status = 'waiting'"),
@@ -6171,10 +6191,8 @@ def _follow_merge(connection: Connection, *, project_id: str, run_id: str, step:
                 # Refreshed on every look, so the console's "Merge PR #N in GitHub" link is there
                 # for a step that started waiting before it carried one.
                 "merge": {"state": seen.get("state"), "pull_request_number": seen.get("number"),
-                          "pull_request_url": connection.execute(
-                              text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
-                              {"i": build_run_id}).scalar()},
-                "note": _merge_note(seen, question)})})
+                          "pull_request_url": url},
+                "note": _merge_note(seen, question, url)})})
         return None
     workflows.requeue_waiting_step(
         connection, project_id=project_id, step_run_id=step["id"],

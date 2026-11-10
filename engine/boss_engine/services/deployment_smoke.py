@@ -147,7 +147,7 @@ def _manifest_for(connection: Connection, settings: Any, engine: Any,
         run[key] = _json(run.get(key)) or {}
     from .deploy_service import _resolve_repo_branch
     from .preview_service import lineage_impl_files
-    from .stack_deploy import github_source_for
+    from .stack_deploy import source_for
 
     owner, repo, branch = _resolve_repo_branch(run, settings)
     try:
@@ -157,7 +157,7 @@ def _manifest_for(connection: Connection, settings: Any, engine: Any,
     candidates = sorted({f for f in files if f.rsplit("/", 1)[-1] == MANIFEST_NAME},
                         key=lambda f: (-f.count("/"), f))
     candidates.append(MANIFEST_NAME)
-    source = github_source_for(connection, settings, project_id, owner, repo)
+    source = source_for(connection, settings, project_id, owner, repo)
     for path in dict.fromkeys(candidates):
         try:
             body = source.read_file(owner, repo, path, branch)
