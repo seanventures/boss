@@ -184,6 +184,8 @@ class GitHubFake:
         #     /orgs/{owner}/repos (or /user/repos) makes an EMPTY one that a push fills.
         if self.remotes.outage and path.startswith(("/repos/", "/orgs/", "/user/repos")):
             return 502, {"message": "boss-e2e GitHub fake: GitHub is down (outage switched on)"}
+        if path == "/graphql" and method == "POST":
+            return self._graphql(body if isinstance(body, dict) else {})
         m = re.match(r"^/users/([^/]+)$", path)
         if m:
             login = m.group(1)
@@ -395,6 +397,23 @@ class GitHubFake:
                      and (state == "all" or p["state"] == state)
                      and (not head or p["head"] == head)]
             return 200, [self._pr_payload(bare, full, p) for p in items]
+        # REVIEW CONVERSATION (BOSSAPP-948): a review's line comments, replies in a thread.
+        m = re.match(r"^/pulls/(\d+)/reviews/(\d+)/comments$", rest)
+        if m and method == "GET":
+            return 200, [self._comment_payload(c) for c in self.world.review_comments
+                         if c["repo"] == full and c["review_id"] == int(m.group(2))]
+        m = re.match(r"^/pulls/(\d+)/comments/(\d+)/replies$", rest)
+        if m and method == "POST":
+            parent = next((c for c in self.world.review_comments
+                           if c["repo"] == full and c["id"] == int(m.group(2))), None)
+            if parent is None:
+                return 404, {"message": "Not Found"}
+            item = self.world.add("review_comments", {
+                "id": len(self.world.review_comments) + 1001, "repo": full, "pr": int(m.group(1)),
+                "review_id": None, "path": parent["path"], "line": parent["line"],
+                "side": parent["side"], "body": str(body.get("body") or ""),
+                "in_reply_to": parent["id"]})
+            return 201, self._comment_payload(item)
         m = re.match(r"^/pulls/(\d+)(/[a-z-]+)?$", rest)
         if not m:
             return 404, {"message": "Not Found"}
@@ -419,6 +438,11 @@ class GitHubFake:
             return 202, {"message": "Updating pull request branch."}
         if sub == "/files":
             return 200, self._files_between(bare, f"refs/heads/{pr['base']}", f"refs/heads/{pr['head']}")
+        if sub == "/reviews" and method == "POST":
+            return self._review(bare, full, pr, body)
+        if sub == "/comments" and method == "GET":
+            return 200, [self._comment_payload(c) for c in self.world.review_comments
+                         if c["repo"] == full and c["pr"] == pr["number"]]
         if sub in ("/reviews", "/comments", "/requested_reviewers"):
             return (200, {"id": 1, "state": body.get("event") or "COMMENTED"}) if method == "POST" else (200, [])
         if method == "PATCH":
@@ -426,4 +450,78 @@ class GitHubFake:
                 if key in body:
                     pr[key] = body[key]
         return 200, self._pr_payload(bare, full, pr)
+
+    # ------------------------------------------------------------------ reviews (BOSSAPP-948)
+    def _diff_lines(self, bare: Path, pr: dict[str, Any]) -> dict[tuple[str, str], set[int]]:
+        """Lines a review comment may sit on, as GitHub decides: inside a hunk of the PR's diff."""
+        out: dict[tuple[str, str], set[int]] = {}
+        path, old_no, new_no = None, 0, 0
+        diff = _git(bare, "diff", "--no-renames", f"refs/heads/{pr['base']}...refs/heads/{pr['head']}")
+        for raw in diff.splitlines():
+            if raw.startswith("diff --git"):
+                path = None
+            elif raw.startswith("--- a/"):
+                path = raw[6:]
+            elif raw.startswith("+++ b/"):
+                path = raw[6:]
+            elif raw.startswith("@@"):
+                m = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
+                old_no, new_no = int(m.group(1)), int(m.group(2))
+            elif path and raw[:1] == "+" and not raw.startswith("+++"):
+                out.setdefault((path, "RIGHT"), set()).add(new_no)
+                new_no += 1
+            elif path and raw[:1] == "-" and not raw.startswith("---"):
+                out.setdefault((path, "LEFT"), set()).add(old_no)
+                old_no += 1
+            elif path and raw[:1] == " ":
+                out.setdefault((path, "RIGHT"), set()).add(new_no)
+                out.setdefault((path, "LEFT"), set()).add(old_no)
+                old_no, new_no = old_no + 1, new_no + 1
+        return out
+
+    def _comment_payload(self, c: dict[str, Any]) -> dict[str, Any]:
+        return {"id": c["id"], "path": c["path"], "line": c["line"], "side": c["side"],
+                "body": c["body"], "in_reply_to_id": c.get("in_reply_to"),
+                "pull_request_review_id": c.get("review_id")}
+
+    def _review(self, bare: Path, full: str, pr: dict[str, Any], body: dict[str, Any]) -> tuple[int, Any]:
+        comments = body.get("comments") or []
+        if comments:
+            lines = self._diff_lines(bare, pr)
+            for c in comments:
+                side = str(c.get("side") or "RIGHT")
+                if int(c.get("line") or 0) not in lines.get((str(c.get("path")), side), set()):
+                    # What GitHub answers for a line outside the diff.
+                    return 422, {"message": "Unprocessable Entity",
+                                 "errors": ["Line could not be resolved"]}
+        review = self.world.add("reviews", {"repo": full, "pr": pr["number"],
+                                            "body": str(body.get("body") or ""),
+                                            "event": str(body.get("event") or "COMMENT")})
+        for c in comments:
+            self.world.add("review_comments", {
+                "id": len(self.world.review_comments) + 1001, "repo": full, "pr": pr["number"],
+                "review_id": review["number"], "path": str(c.get("path")), "line": int(c["line"]),
+                "side": str(c.get("side") or "RIGHT"), "body": str(c.get("body") or ""),
+                "in_reply_to": None})
+        return 200, {"id": review["number"], "state": "COMMENTED", "body": review["body"],
+                     "html_url": f"https://github.com/{full}/pull/{pr['number']}"
+                                 f"#pullrequestreview-{review['number']}"}
+
+    def _graphql(self, body: dict[str, Any]) -> tuple[int, Any]:
+        query = str(body.get("query") or "")
+        variables = body.get("variables") or {}
+        if "resolveReviewThread" in query:
+            thread = str(variables.get("id") or "")
+            root = int(thread.split("_", 1)[-1]) if thread.startswith("RT_") else 0
+            self.world.resolved_threads.add(root)
+            return 200, {"data": {"resolveReviewThread": {"thread": {"id": thread, "isResolved": True}}}}
+        if "reviewThreads" in query:
+            full = f"{variables.get('owner')}/{variables.get('repo')}"
+            number = int(variables.get("number") or 0)
+            roots = [c for c in self.world.review_comments
+                     if c["repo"] == full and c["pr"] == number and not c.get("in_reply_to")]
+            nodes = [{"id": f"RT_{c['id']}", "isResolved": c["id"] in self.world.resolved_threads,
+                      "comments": {"nodes": [{"databaseId": c["id"]}]}} for c in roots]
+            return 200, {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": nodes}}}}}
+        return 200, {"errors": [{"message": "boss-e2e GitHub fake: this GraphQL query is not served"}]}
 

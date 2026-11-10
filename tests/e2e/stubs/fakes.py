@@ -53,6 +53,11 @@ class World:
         # commit sha or branch name ("*" for any commit), set through POST /github/_checks.
         self.pr_comments: list[dict[str, Any]] = []
         self.pr_labels: list[dict[str, Any]] = []
+        # Pull-request reviews and their line comments (replies carry in_reply_to), and the
+        # review threads resolved through GraphQL (BOSSAPP-948: Publish carries local review).
+        self.reviews: list[dict[str, Any]] = []
+        self.review_comments: list[dict[str, Any]] = []
+        self.resolved_threads: set[int] = set()
         self.checks: dict[str, list[dict[str, Any]]] = {}
         # A real app process standing in for what a deploy host runs (POST /_app_backend): the
         # app's *.e2e.test address, and curl on that host over the ssh stub, reach it.

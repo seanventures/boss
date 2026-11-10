@@ -1158,6 +1158,40 @@ class GitHubAdapter:
             {"body": body},
         )
 
+    def resolve_review_thread(self, pull_number: int, comment_id: int) -> bool:
+        """Mark the review thread that holds `comment_id` resolved (GraphQL resolveReviewThread;
+        REST cannot). True when GitHub says it is resolved (BOSSAPP-948: Publish carries a
+        local review's resolved threads)."""
+        base = self.api_base_url
+        graphql = (base[: -len("/v3")] + "/graphql") if base.endswith("/api/v3") \
+            else base + "/graphql"
+        owner, _, repo = self.repository_full_name.partition("/")
+        found = self._send(
+            "POST", graphql, headers=self._headers(),
+            json={"query": "query($owner: String!, $repo: String!, $number: Int!) { repository("
+                           "owner: $owner, name: $repo) { pullRequest(number: $number) { "
+                           "reviewThreads(first: 100) { nodes { id isResolved comments(first: 1) "
+                           "{ nodes { databaseId } } } } } } }",
+                  "variables": {"owner": owner, "repo": repo, "number": int(pull_number)}},
+        ).json()
+        nodes = ((((((found or {}).get("data") or {}).get("repository") or {})
+                   .get("pullRequest") or {}).get("reviewThreads") or {}).get("nodes") or [])
+        thread = next((n for n in nodes if any(
+            int(x.get("databaseId") or 0) == int(comment_id)
+            for x in ((n.get("comments") or {}).get("nodes") or []))), None)
+        if thread is None:
+            return False
+        if thread.get("isResolved"):
+            return True
+        done = self._send(
+            "POST", graphql, headers=self._headers(),
+            json={"query": "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) "
+                           "{ thread { id isResolved } } }",
+                  "variables": {"id": thread["id"]}},
+        ).json()
+        return bool(((((done or {}).get("data") or {}).get("resolveReviewThread") or {})
+                     .get("thread") or {}).get("isResolved"))
+
     def reply_to_review_comment(self, pull_number: int, comment_id: int, body: str) -> int:
         response = self._request(
             "POST",

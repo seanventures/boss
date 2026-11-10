@@ -826,6 +826,156 @@ def unanswered_required(fctx: Mapping[str, Any]) -> list[dict[str, Any]]:
             and not e.get("response_kind")]
 
 
+# ── Publish: the conversation goes to the pull request (BOSSAPP-948 P4) ───────────────────────
+
+def diff_lines(git_dir: Path, base: str, head: str) -> dict[tuple[str, str], set[int]]:
+    """The lines GitHub lets a review comment sit on: every line inside a hunk of the pull
+    request's diff (three lines of context, as GitHub shows it), per (path, side)."""
+    out: dict[tuple[str, str], set[int]] = {}
+    path = None
+    old_no = new_no = 0
+    for raw in local_repo.git(["diff", "--no-color", "--no-renames", f"{base}...{head}"],
+                              git_dir=git_dir, check=False).splitlines():
+        if raw.startswith("+++ "):
+            name = raw[4:]
+            if name.startswith("b/"):
+                path = name[2:]
+            continue
+        if raw.startswith("--- "):
+            name = raw[4:]
+            if name.startswith("a/") and path is None:
+                path = name[2:]
+            continue
+        if raw.startswith("diff --git"):
+            path = None
+            continue
+        m = _HUNK.match(raw)
+        if m:
+            old_no, new_no = int(m.group(1)), int(m.group(3))
+            continue
+        if path is None or not raw or raw.startswith("\\"):
+            continue
+        sign = raw[0]
+        if sign == "+":
+            out.setdefault((path, "new"), set()).add(new_no)
+            new_no += 1
+        elif sign == "-":
+            out.setdefault((path, "old"), set()).add(old_no)
+            old_no += 1
+        elif sign == " ":
+            out.setdefault((path, "new"), set()).add(new_no)
+            out.setdefault((path, "old"), set()).add(old_no)
+            old_no += 1
+            new_no += 1
+    return out
+
+
+def _signed(r: Mapping[str, Any]) -> str:
+    when = r.get("created_at") or ""
+    try:
+        from datetime import datetime
+
+        when = datetime.fromisoformat(str(when)).strftime("%-d %b %H:%M")
+    except (ValueError, TypeError):
+        when = str(when)[:16]
+    via = {"cli": " · from the terminal", "git_notes": " · from git", "mcp": " · from MCP"}.get(
+        str(r.get("origin") or ""), "")
+    who = "agent " + str(r["author"]) if r.get("author_kind") == "agent" else str(r["author"])
+    return f"**{who}** · local review · {when}{via}\n\n{r['body']}"
+
+
+def publish_comments(c: Any, settings: Any, change: Mapping[str, Any], adapter: Any,
+                     pr_number: int) -> dict[str, Any]:
+    """Carry the change's review conversation to its pull request (local_publish step 3):
+
+      * a thread on a line inside the PR's diff, at the head (or the base, old side), becomes
+        an inline review comment; its replies are posted as replies in that thread;
+      * an outdated thread, or one on a line outside the diff (GitHub refuses those), goes in
+        the review body with the line it was about quoted;
+      * a resolved thread is resolved on GitHub too (GraphQL resolveReviewThread);
+      * each comment is signed `**Person** · local review · date`, because the App posts it.
+
+    Idempotent through github_comment_id: a re-run posts only what is not there yet (a body
+    comment is marked with the negative id of the review that carried it)."""
+    git_dir = git_dir_of(change, settings)
+    all_threads = threads(c, change["id"])
+    if not all_threads:
+        return {"posted": 0, "replies": 0, "resolved": 0, "total": 0}
+    head = head_sha(change, git_dir)        # the branch as pushed to GitHub
+    base = change.get("base_sha") or local_repo.branch_sha(git_dir, change["base_branch"]) or ""
+    merge_base = local_repo.merge_base(git_dir, base, head) if base and head else base
+    lines = diff_lines(git_dir, merge_base or base, head) if head else {}
+    inline, loose = [], []
+    for t in all_threads:
+        if t["github_comment_id"]:
+            continue
+        side = "old" if t["side"] == "old" else "new"
+        in_diff = (bool(t["path"]) and t["line"] is not None and not t["outdated"]
+                   and t["line"] in lines.get((t["path"], side), set())
+                   and (side == "old" or t["commit_sha"] in (None, head)))
+        (inline if in_diff else loose).append(t)
+    posted = replies = resolved = 0
+    review_id = None
+    if inline or loose:
+        parts = ["Review comments made in BOSS before this project was published."]
+        for t in loose:
+            where_ = f"`{t['path']}:{t['line']}`" if t["path"] and t["line"] else (
+                f"`{t['path']}`" if t["path"] else "the change")
+            why = (" (outdated: the line changed since)" if t["outdated"] else
+                   " (not a line of this pull request's diff)" if t["path"] and t["line"] else "")
+            block = [f"**{where_}**{why} · {t['state']}"]
+            if t.get("line_text"):
+                block.append(f"> `{t['line_text'].strip()[:200]}`")
+            block.append(_signed(t))
+            block += [f"↳ {_signed(r)}" for r in t["replies"]]
+            parts.append("\n\n".join(block))
+        comments = [{"path": t["path"], "line": int(t["line"]),
+                     "side": "LEFT" if t["side"] == "old" else "RIGHT", "body": _signed(t)}
+                    for t in inline]
+        review = adapter.create_review(int(pr_number), "\n\n---\n\n".join(parts), "COMMENT",
+                                       comments=comments or None)
+        review_id = int(review.id)
+        got = adapter.review_comments_of(int(pr_number), review_id) if inline else []
+        for t in inline:
+            match = next((g for g in got if g["path"] == t["path"]
+                          and str(g.get("body") or "").strip() == _signed(t).strip()), None)
+            if match is None:
+                continue
+            c.execute(text("UPDATE local_change_set_comments SET github_comment_id = :g, "
+                           "updated_at = now() WHERE id = :i"), {"g": int(match["id"]), "i": t["id"]})
+            t["github_comment_id"] = int(match["id"])
+            posted += 1
+        for t in loose:
+            ids = [t["id"]] + [r["id"] for r in t["replies"]]
+            c.execute(text("UPDATE local_change_set_comments SET github_comment_id = :g, "
+                           "updated_at = now() WHERE id = ANY(:ids)"),
+                      {"g": -review_id, "ids": ids})
+            posted += 1
+    # Replies in the threads that are on GitHub, then the resolved state.
+    for t in all_threads:
+        gid = t["github_comment_id"]
+        if not gid or gid < 0:
+            continue
+        for r in t["replies"]:
+            if r["github_comment_id"]:
+                continue
+            rid = adapter.reply_to_review_comment(int(pr_number), int(gid), _signed(r))
+            c.execute(text("UPDATE local_change_set_comments SET github_comment_id = :g, "
+                           "updated_at = now() WHERE id = :i"), {"g": int(rid), "i": r["id"]})
+            replies += 1
+        if t["state"] == "resolved" and hasattr(adapter, "resolve_review_thread"):
+            if adapter.resolve_review_thread(int(pr_number), int(gid)):
+                resolved += 1
+    if posted or replies or resolved:
+        emit_event(c, change["project_id"], "local_review.published_to_pull_request", "boss",
+                   "local_change_set", change["id"],
+                   {"number": int(change["number"]), "pull_request_number": int(pr_number),
+                    "comments": posted, "replies": replies, "resolved": resolved,
+                    "review_id": review_id})
+    return {"posted": posted, "replies": replies, "resolved": resolved,
+            "total": len(all_threads), "inline": len(inline), "in_body": len(loose)}
+
+
 # ── git notes (refs/notes/boss-review) ────────────────────────────────────────────────────────
 
 def import_notes(c: Any, settings: Any, change: Mapping[str, Any], *, author: str,
