@@ -83,6 +83,28 @@ def screen_tool_result(content: Any) -> dict[str, Any]:
     return {"hit": hit, "patterns": patterns, "untrusted": hit}
 
 
+def carried_untrusted(value: Any) -> bool:
+    """True when this result, or the invocation wrapped around it, was screened as untrusted."""
+    if not isinstance(value, dict):
+        return False
+    if value.get("untrusted") is True:
+        return True
+    for key in ("result", "output"):
+        inner = value.get(key)
+        if isinstance(inner, dict) and inner.get("untrusted") is True:
+            return True
+    return False
+
+
+def next_write_must_ask(screened: Any, *, write: bool, policy: str) -> str:
+    """After an untrusted result, a write's allow becomes ask. Off and reads stay."""
+    if policy == "off" or not write or not carried_untrusted(screened):
+        return policy
+    if policy == "allow":
+        return "ask"
+    return policy
+
+
 def apply_screen(result: dict) -> dict:
     """Shallow-copy a hit with ``untrusted`` and ``screen``. A miss is the same dict.
 

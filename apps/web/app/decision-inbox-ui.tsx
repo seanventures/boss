@@ -11,6 +11,7 @@ import { identityKey } from "./app-identity";
 import { ClientRelativeTime } from "./client-relative-time";
 import { ActionForm, DecisionResolveForm } from "./client-forms";
 import { ActionPreview, actionPreviewOf, previewLead } from "./action-preview";
+import { HeldArguments } from "./held-arguments";
 import { ArchitectureDoc } from "./architecture-doc";
 import { ChecksFailing, checksFailingOf } from "./checks-failing";
 import { architectureDocOf } from "../lib/architecture";
@@ -1028,6 +1029,7 @@ function DecisionInboxRow({
             </div>
           ) : null}
           {preview && !refusal ? <ActionPreview preview={preview} /> : null}
+          <HeldArguments recommendation={rec} />
           {/* THE RELEASE'S MONITORING PACK (engine monitoring_pack): approved with it. */}
           {monitoringPackOf(rec.monitoring_pack) ? <MonitoringPackCard pack={monitoringPackOf(rec.monitoring_pack)!} onCard /> : null}
           {decision.prd ? (

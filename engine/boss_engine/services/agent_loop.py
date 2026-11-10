@@ -14,6 +14,7 @@ from .tool_result_text import clip_for_model
 from ..config import Settings
 from . import owned_process
 from . import decision_actions
+from .argument_binding import bind_held_call, held_call_matches
 from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .low_trust import Ledger, blocked, outside_origin, remember, sink_for_skill
@@ -1989,7 +1990,8 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         }
     decision = connection.execute(
         text(
-            "SELECT status FROM decisions WHERE id = :id AND project_id = :project_id"
+            "SELECT status, recommendation FROM decisions "
+            "WHERE id = :id AND project_id = :project_id"
         ),
         {"id": decision_id, "project_id": project_id},
     ).mappings().first()
@@ -2004,6 +2006,28 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 else "approval decision not found"
             ),
             "decision_status": None if decision is None else decision["status"],
+        }
+    # Pending args can be replaced after the person approved a different call.
+    # No digest means an older decision; that resume is unchanged.
+    recommendation = decision["recommendation"]
+    if isinstance(recommendation, str):
+        try:
+            recommendation = json.loads(recommendation)
+        except ValueError:
+            recommendation = {}
+    if not isinstance(recommendation, dict):
+        recommendation = {}
+    tool_name = recommendation.get("tool") or pending.get("tool") or ""
+    if not isinstance(tool_name, str):
+        tool_name = str(tool_name)
+    if not held_call_matches(
+        tool_name, pending.get("args"), recommendation.get("args_sha256"),
+    ):
+        return {
+            "status": "denied",
+            "run_id": run_id,
+            "decision_id": decision_id,
+            "reason": "arguments do not match the approved call",
         }
     if pending.get("kind") == "mcp":
         server = next(
@@ -2210,6 +2234,7 @@ def _hold_for_untrusted_content(
         "task_id": task_id,
         "sink": sink,
         "untrusted_origin": hold.get("origin"),
+        **bind_held_call(name, args),
     }
     if name in mcp_map:
         server, tool = mcp_map[name]
@@ -2391,6 +2416,10 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     # rebuilds from that plus any tool message that still carries the mark.
     _untrusted = Ledger.load(finalize_ctx.get("untrusted_spans"))
     _untrusted.absorb_messages(messages)
+    from .tool_result_screen import carried_untrusted, next_write_must_ask
+
+    # A phrase-screen hit on a tool result holds the next write. A read keeps its policy.
+    screen_hold = bool(finalize_ctx.get("tool_screen_untrusted"))
     on_demand_loader: Optional[str] = None
     if skill_resolution["on_demand"]:
         on_demand_loader = _unique_tool_name(
@@ -2590,7 +2619,12 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 unreviewed = needs_person(server)
                 # ASK IS THE OPERATOR'S RULE, and tier >= 2 always asks (spec E7): a tier-2 tool
                 # waits for a person even on an install that raised the autonomy threshold.
-                asks = _mcp_tool_policy(server, tool) == "ask"
+                policy = next_write_must_ask(
+                    {"untrusted": screen_hold},
+                    write=risk >= 2,
+                    policy=_mcp_tool_policy(server, tool),
+                )
+                asks = policy == "ask"
                 if risk > threshold or unreviewed or asks:
                     decision_id = create_blocking_decision(
                         connection,
@@ -2607,6 +2641,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                             "tool_name": tool_name,
                             "args": args,
                             "task_id": task_id,
+                            **({"tool_screen": "untrusted"} if screen_hold and risk >= 2 else {}),
+                            **bind_held_call(name, args),
                         },
                         {},
                         "agent_mcp_requires_approval",
@@ -2622,6 +2658,9 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         ),
                     }
                     is_deferred = True
+                    if screen_hold and risk >= 2:
+                        screen_hold = False
+                        finalize_ctx["tool_screen_untrusted"] = False
                     deferred = {
                         "kind": "mcp",
                         "tool": name,
@@ -2790,6 +2829,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                             "caller": caller,
                             "args": args,
                             "task_id": task_id,
+                            **bind_held_call(name, args),
                         },
                         {},
                         "agent_skill_requires_approval",
@@ -2846,15 +2886,26 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                     )
             elif name in _WRITE_FNS:
                 _, risk = _WRITE_FNS[name]
-                if risk > threshold:
+                policy = next_write_must_ask(
+                    {"untrusted": screen_hold},
+                    write=True,
+                    policy="ask" if risk > threshold else "allow",
+                )
+                if policy == "ask":
                     decision_id = create_blocking_decision(
                         connection, project_id, task_id,
                         f"Approve agent action: {name}",
-                        {"action": "resume_agent_run", "run_id": run_id, "tool": name, "args": args, "task_id": task_id},
+                        {"action": "resume_agent_run", "run_id": run_id, "tool": name,
+                         "args": args, "task_id": task_id,
+                         **({"tool_screen": "untrusted"} if screen_hold else {}),
+                         **bind_held_call(name, args)},
                         {}, "agent_tool_requires_approval", risk_tier=risk,
                     )
                     result = {"status": "deferred_for_approval", "decision_id": decision_id, "message": f"'{name}' (risk tier {risk}) requires human approval; the run is paused and resumes on approval."}
                     is_deferred = True
+                    if screen_hold:
+                        screen_hold = False
+                        finalize_ctx["tool_screen_untrusted"] = False
                     deferred = {"tool": name, "args": args, "decision_id": decision_id}
                     emit_event(connection, project_id, "agent.tool_deferred", "agent_loop", "decision", decision_id, {"tool": name, "risk_tier": risk, "step": step})
                 else:
@@ -2862,6 +2913,9 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             else:
                 result = _dispatch(connection, project_id, settings, name, args)
                 emit_event(connection, project_id, "agent.tool_invoked", "agent_loop", "task", task_id or project_id, {"tool": name, "step": step})
+            if carried_untrusted(result):
+                screen_hold = True
+                finalize_ctx["tool_screen_untrusted"] = True
             arrived = _origin_for_call(name, mcp_map, skill_map)
             if (
                 arrived

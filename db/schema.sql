@@ -11639,3 +11639,59 @@ CREATE TABLE IF NOT EXISTS change_review_chat (
   CHECK (delivery IN ('steered', 'queued', 'sent'))
 );
 CREATE INDEX IF NOT EXISTS idx_change_review_chat_change ON change_review_chat (project_id, change_key, id);
+
+-- TOOL CALL AUDIT (BOSSAPP-819): one append-only row per receipt-path call.
+-- Update and delete raise. The export route and the Activity tab are a later slice.
+CREATE TABLE IF NOT EXISTS tool_call_audit (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  run_id TEXT,
+  agent TEXT,
+  principal TEXT,
+  server_id TEXT,
+  tool TEXT NOT NULL,
+  args_sha256 TEXT,
+  args_redacted JSONB NOT NULL DEFAULT '{}'::jsonb,
+  decision TEXT NOT NULL,
+  matched_policy_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  decision_id TEXT,
+  outcome TEXT NOT NULL,
+  latency_ms INT NOT NULL DEFAULT 0,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION tool_call_audit_append_only()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION 'tool_call_audit is append-only';
+END;
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'tool_call_audit_no_update'
+  ) THEN
+    CREATE TRIGGER tool_call_audit_no_update
+      BEFORE UPDATE OR DELETE ON tool_call_audit
+      FOR EACH ROW
+      EXECUTE FUNCTION tool_call_audit_append_only();
+  END IF;
+END;
+$$;
+
+-- ALWAYS-ALLOW (BOSSAPP-817): a revocable always-allow row for one tool.
+CREATE TABLE IF NOT EXISTS tool_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  server_id TEXT,
+  tool TEXT NOT NULL,
+  schema_sha256 TEXT,
+  source_decision_id TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  CHECK (status IN ('active', 'revoked'))
+);

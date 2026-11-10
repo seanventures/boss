@@ -2,15 +2,20 @@
 
 The digest is canonical JSON, so key order cannot launder a changed schema. A
 first sight is not a change. A tool that disappears is not quarantined here.
-The catalog table, the decision row, and the console are a later slice.
+A changed tool is marked ask on a copy of the observed list, and that mark is
+what a reachable probe turns into a decision. The console is a later slice.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
+import inspect
 import json
 
-from boss_engine.services.mcp_registry import _tool_summary
+from boss_engine.services.mcp_registry import _tool_summary, record_reachability
 from boss_engine.services.tool_catalog import (
+    apply_quarantine,
+    changed_tool_decisions,
     compare_catalog,
     description_sha256,
     schema_sha256,
@@ -124,3 +129,72 @@ def test_a_first_sight_with_no_previous_catalog_quarantines_nothing():
         {"name": "read_file", "description": "reads", "inputSchema": None},
     ])
     assert compare_catalog(None, observed) == {"quarantined": []}
+
+
+def test_apply_quarantine_asks_only_the_named_tools_and_does_not_mutate():
+    observed = [
+        {"name": "write_file", "description": "writes", "inputSchema": {"type": "object"}},
+        {"name": "read_file", "description": "reads", "inputSchema": {"type": "object"}},
+    ]
+    quarantined = [{
+        "name": "write_file",
+        "quarantine": "ask",
+        "schema_changed": True,
+        "description_changed": False,
+    }]
+    observed_before = copy.deepcopy(observed)
+    quarantined_before = copy.deepcopy(quarantined)
+    marked = apply_quarantine(observed, quarantined)
+    assert observed == observed_before
+    assert quarantined == quarantined_before
+    assert marked is not observed
+    assert marked[0] is not observed[0]
+    assert marked[1] is not observed[1]
+    assert marked == [
+        {
+            "name": "write_file",
+            "description": "writes",
+            "inputSchema": {"type": "object"},
+            "quarantine": "ask",
+        },
+        {
+            "name": "read_file",
+            "description": "reads",
+            "inputSchema": {"type": "object"},
+        },
+    ]
+
+
+def test_changed_tool_decisions_names_the_tool_and_keeps_both_hashes():
+    quarantined = [{
+        "name": "write_file",
+        "quarantine": "ask",
+        "schema_changed": True,
+        "description_changed": False,
+        "previous_schema_sha256": "old-schema",
+        "schema_sha256": "new-schema",
+        "previous_description_sha256": "old-description",
+        "description_sha256": "new-description",
+    }]
+    assert changed_tool_decisions("files", quarantined) == [{
+        "question": "Tool changed: files / write_file",
+        "recommendation": {
+            "action": "review_tool_change",
+            "server": "files",
+            "tool": "write_file",
+            "quarantine": "ask",
+            "schema_changed": True,
+            "description_changed": False,
+            "previous_schema_sha256": "old-schema",
+            "schema_sha256": "new-schema",
+            "previous_description_sha256": "old-description",
+            "description_sha256": "new-description",
+        },
+    }]
+
+
+def test_record_reachability_compares_applies_and_decides_on_a_tool_change():
+    source = inspect.getsource(record_reachability)
+    assert "compare_catalog(" in source
+    assert "apply_quarantine(" in source
+    assert "changed_tool_decisions(" in source

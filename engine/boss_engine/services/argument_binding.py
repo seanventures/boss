@@ -36,6 +36,34 @@ def args_sha256(tool_name: str, arguments: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def held_call_matches(tool_name: str, arguments: Any, stored_sha: Any) -> bool:
+    """True when this call is the one a person approved.
+
+    Older decisions have no digest. A missing or empty stored_sha still matches.
+    A present digest matches only the same canonical arguments, and never a
+    non-dict.
+    """
+    if stored_sha is None or stored_sha == "":
+        return True
+    if not isinstance(arguments, dict):
+        return False
+    return args_sha256(tool_name, arguments) == stored_sha
+
+
+def bind_held_call(tool_name: str, arguments: Any) -> dict:
+    """Digest and redacted preview stored on an Ask decision.
+
+    A non-dict adds nothing, so a hold still opens when the arguments are
+    not a map. The signature and the receipt check are a later slice.
+    """
+    if not isinstance(arguments, dict):
+        return {}
+    return {
+        "args_sha256": args_sha256(tool_name, arguments),
+        "args_preview": redacted_preview(arguments),
+    }
+
+
 def redacted_preview(arguments: dict) -> dict:
     """Copy arguments with secret-named values replaced by "[redacted]"."""
     if not isinstance(arguments, dict):

@@ -33,14 +33,22 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Callable, ContextManager, Optional
 from urllib.parse import urlparse
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .core import emit_event, make_id, normalize_data_boundary
-from .tool_catalog import description_sha256, schema_sha256
+from .core import create_blocking_decision, emit_event, make_id, normalize_data_boundary
+from .tool_call_audit import record_tool_call
+from .tool_catalog import (
+    apply_quarantine,
+    changed_tool_decisions,
+    compare_catalog,
+    description_sha256,
+    schema_sha256,
+)
 from .tool_result_screen import apply_screen
 
 
@@ -1159,7 +1167,36 @@ def record_reachability(
     error: Optional[str] = None,
 ) -> None:
     """Write down what a probe found. A failed probe keeps the last-known tool list, because an
-    operator fixing a server wants to see which tools it HAD, not an empty box."""
+    operator fixing a server wants to see which tools it HAD, not an empty box.
+
+    A reachable probe compares the new summary with the stored tools first. A same-named tool
+    whose schema or description hash changed is stored as ask, and one decision is opened per
+    such tool before the update. An unreachable probe does not compare and does not open a
+    decision. A decision that cannot be opened is not swallowed, so the new list is not stored
+    without it.
+    """
+    summaries = _tool_summary(tools or [])
+    stored = summaries
+    if reachable:
+        row = connection.execute(
+            text("SELECT name, tools FROM mcp_servers WHERE id = :id AND project_id = :p"),
+            {"id": server_id, "p": project_id},
+        ).mappings().first()
+        previous = _loads(row["tools"], []) if row is not None else None
+        quarantined = compare_catalog(previous, summaries)["quarantined"]
+        stored = apply_quarantine(summaries, quarantined)
+        server_name = str(row["name"]) if row is not None and row["name"] else ""
+        for decision in changed_tool_decisions(server_name, quarantined):
+            create_blocking_decision(
+                connection,
+                project_id,
+                None,
+                decision["question"],
+                decision["recommendation"],
+                {},
+                "tool_schema_changed",
+                risk_tier=2,
+            )
     connection.execute(
         text(
             "UPDATE mcp_servers SET reachable = :r, last_checked_at = now(), last_error = :e"
@@ -1167,7 +1204,7 @@ def record_reachability(
             + " WHERE id = :id AND project_id = :p"
         ),
         {"r": bool(reachable), "e": None if reachable else (error or "no answer")[:500],
-         "t": json.dumps(_tool_summary(tools or [])), "id": server_id, "p": project_id},
+         "t": json.dumps(stored), "id": server_id, "p": project_id},
     )
 
 
@@ -1298,21 +1335,44 @@ def call_tool_with_receipt(
 
     A transport failure also records the server as unreachable, so the screens learn about a
     dead server from the run that hit it rather than from the next person who opens them.
+
+    Each road also appends one tool_call_audit row. A missing table is not swallowed.
     """
     from .mcp_client import MCPClient
     from .receipts import ReceiptService
 
+    def _audit_tool_call(outcome: str, decision: str, *, latency_ms: int = 0) -> None:
+        about = approval_about if isinstance(approval_about, dict) else {}
+        record_tool_call(
+            connection,
+            project_id=project_id,
+            run_id=about.get("run_id") if isinstance(about.get("run_id"), str) else None,
+            agent="mcp_registry",
+            principal=None,
+            server_id=server.get("id") if isinstance(server.get("id"), str) else None,
+            tool=tool_name,
+            arguments=inputs if isinstance(inputs, dict) else {},
+            decision=decision,
+            matched_policy_ids=[decision] if decision in ("allow", "ask", "off") else [],
+            decision_id=approved_by,
+            outcome=outcome,
+            latency_ms=latency_ms,
+        )
+
     if needs_person(server) and not approval_stands(connection, project_id, approved_by,
                                                     approval_about):
+        _audit_tool_call("refused", "unreviewed")
         raise McpServerUnreviewed(_refusal(tool_name, server, approved_by))
     # THE OPERATOR'S ALLOW / ASK / OFF (spec E7), the backstop for every road like the review:
     # an Off tool never runs, an Ask tool runs only with a person's approval about this call.
     policy = tool_policy(server, tool_name, _declared_tier(server, tool_name))
     if policy == "off":
+        _audit_tool_call("refused", "off")
         raise McpToolOff(f"Did not call {tool_name}: it is turned off for "
                          f"'{server.get('name')}' in Skills & MCP.")
     if policy == "ask" and not approval_stands(connection, project_id, approved_by,
                                                approval_about):
+        _audit_tool_call("refused", "ask")
         raise McpServerUnreviewed(
             f"Did not call {tool_name}: it is set to ask a person each time, and this call "
             "carried no approval about it.")
@@ -1338,6 +1398,7 @@ def call_tool_with_receipt(
     )
     if not created:
         if receipt.get("status") == "succeeded":
+            _audit_tool_call("deduplicated", policy)
             return apply_screen({
                 "output": receipt.get("result") or {},
                 "receipt_id": receipt["id"],
@@ -1347,6 +1408,7 @@ def call_tool_with_receipt(
         raise RuntimeError(
             f"MCP effect receipt already exists with status {receipt.get('status')}"
         )
+    started = time.monotonic()
     try:
         output = MCPClient(settings).call_tool(server["url"], tool_name, inputs,
                                                headers=headers)
@@ -1359,13 +1421,18 @@ def call_tool_with_receipt(
         if _is_transport_failure(exc):
             record_reachability_quietly(connection, project_id, server, reachable=False,
                                         error=f"{type(exc).__name__}: {exc}")
+        _audit_tool_call(
+            "failed", policy, latency_ms=max(0, int((time.monotonic() - started) * 1000))
+        )
         raise
+    elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
     receipts.mark_succeeded(
         connection,
         receipt["id"],
         f"{server['id']}:{tool_name}",
         output if isinstance(output, dict) else {"value": output},
     )
+    _audit_tool_call("succeeded", policy, latency_ms=elapsed_ms)
     return apply_screen({
         "output": output,
         "receipt_id": receipt["id"],

@@ -6,9 +6,11 @@ and the arguments the model sent are left untouched.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from boss_engine.services.argument_binding import args_sha256, redacted_preview
+from boss_engine.services.argument_binding import args_sha256, bind_held_call, redacted_preview
 
 # sha256 of {"arguments":{"content":"x","path":"ran.py"},"tool":"write_file"}
 _WRITE_FILE = "44410b06b5fa91f0ccf3545c8ea1edd18febb351ffe57acfe3d3e104147b0eed"
@@ -110,3 +112,29 @@ def test_redacted_preview_does_not_mutate_the_arguments():
     assert preview["nested"] is not original["nested"]
     assert preview["items"] is not original["items"]
     assert preview["items"][0] is not original["items"][0]
+
+
+# sha256 of {"arguments":{"password":"hunter2","path":"a.py"},"tool":"write_file"}
+_WRITE_FILE_SECRET = "520fdccd4b173d629f76cc8d2c29a597b897e4edfb2fdf09f3e7b4151094a589"
+
+
+def test_a_held_call_stores_the_digest_and_the_redacted_preview():
+    arguments = {"path": "a.py", "password": "hunter2"}
+    held = bind_held_call("write_file", arguments)
+    assert held["args_sha256"] == _WRITE_FILE_SECRET
+    assert held["args_preview"]["path"] == "a.py"
+    assert held["args_preview"]["password"] == "[redacted]"
+    assert arguments["password"] == "hunter2"
+
+
+def test_a_held_call_without_a_dict_adds_nothing():
+    assert bind_held_call("write_file", "not-a-dict") == {}
+
+
+def test_every_ask_decision_stores_the_argument_binding():
+    source = (
+        Path(__file__).resolve().parents[1] / "boss_engine" / "services" / "agent_loop.py"
+    ).read_text()
+    start = source.index("def _hold_for_untrusted_content")
+    body = source[start:source.index("\ndef conversation_from_messages", start)]
+    assert body.count("bind_held_call(") >= 4
