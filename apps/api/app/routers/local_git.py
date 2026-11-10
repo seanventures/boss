@@ -57,7 +57,8 @@ def _pusher(request: Request) -> tuple[str, str]:
     if ctx is None:
         return "operator", "human"
     kind = getattr(getattr(ctx.principal, "kind", None), "value", "")
-    return identity_guard.actor_for(ctx), ("human" if kind == "user" else "agent")
+    name = str(getattr(ctx.principal, "display_name", "") or "").strip()
+    return name or identity_guard.actor_for(ctx), ("human" if kind == "user" else "agent")
 
 
 async def _read_capped(request: Request, cap: int) -> Optional[bytes]:

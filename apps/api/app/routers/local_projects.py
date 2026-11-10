@@ -396,6 +396,15 @@ class CommentBody(BaseModel):
     origin: str = Field(default="console", pattern="^(console|cli)$")
 
 
+def _author(request: Request) -> str:
+    """How a comment is signed: the person's name (the page and Publish show it), else the actor."""
+    from apps.api.app import identity_guard
+
+    ctx = identity_guard.request_auth(request)
+    name = str(getattr(getattr(ctx, "principal", None), "display_name", "") or "").strip()
+    return name or _actor(request)
+
+
 def _author_kind(request: Request) -> str:
     """A person's comment is a required input of the fix round; an agent's is not."""
     from apps.api.app import identity_guard
@@ -417,7 +426,7 @@ def local_change_comment(project_id: str, number: int, request: Request, payload
         try:
             return local_review.add_comment(
                 connection, _settings, project_id=project_id, number=number, body=payload.body,
-                author=_actor(request), author_kind=_author_kind(request),
+                author=_author(request), author_kind=_author_kind(request),
                 path=payload.path, line=payload.line, end_line=payload.end_line,
                 side=payload.side, commit_sha=payload.commit_sha, severity=payload.severity,
                 origin=payload.origin)
@@ -442,7 +451,7 @@ def local_change_comment_reply(project_id: str, number: int, comment_id: int, re
         try:
             return local_review.add_comment(
                 connection, _settings, project_id=project_id, number=number, body=payload.body,
-                author=_actor(request), author_kind=_author_kind(request),
+                author=_author(request), author_kind=_author_kind(request),
                 origin=payload.origin, reply_to=comment_id)
         except local_review.ReviewError as error:
             return _review_refused(error)
@@ -465,7 +474,7 @@ def local_change_comment_resolve(project_id: str, number: int, comment_id: int, 
         _require(connection, project_id)
         try:
             return local_review.resolve(connection, project_id=project_id, number=number,
-                                        comment_id=comment_id, actor=_actor(request),
+                                        comment_id=comment_id, actor=_author(request),
                                         reopen=payload.reopen)
         except local_review.ReviewError as error:
             return _review_refused(error)

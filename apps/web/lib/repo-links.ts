@@ -10,6 +10,7 @@
 
 import { repoUrl } from "./github-urls";
 import { parseCiHold, type CiHold } from "./ci-hold";
+import { parseSummary, parseThreads, parseWhere, type CommentSummary, type Thread, type Where } from "./local-review-data";
 
 const LOCAL_OWNER_PREFIX = "local_";
 const LOCAL_PR_HOST = "boss-local";
@@ -137,6 +138,8 @@ export type ChangeSet = {
   decision: { id: string; status: string; question: string } | null;
   draft: boolean; labels: string[]; pending_push: boolean; run_id: string | null; head_sha: string | null;
   created_at: string | null; updated_at: string | null; merged_at: string | null;
+  /** BOSSAPP-948: where the code lives, and the line-comment threads (lib/local-review.ts). */
+  where: Where | null; comments: Thread[]; comment_summary: CommentSummary;
 };
 
 export function changeSetPath(projectId: string, number: number | string): string {
@@ -174,6 +177,7 @@ export function parseChangeSet(raw: unknown): ChangeSet {
     draft: r.draft === true, labels: Array.isArray(r.labels) ? r.labels.map((l) => str(l)).filter(Boolean) : [],
     pending_push: r.pending_push === true, run_id: str(r.run_id) || null, head_sha: str(r.head_sha) || null,
     created_at: str(r.created_at) || null, updated_at: str(r.updated_at) || null, merged_at: str(r.merged_at) || null,
+    where: parseWhere(r.where), comments: parseThreads(r.comments), comment_summary: parseSummary(r.comment_summary),
   };
 }
 

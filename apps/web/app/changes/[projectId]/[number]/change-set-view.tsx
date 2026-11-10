@@ -12,20 +12,30 @@
  *
  * Merge is POST …/local-changes/{n}/merge: a person's approval of the review decision, after which
  * BOSS runs the governed merge; the page re-reads until the change set says merged.
+ *
+ * LOCAL REVIEW (BOSSAPP-948, ./local-review.tsx): where the code lives and a working copy; the Code
+ * tab (the whole file at this change or its base); comments on any line of the diff or the file,
+ * in one store; Request changes, which starts the fix round with those comments as required
+ * inputs (Agent actions); Merge held while a person's comment is open.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, CaretDown, CaretRight, ChatCircleText, CheckCircle, CircleNotch, FileCode,
-  GitBranch, GitCommit, GitMerge, HardDrives, ShieldCheck, XCircle,
+  ArrowLeft, ArrowRight, CaretDown, CaretRight, ChatCircleDots, ChatCircleText, CheckCircle, CircleNotch, FileCode,
+  GitBranch, GitCommit, GitMerge, HardDrives, PencilSimpleLine, ShieldCheck, XCircle,
 } from "@phosphor-icons/react";
 
-import { AgentAvatar } from "../../../agent-avatar";
-import { IdentityProvider, useGuardedCall, useIdentity } from "../../../../components/identity/identity-provider";
+import { BoxPop } from "../../../../components/box-pop";
+import { ConsentHost } from "../../../../components/identity/consent-sheet";
+import { CanButton, IdentityProvider, useGuardedCall, useIdentity } from "../../../../components/identity/identity-provider";
 import type { MePermissionsResponse, MeResponse } from "../../../../lib/identity/contract";
 import { idGet, idPost, refusalSentence } from "../../../../lib/identity/api";
 import { changeSetPath, parseChangeSet, type ChangeSet, type ChangeSetNote } from "../../../../lib/repo-links";
 import { commentsByLine, highlight, langOf, parseUnifiedDiff, type DiffFile } from "../../../../lib/diff-view";
 import { Markdown } from "../../../markdown";
+import { requestChanges, runReview, type Thread } from "../../../../lib/local-review";
+import {
+  AgentActions, CodeIcon, CodeTab, ReviewRail, ThreadView, WhereItLives, Who, useJumpTo, useLineReview, type LineReview,
+} from "./local-review";
 import "./change-set.css";
 
 /** Files open on arrival: the first few, so the diff is there without a click. */
@@ -41,6 +51,7 @@ export function ChangeSetView({ projectId, number, me = null, org = null, projec
   return (
     <IdentityProvider me={me} org={org} project={project} projectId={projectId}>
       <ChangeSetPage projectId={projectId} number={number} />
+      <ConsentHost />
     </IdentityProvider>
   );
 }
@@ -70,7 +81,22 @@ function ChangeSetPage({ projectId, number }: { projectId: string; number: strin
   const files = useMemo(() => parseUnifiedDiff(cs?.diff), [cs?.diff]);
   const inline = useMemo(() => commentsByLine<InlineComment>((cs?.review ?? []).flatMap((n) =>
     n.comments.map((c) => ({ ...c, author: n.author })))), [cs?.review]);
-  const commentCount = (cs?.review ?? []).reduce((a, n) => a + n.comments.length + (n.body ? 1 : 0), 0);
+  const commentCount = (cs?.review ?? []).reduce((a, n) => a + n.comments.length + (n.body ? 1 : 0), 0)
+    + (cs?.comments.length ?? 0);
+  // Files (the diff) or Code (the whole file): the Code tab opens at a file named in the diff.
+  const [view, setView] = useState<"files" | "code">("files");
+  const [codePath, setCodePath] = useState<string | null>(null);
+  const reread = useCallback(() => { void read().catch(() => null); }, [read]);
+  const jump = useJumpTo();
+  const lineReview = useLineReview({
+    projectId, number, threads: cs?.comments ?? [], onChanged: reread, open: cs?.state === "open",
+    commitFor: (side) => (side === "new" ? cs?.where?.head_sha || cs?.head_sha || null : null),
+  });
+  const openCode = (path: string | null) => { setCodePath(path); setView("code"); };
+  const onJump = (t: Thread) => {
+    if (t.path && !files.some((f) => f.path === t.path) && !t.outdated) { openCode(t.path); jump(t.id); return; }
+    setView("files"); jump(t.id);
+  };
 
   return (
     <main className="cs" data-testid="change-set">
@@ -90,21 +116,33 @@ function ChangeSetPage({ projectId, number }: { projectId: string; number: strin
       {cs ? (
         <>
           <Header cs={cs} />
+          <WhereItLives cs={cs} projectId={projectId} />
           <nav className="cs-tabs" aria-label="Sections">
-            <a href="#cs-files"><FileCode size={13} aria-hidden />Files <b>{cs.files.length || files.length}</b></a>
-            <a href="#cs-commits"><GitCommit size={13} aria-hidden />Commits <b>{cs.commits.length}</b></a>
-            <a href="#cs-review"><ChatCircleText size={13} aria-hidden />Review <b>{commentCount}</b></a>
+            <a href="#cs-files" aria-current={view === "files" ? "true" : undefined} data-testid="change-set-tab-files"
+               onClick={() => setView("files")}><FileCode size={13} aria-hidden />Files <b>{cs.files.length || files.length}</b></a>
+            <a href="#lr-code" aria-current={view === "code" ? "true" : undefined} data-testid="change-set-tab-code"
+               onClick={(e) => { e.preventDefault(); openCode(codePath); }}><CodeIcon size={13} aria-hidden />Code</a>
+            <a href="#cs-commits" onClick={() => setView("files")}><GitCommit size={13} aria-hidden />Commits <b>{cs.commits.length}</b></a>
+            <a href="#cs-review" onClick={() => setView("files")}><ChatCircleText size={13} aria-hidden />Review <b>{commentCount}</b></a>
             <a href="#cs-checks"><ShieldCheck size={13} aria-hidden />Checks</a>
           </nav>
           <div className="cs-grid">
             <div className="cs-main">
-              {cs.body ? <Body text={cs.body} /> : null}
-              <Files cs={cs} files={files} inline={inline} />
-              <Commits cs={cs} />
-              <Review notes={cs.review} />
+              <AgentActions cs={cs} />
+              {view === "code" ? (
+                <div id="lr-code"><CodeTab cs={cs} projectId={projectId} number={number} startPath={codePath} onChanged={reread} /></div>
+              ) : (
+                <>
+                  {cs.body ? <Body text={cs.body} /> : null}
+                  <Files cs={cs} files={files} inline={inline} review={lineReview} onViewFile={openCode} />
+                  <Commits cs={cs} />
+                  <Review notes={cs.review} threads={cs.comments} projectId={projectId} number={number} onChanged={reread} />
+                </>
+              )}
             </div>
             <aside className="cs-side">
               <Decide cs={cs} projectId={projectId} number={number} reread={read} />
+              <ReviewRail cs={cs} onJump={onJump} />
               <Checks cs={cs} />
             </aside>
           </div>
@@ -148,6 +186,10 @@ function Header({ cs }: { cs: ChangeSet }) {
         <span className="cs-pill" data-tone={ck.tone} title={cs.checks ? `In ${cs.checks.where}` : "No build recorded"}>
           {ck.tone === "green" ? <CheckCircle size={12} weight="fill" aria-hidden /> : ck.tone === "red" ? <XCircle size={12} weight="fill" aria-hidden /> : <ShieldCheck size={12} aria-hidden />}{ck.label}
         </span>
+        {cs.comment_summary.human_open ? (
+          <span className="cs-pill" data-tone="amber" title="Open line comments from people" data-testid="change-set-open-comments">
+            <ChatCircleDots size={12} aria-hidden />{cs.comment_summary.human_open} open comment{cs.comment_summary.human_open === 1 ? "" : "s"}</span>) : null}
+        {cs.labels.includes("pushed") ? <span className="cs-tag" title="A person pushed this branch to BOSS">pushed</span> : null}
         {cs.pending_push ? <span className="cs-pill" data-tone="amber">Waiting for GitHub</span> : null}
         {cs.github_pr_url ? <a className="cs-link" href={cs.github_pr_url} target="_blank" rel="noreferrer">Published PR ↗</a> : null}
       </div>
@@ -157,7 +199,8 @@ function Header({ cs }: { cs: ChangeSet }) {
 
 // ── files and the diff ──────────────────────────────────────────────────────────────────────
 
-function Files({ cs, files, inline }: { cs: ChangeSet; files: DiffFile[]; inline: Map<string, InlineComment[]> }) {
+function Files({ cs, files, inline, review, onViewFile }: { cs: ChangeSet; files: DiffFile[]; inline: Map<string, InlineComment[]>;
+  review?: LineReview; onViewFile?: (path: string) => void }) {
   // The API's file list is the truth for counts; the diff supplies the lines.
   const rows = cs.files.length
     ? cs.files.map((f) => ({ ...f, diff: files.find((d) => d.path === f.path) ?? null }))
@@ -188,7 +231,10 @@ function Files({ cs, files, inline }: { cs: ChangeSet; files: DiffFile[]; inline
                   <i data-k="del" style={{ width: `${(r.deletions / max) * 100}%` }} />
                 </span>
               </button>
-              {isOpen ? (r.diff && r.diff.hunks.length ? <DiffTable file={r.diff} inline={inline} />
+              {isOpen && onViewFile && r.status !== "removed" ? (
+                <div className="lr-file-bar"><button type="button" className="lr-link" data-testid="change-set-view-file"
+                  onClick={() => onViewFile(r.path)} title="Open the whole file in the Code tab"><CodeIcon size={12} aria-hidden />View file</button></div>) : null}
+              {isOpen ? (r.diff && r.diff.hunks.length ? <DiffTable file={r.diff} inline={inline} review={review} />
                 : <p className="cs-empty">{r.diff?.status === "binary" ? "A binary file." : "No lines to show."}</p>) : null}
             </div>
           );
@@ -198,7 +244,7 @@ function Files({ cs, files, inline }: { cs: ChangeSet; files: DiffFile[]; inline
   );
 }
 
-function DiffTable({ file, inline }: { file: DiffFile; inline: Map<string, InlineComment[]> }) {
+function DiffTable({ file, inline, review }: { file: DiffFile; inline: Map<string, InlineComment[]>; review?: LineReview }) {
   const lang = langOf(file.path);
   return (
     <div className="cs-diff" role="region" aria-label={`Diff of ${file.path}`} tabIndex={0}>
@@ -209,10 +255,15 @@ function DiffTable({ file, inline }: { file: DiffFile; inline: Map<string, Inlin
               <tr className="cs-hunk"><td colSpan={3}><span className="cs-mono">{h.header.replace(/ @@.*$/, " @@")}</span>{h.section ? <span className="cs-faint"> {h.section}</span> : null}</td></tr>
               {h.lines.map((l, li) => {
                 const notes = l.newNo != null ? inline.get(`${file.path}:${l.newNo}`) : undefined;
+                // A comment sits on the new side's line, or on a deleted line's old one.
+                const anchor = l.kind === "note" ? null : l.kind === "del"
+                  ? (l.oldNo != null ? { path: file.path, line: l.oldNo, side: "old" as const } : null)
+                  : (l.newNo != null ? { path: file.path, line: l.newNo, side: "new" as const } : null);
+                const threaded = !!(review && anchor && review.has(anchor));
                 return (
                   <React.Fragment key={li}>
-                    <tr className="cs-ln" data-k={l.kind}>
-                      <td className="cs-no">{l.oldNo ?? ""}</td>
+                    <tr className="cs-ln" data-k={l.kind} data-c={threaded || undefined}>
+                      <td className="cs-no lr-gut">{review && anchor ? review.gutter(anchor) : null}{l.oldNo ?? ""}</td>
                       <td className="cs-no">{l.newNo ?? ""}</td>
                       <td className="cs-code"><span className="cs-sign" aria-hidden>{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</span>
                         {l.kind === "note" ? <span className="cs-faint">{l.text}</span>
@@ -226,6 +277,7 @@ function DiffTable({ file, inline }: { file: DiffFile; inline: Map<string, Inlin
                         ))}
                       </td></tr>
                     ) : null}
+                    {threaded && review && anchor ? <tr className="cs-inline"><td colSpan={3}>{review.under(anchor)}</td></tr> : null}
                   </React.Fragment>
                 );
               })}
@@ -254,22 +306,6 @@ function Commits({ cs }: { cs: ChangeSet }) {
   );
 }
 
-/** An agent's name or role key gets its face; a person's name gets initials. */
-function looksLikeAgent(name: string): boolean {
-  return !name || /^(agent:|boss\b|[a-z]+(_[a-z]+)+$)|captain|reviewer|panel|engineer|helm|marshal/i.test(name);
-}
-
-function Who({ name, size = 22 }: { name: string; size?: number }) {
-  const label = name || "BOSS";
-  return (
-    <span className="cs-who">
-      {looksLikeAgent(name) ? <AgentAvatar agent={name.replace(/^agent:/, "") || "engineering_captain"} size={size} aiBadge={false} />
-        : <span className="cs-initials" style={{ width: size, height: size }} aria-hidden>{label.slice(0, 1).toUpperCase()}</span>}
-      <b>{label.replace(/^agent:/, "").replace(/_/g, " ")}</b>
-    </span>
-  );
-}
-
 function eventTone(e: string): string {
   const v = e.toUpperCase();
   return v.includes("APPROVE") ? "green" : v.includes("CHANGES") || v.includes("REQUEST") ? "amber" : "grey";
@@ -284,10 +320,20 @@ export function InlineNote({ author, body }: { author: string; body: string }) {
   );
 }
 
-export function Review({ notes }: { notes: ChangeSetNote[] }) {
+export function Review({ notes, threads = [], projectId = "", number = "", onChanged }: {
+  notes: ChangeSetNote[]; threads?: Thread[]; projectId?: string; number?: string; onChanged?: () => void;
+}) {
+  // People's threads first (open before resolved), then the review panel's notes.
+  const people = threads.filter((t) => t.author_kind === "human");
+  const agents = threads.filter((t) => t.author_kind !== "human");
   return (
     <section className="cs-card" id="cs-review" data-testid="change-set-review" aria-label="Review">
-      <div className="cs-card-h"><ChatCircleText size={15} aria-hidden /><b>Review</b><span className="cs-faint">{notes.length}</span></div>
+      <div className="cs-card-h"><ChatCircleText size={15} aria-hidden /><b>Review</b><span className="cs-faint">{notes.length + threads.length}</span></div>
+      {[...people, ...agents].length ? (
+        <div className="lr-threads" data-testid="lr-review-threads">
+          {[...people, ...agents].map((t) => <ThreadView key={t.id} thread={t} projectId={projectId} number={number}
+                                                         onChanged={onChanged ?? (() => undefined)} compact={!t.outdated} />)}
+        </div>) : null}
       {notes.length ? notes.map((n) => (
         <article key={String(n.id)} className="cs-note">
           <div className="cs-note-h"><Who name={n.author} />
@@ -299,7 +345,7 @@ export function Review({ notes }: { notes: ChangeSetNote[] }) {
             ))}</ul>
           ) : null}
         </article>
-      )) : <p className="cs-empty">No review yet: the review panel comments here.</p>}
+      )) : !threads.length ? <p className="cs-empty">No review yet: the review panel comments here.</p> : null}
     </section>
   );
 }
@@ -372,9 +418,70 @@ export function Decide({ cs, projectId, number, reread }: { cs: ChangeSet; proje
             {cs.merge.held ? cs.merge.held.reason : "A person merges · BOSS runs the governed merge"}</p>
         </>
       ) : cs.state === "open" ? <p className="cs-faint cs-small">Merge opens once the review asks for a decision.</p> : null}
+      {cs.state === "open" && !merging ? <RequestChanges cs={cs} projectId={projectId} number={number} reread={reread} /> : null}
+      {cs.state === "open" && !d && cs.labels.includes("pushed") ? <RunReview cs={cs} projectId={projectId} number={number} reread={reread} /> : null}
       {said ? <p className="cs-error" role="alert">{said}</p> : null}
       {d || cs.merge ? <a className="cs-link cs-small" href={`/?area=decisions&decision=${encodeURIComponent(cs.merge?.decision_id ?? d!.id)}`}>Open the decision ›</a> : null}
     </section>
+  );
+}
+
+/** REQUEST CHANGES (BOSSAPP-948): a person sends the review back; the fix round starts on this
+ *  branch with their open line comments as required inputs, a note optional. */
+function RequestChanges({ cs, projectId, number, reread }: { cs: ChangeSet; projectId: string; number: string; reread: () => Promise<ChangeSet> }) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const n = cs.comments.filter((t) => t.author_kind === "human" && t.state !== "resolved").length;
+  const send = async () => {
+    if (busy || (!note.trim() && !n)) return;
+    setBusy(true); setSaid(null);
+    try {
+      await requestChanges(projectId, number, note.trim());
+      setDone("The fix round started on this branch, your comments first.");
+      setOpen(false); setNote("");
+      await reread().catch(() => null);
+    } catch (e) { setSaid(refusalSentence(e)); } finally { setBusy(false); }
+  };
+  return (
+    <div className="lr-rc">
+      <CanButton permission="decision:approve" projectId={projectId} className="lr-btn" data-kind="amber" aria-expanded={open}
+                 data-testid="change-set-request-changes" tip="Start a fix round on this branch" onClick={() => setOpen((v) => !v)}>
+        <PencilSimpleLine size={14} aria-hidden />Request changes{n ? ` · ${n} comment${n === 1 ? "" : "s"}` : ""}</CanButton>
+      <p className="cs-faint cs-small">{done ?? "The builder starts a fix round on this branch, your comments first"}</p>
+      {open ? (
+        <BoxPop className="lr-composer" fit={false} onEscape={() => setOpen(false)} data-testid="lr-request-changes">
+          <textarea className="lr-input" rows={3} value={note} onChange={(e) => setNote(e.target.value)} aria-label="What to change"
+                    placeholder={n ? "Anything to add to your line comments (optional)" : "Say what to change"} data-testid="lr-rc-note"
+                    onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(); } }} />
+          <div className="lr-composer-f"><span className="cs-faint cs-small">{n ? `${n} line comment${n === 1 ? "" : "s"} go${n === 1 ? "es" : ""} as required inputs` : "No line comments yet"}</span>
+            <span className="cs-spacer" />
+            <button type="button" className="lr-btn" data-kind="ghost" onClick={() => setOpen(false)}>Cancel</button>
+            <button type="button" className="lr-btn" data-kind="primary" disabled={busy || (!note.trim() && !n)} onClick={() => void send()} data-testid="lr-rc-send">
+              {busy ? <CircleNotch size={13} className="cs-spin" aria-hidden /> : null}Start the fix round</button></div>
+          {said ? <p className="cs-error" role="alert">{said}</p> : null}
+        </BoxPop>) : null}
+      {said && !open ? <p className="cs-error" role="alert">{said}</p> : null}
+    </div>
+  );
+}
+
+/** A pushed change whose review did not start with the push (consent, budget): start it now. */
+function RunReview({ cs, projectId, number, reread }: { cs: ChangeSet; projectId: string; number: string; reread: () => Promise<ChangeSet> }) {
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  const running = !!cs.checks && /run|queue|lease|progress|pend/i.test(cs.checks.run_status ?? "");
+  if (running) return <p className="cs-faint cs-small" data-testid="change-set-reviewing"><CircleNotch size={12} className="cs-spin" aria-hidden /> The review panel is checking this change</p>;
+  return (
+    <div className="lr-rc">
+      <CanButton permission="code_task:create" projectId={projectId} className="lr-btn" data-kind="ghost" disabled={busy} data-testid="change-set-run-review"
+                 tip="Run the sandbox checks and the review panel on this branch"
+                 onClick={() => { setBusy(true); setSaid(null); void runReview(projectId, number).then(() => reread()).catch((e: unknown) => setSaid(refusalSentence(e))).finally(() => setBusy(false)); }}>
+        <ShieldCheck size={14} aria-hidden />Run the review</CanButton>
+      {said ? <p className="cs-error" role="alert">{said}</p> : null}
+    </div>
   );
 }
 
