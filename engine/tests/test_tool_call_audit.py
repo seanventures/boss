@@ -13,7 +13,11 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ProgrammingError
 
-from boss_engine.services.tool_call_audit import SCHEMA_SQL, record_tool_call
+from boss_engine.services.tool_call_audit import (
+    SCHEMA_SQL,
+    list_tool_calls,
+    record_tool_call,
+)
 
 URL = os.environ.get("BOSS_AUDIT_TEST_DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(
@@ -106,6 +110,80 @@ def test_update_and_delete_are_rejected(engine):
             {"id": row_id},
         ).scalar()
     assert still == "refused"
+
+
+def test_list_tool_calls_returns_one_project_newest_first(engine):
+    # now() is the transaction start, so each call is its own transaction.
+    # Append-only: a rerun wipes the table instead of deleting rows.
+    with engine.begin() as connection:
+        connection.execute(text("TRUNCATE tool_call_audit"))
+    with engine.begin() as connection:
+        record_tool_call(
+            connection,
+            project_id="p-list",
+            run_id=None,
+            agent=None,
+            principal=None,
+            server_id=None,
+            tool="older_tool",
+            arguments={"path": "notes.txt", "password": "hunter2"},
+            decision="allow",
+            matched_policy_ids=[],
+            decision_id=None,
+            outcome="succeeded",
+            latency_ms=4,
+        )
+    with engine.begin() as connection:
+        record_tool_call(
+            connection,
+            project_id="p-list",
+            run_id="run-9",
+            agent="agent_loop",
+            principal="ceo",
+            server_id="srv-1",
+            tool="newer_tool",
+            arguments={"path": "notes.txt", "password": "hunter2"},
+            decision="allow",
+            matched_policy_ids=["allow-write"],
+            decision_id=None,
+            outcome="succeeded",
+            latency_ms=9,
+        )
+    with engine.begin() as connection:
+        record_tool_call(
+            connection,
+            project_id="p-other",
+            run_id=None,
+            agent=None,
+            principal=None,
+            server_id=None,
+            tool="other_tool",
+            arguments={"path": "other.txt"},
+            decision="off",
+            matched_policy_ids=[],
+            decision_id=None,
+            outcome="refused",
+            latency_ms=1,
+        )
+    with engine.begin() as connection:
+        rows = list_tool_calls(connection, project_id="p-list")
+        newest = list_tool_calls(connection, project_id="p-list", limit=1)
+    assert [row["tool"] for row in rows] == ["newer_tool", "older_tool"]
+    assert [row["tool"] for row in newest] == ["newer_tool"]
+    assert rows[0]["latency_ms"] == 9
+    assert rows[1]["latency_ms"] == 4
+    assert rows[0]["decision"] == "allow"
+    assert rows[0]["outcome"] == "succeeded"
+    assert len(rows[0]["args_sha256"]) == 64
+    assert rows[0]["args_redacted"] == {"path": "notes.txt", "password": "[redacted]"}
+    assert set(rows[0]) == {
+        "tool",
+        "args_sha256",
+        "args_redacted",
+        "decision",
+        "outcome",
+        "latency_ms",
+    }
 
 
 def test_call_tool_with_receipt_records_every_outcome():

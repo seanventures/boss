@@ -114,3 +114,43 @@ def record_tool_call(
         },
     )
     return row_id
+
+
+def list_tool_calls(
+    connection: Connection,
+    *,
+    project_id: str,
+    limit: int = 50,
+) -> list[dict]:
+    """Return one project's rows, newest recorded_at first, at most limit.
+
+    When recorded_at ties, id descending breaks the tie so the order is stable.
+    """
+    rows = connection.execute(
+        text(
+            """
+            SELECT tool, args_sha256, args_redacted, decision, outcome, latency_ms
+            FROM tool_call_audit
+            WHERE project_id = :project_id
+            ORDER BY recorded_at DESC, id DESC
+            LIMIT :limit
+            """
+        ),
+        {"project_id": project_id, "limit": int(limit)},
+    ).mappings().all()
+    listed = []
+    for row in rows:
+        redacted = row["args_redacted"]
+        if isinstance(redacted, str):
+            redacted = json.loads(redacted)
+        listed.append(
+            {
+                "tool": row["tool"],
+                "args_sha256": row["args_sha256"],
+                "args_redacted": dict(redacted or {}),
+                "decision": row["decision"],
+                "outcome": row["outcome"],
+                "latency_ms": row["latency_ms"],
+            }
+        )
+    return listed
