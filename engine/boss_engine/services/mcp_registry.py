@@ -40,6 +40,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .core import emit_event, make_id, normalize_data_boundary
+from .tool_result_screen import apply_screen
 
 
 _MCP_COLUMNS = (
@@ -1332,12 +1333,12 @@ def call_tool_with_receipt(
     )
     if not created:
         if receipt.get("status") == "succeeded":
-            return {
+            return apply_screen({
                 "output": receipt.get("result") or {},
                 "receipt_id": receipt["id"],
                 "actual_cost_usd_micros": 0,
                 "deduplicated": True,
-            }
+            })
         raise RuntimeError(
             f"MCP effect receipt already exists with status {receipt.get('status')}"
         )
@@ -1360,11 +1361,11 @@ def call_tool_with_receipt(
         f"{server['id']}:{tool_name}",
         output if isinstance(output, dict) else {"value": output},
     )
-    return {
+    return apply_screen({
         "output": output,
         "receipt_id": receipt["id"],
         "actual_cost_usd_micros": 0,
-    }
+    })
 
 
 def _refusal(tool_name: str, server: dict[str, Any], approved_by: Optional[str]) -> str:
