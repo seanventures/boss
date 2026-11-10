@@ -7548,8 +7548,13 @@ def waiting_on_label(step: dict[str, Any]) -> Optional[str]:
     # A DEPLOY HELD FOR ITS MERGE says so, before its approver: the run list read "waiting on a
     # decision" while the thing to do was merge PR #3 in GitHub (helpdesk-ai, 2026-11-06).
     if isinstance(awaited, dict) and str(awaited.get("kind") or "") == "merge":
-        number = ((step.get("output") or {}).get("merge") or {}).get("pull_request_number")
-        return f"PR #{number} to be merged" if number else _AWAIT_LABELS["merge"]
+        merge = ((step.get("output") or {}).get("merge") or {})
+        number = merge.get("pull_request_number")
+        if not number:
+            return _AWAIT_LABELS["merge"]
+        from .repo_links import change_ref
+
+        return f"{change_ref(merge.get('pull_request_url'), number)} to be merged"
     approver = (step.get("approval") or {}).get("approver_role")
     if approver:
         return str(approver)

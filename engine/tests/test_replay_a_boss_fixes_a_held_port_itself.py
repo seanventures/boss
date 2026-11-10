@@ -207,7 +207,7 @@ from boss_engine.services import budget, deploy_policy, governed_host_deploy, re
 from boss_engine.services import run_decisions
 from boss_engine.templates import deploy_guard
 
-stack_deploy.github_source_for = lambda *a, **k: GitHub()
+stack_deploy.source_for = lambda *a, **k: GitHub()
 stack_deploy.host_access_for = lambda *a, **k: Access()
 stack_deploy.preflight_host = lambda *a, **k: []
 stack_deploy.manifest_misfit = lambda *a, **k: None

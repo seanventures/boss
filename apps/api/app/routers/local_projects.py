@@ -240,9 +240,12 @@ def local_change(project_id: str, number: int) -> dict[str, Any]:
             view["files"] = adapter.pull_request_files(number)
             view["diff"] = adapter.get_pull_request_diff(number)[:400_000]
             base = row["base_branch"] if row["state"] == "open" else (row["base_sha"] or row["base_branch"])
-            view["commits"] = local_repo.commits_between(git_dir, base, row["branch"]
-                                                         if local_repo.branch_exists(git_dir, row["branch"])
-                                                         else row["head_sha"])
+            # A merged or closed change set is what it was when it closed: its recorded head,
+            # never its branch, which a later build on the same branch moves on.
+            head = (row["branch"] if row["state"] == "open"
+                    and local_repo.branch_exists(git_dir, row["branch"])
+                    else row["head_sha"] or row["branch"])
+            view["commits"] = local_repo.commits_between(git_dir, base, head)
         except Exception as error:  # noqa: BLE001 — the record still shows
             view.update({"files": [], "diff": "", "commits": [],
                          "diff_error": f"{type(error).__name__}: {str(error)[:200]}"})

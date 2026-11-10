@@ -20,7 +20,7 @@ import { deployTarget } from "../infra/infra-actions";
 import { EngineNotReady, Face, Flow, HEALTH_TONE, HEALTH_WORD, Ico, PxLink, ReadGate, Ring, Said, Tag } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
 import { ConfirmSheet } from "./confirm-sheet";
-import { DeployLive } from "./deploy-live";
+import { DeployLive, DeployStepFailed } from "./deploy-live";
 import { ItemAction } from "./staging-target-sheet";
 import { whenLocal } from "../../lib/local-time";
 import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
@@ -94,6 +94,14 @@ export function DeploymentsTab({ ctx }: { ctx: PxCtx }) {
                     ...n, icon: shipIcon(n.label, n.state),
                     type: /prod/i.test(n.label) && n.state !== "done" ? "waiting" : /auto/i.test(n.label) ? "agent" : n.state,
                   }))} testid="px-dep-ship" />
+                </section>
+              ) : null}
+              {!d.environments.length && d.empty?.failed ? (
+                <section className="px-card" aria-labelledby="px-dep-empty-failed" data-testid="px-dep-empty-failed">
+                  <div className="px-card-h"><Ico icon={RocketLaunch} c="red" /><h2 id="px-dep-empty-failed">{d.empty.label}</h2></div>
+                  <DeployStepFailed projectId={ctx.projectId} actor={ctx.actor} where="the app" reason={d.empty.detail}
+                                    runId={d.empty.workflow_run_id} stepId={d.empty.step_id} runHref={d.empty.href}
+                                    onFix={(q) => ctx.ask(q)} onChanged={() => ctx.refreshWork()} testid="px-dep-empty-stepfail" />
                 </section>
               ) : null}
               <div className="px-grid px-g2">
@@ -196,6 +204,11 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
                             title="Not live yet: this address answers once a deploy here succeeds">
           <Globe size={12} aria-hidden />{e.deploy?.state === "failed" ? "Not live" : e.deploy?.state === "not_deployed" || !e.deploy ? "Not deployed yet" : "Setting up"} · will answer at {e.address.replace(/^https?:\/\//, "")}</span> : null}
       <DeployLive e={e} projectId={ctx.projectId} actor={ctx.actor} onFix={(q) => ctx.ask(q)} onChanged={() => ctx.refreshWork()} />
+      {e.deploy?.state === "failed" && e.deploy.attempt?.kind === "step" ? (
+        <DeployStepFailed projectId={ctx.projectId} actor={ctx.actor} where={`${e.app || "the app"} on ${e.label}`} reason={e.deploy.reason}
+                          runId={e.deploy.attempt.workflow_run_id} stepId={e.deploy.attempt.step_id} runHref={e.deploy.attempt.run_href}
+                          onFix={(q) => ctx.ask(q)} onChanged={() => ctx.refreshWork()} testid={`px-env-stepfail-${e.key}`} />
+      ) : null}
       <div className="px-env-m">
         {e.uptime_pct !== null ? <Ring pct={e.uptime_pct} tone={e.health === "healthy" ? "green" : e.health === "down" ? "red" : "amber"} size="l" label={`Uptime ${e.uptime_pct}%`}>{Math.round(e.uptime_pct * 10) / 10}%</Ring> : null}
         <div style={{ flex: 1, minWidth: 0 }}>

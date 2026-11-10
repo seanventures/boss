@@ -64,6 +64,26 @@ def _engine(settings: Any):
     return get_engine(settings)
 
 
+def _head_of(row: Mapping[str, Any], git_dir: Path) -> str:
+    """The change set's head: its branch while it is open; once merged or closed, the head it
+    had then — a later build on the same branch moves the branch, never a closed change."""
+    if row.get("state") == "open" and local_repo.branch_exists(git_dir, row["branch"]):
+        return str(row["branch"])
+    return str(row.get("head_sha") or row["branch"])
+
+
+def _note_key(comments: Any) -> str:
+    """A note's inline comments as words and places, without the ids each posting mints."""
+    if isinstance(comments, str):
+        try:
+            comments = json.loads(comments)
+        except ValueError:
+            comments = []
+    return json.dumps(sorted(json.dumps({k: v for k, v in (c or {}).items() if k != "id"},
+                                        sort_keys=True, default=str)
+                             for c in (comments or []) if isinstance(c, dict)))
+
+
 class _NotFound(Exception):
     """What a GitHub 404 is to the readers that probe for a file (ci_gate.has_workflows)."""
 
@@ -302,13 +322,13 @@ class LocalGitAdapter:
     def pull_request_files(self, pull_number: int, *, limit: int = 3000) -> list[dict]:
         row = self.change_set(pull_number)
         base = row["base_branch"] if row["state"] == "open" else (row.get("base_sha") or row["base_branch"])
-        head = row["branch"] if local_repo.branch_exists(self._require(), row["branch"]) else row["head_sha"]
+        head = _head_of(row, self._require())
         return local_repo.changed_files(self.git_dir, base, head)[:limit]
 
     def get_pull_request_diff(self, pull_number: int) -> str:
         row = self.change_set(pull_number)
         base = row["base_branch"] if row["state"] == "open" else (row.get("base_sha") or row["base_branch"])
-        head = row["branch"] if local_repo.branch_exists(self._require(), row["branch"]) else row["head_sha"]
+        head = _head_of(row, self._require())
         return local_repo.diff(self.git_dir, base, head)
 
     def merge_pull_request(self, pull_request_number: int, commit_title: str,
@@ -366,6 +386,16 @@ class LocalGitAdapter:
               author: str = "boss") -> int:
         with self.engine.begin() as c:
             row = self._row(c, number)
+            # ONE NOTE PER WORDS: a build's review conversation posted again (a retried finalize,
+            # a follow-up re-posting the rounds it inherited) is the same note, not a second copy.
+            for same in c.execute(text(
+                    "SELECT number, comments FROM local_change_set_notes WHERE change_set_id = :cs "
+                    "AND kind = :k AND COALESCE(event, '') = COALESCE(:e, '') AND body = :b "
+                    "AND in_reply_to IS NOT DISTINCT FROM :r ORDER BY number"),
+                    {"cs": row["id"], "k": kind, "e": event, "b": body or "",
+                     "r": in_reply_to}).mappings():
+                if _note_key(same["comments"]) == _note_key(comments):
+                    return int(same["number"])
             note_id = int(c.execute(text("SELECT nextval('local_change_set_note_ids')")).scalar())
             c.execute(text(
                 "INSERT INTO local_change_set_notes (id, change_set_id, number, kind, event, body, "
@@ -403,7 +433,17 @@ class LocalGitAdapter:
                 "SELECT id, number, kind, event, body, comments, in_reply_to, author, created_at "
                 "FROM local_change_set_notes WHERE change_set_id = :cs ORDER BY created_at, number"),
                 {"cs": row["id"]}).mappings().all()
-        return [dict(r) for r in rows]
+        # Notes written before _note refused a second copy are read once, too.
+        seen: set[tuple] = set()
+        out = []
+        for r in rows:
+            key = (r["kind"], r["event"] or "", r["body"] or "", r["in_reply_to"],
+                   _note_key(r["comments"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(dict(r))
+        return out
 
     def pull_request_reviews(self, pull_number: int) -> list[dict]:
         row = self.change_set(pull_number)
@@ -495,6 +535,13 @@ class LocalSandboxPipeline:
         return PipelineVerdict(provider=self.provider, repository=self.repository, ref=ref,
                                status="passed", summary=LOCAL_CHECKS_SUMMARY, completed=True,
                                checks=[])
+
+    def discover(self, repository: str = "") -> Any:
+        """A local repository's pipeline is always configured: it is BOSS's sandbox."""
+        from .pipeline_adapter import PipelineDescriptor
+
+        return PipelineDescriptor(provider=self.provider, repository=self.repository,
+                                  configured=True, workflows=[])
 
     def trigger(self, ref: str) -> Any:
         raise LocalHostUnsupported("A local repository has no hosted pipeline to trigger: "

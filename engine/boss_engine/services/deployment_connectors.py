@@ -711,9 +711,14 @@ class SSHContainerConnector:
         after apply() had stopped needing one."""
         if run_id:
             return None
-        return {"owner": (_resource(target, "repo_owner")
+        # A target that names its repository in full (owner/name) says where it lives — a
+        # local project's `local_<project>/<name>` above all, which the install's GitHub owner
+        # would turn into a GitHub repository (the deploy's clone then asked GitHub for it).
+        full = str(target.get("repo") or "")
+        owner_named, _, repo_named = full.partition("/") if "/" in full else ("", "", full)
+        return {"owner": (owner_named or _resource(target, "repo_owner")
                           or getattr(settings, "target_github_owner", "")),
-                "repo": target.get("repo"), "ref": ref or "main",
+                "repo": repo_named or target.get("repo"), "ref": ref or "main",
                 "project_id": target.get("project_id"),
                 "app_entry": _app_entry(target)}
 

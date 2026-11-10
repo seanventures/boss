@@ -192,13 +192,17 @@ def story(connection: Connection, project_id: str, work_id: str) -> dict[str, An
               if merge.get("sha") else "Only a person merges")
     if merge.get("sha") and merge_pr and str(merge_pr.get("external_url")) != str(merged_url):
         # A follow-up after the merge waits on a person: said beside the merge, never instead.
-        pr_sub += f" · follow-up PR #{merge_pr.get('number')} waits on you"
+        from ..repo_links import change_ref as _change_ref
+
+        follow = _change_ref(merge_pr.get("external_url"), merge_pr.get("number"), lower=True)
+        pr_sub += f" · follow-up {follow} waits on you"
     link_url, link_n = (merged_url, merged_number) if merged_url else (pr_url, number)
+    from ..repo_links import change_link as _change_link
     rows["pr"] = {"sub": pr_sub,
                   "at": iso(merge.get("at") or merge.get("merged_at")
                             or (merge_dec or {}).get("approved_at")), "person": True,
-                  "link": ({"label": f"PR #{link_n}", "external_url": link_url}
-                           if link_url else None)}
+                  # A local change set opens BOSS's own view ("Change #1"), never "PR #1 ↗".
+                  "link": _change_link(link_url, link_n)}
     deploy_dec = next((d for d in (_decision(connection, st.get("decision_id"))
                                    for st in steps.values() if st.get("decision_id")
                                    and (st["output"].get("stack_deployment_id")

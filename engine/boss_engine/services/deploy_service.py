@@ -1006,8 +1006,14 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
             # under it matches the static-directory rule. "." means the repository root.
             hint = [e, f"{e}/index.html" if e != "." else "index.html"]
             changed = hint + [c for c in (changed or []) if c not in hint]
-        with begin(engine) as _c:
-            _tok = github_token_for(_c, settings, project_id, owner, repo)
+        from . import local_repo as _local_repo
+
+        _tok = ""
+        if not _local_repo.is_local_owner(owner):
+            # A local project's repository is a bare repository here (git_access gives its
+            # file:// URL): no GitHub credential exists for it, and none is asked for.
+            with begin(engine) as _c:
+                _tok = github_token_for(_c, settings, project_id, owner, repo)
         work, mode, entry, sha = _build_dist(settings, owner, repo, branch,     # 1 build
                                              token=_tok, changed=changed, ref=ref)
         # The SHA that was actually checked out, captured inside _build_dist while the clone

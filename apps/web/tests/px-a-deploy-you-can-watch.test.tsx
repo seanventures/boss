@@ -154,6 +154,39 @@ describe("a deploy you can watch (BOSSAPP-932)", () => {
     expect(tid("px-env-rollback-staging")).toBeNull();
   });
 
+  it("a deploy that failed before it had a record says Last deploy failed with Fix and Retry, never Not deployed yet", async () => {
+    // helpdesk-laptop, wfr_e9d48d68: the deploy step dead-lettered while it resolved the source,
+    // so no stack deployment exists (engine deploy_truth.step_failures).
+    const why = "The local repository local_helpdesk-laptop/helpdesk-laptop has no ref '47e8687'.";
+    const failedEnv = { ...env("failed"), deploy: { state: "failed", word: "Last deploy failed", live: false, reason: why, progress: null,
+      attempt: { id: "wsr_1", kind: "step", status: "failed", commit: "47e8687", at: "2026-11-10T00:49:55+00:00",
+                 workflow_run_id: "wfr_e9d48d68", step_id: "deploy", run_href: `?project_id=${P}&area=delivery_workflows&wfr=wfr_e9d48d68` } } };
+    const calls = stubFetch((c: Call) => {
+      if (c.method === "POST") return { body: { ok: true, status: "ready" } };
+      if (c.path === "/v1/projects/summary") return { body: FX_SUMMARY };
+      const m = c.path.match(/^\/v1\/projects\/([^/]+)\/(overview|work|knowledge|deployments|onboarding|settings|health|captain)$/);
+      if (m) {
+        const table: Record<string, unknown> = { overview: { ...FX_OVERVIEW, project: { ...FX_OVERVIEW.project, id: P } }, work: FX_WORK,
+          knowledge: FX_KNOWLEDGE, deployments: { ...FX_DEPLOYMENTS, environments: [failedEnv], history: [] },
+          onboarding: { ...FX_ONBOARDING, state: "ready" }, settings: FX_SETTINGS, health: FX_HEALTH };
+        return { body: table[m[2]] };
+      }
+      return undefined;
+    });
+    await openDeployments();
+    expect(tid("px-env-state-staging")!.textContent).toBe("Last deploy failed");
+    const box = tid("px-env-stepfail-staging")!;
+    expect(box.textContent).toContain("Last deploy failed:");
+    expect(box.textContent).toContain(why);
+    expect(tid("px-env-stepfail-staging-run")!.getAttribute("href")).toContain("wfr=wfr_e9d48d68");
+    await press(tid("px-env-stepfail-staging-retry"));
+    await settle();
+    const retry = calls.find((c) => c.method === "POST" && (c.body as { action?: string })?.action === "retry_step");
+    expect(retry).toBeTruthy();
+    expect(retry!.body).toMatchObject({ run_id: "wfr_e9d48d68", step_id: "deploy", project_id: P });
+    expect(box.textContent).toContain("Retrying the deploy step.");
+  });
+
   it("says elapsed time in one short token", () => {
     expect(elapsedWords(0)).toBe("0s");
     expect(elapsedWords(59)).toBe("59s");

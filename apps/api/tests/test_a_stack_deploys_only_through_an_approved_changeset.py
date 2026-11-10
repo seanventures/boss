@@ -90,7 +90,7 @@ def stack(client, engine, monkeypatch):
     journal: list[str] = []
     host = FakeHost(journal)
     github = FakeGitHub()
-    monkeypatch.setattr(stack_deploy, "github_source_for", lambda *a, **k: github)
+    monkeypatch.setattr(stack_deploy, "source_for", lambda *a, **k: github)
     monkeypatch.setattr(
         stack_deploy, "host_access_for",
         lambda connection, settings, row, adapter=None: stack_deploy.HostAccess(

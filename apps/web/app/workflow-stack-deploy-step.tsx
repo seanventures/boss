@@ -15,6 +15,7 @@
  */
 import React, { useRef } from "react";
 
+import { isLocalRepo } from "../lib/repo-links";
 import type { StackDeployment } from "../lib/stack-deploy";
 import { StackDeploymentView } from "./stack-deploy-ui";
 
@@ -24,6 +25,8 @@ export type StepStackDeploy = {
   target_id?: string | null;
   target_name?: string | null;
   environment?: string | null;
+  /** The repository it ships: a local one's source is its change, never a pull request. */
+  repository?: string | null;
   host?: string | null;
   host_address?: string | null;
   deployment?: StackDeployment | null;
@@ -50,7 +53,7 @@ export function StackDeployStep({ stack, actor, onChanged }: {
         {host ? <> on <strong>{host}</strong></> : null}, as its <code>boss.deploy.yaml</code> declares.
         {deploymentId
           ? " Approving this deployment is the release approval, there is no other."
-          : " BOSS plans the deployment from the build's pull request as soon as this step runs; "
+          : ` BOSS plans the deployment from the build's ${isLocalRepo(stack.repository) ? "merged change" : "pull request"} as soon as this step runs; `
             + "its approval is the release approval."}
       </p>
       {deploymentId ? (
