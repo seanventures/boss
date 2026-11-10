@@ -36,6 +36,20 @@ def args_sha256(tool_name: str, arguments: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def bind_held_call(tool_name: str, arguments: Any) -> dict:
+    """Digest and redacted preview stored on an Ask decision.
+
+    A non-dict adds nothing, so a hold still opens when the arguments are
+    not a map. The signature and the receipt check are a later slice.
+    """
+    if not isinstance(arguments, dict):
+        return {}
+    return {
+        "args_sha256": args_sha256(tool_name, arguments),
+        "args_preview": redacted_preview(arguments),
+    }
+
+
 def redacted_preview(arguments: dict) -> dict:
     """Copy arguments with secret-named values replaced by "[redacted]"."""
     if not isinstance(arguments, dict):

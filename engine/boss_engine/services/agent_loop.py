@@ -14,6 +14,7 @@ from .tool_result_text import clip_for_model
 from ..config import Settings
 from . import owned_process
 from . import decision_actions
+from .argument_binding import bind_held_call
 from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .low_trust import Ledger, blocked, outside_origin, remember, sink_for_skill
@@ -2210,6 +2211,7 @@ def _hold_for_untrusted_content(
         "task_id": task_id,
         "sink": sink,
         "untrusted_origin": hold.get("origin"),
+        **bind_held_call(name, args),
     }
     if name in mcp_map:
         server, tool = mcp_map[name]
@@ -2617,6 +2619,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                             "args": args,
                             "task_id": task_id,
                             **({"tool_screen": "untrusted"} if screen_hold and risk >= 2 else {}),
+                            **bind_held_call(name, args),
                         },
                         {},
                         "agent_mcp_requires_approval",
@@ -2803,6 +2806,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                             "caller": caller,
                             "args": args,
                             "task_id": task_id,
+                            **bind_held_call(name, args),
                         },
                         {},
                         "agent_skill_requires_approval",
@@ -2870,7 +2874,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         f"Approve agent action: {name}",
                         {"action": "resume_agent_run", "run_id": run_id, "tool": name,
                          "args": args, "task_id": task_id,
-                         **({"tool_screen": "untrusted"} if screen_hold else {})},
+                         **({"tool_screen": "untrusted"} if screen_hold else {}),
+                         **bind_held_call(name, args)},
                         {}, "agent_tool_requires_approval", risk_tier=risk,
                     )
                     result = {"status": "deferred_for_approval", "decision_id": decision_id, "message": f"'{name}' (risk tier {risk}) requires human approval; the run is paused and resumes on approval."}
