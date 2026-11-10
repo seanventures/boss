@@ -11584,3 +11584,45 @@ CREATE TABLE IF NOT EXISTS repo_push_pending (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_repo_push_pending_open
   ON repo_push_pending (owner, repo, branch) WHERE status IN ('waiting', 'pushing');
 CREATE INDEX IF NOT EXISTS idx_repo_push_pending_due ON repo_push_pending (status, next_attempt_at);
+
+-- TOOL CALL AUDIT (BOSSAPP-819): one append-only row per receipt-path call.
+-- Update and delete raise. The export route and the Activity tab are a later slice.
+CREATE TABLE IF NOT EXISTS tool_call_audit (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  run_id TEXT,
+  agent TEXT,
+  principal TEXT,
+  server_id TEXT,
+  tool TEXT NOT NULL,
+  args_sha256 TEXT,
+  args_redacted JSONB NOT NULL DEFAULT '{}'::jsonb,
+  decision TEXT NOT NULL,
+  matched_policy_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  decision_id TEXT,
+  outcome TEXT NOT NULL,
+  latency_ms INT NOT NULL DEFAULT 0,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION tool_call_audit_append_only()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION 'tool_call_audit is append-only';
+END;
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'tool_call_audit_no_update'
+  ) THEN
+    CREATE TRIGGER tool_call_audit_no_update
+      BEFORE UPDATE OR DELETE ON tool_call_audit
+      FOR EACH ROW
+      EXECUTE FUNCTION tool_call_audit_append_only();
+  END IF;
+END;
+$$;
