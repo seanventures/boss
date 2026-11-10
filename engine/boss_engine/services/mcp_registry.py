@@ -40,6 +40,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .core import emit_event, make_id, normalize_data_boundary
+from .tool_catalog import description_sha256, schema_sha256
 from .tool_result_screen import apply_screen
 
 
@@ -1079,10 +1080,14 @@ def _tool_summary(tools: Any) -> list[dict[str, Any]]:
     for tool in tools or []:
         if not isinstance(tool, dict) or not tool.get("name"):
             continue
+        description = str(tool.get("description") or "")[:500]
+        schema = (tool.get("inputSchema")
+                  if isinstance(tool.get("inputSchema"), dict) else None)
         out.append({"name": str(tool["name"]),
-                    "description": str(tool.get("description") or "")[:500],
-                    "inputSchema": tool.get("inputSchema")
-                    if isinstance(tool.get("inputSchema"), dict) else None})
+                    "description": description,
+                    "inputSchema": schema,
+                    "schema_sha256": schema_sha256(schema),
+                    "description_sha256": description_sha256(description)})
     return out
 
 
