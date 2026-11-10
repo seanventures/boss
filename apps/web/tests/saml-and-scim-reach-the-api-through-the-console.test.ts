@@ -191,7 +191,8 @@ describe("the route files", () => {
   });
 
   it("the protocol calls bypass the server-side wrappers that would add the person back", () => {
-    expect(read("../lib/identity/protocol-proxy.ts")).toMatch(/__bossOriginalFetch/);
+    expect(read("../lib/identity/protocol-proxy.ts")).toMatch(/from "\.\.\/direct-fetch"/);
+    expect(read("../lib/direct-fetch.ts")).toMatch(/__bossOriginalFetch/);
     expect(read("../lib/feed-cache.ts")).toMatch(/__bossOriginalFetch \?\?= original/);
   });
 });

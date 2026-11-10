@@ -3870,27 +3870,25 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         if not body:
             return {"ok": False, "error": "body is required"}
         # A LOCAL CHANGE (BOSSAPP-948): the one comment store every surface writes —
-        # local_review.add_comment — by change number, or by the run whose change set it is.
+        # local_review.add_comment — by change number, or by the run whose change set it is,
+        # signed the way the console signs (local_review.signer).
         from ..services import local_review as _local_review
+        from .registry import CURRENT_TOOL_AUTH
 
         with ctx.begin() as c:
-            number = args.get("change_number")
-            if not number and args.get("run_id"):
-                number = c.execute(_text(
-                    "SELECT number FROM local_change_sets WHERE project_id = :p AND run_id = :r "
-                    "AND state = 'open' ORDER BY created_at DESC LIMIT 1"),
-                    {"p": project_id, "r": args["run_id"]}).scalar()
+            number = _local_change_number(c, project_id, args)
             if number:
                 from ..config import get_settings as _gs
 
                 try:
                     made = _local_review.add_comment(
-                        c, _gs(), project_id=project_id, number=int(number), body=body,
-                        author=actor, author_kind="human", path=args.get("path"),
-                        line=args.get("line"), end_line=args.get("end_line"),
+                        c, _gs(), project_id=project_id, number=number, body=body,
+                        **_local_review.signer(CURRENT_TOOL_AUTH.get(), actor),
+                        path=args.get("path"), line=args.get("line"),
+                        end_line=args.get("end_line"),
                         severity=args.get("severity") or "major", origin="mcp")
                 except _local_review.ReviewError as exc:
-                    return {"ok": False, "error": str(exc)}
+                    return {"ok": False, "error": exc.error, "message": str(exc)}
                 return {"ok": True, "comment_id": made["id"], "change_number": int(number),
                         "at": f"{made['path']}:{made['line']}",
                         "applies": "a required input of the change's next fix round "
@@ -3929,13 +3927,32 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "Every review comment on a code task — from the panel and from people — with its "
         "file, line, severity and whether it has been dealt with.",
         _obj({"run_id": {"type": "string"},
-              "status": {"type": "string", "enum": ["open", "addressed", "dismissed", "all"],
+              "change_number": {"type": "integer", "minimum": 1,
+                                "description": "a LOCAL project's change #N (instead of run_id): "
+                                               "its review threads, as the console shows them"},
+              "status": {"type": "string",
+                         "enum": ["open", "addressed", "dismissed", "resolved", "all"],
                          "default": "all"}},
-             ["run_id"]), permission="code_task:read")
+             []), permission="code_task:read")
     def list_review_comments(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
         want = (args.get("status") or "all").lower()
+        from ..services import local_review as _local_review
+
         with ctx.begin() as c:
+            # A LOCAL CHANGE (BOSSAPP-948): its threads in the one store, read the way the
+            # console's Review panel reads them (local_review.list_threads).
+            number = _local_change_number(c, project_id, args)
+            if number:
+                try:
+                    listed = _local_review.list_threads(c, project_id=project_id, number=number,
+                                                        status=want)
+                except _local_review.ReviewError as exc:
+                    return {"ok": False, "error": exc.error, "message": str(exc)}
+                return {"ok": True, "change_number": number, "count": len(listed["items"]),
+                        "comments": listed["items"], "summary": listed["summary"]}
+            if not args.get("run_id"):
+                return {"ok": False, "error": "give run_id, or change_number for a local change"}
             row = _code_task_in_project(c, run_id := args["run_id"], project_id)
             if not row:
                 return {"ok": False, "error": f"no code task run {run_id}"}
@@ -3953,14 +3970,52 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "judgement call rather than making it disappear — a comment that vanishes is "
         "indistinguishable from one nobody read.",
         _obj({"run_id": {"type": "string"},
+              "change_number": {"type": "integer", "minimum": 1,
+                                "description": "a LOCAL project's change #N: comment_id is one "
+                                               "of its threads (a number, or lcc_N)"},
               "comment_id": {"type": "string"},
               "status": {"type": "string", "enum": ["addressed", "dismissed"]},
               "note": {"type": "string", "description": "why, for a dismissal"}},
-             ["run_id", "comment_id", "status"]),
+             ["comment_id", "status"]),
         kind="write",
         reversibility="safe", permission="code_task:steer")
     def resolve_review_comment(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
+        from ..services import local_review as _local_review
+        from .registry import CURRENT_TOOL_AUTH
+
+        status = str(args.get("status") or "").lower()
+        with ctx.begin() as c:
+            number = _local_change_number(c, project_id, args, comment_id=args.get("comment_id"))
+            if number:
+                # A LOCAL CHANGE (BOSSAPP-948): a person resolves the thread, as on the console
+                # (same refusal for an agent's or a service's credential); a note is the
+                # person's reply in the thread first, so the reason stays on the record.
+                auth = CURRENT_TOOL_AUTH.get()
+                refused = _local_review.person_refusal(auth, "Resolving a review thread")
+                if refused is not None:
+                    return {"ok": False, "error": refused.error, "message": str(refused)}
+                if status not in ("addressed", "dismissed"):
+                    return {"ok": False, "error": "status is addressed or dismissed"}
+                from ..config import get_settings as _gs
+
+                try:
+                    cid = _local_review.comment_number(args.get("comment_id"))
+                    note = str(args.get("note") or "").strip()
+                    if note:
+                        _local_review.add_comment(
+                            c, _gs(), project_id=project_id, number=number,
+                            body=("Dismissed: " if status == "dismissed" else "Addressed: ") + note,
+                            **_local_review.signer(auth, actor), origin="mcp", reply_to=cid)
+                    done = _local_review.resolve(
+                        c, project_id=project_id, number=number, comment_id=cid,
+                        actor=_local_review.signer(auth, actor)["author"])
+                except _local_review.ReviewError as exc:
+                    return {"ok": False, "error": exc.error, "message": str(exc)}
+                return {"ok": True, "change_number": number, "comment_id": done["id"],
+                        "status": status, "state": done["state"]}
+        if not args.get("run_id"):
+            return {"ok": False, "error": "give run_id, or change_number for a local change"}
         run_id = args["run_id"]
         try:
             with ctx.begin() as c:
@@ -4750,6 +4805,30 @@ def _text(sql: str):
     from sqlalchemy import text
 
     return text(sql)
+
+
+def _local_change_number(connection, project_id: str, args: dict,
+                         comment_id: Any = None) -> _Optional[int]:
+    """The LOCAL change (BOSSAPP-948) a review-comment tool call is about, or None for a run's
+    own comments: `change_number`; else the change a local comment id (N or lcc_N) belongs to;
+    else the open change set the run proposed. A panel finding's id (rc_…) is the run's."""
+    if args.get("change_number"):
+        return int(args["change_number"])
+    if comment_id is not None:
+        raw = str(comment_id).strip()
+        if raw.startswith("lcc_") or raw.isdigit():
+            n = connection.execute(_text(
+                "SELECT cs.number FROM local_change_set_comments cm JOIN local_change_sets cs "
+                "ON cs.id = cm.change_set_id WHERE cm.id = :i AND cm.project_id = :p"),
+                {"i": int(raw.removeprefix("lcc_")) if raw.removeprefix("lcc_").isdigit() else -1,
+                 "p": project_id}).scalar()
+            if n:
+                return int(n)
+        else:
+            return None
+    from ..services import local_review as _local_review
+
+    return _local_review.change_number_for_run(connection, project_id, args.get("run_id"))
 
 
 def _code_task_in_project(connection, run_id: str, project_id: str):

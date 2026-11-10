@@ -98,15 +98,21 @@ Commands:
   clone PROJECT [DIR] [--branch B] [--open]
                       A working copy of a local project's code (BOSS's git remote,
                       http://localhost:3000/git/PROJECT.git), in DIR (default ~/code/PROJECT).
-                      Your BOSS access token (BOSS_TOKEN, or asked once on the terminal;
-                      Enter uses this machine's host tools key) goes to git's credential
-                      helper (the keychain on macOS), never into the URL or .git/config.
-                      --open opens it in VS Code (or Finder). The change page lists it.
+                      Your personal access token (boss_pat_…: BOSS_TOKEN, the one boss login
+                      stored, or asked once on the terminal; never the host tools' key) goes
+                      to git's credential helper (the keychain on macOS), never into the URL
+                      or .git/config. --open opens it in VS Code (or Finder).
+  login [--with-token]
+                      Keep your personal access token (make one in Account › Access tokens)
+                      for this BOSS: asked hidden on the terminal, or read from stdin with
+                      --with-token. BOSS checks it is a person's; it goes to git's credential
+                      helper and is never printed.
   review comment N FILE:LINE "TEXT" [--severity must|should|nit]
   review list N | review reply N ID "TEXT" | review resolve N ID
                       Line comments on local change #N, in the same store as the console.
                       Run inside a working copy (the project is read from its remote) or
-                      pass --project PROJECT. Signs in with the token boss clone stored.
+                      pass --project PROJECT. Signed by a person: the token boss clone or
+                      boss login stored (or BOSS_TOKEN); refused without one.
   version             Installed release and commit
 
 Environment: BOSS_INSTALL_DIR selects another install.
@@ -1389,18 +1395,40 @@ credential_helper() {
   printf 'cache --timeout=86400'
 }
 
-# The person's BOSS token: BOSS_TOKEN, else asked once on the terminal (hidden), else the host
-# tools' key. Printed to stdout for a $(...) capture only — never echoed to the terminal.
+PERSON_TOKEN_REFUSAL='Run `boss clone <project>` or `boss login` first: comments are signed by a person.'
+
+# A PERSON's token: a personal access token (boss_pat_…), never this machine's host tools key —
+# what that key signs reads as no person's (BOSSAPP-948). Only the shape is checked here (no
+# network, nothing printed); `boss login` asks BOSS who it belongs to.
+is_person_token() {
+  local token="$1" host
+  [[ "$token" == boss_pat_* ]] || return 1
+  host="$(env_value BOSS_HOST_API_KEY)"
+  [[ -z "$host" || "$token" != "$host" ]]
+}
+
+# The person's BOSS token: what is stored for this BOSS (stored_token), else asked once on the
+# terminal (hidden). Never the host tools' key. Printed to stdout for a $(...) capture only —
+# never echoed to the terminal; the caller exits when this fails.
 person_token() {
-  local token="${BOSS_TOKEN:-}"
+  local token
+  token="$(stored_token)"
   if [[ -z "$token" ]] && have_tty; then
-    printf 'Your BOSS access token (Account › Access tokens; Enter uses this machine'"'"'s host tools key): ' >/dev/tty
+    printf 'Your personal BOSS access token (boss_pat_…, from Account › Access tokens): ' >/dev/tty
     IFS= read -rs token </dev/tty || token=""
     printf '\n' >/dev/tty
   fi
-  [[ -n "$token" ]] || token="$(host_key)"
-  [[ -n "$token" ]] || die "no BOSS token: set BOSS_TOKEN, or run this on a terminal."
+  [[ -n "$token" ]] || die "no personal BOSS token: set BOSS_TOKEN, run boss login, or run this on a terminal."
+  is_person_token "$token" || die "that is not a personal access token (boss_pat_…): the host tools' key and other keys cannot sign for a person. Make one in Account › Access tokens."
   printf '%s' "$token"
+}
+
+# Keep TOKEN in git's credential helper (the keychain on macOS), keyed by this BOSS's address.
+remember_token() {
+  local token="$1" base proto hostport
+  base="$(git_remote_base)"; proto="${base%%://*}"; hostport="${base#*://}"; hostport="${hostport%%/*}"
+  printf 'protocol=%s\nhost=%s\nusername=boss\npassword=%s\n\n' "$proto" "$hostport" "$token" |
+    git -c credential.helper= -c "credential.helper=$(credential_helper)" credential approve
 }
 
 # One call to the API, signed with TOKEN (read from the header on stdin, never an argument).
@@ -1433,13 +1461,11 @@ cmd_clone() {
   dir="${dir:-$HOME/code/$project}"
   dir="${dir/#\~/$HOME}"
   [[ ! -e "$dir" || -z "$(ls -A "$dir" 2>/dev/null)" ]] || die "$dir already exists and is not empty. Pick another folder."
-  local base url helper proto hostport token
+  local base url helper token
   base="$(git_remote_base)"; url="$base/git/$project.git"; helper="$(credential_helper)"
-  proto="${base%%://*}"; hostport="${base#*://}"; hostport="${hostport%%/*}"
-  token="$(person_token)"
+  token="$(person_token)" || exit 1
   # The token goes to the credential helper (the keychain), keyed by this BOSS's address.
-  printf 'protocol=%s\nhost=%s\nusername=boss\npassword=%s\n\n' "$proto" "$hostport" "$token" |
-    git -c credential.helper= -c "credential.helper=$helper" credential approve
+  remember_token "$token"
   mkdir -p "$(dirname "$dir")"
   git -c credential.helper= -c "credential.helper=$helper" clone ${branch:+--branch "$branch"} "$url" "$dir" ||
     die "the clone did not complete (is BOSS running, and is $project a local project?)"
@@ -1458,16 +1484,66 @@ cmd_clone() {
   fi
 }
 
-# The person's token for review commands: what boss clone stored for this BOSS's address.
+# The person's token for review commands: BOSS_TOKEN, else what boss clone / boss login stored
+# for this BOSS's address. Empty when there is none — never the host tools' key.
 stored_token() {
   local base proto hostport out
   [[ -n "${BOSS_TOKEN:-}" ]] && { printf '%s' "$BOSS_TOKEN"; return; }
   base="$(git_remote_base)"; proto="${base%%://*}"; hostport="${base#*://}"; hostport="${hostport%%/*}"
-  out="$(printf 'protocol=%s\nhost=%s\n\n' "$proto" "$hostport" |
-    GIT_TERMINAL_PROMPT=0 git -c "credential.helper=$(credential_helper)" credential fill 2>/dev/null || true)"
+  out="$(printf 'protocol=%s\nhost=%s\nusername=boss\n\n' "$proto" "$hostport" |
+    GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false \
+    git -c credential.helper= -c "credential.helper=$(credential_helper)" credential fill 2>/dev/null || true)"
   out="$(printf '%s\n' "$out" | sed -n 's/^password=//p' | head -n 1)"
-  [[ -n "$out" ]] && { printf '%s' "$out"; return; }
-  host_key
+  printf '%s' "$out"
+}
+
+# boss login: keep a person's own access token for this BOSS, so `boss review` signs as them.
+# The token is asked for hidden on the terminal (or read from stdin with --with-token, or
+# BOSS_TOKEN), checked with BOSS (GET /v1/identity/me: it must be a person's), and handed to git's
+# credential helper — never printed, never an argument, never in a file BOSS writes.
+cmd_login() {
+  need_install
+  local token="${BOSS_TOKEN:-}" from_stdin=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --with-token) from_stdin=1; shift ;;
+      *) die "login: unknown option $1 (boss login [--with-token < file])" ;;
+    esac
+  done
+  if [[ -z "$token" && "$from_stdin" -eq 1 ]]; then
+    IFS= read -r token || true
+  elif [[ -z "$token" ]]; then
+    have_tty || die "boss login needs a terminal, BOSS_TOKEN, or --with-token on stdin."
+    printf 'Make a personal access token in the console (Account › Access tokens), then paste it.\n' >/dev/tty
+    printf 'Personal access token (boss_pat_…, hidden): ' >/dev/tty
+    IFS= read -rs token </dev/tty || token=""
+    printf '\n' >/dev/tty
+  fi
+  token="${token//[[:space:]]/}"
+  [[ -n "$token" ]] || die "no token given."
+  is_person_token "$token" || die "that is not a personal access token (boss_pat_…): the host tools' key and other keys cannot sign for a person."
+  local said code
+  said="$(api_call "$token" GET "/v1/identity/me" 2>/dev/null || true)"
+  code="${said##*$'\n'}"; said="${said%$'\n'*}"
+  case "$code" in
+    200) ;;
+    401|403) die "BOSS refused that token (HTTP $code): it is expired, revoked or mistyped." ;;
+    *) die "could not reach BOSS at $(api_url) to check the token (HTTP ${code:-000}). Is BOSS running?" ;;
+  esac
+  local who
+  who="$(python3 -c '
+import json, sys
+try:
+    me = json.loads(sys.stdin.read() or "{}")
+except ValueError:
+    me = {}
+if me.get("kind") != "user":
+    sys.exit(3)
+print(me.get("display_name") or me.get("email") or me.get("principal_id") or "you")
+' <<<"$said")" || die "that token is not a person's: comments are signed by a person."
+  remember_token "$token"
+  printf 'Signed in as %s. The token is kept by git'"'"'s credential helper (%s), for git and boss review.\n' \
+    "$who" "$(credential_helper)"
 }
 
 project_from_remote() {
@@ -1494,6 +1570,8 @@ cmd_review() {
   [[ -n "$project" ]] || die "which project? Run this inside a working copy from boss clone, or pass --project."
   local token said code body base="/v1/projects/$project/local-changes/$number"
   token="$(stored_token)"
+  # Signed by a person or not at all: no fallback to the host tools' key (BOSSAPP-948).
+  [[ -n "$token" ]] && is_person_token "$token" || die "$PERSON_TOKEN_REFUSAL"
   case "$action" in
     comment)
       [[ $# -eq 2 ]] || die "review comment N FILE:LINE \"TEXT\""
@@ -1542,6 +1620,7 @@ else:
 
 case "$COMMAND" in
   clone) cmd_clone "$@" ;;
+  login) cmd_login "$@" ;;
   review) cmd_review "$@" ;;
   status) cmd_status "$@" ;;
   metatron|terminal) cmd_metatron "$@" ;;

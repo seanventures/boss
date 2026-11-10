@@ -18,6 +18,7 @@
  * through; middleware.ts adds no console CSP here.
  */
 import { clientHop, proxyHops } from "./client-hop";
+import { directFetch } from "./direct-fetch";
 import { rawRequestUrl } from "./raw-request-url";
 import { readCapped } from "./read-capped";
 
@@ -97,8 +98,7 @@ export async function forwardOidc(req: Request, opts: { apiUrl: string; fetchImp
   } else if (method !== "GET" && method !== "HEAD") {
     return answer(405, "invalid_request");
   }
-  const g = globalThis as unknown as { __bossOriginalFetch?: typeof fetch };
-  const doFetch = opts.fetchImpl ?? g.__bossOriginalFetch ?? globalThis.fetch;
+  const doFetch = opts.fetchImpl ?? directFetch;
   let upstream: Response;
   try {
     upstream = await doFetch(`${opts.apiUrl}${url.pathname}${url.search}`, {

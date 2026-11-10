@@ -26,6 +26,7 @@ import { clientHop, proxyHops } from "../client-hop";
 import { readCapped } from "../read-capped";
 import { identityCookieHeader, normalisePath } from "./forward";
 import { rawRequestUrl } from "../raw-request-url";
+import { directFetch } from "../direct-fetch";
 
 export const SAML_METADATA_PATH = "/saml/v2/metadata";
 export const SAML_ACS_PATH = "/saml/v2/acs";
@@ -81,11 +82,8 @@ export function protocolHeaders(kind: ProtocolKind, incoming: Headers): Headers 
 /** The answer headers relayed to the caller. Set-Cookie only from the ACS (it signs the person in). */
 const RELAYED = ["content-type", "cache-control", "etag", "location", "www-authenticate", "retry-after", "content-security-policy"];
 
-/** The platform fetch, before the console's server-side wrappers (feed cache, identity). */
-export function directFetch(input: string, init: RequestInit): Promise<Response> {
-  const g = globalThis as unknown as { __bossOriginalFetch?: typeof fetch };
-  return (g.__bossOriginalFetch ?? globalThis.fetch)(input, init);
-}
+/** The platform fetch, before the console's server-side wrappers (lib/direct-fetch.ts). */
+export { directFetch };
 
 function answer(status: number, detail: string): Response {
   return Response.json({ detail }, { status, headers: { "Cache-Control": "no-store" } });

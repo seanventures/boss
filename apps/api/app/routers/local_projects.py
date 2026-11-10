@@ -333,11 +333,9 @@ def local_change_comments(project_id: str, number: int) -> Any:
     with begin(_engine) as connection:
         _require(connection, project_id)
         try:
-            row = local_review.change_row(connection, project_id, number)
+            return local_review.list_threads(connection, project_id=project_id, number=number)
         except local_review.ReviewError as error:
             return _review_refused(error)
-        return {"number": int(number), "items": local_review.threads(connection, row["id"]),
-                "summary": local_review.summary(connection, row["id"])}
 
 
 class CommentBody(BaseModel):
@@ -353,24 +351,17 @@ class CommentBody(BaseModel):
     origin: str = Field(default="console", pattern="^(console|cli)$")
 
 
+def _signer(request: Request) -> dict[str, Any]:
+    """How a comment is signed (local_review.signer, the one rule MCP uses too): the person's
+    name, person or agent, and the principal id (the host tools' key never signs one)."""
+    from apps.api.app import identity_guard
+    from boss_engine.services import local_review
+
+    return local_review.signer(identity_guard.request_auth(request), _actor(request))
+
+
 def _author(request: Request) -> str:
-    """How a comment is signed: the person's name (the page and Publish show it), else the actor."""
-    from apps.api.app import identity_guard
-
-    ctx = identity_guard.request_auth(request)
-    name = str(getattr(getattr(ctx, "principal", None), "display_name", "") or "").strip()
-    return name or _actor(request)
-
-
-def _author_kind(request: Request) -> str:
-    """A person's comment is a required input of the fix round; an agent's is not."""
-    from apps.api.app import identity_guard
-
-    ctx = identity_guard.request_auth(request)
-    if ctx is None:
-        return "human"
-    kind = getattr(getattr(getattr(ctx, "principal", None), "kind", None), "value", "")
-    return "human" if kind in ("user", "") else "agent"
+    return str(_signer(request)["author"])
 
 
 @router.post("/v1/projects/{project_id}/local-changes/{number}/comments")
@@ -383,8 +374,7 @@ def local_change_comment(project_id: str, number: int, request: Request, payload
         try:
             return local_review.add_comment(
                 connection, _settings, project_id=project_id, number=number, body=payload.body,
-                author=_author(request), author_kind=_author_kind(request),
-                path=payload.path, line=payload.line, end_line=payload.end_line,
+                **_signer(request), path=payload.path, line=payload.line, end_line=payload.end_line,
                 side=payload.side, commit_sha=payload.commit_sha, severity=payload.severity,
                 origin=payload.origin)
         except local_review.ReviewError as error:
@@ -408,8 +398,7 @@ def local_change_comment_reply(project_id: str, number: int, comment_id: int, re
         try:
             return local_review.add_comment(
                 connection, _settings, project_id=project_id, number=number, body=payload.body,
-                author=_author(request), author_kind=_author_kind(request),
-                origin=payload.origin, reply_to=comment_id)
+                **_signer(request), origin=payload.origin, reply_to=comment_id)
         except local_review.ReviewError as error:
             return _review_refused(error)
 
