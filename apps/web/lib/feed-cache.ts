@@ -211,7 +211,7 @@ export function installFeedCache(apiUrl: string): void {
 
   const original = g.fetch.bind(globalThis);
   // The platform fetch, for the protocol proxies that must bypass every wrapper (SAML/SCIM:
-  // lib/identity/protocol-proxy.ts directFetch).
+  // lib/direct-fetch.ts).
   g.__bossOriginalFetch ??= original;
   const inFlight = new Map<string, Promise<Stored>>();
   const completed = new Map<string, Entry>();

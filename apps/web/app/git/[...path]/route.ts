@@ -3,6 +3,7 @@ import { identityCookieHeader } from "../../../lib/identity/forward";
 import { identityStubEnabled } from "../../../lib/identity/stub/enabled";
 import { clientHop, proxyHops } from "../../../lib/client-hop";
 import { rawRequestUrl } from "../../../lib/raw-request-url";
+import { directFetch } from "../../../lib/direct-fetch";
 
 /**
  * BOSS'S LOCAL GIT REMOTE ON THE CONSOLE'S ORIGIN (BOSSAPP-948): http://localhost:3000/git/<project>.git
@@ -14,6 +15,10 @@ import { rawRequestUrl } from "../../../lib/raw-request-url";
  * the pack's content type and encoding, and git's protocol header. The host the client named goes
  * up as X-Forwarded-Host: the API refuses a client that did not name this machine (loopback only,
  * unless BOSS_GIT_REMOTE_REACH=network). Packs stream both ways; nothing is buffered here.
+ *
+ * The call goes out on the platform fetch (lib/direct-fetch.ts), never the global fetch: the
+ * console's identity wrapper strips Authorization from every call to the API, so git's token
+ * never arrived and every clone through the console got 401 (BOSSAPP-948).
  */
 export const dynamic = "force-dynamic";
 
@@ -42,7 +47,7 @@ async function proxy(req: Request): Promise<Response> {
   const method = req.method.toUpperCase();
   let upstream: Response;
   try {
-    upstream = await fetch(`${API_URL}${incoming.pathname}${incoming.search}`, {
+    upstream = await directFetch(`${API_URL}${incoming.pathname}${incoming.search}`, {
       method,
       headers,
       body: method === "POST" ? req.body : undefined,
