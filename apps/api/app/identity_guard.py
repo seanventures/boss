@@ -605,6 +605,10 @@ def _writing_get_csrf(conn: HTTPConnection, access: Any, ctx: Any,
 async def _render_refusal(_request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, AccessRefused)
     headers = {"WWW-Authenticate": "Bearer"} if exc.outcome.status == 401 else None
+    if headers is not None and str(_request.url.path).startswith("/git/"):
+        # The git remote (BOSSAPP-948): git answers a Basic challenge by asking for (or reading
+        # its credential helper for) the BOSS token.
+        headers = {"WWW-Authenticate": 'Basic realm="BOSS"'}
     return JSONResponse(status_code=exc.outcome.status, content=exc.outcome.error_body(),
                         headers=headers)
 

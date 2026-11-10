@@ -1,0 +1,313 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Local change review</title>
+<link rel="stylesheet" href="../project-experience/console.css"><link rel="stylesheet" href="../project-experience/project.css">
+<link rel="stylesheet" href="../project-experience/new-project-v2/np2.css"><link rel="stylesheet" href="af.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-crumb="Projects|helpdesk-laptop|Work|Change #1" data-base="../project-experience/">
+<div id="content">
+
+<!-- ═════════════ (a) WHERE IT LIVES ═════════════ -->
+<div class="af-cap">a · The change-set page, with where the code lives <span class="pin">1</span></div>
+<section class="card">
+  <div class="lr-head">
+    <h1>Add an SLA timer to the inbox <span class="faint">#1</span></h1>
+    <span class="tag" data-tone="green"><span class="dot" data-s="done"></span>open</span>
+    <span class="lr-chip">boss/ct-41a-sla-timer</span><i class="ph ph-arrow-right faint"></i><span class="lr-chip">main</span>
+    <span class="tag"><i class="ph ph-hard-drives"></i>Local repo</span>
+    <span class="tag" data-tone="green">Tests passed</span>
+    <span class="tag" data-tone="amber" title="Open line comments from people"><i class="ph ph-chat-circle-dots"></i>2 open comments</span>
+  </div>
+
+  <div class="lr-where" aria-label="Where it lives">
+    <div><span class="k"><i class="ph ph-database"></i>Stored in BOSS</span>
+      <span class="v">/var/lib/boss/repos/helpdesk-laptop/helpdesk.git<i class="ph ph-copy" title="Copy path"></i></span>
+      <small>Docker volume boss_community_repos · not a folder on your Mac</small></div>
+    <div><span class="k"><i class="ph ph-git-branch"></i>Branch · commit</span>
+      <span class="v">boss/ct-41a-sla-timer<i class="ph ph-copy" title="Copy branch"></i></span>
+      <small><span class="mono">9e4f1c2</span> · 3 commits ahead of main</small></div>
+    <div><span class="k"><i class="ph ph-link"></i>Git remote</span>
+      <span class="v">http://localhost:3000/git/helpdesk-laptop.git<i class="ph ph-copy" title="Copy the clone URL"></i></span>
+      <small>this machine only · your BOSS token signs in</small></div>
+    <div><span class="k"><i class="ph ph-folder-open"></i>Working copy</span>
+      <span class="v" style="color:var(--faint)">none yet</span>
+      <small>a folder you can open in your editor</small></div>
+    <span class="go btn" data-kind="primary"><i class="ph ph-download-simple"></i>Get a working copy <span class="pin" style="margin-left:4px">2</span></span>
+  </div>
+
+  <div class="lr-tabs">
+    <span aria-selected="true"><i class="ph ph-file-code"></i>Files <b>4</b></span>
+    <span data-new><i class="ph ph-folder-simple"></i>Code</span>
+    <span><i class="ph ph-git-commit"></i>Commits <b>3</b></span>
+    <span><i class="ph ph-chat-circle-text"></i>Review <b>5</b></span>
+    <span><i class="ph ph-shield-check"></i>Checks</span>
+  </div>
+  <div class="lr-list">
+    <div><i class="ph ph-file-js"></i><span><b>src/app.js</b> <small>clicking the name opens it in the Code tab at this change</small></span><span class="mono" style="font-size:.52rem"><span style="color:var(--green)">+14</span> <span style="color:var(--red)">−2</span></span></div>
+    <div><i class="ph ph-file-js"></i><span><b>src/sla.js</b> <span class="tag" data-tone="green">added</span></span><span class="mono" style="font-size:.52rem;color:var(--green)">+38</span></div>
+    <div><i class="ph ph-file-js"></i><span><b>src/inbox/list.js</b></span><span class="mono" style="font-size:.52rem"><span style="color:var(--green)">+6</span> <span style="color:var(--red)">−1</span></span></div>
+    <div><i class="ph ph-test-tube"></i><span><b>test/sla.test.js</b> <span class="tag" data-tone="green">added</span></span><span class="mono" style="font-size:.52rem;color:var(--green)">+41</span></div>
+  </div>
+</section>
+
+<div class="af-cap">Get a working copy: one folder, cloned, opened <span class="pin">2</span></div>
+<div class="pop" style="max-width:640px">
+  <div class="pop-h"><i class="ph ph-download-simple"></i><b>Get a working copy</b><span class="anchor">helpdesk-laptop · boss/ct-41a-sla-timer</span></div>
+  <div class="af-prog" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+    <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>Pick a folder</b><small>~/code/helpdesk-laptop</small></div>
+    <div class="af-ps" data-s="run"><span class="c"><i class="ph ph-git-fork"></i></span><b>Clone</b><small>214 objects · on this branch</small></div>
+    <div class="af-ps"><span class="c"><i class="ph ph-arrow-square-out"></i></span><b>Open</b><small>VS Code · Finder · Terminal</small></div>
+  </div>
+  <div class="af-kv">
+    <span>Folder</span><span class="af-code">~/code/helpdesk-laptop<i class="ph ph-folder-open" title="Pick another folder"></i></span>
+    <span>Runs</span><span class="af-code">boss clone helpdesk-laptop ~/code/helpdesk-laptop --branch boss/ct-41a-sla-timer<i class="ph ph-copy" title="Copy"></i></span>
+    <span>Sign-in</span><span>Your BOSS access token goes to the OS keychain through git's credential helper. It never sits in the URL or in .git/config.</span>
+  </div>
+  <div class="pop-f"><span class="faint" style="font-size:.54rem;margin-right:auto">The page lists the folder under Working copy once it exists</span><span class="btn" data-kind="ghost">Cancel</span><span class="btn" data-kind="primary"><i class="ph ph-download-simple"></i>Clone and open</span></div>
+</div>
+
+<!-- ═════════════ (b) FILE VIEW ═════════════ -->
+<div class="af-cap">b · Code tab: the whole file, at this change or at main <span class="pin">3</span></div>
+<div class="lr-fv">
+  <div class="lr-tree" aria-label="Files">
+    <span class="q"><i class="ph ph-magnifying-glass"></i>Go to file  ⌘P</span>
+    <div class="f"><i class="ph ph-folder-open"></i><span class="n">src</span></div>
+    <div class="f" data-d="1" aria-current="true"><i class="ph ph-file-js"></i><span class="n">app.js</span><span class="st" data-s="c" title="2 comment threads"><i class="ph-fill ph-chat-circle"></i>2</span><span class="st" data-s="M">M</span></div>
+    <div class="f" data-d="1"><i class="ph ph-file-js"></i><span class="n">sla.js</span><span class="st" data-s="A">A</span></div>
+    <div class="f" data-d="1"><i class="ph ph-folder-open"></i><span class="n">inbox</span></div>
+    <div class="f" data-d="2"><i class="ph ph-file-js"></i><span class="n">list.js</span><span class="st" data-s="c"><i class="ph-fill ph-chat-circle"></i>1</span><span class="st" data-s="M">M</span></div>
+    <div class="f" data-d="1" data-hide-s><i class="ph ph-file-js"></i><span class="n">settings.js</span></div>
+    <div class="f" data-hide-s><i class="ph ph-folder"></i><span class="n">test</span></div>
+    <div class="f" data-hide-s><i class="ph ph-file-text"></i><span class="n">README.md</span></div>
+    <div class="f" data-hide-s><i class="ph ph-brackets-curly"></i><span class="n">package.json</span></div>
+  </div>
+  <div class="lr-file">
+    <div class="lr-file-h">
+      <span class="path">src/app.js</span>
+      <span class="lr-seg" title="Which version of the file"><span aria-selected="true">This change · 9e4f1c2</span><span>main · 2d81f0b</span></span>
+      <span class="wf-spacer"></span>
+      <span class="faint" style="font-size:.52rem">JavaScript · 61 lines</span>
+      <i class="ph ph-copy" title="Copy path"></i><i class="ph ph-arrow-square-out" title="Open in your working copy"></i>
+    </div>
+    <div class="lr-code" data-file>
+      <div class="lr-l" data-k="hunk"><span class="no">⋯</span><span class="sg"></span><span class="tx">lines 1–25 · show</span></div>
+      <div class="lr-l"><span class="no">26</span><span class="sg"></span><span class="tx"><span class="k4">// SLA: a ticket is overdue 4 working hours after it arrives</span></span></div>
+      <div class="lr-l"><span class="no">27</span><span class="sg"></span><span class="tx"><span class="k1">import</span> { addHours } <span class="k1">from</span> <span class="k5">"./sla.js"</span>;</span></div>
+      <div class="lr-l"><span class="no">28</span><span class="sg"></span><span class="tx"><span class="k1">import</span> { settings } <span class="k1">from</span> <span class="k5">"./settings.js"</span>;</span></div>
+      <div class="lr-l"><span class="no">29</span><span class="sg"></span><span class="tx"> </span></div>
+      <div class="lr-l"><span class="no">30</span><span class="sg"></span><span class="tx"><span class="k1">export function</span> <span class="k2">scheduleSla</span>(ticket, clock = Date) {</span></div>
+      <div class="lr-l" data-c><span class="no">31</span><span class="sg"></span><span class="tx">  <span class="k1">const</span> hours = settings.sla?.hours ?? <span class="k3">4</span>;</span><span class="cbadge" style="background:var(--green-soft);color:var(--green)"><i class="ph-fill ph-check-circle"></i>resolved</span></div>
+      <div class="lr-l"><span class="no">32</span><span class="sg"></span><span class="tx">  <span class="k1">if</span> (ticket.priority === <span class="k5">"low"</span>) <span class="k1">return</span> <span class="k3">null</span>;</span></div>
+      <div class="lr-l"><span class="no">33</span><span class="sg"></span><span class="tx">  <span class="k1">const</span> now = clock.<span class="k2">now</span>();</span></div>
+      <div class="lr-l" data-c><span class="no">34</span><span class="sg"></span><span class="tx">  <span class="k1">const</span> due = <span class="k2">addHours</span>(ticket.createdAt, hours);</span><span class="cbadge"><i class="ph-fill ph-chat-circle"></i>1 open</span></div>
+      <div class="lr-l"><span class="no">35</span><span class="sg"></span><span class="tx">  ticket.slaDueAt = due;</span></div>
+      <div class="lr-l"><span class="no">36</span><span class="sg"></span><span class="tx">  <span class="k1">if</span> (due &lt;= now) inbox.<span class="k2">flag</span>(ticket.id, <span class="k5">"overdue"</span>);</span></div>
+      <div class="lr-l"><span class="no">37</span><span class="sg"></span><span class="tx">  <span class="k1">if</span> (!ticket.queue) <span class="k1">return</span> <span class="k3">null</span>;</span></div>
+      <div class="lr-l"><span class="no">38</span><span class="sg"></span><span class="tx">  <span class="k1">return</span> timers.<span class="k2">at</span>(due, () =&gt; <span class="k2">markOverdue</span>(ticket.id));</span></div>
+      <div class="lr-l"><span class="no">39</span><span class="sg"></span><span class="tx">}</span></div>
+      <div class="lr-l" data-k="hunk"><span class="no">⋯</span><span class="sg"></span><span class="tx">lines 40–61 · show</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════ (c) LINE COMMENTS ═════════════ -->
+<div class="af-cap">c · Comments on a line, saved in BOSS; Request changes starts the fix round <span class="pin">4</span></div>
+<div class="lr-grid">
+  <section class="card" style="padding:0;overflow:hidden">
+    <div class="lr-file-h"><i class="ph ph-caret-down"></i><span class="path">src/app.js</span><span class="tag" data-tone="amber">M</span><span class="wf-spacer"></span><span class="mono" style="font-size:.52rem"><span style="color:var(--green)">+14</span> <span style="color:var(--red)">−2</span></span><span class="btn" data-size="s" data-kind="ghost" title="Open the whole file in the Code tab"><i class="ph ph-file-magnifying-glass"></i>View file</span></div>
+    <div class="lr-code">
+      <div class="lr-l" data-k="hunk"><span class="no"></span><span class="no"></span><span class="sg"></span><span class="tx">@@ -27,6 +27,13 @@ export function scheduleSla</span></div>
+      <div class="lr-l"><span class="no">27</span><span class="no">27</span><span class="sg"></span><span class="tx">import { addHours } from "./sla.js";</span></div>
+      <div class="lr-l" data-k="add"><span class="no"></span><span class="no">28</span><span class="sg">+</span><span class="tx">import { settings } from "./settings.js";</span></div>
+      <div class="lr-l"><span class="no">28</span><span class="no">29</span><span class="sg"></span><span class="tx"> </span></div>
+      <div class="lr-l"><span class="no">29</span><span class="no">30</span><span class="sg"></span><span class="tx">export function scheduleSla(ticket, clock = Date) {</span></div>
+      <div class="lr-l" data-k="del"><span class="no">30</span><span class="no"></span><span class="sg">−</span><span class="tx">  const hours = 4;</span></div>
+      <div class="lr-l" data-k="add" data-c><span class="no"></span><span class="no">31</span><span class="sg">+</span><span class="tx">  const hours = settings.sla?.hours ?? 4;</span></div>
+    </div>
+    <div class="lr-thread" data-s="resolved">
+      <div class="lr-c"><span class="face" data-a="you"></span><div class="who"><b>Param</b> · on <span class="lr-chip">5a0c7e2</span> · yesterday</div><p>Read the SLA hours from settings, not a constant. Support wants 8 on weekends next month.</p></div>
+      <div class="lr-c"><span class="face" data-a="forge"></span><div class="who"><b>Forge</b> · builder · fix round 1</div><p>Changed in commit <span class="lr-chip">9e4f1c2</span>: hours now come from <span class="mono">settings.sla.hours</span> (default 4). Test added at <span class="mono">test/sla.test.js:18</span>.</p></div>
+      <div class="lr-thread-f"><i class="ph-fill ph-check-circle" style="color:var(--green)"></i><b style="color:var(--green)">Resolved</b> by Param · 09:41<span class="wf-spacer"></span><a>Reopen</a></div>
+    </div>
+    <div class="lr-code">
+      <div class="lr-l"><span class="no">31</span><span class="no">32</span><span class="sg"></span><span class="tx">  if (ticket.priority === "low") return null;</span></div>
+      <div class="lr-l" data-k="add"><span class="no"></span><span class="no">33</span><span class="sg">+</span><span class="tx">  const now = clock.now();</span></div>
+      <div class="lr-l" data-k="add" data-c><span class="plus" title="Comment on this line">+</span><span class="no"></span><span class="no">34</span><span class="sg">+</span><span class="tx">  const due = addHours(ticket.createdAt, hours);</span></div>
+    </div>
+    <div class="lr-compose">
+      <div class="row"><span class="face" data-a="you" style="width:20px;height:20px"></span><b style="color:var(--ink)">src/app.js:34</b> · new side · on 9e4f1c2</div>
+      <div class="txt">Weekends should not count toward the SLA. Skip Saturday and Sunday.<span class="caret"></span></div>
+      <div class="row"><span class="lr-seg" title="How much it blocks"><span aria-selected="true">Must fix</span><span>Should fix</span><span>Nit</span></span><span class="wf-spacer"></span><span class="btn" data-size="s" data-kind="ghost">Cancel</span><span class="btn" data-size="s" data-kind="primary">Comment <span class="np2-kbd">⌘↵</span></span></div>
+    </div>
+    <div class="lr-code">
+      <div class="lr-l" data-k="add"><span class="no"></span><span class="no">35</span><span class="sg">+</span><span class="tx">  ticket.slaDueAt = due;</span></div>
+      <div class="lr-l" data-k="add"><span class="no"></span><span class="no">36</span><span class="sg">+</span><span class="tx">  if (due &lt;= now) inbox.flag(ticket.id, "overdue");</span></div>
+    </div>
+  </section>
+
+  <aside class="lr-side">
+    <section class="card">
+      <div class="card-h"><span class="ico"><i class="ph ph-chat-circle-text"></i></span><h3>Review</h3><span class="wf-spacer"></span><span class="tag" data-tone="amber">2 open</span></div>
+      <div class="lr-open">
+        <div><i class="ph ph-circle" style="color:var(--amber)"></i><span>Weekends should not count toward the SLA.<small>src/app.js:34 · Param · must fix</small></span></div>
+        <div><i class="ph ph-circle" style="color:var(--amber)"></i><span>The overdue badge is red on red in dark mode.<small>src/inbox/list.js:88 · Param · should fix</small></span></div>
+        <div><i class="ph-fill ph-check-circle" style="color:var(--green)"></i><span style="color:var(--faint)">Read the SLA hours from settings.<small>src/app.js:31 · resolved</small></span></div>
+        <div><i class="ph ph-robot" style="color:var(--faint)"></i><span style="color:var(--faint)">2 review-panel notes (P2)<small>Vera · after yours</small></span></div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-h"><span class="ico"><i class="ph ph-git-merge"></i></span><h3>Decision</h3><span class="wf-spacer"></span><span class="tag" data-tone="amber">pending</span></div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+        <span class="btn" data-kind="amber"><i class="ph ph-arrow-counter-clockwise"></i>Request changes · 2 comments <span class="pin" style="margin-left:4px">5</span></span>
+        <span class="faint" style="font-size:.52rem">Forge starts a fix round on this branch, your comments first</span>
+        <span class="btn" data-off title="2 open comments from people: resolve or request changes first"><i class="ph ph-git-merge"></i>Merge into main</span>
+        <span class="faint" style="font-size:.52rem">A person merges · BOSS runs the governed merge</span>
+      </div>
+    </section>
+  </aside>
+</div>
+
+<!-- ═════════════ (d) NEXT RUN: AGENT ACTIONS ═════════════ -->
+<div class="af-cap">d · The fix round: human comments are required inputs <span class="pin">6</span></div>
+<div class="ub">
+  <div class="ub-h"><span class="face" data-a="forge_live" data-size="m"></span>
+    <div><b>Agent actions</b><small>Forge · fix round 2 on boss/ct-41a-sla-timer · started by Param’s Request changes</small></div>
+    <span class="tag" data-tone="blue"><span class="dot" data-s="run"></span>working</span></div>
+  <div class="af-prog" style="grid-template-columns:repeat(5,minmax(0,1fr))">
+    <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>Read comments</b><small>3 human · 2 panel</small></div>
+    <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>Fix</b><small>2 commits</small></div>
+    <div class="af-ps" data-s="run"><span class="c"><i class="ph ph-test-tube"></i></span><b>Test</b><small>in the sandbox</small></div>
+    <div class="af-ps"><span class="c"><i class="ph ph-chat-circle-text"></i></span><b>Reply on each</b><small>Fixed or Disputed</small></div>
+    <div class="af-ps" data-s="you"><span class="c"><i class="ph-bold ph-hand-palm"></i></span><b>You resolve</b><small>then merge</small></div>
+  </div>
+  <div class="ub-f"><span class="lbl">3 human comments to address</span>
+    <div class="lr-req">
+      <div><span class="bx" data-s="done"><i class="ph-bold ph-check"></i></span><span><b>src/app.js:34</b> Weekends should not count toward the SLA.<small>Changed in commit 4b1d0e7: addWorkingHours skips Sat/Sun · test at test/sla.test.js:31</small></span><span class="tag" data-tone="green">fixed</span></div>
+      <div><span class="bx" data-s="done"><i class="ph-bold ph-check"></i></span><span><b>src/inbox/list.js:88</b> The overdue badge is red on red in dark mode.<small>Changed in commit 4b1d0e7: badge uses --red on --red-soft in both themes</small></span><span class="tag" data-tone="green">fixed</span></div>
+      <div><span class="bx" data-s="run"><i class="ph ph-circle-notch"></i></span><span><b>src/app.js:37</b> Log when the timer is skipped (no queue). <span class="tag"><i class="ph ph-terminal"></i>from git</span><small>working on it</small></span><span class="tag" data-tone="blue">working</span></div>
+    </div>
+  </div>
+  <div class="ub-f"><span class="lbl">After yours</span><span>2 review-panel notes (P2) · <span class="faint">answered the same way</span></span></div>
+  <div class="ub-act"><span class="faint" style="font-size:.54rem"><i class="ph ph-lock-simple"></i> The round cannot ask you to merge until every required comment has a reply: Fixed with a commit, or Disputed with a reason.</span></div>
+</div>
+
+<!-- ═════════════ (e) GIT CLIENT ═════════════ -->
+<div class="af-cap">e · Work from a terminal: plain git, plus <span class="mono">boss review</span> <span class="pin">7</span></div>
+<div class="lr-two">
+  <div class="lr-term" aria-label="Terminal">
+    <div class="lr-term-h"><i class="d"></i><i class="d"></i><i class="d"></i><span style="margin-left:6px">~/code · zsh</span></div>
+<pre><span class="p">$</span> git clone http://localhost:3000/git/helpdesk-laptop.git
+<span class="o">Cloning into 'helpdesk-laptop'...
+Username: param   Password: (your BOSS access token, kept by the keychain)
+Receiving objects: 100% (214/214), done.</span>
+<span class="p">$</span> cd helpdesk-laptop &amp;&amp; git switch boss/ct-41a-sla-timer
+<span class="p">$</span> git pull
+<span class="o">Updating 5a0c7e2..9e4f1c2  Fast-forward   </span><span class="hl"># Forge’s fix round 1</span>
+<span class="p">$</span> git switch -c fix/inbox-empty-copy &amp;&amp; git commit -qam "Inbox: clearer empty state"
+<span class="p">$</span> git push -u origin fix/inbox-empty-copy
+<span class="ok">remote: BOSS opened change #2  fix/inbox-empty-copy → main
+remote:   http://localhost:3000/changes/helpdesk-laptop/2</span>
+<span class="o"> * [new branch]  fix/inbox-empty-copy -&gt; fix/inbox-empty-copy</span>
+<span class="p">$</span> git push origin main
+<span class="bad">remote: main moves only through BOSS's merge. Push a branch: it becomes a change.
+ ! [remote rejected] main -&gt; main (pre-receive hook declined)</span>
+<span class="p">$</span> boss review comment 1 src/app.js:37 "Log when the timer is skipped (no queue)"
+<span class="ok">✓ comment 6 on change #1 · src/app.js:37 · must fix · open</span>
+<span class="p">$</span> boss review list 1
+<span class="o">  open      src/app.js:34        Weekends should not count…     param
+  open      src/app.js:37        Log when the timer is skipped… param
+  resolved  src/app.js:31        Read the SLA hours from…       param</span></pre>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+    <section class="card">
+      <div class="card-h"><span class="ico"><i class="ph ph-git-pull-request"></i></span><h3>Changes · helpdesk-laptop</h3></div>
+      <div class="lr-list">
+        <div data-new><i class="ph ph-git-branch" style="color:var(--teal)"></i><span><b>#2 Inbox: clearer empty state</b><small>fix/inbox-empty-copy · pushed by Param from git · checks queued</small></span><span class="tag" data-tone="blue">new</span></div>
+        <div><i class="ph ph-git-branch"></i><span><b>#1 Add an SLA timer to the inbox</b><small>boss/ct-41a-sla-timer · Forge · fix round 2</small></span><span class="tag" data-tone="amber">3 open</span></div>
+      </div>
+    </section>
+    <section class="card" style="padding:0;overflow:hidden">
+      <div class="lr-code">
+        <div class="lr-l" data-k="add" data-c><span class="no"></span><span class="no">37</span><span class="sg">+</span><span class="tx">  if (!ticket.queue) return null;</span></div>
+      </div>
+      <div class="lr-thread" data-s="open">
+        <div class="lr-c"><span class="face" data-a="you"></span><div class="who"><b>Param</b><span class="tag"><i class="ph ph-terminal"></i>from git</span> · just now</div><p>Log when the timer is skipped (no queue).</p></div>
+        <div class="lr-thread-f"><i class="ph ph-circle" style="color:var(--amber)"></i>Open · must fix<span class="wf-spacer"></span><a>Reply</a><a>Resolve</a></div>
+      </div>
+    </section>
+    <div class="notes" style="margin-top:0"><b>Optional: git notes.</b> <span class="mono">git push origin refs/notes/boss-review</span> carries comments written offline with any tool; <span class="mono">git log --notes=boss-review</span> shows BOSS’s comments without the console.</div>
+  </div>
+</div>
+
+<!-- ═════════════ (f) PUBLISH ═════════════ -->
+<div class="af-cap">f · Publish to GitHub: comments go along as pull-request review comments <span class="pin">8</span></div>
+<div class="af-stage">
+<div class="sheet np2 af-sheet" role="dialog" aria-label="Publish to GitHub" style="max-width:860px">
+  <div class="sheet-h"><span class="ico"><i class="ph ph-github-logo"></i></span><h2>Publish to GitHub</h2><span class="wf-spacer"></span><i class="ph ph-x" title="Close (Esc)"></i></div>
+  <div class="np2-body">
+    <div class="np2-detect"><span>To <b>seanventures/helpdesk</b> · private · new repository</span></div>
+    <div class="ub">
+      <div class="ub-h"><span class="face" data-a="forge" data-size="m"></span><div><b>Agent actions</b><small>Everything the local repository holds, in order · re-running resumes where it stopped</small></div></div>
+      <div class="af-prog">
+        <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>Repository</b><small>created</small></div>
+        <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>Push</b><small>4 branches · 0 tags</small></div>
+        <div class="af-ps" data-s="done"><span class="c"><i class="ph-bold ph-check"></i></span><b>Pull requests</b><small>#1 → PR 12 · #2 → PR 13</small></div>
+        <div class="af-ps" data-s="run"><span class="c"><i class="ph ph-chat-circle-text"></i></span><b>Comments</b><small>9 of 12</small></div>
+        <div class="af-ps"><span class="c"><i class="ph ph-check-square"></i></span><b>Resolved threads</b><small>2</small></div>
+        <div class="af-ps"><span class="c"><i class="ph ph-swap"></i></span><b>Switch</b><small>local stays a mirror</small></div>
+      </div>
+      <div class="ub-f"><span class="lbl">How comments map</span>
+        <div class="af-watch" style="width:100%">
+          <div><i class="ph ph-chat-circle"></i><span>src/app.js:37 · on the head commit<small>PR 12 · review comment on line 37 (right side)</small></span><span class="tag" data-tone="green">inline</span></div>
+          <div><i class="ph ph-chat-circles"></i><span>src/app.js:31 · comment + Forge’s reply · resolved<small>PR 12 · comment, reply in the thread, thread marked resolved</small></span><span class="tag" data-tone="green">thread</span></div>
+          <div><i class="ph ph-clock-counter-clockwise"></i><span>src/inbox/list.js:88 · line changed since<small>PR 12 · review body, with the old line quoted (GitHub only takes lines in the diff)</small></span><span class="tag" data-tone="amber">outdated</span></div>
+        </div></div>
+    </div>
+    <div class="pop" style="max-width:none">
+      <div class="pop-h"><i class="ph ph-github-logo"></i><b>On GitHub · PR 12 · src/app.js line 37</b><span class="anchor">posted by the BOSS app</span></div>
+      <div class="lr-c" style="padding:0"><span class="face" data-a="you"></span><div class="who"><b>boss-localhost[bot]</b></div><p><b>Param</b> · local review · 9 Nov 14:02 · from git<br>Log when the timer is skipped (no queue).</p></div>
+    </div>
+  </div>
+  <div class="np2-foot"><span class="faint np2-hide-s" style="font-size:.56rem"><i class="ph ph-shield-check"></i> Talking to the outside: a person presses Publish</span><span class="wf-spacer"></span><span class="btn" data-kind="primary"><i class="ph ph-github-logo"></i>Publish</span></div>
+</div>
+</div>
+
+<!-- ═════════════ PARITY + NOTES ═════════════ -->
+<div class="af-cap">Parity · 12 of 12 kept, 7 added</div>
+<section class="card"><table class="parity"><thead><tr><th>Capability</th><th>Was</th><th>Now</th></tr></thead><tbody>
+  <tr><td>Title, state, branch → base, Local repo tag, checks pill</td><td>Header</td><td>Same header</td></tr>
+  <tr><td>Waiting for GitHub, Published PR ↗</td><td>Header</td><td>Same</td></tr>
+  <tr><td>Description (Markdown, Show all)</td><td>Body card</td><td>Same</td></tr>
+  <tr><td>Files with +/− bars and the unified diff</td><td>Files</td><td>Same, plus line comments and View file</td></tr>
+  <tr><td>Review panel notes inline on diff lines</td><td>Files</td><td>Same, beside human threads</td></tr>
+  <tr><td>Commits list</td><td>Commits</td><td>Same</td></tr>
+  <tr><td>Review notes (panel reviews, replies)</td><td>Review</td><td>Same list, plus open human comments first</td></tr>
+  <tr><td>Checks: build, tests, where they ran</td><td>Side</td><td>Same</td></tr>
+  <tr><td>Merge into main (decision:approve, people only)</td><td>Decision</td><td>Same; also waits while human comments are open</td></tr>
+  <tr><td>Held by CI reason on Merge</td><td>Decision</td><td>Same</td></tr>
+  <tr><td>Open the decision ›</td><td>Decision</td><td>Same</td></tr>
+  <tr><td>Breadcrumb Project › Work</td><td>Top</td><td>Same</td></tr>
+  <tr><td><b>New</b>: where it lives, the clone URL, a working copy</td><td>—</td><td>Where it lives strip</td></tr>
+  <tr><td><b>New</b>: full file at this change or main, with a tree</td><td>—</td><td>Code tab</td></tr>
+  <tr><td><b>New</b>: line comments, replies, resolve, Request changes</td><td>—</td><td>Diff, Code tab, Review, Decision</td></tr>
+  <tr><td><b>New</b>: human comments as required inputs of a fix round</td><td>run-only <span class="mono">add_review_comment</span></td><td>Agent actions</td></tr>
+  <tr><td><b>New</b>: clone, pull, push a branch, refused push to main</td><td>—</td><td>Git remote</td></tr>
+  <tr><td><b>New</b>: <span class="mono">boss review</span> comment / list / reply / resolve; git notes</td><td>—</td><td>Terminal</td></tr>
+  <tr><td><b>New</b>: comments carried to GitHub on Publish</td><td>PRs only</td><td>Review comments, threads, resolved state</td></tr>
+</tbody></table></section>
+
+<div class="notes"><b>Design notes: review locally, like git, and take it to GitHub later</b><ol class="np2-n">
+  <li><b>1</b> Where it lives answers “which folder”. The code lives in BOSS’s Docker volume, not a folder on the Mac, and the strip says so. The clone URL is the way in. Each value has a copy button.</li>
+  <li><b>2</b> Get a working copy: pick a folder, clone, open. It runs the same <span class="mono">boss clone</span> line it shows. The token goes to the keychain, never into the URL.</li>
+  <li><b>3</b> Code tab: a tree with changed files (M/A) and comment counts, and the whole file with syntax colour at this change or at main. A file name in the diff opens it here.</li>
+  <li><b>4</b> One comment store. A comment is anchored to file, line, side and commit. The diff, the Code tab and <span class="mono">boss review</span> all write to it. A resolved thread keeps the agent’s “Changed in commit …” reply.</li>
+  <li><b>5</b> Request changes answers the review decision. It starts a fix round on the same branch. Merge waits while human comments are open.</li>
+  <li><b>6</b> In the fix round, human comments are required inputs, people’s first. Each one is ticked when the agent replies Fixed (with a commit) or Disputed (with a reason). The person resolves.</li>
+  <li><b>7</b> Plain git works: clone, pull, push a branch, and the branch becomes a change. A push to main is refused: main moves only through the governed merge. <span class="mono">boss review</span> writes to the same store. Git notes are an optional offline transport.</li>
+  <li><b>8</b> Publish carries comments as PR review comments: inline when the line is in the PR diff, else in the review body. Each one is signed with the person and the date. Resolved threads are resolved on GitHub too.</li>
+</ol></div>
+</div>
+<script src="../project-experience/shell.js"></script>
+</body></html>

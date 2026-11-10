@@ -47,9 +47,11 @@ def test_the_built_in_roles_are_the_reviewed_sizes():
     # propose. Owner and admin only (operator decision 2026-10-24), step-up, never delegable.
     # +1 setup:check (2026-11-05): Test and Test all re-check access and change nothing, so no
     # step-up (every Test opened "Confirm it's you"). Owner, admin and operator.
-    assert len(Permission) == 201
+    # +1 repository:push (BOSSAPP-948, operator answer 1, 2026-11-09): pushing a branch to a
+    # local project's repository. Owner, admin and operator; never its default branch.
+    assert len(Permission) == 202
     sizes = {role: len(perms) for role, perms in ROLE_PERMISSIONS.items()}
-    assert sizes == {"owner": 194, "admin": 185, "operator": 95, "viewer": 49, "auditor": 63,
+    assert sizes == {"owner": 195, "admin": 186, "operator": 96, "viewer": 49, "auditor": 63,
                      "system_worker": 3, "system_collector": 1, "system_scim": 1,
                      "system_self_installer": 2}
 
@@ -114,4 +116,4 @@ def test_a_catalogue_that_breaks_a_rule_is_refused(mutate, message):
 
 
 def test_the_source_loads():
-    assert len(load().permissions) == 201
+    assert len(load().permissions) == 202

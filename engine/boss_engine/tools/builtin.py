@@ -3846,6 +3846,9 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "the problem is somewhere specific — 'the error handling is weak' costs a repair round "
         "in re-reading; 'pricing/rules.py:14 returns 1.0 for an unknown SKU' does not.",
         _obj({"run_id": {"type": "string"},
+              "change_number": {"type": "integer", "minimum": 1,
+                                "description": "a LOCAL project's change #N (instead of run_id): "
+                                               "the comment joins the change's review threads"},
               "path": {"type": "string", "description": "file the comment is about"},
               "line": {"type": "integer", "minimum": 1},
               "body": {"type": "string", "description": "what is wrong here"},
@@ -3855,7 +3858,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                            "default": "major",
                            "description": "blocker/major block the gate; minor/nit become "
                                           "follow-up work"}},
-             ["run_id", "path", "line", "body"]),
+             ["path", "line", "body"]),
         kind="write",
         reversibility="safe", permission="code_task:steer")
     def add_review_comment(ctx, *, project_id, actor, args):
@@ -3866,6 +3869,34 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         body = (args.get("body") or "").strip()
         if not body:
             return {"ok": False, "error": "body is required"}
+        # A LOCAL CHANGE (BOSSAPP-948): the one comment store every surface writes —
+        # local_review.add_comment — by change number, or by the run whose change set it is.
+        from ..services import local_review as _local_review
+
+        with ctx.begin() as c:
+            number = args.get("change_number")
+            if not number and args.get("run_id"):
+                number = c.execute(_text(
+                    "SELECT number FROM local_change_sets WHERE project_id = :p AND run_id = :r "
+                    "AND state = 'open' ORDER BY created_at DESC LIMIT 1"),
+                    {"p": project_id, "r": args["run_id"]}).scalar()
+            if number:
+                from ..config import get_settings as _gs
+
+                try:
+                    made = _local_review.add_comment(
+                        c, _gs(), project_id=project_id, number=int(number), body=body,
+                        author=actor, author_kind="human", path=args.get("path"),
+                        line=args.get("line"), end_line=args.get("end_line"),
+                        severity=args.get("severity") or "major", origin="mcp")
+                except _local_review.ReviewError as exc:
+                    return {"ok": False, "error": str(exc)}
+                return {"ok": True, "comment_id": made["id"], "change_number": int(number),
+                        "at": f"{made['path']}:{made['line']}",
+                        "applies": "a required input of the change's next fix round "
+                                   "(Request changes); it holds Merge until a person resolves it"}
+        if not args.get("run_id"):
+            return {"ok": False, "error": "give run_id, or change_number for a local change"}
         comment = ReviewComment(
             severity=(args.get("severity") or "major").lower(),
             body=body[:500],

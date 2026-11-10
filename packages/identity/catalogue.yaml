@@ -594,6 +594,12 @@ categories:
         roles: [owner, admin]
         scope: project
         flags: [step_up]
+      - key: repository:push
+        title: "Push to local repositories"
+        description: "Push branches to a local project's repository over git (each becomes a change); never its default branch."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
       - key: github:read
         title: "View GitHub"
         description: "See GitHub connections, branches, leases, sync and merge state."

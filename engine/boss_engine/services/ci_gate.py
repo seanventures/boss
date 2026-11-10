@@ -1247,6 +1247,15 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
     if action not in DEPLOY_ACTIONS | MERGE_ACTIONS:
         return
     if action in MERGE_ACTIONS:
+        # PEOPLE'S COMMENTS HOLD A LOCAL MERGE (BOSSAPP-948, local_review.merge_hold): while a
+        # thread a person started on the change is not resolved, nobody merges it — not a force,
+        # not a policy, not a delegate. The person resolves it, or requests changes.
+        from .local_review import merge_hold_for_url
+
+        held = merge_hold_for_url(connection, rec.get("pull_request_url"))
+        if held is not None:
+            raise CiGateRefused("review_comments_open", held["reason"],
+                                open_comments=held["open_comments"])
         # CHECKS FAILING (checks_failing.py): the PR opened after its repair rounds with BOSS's
         # own checks still failing. It is merged only by a PERSON who says why (a forced merge,
         # whose note decisions.transition requires), never by a click, a policy or an agent.
@@ -1327,6 +1336,13 @@ def approval_hold(connection: Any, project_id: str, rec: Mapping[str, Any]
     action = str((rec or {}).get("action") or "")
     if action not in DEPLOY_ACTIONS | MERGE_ACTIONS:
         return None
+    if action in MERGE_ACTIONS:
+        # The same hold refuse_approval applies: people's open comments on a local change.
+        from .local_review import merge_hold_for_url
+
+        held = merge_hold_for_url(connection, rec.get("pull_request_url"))
+        if held is not None:
+            return held
     wait = latest_wait(connection, project_id, pull_request_url=rec.get("pull_request_url"),
                        shas=_shas(rec))
     if wait is None:

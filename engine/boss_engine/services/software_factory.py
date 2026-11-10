@@ -2119,6 +2119,15 @@ class SoftwareFactoryService:
         branch_head_sha = commit_shas[-1] if commit_shas else self.github.ensure_branch(
             branch_name
         )
+        if getattr(self.github, "kind", "") == "local":
+            # LOCAL REVIEW (BOSSAPP-948): the change set belongs to this build now; its threads
+            # follow the new head, and the build's answers to a person's comments become its
+            # replies, citing this commit.
+            from . import local_review
+
+            local_review.on_change_proposed(connection, self.settings, run_id=run_id,
+                                            repository=self.github.repository_full_name,
+                                            number=pr.number)
         # CI CHANGED (services/ci_gate.py): a change under .github/workflows/ is flagged on the
         # pull request and in BOSS's review, gets deterministic static checks, and needs a
         # PERSON's approval before merge or deploy (ci_gate.refuse_approval).

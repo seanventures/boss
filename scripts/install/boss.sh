@@ -95,6 +95,18 @@ Commands:
                       pinned Temurin JDK 21, Maven and Gradle (about 0.5 GB); security adds
                       Semgrep, OSV-Scanner and OWASP ZAP on top of Java. See
                       docs/community/TOOLCHAINS.md
+  clone PROJECT [DIR] [--branch B] [--open]
+                      A working copy of a local project's code (BOSS's git remote,
+                      http://localhost:3000/git/PROJECT.git), in DIR (default ~/code/PROJECT).
+                      Your BOSS access token (BOSS_TOKEN, or asked once on the terminal;
+                      Enter uses this machine's host tools key) goes to git's credential
+                      helper (the keychain on macOS), never into the URL or .git/config.
+                      --open opens it in VS Code (or Finder). The change page lists it.
+  review comment N FILE:LINE "TEXT" [--severity must|should|nit]
+  review list N | review reply N ID "TEXT" | review resolve N ID
+                      Line comments on local change #N, in the same store as the console.
+                      Run inside a working copy (the project is read from its remote) or
+                      pass --project PROJECT. Signs in with the token boss clone stored.
   version             Installed release and commit
 
 Environment: BOSS_INSTALL_DIR selects another install.
@@ -1355,7 +1367,182 @@ cmd_identity() {
   esac
 }
 
+# ---- the local git remote and local review (BOSSAPP-948) ------------------------------------
+# A token is never printed, never an argument of a process, never in a URL or .git/config: it goes
+# to git's credential helper on stdin, and to curl as a header on stdin.
+
+git_remote_base() {
+  local base="${BOSS_GIT_REMOTE_BASE:-}" port
+  if [[ -z "$base" ]]; then
+    port="$(env_value BOSS_WEB_PORT)"; base="http://localhost:${port:-3000}"
+  fi
+  printf '%s' "${base%/}"
+}
+
+credential_helper() {
+  if [[ -n "${BOSS_GIT_CREDENTIAL_HELPER:-}" ]]; then printf '%s' "$BOSS_GIT_CREDENTIAL_HELPER"; return; fi
+  if [[ "$(host_os)" == Darwin ]]; then printf 'osxkeychain'; return; fi
+  if [[ -x "$(git --exec-path 2>/dev/null)/git-credential-libsecret" ]] || command -v git-credential-libsecret >/dev/null 2>&1; then
+    printf 'libsecret'; return
+  fi
+  # No keychain on this machine: git keeps it in memory for a day, never on disk.
+  printf 'cache --timeout=86400'
+}
+
+# The person's BOSS token: BOSS_TOKEN, else asked once on the terminal (hidden), else the host
+# tools' key. Printed to stdout for a $(...) capture only — never echoed to the terminal.
+person_token() {
+  local token="${BOSS_TOKEN:-}"
+  if [[ -z "$token" ]] && have_tty; then
+    printf 'Your BOSS access token (Account › Access tokens; Enter uses this machine'"'"'s host tools key): ' >/dev/tty
+    IFS= read -rs token </dev/tty || token=""
+    printf '\n' >/dev/tty
+  fi
+  [[ -n "$token" ]] || token="$(host_key)"
+  [[ -n "$token" ]] || die "no BOSS token: set BOSS_TOKEN, or run this on a terminal."
+  printf '%s' "$token"
+}
+
+# One call to the API, signed with TOKEN (read from the header on stdin, never an argument).
+api_call() {
+  local token="$1" method="$2" path="$3" body="${4:-}"
+  if [[ -n "$body" ]]; then
+    printf 'Authorization: Bearer %s\n' "$token" | curl -sS -m 30 -X "$method" "$(api_url)$path" \
+      -H @- -H 'Content-Type: application/json' --data-binary "$body" -w '\n%{http_code}'
+  else
+    printf 'Authorization: Bearer %s\n' "$token" | curl -sS -m 30 -X "$method" "$(api_url)$path" \
+      -H @- -w '\n%{http_code}'
+  fi
+}
+
+json_of() { python3 -c 'import json,sys; print(json.dumps(dict(zip(sys.argv[1::2], sys.argv[2::2]))))' "$@"; }
+
+cmd_clone() {
+  need_install
+  local project="" dir="" branch="" open_it=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --branch) branch="${2:?--branch needs a name}"; shift 2 ;;
+      --open) open_it=1; shift ;;
+      -*) die "clone: unknown option $1" ;;
+      *) if [[ -z "$project" ]]; then project="$1"; elif [[ -z "$dir" ]]; then dir="$1"; else die "clone takes PROJECT [DIR]"; fi; shift ;;
+    esac
+  done
+  [[ -n "$project" ]] || die "clone needs the project: boss clone PROJECT [DIR] [--branch B]"
+  [[ "$project" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$ ]] || die "that is not a project id: $project"
+  dir="${dir:-$HOME/code/$project}"
+  dir="${dir/#\~/$HOME}"
+  [[ ! -e "$dir" || -z "$(ls -A "$dir" 2>/dev/null)" ]] || die "$dir already exists and is not empty. Pick another folder."
+  local base url helper proto hostport token
+  base="$(git_remote_base)"; url="$base/git/$project.git"; helper="$(credential_helper)"
+  proto="${base%%://*}"; hostport="${base#*://}"; hostport="${hostport%%/*}"
+  token="$(person_token)"
+  # The token goes to the credential helper (the keychain), keyed by this BOSS's address.
+  printf 'protocol=%s\nhost=%s\nusername=boss\npassword=%s\n\n' "$proto" "$hostport" "$token" |
+    git -c credential.helper= -c "credential.helper=$helper" credential approve
+  mkdir -p "$(dirname "$dir")"
+  git -c credential.helper= -c "credential.helper=$helper" clone ${branch:+--branch "$branch"} "$url" "$dir" ||
+    die "the clone did not complete (is BOSS running, and is $project a local project?)"
+  git -C "$dir" config credential.helper "$helper"
+  printf 'Cloned %s into %s%s\n' "$project" "$dir" "${branch:+ on $branch}"
+  local said code
+  said="$(api_call "$token" POST "/v1/projects/$project/local-repo/working-copies" \
+    "$(json_of path "$dir" branch "${branch:-}" machine "$(hostname -s 2>/dev/null || hostname)")" 2>/dev/null || true)"
+  code="${said##*$'\n'}"
+  [[ "$code" == 200 ]] && printf 'The change page lists it under Working copy.\n' ||
+    printf 'BOSS did not record the working copy (HTTP %s); the clone is fine.\n' "${code:-000}"
+  if [[ "$open_it" -eq 1 ]]; then
+    if command -v code >/dev/null 2>&1; then code "$dir" || true
+    elif [[ "$(host_os)" == Darwin ]]; then open "$dir" || true
+    fi
+  fi
+}
+
+# The person's token for review commands: what boss clone stored for this BOSS's address.
+stored_token() {
+  local base proto hostport out
+  [[ -n "${BOSS_TOKEN:-}" ]] && { printf '%s' "$BOSS_TOKEN"; return; }
+  base="$(git_remote_base)"; proto="${base%%://*}"; hostport="${base#*://}"; hostport="${hostport%%/*}"
+  out="$(printf 'protocol=%s\nhost=%s\n\n' "$proto" "$hostport" |
+    GIT_TERMINAL_PROMPT=0 git -c "credential.helper=$(credential_helper)" credential fill 2>/dev/null || true)"
+  out="$(printf '%s\n' "$out" | sed -n 's/^password=//p' | head -n 1)"
+  [[ -n "$out" ]] && { printf '%s' "$out"; return; }
+  host_key
+}
+
+project_from_remote() {
+  local remote
+  remote="$(git remote get-url origin 2>/dev/null || true)"
+  [[ "$remote" =~ /git/([A-Za-z0-9._-]+)(/[A-Za-z0-9._-]+)?\.git/?$ ]] && printf '%s' "${BASH_REMATCH[1]}"
+}
+
+cmd_review() {
+  need_install
+  local project="" severity="" args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project) project="${2:?--project needs an id}"; shift 2 ;;
+      --severity) severity="${2:?--severity needs must, should or nit}"; shift 2 ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]+"${args[@]}"}"
+  [[ $# -ge 2 ]] || die "review needs: comment N FILE:LINE TEXT | list N | reply N ID TEXT | resolve N ID"
+  local action="$1" number="$2"; shift 2
+  [[ "$number" =~ ^[0-9]+$ ]] || die "the change number is a number: $number"
+  project="${project:-$(project_from_remote)}"
+  [[ -n "$project" ]] || die "which project? Run this inside a working copy from boss clone, or pass --project."
+  local token said code body base="/v1/projects/$project/local-changes/$number"
+  token="$(stored_token)"
+  case "$action" in
+    comment)
+      [[ $# -eq 2 ]] || die "review comment N FILE:LINE \"TEXT\""
+      local anchor="$1" text="$2" file line
+      file="${anchor%:*}"; line="${anchor##*:}"
+      [[ "$anchor" == *:* && "$line" =~ ^[0-9]+$ ]] || { file="$anchor"; line=""; }
+      case "$severity" in ""|must|must_fix) severity="must fix" ;; should|should_fix) severity="should fix" ;; nit) ;; *) die "--severity is must, should or nit" ;; esac
+      if [[ -n "$line" ]]; then
+        body="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "line": int(sys.argv[2]), "body": sys.argv[3], "severity": sys.argv[4], "origin": "cli"}))' "$file" "$line" "$text" "$severity")"
+      else
+        body="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "body": sys.argv[2], "severity": sys.argv[3], "origin": "cli"}))' "$file" "$text" "$severity")"
+      fi
+      said="$(api_call "$token" POST "$base/comments" "$body")" ;;
+    list) said="$(api_call "$token" GET "$base/comments")" ;;
+    reply)
+      [[ $# -eq 2 && "$1" =~ ^[0-9]+$ ]] || die "review reply N ID \"TEXT\""
+      said="$(api_call "$token" POST "$base/comments/$1/reply" "$(json_of body "$2" origin cli)")" ;;
+    resolve)
+      [[ $# -eq 1 && "$1" =~ ^[0-9]+$ ]] || die "review resolve N ID"
+      said="$(api_call "$token" POST "$base/comments/$1/resolve" '{}')" ;;
+    *) die "review: comment, list, reply or resolve" ;;
+  esac
+  code="${said##*$'\n'}"; said="${said%$'\n'*}"
+  BOSS_REVIEW_ACTION="$action" BOSS_REVIEW_NUMBER="$number" BOSS_REVIEW_CODE="$code" python3 -c '
+import json, os, sys
+action, number, code = os.environ["BOSS_REVIEW_ACTION"], os.environ["BOSS_REVIEW_NUMBER"], os.environ["BOSS_REVIEW_CODE"]
+try:
+    data = json.loads(sys.stdin.read() or "{}")
+except ValueError:
+    data = {}
+if code != "200":
+    msg = data.get("message") or (data.get("detail") if isinstance(data.get("detail"), str) else "") or data.get("error") or ("HTTP " + code)
+    print("boss: " + str(msg), file=sys.stderr); sys.exit(1)
+def where(c):
+    return (c.get("path") or "(the change)") + (":" + str(c["line"]) if c.get("line") else "")
+if action == "list":
+    for t in data.get("items", []):
+        print("  %-10s %-24s %-40s %s" % (t["state"], where(t), (t["body"][:38] + "…") if len(t["body"]) > 39 else t["body"], t["author"]))
+    if not data.get("items"):
+        print("  no comments on change #" + number)
+else:
+    verb = {"comment": "comment", "reply": "reply", "resolve": "resolved"}[action]
+    print("✓ %s %s on change #%s · %s · %s · %s" % (verb, data.get("id"), number, where(data), data.get("severity_words", ""), data.get("state", "")))
+' <<<"$said"
+}
+
 case "$COMMAND" in
+  clone) cmd_clone "$@" ;;
+  review) cmd_review "$@" ;;
   status) cmd_status "$@" ;;
   metatron|terminal) cmd_metatron "$@" ;;
   identity) cmd_identity "$@" ;;

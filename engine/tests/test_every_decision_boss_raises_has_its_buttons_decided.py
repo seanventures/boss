@@ -586,6 +586,16 @@ def test_request_changes_is_offered_exactly_where_something_reads_it():
         card = {"status": "pending", "recommendation": {"action": action}}
         offers_revise = "revise" in {a["action"] for a in da.allowed_actions(card)}
         assert offers_revise == (action in da.REVISE_CONSUMED), action
+    # A LOCAL change's review (BOSSAPP-948): Request changes starts its fix round, read by the
+    # follow-on's local-review branch (decision_actions.is_local_review); a GitHub PR's is not.
+    local = {"status": "pending", "recommendation": {
+        "action": "review_pull_request", "pull_request_url": "http://boss-local/local_p/app/pull/1"}}
+    assert "revise" in {a["action"] for a in da.allowed_actions(local)}
+    assert da.consumes_revision(local) and da.is_local_review(local)
+    source = (Path(__file__).resolve().parents[1] / "boss_engine" / "services" / "decisions.py"
+              ).read_text(encoding="utf-8")
+    assert "decision_actions.is_local_review(row)" in source
+    assert "local_review.on_review_sent_back(" in source
 
 
 @pytest.mark.parametrize("action", sorted(da.KNOWN_ACTIONS))

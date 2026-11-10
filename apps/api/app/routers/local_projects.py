@@ -11,6 +11,15 @@ GET  /v1/projects/{id}/local-changes/{n}             one: branch, diff, files, c
                                                      comments, sandbox checks, its decision
 POST /v1/projects/{id}/local-changes/{n}/merge       Merge into the default branch (a person's
                                                      approval of the change's review decision)
+GET  /v1/projects/{id}/local-changes/{n}/tree        the Code tab's tree at head|base (BOSSAPP-948)
+GET  /v1/projects/{id}/local-changes/{n}/file        one file at head|base|a commit of the change
+GET  /v1/projects/{id}/local-changes/{n}/comments    the line-comment threads (local_review)
+POST /v1/projects/{id}/local-changes/{n}/comments    a comment on a line (or the change)
+POST …/local-changes/{n}/comments/{id}/reply         a reply in a thread
+POST …/local-changes/{n}/comments/{id}/resolve       a person resolves (or reopens) a thread
+POST /v1/projects/{id}/local-changes/{n}/request-changes   a person's Request changes → fix round
+POST /v1/projects/{id}/local-changes/{n}/review      run a pushed change's review now
+POST /v1/projects/{id}/local-repo/working-copies     `boss clone` records where it cloned
 POST /v1/projects/{id}/publish                       Publish to GitHub (a person's decision)
 POST /v1/projects/{id}/github-repository             make an empty GitHub repository (BOSSAPP-917)
 GET  /v1/projects/{id}/github-repository/check       can BOSS make it (or publish into it)? reads only
@@ -195,6 +204,16 @@ def _row_view(row: dict[str, Any]) -> dict[str, Any]:
 def local_changes(project_id: str, state: Optional[str] = None) -> dict[str, Any]:
     with begin(_engine) as connection:
         _require(connection, project_id)
+        # THE RECONCILER (BOSSAPP-948): a branch that moved without a push through BOSS's
+        # remote is caught here — its change set follows the head, a person's new branch
+        # becomes a change. Never fatal for the list.
+        from boss_engine.services import local_git_hooks
+
+        try:
+            with connection.begin_nested():
+                local_git_hooks.reconcile(connection, _settings, project_id)
+        except Exception:  # noqa: BLE001
+            pass
         rows = connection.execute(text(
             "SELECT * FROM local_change_sets WHERE project_id = :p AND "
             "(CAST(:s AS TEXT) IS NULL OR state = :s) ORDER BY created_at DESC LIMIT 200"),
@@ -249,6 +268,15 @@ def local_change(project_id: str, number: int) -> dict[str, Any]:
         except Exception as error:  # noqa: BLE001 — the record still shows
             view.update({"files": [], "diff": "", "commits": [],
                          "diff_error": f"{type(error).__name__}: {str(error)[:200]}"})
+        # WHERE IT LIVES and the comment threads (BOSSAPP-948, local_review).
+        from boss_engine.services import local_review
+
+        try:
+            view["where"] = local_review.where(connection, _settings, row)
+        except Exception as error:  # noqa: BLE001 — the record still shows
+            view["where"] = {"error": f"{type(error).__name__}: {str(error)[:200]}"}
+        view["comments"] = local_review.threads(connection, row["id"])
+        view["comment_summary"] = local_review.summary(connection, row["id"])
         view["review"] = [{"id": n["number"], "kind": n["kind"], "event": n["event"],
                            "body": n["body"], "comments": n["comments"] or [],
                            "in_reply_to": n["in_reply_to"], "author": n["author"],
@@ -307,6 +335,229 @@ def local_change_merge(project_id: str, number: int, request: Request, payload: 
                              f"Change #{number} has no review waiting for a decision."}, status_code=409)
     return approve_decision_card(decision["id"], DecisionActionRequest(
         actor=_actor(request), note=payload.note or f"Merge change #{number}", force=payload.force))
+
+
+# ── local review: the Code tab, line comments, Request changes (BOSSAPP-948) ─────────────────
+
+def _review_refused(error: Exception) -> JSONResponse:
+    return JSONResponse(error.body() if hasattr(error, "body") else {"error": "refused",
+                                                                     "message": str(error)},
+                        status_code=int(getattr(error, "status", 422) or 422))
+
+
+@router.get("/v1/projects/{project_id}/local-changes/{number}/tree")
+@permit(P.CODE_TASK_READ, scope=Scope.project(path="project_id"))
+def local_change_tree(project_id: str, number: int, ref: Optional[str] = "head") -> Any:
+    from boss_engine.services import local_review
+
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        try:
+            return local_review.tree(connection, _settings, project_id, number, ref)
+        except local_review.ReviewError as error:
+            return _review_refused(error)
+
+
+@router.get("/v1/projects/{project_id}/local-changes/{number}/file")
+@permit(P.CODE_TASK_READ, scope=Scope.project(path="project_id"))
+def local_change_file(project_id: str, number: int, path: str, ref: Optional[str] = "head") -> Any:
+    from boss_engine.services import local_review
+
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        try:
+            return local_review.read_file(connection, _settings, project_id, number, path, ref)
+        except local_review.ReviewError as error:
+            return _review_refused(error)
+
+
+@router.get("/v1/projects/{project_id}/local-changes/{number}/comments")
+@permit(P.CODE_TASK_READ, scope=Scope.project(path="project_id"))
+def local_change_comments(project_id: str, number: int) -> Any:
+    from boss_engine.services import local_review
+
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        try:
+            row = local_review.change_row(connection, project_id, number)
+        except local_review.ReviewError as error:
+            return _review_refused(error)
+        return {"number": int(number), "items": local_review.threads(connection, row["id"]),
+                "summary": local_review.summary(connection, row["id"])}
+
+
+class CommentBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    body: str = Field(..., min_length=1, max_length=8000)
+    path: Optional[str] = Field(default=None, max_length=500)
+    line: Optional[int] = Field(default=None, ge=1)
+    end_line: Optional[int] = Field(default=None, ge=1)
+    side: str = Field(default="new", pattern="^(new|old|right|left)$")
+    commit_sha: Optional[str] = Field(default=None, max_length=64)
+    severity: Optional[str] = Field(default=None, max_length=20,
+                                    description="must fix | should fix | nit")
+    origin: str = Field(default="console", pattern="^(console|cli)$")
+
+
+def _author(request: Request) -> str:
+    """How a comment is signed: the person's name (the page and Publish show it), else the actor."""
+    from apps.api.app import identity_guard
+
+    ctx = identity_guard.request_auth(request)
+    name = str(getattr(getattr(ctx, "principal", None), "display_name", "") or "").strip()
+    return name or _actor(request)
+
+
+def _author_kind(request: Request) -> str:
+    """A person's comment is a required input of the fix round; an agent's is not."""
+    from apps.api.app import identity_guard
+
+    ctx = identity_guard.request_auth(request)
+    if ctx is None:
+        return "human"
+    kind = getattr(getattr(getattr(ctx, "principal", None), "kind", None), "value", "")
+    return "human" if kind in ("user", "") else "agent"
+
+
+@router.post("/v1/projects/{project_id}/local-changes/{number}/comments")
+@permit(P.CODE_TASK_STEER, scope=Scope.project(path="project_id"))
+def local_change_comment(project_id: str, number: int, request: Request, payload: CommentBody) -> Any:
+    from boss_engine.services import local_review
+
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        try:
+            return local_review.add_comment(
+                connection, _settings, project_id=project_id, number=number, body=payload.body,
+                author=_author(request), author_kind=_author_kind(request),
+                path=payload.path, line=payload.line, end_line=payload.end_line,
+                side=payload.side, commit_sha=payload.commit_sha, severity=payload.severity,
+                origin=payload.origin)
+        except local_review.ReviewError as error:
+            return _review_refused(error)
+
+
+class ReplyBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    body: str = Field(..., min_length=1, max_length=8000)
+    origin: str = Field(default="console", pattern="^(console|cli)$")
+
+
+@router.post("/v1/projects/{project_id}/local-changes/{number}/comments/{comment_id}/reply")
+@permit(P.CODE_TASK_STEER, scope=Scope.project(path="project_id"))
+def local_change_comment_reply(project_id: str, number: int, comment_id: int, request: Request,
+                               payload: ReplyBody) -> Any:
+    from boss_engine.services import local_review
+
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        try:
+            return local_review.add_comment(
+                connection, _settings, project_id=project_id, number=number, body=payload.body,
+                author=_author(request), author_kind=_author_kind(request),
+                origin=payload.origin, reply_to=comment_id)
+        except local_review.ReviewError as error:
+            return _review_refused(error)
+
+
+class ResolveBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reopen: bool = False
+
+
+@router.post("/v1/projects/{project_id}/local-changes/{number}/comments/{comment_id}/resolve")
+@permit(P.CODE_TASK_STEER, scope=Scope.project(path="project_id"))
+def local_change_comment_resolve(project_id: str, number: int, comment_id: int, request: Request,
+                                 payload: ResolveBody) -> Any:
+    """A PERSON resolves a thread (the agent replies "Fixed …"; the person confirms)."""
+    from boss_engine.services import local_review
+
+    _people_only(request, "Resolving a review thread")
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        try:
+            return local_review.resolve(connection, project_id=project_id, number=number,
+                                        comment_id=comment_id, actor=_author(request),
+                                        reopen=payload.reopen)
+        except local_review.ReviewError as error:
+            return _review_refused(error)
+
+
+class RequestChangesBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note: Optional[str] = Field(default=None, max_length=4000)
+
+
+@router.post("/v1/projects/{project_id}/local-changes/{number}/request-changes")
+@permit(P.DECISION_APPROVE, scope=Scope.project(path="project_id"))
+def local_change_request_changes(project_id: str, number: int, request: Request,
+                                 payload: RequestChangesBody) -> Any:
+    """REQUEST CHANGES: a person sends the review decision back; that starts the fix round on
+    the change's branch with their open line comments as required inputs."""
+    from apps.api.app.main import decisions, jobs
+    from boss_engine.services import local_review
+    from boss_engine.services.decisions import InvalidDecisionTransitionError
+
+    _people_only(request, "Requesting changes")
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        try:
+            return local_review.request_changes(
+                connection, _settings, project_id=project_id, number=number, note=payload.note,
+                actor=_actor(request), jobs=jobs, decisions=decisions)
+        except local_review.ReviewError as error:
+            return _review_refused(error)
+        except InvalidDecisionTransitionError as error:
+            return JSONResponse({"error": "not_pending", "message": str(error)}, status_code=409)
+
+
+@router.post("/v1/projects/{project_id}/local-changes/{number}/review")
+@permit(P.CODE_TASK_CREATE, scope=Scope.project(path="project_id"))
+def local_change_review(project_id: str, number: int, request: Request) -> Any:
+    """Run the review of a pushed change now (a push queues it; when that could not start —
+    consent, the budget — the change page offers this)."""
+    from apps.api.app.main import jobs
+    from boss_engine.services import local_git_hooks, local_review
+
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        try:
+            row = local_review.change_row(connection, project_id, number)
+        except local_review.ReviewError as error:
+            return _review_refused(error)
+        if row["state"] != "open":
+            return JSONResponse({"error": "not_open", "message": f"Change #{number} is "
+                                 f"{row['state']}."}, status_code=409)
+        run_id = local_git_hooks.queue_review_of(connection, _settings, change=row,
+                                                 pusher=_actor(request), jobs=jobs,
+                                                 raise_refusals=True)
+        return {"number": int(number), "run_id": run_id}
+
+
+class WorkingCopyBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(..., min_length=1, max_length=500)
+    branch: Optional[str] = Field(default=None, max_length=250)
+    machine: str = Field(default="", max_length=120)
+    repository: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/v1/projects/{project_id}/local-repo/working-copies")
+@permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
+def local_repo_working_copy(project_id: str, request: Request, payload: WorkingCopyBody) -> Any:
+    """`boss clone` says where it cloned, so the change page lists the working copy."""
+    from boss_engine.services import local_review
+
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        binding = _local_binding(connection, project_id)
+        try:
+            return local_review.record_working_copy(
+                connection, project_id, repository=payload.repository or binding["full_name"],
+                path=payload.path, branch=payload.branch, machine=payload.machine,
+                actor=_actor(request))
+        except local_review.ReviewError as error:
+            return _review_refused(error)
 
 
 # ── publish to GitHub, and making the GitHub repository ─────────────────────────────────────

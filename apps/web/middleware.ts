@@ -74,6 +74,9 @@ export async function middleware(request: NextRequest) {
     return NextResponse.json({ error: "The console requires HTTPS for remote access." },
       { status: 426, headers: { "Cache-Control": "no-store" } });
   }
+  // BOSS'S GIT REMOTE (BOSSAPP-948, app/git/[...path]/route.ts): git carries its own credential
+  // (HTTP Basic with a BOSS token) and no browser cookie or Origin; the API decides who it is.
+  if (path.startsWith("/git/")) return NextResponse.next();
   // A PREVIEW PATH, IN ANY SPELLING, is never served on this origin: the /v1 route sends it to
   // the preview origin (lib/identity/forward.ts isPreviewCapabilityPath, which judges the
   // normalised path) and forwards nothing. No session is needed for a redirect, and none is used.

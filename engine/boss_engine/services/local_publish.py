@@ -392,6 +392,33 @@ def publish(c: Any, settings: Any, project_id: str, *, owner: str, repo: str,
         if rows:
             steps.append({"key": "pull_requests", "ok": True,
                           "words": f"Opened {len(rows)} pull request(s) from open changes."})
+        # THE REVIEW CONVERSATION GOES ALONG (BOSSAPP-948): each published change's line
+        # comments, replies and resolved threads, on its pull request (local_review). Idempotent:
+        # a re-run posts only what is not there yet; a failure is said and the next run resumes.
+        from . import local_review
+
+        totals = {"posted": 0, "replies": 0, "resolved": 0, "total": 0}
+        failed: list[str] = []
+        for row in c.execute(text(
+                "SELECT * FROM local_change_sets WHERE project_id = :p AND repository = :r AND "
+                "state = 'published' AND github_pr_number IS NOT NULL ORDER BY number"),
+                {"p": project_id, "r": binding["full_name"]}).mappings().all():
+            try:
+                with c.begin_nested():
+                    got = local_review.publish_comments(c, settings, dict(row), adapter,
+                                                        int(row["github_pr_number"]))
+                for k in totals:
+                    totals[k] += int(got.get(k) or 0)
+            except Exception as error:  # noqa: BLE001 — the code is published; comments resume
+                failed.append(f"change #{row['number']}: {type(error).__name__}: "
+                              f"{str(error)[:160]}")
+        if totals["total"] or failed:
+            steps.append({"key": "comments", "ok": not failed, **totals,
+                          "words": (f"Carried {totals['posted']} comment thread(s), "
+                                    f"{totals['replies']} repl(ies) and {totals['resolved']} "
+                                    "resolved thread(s) to the pull requests."
+                                    + (" Not yet: " + "; ".join(failed) + ". Publish again to "
+                                       "finish them." if failed else ""))})
 
     # 4. the project now builds on GitHub; the local repository stays as a mirror
     if state.get("step") == "pull_requests":

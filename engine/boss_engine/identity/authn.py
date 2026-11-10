@@ -68,6 +68,18 @@ class RequestCredentials:
         scheme, _, value = raw.partition(" ")
         if scheme.lower() in ("bearer", "dpop") and value.strip():
             return value.strip()
+        if scheme.lower() == "basic" and value.strip() and self.path.startswith("/git/"):
+            # THE GIT REMOTE (BOSSAPP-948): git sends a BOSS token as HTTP Basic's password.
+            # Accepted on /git/* only; the user name is ignored (the token names the principal).
+            import base64
+            import binascii
+
+            try:
+                decoded = base64.b64decode(value.strip(), validate=True).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError, ValueError):
+                return None
+            password = decoded.partition(":")[2].strip()
+            return password or None
         # The host tools send their key the old way, in X-Boss-Api-Key: a BOSS key there is the
         # same credential as in Authorization (a legacy hex key there stays the bridge's).
         return api_key_header(self.headers)
