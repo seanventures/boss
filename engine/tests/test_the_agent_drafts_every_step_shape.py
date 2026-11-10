@@ -99,6 +99,98 @@ def test_every_block_the_builder_can_place_can_be_drafted():
         assert step["kind"] == kind
 
 
+def _bug_route(**over):
+    step = {
+        "id": "route",
+        "typed_decision": {
+            "question": "Is this ticket a bug?",
+            "options": {"bug": "A defect", "other": "Not a defect"},
+            "min_confidence": 0.8,
+        },
+        "state": {"from_input": "ticket"},
+        "true_value": "bug",
+        "on_true": "fix",
+        "on_false": "triage",
+    }
+    step.update(over)
+    return step
+
+
+def _bug_arms():
+    return [
+        {"id": "fix", "gate": {"question": "Ship the fix?"}},
+        {"id": "triage", "gate": {"question": "Who should see this?"}},
+    ]
+
+
+def test_a_typed_decision_drafts_a_branch_not_a_straight_line():
+    """A typed decision is a question plus a real condition. Chaining fix into triage is not
+    a branch — the condition's on_true and on_false are the only edges to those steps."""
+    spec = _spec_from_steps([_bug_route(), *_bug_arms()], {})
+    steps = [s for s in spec.get("steps") or [] if isinstance(s, dict)]
+    assert "condition" in [s.get("kind") for s in steps], spec
+    by_id = {s["id"]: s for s in steps}
+    route = by_id["route"]
+    assert route["kind"] == "capability"
+    assert "capability" not in route["binding"]
+    assert route["binding"]["typed_decision"] == {
+        "question": "Is this ticket a bug?",
+        "options": {"bug": "A defect", "other": "Not a defect"},
+        "min_confidence": 0.8,
+    }
+    assert route["binding"]["inputs"]["state"] == {"from_input": "ticket"}
+    assert route["next"] == ["route_branch"]
+    branch = by_id["route_branch"]
+    assert branch["kind"] == "condition"
+    assert branch["next"] == []
+    assert branch["expression"] == {
+        "path": "steps.route.output.answer", "op": "eq", "value": "bug",
+    }
+    assert (branch["on_true"], branch["on_false"]) == ("fix", "triage")
+    assert "triage" not in (by_id["fix"].get("next") or [])
+    assert "fix" not in (by_id["triage"].get("next") or [])
+    validate_workflow_spec(spec)
+
+    bare = _bug_route()
+    bare["typed_decision"] = {
+        "question": "Is this ticket a bug?",
+        "options": {"bug": "A defect", "other": "Not a defect"},
+    }
+    drafted = _spec_from_steps([bare, *_bug_arms()], {})
+    assert drafted.get("ok") is not False, drafted
+    decided = next(s for s in drafted["steps"] if s["id"] == "route")
+    assert "min_confidence" not in decided["binding"]["typed_decision"]
+
+
+def test_a_typed_decision_without_a_branch_is_refused():
+    route = _bug_route()
+    route.pop("on_false")
+    refused = _spec_from_steps([route, *_bug_arms()], {})
+    assert refused.get("ok") is False
+    assert "on_false" in str(refused.get("error"))
+
+
+def test_the_draft_prompt_names_a_typed_decision_branch():
+    from boss_engine.services.workflow_drafting import _draft_prompt
+
+    prompt = _draft_prompt("route a ticket", {
+        "capabilities": [], "custom_steps": [], "agents": [],
+    })
+    assert "typed_decision" in prompt
+    assert "on_true" in prompt and "on_false" in prompt
+
+
+def test_the_typed_decision_sample_validates():
+    from boss_engine.services.workflow_samples import TYPED_DECISION_BRANCH_SAMPLE
+
+    validated = validate_workflow_spec(TYPED_DECISION_BRANCH_SAMPLE)
+    decisions = [s for s in validated["steps"]
+                 if isinstance((s.get("binding") or {}).get("typed_decision"), dict)]
+    assert len(decisions) == 1
+    assert sum(1 for s in validated["steps"] if s.get("kind") == "condition") == 1
+    assert caps.validate_step_fields(decisions[0]) == []
+
+
 # ── With a database: the MCP step and the agent check ────────────────────────────────────────
 
 TEST_DB = os.environ.get(

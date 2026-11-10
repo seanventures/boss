@@ -144,6 +144,41 @@ DISCOVERY_SAMPLES: list[str] = [
     "Is there a real market for meeting-cost tooling, or is it a novelty people install once?",
 ]
 
+#: A workflow spec, not a start brief. One typed decision and the condition that branches on
+#: its answer. NEW_PRODUCT_SAMPLES stay briefs; this is the graph that question drafts.
+TYPED_DECISION_BRANCH_SAMPLE: dict[str, Any] = {
+    "entry_step": "route",
+    "steps": [
+        {
+            "id": "route",
+            "kind": "capability",
+            "next": ["route_branch"],
+            "binding": {
+                "typed_decision": {
+                    "question": "Is this ticket a bug?",
+                    "options": {"bug": "A defect", "other": "Not a defect"},
+                    "min_confidence": 0.8,
+                },
+                "inputs": {"state": {"from_input": "ticket"}},
+            },
+        },
+        {
+            "id": "route_branch",
+            "kind": "condition",
+            "next": [],
+            "expression": {
+                "path": "steps.route.output.answer",
+                "op": "eq",
+                "value": "bug",
+            },
+            "on_true": "fix",
+            "on_false": "triage",
+        },
+        {"id": "fix", "kind": "task", "next": []},
+        {"id": "triage", "kind": "task", "next": []},
+    ],
+}
+
 
 def _existing_app_names(connection: Connection, project_id: str) -> list[str]:
     """Apps this project has actually built, newest first."""
