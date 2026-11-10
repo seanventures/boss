@@ -219,7 +219,7 @@ def test_comments_sit_on_their_code_and_go_outdated(person: Person, review_proje
     assert re.search(rf"/changes/{pid}/{n}/commits/[0-9a-f]{{40}}", made_on.get_attribute("href") or "")
     made_on.click()
     p.tid("gr-commit-view").wait_for()
-    assert _thread(p, "This line needs a guard.").is_visible()          # on the commit it was made on
+    _thread(p, "This line needs a guard.").wait_for(timeout=15_000)     # on the commit it was made on (once it has loaded)
     p.check("comments and their code")
 
 

@@ -16,7 +16,10 @@ import {
 } from "../lib/change-review";
 import { anchorWords, parseThreads, snippetFocus } from "../lib/local-review-data";
 import { parseChangeSet } from "../lib/repo-links";
-import { columns, DEFAULT_LAYOUT, effective, keyAction, parseLayout, reduce, type Layout } from "../lib/review-layout";
+import { columns, DEFAULT_LAYOUT, effective, keyAction, layoutKey, loadLayout, parseLayout, reduce, type Layout } from "../lib/review-layout";
+import { ReviewLayoutProvider } from "../app/changes/[projectId]/[number]/review-dock";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { FileTree, GoToFile } from "../app/changes/[projectId]/[number]/file-tree";
 import { AgentPane, CommitsTab } from "../app/changes/[projectId]/[number]/review-panes";
 import { CommentCode, useLineReview } from "../app/changes/[projectId]/[number]/local-review";
@@ -67,6 +70,17 @@ describe("the file tree", () => {
                            [{ path: "src/app.js", state: "open" }, { path: "src/app.js", state: "resolved" }], "all");
     expect(rows.find((r) => r.path === "src/app.js")).toMatchObject({ changed: true, additions: 14, open: 1, comments: 2 });
     expect(rows.find((r) => r.path === "README.md")).toMatchObject({ changed: false, open: 0 });
+  });
+
+  it("a reveal focuses its file, unless the person moved focus elsewhere meanwhile", async () => {
+    const files = [{ path: "src/app.js", name: "app.js", status: "A", additions: 1, deletions: 0, comments: 0, open: 0, changed: true }];
+    const reveal = { path: "src/app.js", n: 1 };
+    const host = await mountAs(<><button type="button" data-testid="elsewhere">x</button>
+      <FileTree files={files} current={null} onPick={() => undefined} testid="lr-tree-item" reveal={reveal} /></>);
+    (host.querySelector("[data-testid='elsewhere']") as HTMLElement).focus();     // a key on another control
+    await act(async () => { await new Promise((ok) => setTimeout(ok, 60)); });
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("elsewhere");
+    unmount();
   });
 
   it("renders a tree that expands and collapses, and go to file picks with the keyboard", async () => {
@@ -177,6 +191,30 @@ describe("the dockable panes", () => {
     s = reduce(s, { type: "focus" });
     expect([s.tree, s.agent, s.focus]).toEqual(["rail", "docked", false]);
     expect(reduce(s, { type: "resize", pane: "tree", width: 9999 }).treeW).toBe(560);
+  });
+  it("three key presses on a resize handle are three steps, each from the width in the state", () => {
+    let s: Layout = DEFAULT_LAYOUT;
+    for (let i = 0; i < 3; i++) s = reduce(s, { type: "nudge", pane: "tree", by: 16 });
+    expect(s.treeW).toBe(DEFAULT_LAYOUT.treeW + 48);
+    expect(reduce(s, { type: "nudge", pane: "agent", by: -9999 }).agentW).toBe(260);
+  });
+  it("what was remembered survives a reload, even with React's double effects (StrictMode)", async () => {
+    const key = layoutKey("", "change");
+    window.localStorage.setItem(key, JSON.stringify({ ...DEFAULT_LAYOUT, treeW: 312, agent: "rail" }));
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () => r.render(<React.StrictMode><ReviewLayoutProvider page="change"><span /></ReviewLayoutProvider></React.StrictMode>));
+    await act(async () => { await new Promise((ok) => setTimeout(ok, 0)); });
+    expect(parseLayout(window.localStorage.getItem(key))).toMatchObject({ treeW: 312, agent: "rail" });
+    expect(host.querySelector<HTMLElement>("[data-testid='gr-layout']")!.style.getPropertyValue("--gr-tree-col")).toBe("312px");
+    act(() => r.unmount());
+    host.remove();
+    window.localStorage.removeItem(key);
+  });
+  it("nothing remembered keeps what is on screen (a resize before the identity arrived stays)", () => {
+    window.localStorage.removeItem(layoutKey("usr_new", "change"));
+    expect(loadLayout("usr_new", "change")).toBeNull();
   });
   it("keys: [ ] \\ — never while typing", () => {
     expect(keyAction("[", false)).toEqual({ type: "toggle", pane: "tree" });

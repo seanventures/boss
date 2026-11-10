@@ -20,6 +20,7 @@ export type Action =
   | { type: "pin"; pane: Pane }             // overlay/rail → docked (the pin)
   | { type: "focus"; on?: boolean }         // \ and Full screen
   | { type: "resize"; pane: Pane; width: number }
+  | { type: "nudge"; pane: Pane; by: number }    // a key on the handle: from the width NOW, never a stale one
   | { type: "load"; layout: Layout };          // what this person had on this page type
 
 export const TREE_W = { min: 160, max: 560, initial: 264 };
@@ -54,6 +55,8 @@ export function reduce(s: Layout, a: Action): Layout {
                        tree: "rail", agent: "rail" };
       return { ...s, focus: false, tree: s.before?.tree ?? "docked", agent: s.before?.agent ?? "docked", before: null };
     }
+    case "nudge":
+      return reduce(s, { type: "resize", pane: a.pane, width: (a.pane === "tree" ? s.treeW : s.agentW) + a.by });
     case "resize":
       return a.pane === "tree" ? { ...s, treeW: clamp(a.width, TREE_W.min, TREE_W.max) }
         : { ...s, agentW: clamp(a.width, AGENT_W.min, AGENT_W.max) };
@@ -102,8 +105,13 @@ export function parseLayout(raw: string | null): Layout {
   }
 }
 
-export function loadLayout(person: string, page: string): Layout {
-  try { return parseLayout(window.localStorage.getItem(layoutKey(person, page))); } catch { return DEFAULT_LAYOUT; }
+/** What this person has remembered on this page type, or null when nothing is: the page then keeps
+ *  what is on screen (a resize made before the person's identity arrived is not thrown away). */
+export function loadLayout(person: string, page: string): Layout | null {
+  try {
+    const raw = window.localStorage.getItem(layoutKey(person, page));
+    return raw == null ? null : parseLayout(raw);
+  } catch { return null; }
 }
 
 export function saveLayout(person: string, page: string, s: Layout): void {

@@ -216,9 +216,12 @@ export function DiffBrowser({ cs, at, files, diff, review, inline, layout, toolb
     setCurrent(focus.path);
     setOpen((s) => new Set(s).add(focus.path));
   }, [focus]);
-  const isViewed = (p: string) => !!(viewed && head && viewed.paths[p] === head);
+  // A tick shows at once (the person's click), then the server's answer replaces it; a refusal
+  // puts it back and says why. A controlled box that waited for the round trip ignored the click.
+  const [ticking, setTicking] = useState<Record<string, boolean>>({});
+  const isViewed = (p: string) => (p in ticking ? ticking[p] : !!(viewed && head && viewed.paths[p] === head));
   const pick = (p: string) => {
-    if (dock.layout.tree === "overlay") dock.dispatch({ type: "close", pane: "tree" });
+    dock.picked("tree");
     if (!files.some((f) => f.path === p)) { onViewFile(p); return; }
     setCurrent(p);
     setOpen((s) => new Set(s).add(p));
@@ -227,11 +230,13 @@ export function DiffBrowser({ cs, at, files, diff, review, inline, layout, toolb
   const toggleViewed = async (p: string) => {
     if (!onViewed) return;
     const was = isViewed(p);
+    setTicking((t) => ({ ...t, [p]: !was }));
     try {
       const v = await setViewed(at, p, head, !was);
       onViewed(v);
       setOpen((s) => { const n = new Set(s); if (!was) n.delete(p); else n.add(p); return n; });
     } catch (e) { setErr(refusalSentence(e)); }
+    setTicking((t) => { const n = { ...t }; delete n[p]; return n; });
   };
   const max = Math.max(1, ...files.map((r) => r.additions + r.deletions));
   return (
@@ -399,6 +404,18 @@ export function CommitsTab({ cs, at, commits, shown, onShow, hrefFor, wholeFiles
   // A commit's own view: the comments made on that commit, under their line (read-only here).
   const madeHere = useMemo(() => cs.comments.filter((t) => !!view && !!t.path && (t.made_on ?? t.commit_sha ?? "") === view.sha), [cs.comments, view]);
   const commitReview = useLineReviewReadOnly(at, madeHere);
+  // EVERY COMMENT MADE ON THIS COMMIT IS ON ITS PAGE ("made on <sha>" lands here): one whose line
+  // is not in this commit's own diff (its file was written by an earlier commit, or the line is
+  // outside the hunks) is shown with the code it was about, above the diff.
+  const offDiff = useMemo(() => {
+    if (!view) return [];
+    const rows = new Set<string>();
+    for (const f of parseUnifiedDiff(view.diff)) for (const h of f.hunks) for (const l of h.lines) {
+      if (l.newNo != null) rows.add(`new:${f.path}:${l.newNo}`);
+      if (l.oldNo != null) rows.add(`old:${f.oldPath ?? f.path}:${l.oldNo}`);
+    }
+    return madeHere.filter((t) => t.line == null || !rows.has(`${t.side}:${t.path}:${t.line}`));
+  }, [madeHere, view]);
   const nb = neighbours(commits, shown);
   const sumAll = totals(wholeFiles);
   const list = (
@@ -467,8 +484,15 @@ export function CommitsTab({ cs, at, commits, shown, onShow, hrefFor, wholeFiles
                        toolbar={head} onViewFile={onViewFile} allowAll={false} />
         ) : err ? <>{head}<p className="cs-error" role="alert">{err}</p></> : !view
           ? <>{head}<div className="cs-loading" role="status" aria-label="Loading the commit"><i /><i /></div></>
-          : <DiffBrowser cs={cs} at={at} files={commitFiles} diff={view.diff} review={commitReview} inline={new Map()} layout={layout}
-                         allowAll={false} toolbar={head} onViewFile={onViewFile} />}
+          : <>
+              {offDiff.length ? (
+                <div className="gr-made-here" data-testid="gr-made-here" aria-label="Comments made on this commit">
+                  <b className="cs-small">Made on this commit, on code it did not change</b>
+                  {offDiff.map((t) => <ThreadView key={t.id} thread={t} at={at} withCode compact onChanged={() => undefined} />)}
+                </div>) : null}
+              <DiffBrowser cs={cs} at={at} files={commitFiles} diff={view.diff} review={commitReview} inline={new Map()} layout={layout}
+                           allowAll={false} toolbar={head} onViewFile={onViewFile} />
+            </>}
       </div>
     </section>
   );

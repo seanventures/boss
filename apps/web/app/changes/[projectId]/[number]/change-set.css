@@ -114,6 +114,9 @@
 .cs-md > :first-child { margin-top: 0; }
 .cs-md > :last-child { margin-bottom: 0; }
 .cs-md p { margin: 0 0 4px; }
+/* A comment's or a chat message's paragraphs read at their box's size: the global `p` reset is
+   1rem (19px on a laptop), which drew a one-line note larger than the code beside it. */
+.cs .md-p { font-size: inherit; }
 .cs-note-cb { flex: 1 1 240px; min-width: 0; }
 .tk-kw { color: var(--cs-violet); }
 .tk-str { color: var(--green); }
@@ -170,7 +173,7 @@
 .lr-btn[data-kind="amber"] { width: 100%; color: var(--amber); background: var(--amber-soft); border-color: transparent; }
 .lr-btn:disabled, .lr-btn[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
 .lr-btn kbd { font-family: var(--mono); font-size: var(--fs-tag); opacity: .75; }
-.lr-link { all: unset; display: inline-flex; align-items: center; gap: 4px; color: var(--accent-text); font-size: var(--fs-meta); font-weight: 600; cursor: pointer; }
+.lr-link { all: unset; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex: none; color: var(--accent-text); font-size: var(--fs-meta); font-weight: 600; cursor: pointer; }
 .lr-link:hover { text-decoration: underline; }
 .lr-link:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 4px; }
 .lr-link[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
@@ -335,7 +338,7 @@
 .gr-layout { --gr-tree-col: 264px; --gr-agent-col: 340px; min-width: 0; }
 .gr-body { display: grid; grid-template-columns: minmax(0, 1fr) var(--gr-agent-col); gap: 12px; align-items: start; min-width: 0; }
 .gr-tab { min-width: 0; }
-.gr-files, .lr-code { display: grid; grid-template-columns: var(--gr-tree-col) minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; }
+.gr-files, .lr-code { display: grid; grid-template-columns: var(--gr-tree-col) minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; padding: 0; }
 .gr-dock { position: sticky; top: 8px; min-width: 0; align-self: start; }
 .gr-dock[data-state="docked"] { position: sticky; }
 .gr-dock[data-state="sheet"] { position: static; width: 0; }
@@ -360,6 +363,12 @@
 .gr-tree { position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow: auto; background: var(--surface);
   border: 1px solid var(--border); border-radius: 10px; padding: 6px 0; min-width: 0; }
 .gr-dock > .gr-tree { position: static; }
+/* Docked, the tree and the agent fill the screen's height (sticky under its top edge), so on a
+   large monitor the panes fill it instead of ending where their content ends. */
+/* --gr-top is where the panes start on the page (review-dock.tsx measures it): at the top of the
+   page they reach the screen's bottom edge, with the agent's message box in view. */
+.gr-dock[data-state="docked"] > .gr-tree, .gr-dock[data-state="docked"] > .gr-agent {
+  height: max(18rem, calc(100dvh - var(--gr-top, 16px) - 16px)); max-height: calc(100dvh - 16px); }
 .gr-layout[data-focus] .gr-crumb-w { font-weight: 600; }
 .gr-tree .lr-goto { margin: 0 8px 6px; }
 .gr-mode { display: flex; margin: 0 8px 6px; }
@@ -409,6 +418,8 @@
 .gr-cmpbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--accent-line);
   background: var(--accent-soft); border-radius: 10px; font-size: var(--fs-meta); }
 .gr-commit-view { margin-top: 10px; }
+.gr-made-here { display: grid; gap: 8px; margin-bottom: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); min-width: 0; }
+.gr-made-here > b { color: var(--muted); }
 .gr-commit-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--fs-ui); }
 
 /* conversation */

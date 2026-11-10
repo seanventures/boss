@@ -19,6 +19,8 @@ type Ctx = {
   layout: Layout; dispatch: (a: Action) => void; viewport: number;
   eff: { tree: PaneState | "sheet"; agent: PaneState | "sheet" };
   fullScreen: () => void; isFull: boolean;
+  /** A file picked in a pane: its drawer (or a phone's sheet) closes so the code it opens shows. */
+  picked: (pane: Pane) => void;
 };
 const LayoutCtx = createContext<Ctx | null>(null);
 
@@ -27,19 +29,25 @@ export function useReviewLayout(): Ctx {
   if (v) return v;
   // Outside the provider (a unit test of one pane): everything docked, nothing remembered.
   return { layout: DEFAULT_LAYOUT, dispatch: () => undefined, viewport: 1440, eff: { tree: "docked", agent: "docked" },
-           fullScreen: () => undefined, isFull: false };
+           fullScreen: () => undefined, isFull: false, picked: () => undefined };
 }
 
 export function ReviewLayoutProvider({ page, children }: { page: string; children: React.ReactNode }) {
   const { me } = useIdentity();
   const person = String((me as { principal_id?: string } | null)?.principal_id ?? "");
   const [layout, dispatch] = useReducer(reduce, DEFAULT_LAYOUT);
-  const loaded = useRef(false);
+  // Saved only once what was remembered for THIS person and page is the state on screen: saving
+  // in the commit that asks for the load wrote the default over it (and React's dev double-run
+  // of effects then loaded that default back), so a resize or a rail was lost on reload. Nothing
+  // remembered (a first visit, or the person's identity arriving after the page) keeps the screen.
+  const key = `${person}\u0000${page}`;
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   useEffect(() => {
-    dispatch({ type: "load", layout: loadLayout(person, page) });
-    loaded.current = true;
+    const had = loadLayout(person, page);
+    if (had) dispatch({ type: "load", layout: had });
+    setLoadedKey(`${person}\u0000${page}`);
   }, [person, page]);
-  useEffect(() => { if (loaded.current) saveLayout(person, page, layout); }, [layout, person, page]);
+  useEffect(() => { if (loadedKey === key) saveLayout(person, page, layout); }, [layout, person, page, key, loadedKey]);
   const [viewport, setViewport] = useState(1440);
   useEffect(() => {
     const on = () => setViewport(window.innerWidth);
@@ -74,10 +82,27 @@ export function ReviewLayoutProvider({ page, children }: { page: string; childre
     dispatch({ type: "focus", on: true });
     void document.documentElement.requestFullscreen?.().catch(() => null);
   }, []);
+  const picked = useCallback((pane: Pane) => dispatch({ type: "close", pane }), []);
   const cols = columns(layout, viewport);
+  // Where the panes start on the page (--gr-top, for their height): measured when the page's
+  // content changes size (the change loads, a banner comes or goes) and on resize.
+  const box = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const measure = () => {
+      const body = el.querySelector(".gr-body");
+      if (body) el.style.setProperty("--gr-top", `${Math.round(body.getBoundingClientRect().top + window.scrollY)}px`);
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => { ro.disconnect(); window.removeEventListener("resize", measure); };
+  }, []);
   return (
-    <LayoutCtx.Provider value={{ layout, dispatch, viewport, eff: effective(layout, viewport), fullScreen, isFull }}>
-      <div className="gr-layout" data-focus={layout.focus || undefined} data-testid="gr-layout"
+    <LayoutCtx.Provider value={{ layout, dispatch, viewport, eff: effective(layout, viewport), fullScreen, isFull, picked }}>
+      <div className="gr-layout" ref={box} data-focus={layout.focus || undefined} data-testid="gr-layout"
            style={{ ["--gr-tree-col" as string]: cols.tree, ["--gr-agent-col" as string]: cols.agent } as React.CSSProperties}>
         {children}
       </div>
@@ -109,7 +134,12 @@ export function DockPane({ pane, label, icon, children, testid }: {
              onPointerDown={(e) => { start.current = { x: e.clientX, w: width }; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); }}
              onPointerMove={(e) => { if (start.current) resize(start.current.w + sign * (e.clientX - start.current.x)); }}
              onPointerUp={() => { start.current = null; }} onPointerCancel={() => { start.current = null; }}
-             onKeyDown={(e) => { if (e.key === "ArrowLeft") resize(width - 16 * sign); if (e.key === "ArrowRight") resize(width + 16 * sign); }} />
+             onKeyDown={(e) => {
+               // Relative to the width in the state, not this render's: keys pressed faster than a
+               // render each count (three presses are 48px, never 32).
+               if (e.key === "ArrowLeft") dispatch({ type: "nudge", pane, by: -16 * sign });
+               if (e.key === "ArrowRight") dispatch({ type: "nudge", pane, by: 16 * sign });
+             }} />
       </div>
     );
   }

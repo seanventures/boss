@@ -62,9 +62,14 @@ export function FileTree({ files, current, onPick, testid = "gr-tree-file", stat
   useEffect(() => {
     if (!reveal) return;
     setOpen((was) => new Set([...was, ...ancestorsOf(nodes, reveal.path), reveal.path]));
+    // Focus follows the reveal only if the person has not moved on meanwhile: a key pressed on
+    // another control in those 30 ms (a resize handle) must not land on the tree.
+    const from = document.activeElement;
     window.setTimeout(() => {
       const el = ref.current?.querySelector(`[data-path="${CSS.escape(reveal.path)}"]`);
-      if (el) { (el as HTMLElement).scrollIntoView({ block: "nearest" }); (el as HTMLElement).focus(); }
+      if (!el) return;
+      (el as HTMLElement).scrollIntoView({ block: "nearest" });
+      if (document.activeElement === from || document.activeElement === document.body) (el as HTMLElement).focus();
     }, 30);
   }, [reveal]); // eslint-disable-line react-hooks/exhaustive-deps
   const toggle = (p: string) => setOpen((s) => { const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n; });

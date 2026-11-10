@@ -12,7 +12,7 @@ every popover whole in view), and the same dev stack:
                                        and local_review.on_change_proposed)
   BOSS_E2E_REPO_ROOT / _IMPORT_ROOT / _FAKES   as local_first needs them
 
-Run:  scratchpad run-e2e.sh local_change_review   (or the same env + python3 -m pytest …)
+Run:  scripts/e2e/local-change-review.sh   (starts the whole disposable stack, runs both suites, stops it)
 """
 from __future__ import annotations
 

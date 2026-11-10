@@ -382,7 +382,8 @@ export function CodeTab({ cs, at, startPath, onChanged, commits = [] }: {
     return () => { alive = false; };
   }, [at, path, ref]);
   const items = tree?.items ?? [];
-  const { layout } = useReviewLayout();
+  const { layout, picked } = useReviewLayout();
+  const openFile = (p: string, reveal = false) => { setPath(p); if (reveal) setReveal({ path: p, n: Date.now() }); picked("tree"); };
   const [reveal, setReveal] = useState<{ path: string; n: number } | null>(null);
   // Comments sit on the head (new side) or the base (old side); at another commit, the ones made
   // on that commit show (read-only), under their line.
@@ -399,10 +400,10 @@ export function CodeTab({ cs, at, startPath, onChanged, commits = [] }: {
     <section className="lr-code" aria-label="Code" data-testid="lr-code">
       <DockPane pane="tree" label="Files" icon={<FolderOpen size={15} aria-hidden />} testid="gr-dock-tree">
         <nav className="lr-tree gr-tree" aria-label="Files">
-          <GoToFile paths={items.map((i) => i.path)} onPick={(p) => { setPath(p); setReveal({ path: p, n: Date.now() }); }} />
+          <GoToFile paths={items.map((i) => i.path)} onPick={(p) => openFile(p, true)} />
           <FileTree files={items.map((i) => ({ path: i.path, name: i.path.split("/").pop() ?? i.path, status: i.status,
                                                additions: 0, deletions: 0, comments: i.comments, open: i.open_comments, changed: !!i.status }))}
-                    current={path} onPick={setPath} testid="lr-tree-item" reveal={reveal} width={layout.treeW} />
+                    current={path} onPick={(p) => openFile(p)} testid="lr-tree-item" reveal={reveal} width={layout.treeW} />
           {tree && !items.length ? <p className="cs-empty">No files.</p> : null}
         </nav>
       </DockPane>

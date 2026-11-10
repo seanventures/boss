@@ -159,7 +159,9 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit }: {
   const dock = useReviewLayout();
   const [clone, setClone] = useState(false);
   const [agentKey, setAgentKey] = useState(0);
-  const reread = useCallback(() => { void read().catch(() => null); setAgentKey((k) => k + 1); }, [read]);
+  // ONE ORDER FOR EVERY UPDATE: the change first, then the agent pane. Both at once let the pane's
+  // (faster) read say "resolved" while the thread and the header still said open.
+  const reread = useCallback(() => { void read().catch(() => null).finally(() => setAgentKey((k) => k + 1)); }, [read]);
   const jump = useJumpTo();
   const inline = useMemo(() => commentsByLine<Note>((cs?.review ?? []).flatMap((n) =>
     n.comments.map((c) => ({ ...c, author: n.author })))), [cs?.review]);

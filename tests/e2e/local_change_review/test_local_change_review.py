@@ -43,6 +43,27 @@ def _tab(p: Person, name: str) -> None:
     p.p.wait_for_function(f"() => document.querySelector(\"[data-testid='change-set-tab-{name}']\")?.getAttribute('aria-selected') === 'true'")
 
 
+def _tree(p: Person) -> None:
+    """The Code tab's tree: a column from 700px; on a phone a sheet opened from the header (BOSSAPP-954)."""
+    if p.width < 700 and not p.tid("gr-drawer-tree").count():
+        p.tid("gr-tree-toggle").click()
+        p.tid("gr-drawer-tree").wait_for()
+
+
+def _agent_says(p: Person, pattern: str) -> None:
+    """The agent pane's comments say this. Docked from 1100px; below, a drawer or sheet the person
+    opens from the header and closes again (BOSSAPP-954)."""
+    small = p.width < 1100
+    if small:
+        p.tid("gr-agent-toggle").click()
+        p.tid("gr-drawer-agent").wait_for()
+    p.p.wait_for_function("(re) => new RegExp(re).test(document.querySelector(\"[data-testid='gr-agent-comments']\")?.textContent || '')",
+                          arg=pattern, timeout=30_000)
+    if small:
+        p.tid("gr-drawer-close-agent").click()
+        p.tid("gr-drawer-agent").wait_for(state="detached")
+
+
 def _thread(p: Person, text: str):
     return p.p.locator("[data-testid='lr-thread']").filter(has_text=text).first
 
@@ -89,6 +110,7 @@ def test_review_a_local_change_comment_request_changes_and_resolve(person: Perso
     # (b) The Code tab: a folder tree with the change's status and comment counts, the whole file.
     _tab(p, "code")
     p.tid("lr-code").wait_for()
+    _tree(p)
     item = p.p.locator("[data-testid='lr-tree-item'][data-path='app.js']")
     item.wait_for()
     assert "A" in item.inner_text() and "1" in item.inner_text()
@@ -108,6 +130,7 @@ def test_review_a_local_change_comment_request_changes_and_resolve(person: Perso
     p.tid("lr-composer").wait_for(state="detached")
     _thread(p, "Return the new item").wait_for()
     # The base: README.md as it is on main (Go to file, fuzzy, then Enter).
+    _tree(p)                                                            # Go to file is the tree's
     p.tid("lr-goto").fill("readme")
     p.tid("gr-goto-results").wait_for()
     p.tid("lr-goto").press("Enter")
@@ -119,16 +142,15 @@ def test_review_a_local_change_comment_request_changes_and_resolve(person: Perso
 
     # The agent pane lists both, people first; one is resolved here by the person.
     _tab(p, "files")
-    rail = p.tid("gr-agent-comments")
-    assert "2 open" in rail.inner_text()
+    _agent_says(p, r"2 open")
     second = _thread(p, "Return the new item")
     if not second.is_visible():
         _tab(p, "conversation")
     second = _thread(p, "Return the new item")
     second.wait_for()
     second.locator("[data-testid='lr-resolve']").click()
-    p.p.wait_for_function("() => /1 open/.test(document.querySelector(\"[data-testid='gr-agent-comments']\")?.textContent || '')")
-    assert _thread(p, "Return the new item").locator("[data-testid='lr-thread-state']").inner_text() == "Resolved"
+    _agent_says(p, r"1 open")
+    _thread(p, "Return the new item").locator("[data-testid='lr-thread-state']", has_text="Resolved").wait_for(timeout=15_000)
 
     # (d) Request changes: the fix run on this branch, the person's open comment its required input.
     # Its build acts for the person: the first one asks for their consent (409, then the sheet).
@@ -162,7 +184,7 @@ def test_review_a_local_change_comment_request_changes_and_resolve(person: Perso
     assert re.search(r"Changed in commit [0-9a-f]{7}: checks the amount", t1.inner_text())
     assert t1.locator("[data-testid='lr-thread-state']").inner_text() == "Answered"
     assert t1.locator("[data-testid='lr-fixed-in']").is_visible()           # "fixed in <sha>"
-    assert re.search(r"fixed in [0-9a-f]{7}", p.tid("gr-agent-comments").inner_text())
+    _agent_says(p, r"fixed in [0-9a-f]{7}")
     _tab(p, "checks")
     assert "fixed" in p.tid("lr-agent-actions").inner_text()
     _tab(p, "conversation")
