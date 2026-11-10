@@ -14,7 +14,7 @@ from .tool_result_text import clip_for_model
 from ..config import Settings
 from . import owned_process
 from . import decision_actions
-from .argument_binding import bind_held_call
+from .argument_binding import bind_held_call, held_call_matches
 from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .low_trust import Ledger, blocked, outside_origin, remember, sink_for_skill
@@ -1990,7 +1990,8 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         }
     decision = connection.execute(
         text(
-            "SELECT status FROM decisions WHERE id = :id AND project_id = :project_id"
+            "SELECT status, recommendation FROM decisions "
+            "WHERE id = :id AND project_id = :project_id"
         ),
         {"id": decision_id, "project_id": project_id},
     ).mappings().first()
@@ -2005,6 +2006,28 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 else "approval decision not found"
             ),
             "decision_status": None if decision is None else decision["status"],
+        }
+    # Pending args can be replaced after the person approved a different call.
+    # No digest means an older decision; that resume is unchanged.
+    recommendation = decision["recommendation"]
+    if isinstance(recommendation, str):
+        try:
+            recommendation = json.loads(recommendation)
+        except ValueError:
+            recommendation = {}
+    if not isinstance(recommendation, dict):
+        recommendation = {}
+    tool_name = recommendation.get("tool") or pending.get("tool") or ""
+    if not isinstance(tool_name, str):
+        tool_name = str(tool_name)
+    if not held_call_matches(
+        tool_name, pending.get("args"), recommendation.get("args_sha256"),
+    ):
+        return {
+            "status": "denied",
+            "run_id": run_id,
+            "decision_id": decision_id,
+            "reason": "arguments do not match the approved call",
         }
     if pending.get("kind") == "mcp":
         server = next(
