@@ -317,9 +317,20 @@ def carries_out_on_approval(decision: Mapping[str, Any]) -> bool:
     return _action_of(decision) in CARRIED_OUT_ON_APPROVAL or is_ambient_card(decision)
 
 
+def is_local_review(decision: Mapping[str, Any]) -> bool:
+    """A LOCAL change's review decision (BOSSAPP-948): "Request changes" starts the fix round on
+    the change's own branch (local_review.on_review_sent_back), so for it the note is read. A
+    GitHub pull request's review is not: changing it is a new build, started from Factory."""
+    from .local_repo_host import is_local_pr_url
+
+    return (_action_of(decision) == "review_pull_request"
+            and is_local_pr_url(_rec(decision).get("pull_request_url")))
+
+
 def consumes_revision(decision: Mapping[str, Any]) -> bool:
     """True when something reads `revision_requested` for this decision and acts on the note."""
-    return _action_of(decision) in REVISE_CONSUMED or is_ambient_card(decision)
+    return (_action_of(decision) in REVISE_CONSUMED or is_ambient_card(decision)
+            or is_local_review(decision))
 
 
 def _action(action: str, label: str, tone: str, effect: str,
@@ -685,6 +696,20 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
         # A local change set is "the change", never a pull request (BOSSAPP-946).
         what = "The change" if is_local_pr_url(_rec(decision).get("pull_request_url")) \
             else "The pull request"
+        if is_local_review(decision):
+            # A LOCAL change is reviewed in BOSS (BOSSAPP-948): Request changes starts the fix
+            # round on its branch, with the person's line comments as required inputs.
+            return [
+                _action("approve", "Approve and merge", "approve",
+                        "Authorizes the merge; BOSS merges once its own checks pass and every "
+                        "comment from people is resolved."),
+                _action("revise", "Request changes", "neutral",
+                        "Starts a fix round on the change's branch from your note and your line "
+                        "comments; the agent answers each one.", needs="note"),
+                _action("reject", "Keep blocked", "reject",
+                        f"{what} stays open and unmerged."),
+                _delegate(),
+            ]
         return [
             _action("approve", "Approve and merge", "approve",
                     "Authorizes the merge; BOSS merges once its own checks pass."),

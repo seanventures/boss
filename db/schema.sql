@@ -11502,6 +11502,63 @@ CREATE TABLE IF NOT EXISTS local_change_set_notes (
 CREATE SEQUENCE IF NOT EXISTS local_change_set_note_ids;
 CREATE INDEX IF NOT EXISTS idx_local_change_set_notes_cs ON local_change_set_notes (change_set_id, created_at);
 
+-- LOCAL REVIEW COMMENTS (BOSSAPP-948, services/local_review.py): ONE store for the line comments
+-- on a local change set, whoever writes them — the console's diff and Code tab, `boss review`,
+-- git notes (refs/notes/boss-review) and MCP add_review_comment. Anchored to (commit, path,
+-- side, line); `outdated` once the head moved and that line changed (the thread stays visible).
+-- A thread is its root (reply_to NULL) and its replies; the root's state is the thread's:
+-- open → addressed|disputed (the agent's reply) → resolved (a person) — reopen goes back to open.
+-- A person's open thread holds Merge. `github_comment_id` keeps Publish idempotent.
+CREATE TABLE IF NOT EXISTS local_change_set_comments (
+  id BIGSERIAL PRIMARY KEY,
+  change_set_id TEXT NOT NULL REFERENCES local_change_sets(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  path TEXT,
+  line INT,
+  end_line INT,
+  side TEXT NOT NULL DEFAULT 'new',
+  commit_sha TEXT,
+  author TEXT NOT NULL,
+  author_kind TEXT NOT NULL DEFAULT 'human',
+  severity TEXT NOT NULL DEFAULT 'major',
+  body TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'open',
+  reply_to BIGINT REFERENCES local_change_set_comments(id) ON DELETE CASCADE,
+  origin TEXT NOT NULL DEFAULT 'console',
+  outdated BOOLEAN NOT NULL DEFAULT false,
+  original_line INT,
+  line_text TEXT,
+  run_round TEXT,
+  response_commit TEXT,
+  github_comment_id BIGINT,
+  resolved_by TEXT,
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (side IN ('new', 'old')),
+  CHECK (author_kind IN ('human', 'agent')),
+  CHECK (severity IN ('blocker', 'major', 'minor', 'nit')),
+  CHECK (state IN ('open', 'addressed', 'disputed', 'resolved')),
+  CHECK (origin IN ('console', 'cli', 'git_notes', 'mcp', 'agent'))
+);
+CREATE INDEX IF NOT EXISTS idx_local_cs_comments_cs ON local_change_set_comments (change_set_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_local_cs_comments_reply ON local_change_set_comments (reply_to);
+-- Where `boss clone` put a working copy of a local repository (the page lists it).
+CREATE TABLE IF NOT EXISTS local_working_copies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository TEXT NOT NULL,
+  path TEXT NOT NULL,
+  branch TEXT,
+  machine TEXT NOT NULL DEFAULT '',
+  recorded_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, repository, machine, path)
+);
+-- A change set opened by a push names who pushed it (`pushed` label; author = the pusher).
+ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS author TEXT;
+
 -- PUSH PENDING (BOSSAPP-922): a GitHub project's branch whose commits landed in the local mirror
 -- while GitHub was down. The worker's push-pending job pushes it and opens the pull request when
 -- GitHub answers again, with backoff; the build waits "waiting for GitHub", never failed.

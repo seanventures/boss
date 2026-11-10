@@ -1392,6 +1392,13 @@ class DecisionService:
             from .architecture_docs import on_decision_answered
 
             on_decision_answered(connection, row, action=action, actor=actor, note=note)
+        elif action == "revise" and decision_actions.is_local_review(row):
+            # REQUEST CHANGES ON A LOCAL CHANGE (BOSSAPP-948): the fix round on its own branch,
+            # with the person's open line comments as required inputs (local_review).
+            from . import local_review
+
+            local_review.on_review_sent_back(connection, self.settings, row, actor=actor,
+                                             note=note, jobs=self.jobs)
 
     def _start_code_task_after_prd(
         self,

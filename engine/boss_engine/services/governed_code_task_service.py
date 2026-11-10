@@ -2455,6 +2455,8 @@ def _record_comment_responses(engine, run_id: str, project_id: str, answered: li
                 "|| jsonb_build_object('review_comments', CAST(:e AS JSONB)), updated_at=now() "
                 "WHERE id=:id AND project_id=:p"),
                 {"e": _json_dumps(stored), "id": run_id, "p": project_id})
+        # A local change's answers become thread replies when the change set is refreshed
+        # (local_review.on_change_proposed), so each reply cites the commit that holds the fix.
         return len(by_id)
     except Exception as exc:  # noqa: BLE001
         _log_caught(logger)
@@ -4604,11 +4606,19 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # this function calls — shadowing it made every release-scoped fix build crash with
     # "'dict' object is not callable" (Order API release 1.2 fix, crun_a3074b0f).
     _release_target = _release_scope.of_run(fctx)
+    from .local_repo import is_local_owner as _is_local_owner_name
+
+    _pushed_branch = str(fctx.get("local_change_branch") or "")
     if _release_target is not None:
         try:
             work_branch = _release_scope.prepare_branch(sf.github, _release_target)
         except _release_scope.ReleaseBranchError as exc:
             raise RuntimeError(f"release branch: {exc}") from exc
+        base_branch = work_branch
+    elif _pushed_branch and _is_local_owner_name(owner) and sf.github.branch_exists(_pushed_branch):
+        # A FIX ROUND ON A PUSHED LOCAL CHANGE (BOSSAPP-948, local_review.start_fix_round): the
+        # build works on the branch the person pushed, so its change set is the one refreshed.
+        work_branch = _pushed_branch
         base_branch = work_branch
     elif root_run != run_id and sf.github.branch_exists(work_branch):
         base_branch = work_branch  # prior attempt's code is present in the clone
@@ -7185,6 +7195,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 impl_session_id = _install_until_it_passes(a, m, impl_session_id, "implement")
                 cost += _cost_extra[0]
                 _cost_extra[0] = 0
+                # A FIX ROUND'S REQUIRED INPUTS (BOSSAPP-948, local_review.fix_brief): the brief
+                # numbered a person's line comments; the implementer's RESPONSE lines become its
+                # reply on each thread (Fixed with the commit, or Disputed with a reason).
+                _required_human = [rc_ for rc_ in _open_operator_comments(engine, run_id, project_id)
+                                   if str(getattr(rc_, "ref", "") or "").startswith("lcc_")]
+                if _required_human:
+                    _record_comment_responses(
+                        engine, run_id, project_id,
+                        review_comments.implementer_order(_required_human),
+                        r2.get("summary") or "", round_i=attempt,
+                        changed_files=[fc.path for fc in sandbox.diff()])
                 if do_separate_tests:
                     tests_untouched = tests_before == _hash_files(root, test_files)
                     tampered = [p for p in test_files
@@ -9368,6 +9389,36 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 on_status_written(c, run_id)
             return {"status": "blocked", "done": True, "failing_gates": [
                 g for g in TEMPLATE_GATES if (_tpl_gates or {}).get(g) is not True]}
+        # A FIX ROUND DOES NOT ASK FOR THE MERGE WITH A PERSON'S COMMENT UNANSWERED (BOSSAPP-948):
+        # every required line comment gets Fixed (with the commit) or Disputed (with a reason).
+        # One more turn of the implementer's own session, asking only for the missing answers.
+        try:
+            with _transaction(engine) as c:
+                _frow = c.execute(sql("SELECT finalize_ctx FROM code_task_runs WHERE id=:id"),
+                                  {"id": run_id}).mappings().first()
+            from . import local_review as _local_review
+
+            _missing = _local_review.unanswered_required((_frow or {}).get("finalize_ctx") or {})
+            if _missing and impl_session_id:
+                _req = [rc_ for rc_ in _open_operator_comments(engine, run_id, project_id)
+                        if str(getattr(rc_, "ref", "") or "").startswith("lcc_")]
+                _ord = review_comments.implementer_order(_req)
+                _want = {str(e.get("id")) for e in _missing}
+                _lines = [f"{i}. {rc_.location()} — {rc_.body}" for i, rc_ in enumerate(_ord, 1)
+                          if getattr(rc_, "ref", None) in _want]
+                if _lines:
+                    a_ans, m_ans = _route("implement")
+                    r_ans = a_ans.run_role(
+                        "These line comments from a PERSON still have no answer. Answer each one "
+                        "now (fix it first if it is not fixed yet):\n" + "\n".join(_lines) + "\n"
+                        + review_comments.response_clause(), root, model=m_ans,
+                        resume_session_id=impl_session_id)
+                    cost += int(r_ans.get("cost_usd_micros") or 0)
+                    _record_comment_responses(engine, run_id, project_id, _ord,
+                                              r_ans.get("summary") or "", round_i=99,
+                                              changed_files=[])
+        except Exception:  # noqa: BLE001 — Merge stays held by the open comments (ci_gate)
+            _log_caught(logger)
         _finish_vms(success=True)
         _declare_preview_app()
         _commit_approved_prd()
