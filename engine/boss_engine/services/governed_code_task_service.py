@@ -7047,8 +7047,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             nonlocal cost
             with _transaction(engine) as c:
                 _phase(c, "test_arbitration")
+            # The arbiter is ledgered under its OWN stage (BOSSAPP-998): booked as review_code
+            # it overstated review spend and made arbiter spend invisible. It still RUNS on the
+            # review_code route (same reviewer lane), and _route stamps that route_id on the
+            # context, so the row keeps its route.
             set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
-                            run_id=run_id, stage="review_code")
+                            run_id=run_id, stage="test_arbitration")
             a_arb, m_arb = _route("review_code")
             r_arb = a_arb.run_role(
                 _test_arbiter_prompt(

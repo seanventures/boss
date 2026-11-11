@@ -337,10 +337,11 @@ class CliChatBrain:
         # toolbelt (ClaudeCliAdapter._invoke_plain); every other CLI gets the prompt as before.
         #
         # EVERY CLI CHAT ENGINE PASSES THROUGH HERE, which is why the capacity observation
-        # sits on the base rather than in each adapter's own raise. The chat and panel path
-        # reports no llm_calls row at all, so the hook in record_llm_call — which covers the
-        # BUILD path — never saw a panel failure: a subscription hit its weekly cap, the
-        # meeting stalled for fifteen minutes, and nothing anywhere recorded why.
+        # sits on the base rather than in each adapter's own raise. The chat and panel path's
+        # llm_calls row is written one layer up — the router's recording wrapper
+        # (model_routing.project_chat_adapter -> RecordedChatAdapter / FailoverChatAdapter,
+        # BOSSAPP-998) — but that wrapper records with the ambient context, which a bare
+        # adapter call may not carry; this observation kept working through that gap.
         try:
             data = self._invoke_plain(system_prompt or "", prompt)
         except Exception as exc:  # noqa: BLE001 — observed, then re-raised unchanged

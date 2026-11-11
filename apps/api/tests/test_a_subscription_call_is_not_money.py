@@ -131,9 +131,11 @@ def test_a_subscription_stage_settles_zero_money_and_keeps_its_list_price_value(
     assert all(d["amount_usd_micros"] > 0 for d in after["top_cost_drivers"]), (
         "a subscription's value is not a money cost driver")
     with engine.connect() as c:
+        # The settlement records the stage the invocation named (BOSSAPP-998) — the research
+        # agent here is a stub that records nothing itself, so the gateway's row is the one.
         rows = c.execute(text(
             "SELECT included_in_subscription, cost_usd_micros FROM llm_calls "
-            "WHERE project_id = :p AND stage = 'model_gateway' ORDER BY created_at DESC LIMIT 4"),
+            "WHERE project_id = :p AND stage LIKE 'discovery:%' ORDER BY created_at DESC LIMIT 4"),
             {"p": PROJECT}).all()
     assert rows and all(included and cost == 250_000 for included, cost in rows), rows
 

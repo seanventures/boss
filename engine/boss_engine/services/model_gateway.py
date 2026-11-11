@@ -859,6 +859,7 @@ class ModelGatewayService:
         actual_cost_usd_micros: Optional[int],
         observed_capacity: dict[str, Any],
         error: dict[str, Any],
+        llm_call_recorded: bool = False,
     ) -> dict[str, Any]:
         lease = self._load_lease(connection, project_id, lease_id, worker_id, lease_token)
         self.jobs.require_active_lease(connection, worker_id, lease["job_id"], job_lease_token)
@@ -881,6 +882,7 @@ class ModelGatewayService:
             succeeded=succeeded, provider_ref=provider_ref, usage_units=usage_units,
             actual_cost_usd_micros=actual_cost_usd_micros,
             observed_capacity=observed_capacity, error=error,
+            llm_call_recorded=llm_call_recorded,
         )
 
     def settle_retained_invocation(
@@ -963,6 +965,7 @@ class ModelGatewayService:
         observed_capacity: dict[str, Any],
         error: dict[str, Any],
         allow_expired_reservation: bool = False,
+        llm_call_recorded: bool = False,
     ) -> dict[str, Any]:
         lease_id = lease["id"]
         invocation_id = invocation["id"]
@@ -1041,38 +1044,42 @@ class ModelGatewayService:
             model_route_decision_id=lease["route_decision_id"],
             dedupe_key=f"model-invocation:{invocation_id}", status=status,
         )
-        # THE ROW NAMES ITS OWN STAGE. The invocation's metadata already declares it
-        # (typed_decision_spend passes `stage`, "connection_proof" for proofs and login
-        # checks), so settlement no longer ledgers those as anonymous `model_gateway` work —
-        # 303 failed codex login checks in one month read as gateway calls (BOSSAPP-1008).
-        invocation_metadata = invocation.get("metadata") or {}
-        if isinstance(invocation_metadata, str):
-            try:
-                invocation_metadata = json.loads(invocation_metadata)
-            except ValueError:
+        # THE LEDGER ROW GOES THROUGH THE ONE RECORDING SEAM (BOSSAPP-998). A call whose maker
+        # already recorded it (a research session, a converse turn, a CLI proof — each with its
+        # real stage and run) says so with `llm_call_recorded=True`, and this settlement writes
+        # NO second row: the gateway used to double-record those under a flat 'model_gateway'
+        # stage, un-joinable with their twins. A call nothing else records (a typed decision,
+        # an API-key proof, a login check) is recorded here, under the stage its invocation
+        # metadata declares (BOSSAPP-1008: typed_decision_spend passes `stage`,
+        # "connection_proof" for proofs and login checks) — never as anonymous model_gateway
+        # work unless nothing named it.
+        if not llm_call_recorded:
+            from .llm_telemetry import record_llm_call
+
+            invocation_metadata = invocation.get("metadata") or {}
+            if isinstance(invocation_metadata, str):
+                try:
+                    invocation_metadata = json.loads(invocation_metadata)
+                except ValueError:
+                    invocation_metadata = {}
+            if not isinstance(invocation_metadata, dict):
                 invocation_metadata = {}
-        if not isinstance(invocation_metadata, dict):
-            invocation_metadata = {}
-        connection.execute(
-            text(
-                """
-                INSERT INTO llm_calls (
-                  id,project_id,stage,engine,model,prompt_tokens,completion_tokens,
-                  total_tokens,cost_usd_micros,ok,error,included_in_subscription
-                ) VALUES (:id,:p,:stage,:engine,:model,:prompt,:completion,
-                          :total,:cost,:ok,:error,:included)
-                """
-            ),
-            {"id": make_id("llm"), "p": project_id,
-             "stage": str(invocation_metadata.get("stage") or "") or "model_gateway",
-             "engine": lease["source_id"],
-             "model": lease.get("model_id"), "prompt": int(usage_units.get("prompt_tokens", 0)),
-             "completion": int(usage_units.get("completion_tokens", 0)),
-             "total": int(usage_units.get("total_tokens", 0)),
-             "cost": int(actual_cost_usd_micros or 0), "ok": succeeded,
-             "error": None if succeeded else json.dumps(error or {})[:2000],
-             "included": included},
-        )
+            record_llm_call(
+                connection=connection,
+                capacity=False,  # this settlement already probes capacity (entitlements above)
+                engine_name=str(lease["source_id"]),
+                usage={"model": lease.get("model_id"),
+                       "prompt_tokens": int(usage_units.get("prompt_tokens", 0)),
+                       "completion_tokens": int(usage_units.get("completion_tokens", 0)),
+                       "total_tokens": int(usage_units.get("total_tokens", 0)),
+                       # The lease's source already decided whether this call is money.
+                       "billing": "subscription" if included else "metered"},
+                cost_usd_micros=int(actual_cost_usd_micros or 0),
+                ok=succeeded,
+                error=None if succeeded else json.dumps(error or {})[:500],
+                stage=str(invocation_metadata.get("stage") or "") or "model_gateway",
+                project_id=project_id,
+            )
         emit_event(connection, project_id, f"model_gateway.invocation_{status}", worker_id,
                    "model_gateway_invocation", invocation_id,
                    {"lease_id": lease_id, "receipt_id": invocation["receipt_id"],

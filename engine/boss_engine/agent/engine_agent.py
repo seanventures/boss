@@ -907,6 +907,11 @@ class EngineAgent:
             elif type(adapter).__name__ in _CLI_ADAPTER_TYPES:
                 return None
             else:
+                # A kernel run's calls are ledgered by its own sink (kernel/ledger.DbSink ->
+                # record_llm_call), so the router's recording wrapper stands down here -- the
+                # one-row-per-call rule (BOSSAPP-998), never a second copy of the row.
+                if hasattr(adapter, "_record"):
+                    adapter._record = False
                 engine = kernel.OpenAIChatEngine(adapter)
         gate = None
         if getattr(self, "_adapter_routed", False) and settings is not None and project_id \

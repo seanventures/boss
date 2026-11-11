@@ -81,6 +81,9 @@ STAGE_ROLES = {
     "review_code": "adversarial_reviewer", "consistency_check": "adversarial_reviewer",
     "security_check": "security_reviewer",
     "check_tests": "qa", "run_all_tests": "qa",
+    # The test arbiter rules on failing tests before an implementer chases them; it used to be
+    # ledgered as review_code, which overstated review spend and hid the arbiter's entirely.
+    "test_arbitration": "adversarial_reviewer",
     "guest": "software_engineer", "solo": "software_engineer",
 }
 
@@ -190,7 +193,10 @@ def _signed_by(c, ctx: dict, stage: Optional[str]) -> tuple[Optional[str], Optio
                                seat=ctx.get("seat") if (stage or "") == "review_code" else None)
     if not found:
         return None, named or role_for_stage(stage)
-    return found["act_id"], canonical_role(found.get("role_key"))
+    # An act that carries no role (a build signed by its root act — a stage outside the
+    # pipeline's phase map, like test_arbitration) still writes the stage's known role.
+    return found["act_id"], (canonical_role(found.get("role_key")) or named
+                             or role_for_stage(stage))
 
 
 def _ledger_columns(c, ctx: dict, *, act_id: Optional[str], row_id: str) -> dict:
@@ -231,10 +237,23 @@ def record_llm_call(
     route_id: Optional[str] = None,
     project_id: Optional[str] = None,
     billing: Optional[str] = None,
-) -> None:
+    connection=None,
+    capacity: bool = True,
+) -> Optional[str]:
     """Insert one llm_calls row from the call result + the ambient context. Never raises.
     `route_id` / `project_id` name the model router's decision and project when the caller
-    holds them (a routed chat call), over whatever the ambient context says."""
+    holds them (a routed chat call), over whatever the ambient context says.
+
+    THIS IS THE ONE RECORDING SEAM (BOSSAPP-998): every model invocation — a build stage, a
+    chat turn, a panel seat, a decision, a proof, a gateway-settled call — lands in llm_calls
+    through here, exactly once. A caller inside a transaction passes `connection`; the row is
+    then written on it inside a savepoint (a failed write never poisons the caller's
+    transaction). `capacity=False` skips the provider-capacity observation for a caller that
+    observes capacity its own way (the model gateway's entitlement probe).
+
+    Returns the row id when the call was recorded, else None; the id is also published to the
+    ambient context as `last_llm_call_id`, so a settlement boundary (setup_service's
+    governed_proof) can tell whether the call it paid for already recorded itself."""
     try:
         from ..db import begin
         from .openai_adapter import price_for_model
@@ -258,18 +277,19 @@ def record_llm_call(
         # model that is not money (included_spend.py): the row says so, and the code task's
         # budget settlement (code_task_service) charges only the rows that are money.
         included = engine_call_is_included(engine_name, u)
-        with begin(ctx.get("db_engine")) as c:
+        row_id = f"llmc_{uuid4().hex[:20]}"
+
+        def _write(c) -> None:
             act_id, role = _signed_by(c, ctx, stage or ctx.get("stage"))
             # The act column is written only when there is an act, so a store that predates
             # the ledger (or a test's minimal table) records the call exactly as before.
             signed = (", act_id", ", :act") if act_id else ("", "")
             # The route that chose this call's model (model_router): by stage, else the last.
             routes = ctx.get("routes") if isinstance(ctx.get("routes"), dict) else {}
-            route_id = route_id or routes.get(stage or ctx.get("stage") or "") \
+            route = route_id or routes.get(stage or ctx.get("stage") or "") \
                 or ctx.get("route_id")
-            if route_id:
+            if route:
                 signed = (signed[0] + ", route_id", signed[1] + ", :route")
-            row_id = f"llmc_{uuid4().hex[:20]}"
             # THE RUN LEDGER (BOSS_LEDGER_EVENTS, kernel/ledger.py): the run, its sequence, its
             # retry lineage and the policies that produced the call. Only the columns that
             # have a value are written, so a store that predates them records as before.
@@ -298,7 +318,7 @@ def record_llm_call(
                     "stage": stage or ctx.get("stage"),
                     "role": role,
                     "act": act_id,
-                    "route": route_id,
+                    "route": route,
                     "eng": engine_name,
                     "model": model or None,
                     "pt": int(u.get("prompt_tokens") or 0),
@@ -323,10 +343,10 @@ def record_llm_call(
             # existed, that sentence lived only in a container log: a subscription hit its
             # weekly cap mid-run, the panel stalled, a build filled with red crosses, and the
             # operator — who could have switched models in ten seconds — never saw it at all.
-            project_id = ctx.get("project_id")
-            if project_id:
+            observed_project = ctx.get("project_id")
+            if observed_project and capacity:
                 from .provider_limits import record_call_outcome
-                record_call_outcome(c, ctx.get("settings"), str(project_id), engine_name,
+                record_call_outcome(c, ctx.get("settings"), str(observed_project), engine_name,
                                     ok=bool(ok), error=error)
                 # SUBSCRIPTION HEADROOM (model_router.headroom): the CLI's own window numbers
                 # and its limit sentences, folded into the source's observed windows.
@@ -337,12 +357,26 @@ def record_llm_call(
                 if str(engine_name) in SUBSCRIPTION_ENGINES:
                     from .model_router.store import observe
 
-                    observe(c, ctx.get("settings"), str(project_id), str(engine_name),
+                    observe(c, ctx.get("settings"), str(observed_project), str(engine_name),
                             event=u.get("rate_limit") if isinstance(u.get("rate_limit"), dict)
                             else None, error=None if ok else error,
                             ok_model=(model or "") if ok else None)
+
+        if connection is not None:
+            # On the caller's transaction, inside a savepoint: a failed telemetry write rolls
+            # back to here and never aborts the settlement it rides on. A settlement-side
+            # write publishes no marker: `last_llm_call_id` means "the CALL recorded itself",
+            # and the ambient context goes back exactly as the caller left it.
+            with connection.begin_nested():
+                _write(connection)
+        else:
+            with begin(ctx.get("db_engine")) as c:
+                _write(c)
+            set_llm_context(last_llm_call_id=row_id)
+        return row_id
     except Exception as exc:  # noqa: BLE001 — telemetry must never break the pipeline
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)
+    return None
 
 
 def record_agent_turns(

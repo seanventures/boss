@@ -184,15 +184,104 @@ class FailoverAgent:
         return self._call("run_research", *args, **kwargs)
 
 
+def record_chat_call(*, engine_name: str, usage: Any, started: float, ok: bool,
+                     error: Optional[str], stage: str, route_id: Optional[str] = None,
+                     project_id: Optional[str] = None) -> None:
+    """One chat-shaped call into the recording seam (llm_telemetry.record_llm_call).
+
+    Shared by the two chat wrappers so a Smart-routed and a Fixed call write the same row —
+    the stage the boundary named, the route when one chose the model, and the project so the
+    row lands on the cost surfaces even when no ambient context is set."""
+    try:
+        from ..llm_telemetry import record_llm_call
+        from ..openai_adapter import estimate_cost_usd_micros
+
+        usage = usage if isinstance(usage, dict) else {}
+        record_llm_call(engine_name=engine_name, usage=usage,
+                        cost_usd_micros=estimate_cost_usd_micros(usage) if usage else 0,
+                        latency_ms=int((time.monotonic() - started) * 1000), ok=ok,
+                        error=error, stage=stage, route_id=route_id, project_id=project_id)
+    except Exception:  # noqa: BLE001
+        log.warning("could not record a chat call", exc_info=True)
+
+
+def _plain_answer(wrapper: Any) -> Any:
+    """`create_plain_answer`, recorded, as ONE pinned attempt (no failover: a plain answer is
+    subject_answer's budgeted first try, and its caller handles the miss). None when the inner
+    adapter has no such call, so feature detection keeps working through the wrapper."""
+    inner_call = getattr(wrapper._inner, "create_plain_answer", None)
+    if not callable(inner_call):
+        return None
+
+    def call(*args: Any, **kwargs: Any) -> Any:
+        started = time.monotonic()
+        try:
+            result = inner_call(*args, **kwargs)
+        except Exception as error:  # noqa: BLE001 — recorded, then re-raised unchanged
+            wrapper._record_call({}, started, False, str(error))
+            raise
+        usage = result[1] if isinstance(result, tuple) and len(result) > 1 else {}
+        wrapper._record_call(usage, started, True, None)
+        return result
+
+    return call
+
+
+class RecordedChatAdapter:
+    """A chat adapter whose every call lands in llm_calls, with the stage its boundary named.
+
+    THE FIXED-MODE HALF OF THE RECORDING SEAM (BOSSAPP-998): `project_chat_adapter` wraps a
+    Smart-routed adapter in FailoverChatAdapter, which records; the Fixed path used to hand the
+    bare adapter back, so every chat turn, panel seat and decision on a Fixed install was
+    invisible to the ledger. A caller that records its own turns (agent_converse) sets
+    `_record = False`, exactly as it does on the failover wrapper."""
+
+    def __init__(self, inner: Any, *, engine_name: str, stage: str = "chat",
+                 project_id: Optional[str] = None, record: bool = True):
+        self._inner, self._engine_name = inner, engine_name
+        self._stage, self._project_id, self._record = stage, project_id, record
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def _record_call(self, usage: Any, started: float, ok: bool, error: Optional[str]) -> None:
+        if not self._record:
+            return
+        record_chat_call(engine_name=self._engine_name, usage=usage, started=started,
+                         ok=ok, error=error, stage=self._stage, project_id=self._project_id)
+
+    def _call(self, method: str, usage_at: int, *args: Any, **kwargs: Any) -> Any:
+        started = time.monotonic()
+        try:
+            result = getattr(self._inner, method)(*args, **kwargs)
+        except Exception as error:  # noqa: BLE001 — recorded, then re-raised unchanged
+            self._record_call({}, started, False, str(error))
+            raise
+        usage = result[usage_at] if isinstance(result, tuple) and len(result) > usage_at else {}
+        self._record_call(usage, started, True, None)
+        return result
+
+    def create_chat_completion(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call("create_chat_completion", 1, *args, **kwargs)
+
+    def create_text_response(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call("create_text_response", 2, *args, **kwargs)
+
+    @property
+    def create_plain_answer(self) -> Any:
+        return _plain_answer(self)
+
+
 class FailoverChatAdapter:
     """A chat adapter that records each call against its route (llm_calls.route_id) and, on a
     limit or transient failure, retries the call once more on the next source."""
 
     def __init__(self, inner: Any, decision: Any,
                  reroute: Callable[[str], tuple[Any, Any]], *, stage: str = "chat",
-                 record: bool = True):
+                 record: bool = True, project_id: Optional[str] = None):
         self._inner, self._decision = inner, decision
         self._reroute, self._stage, self._record = reroute, stage, record
+        self._project_id = project_id
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -204,17 +293,13 @@ class FailoverChatAdapter:
     def _record_call(self, usage: Any, started: float, ok: bool, error: Optional[str]) -> None:
         if not self._record:
             return
-        try:
-            from ..llm_telemetry import record_llm_call
-            from ..openai_adapter import estimate_cost_usd_micros
+        record_chat_call(engine_name=self._decision.engine, usage=usage, started=started,
+                         ok=ok, error=error, stage=self._stage, route_id=self._decision.id,
+                         project_id=self._project_id)
 
-            usage = usage if isinstance(usage, dict) else {}
-            record_llm_call(engine_name=self._decision.engine, usage=usage,
-                            cost_usd_micros=estimate_cost_usd_micros(usage) if usage else 0,
-                            latency_ms=int((time.monotonic() - started) * 1000), ok=ok,
-                            error=error, stage=self._stage, route_id=self._decision.id)
-        except Exception:  # noqa: BLE001
-            log.warning("could not record a routed call", exc_info=True)
+    @property
+    def create_plain_answer(self) -> Any:
+        return _plain_answer(self)
 
     def _call(self, method: str, usage_at: int, *args: Any, **kwargs: Any) -> Any:
         hops = 0

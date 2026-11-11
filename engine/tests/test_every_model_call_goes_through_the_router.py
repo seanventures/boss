@@ -40,6 +40,19 @@ _MODEL_CALLS = frozenset({"create_chat_completion", "create_text_response",
                           "create_plain_answer"})
 
 
+def _engine_adapter(*args, **kwargs):
+    """The routed engine's OWN adapter. `project_chat_adapter` returns it inside a recording
+    wrapper (the one llm_calls seam, BOSSAPP-998); these tests assert the ROUTING, so they
+    look through the wrapper at which adapter the router built."""
+    from boss_engine.services.model_router.failover import RecordedChatAdapter
+
+    adapter = model_routing.project_chat_adapter(*args, **kwargs)
+    assert isinstance(adapter, RecordedChatAdapter), (
+        "every Fixed-path adapter leaves the router recorded (BOSSAPP-998); got "
+        + type(adapter).__name__)
+    return adapter._inner
+
+
 def _no_key_settings(**extra) -> Settings:
     return Settings().model_copy(update={
         "openai_api_key": None, "azure_openai_key": None, "llm_engine": "auto",
@@ -191,13 +204,13 @@ def _connect(conn, source_id):
 def test_a_subscription_only_project_routes_to_the_subscription(sources):
     _connect(sources, "anthropic_claude_code")
     _connect(sources, "openai_codex_chatgpt")
-    adapter = model_routing.project_chat_adapter(sources, _no_key_settings(), "p")
+    adapter = _engine_adapter(sources, _no_key_settings(), "p")
     assert isinstance(adapter, ClaudeCliAdapter), type(adapter).__name__
 
 
 def test_a_key_only_install_is_left_on_its_key(sources):
     """The router must not move an install that has always run on an API key."""
-    adapter = model_routing.project_chat_adapter(
+    adapter = _engine_adapter(
         sources, _no_key_settings(openai_api_key="sk-test-not-real"), "p")
     assert isinstance(adapter, OpenAIAdapter)
 
@@ -208,7 +221,7 @@ def test_the_console_choice_wins(sources):
     _connect(sources, "anthropic_claude_code")
     sources.execute(text("INSERT INTO project_settings (project_id, key, value) "
                          "VALUES ('p', 'chat_llm_engine', 'codex')"))
-    adapter = model_routing.project_chat_adapter(sources, _no_key_settings(), "p")
+    adapter = _engine_adapter(sources, _no_key_settings(), "p")
     assert isinstance(adapter, CodexCliAdapter), type(adapter).__name__
 
 
@@ -286,7 +299,7 @@ def test_a_stored_openai_key_with_no_env_key_is_what_the_step_runs_on(project):
     _store_key(project, "openai")
     settings = _no_key_settings()
     assert _readiness_says_connected(project, settings)
-    adapter = model_routing.project_chat_adapter(project, settings, "p")
+    adapter = _engine_adapter(project, settings, "p")
     assert isinstance(adapter, OpenAIAdapter), type(adapter).__name__
     assert adapter._resolved_api_key() == _STORED_KEY
 
@@ -302,7 +315,7 @@ def test_a_stored_key_for_another_provider_reaches_that_provider(project, provid
     _store_key(project, provider, model=f"{provider}-model")
     settings = _no_key_settings()
     assert _readiness_says_connected(project, settings)
-    adapter = model_routing.project_chat_adapter(project, settings, "p")
+    adapter = _engine_adapter(project, settings, "p")
     assert isinstance(adapter, OpenAIAdapter), type(adapter).__name__
     assert adapter._resolved_api_key() == _STORED_KEY
     assert adapter._resolved_base_url() == base_url
@@ -322,7 +335,7 @@ def test_readiness_and_the_router_agree_for_every_key_the_console_can_store(proj
     settings = _no_key_settings()
     choice = model_routing.choose(project, settings, "p")
     assert _readiness_says_connected(project, settings) == choice.runnable is True
-    adapter = model_routing.project_chat_adapter(project, settings, "p")
+    adapter = _engine_adapter(project, settings, "p")
     if isinstance(adapter, OpenAIAdapter):
         assert adapter._resolved_api_key() == _STORED_KEY, provider
     else:
@@ -357,7 +370,7 @@ def test_an_exhausted_subscription_is_passed_over_for_one_with_capacity(sources)
         {"c": '{"exhausted": true, "retry_at": "2999-01-01T00:00:00+00:00"}'})
     choice = model_routing.choose(sources, _no_key_settings(), "p")
     assert choice.engine == "codex", choice
-    adapter = model_routing.project_chat_adapter(sources, _no_key_settings(), "p")
+    adapter = _engine_adapter(sources, _no_key_settings(), "p")
     assert isinstance(adapter, CodexCliAdapter), type(adapter).__name__
 
 
@@ -366,7 +379,7 @@ def test_a_subscription_never_falls_back_to_a_paid_key_unasked(sources):
     exists, so a CLI hiccup moved agent turns onto the metered key with no reservation."""
     sources.execute(text("INSERT INTO project_settings (project_id, key, value) "
                          "VALUES ('p', 'chat_llm_engine', 'claude_code')"))
-    adapter = model_routing.project_chat_adapter(
+    adapter = _engine_adapter(
         sources, _no_key_settings(openai_api_key="sk-test-not-real"), "p")
     assert type(adapter) is ClaudeCliAdapter, type(adapter).__name__
 
