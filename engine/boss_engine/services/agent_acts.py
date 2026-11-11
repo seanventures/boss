@@ -82,7 +82,7 @@ STAGE_PHASES: dict[str, int] = {
     "write_tests": 1,
     "implement": 2, "solo": 2, "guest": 2,
     "check_tests": 3, "run_all_tests": 3,
-    "review_code": 4, "consistency_check": 4, "security_check": 4,
+    "review_code": 4, "consistency_check": 4, "security_check": 4, "review_panel": 4,
     "repair": 5,
 }
 STAGE_TITLES: dict[str, str] = {
@@ -90,7 +90,7 @@ STAGE_TITLES: dict[str, str] = {
     "design": "Design", "write_tests": "Write tests", "implement": "Implement", "solo": "Build",
     "guest": "Build", "check_tests": "Run tests", "run_all_tests": "Run tests",
     "review_code": "Code review", "consistency_check": "Consistency check",
-    "security_check": "Security check", "repair": "Repair",
+    "security_check": "Security check", "review_panel": "Review panel", "repair": "Repair",
 }
 #: The stages an operator's choice of engineer takes. A build step that NAMES an agent names who
 #: builds it — not who reviews it: crediting the review to the author would be the one lie a
@@ -1855,6 +1855,7 @@ STAGE_VERBS: dict[str, str] = {
     "design": "Designing",
     "implement": "Coding", "repair": "Coding", "solo": "Coding", "guest": "Coding",
     "review_code": "Reviewing", "consistency_check": "Reviewing", "security_check": "Reviewing",
+    "review_panel": "Reviewing",
     "write_tests": "Testing", "check_tests": "Testing", "run_all_tests": "Testing",
 }
 #: A capability's `family` (workflow_capabilities.Capability.family) → the verb.

@@ -124,6 +124,9 @@ STAGE_ROLES = {
     "implement": "software_engineer", "repair": "software_engineer",
     "review_code": "adversarial_reviewer", "consistency_check": "adversarial_reviewer",
     "security_check": "security_reviewer",
+    # The merged panel session (BOSSAPP-1000): one session sits every review seat; its row is
+    # its own stage so review spend is never overstated the way the arbiter's was.
+    "review_panel": "adversarial_reviewer",
     "check_tests": "qa", "run_all_tests": "qa",
     # The test arbiter rules on failing tests before an implementer chases them; it used to be
     # ledgered as review_code, which overstated review spend and hid the arbiter's entirely.

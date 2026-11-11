@@ -50,6 +50,8 @@ STAGE_CLASSES: dict[str, str] = {
     "review_plan": "build_stage", "design": "build_stage", "write_tests": "build_stage",
     "implement": "build_stage", "repair": "build_stage", "review_code": "build_stage",
     "consistency_check": "build_stage", "security_check": "build_stage",
+    # The merged review panel: one session, every LLM seat (BOSSAPP-1000).
+    "review_panel": "build_stage",
     "check_tests": "build_stage", "run_all_tests": "build_stage",
     "test_arbitration": "build_stage", "guest": "build_stage", "solo": "build_stage",
     "quality": "build_stage", "precheck": "build_stage", "workflow_precheck": "build_stage",

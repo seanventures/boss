@@ -45,7 +45,7 @@ from ..ports import sql
 from ..schemas import FileChange
 from ..templates import run_env as _run_env
 from . import agent_acts, baseline_verify, ci_gate, design_prompts, plane_sync, review_comments, verification_target
-from . import red_first, repair_review_scope, review_input
+from . import red_first, repair_review_scope, review_input, review_panel
 from . import approved_prd_design
 from .knowledge import learning_context, learning_writeback  # learning while executing (BOSSAPP-768)
 from .bakeoff import (
@@ -609,12 +609,24 @@ def review_panel_seats(lane: str, risk_tier: int, profile: dict, *, ci_files: bo
     return seats
 
 
-def panel_seats(enabled_seats, review_checks, *, security, regression, consistency):
+def panel_seats(enabled_seats, review_checks, *, security, regression, consistency,
+                merged=None):
     """(label, fn) for exactly the review-panel seats that are enabled, in panel order.
 
     The one place the panel's seat list is built, from the same `enabled_seats` that decided
-    which seats were skipped, so a seat reported as skipped can never still be run."""
+    which seats were skipped, so a seat reported as skipped can never still be run.
+
+    ``merged`` (BOSSAPP-1000) is the one-session panel: when given, it stands in for EVERY
+    enabled LLM seat (review/security/consistency) — one session reads the change once and
+    casts each enabled seat's verdict, with a per-seat fallback inside it for a section the
+    session did not deliver. The regression seat is not a model call and keeps its own slot."""
     seats = []
+    if merged is not None:
+        if {"review_code", "security_check", "consistency_check"} & set(enabled_seats):
+            seats.append(("panel", merged))
+        if "regression" in enabled_seats:
+            seats.append(("regression", regression))
+        return seats
     if "review_code" in enabled_seats:
         seats += [(f"review[{i}]", c) for i, c in enumerate(review_checks)]
     if "security_check" in enabled_seats:
@@ -2431,13 +2443,16 @@ def _json_dumps(value) -> str:
 
 def _comment_signers(c, run_id: str, review_seat) -> dict:
     """{stage: {act_id, role_key}}: the newest act that ran each review stage of this build.
-    For a panel, the code review is the seat whose findings stand for it."""
+    For a panel, the code review is the seat whose findings stand for it. When the panel sat
+    as ONE session (BOSSAPP-1000, stage `review_panel`), that session's act signs every seat's
+    findings that has no act of its own — the one agent really did write them."""
     out: dict = {}
     try:
         rows = c.execute(sql(
             "SELECT act_id, role_key, step_id, seat FROM agent_acts WHERE kind = 'stage' "
             "AND code_task_run_id = :r AND step_id IN ('review_code','security_check',"
-            "'consistency_check') ORDER BY started_at"), {"r": run_id}).mappings().all()
+            "'consistency_check','review_panel') ORDER BY started_at"),
+            {"r": run_id}).mappings().all()
     except Exception:  # noqa: BLE001 — a signature is never worth losing the comments
         _log_caught(logger)
         return out
@@ -2446,6 +2461,10 @@ def _comment_signers(c, run_id: str, review_seat) -> dict:
         if stage == "review_code" and review_seat and r["seat"] not in (None, review_seat):
             continue
         out[stage] = {"act_id": r["act_id"], "role_key": r["role_key"]}
+    merged = out.pop("review_panel", None)
+    if merged:
+        for stage in ("review_code", "security_check", "consistency_check"):
+            out.setdefault(stage, merged)
     return out
 
 
@@ -3102,8 +3121,7 @@ def _repair_review_scope_blocks(engine, *, run_id: str, project_id: str, fctx: d
     try:
         with _transaction(engine) as c:
             emit_event(c, project_id, "code_task.repair_review_scope", "boss", "code_task_run",
-                       run_id, {"parent_run_id": parent_id, "seats": record,
-                                "security_check": "full"})
+                       run_id, {"parent_run_id": parent_id, "seats": record})
     except Exception:  # noqa: BLE001 — the record must not stop the review
         _log_caught(logger)
     return blocks
@@ -3171,9 +3189,12 @@ def _operator_review_block(engine, run_id: str, project_id: str) -> str:
             "leaves one undone is REFUTED, whatever else it gets right.\n" + body + "\n\n")
 
 
-def _review_prompt(title, criteria, *, instructions="", ui=False, change="", operator=""):
+def _review_prompt(title, criteria, *, instructions="", ui=False, change="", operator="",
+                   ctx=True):
+    # `ctx=False` for a merged-panel section (review_panel.combined_prompt): the task context
+    # and the shared change are in the prompt ONCE, not once per seat.
     return (
-        _ctx_block(title, instructions, criteria)
+        (_ctx_block(title, instructions, criteria) if ctx else "")
         + (operator or "")
         + "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
         "these tests. Try HARD to break the change: read the implementation and the tests and look "
@@ -3460,9 +3481,9 @@ from .review_verdict import (  # noqa: E402 — re-exported under their old name
 )
 
 
-def _security_prompt(title, *, instructions="", criteria=(), change=""):
+def _security_prompt(title, *, instructions="", criteria=(), change="", ctx=True):
     return (
-        _ctx_block(title, instructions, criteria)
+        (_ctx_block(title, instructions, criteria) if ctx else "")
         + "You are a security reviewer. Assess the change for EXPLOITABLE vulnerabilities — things an "
         "attacker could actually use: injection (SQL / command / HTML-XSS), auth or access-control "
         "bypass, unsafe secret/credential handling, unsafe deserialization or parsing, SSRF, path "
@@ -3510,17 +3531,6 @@ def _qa_static_fix_prompt(findings) -> str:
         "are fine: the implementer writes them next. Do not edit any non-test file and do not add "
         "lint or type suppressions. After this turn the tests are frozen: nobody else may edit "
         "them. End with one line naming what you fixed.")
-
-
-def _mutate_prompt(impl_files):
-    fl = ", ".join(impl_files) or "the implementation file(s)"
-    return (
-        "Mutation testing is a standard QA practice that verifies a test suite can detect a defect. "
-        f"In an implementation file ({fl}), change exactly ONE line so its behaviour differs from "
-        "the spec — for example adjust a comparison operator, a constant, or remove a validation "
-        "step. Edit ONLY implementation files, never the test files. Make a single change and end "
-        "with a one-line summary of what you changed."
-    )
 
 
 def _template_tests_home(spec: dict, fctx: dict, instructions: str) -> Optional[str]:
@@ -3933,6 +3943,33 @@ def _spec_prompt(title, instructions, criteria):
     )
 
 
+def _plan_self_check_section() -> str:
+    """The plan review as a SELF-CHECK section of the session that wrote the plan
+    (BOSSAPP-1003, audit 997 §7.6). review_plan was its own fresh CLI session that re-read the
+    repository to judge a plan it was handed inline — 88 calls, $42.80/month, nine times the
+    plan stage itself. The session that just read the repository re-reads its own plan instead,
+    under the SAME contract: the ROUTING: NOT_A_CODE_TASK check and a final PLAN: OK / REVISE
+    marker, parsed by the same `review_verdict.plan_verdict`. A session that skips the section
+    falls back to the separate review session (`_review_plan_prompt`), so the check never
+    silently disappears. The human approve-plan gate is untouched."""
+    return (
+        "=== PLAN REVIEW ===\nNow change hats: review the plan you just wrote as a design "
+        "reviewer would, against the task and the spec/standards above.\n"
+        "FIRST decide whether this task ASKS FOR CODE at all. It is NOT a coding task ONLY "
+        "when its deliverable is inherently a document, research, or a written specification — "
+        "e.g. 'write a PRD', 'research the options', 'produce a discovery report' — where the "
+        "task does not call for creating or modifying source code. A task that asks you to add "
+        "or change code IS a coding task, EVEN IF the new code is a standalone/new module or "
+        "the repository already contains unrelated or messy code. If and ONLY if the "
+        "deliverable is not code at all, this section must be ONLY this single line:\n"
+        "  ROUTING: NOT_A_CODE_TASK — <one-line reason>\n"
+        "Otherwise, name the plan's gaps, missing edge cases, and risky choices — and fix the "
+        "PLAN section's text for anything material you find, so the plan above is the plan to "
+        "build. End this section with EXACTLY one final line:\n"
+        "  PLAN: OK\n  PLAN: REVISE\n"
+    )
+
+
 def _plan_prompt(title, spec):
     return (
         "You are a software architect. Given the spec, write a short technical plan: the files to "
@@ -3940,19 +3977,21 @@ def _plan_prompt(title, spec):
         "files. If the app needs a relational database, end the plan with the line "
         "`database: postgres` (BOSS then gives every build its own PostgreSQL database, "
         "DATABASE_URL in the environment); otherwise end with `database: none`."
-        f"\n\nTASK: {title}\n\nSPEC:\n{spec}"
+        f"\n\nTASK: {title}\n\nSPEC:\n{spec}\n\n"
+        "Write the plan as a section starting with the heading line `=== PLAN ===`, then add "
+        "this second section:\n\n" + _plan_self_check_section()
     )
 
 
 _DESIGN_HEADS = (("standards", "STANDARDS"), ("spec", "SPEC"), ("plan", "PLAN"),
-                 ("packages", "WORK PACKAGES"))
+                 ("plan_review", "PLAN REVIEW"), ("packages", "WORK PACKAGES"))
 
 
 def _design_prompt(title, instructions, criteria):
     """Standards, spec and plan from ONE read of the repository, in three marked sections."""
     return (
         _ctx_block(title, instructions, criteria)
-        + "You are the design lead for this change. Read this repository ONCE, then write four "
+        + "You are the design lead for this change. Read this repository ONCE, then write five "
         "sections, each starting with its own heading line exactly as shown. Do NOT edit any "
         "files.\n\n"
         "=== STANDARDS ===\nA short bulleted list of the coding standards a new change here "
@@ -3964,7 +4003,8 @@ def _design_prompt(title, instructions, criteria):
         "signatures, and the key edge cases to handle. If the app needs a relational database, "
         "end the plan with the line `database: postgres` (BOSS then gives every build its own "
         "PostgreSQL database, DATABASE_URL in the environment); otherwise end with "
-        "`database: none`."
+        "`database: none`.\n\n"
+        + _plan_self_check_section()
         + _parallel_build.design_prompt_section()
     )
 
@@ -4070,11 +4110,11 @@ def _is_not_a_code_task(plan_review: str) -> bool:
     return bool(_NOT_A_CODE_TASK_RE.search(plan_review or ""))
 
 
-def _consistency_prompt(title, criteria, design, *, instructions="", change=""):
+def _consistency_prompt(title, criteria, design, *, instructions="", change="", ctx=True):
     spec = (design or {}).get("spec", "")
     extra = f"\n\nAGREED SPEC:\n{spec}" if spec else ""
     return (
-        _ctx_block(title, instructions, criteria)
+        (_ctx_block(title, instructions, criteria) if ctx else "")
         + "You are a reviewer checking internal consistency. Read the implementation and the tests "
         "and confirm they agree with the task and its acceptance criteria: every criterion is "
         "implemented and tested, names and behaviour match the spec, and nothing contradicts. Do "
@@ -6011,6 +6051,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         _review_change = review_input.ChangeUnderReview()
         _hollow_seats: dict[str, str] = {}
+        # BOSSAPP-1000: filled by the merged panel session when one sat (for the evidence).
+        _merged_record: dict = {}
         _stack_declarations: list = []
 
         def _run_manifest_verify(plan, *, record: bool):
@@ -6505,8 +6547,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # re-reading the same repository (a HelpDesk AI build: 0.6 + 2.2 + 5.3 minutes).
                 # One read produces all three, under the plan's route (the strongest of the
                 # three). A part the session did not deliver is written by its own session as
-                # before, so a short answer never becomes a thin design. The plan review below
-                # stays its OWN session with fresh context: a plan is never reviewed by its author.
+                # before, so a short answer never becomes a thin design.
+                # THE PLAN CHECKS ITSELF IN THE SAME SESSION (BOSSAPP-1003, audit 997 §7.6):
+                # review_plan was its own fresh CLI session re-reading the repository to judge
+                # a plan it was handed inline — $42.80/month, 9x the plan stage itself. The
+                # session that wrote the plan now closes with the PLAN REVIEW section under the
+                # same contract (NOT_A_CODE_TASK routing + a final PLAN: OK/REVISE marker,
+                # review_verdict.plan_verdict). A session that skips the section still gets the
+                # separate review session below, so the check never silently disappears.
                 set_llm_context(stage="design")
                 a, m = _route("plan")
                 joint = a.run_role(_design_prompt(title, instructions, criteria), root,
@@ -6515,6 +6563,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 d1 = {"summary": parts["standards"], "cost_usd_micros": joint.get("cost_usd_micros")}
                 d2 = {"summary": parts["spec"], "cost_usd_micros": 0}
                 d3 = {"summary": parts["plan"], "cost_usd_micros": 0}
+                d4 = {"summary": parts["plan_review"], "cost_usd_micros": 0}
                 if not parts["standards"]:
                     set_llm_context(stage="standards")
                     a, m = _route("standards")
@@ -6527,14 +6576,22 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     d2 = a.run_role(_spec_prompt(title, instructions, criteria), root,
                                     read_only=True, model=m)
                 if not parts["plan"]:
+                    # The plan's own session self-checks too; its sections replace the joint
+                    # answer's (which had no plan to review).
                     set_llm_context(stage="plan")
                     a, m = _route("plan")
                     d3 = a.run_role(_plan_prompt(title, d2.get("summary", "")), root,
                                     read_only=True, model=m)
-                set_llm_context(stage="review_plan")
-                a, m = _route("review_plan")
-                d4 = a.run_role(_review_plan_prompt(title, d3.get("summary", "")), root,
-                                read_only=True, model=m)
+                    plan_parts = _split_design(d3.get("summary", ""))
+                    if plan_parts["plan"]:
+                        d3 = {**d3, "summary": plan_parts["plan"]}
+                    d4 = {"summary": plan_parts["plan_review"], "cost_usd_micros": 0}
+                if not str(d4.get("summary") or "").strip():
+                    # No self-check came back: the separate review session, exactly as before.
+                    set_llm_context(stage="review_plan")
+                    a, m = _route("review_plan")
+                    d4 = a.run_role(_review_plan_prompt(title, d3.get("summary", "")), root,
+                                    read_only=True, model=m)
                 for d in (d1, d2, d3, d4):
                     cost += int(d.get("cost_usd_micros") or 0)
                 # THE MARKER, NOT THE WORD (BOSSAPP-960). This was `"REVISE" not in summary`,
@@ -7864,7 +7921,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # fixes. Each scopable seat now judges the repair's delta against the change the
             # parent's seat last reviewed, with its own findings to confirm — unless a guardrail
             # (no prior review, a big repair, files nobody named) sends it to the full review.
-            # Same seats, same model routing; security_check is always full.
+            # Same seats, same model routing. security_check scopes too (BOSSAPP-1000): it
+            # always re-read the FULL change on repairs, the single costliest habit the audit
+            # measured in the panel; the same guardrails send a doubtful repair to the full
+            # security review.
             _scope_blocks = _repair_review_scope_blocks(
                 engine, run_id=run_id, project_id=project_id, fctx=fctx,
                 change=_review_change, baseline=_seed_baseline,
@@ -7907,7 +7967,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 stage="security_check")
                 rr, hollow = _judge_seat("security_check", lambda pre: security_agent.run_role(
                     pre + _security_prompt(title, instructions=instructions, criteria=criteria,
-                                           change=change_block),
+                                           change=_scope_blocks.get("security_check")
+                                           or change_block),
                     review_root, read_only=True, model=security_model))
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
@@ -7964,12 +8025,103 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # handling with no security review at all. Above tier 1 the full panel is restored
             # no matter what the profile asked for.
             enabled_seats = review_panel_seats(lane, risk_tier, profile, ci_files=bool(_ci_files))
+
+            # ONE SESSION SITS EVERY LLM SEAT (BOSSAPP-1000, audit 997 §7.3). The three seats
+            # were three separate full CLI sessions over the SAME inline change — $375.98/month
+            # of the panel's $389.91 — each paying its own repo onboarding to judge a text the
+            # others had already read. One session (review_panel.combined_prompt) now reads the
+            # change once and casts every enabled seat's verdict in its own marked section,
+            # parsed by the SAME review_verdict grammar; a section the session does not deliver
+            # is judged by that seat's own session, exactly as before. A refute panel of k > 1
+            # keeps its independent review sessions (the votes must not share a context), and
+            # the fix lane keeps its own combined reviewer.
+            _merged_seats = [s for s in review_panel.SEATS if s in enabled_seats]
+            _merge_panel = (panel_size == 1 and lane != fix_lane_triage.LANE_FIX
+                            and len(_merged_seats) >= 2)
+
+            def _do_merged_panel():
+                set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                                run_id=run_id, stage=review_panel.STAGE)
+                sections: list = []
+                if "review_code" in _merged_seats:
+                    _rc_scoped = _scope_blocks.get("review_code")
+                    sections.append(("review_code", _review_prompt(
+                        title, criteria, instructions=instructions, ui=ui_task,
+                        change=_rc_scoped or "", ctx=False,
+                        operator=_operator_review_block(engine, run_id, project_id))
+                        + ("" if _rc_scoped else ci_gate.review_clause_for(change_block))))
+                if "security_check" in _merged_seats:
+                    sections.append(("security_check", _security_prompt(
+                        title, instructions=instructions, criteria=criteria,
+                        change=_scope_blocks.get("security_check") or "", ctx=False)))
+                if "consistency_check" in _merged_seats:
+                    sections.append(("consistency_check", _consistency_prompt(
+                        title, criteria, design, instructions=instructions,
+                        change=_scope_blocks.get("consistency_check") or "", ctx=False)))
+                # The task context and the change are in the prompt ONCE (the whole point);
+                # a repair-scoped seat carries its own delta block inside its section instead.
+                _shared = [s for s, _ in sections if not _scope_blocks.get(s)]
+                common = (_ctx_block(title, instructions, criteria)
+                          + (_change_clause(change_block) if _shared else ""))
+                rr, hollow = _judge_seat(review_panel.STAGE, lambda pre: review_agent.run_role(
+                    pre + review_panel.combined_prompt(sections, common=common),
+                    review_root, read_only=True, model=review_model))
+                with lock:
+                    panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
+                parts = review_panel.split(rr.get("summary", ""), [s for s, _ in sections])
+                fallback: list = []
+                for seat in [s for s, _ in sections]:
+                    section = (parts.get(seat) or "").strip()
+                    if hollow:
+                        # One session, one sight of the change: a session that never saw it is
+                        # hollow for EVERY seat it sat — recorded as not reviewed, never a pass.
+                        with lock:
+                            _hollow_seats[seat] = hollow
+                        section = rr.get("summary", "")
+                    elif not section:
+                        fallback.append(seat)
+                        continue
+                    if seat == "review_code":
+                        # The merged session's cost rides the review seat's result, so the
+                        # evidence books one session once (the other seats record 0).
+                        panel["review_votes"][0] = (
+                            {**rr, "summary": section},
+                            "not_run" if hollow else _parse_verdict(section))
+                    elif seat == "security_check":
+                        panel["security"] = (
+                            {"summary": section, "cost_usd_micros": 0,
+                             "model": rr.get("model")},
+                            "hollow" if hollow else _parse_security(section))
+                    else:
+                        panel["consistency"] = (
+                            {"summary": section, "cost_usd_micros": 0,
+                             "model": rr.get("model")},
+                            "hollow" if hollow else _parse_consistency(section))
+                for seat in fallback:  # a missing section: that seat's own session, as before
+                    if seat == "review_code":
+                        review_checks[0]()
+                    elif seat == "security_check":
+                        _do_security()
+                    else:
+                        _do_consistency()
+                _merged_record.update(
+                    {"seats": [s for s, _ in sections], "fallback": fallback,
+                     "hollow": bool(hollow),
+                     "cost_usd_micros": int(rr.get("cost_usd_micros") or 0)})
+                try:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.review_panel_merged", "boss",
+                                   "code_task_run", run_id, dict(_merged_record))
+                except Exception:  # noqa: BLE001 — the record must not sink the panel
+                    _log_caught(logger)
+
             # ONLY THE SEATS THAT ARE ENABLED RUN, and the pool is sized from them. Every seat
             # used to be handed in regardless, while the pool was sized from the enabled
             # checks: after review_skipped_tests_failing the "skipped" seats ran one after
             # another for up to 480 s (crun_decc93: skip 22:49:14, review_degraded 22:57:15).
             guarded = panel_seats(enabled_seats, review_checks, security=_do_security,
-                                  regression=_do_full, consistency=_do_consistency)
+                                  regression=_do_full, consistency=_do_consistency,
+                                  merged=_do_merged_panel if _merge_panel else None)
             # Panel checks are independent + read-only, so run them ALL in parallel rather
             # than in slow batches of code_agent_max_concurrency (which is tuned for the
             # general lane). A low general concurrency was serializing the panel into ~2-3
@@ -8011,6 +8163,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # seat queued behind a slow one is not charged for the wait. A seat past it has its
             # own processes ended (it is a `claude -p` subprocess; Future.cancel() never stopped
             # a running one) and its slot freed. Unfinished checks keep their safe defaults.
+            # The merged panel seat keeps the SAME deadline: it reads the change once and
+            # writes three short verdicts (the slowest single seat measured 336-348 s against
+            # a 900 s default), and its hollow/not_run degradation is the same as any seat's.
             review_deadline = int(getattr(settings, "code_agent_review_timeout_seconds", 900) or 900)
             _seat_run = _run_seats(
                 guarded, max_workers=max_workers, seat_deadline_s=review_deadline,
@@ -8058,9 +8213,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             r6 = r6 or _empty
             regressions_ok = panel["full"]
 
-            # check tests (mutation) — plant one bug, expect the tests to FAIL. In the
-            # micro-VM substrate the mutation runs in ITS OWN VM against the committed
-            # work branch and its diff is simply never committed — nothing to restore.
+            # check tests (mutation) — plant one bug, expect the tests to FAIL. THE PLANT IS
+            # CODE, NOT A MODEL (BOSSAPP-1004, audit 997 §7.7): a write-capable model session
+            # used to flip the one operator (87 calls, $13.93/month); the re-probe already
+            # replanted deterministically, so the first plant now does too
+            # (mutation_probe.plant_first) — no model call, no write-capable session in the
+            # panel. In the micro-VM substrate the suite runs against the mutant in ITS OWN VM
+            # (echo engine: clone + apply the mutant + run the suite) and the mutant is simply
+            # never committed — nothing to restore.
             # Official /report reads tests_passed + last_verify_output. The mutation
             # probe is supposed to fail; never let that failure clobber implement-time
             # evidence. Skip the probe when authoritative verify already failed.
@@ -8073,37 +8233,45 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             else:
                 with _transaction(engine) as c:
                     _phase(c, "check_tests")
+                _mu_read = ((lambda p: accumulated.get(p)) if use_microvm
+                            else (lambda p: (root / p).read_text(errors="ignore")
+                                  if (root / p).exists() else None))
                 # ONLY FILES THE CRITERIA COVER, NEVER A CONNECTOR'S (mutation_probe.targets).
                 _mu_targets = mutation_probe.targets(
                     impl_files, criteria, connector_files=_connector_files(engine, run),
-                    read=lambda p: (root / p).read_text(errors="ignore")
-                    if (root / p).exists() else None)
-                if use_microvm:
-                    if _mu_targets:
-                        res5 = _guest_stage("check_tests", "check_tests",
-                                            _mutate_prompt(_mu_targets), test_cmds=list(verify_commands),
-                                            stage_title=f"Mutation probe — {title}")
-                        r5 = {"cost_usd_micros": res5.cost_usd_micros,
-                              "summary": res5.summary, "model": stage_routes["check_tests"]["model"]}
-                        # A real suite FAILS on the planted bug. Only meaningful if the
-                        # mutator actually changed an implementation file.
-                        mutated = any(not _is_test_path(fc.path) for fc in res5.diff)
-                        mutation_caught = (not bool(res5.tests_passed)) if mutated else None
+                    read=_mu_read)
+                _planted = (mutation_probe.plant_first(_mu_targets, read=_mu_read)
+                            if _mu_targets else None)
+                if _planted is None:
+                    # Nothing the plant knows how to flip: the probe did not run — recorded
+                    # as inconclusive, never guessed and never a model fallback.
+                    mutation_caught = None
+                    r5 = {"cost_usd_micros": 0, "model": None,
+                          "summary": "mutation probe not run: no deterministic mutation site "
+                                     "in the targeted implementation files"}
+                elif use_microvm:
+                    res5 = _guest_stage(
+                        "check_tests", "check_tests", "Run the full test suite.",
+                        test_cmds=[mutation_probe.apply_command(_planted)]
+                        + list(verify_commands),
+                        stage_title=f"Mutation probe — {title}", engine_override="echo")
+                    r5 = {"cost_usd_micros": res5.cost_usd_micros,
+                          "summary": _planted.description, "model": None}
+                    # A real suite FAILS on the planted bug. Only meaningful if the apply
+                    # step actually changed an implementation file in the guest.
+                    mutated = any(not _is_test_path(fc.path) for fc in res5.diff)
+                    mutation_caught = (not bool(res5.tests_passed)) if mutated else None
                 else:
                     # serial: it edits the workdir, then restores it so the PR diff is
-                    # unchanged. snapshot impl, plant one bug, restore after.
-                    # Every implementation file is snapshotted (and restored); only the
-                    # targets are offered to the mutator.
+                    # unchanged. Every implementation file is snapshotted (and restored).
                     orig = {p: (root / p).read_text(errors="ignore")
                             for p in impl_files if (root / p).exists()}
-                    if orig and _mu_targets:
-                        set_llm_context(stage="check_tests")
-                        a, m = _route("check_tests")
-                        r5 = a.run_role(_mutate_prompt(_mu_targets), root, model=m)
-                        cost += int(r5.get("cost_usd_micros") or 0)
+                    if orig and _planted.path in orig:
+                        r5 = {"cost_usd_micros": 0, "summary": _planted.description,
+                              "model": None}
+                        _ws_write(root / _planted.path, _planted.mutated)
                         _mutant = mutation_probe.capture(
-                            orig, {p: (root / p).read_text(errors="ignore")
-                                   for p in orig if (root / p).exists()})
+                            orig, {**orig, _planted.path: _planted.mutated})
                         mut = _run_verify(record=False)
                         mutation_caught = not bool(mut.ok)
                         for p, content in orig.items():
@@ -8482,6 +8650,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # Seats whose review did not see the change (review_input), and why. Their gates
             # fail as HOLLOW_GATE_REASON and the check is re-run, never the coder.
             "review_hollow": dict(_hollow_seats),
+            # BOSSAPP-1000: the LLM seats sat ONE session (which seats, and any that fell
+            # back to their own); absent = the pre-merge shape (refute panel / fix lane).
+            **({"review_panel_merged": dict(_merged_record)} if _merged_record else {}),
             "review_change_files": len(_review_change.paths),
             "security_verdict": sec_verdict,
             "consistency_verdict": cons_verdict,
@@ -8986,23 +9157,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                      for p, b in _mutant.items() if p in _orig}
                                     if _mutant and set(_mutant) <= set(_orig) else {})
                         _same_mutant = bool(_replant) and all(_replant.values())
-                        if _orig:
+                        # The code moved under the old mutant: a NEW deterministic plant
+                        # (BOSSAPP-1004) — the same no-model mechanism as the first probe.
+                        _newplant = None if _same_mutant else mutation_probe.plant_first(
+                            mutation_probe.targets(
+                                list(_orig), criteria,
+                                connector_files=_connector_files(engine, run),
+                                read=_orig.get) or list(_orig), read=_orig.get)
+                        if _orig and (_same_mutant or _newplant is not None):
                             set_llm_context(routes=_route_ids(), db_engine=engine,
                                             project_id=project_id, run_id=run_id,
                                             stage="check_tests")
-                            a_mu, m_mu = _route("check_tests")
                             try:
                                 if _same_mutant:
                                     for _mp, _mc in _replant.items():
                                         _ws_write(root / _mp, _mc)
                                 else:
-                                    r5 = a_mu.run_role(_mutate_prompt(
-                                        mutation_probe.targets(
-                                            list(_orig), criteria,
-                                            connector_files=_connector_files(engine, run),
-                                            read=_orig.get) or list(_orig)),
-                                        root, model=m_mu)
-                                    cost += int(r5.get("cost_usd_micros") or 0)
+                                    r5 = {"cost_usd_micros": 0, "model": None,
+                                          "summary": _newplant.description}
+                                    _ws_write(root / _newplant.path, _newplant.mutated)
+                                    _mutant = mutation_probe.capture(
+                                        _orig, {**_orig, _newplant.path: _newplant.mutated})
                                 _caught = not bool(_run_verify(record=False).ok)
                             finally:
                                 for _mp, _mc in _orig.items():

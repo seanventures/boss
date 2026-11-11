@@ -8,14 +8,19 @@ words — runs end to end for free, and the SAME assertions can be made of it as
 What it plays, by stage (the stage is read from the LLM context the pipeline sets, as every
 engine's telemetry is):
 
-    standards / spec / plan / design   the three design sections (=== STANDARDS === …)
-    review_plan                        PLAN: OK
+    standards / spec / plan / design   the design sections (=== STANDARDS === …), the plan's
+                                       self-check (=== PLAN REVIEW ===, BOSSAPP-1003) included
+    review_plan                        PLAN: OK (the fallback session, when a plan skipped its
+                                       self-check)
     write_tests                        writes the fixture's tests; replies "TEST PLAN: …"
     implement / solo / repair / quality writes the fixture's app (or a faulty one, see below)
+    review_panel                       the merged panel (BOSSAPP-1000): every asked seat's
+                                       section, each with its own verdict line
     review_code                        a verdict naming the changed files (or a BLOCKER finding)
     security_check                     VERDICT: CLEAN
     consistency_check                  CONSISTENT: YES
-    check_tests                        the mutation probe: changes one line; the arbiter: CODE_WRONG
+    check_tests                        the arbiter: CODE_WRONG (the probe's plant is
+                                       deterministic since BOSSAPP-1004 — no model call)
     rule_scan                          one rule on the first symbol listed (rule_scan.scripted_reply)
 
 The app is a known-good fixture (tests/e2e/fixtures/plain-node by default; BOSS_SCRIPTED_FIXTURE
@@ -63,6 +68,7 @@ _DESIGN = (
     "=== SPEC ===\n- slug(text) lowercases, joins words with single hyphens and trims them.\n"
     "- GET /?q=<text> answers {\"slug\": slug(text)} as JSON.\n"
     "=== PLAN ===\n1. tests in test/slug.test.js\n2. src/slug.js\n3. src/server.js (PORT)\n"
+    "=== PLAN REVIEW ===\nThe plan covers the spec and the tests come first.\nPLAN: OK\n"
     "=== WORK PACKAGES ===\n- one package: the whole app\n"
 )
 
@@ -305,21 +311,41 @@ class ScriptedEngine:
             for rel, body in tests.items():
                 self._write(root, rel, body, turns, written)
             return self._test_plan(tests), written
-        if stage == "review_code" or ("VERDICT: SURVIVED" in text and read_only):
+        def _review_reply() -> str:
             names = ", ".join(sorted(impl)) or "the change"
             if "blocker" in self.faults and "review_blocker" not in state.fired:
                 state.fired.add("review_blocker")
                 target = next(iter(sorted(impl)), "src/slug.js")
                 return (f"Reviewed {names}.\nFINDING: BLOCKER {target}:1 — scripted fault: the "
-                        "export is missing its input validation.\nVERDICT: REFUTED"), written
+                        "export is missing its input validation.\nVERDICT: REFUTED")
             return (f"Reviewed {names}: the change implements the spec and its tests cover it. "
-                    "No defects found.\nVERDICT: SURVIVED"), written
-        if stage == "security_check":
+                    "No defects found.\nVERDICT: SURVIVED")
+
+        def _security_reply() -> str:
             return (f"Reviewed {', '.join(sorted(impl))}: no injection, auth, secret or "
-                    "traversal issue reachable from input.\nVERDICT: CLEAN"), written
-        if stage == "consistency_check":
+                    "traversal issue reachable from input.\nVERDICT: CLEAN")
+
+        def _consistency_reply() -> str:
             return (f"{', '.join(sorted(impl))} and {', '.join(sorted(tests))} agree with the "
-                    "criteria.\nCONSISTENT: YES"), written
+                    "criteria.\nCONSISTENT: YES")
+
+        if stage == "review_panel" or "=== CODE REVIEW ===" in text:
+            # The merged panel session (BOSSAPP-1000): one marked section per seat the prompt
+            # asked for, each closing with its own seat's verdict line.
+            from . import review_panel as _rp
+
+            replies = {"review_code": _review_reply, "security_check": _security_reply,
+                       "consistency_check": _consistency_reply}
+            parts = [f"REVIEWED: {', '.join(sorted(impl)) or 'the change'}"]
+            parts += [f"=== {_rp.SECTION_HEADS[seat]} ===\n{replies[seat]()}"
+                      for seat in _rp.SEATS if f"=== {_rp.SECTION_HEADS[seat]} ===" in text]
+            return "\n".join(parts), written
+        if stage == "review_code" or ("VERDICT: SURVIVED" in text and read_only):
+            return _review_reply(), written
+        if stage == "security_check":
+            return _security_reply(), written
+        if stage == "consistency_check":
+            return _consistency_reply(), written
         if read_only:
             return f"Read {', '.join(sorted(impl))}. Nothing further.", written
         # A writing stage: implement, solo, repair, quality, a fix round, an install fix.

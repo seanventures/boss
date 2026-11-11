@@ -20,8 +20,7 @@ parent's seat last reviewed:
 * the instruction to look for regressions the repair introduced.
 
 QUALITY GUARDRAILS. A scoped re-review is a shortcut, so it is taken only when it is safe; any
-doubt runs the FULL review exactly as before (same seat, same model routing, security_check
-always full):
+doubt runs the FULL review exactly as before (same seat, same model routing):
 
 * NO PRIOR REVIEW: the seat never completed a review on the parent (hollow, not run), or the
   parent predates the reviewed-change snapshot this module records — nothing to scope against.
@@ -56,9 +55,13 @@ MAX_SCOPED_FILES = 8
 #: context grows. The real repair (crun_b32b4a26) was well under it.
 MAX_SCOPED_LINES = 300
 
-#: The seats a repair attempt may scope. security_check is never scoped: it is fast (0.46 min
-#: on crun_b32b4a26) and a security regression can live anywhere the change reaches.
-SCOPABLE_SEATS = ("review_code", "consistency_check")
+#: The seats a repair attempt may scope. security_check scopes too (BOSSAPP-1000, audit 997
+#: §7.3): it used to re-read the FULL change on every repair round ($69.56/month of panel
+#: spend), while the guardrails below already refuse the shortcut whenever the repair reaches
+#: files no finding named — which is exactly when a security regression could hide outside the
+#: delta. A repair that passes them changed only small, named files, and the scoped prompt
+#: still tells the seat to follow what the changed lines call and are called by.
+SCOPABLE_SEATS = ("review_code", "security_check", "consistency_check")
 
 SCOPED = "scoped"
 FULL = "full"

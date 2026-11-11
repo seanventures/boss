@@ -31,8 +31,9 @@ def test_the_failed_seats_re_review_side_by_side():
     assert "_rs_run = _run_seats(" in block
     assert "seat_deadline_s=_rs_deadline" in block
     # Every READ-ONLY seat call lives in a seat closure, none runs inline after the wait. The
-    # one exception is the weak-suite probe, which edits the tree and so runs after them, alone.
+    # weak-suite probe still runs after them, alone (it edits the tree) — but its plant is
+    # deterministic code (BOSSAPP-1004), so no model session runs inline either.
     after = block[block.index("_rs_run = _run_seats("):]
     inline = after[:after.index("if not failing:")]
-    assert inline.count(".run_role(") == 1
-    assert "a_mu.run_role(_mutate_prompt(" in inline
+    assert inline.count(".run_role(") == 0
+    assert "mutation_probe.plant_first(" in inline

@@ -70,4 +70,25 @@ def test_a_fix_round_re_probes_the_same_mutant():
     assert '"same_mutant": _same_mutant' in reprobe
     first = inspect.getsource(g._run_governed_code_task)
     assert "_mutant = mutation_probe.capture(" in first
-    assert "_mutate_prompt(_mu_targets)" in first
+
+
+def test_the_plant_is_deterministic_code_never_a_model_session():
+    """BOSSAPP-1004 (audit 997 §7.7): the probe used to spend a WRITE-CAPABLE model session to
+    flip one operator ($13.93/month), while the re-probe already replanted without a model.
+    Both the first plant and a fix round's fresh plant are now mutation_probe.plant_first."""
+    first = inspect.getsource(g._run_governed_code_task)
+    probe = first[first.index("check tests (mutation)"):first.index("IaC VERIFY LANE")]
+    assert "mutation_probe.plant_first(" in probe
+    assert ".run_role(" not in probe, "the probe spends a model session again"
+    assert '_route("check_tests")' not in probe
+    # No plantable site: the probe is recorded as not run — never guessed, never a model.
+    assert "mutation probe not run: no deterministic mutation site" in probe
+    # The micro-VM substrate plants through a test command in the suite's own VM (echo engine).
+    assert "mutation_probe.apply_command(_planted)" in probe
+    assert 'engine_override="echo"' in probe
+    src = inspect.getsource(g)
+    block = src[src.index("_convergeable = _CONVERGEABLE"):src.index("rounds_used = max(0")]
+    reprobe = block[block.index('if "tests_strong_enough" in failing:'):]
+    assert "mutation_probe.plant_first(" in reprobe
+    assert "_route(\"check_tests\")" not in reprobe, "the re-probe still routes a model"
+    assert "_mutate_prompt" not in src, "the model mutator prompt is retired"

@@ -7,7 +7,8 @@ test files — and its first panel re-read the whole 21-file change: review_code
 consistency_check ~7 min each, part of a 28-min repair. The repair's seats now get the delta
 against what the parent's seat reviewed, its own findings to confirm, and the instruction to look
 for regressions. A big repair, a repair touching files nobody named, or a parent with no
-recorded review still gets the FULL review. security_check is never scoped.
+recorded review still gets the FULL review. security_check scopes under the same guardrails
+(BOSSAPP-1000): it used to re-read the FULL change on every repair round.
 """
 from __future__ import annotations
 
@@ -107,8 +108,16 @@ def test_consistency_is_scoped_with_its_own_findings():
     assert "/api/triage/queue" in scope.render(p)
 
 
-def test_security_is_never_scoped():
+def test_security_scopes_under_the_same_guardrails():
+    # The same guardrails as the other seats: files nobody named send it to the full review …
     assert _plan("security_check", _the_real_repair()).mode == scope.FULL
+    # … and a small repair of named files is scoped, with the security seat's OWN findings.
+    p = _plan("security_check", _the_real_repair(), named_text=REVIEW_SUMMARY)
+    assert p.mode == scope.SCOPED, p.reason
+    assert "VERDICT: CLEAN" in scope.render(p)
+    # A seat this module does not know is never scoped.
+    assert scope.plan("regression", parent_run_id="x", parent_rounds=_rounds(),
+                      current=_change(_the_real_repair())).reason == "seat_always_full"
 
 
 # --- full: the guardrails ----------------------------------------------------------------------
@@ -215,12 +224,13 @@ def test_the_panel_scopes_the_seats_and_records_the_mode(monkeypatch):
         None, run_id="crun_b32b4a26adc74899881d", project_id="p",
         fctx={"parent_run_id": parent["id"]}, change=_change(_the_real_repair()),
         baseline=dict(REVIEWED))
-    assert set(blocks) == {"review_code", "consistency_check"}
-    assert "security_check" not in blocks
+    # Every LLM seat scopes here: the panel hands each one the files ANY seat's findings named,
+    # so security (whose own review named only server/sla.mjs) is scoped too (BOSSAPP-1000).
+    assert set(blocks) == {"review_code", "security_check", "consistency_check"}
     (kind, data), = store["events"]
     assert kind == "code_task.repair_review_scope"
     assert data["seats"]["review_code"]["mode"] == "scoped"
-    assert data["security_check"] == "full"
+    assert data["seats"]["security_check"]["mode"] == "scoped"
 
 
 def test_a_first_attempt_and_the_fix_lane_review_in_full(monkeypatch):
