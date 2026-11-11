@@ -47,6 +47,13 @@ P0:
     # Governed deploy + health
     - engine/tests/test_an_app_is_deployed_the_way_it_says.py
     - engine/tests/test_a_smoke_test_asks_the_deployment_not_a_url.py
+    # The measuring stick (BOSSAPP-959): the harness benchmark's suite, numbers and verdicts,
+    # the decision eval's floor, and the web quarantine that only shrinks
+    - engine/tests/test_harness_bench_suite.py
+    - engine/tests/test_harness_bench_metrics.py
+    - engine/tests/test_harness_bench_compare.py
+    - engine/tests/test_decision_eval_has_a_floor.py
+    - engine/tests/test_web_quarantine_holds_only_real_failures.py
   api:
     - apps/api/tests/test_api_e2e_smoke.py
     # Sign-in, step-up, CSRF
@@ -80,6 +87,8 @@ P0:
 
 P1:
   engine:
+    # The scripted harness benchmark end to end on one task, and a regression it must catch
+    - engine/tests/test_harness_bench_e2e.py
     # Operator-reported: tsx Permission denied in the serve proof (crun_247435e1)
     - engine/tests/test_an_installed_executable_stays_executable.py
     # Operator-reported: SESSION_SECRET missing in the serve proof; vitest.config secret false positive (crun_db538dff)
@@ -138,6 +147,8 @@ P1:
     - engine/tests/test_an_app_incident_is_responded_to.py
     - engine/tests/test_incident_response_starts_per_rule_never_per_app.py
   api:
+    # The harness score per change (BOSSAPP-959)
+    - apps/api/tests/test_harness_score_api.py
     # Approvals
     - apps/api/tests/test_an_approval_shows_what_it_will_send.py
     - apps/api/tests/test_architecture_approval_api.py

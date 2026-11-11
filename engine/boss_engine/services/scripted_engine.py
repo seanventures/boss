@@ -26,7 +26,8 @@ names another directory). Its files are split into tests (written by write_tests
 FAULTS (BOSS_SCRIPTED_FAULTS, comma-separated), each injected once and fixed on the next writing
 turn, to exercise the fix rounds:
 
-    failing_test    the first implement writes an app whose tests fail
+    failing_test    the first implement writes an app whose tests fail (the slug fixture's slug.js;
+                    on any other fixture, the first changed .js/.mjs/.py module fails to import)
     blocker         the first review_code answers with a BLOCKER finding
     crash_on_start  the first implement writes a server that exits on start
     crash           every session raises (an engine that cannot run at all)
@@ -69,6 +70,14 @@ _BROKEN_SLUG = ("// scripted fault: failing_test\nexport function slug(text) {\n
                 "  return String(text ?? \"\");\n}\n")
 _CRASHING_SERVER = ("// scripted fault: crash_on_start\n"
                     "throw new Error(\"scripted fault: the server crashes on start\");\n")
+
+
+#: The generic `failing_test` fault, appended to a module so that importing it fails.
+_GENERIC_BREAK = {
+    ".js": "\nthrow new Error(\"scripted fault: failing_test\");\n",
+    ".mjs": "\nthrow new Error(\"scripted fault: failing_test\");\n",
+    ".py": "\nraise RuntimeError(\"scripted fault: failing_test\")\n",
+}
 
 
 class ScriptedFault(RuntimeError):
@@ -271,7 +280,10 @@ class ScriptedEngine:
         if read_only:
             return f"Read {', '.join(sorted(impl))}. Nothing further.", written
         # A writing stage: implement, solo, repair, quality, a fix round, an install fix.
+        broken = self._generic_failing_test(root, impl, state)
         for rel, body in impl.items():
+            if rel == broken:
+                body = body + _GENERIC_BREAK[Path(rel).suffix]
             if rel.endswith("slug.js") and "failing_test" in self.faults \
                     and "failing_test" not in state.fired:
                 state.fired.add("failing_test")
@@ -298,6 +310,24 @@ class ScriptedEngine:
                     self._write(root, rel, body, turns, written)
         changed = ", ".join(written) or "nothing (already in place)"
         return f"Implemented the slug service. Changed: {changed}.", written
+
+    def _generic_failing_test(self, root: Path, impl: dict[str, str],
+                              state: _RunState) -> Optional[str]:
+        """The `failing_test` fault on a fixture with no slug.js (the harness benchmark's tasks):
+        the first implementation file this turn changes is written so that importing it fails,
+        once per run; the next writing turn writes it whole. None when the fault does not fire."""
+        if "failing_test" not in self.faults or "failing_test" in state.fired:
+            return None
+        if any(rel.endswith("slug.js") for rel in impl):
+            return None     # the slug fixture's own fault (_BROKEN_SLUG) plays it
+        for rel in sorted(impl):
+            if Path(rel).suffix not in _GENERIC_BREAK:
+                continue
+            current = (root / rel).read_text(encoding="utf-8") if (root / rel).exists() else None
+            if current != impl[rel]:
+                state.fired.add("failing_test")
+                return rel
+        return None
 
     @staticmethod
     def _test_plan(tests: dict[str, str]) -> str:

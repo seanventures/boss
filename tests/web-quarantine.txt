@@ -1,0 +1,31 @@
+# Web unit test files that fail on main and are fixed under a ticket (BOSSAPP-944).
+#
+# CI (scripts/web-unit-ci.py, job "web" in .github/workflows/ci.yml) runs the WHOLE suite and fails on:
+#   * any failing file NOT listed here (a new failure), and
+#   * any file listed here that now PASSES (delete its line: the list only shrinks).
+# engine/tests/test_web_quarantine_holds_only_real_failures.py checks every line is well formed,
+# names a file that exists, carries a reason and a ticket, and (with node_modules installed)
+# that each listed file really fails.
+#
+# Format: <path under apps/web>  |  <ticket>  |  <why it fails today>
+# Seeded 2026-11-10 from a full run at 216ae9646 (20 files, 33 tests failing).
+tests/a-page-width-is-a-layout-token.test.ts | BOSSAPP-944 | a page container sets a px max-width above 640px, and a grid column is in px
+tests/connection-section.test.tsx | BOSSAPP-944 | a stored secret is not shown as its last four characters outside an input
+tests/datetime-hydration.test.ts | BOSSAPP-944 | a client island formats dates without the UTC helpers or a pinned locale
+tests/every-area-link-goes-somewhere.test.ts | BOSSAPP-944 | an area link names an area that is not in the nav
+tests/every-button-class-is-styled.test.ts | BOSSAPP-944 | a <button className> names a class no stylesheet defines
+tests/every-call-action-button-is-pre-greyed.test.ts | BOSSAPP-944 | a pressed call's permission is not gated in the same file
+tests/every-client-fetch-has-a-route.test.ts | BOSSAPP-944 | a client /api/* call has no handler under app/api
+tests/every-control-mirrors-the-permission-the-api-checks.test.ts | BOSSAPP-944 | an action posting a literal /v1 path declares a permission that route does not check
+tests/every-idea-has-a-drawing.test.ts | BOSSAPP-944 | catalogue ideas are left with the plain cover / without a labelled 320x180 drawing
+tests/every-in-console-link-names-a-real-area.test.ts | BOSSAPP-944 | a literal area target is not an area the shell knows
+tests/every-write-is-pre-greyed.test.ts | BOSSAPP-944 | a browser file that writes is not accounted for, or does not gate its permission
+tests/identity-contract.test.ts | BOSSAPP-944 | the generated permission union is no longer the reviewed 200-entry catalogue
+tests/identity-readers-subscribe.test.ts | BOSSAPP-944 | a component calls an identity reader at render without a subscribing hook
+tests/settings-knobs.test.ts | BOSSAPP-944 | the starter strip and the per-job model picker no longer match their expectations
+tests/sign-in-shared-password.test.tsx | BOSSAPP-944 | the shared console password is not offered / shown as the test expects after the claim
+tests/start-doors-forward-the-checklist.test.ts | BOSSAPP-944 | app/knowledge/kg-aml-sample.tsx does not draw the readiness checklist with Start anyway
+tests/the-step-up-is-the-top-layer.test.tsx | BOSSAPP-944 | a file picks its own overlay z-index instead of a --z token
+tests/the-tree-names-no-design-reference.test.ts | BOSSAPP-944 | a tracked file names the design reference
+tests/the-walks-refused-controls-are-pre-greyed.test.ts | BOSSAPP-944 | app/setup/setup-board.tsx su-test-all is not pre-greyed on setup:manage
+tests/ui-simplification.test.tsx | BOSSAPP-944 | refresh failures and simplified lists do not render as the test expects

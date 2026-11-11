@@ -1,0 +1,268 @@
+# THE BOSS HARNESS BENCHMARK SUITE (BOSSAPP-959, phase 0 of BOSSAPP-958).
+#
+# Eight pinned tasks that every harness change is measured on: 3 small fixes and 3 features on
+# existing apps (HelpDesk and a Python library) and 2 new apps. Each task names:
+#   fixture     the repository it starts from (bench/harness/fixtures/<name>, pinned by sha256);
+#   brief       what the agent is told (title, instructions, acceptance criteria, test commands);
+#   acceptance  checks the BENCHMARK runs itself on the pull request's head, with tests the
+#               agent never sees (bench/harness/acceptance/<task>), so success never rests on
+#               the agent's word;
+#   scripted    what the scripted conformance engine writes (an overlay of the finished files)
+#               and the faults it plays, so the no-model run exercises the same pipeline.
+#
+# Change anything here (or under fixtures/, acceptance/, solutions/) and the suite's sha256
+# changes: bump `version`, re-run `scripts/harness-bench run --engine scripted
+# --save-baseline scripted` and commit the new baseline. A comparison across two suite hashes is
+# refused, and engine/tests/test_harness_bench_suite.py fails while the committed baseline was
+# made on another hash.
+#
+# docs/architecture/HARNESS_BENCHMARK.md says how to run it and how the guards decide.
+suite: boss-harness
+version: "1"
+
+defaults:
+  profile: balanced        # the full review panel at tier 1, no plan-approval stop
+  risk_tier: 1
+  timeout_s: 1800          # one task run, wall clock (a real engine)
+  open_pr: true
+
+# How a comparison decides (boss_engine/harness_bench/compare.py).
+#
+# NOISE. Each metric is summed over the suite once per pass (`--repeat N` gives N passes). A
+# change counts only when it is larger than its noise band:
+#     band = max(abs_floor, rel_floor x |baseline mean|, k_stdev x the larger of the two stdevs)
+# With one pass there is no stdev, so only the floors apply.
+#
+# GUARDS. A guard fails when the candidate is worse than the baseline by MORE than its limit
+# AND by more than the noise band. Any failed guard makes the verdict `worse` and the exit code 1.
+noise:
+  k_stdev: 2.0
+metrics:
+  success_rate:  {abs_floor: 0.0}
+  wall_s:        {abs_floor: 30, rel_floor: 0.10}
+  tokens_in:     {abs_floor: 2000, rel_floor: 0.05}
+  tokens_out:    {abs_floor: 500, rel_floor: 0.05}
+  cache_share:   {abs_floor: 0.02}
+  cost_usd:      {abs_floor: 0.05, rel_floor: 0.05}
+  model_calls:   {abs_floor: 0}
+  turns:         {abs_floor: 0}
+  repair_rounds: {abs_floor: 0}
+  interventions: {abs_floor: 0}
+guards:
+  success_rate:  {max_drop: 0.0}          # the success rate must not drop
+  cost_usd:      {max_rise_pct: 15}       # cost must not rise by more than 15%
+  wall_s:        {max_rise_pct: 25}       # time must not rise by more than 25%
+  interventions: {max_rise: 0}            # no new decision asked of a person
+# A deterministic engine has no noise in what it does, so its counts are guarded too, and its
+# wall time (a CI runner against a laptop) is not: a time guard there would be a guard on hardware.
+engine_overrides:
+  scripted:
+    metrics:
+      tokens_in:  {abs_floor: 200, rel_floor: 0.02}
+      tokens_out: {abs_floor: 50, rel_floor: 0.02}
+    guards:
+      wall_s: null
+      model_calls:   {max_rise: 0}
+      turns:         {max_rise: 0}
+      repair_rounds: {max_rise: 0}
+
+fixtures:
+  helpdesk-lite:
+    path: fixtures/helpdesk-lite
+    sha256: 7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871
+    about: HelpDesk's ticket domain (classify, store, routes) in plain Node ESM with no dependencies
+  textkit:
+    path: fixtures/textkit
+    sha256: f63c43bf762a2d2b4d74deac81b2d11ba10703f8430893454acad6ad719a9878
+    about: a small Python 3.11 standard-library text package
+  empty:
+    path: fixtures/empty
+    sha256: 4d7a4904a9b4ab587165510784c5fe2c5193e7a0acc090eb8a9cff5d9d1782be
+    about: a new repository holding only a README
+
+tasks:
+  # ── small fixes ──────────────────────────────────────────────────────────────────────────
+  - id: helpdesk-classify-case
+    kind: fix
+    fixture: helpdesk-lite
+    title: "HelpDesk: classify tickets whatever the case of their words"
+    instructions: |
+      Bug: a ticket titled "REFUND my order" or "Login Broken" is filed under "Other", because
+      src/classify.js matches its keywords case-sensitively. Match keywords regardless of the
+      case of the ticket's words, so the category and the confidence are the same as for the
+      lower-case text. Keep the categories, keywords and confidence rule as they are. Add a
+      regression test under test/.
+    acceptance_criteria:
+      - "classify() picks the same category and confidence for any mix of upper and lower case"
+      - "text that matches no keyword is still Other with confidence 0.3"
+      - "npm test passes"
+    test_commands: ["npm test"]
+    acceptance:
+      hidden: acceptance/helpdesk-classify-case
+      commands: ["node --test bench_acceptance/classify_case.accept.mjs"]
+      expect_changed: [src/classify.js]
+    scripted:
+      solution: solutions/helpdesk-classify-case
+
+  - id: helpdesk-blank-title
+    kind: fix
+    fixture: helpdesk-lite
+    title: "HelpDesk: refuse a ticket whose title is only spaces"
+    instructions: |
+      Bug: POST /tickets with {"title": "   "} creates a ticket with a blank title; only a missing
+      or empty title is refused. A title made only of whitespace must be refused the same way
+      (400 {"error": "title_required"}), and a title with spaces around it must be stored
+      trimmed. The fix belongs in src/store.js. Add a regression test under test/.
+    acceptance_criteria:
+      - "a whitespace-only title answers 400 title_required and creates nothing"
+      - "a title is stored without leading or trailing whitespace"
+      - "npm test passes"
+    test_commands: ["npm test"]
+    acceptance:
+      hidden: acceptance/helpdesk-blank-title
+      include: [acceptance/_http.mjs]
+      commands: ["node --test bench_acceptance/blank_title.accept.mjs"]
+      expect_changed: [src/store.js]
+    scripted:
+      solution: solutions/helpdesk-blank-title
+
+  - id: textkit-word-count
+    kind: fix
+    fixture: textkit
+    title: "textkit: count words across any whitespace"
+    instructions: |
+      Bug: textkit.word_count("a  b") answers 3 and word_count("one\ntwo") answers 1, because
+      it splits on single spaces. Count words separated by any run of whitespace (spaces, tabs,
+      newlines); a text of only whitespace has no words. Do not change first_words. Add a
+      regression test under tests/.
+    acceptance_criteria:
+      - "word_count counts words separated by any run of whitespace"
+      - "whitespace-only text has 0 words"
+      - "python3 -m unittest discover -s tests -t . passes"
+    test_commands: ["python3 -m unittest discover -s tests -t ."]
+    acceptance:
+      hidden: acceptance/textkit-word-count
+      commands: ["python3 -m unittest discover -s bench_acceptance -t ."]
+      expect_changed: [textkit/words.py]
+    scripted:
+      solution: solutions/textkit-word-count
+
+  # ── features on an existing app ──────────────────────────────────────────────────────────
+  - id: helpdesk-priority
+    kind: feature
+    fixture: helpdesk-lite
+    title: "HelpDesk: tickets carry a priority and the list filters by it"
+    instructions: |
+      Add a priority to tickets: one of "low", "normal" or "high". POST /tickets takes an
+      optional "priority" (default "normal"); any other value answers 400
+      {"error": "invalid_priority"} and creates nothing. Every ticket returned by the API
+      includes its priority. GET /tickets?priority=<p> lists only tickets of that priority,
+      newest first; without the parameter it lists every ticket as today. Add tests under test/.
+    acceptance_criteria:
+      - "a new ticket's priority defaults to normal and keeps low, normal or high when given"
+      - "an unknown priority answers 400 invalid_priority and creates nothing"
+      - "GET /tickets?priority=high lists only high-priority tickets, newest first"
+      - "npm test passes"
+    test_commands: ["npm test"]
+    acceptance:
+      hidden: acceptance/helpdesk-priority
+      include: [acceptance/_http.mjs]
+      commands: ["node --test bench_acceptance/priority.accept.mjs"]
+      expect_changed: [src/store.js, src/app.js]
+    scripted:
+      solution: solutions/helpdesk-priority
+      faults: [blocker]          # the first review finds a BLOCKER: the warm fix round runs
+
+  - id: helpdesk-stats
+    kind: feature
+    fixture: helpdesk-lite
+    title: "HelpDesk: a stats endpoint for the desk"
+    instructions: |
+      Add GET /stats answering
+      {"total": <n>, "by_status": {"open": <n>, "closed": <n>}, "by_category": {<category>: <n>}}
+      where by_category has an entry for EVERY category in CATEGORIES (src/classify.js), zero
+      included, and by_status has both statuses. Counts reflect the current tickets and their
+      current status. Do not change the existing routes. Add tests under test/.
+    acceptance_criteria:
+      - "GET /stats on an empty desk answers total 0 and zero for every status and category"
+      - "the counts follow created tickets, their categories and status changes"
+      - "npm test passes"
+    test_commands: ["npm test"]
+    acceptance:
+      hidden: acceptance/helpdesk-stats
+      include: [acceptance/_http.mjs]
+      commands: ["node --test bench_acceptance/stats.accept.mjs"]
+      expect_changed: [src/app.js]
+    scripted:
+      solution: solutions/helpdesk-stats
+
+  - id: textkit-truncate
+    kind: feature
+    fixture: textkit
+    title: "textkit: truncate_words"
+    instructions: |
+      Add textkit.truncate_words(text, limit, suffix="…"), exported from the package. When the
+      text has more than `limit` words (split on any whitespace), answer its first `limit` words
+      joined by single spaces followed by `suffix`; otherwise answer the text unchanged. A
+      negative limit raises ValueError. Add tests under tests/.
+    acceptance_criteria:
+      - "truncate_words cuts to the first limit words and appends the suffix"
+      - "a text within the limit comes back unchanged"
+      - "a negative limit raises ValueError"
+      - "python3 -m unittest discover -s tests -t . passes"
+    test_commands: ["python3 -m unittest discover -s tests -t ."]
+    acceptance:
+      hidden: acceptance/textkit-truncate
+      commands: ["python3 -m unittest discover -s bench_acceptance -t ."]
+      expect_changed: [textkit/words.py, textkit/__init__.py]
+    scripted:
+      solution: solutions/textkit-truncate
+
+  # ── new apps ─────────────────────────────────────────────────────────────────────────────
+  - id: new-slug-service
+    kind: new_app
+    fixture: empty
+    title: "New app: a slug service"
+    instructions: |
+      Build a tiny plain Node ESM service (Node 20+, no dependencies) at the repository root:
+      slug(text) in src/slug.js lowercases the text, joins its words with single hyphens and
+      trims leading and trailing hyphens (undefined or empty gives ""); src/server.js answers
+      GET /?q=<text> with {"slug": slug(text)} as JSON on $PORT. package.json has "type":
+      "module", "start": "node src/server.js" and "test": "node --test"; tests go under test/.
+    acceptance_criteria:
+      - "slug lowercases and joins words with hyphens"
+      - "GET /?q= answers the slug as JSON"
+      - "npm test passes"
+    test_commands: ["npm test"]
+    acceptance:
+      hidden: acceptance/new-slug-service
+      commands: ["node --test bench_acceptance/slug.accept.mjs"]
+      expect_files: [src/slug.js, src/server.js, package.json]
+    scripted:
+      # The engines gate's known-good app (tests/e2e/fixtures/plain-node), reused.
+      solution: ../../tests/e2e/fixtures/plain-node/plain
+      faults: [failing_test]     # the first implementation fails its tests: a repair round runs
+
+  - id: new-tempconv
+    kind: new_app
+    fixture: empty
+    title: "New app: a temperature converter (Python)"
+    instructions: |
+      Build a Python 3.11 package `tempconv` (standard library only) at the repository root:
+      c_to_f(celsius) and f_to_c(fahrenheit) return floats; convert(reading) takes "100C" or
+      "32F" (a number, then C or F in either case) and answers the other unit with one decimal,
+      e.g. "212.0F" and "0.0C", raising ValueError for anything else. `python3 -m tempconv 100C`
+      prints 212.0F and exits 0; a bad or missing argument prints a message on stderr and exits 2.
+      Tests under tests/ run with: python3 -m unittest discover -s tests -t .
+    acceptance_criteria:
+      - "c_to_f and f_to_c convert correctly"
+      - "convert answers the other unit with one decimal and refuses anything else"
+      - "the command line prints the conversion, and exits 2 on bad input"
+      - "python3 -m unittest discover -s tests -t . passes"
+    test_commands: ["python3 -m unittest discover -s tests -t ."]
+    acceptance:
+      hidden: acceptance/new-tempconv
+      commands: ["python3 -m unittest discover -s bench_acceptance -t ."]
+      expect_files: [tempconv/__init__.py, tempconv/__main__.py]
+    scripted:
+      solution: solutions/new-tempconv

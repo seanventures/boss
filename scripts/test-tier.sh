@@ -27,6 +27,9 @@ esac
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 OUT="${TEST_TIER_OUT:-$(mktemp -d -t boss-tier-XXXX)}"
 DBC="${BOSS_TEST_DB_CONTAINER:-boss-community-db-1}"
+# The test databases: <prefix> for the engine suite, <prefix>_t1..tN for the API shards.
+DBP="${TEST_TIER_DB_PREFIX:-boss_test}"
+case "$DBP" in boss_test*) ;; *) echo "TEST_TIER_DB_PREFIX must start with boss_test" >&2; exit 2 ;; esac
 
 # ---- which files --------------------------------------------------------------------------
 python3 - "$TIER" "$SINCE" "$OUT" <<'PY'
@@ -89,26 +92,59 @@ for s in SUITES:
 PY
 [ $? -eq 0 ] || exit 2
 
-# ---- database ------------------------------------------------------------------------------
-PGU=$(docker exec "$DBC" printenv POSTGRES_USER 2>/dev/null) || { echo "no $DBC container" >&2; exit 2; }
-PGP=$(docker exec "$DBC" printenv POSTGRES_PASSWORD)
-PORT=$(docker port "$DBC" 5432 | head -1 | awk -F: '{print $NF}')
-PW=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$PGP")
-CORES=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
-N=$(( CORES / 2 )); [ "$N" -gt 6 ] && N=6; [ "$N" -lt 1 ] && N=1
-for i in $(seq 1 "$N"); do
-  docker exec "$DBC" psql -U "$PGU" -d postgres -tAc "select 1 from pg_database where datname='boss_test_t$i'" | grep -q 1 \
-    || docker exec "$DBC" psql -U "$PGU" -d postgres -qc "CREATE DATABASE boss_test_t$i" >/dev/null
+# Only some suites (CI's p0 job runs engine,api; its web job runs the whole web suite).
+for s in engine api web; do
+  case ",${TEST_TIER_SUITES:-engine,api,web}," in *",$s,"*) ;; *) : > "$OUT/$s.files" ;; esac
 done
 
+# ---- database ------------------------------------------------------------------------------
+CORES=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+N=$(( CORES / 2 )); [ "$N" -gt 6 ] && N=6; [ "$N" -lt 1 ] && N=1
+N="${TEST_TIER_SHARDS:-$N}"
+if [ -n "${BOSS_TEST_PG_URL:-}" ]; then
+  # A plain Postgres (CI's service container): BOSS_TEST_PG_URL=postgresql://user:pass@host:port
+  # with the right to create databases. boss_test and boss_test_t1..tN are created when missing.
+  eval "$(python3 - "$N" <<'PY'
+import os, shlex, sys, urllib.parse
+import psycopg
+u = urllib.parse.urlsplit(os.environ["BOSS_TEST_PG_URL"])
+n = int(sys.argv[1])
+with psycopg.connect(f"{u.scheme}://{u.netloc}/postgres", autocommit=True) as c:
+    have = {r[0] for r in c.execute("select datname from pg_database")}
+    p = os.environ.get("TEST_TIER_DB_PREFIX", "boss_test")
+    for name in [p] + [f"{p}_t{i}" for i in range(1, n + 1)]:
+        if name not in have:
+            c.execute(f'CREATE DATABASE "{name}"')
+pw = urllib.parse.quote(urllib.parse.unquote(u.password or ""), safe="")
+for k, v in (("PGU", u.username or ""), ("PW", pw), ("PGHOSTNAME", u.hostname or "localhost"),
+             ("APISCHEME", "postgresql+psycopg"),
+             ("PORT", str(u.port or 5432))):
+    print(f"{k}={shlex.quote(v)}")
+PY
+)" || { echo "BOSS_TEST_PG_URL: cannot reach Postgres or create the test databases" >&2; exit 2; }
+else
+  PGU=$(docker exec "$DBC" printenv POSTGRES_USER 2>/dev/null) || { echo "no $DBC container" >&2; exit 2; }
+  PGP=$(docker exec "$DBC" printenv POSTGRES_PASSWORD)
+  PORT=$(docker port "$DBC" 5432 | head -1 | awk -F: '{print $NF}')
+  PW=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$PGP")
+  PGHOSTNAME=127.0.0.1
+  APISCHEME=postgresql
+  for i in $(seq 1 "$N"); do
+    docker exec "$DBC" psql -U "$PGU" -d postgres -tAc "select 1 from pg_database where datname='${DBP}_t$i'" | grep -q 1 \
+      || docker exec "$DBC" psql -U "$PGU" -d postgres -qc "CREATE DATABASE ${DBP}_t$i" >/dev/null
+  done
+fi
+
+# Each pytest run is killed after this many seconds (a hung run is then a failure, not a hung gate).
+RUN_TIMEOUT="${TEST_TIER_RUN_TIMEOUT:-1500}"
 secs() { date +%s; }
 summary=()
 
 # ---- engine (one database: its fixtures expect the seeded boss_test) -------------------------
 if [ -s "$OUT/engine.files" ]; then
   t0=$(secs)
-  BOSS_TEST_DATABASE_URL="postgresql+psycopg://$PGU:$PW@127.0.0.1:$PORT/boss_test" PYTHONPATH=.:engine \
-    python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/engine.files") -rfE > "$OUT/engine.log" 2>&1
+  BOSS_TEST_DATABASE_URL="postgresql+psycopg://$PGU:$PW@$PGHOSTNAME:$PORT/$DBP" PYTHONPATH=.:engine \
+    perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/engine.files") -rfE > "$OUT/engine.log" 2>&1
   summary+=("engine $(( $(secs) - t0 ))s: $(tail -1 "$OUT/engine.log")")
 fi
 
@@ -118,8 +154,8 @@ if [ -s "$OUT/api.files" ]; then
   awk -v n="$N" '{print > ("'"$OUT"'/api.shard" (NR % n))}' "$OUT/api.files"
   for i in $(seq 0 $(( N - 1 ))); do
     [ -s "$OUT/api.shard$i" ] || continue
-    ( DATABASE_URL="postgresql://$PGU:$PW@localhost:$PORT/boss_test_t$(( i + 1 ))" PYTHONPATH=.:engine \
-        python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/api.shard$i") -rfE > "$OUT/api$i.log" 2>&1 ) &
+    ( DATABASE_URL="$APISCHEME://$PGU:$PW@$PGHOSTNAME:$PORT/${DBP}_t$(( i + 1 ))" PYTHONPATH=.:engine \
+        perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/api.shard$i") -rfE > "$OUT/api$i.log" 2>&1 ) &
   done
 fi
 if [ -s "$OUT/web.files" ]; then
@@ -140,6 +176,13 @@ fi
 cat "$OUT"/engine.log "$OUT"/api[0-9]*.log 2>/dev/null | grep -E "^(FAILED|ERROR) " | sed 's/ - .*//' | awk '{print $2}' \
   | grep -E '^(engine|apps)/' > "$OUT/failed.txt"
 grep -E "^ FAIL " "$OUT/web.log" 2>/dev/null | sed 's/^ FAIL  *//; s/ >.*//' >> "$OUT/failed.txt"
+# A pytest run that never printed its summary ("N passed in 12.3s") crashed or was killed: that
+# is a failure too, never a silent pass.
+for log in "$OUT"/engine.log "$OUT"/api[0-9]*.log; do
+  [ -f "$log" ] || continue
+  grep -qE '(passed|failed|error|skipped|no tests ran).* in [0-9.]+s' "$log" \
+    || echo "$(basename "$log" .log): the pytest run did not finish (see $log)" >> "$OUT/failed.txt"
+done
 sort -u -o "$OUT/failed.txt" "$OUT/failed.txt"
 KNOWN="tests/known-failures.txt"
 if [ -f "$KNOWN" ]; then grep -vE '^\s*(#|$)' "$KNOWN" | sort -u > "$OUT/known.txt"; else : > "$OUT/known.txt"; fi

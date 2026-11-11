@@ -14,3 +14,9 @@ engine/tests/test_sandbox_s1_go.py::test_golden_submit_fixture_matches_python_co
 engine/tests/test_every_template_says_what_it_needs.py::test_every_door_that_starts_a_run_checks_readiness_first
 # - an agent step offered its MCP server but none of the server's tools; not yet diagnosed.
 engine/tests/test_who_runs_a_step.py::test_an_agent_step_with_an_mcp_server_reaches_that_server_and_no_other
+# Fail on main at 216ae9646 (found when CI first ran the P0 tier, BOSSAPP-959); not caused by it:
+# - the sqlite stub of github_repository_bindings has no `host` column the setup query now reads.
+engine/tests/test_first_run_setup.py::test_an_install_configured_the_old_way_is_not_told_it_is_unconfigured
+engine/tests/test_first_run_setup.py::test_and_its_last_check_is_what_the_row_says
+# - 14 tracked files on main name a real server address, a tailnet name or a home directory.
+engine/tests/test_the_public_tree_names_no_private_infrastructure.py::test_no_tracked_file_names_private_infrastructure
