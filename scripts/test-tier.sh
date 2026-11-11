@@ -100,6 +100,7 @@ done
 # ---- database ------------------------------------------------------------------------------
 CORES=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 N=$(( CORES / 2 )); [ "$N" -gt 6 ] && N=6; [ "$N" -lt 1 ] && N=1
+N="${TEST_TIER_SHARDS:-$N}"
 if [ -n "${BOSS_TEST_PG_URL:-}" ]; then
   # A plain Postgres (CI's service container): BOSS_TEST_PG_URL=postgresql://user:pass@host:port
   # with the right to create databases. boss_test and boss_test_t1..tN are created when missing.
@@ -134,6 +135,8 @@ else
   done
 fi
 
+# Each pytest run is killed after this many seconds (a hung run is then a failure, not a hung gate).
+RUN_TIMEOUT="${TEST_TIER_RUN_TIMEOUT:-1500}"
 secs() { date +%s; }
 summary=()
 
@@ -141,7 +144,7 @@ summary=()
 if [ -s "$OUT/engine.files" ]; then
   t0=$(secs)
   BOSS_TEST_DATABASE_URL="postgresql+psycopg://$PGU:$PW@$PGHOSTNAME:$PORT/$DBP" PYTHONPATH=.:engine \
-    python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/engine.files") -rfE > "$OUT/engine.log" 2>&1
+    perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/engine.files") -rfE > "$OUT/engine.log" 2>&1
   summary+=("engine $(( $(secs) - t0 ))s: $(tail -1 "$OUT/engine.log")")
 fi
 
@@ -152,7 +155,7 @@ if [ -s "$OUT/api.files" ]; then
   for i in $(seq 0 $(( N - 1 ))); do
     [ -s "$OUT/api.shard$i" ] || continue
     ( DATABASE_URL="$APISCHEME://$PGU:$PW@$PGHOSTNAME:$PORT/${DBP}_t$(( i + 1 ))" PYTHONPATH=.:engine \
-        python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/api.shard$i") -rfE > "$OUT/api$i.log" 2>&1 ) &
+        perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/api.shard$i") -rfE > "$OUT/api$i.log" 2>&1 ) &
   done
 fi
 if [ -s "$OUT/web.files" ]; then
@@ -173,6 +176,13 @@ fi
 cat "$OUT"/engine.log "$OUT"/api[0-9]*.log 2>/dev/null | grep -E "^(FAILED|ERROR) " | sed 's/ - .*//' | awk '{print $2}' \
   | grep -E '^(engine|apps)/' > "$OUT/failed.txt"
 grep -E "^ FAIL " "$OUT/web.log" 2>/dev/null | sed 's/^ FAIL  *//; s/ >.*//' >> "$OUT/failed.txt"
+# A pytest run that never printed its summary ("N passed in 12.3s") crashed or was killed: that
+# is a failure too, never a silent pass.
+for log in "$OUT"/engine.log "$OUT"/api[0-9]*.log; do
+  [ -f "$log" ] || continue
+  grep -qE '(passed|failed|error|skipped|no tests ran).* in [0-9.]+s' "$log" \
+    || echo "$(basename "$log" .log): the pytest run did not finish (see $log)" >> "$OUT/failed.txt"
+done
 sort -u -o "$OUT/failed.txt" "$OUT/failed.txt"
 KNOWN="tests/known-failures.txt"
 if [ -f "$KNOWN" ]; then grep -vE '^\s*(#|$)' "$KNOWN" | sort -u > "$OUT/known.txt"; else : > "$OUT/known.txt"; fi

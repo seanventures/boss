@@ -46,6 +46,7 @@ jobs:
     env:
       BOSS_TEST_PG_URL: postgresql://boss:boss@localhost:5432
       TEST_TIER_SUITES: engine,api
+      TEST_TIER_RUN_TIMEOUT: "900"
       TEST_TIER_OUT: ${{ github.workspace }}/.tier-out
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +72,7 @@ jobs:
         run: |
           docker exec ${{ job.services.postgres.id }} psql -U boss -d postgres -qc "ALTER SYSTEM SET max_locks_per_transaction = 256"
           docker restart ${{ job.services.postgres.id }}
-          for i in $(seq 1 60); do docker exec ${{ job.services.postgres.id }} pg_isready -U boss -q && break; sleep 1; done
+          for _ in $(seq 1 60); do docker exec ${{ job.services.postgres.id }} pg_isready -U boss -q && break; sleep 1; done
       - name: Apply the schema to the engine suite's database
         run: python scripts/ci_apply_schema.py boss_test
       - name: Run the P0 tier

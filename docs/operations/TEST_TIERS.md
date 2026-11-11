@@ -45,6 +45,26 @@ How it runs:
 **Only new failures fail the gate.** `tests/known-failures.txt` lists failures that also happen on
 `origin/main`. They are reported but not counted. Delete a line when its test is fixed; never add a line to make a gate pass.
 
+**Without the install's database container** (CI, `.github/workflows/ci.yml`), these settings apply:
+
+| Setting | Effect |
+|---|---|
+| `BOSS_TEST_PG_URL=postgresql://user:pass@host:port` | Uses any Postgres that may create databases, instead of `boss-community-db-1` |
+| `TEST_TIER_DB_PREFIX` | Names the databases (default `boss_test`, so `boss_test` and `boss_test_t1..tN`). The name must start with `boss_test` |
+| `TEST_TIER_SHARDS` | Sets the number of API shards |
+| `TEST_TIER_SUITES=engine,api` | Limits the run to those suites |
+
+A fresh database needs the schema and the install's first-boot seed:
+`python scripts/ci_apply_schema.py boss_test`.
+
+**CI runs** three jobs on every pull request:
+
+- `p0`: this tier's engine and API suites;
+- `web`: the type check, and the whole web unit suite. Failing files that are known are listed in
+  `tests/web-quarantine.txt` with their ticket. That list can only shrink;
+- `bench-scripted`: the harness benchmark on the scripted engine against its committed baseline
+  (`docs/architecture/HARNESS_BENCHMARK.md`).
+
 ## The end-to-end gate, tier A: `scripts/e2e-gate.sh plumbing`
 
 Unit and API tests passed while real HelpDesk builds broke on 2026-10-13, each time on the plumbing

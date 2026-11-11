@@ -93,6 +93,21 @@ def main(argv: list[str] | None = None) -> int:
         print("web-unit-ci: no test file ran", file=sys.stderr)
         return 1
     failing = sorted(f for f, s in results.items() if s == "failed")
+    # ONE visible retry for an UNEXPECTED failure. The whole suite is 9,000 tests on a loaded
+    # runner, and a 5 s per-test timeout trips there on files that pass alone in seconds
+    # (tests/control-plane-visible.test.ts, 2026-11-10). A new failure that also fails alone is
+    # real and still fails the job; a file that passes its retry is reported as FLAKY, never
+    # hidden. Quarantined files get no retry: they are expected to fail.
+    unexpected = [f for f in failing if f not in quarantine and (WEB / f).exists()]
+    if unexpected and not args.only_quarantined:
+        print(f"\nweb-unit-ci: retrying {len(unexpected)} unexpected failure(s) alone: "
+              + ", ".join(unexpected))
+        retry = run_vitest(unexpected)
+        for f, status in retry.items():
+            if f in unexpected and status == "passed":
+                print(f"  FLAKY: {f} failed in the full run and passed alone")
+                results[f] = "passed"
+        failing = sorted(f for f, s in results.items() if s == "failed")
     print(f"\nweb-unit-ci: {len(results)} files ran, {len(failing)} failed, "
           f"{len(quarantine)} quarantined")
     for f in failing:
