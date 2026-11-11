@@ -337,7 +337,8 @@ class Gateway:
 
     def settle_invocation(self, connection, project_id, lease_id, invocation_id, *,
                           worker_id, lease_token, job_lease_token, succeeded, provider_ref,
-                          usage_units, actual_cost_usd_micros, observed_capacity, error):
+                          usage_units, actual_cost_usd_micros, observed_capacity, error,
+                          llm_call_recorded=False):
         row = self._load(lease_id, worker_id, lease_token)
         self.jobs.require_active_lease(connection, worker_id, row["job_id"], job_lease_token)
         invocation = self.invocations[invocation_id]

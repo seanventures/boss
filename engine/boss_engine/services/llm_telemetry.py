@@ -364,13 +364,15 @@ def record_llm_call(
 
         if connection is not None:
             # On the caller's transaction, inside a savepoint: a failed telemetry write rolls
-            # back to here and never aborts the settlement it rides on.
+            # back to here and never aborts the settlement it rides on. A settlement-side
+            # write publishes no marker: `last_llm_call_id` means "the CALL recorded itself",
+            # and the ambient context goes back exactly as the caller left it.
             with connection.begin_nested():
                 _write(connection)
         else:
             with begin(ctx.get("db_engine")) as c:
                 _write(c)
-        set_llm_context(last_llm_call_id=row_id)
+            set_llm_context(last_llm_call_id=row_id)
         return row_id
     except Exception as exc:  # noqa: BLE001 — telemetry must never break the pipeline
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)
