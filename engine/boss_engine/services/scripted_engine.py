@@ -36,9 +36,9 @@ SELF-FIX STAGES (`self_fix_*`, BOSSAPP-571) play the scripts of self_fix_scripts
 BOSS_SCRIPTED_SELF_FIX=<script>:<fixture dir>.
 
 CAPABILITIES (BOSS_SCRIPTED_CAPS, comma-separated, default none): "resume", "read_only",
-"turn_limit", "reports_cost", "streams_turns". The default is the poorest engine — no sessions,
-no read-only mode — so BOSS's fallbacks are what run; the conformance tests also run it with every
-capability, and the two must behave the same.
+"turn_limit", "reports_cost", "streams_turns", "plain_completion". The default is the poorest
+engine — no sessions, no read-only mode, no plain completion — so BOSS's fallbacks are what run;
+the conformance tests also run it with every capability, and the two must behave the same.
 """
 from __future__ import annotations
 
@@ -190,6 +190,45 @@ class ScriptedEngine:
             "tool_calls": len(written),
             "model": MODEL,
             "session_id": (f"scr-{uuid.uuid4().hex[:12]}" if self.capabilities.resume else None),
+            "stop_reason": "done",
+        }
+
+    def run_plain(self, prompt: str, *, model: Optional[str] = None, **_extra: Any) -> dict:
+        """The plain one-shot (engine_contract.run_verdict): the same scripted reply the stage
+        would get from run_role, with no working tree at all. The call is kept in the run state
+        with transport="plain" so a test can assert which path a verdict rode."""
+        import tempfile
+
+        from .llm_telemetry import get_llm_context, record_agent_turns, record_llm_call
+
+        ctx = get_llm_context()
+        stage = str(ctx.get("stage") or "").strip().lower() or _stage_from_prompt(prompt)
+        state = run_state(ctx.get("run_id"))
+        state.calls.append({"stage": stage, "read_only": True, "resumed": None,
+                            "max_turns": 1, "transport": "plain",
+                            "prompt_head": (prompt or "")[:4000], "full_prompt": prompt or ""})
+        if "crash" in self.faults:
+            record_llm_call(engine_name=self.engine, usage={"model": MODEL}, latency_ms=0,
+                            ok=False, error="scripted fault: crash")
+            raise ScriptedFault("scripted fault: the engine crashed")
+        turns: list[dict[str, Any]] = []
+        with tempfile.TemporaryDirectory(prefix="boss-scripted-plain-") as cwd:
+            summary, _written = self._play(stage, prompt, Path(cwd), self._app_root(prompt),
+                                           True, state, turns)
+        record_agent_turns([{"direction": "completion", "content": summary, "turn_index": 0}],
+                           engine_name=self.engine, model=MODEL, prompt=prompt)
+        usage = {"model": MODEL, "prompt_tokens": len(prompt) // 4,
+                 "completion_tokens": len(summary) // 4, "cache_read_tokens": 0,
+                 "cache_write_tokens": 0, "billing": "local"}
+        record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=0, latency_ms=1,
+                        turns=1)
+        return {
+            "summary": summary,
+            "usage": usage,
+            "cost_usd_micros": 0,
+            "cost_unreported": not self.capabilities.reports_cost,
+            "turns": 1,
+            "model": MODEL,
             "stop_reason": "done",
         }
 

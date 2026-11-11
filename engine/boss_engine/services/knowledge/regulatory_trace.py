@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
 import uuid
-from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from sqlalchemy import text
@@ -168,9 +166,13 @@ def _judge(agent: Any, clause_text: str, candidates: Sequence[Mapping[str, Any]]
           ) -> dict[str, Any]:
     """Run the judging call and return its parsed answer, defaulting to a low-confidence gap
     when the engine answers nothing readable (never a hard-coded verdict)."""
+    from ..engine_contract import run_verdict
+
     prompt = _judge_prompt(clause_text, candidates)
-    with tempfile.TemporaryDirectory(prefix="boss-regulatory-trace-") as cwd:
-        result = agent.run_role(prompt, Path(cwd), read_only=True, max_turns=MAX_TURNS) or {}
+    # A single-turn verdict: clause and candidates are in the prompt, so a plain-capable
+    # engine answers without an agentic session (engine_contract.run_verdict).
+    result = run_verdict(agent, prompt, max_turns=MAX_TURNS,
+                         temp_prefix="boss-regulatory-trace-") or {}
     judged = _parse_judgement(str(result.get("summary") or ""), len(candidates))
     if judged is None:
         judged = {"index": None, "confidence": 0.0,

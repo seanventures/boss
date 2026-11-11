@@ -15,7 +15,6 @@ import contextlib
 
 import json
 import re
-import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -75,18 +74,26 @@ def _ask_role(agent: Any, prompt: str) -> Optional[dict[str, Any]]:
     None when the agent answered nothing readable — the caller treats that exactly like
     ``regulatory_trace``'s unreadable judgement: a gap/ruled-out, never an invented verdict.
 
-    ONE MORE ASK, FOR THE ANSWER ONLY. An agent that spends its turns reading the code (the
+    A SINGLE-TURN VERDICT, NOT A SESSION (engine_contract.run_verdict): the role's whole
+    situation is in the prompt, so an engine with a plain completion path answers there
+    (~450 tokens of overhead) instead of a fresh agentic CLI session in an empty temporary
+    directory (~34k); an engine without one still runs the old route, unchanged.
+
+    ONE MORE ASK, FOR THE ANSWER ONLY. An agent that spends its reply on its working (the
     Remediation Advisor did, and found the right classes) can end without its judgement; it is
     asked once more, briefly, to answer from what it has, before the step falls back."""
-    with tempfile.TemporaryDirectory(prefix="boss-banking-regulatory-") as cwd:
-        result = agent.run_role(prompt, Path(cwd), read_only=True, max_turns=MAX_TURNS) or {}
+    from ..engine_contract import run_verdict
+
+    result = run_verdict(agent, prompt, max_turns=MAX_TURNS,
+                         temp_prefix="boss-banking-regulatory-") or {}
+    parsed = _parse_judgement(str(result.get("summary") or ""))
+    if parsed is None and str(result.get("summary") or "").strip():
+        followup = (f"{prompt}\n\nWHAT YOU FOUND SO FAR:\n{str(result.get('summary'))[:6000]}\n\n"
+                    "Answer NOW from what you already know: only the JSON judgement between "
+                    f"the two marker lines ({_MARK_OPEN} / {_MARK_CLOSE}), nothing else.")
+        result = run_verdict(agent, followup, max_turns=2,
+                             temp_prefix="boss-banking-regulatory-") or {}
         parsed = _parse_judgement(str(result.get("summary") or ""))
-        if parsed is None and str(result.get("summary") or "").strip():
-            followup = (f"{prompt}\n\nWHAT YOU FOUND SO FAR:\n{str(result.get('summary'))[:6000]}\n\n"
-                        "Answer NOW from what you already know: only the JSON judgement between "
-                        f"the two marker lines ({_MARK_OPEN} / {_MARK_CLOSE}), nothing else.")
-            result = agent.run_role(followup, Path(cwd), read_only=True, max_turns=2) or {}
-            parsed = _parse_judgement(str(result.get("summary") or ""))
     return parsed
 
 

@@ -111,20 +111,24 @@ def situation(title: str, batch: Sequence[Mapping[str, Any]]) -> str:
 
 
 def _ask(agent: Any, prompt: str) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
-    """One role turn: (the parsed judgement or None, what it cost)."""
-    import tempfile
-    from pathlib import Path
+    """One role turn: (the parsed judgement or None, what it cost).
 
-    with tempfile.TemporaryDirectory(prefix="boss-rulebook-") as cwd:
-        result = agent.run_role(prompt, Path(cwd), read_only=True, max_turns=MAX_TURNS) or {}
+    A single-turn verdict (engine_contract.run_verdict): the clauses are in the prompt, so a
+    plain-capable engine answers on its lean completion path; any other engine keeps the old
+    agentic route in an empty temporary directory."""
+    from ..engine_contract import run_verdict
+
+    result = run_verdict(agent, prompt, max_turns=MAX_TURNS,
+                         temp_prefix="boss-rulebook-") or {}
+    parsed = _parse_judgement(str(result.get("summary") or ""))
+    if parsed is None and str(result.get("summary") or "").strip():
+        # ONE MORE ASK, FOR THE ANSWER ONLY (the shared role path's rule).
+        followup = (f"{prompt}\n\nWHAT YOU WROTE:\n{str(result.get('summary'))[:6000]}\n\n"
+                    "Answer NOW: only the JSON object between the two marker lines "
+                    f"({_shared._MARK_OPEN} / {_shared._MARK_CLOSE}), nothing else.")
+        result = run_verdict(agent, followup, max_turns=2,
+                             temp_prefix="boss-rulebook-") or {}
         parsed = _parse_judgement(str(result.get("summary") or ""))
-        if parsed is None and str(result.get("summary") or "").strip():
-            # ONE MORE ASK, FOR THE ANSWER ONLY (the shared role path's rule).
-            followup = (f"{prompt}\n\nWHAT YOU WROTE:\n{str(result.get('summary'))[:6000]}\n\n"
-                        "Answer NOW: only the JSON object between the two marker lines "
-                        f"({_shared._MARK_OPEN} / {_shared._MARK_CLOSE}), nothing else.")
-            result = agent.run_role(followup, Path(cwd), read_only=True, max_turns=2) or {}
-            parsed = _parse_judgement(str(result.get("summary") or ""))
     usage = dict(result.get("usage") or {}) if isinstance(result.get("usage"), Mapping) else {}
     if result.get("model") and not usage.get("model"):
         usage["model"] = result["model"]
