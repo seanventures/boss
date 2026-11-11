@@ -2125,6 +2125,9 @@ class LeasedJob(BaseModel):
     max_attempts: int
     lease_token: str
     lease_expires_at: str
+    #: Fencing epoch (BOSSAPP-986): increments on every claim and reclaim. A commit carrying
+    #: an older epoch than the run's is rejected at the database boundary.
+    fence_epoch: int = 0
 
 
 class WorkerPollRequest(BaseModel):

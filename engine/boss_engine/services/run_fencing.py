@@ -78,23 +78,61 @@ def hash_token(raw_token: Optional[str]) -> Optional[str]:
 
 
 def claim_run(connection, run_id: str, token_hash: Optional[str]) -> bool:
-    """Take ownership of a run for this execution. The most recent claimer wins.
+    """Take ownership of a run for this execution. The CURRENT lease wins — provably.
 
-    Deliberately unconditional. The control plane has already decided who holds the job
-    lease — by the time an execution starts, it IS the owner, and any previous executor is by
-    definition stale. Making the claim conditional on the old owner being absent would leave
-    the stale executor in charge, which is the bug this module exists to remove.
+    "Most recent claimer wins, unconditionally" had a hole (BOSSAPP-986): a STALE executor
+    whose claim landed late — delayed transaction, slow start — took the token back from the
+    worker that legitimately reclaimed the job, and from then on the stale one wrote freely
+    while the real owner was fenced. Ownership must be decided by the control plane's epoch,
+    not by whoever wrote last.
+
+    The lease grant (JobLeaseService.claim_job / lease_owned_job) increments the job's
+    fence_epoch and stamps it onto the run, monotonically. Claiming here consults the LIVE
+    lease for this run: an executor whose token is not the current lease's, or whose epoch is
+    older than the run's, raises RunFenced — it must stand down before doing any work. The
+    claim write itself carries `fence_epoch <= :e` so even a racing stale claim matches 0 rows
+    at the database boundary.
 
     Returns False only when there is nothing to claim (no such run) or no token was supplied
     (single-worker/dev paths keep working unfenced rather than breaking).
     """
     if not token_hash:
         return False
+    live = connection.execute(
+        sql(
+            "SELECT lease_token_hash, fence_epoch FROM jobs "
+            "WHERE kind = 'code.task' AND payload->>'run_id' = :run_id "
+            "  AND status IN ('leased', 'running') "
+            "ORDER BY updated_at DESC LIMIT 1"
+        ),
+        {"run_id": run_id},
+    ).mappings().first()
+    if live is None:
+        # No live lease (a direct API run, a dev path): the old last-claimer rule stands.
+        n = connection.execute(
+            sql("UPDATE code_task_runs SET owner_token = :t, updated_at = now() "
+                "WHERE id = :id"),
+            {"t": token_hash, "id": run_id},
+        ).rowcount
+        return bool(n)
+    if live["lease_token_hash"] and live["lease_token_hash"] != token_hash:
+        # The job has been re-leased: this execution's lease is not the current one.
+        raise RunFenced(run_id, "claim")
+    epoch = int(live["fence_epoch"] or 0)
     n = connection.execute(
-        sql("UPDATE code_task_runs SET owner_token = :t, updated_at = now() WHERE id = :id"),
-        {"t": token_hash, "id": run_id},
+        sql("UPDATE code_task_runs SET owner_token = :t, fence_epoch = :e, "
+            "updated_at = now() WHERE id = :id AND fence_epoch <= :e"),
+        {"t": token_hash, "e": epoch, "id": run_id},
     ).rowcount
-    return bool(n)
+    if n:
+        return True
+    exists = connection.execute(
+        sql("SELECT 1 FROM code_task_runs WHERE id = :id"), {"id": run_id}
+    ).scalar()
+    if exists:
+        # The run carries a NEWER epoch than this execution's lease: claimed by a successor.
+        raise RunFenced(run_id, "claim")
+    return False
 
 
 def is_owner(connection, run_id: str, token_hash: Optional[str]) -> bool:

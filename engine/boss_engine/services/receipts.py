@@ -143,18 +143,23 @@ class ReceiptService:
             or effect_scope.get("data_boundary")
             or payload.get("data_boundary")
         )
+        # The receipt's dedupe_key is the operation's stable id; the DECLARED side-effect
+        # class rides with it (durable_operations, BOSSAPP-986) so anyone reading a receipt —
+        # the reconciler above all — knows whether a retry of this effect is safe.
+        from .durable_operations import side_effect_class
+
         connection.execute(
             text(
                 """
                 INSERT INTO receipts (
                     id, org_id, workspace_id, project_id, dedupe_key, effect_kind,
                     effect_scope, payload_hash, status, created_by_job_id,
-                    data_boundary
+                    data_boundary, side_effect_class
                 )
                 VALUES (
                     :id, :org_id, :workspace_id, :project_id, :dedupe_key, :effect_kind,
                     CAST(:effect_scope AS JSONB), :payload_hash, 'in_progress',
-                    :created_by_job_id, :data_boundary
+                    :created_by_job_id, :data_boundary, :side_effect_class
                 )
                 """
             ),
@@ -169,6 +174,7 @@ class ReceiptService:
                 "payload_hash": json_hash(payload),
                 "created_by_job_id": created_by_job_id,
                 "data_boundary": boundary,
+                "side_effect_class": side_effect_class(effect_kind),
             },
         )
         emit_event(

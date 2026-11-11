@@ -24,6 +24,8 @@ class LeasedJob:
     priority_score: Optional[float] = None
     workload_class: str = "general"
     resource_units: int = 1
+    #: Fencing epoch (BOSSAPP-986): the lease's monotonically increasing ownership number.
+    fence_epoch: int = 0
 
 
 class StepCrashed(RuntimeError):

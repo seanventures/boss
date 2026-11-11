@@ -665,6 +665,32 @@ class JobLeaseService:
         admission_cap = None
         for candidate in candidates:
             payload = candidate["payload"] or {}
+            # AN IRREVERSIBLE EFFECT WHOSE HOLDER DIED IS NEVER RE-RUN BLIND (BOSSAPP-986).
+            # A reclaim means the previous worker stopped answering MID-FLIGHT — after it may
+            # have asked GitHub to merge and before it recorded the answer. For a kind whose
+            # duplicate cannot be undone, the outcome must be KNOWN before anything retries:
+            # the job parks in unknown_outcome and the reconciler asks the provider.
+            if candidate["status"] in {"leased", "running"}:
+                from . import durable_operations
+
+                if durable_operations.side_effect_class(candidate["kind"]) == (
+                        durable_operations.IRREVERSIBLE):
+                    with connection.begin_nested():
+                        durable_operations.park_job_unknown_outcome(
+                            connection, dict(candidate),
+                            {"type": "LeaseLost",
+                             "message": "its worker stopped answering mid-operation"},
+                            actor=worker_id,
+                            cause="the lease expired while the operation was in flight")
+                        self.work_orchestration.release_job_slot(
+                            connection,
+                            project_id=candidate["project_id"],
+                            job_id=candidate["id"],
+                            allocation_id=candidate["allocation_id"],
+                            resource_units=int(candidate["resource_units"] or 1),
+                            reason="unknown_outcome_hold",
+                        )
+                    continue
             # A RECLAIM PAST ITS LAST ATTEMPT ENDS HERE. Reclaiming an expired lease added an
             # attempt and never compared it with max_attempts, so a job whose every attempt died
             # before it could report (the step endpoint 500'd, the worker's fail() hit a reset
@@ -789,6 +815,7 @@ class JobLeaseService:
                         lease_expires_at = :lease_expires_at,
                         heartbeat_at = :now_utc,
                         attempt = jobs.attempt + 1,
+                        fence_epoch = jobs.fence_epoch + 1,
                         updated_at = :now_utc
                     WHERE id = :job_id
                     RETURNING
@@ -806,7 +833,8 @@ class JobLeaseService:
                         resource_units,
                         attempt,
                         max_attempts,
-                        lease_expires_at
+                        lease_expires_at,
+                        fence_epoch
                     """
                 ),
                 {
@@ -817,6 +845,19 @@ class JobLeaseService:
                     "now_utc": current_time,
                 },
             ).mappings().one()
+
+            # OWNERSHIP OF THE RUN CHANGES HANDS HERE TOO (BOSSAPP-986). The run row carries
+            # the epoch of the lease that owns it, stamped where the lease is granted —
+            # monotonically, so a late write from an older claim can never move it back.
+            # run_fencing.claim_run then refuses an executor whose epoch is older than this.
+            if row["kind"] == "code.task":
+                run_ref = job_run_id(row["kind"], row["payload"] or {})
+                if run_ref:
+                    connection.execute(
+                        text("UPDATE code_task_runs SET fence_epoch = :epoch "
+                             "WHERE id = :run_id AND fence_epoch < :epoch"),
+                        {"run_id": run_ref, "epoch": int(row["fence_epoch"])},
+                    )
 
             event_type = (
                 "job.lease_reclaimed"
@@ -870,6 +911,7 @@ class JobLeaseService:
                 "max_attempts": row["max_attempts"],
                 "lease_token": lease_token,
                 "lease_expires_at": row["lease_expires_at"].isoformat(),
+                "fence_epoch": int(row["fence_epoch"]),
             }
 
         return None
@@ -964,10 +1006,11 @@ class JobLeaseService:
                     lease_expires_at = :lease_expires_at,
                     heartbeat_at = :now_utc,
                     attempt = jobs.attempt + 1,
+                    fence_epoch = jobs.fence_epoch + 1,
                     updated_at = :now_utc
                 WHERE id = :job_id
                 RETURNING id, kind, payload, data_boundary, workload_class,
-                          allocation_id, attempt
+                          allocation_id, attempt, fence_epoch
                 """
             ),
             {
@@ -1001,6 +1044,7 @@ class JobLeaseService:
             "attempt": int(updated["attempt"]),
             "lease_token": lease_token,
             "lease_expires_at": lease_expires_at.isoformat(),
+            "fence_epoch": int(updated["fence_epoch"]),
         }
 
     def heartbeat(
@@ -1261,6 +1305,27 @@ class JobLeaseService:
                                                allow_expired=True)
         project_id = row["project_id"]
         current_time = now_utc()
+
+        # AN IRREVERSIBLE EFFECT WITH AN AMBIGUOUS FAILURE IS NEVER RETRIED BLIND
+        # (BOSSAPP-986). A timeout or a dropped connection mid-call means the merge, the
+        # delete, the delivery MAY have happened. Whatever the worker thinks about
+        # retryability, the job parks in unknown_outcome and the reconciler asks the provider
+        # first; only a KNOWN outcome releases it (to a safe retry) or ends it.
+        from . import durable_operations
+
+        if durable_operations.must_park_unknown(row["kind"], error):
+            held = durable_operations.park_job_unknown_outcome(
+                connection, dict(row), error, actor=worker_id,
+                cause=str(error.get("message") or error.get("type") or "ambiguous failure")[:200])
+            self.work_orchestration.release_job_slot(
+                connection,
+                project_id=project_id,
+                job_id=job_id,
+                allocation_id=row.get("allocation_id"),
+                resource_units=int(row.get("resource_units") or 1),
+                reason="unknown_outcome_hold",
+            )
+            return held
 
         if retryable and int(row["attempt"]) < int(row["max_attempts"]):
             next_run_after = current_time + timedelta(seconds=retry_delay_seconds)
@@ -1629,10 +1694,38 @@ class JobLeaseService:
             "SELECT id, project_id, kind, attempt, max_attempts, lease_owner, lease_expires_at FROM jobs "
             "WHERE status IN ('leased', 'running') AND lease_expires_at < :h "
             "ORDER BY lease_expires_at LIMIT 200"), {"h": horizon}).mappings().all()
-        out = {"retired": 0, "requeued": 0}
+        out = {"retired": 0, "requeued": 0, "held_unknown": 0}
         for r in rows:
             silent = int((now_utc() - r["lease_expires_at"]).total_seconds() // 60)
             with connection.begin_nested():
+                # The same rule as the claim path (BOSSAPP-986): an irreversible effect whose
+                # holder vanished mid-flight is parked for reconciliation, never requeued blind
+                # and never declared failed — either claim could be a lie until the provider
+                # answers. Row re-read under lock inside the helper's own UPDATE.
+                from . import durable_operations
+
+                if durable_operations.side_effect_class(r["kind"]) == (
+                        durable_operations.IRREVERSIBLE):
+                    full = connection.execute(text(
+                        "SELECT id, project_id, kind, payload, attempt, max_attempts, "
+                        "allocation_id, resource_units FROM jobs WHERE id = :id "
+                        "AND status IN ('leased', 'running') AND lease_expires_at < :h "
+                        "FOR UPDATE SKIP LOCKED"),
+                        {"id": r["id"], "h": horizon}).mappings().first()
+                    if full:
+                        durable_operations.park_job_unknown_outcome(
+                            connection, dict(full),
+                            {"type": "LeaseLost",
+                             "message": "its worker stopped answering mid-operation"},
+                            actor=actor,
+                            cause=f"the lease was abandoned for {silent} min mid-operation")
+                        self.work_orchestration.release_job_slot(
+                            connection, project_id=full["project_id"], job_id=full["id"],
+                            allocation_id=full.get("allocation_id"),
+                            resource_units=int(full.get("resource_units") or 1),
+                            reason="unknown_outcome_hold")
+                        out["held_unknown"] += 1
+                    continue
                 if int(r["attempt"] or 0) >= int(r["max_attempts"] or 1):
                     done = self.retire_lost_lease(
                         connection, r["id"], actor=actor,
