@@ -425,6 +425,16 @@ def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
             lambda: preview_service.sweep_preview_workdirs(engine))
     if engine is not None:
         report["jobs"] = _safe(lambda: reap_jobs(engine, settings))
+
+        def _reconcile_unknown() -> Any:
+            # A job parked in unknown_outcome (an irreversible effect whose call ended without
+            # an answer, BOSSAPP-986) is only released once the provider says what happened.
+            from ..config import get_settings
+            from .durable_operations import reconcile_unknown_outcomes
+
+            return reconcile_unknown_outcomes(engine, settings or get_settings())
+
+        report["unknown_outcomes"] = _safe(_reconcile_unknown)
     report["dirs"] = _safe(lambda: reap_dirs())
     # A run that died never dropped its build-services database (build_services).
     from . import build_services

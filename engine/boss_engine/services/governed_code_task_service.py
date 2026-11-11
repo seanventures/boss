@@ -4382,12 +4382,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     from .run_fencing import RunFenced, assert_owner, claim_run, hash_token  # noqa: F401
     _fence = hash_token(fencing_token)
     _build_database: dict[str, Any] = {}      # filled by _provision_build_services
-    with _transaction(engine) as c:
-        run = load_code_task_run(c, run_id)
-        if run is not None and _fence:
-            # Unconditional by design: the control plane already decided who holds the lease,
-            # so by the time we execute we ARE the owner and any prior executor is stale.
-            claim_run(c, run_id, _fence)
+    run = None
+    try:
+        with _transaction(engine) as c:
+            run = load_code_task_run(c, run_id)
+            if run is not None and _fence:
+                # The claim is decided by the lease's fence epoch (run_fencing.claim_run,
+                # BOSSAPP-986): the control plane stamps a monotonically increasing epoch on
+                # every claim and reclaim, so a stale execution — one whose lease has been
+                # reclaimed — is refused HERE, before it does any work; its late writes match
+                # 0 rows at the database boundary either way.
+                claim_run(c, run_id, _fence)
+    except RunFenced as exc:
+        # A duplicate execution stands down without touching the run: the owner continues.
+        try:
+            with _transaction(engine) as c:
+                emit_event(c, (run or {}).get("project_id") or "boss-dogfood",
+                           "code_task.fenced_exit", "boss", "code_task_run", run_id,
+                           {"detail": str(exc)[:200],
+                            "note": "stale claim refused; the current lease's execution "
+                                    "continues"})
+        except Exception:  # noqa: BLE001 — standing down must not fail over its own event
+            _log_caught(logger)
+        return {"status": "superseded", "done": True, "reason": str(exc)}
     if run is None:
         return {"status": "not_found", "done": True}
     if run["status"] != "running" or run["pull_request_url"]:

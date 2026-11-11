@@ -974,6 +974,12 @@ CREATE INDEX IF NOT EXISTS idx_jobs_ranked_claimable
 CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_project_dedupe
   ON jobs(project_id, dedupe_key)
   WHERE dedupe_key IS NOT NULL;
+-- FENCING EPOCH (BOSSAPP-986). Ownership of a job — and of the run it drives — changes hands
+-- at claim and reclaim. Each handover increments fence_epoch, so every lease carries a
+-- monotonically increasing number. A commit from an older epoch matches 0 rows at the database
+-- boundary; a lease timeout alone never stops an old worker, this does. Additive and safe on
+-- upgrade: existing rows start at 0 and the next claim moves them forward.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS fence_epoch BIGINT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY,
@@ -994,6 +1000,13 @@ CREATE TABLE IF NOT EXISTS receipts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(org_id, dedupe_key)
 );
+-- SIDE-EFFECT CLASS + UNKNOWN_OUTCOME (BOSSAPP-986). Every externally effectful operation is
+-- deduped by its receipt's dedupe_key (the stable operation id) and now carries its declared
+-- class: pure / idempotent / compensatable / irreversible (services/durable_operations.py).
+-- status gains 'unknown_outcome' as a first-class value: the effect MAY have happened (a
+-- timeout mid-call) and a reconciler must ask the provider before any retry or compensation.
+-- Additive and safe on upgrade: existing receipts keep a NULL class (undeclared).
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS side_effect_class TEXT;
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -5622,6 +5635,12 @@ ALTER TABLE pipeline_profiles ADD COLUMN IF NOT EXISTS panel_checks JSONB;
 -- state_version makes contention visible after the fact — it jumps in bursts under a race.
 ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS owner_token TEXT;
 ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS state_version INTEGER NOT NULL DEFAULT 0;
+-- fence_epoch (BOSSAPP-986) closes the one hole the token left: claim_run was unconditional,
+-- so a STALE executor whose claim landed late could take the token back from the worker that
+-- legitimately reclaimed the job. The epoch is stamped from the job lease at claim/reclaim and
+-- only ever moves forward; an older epoch can neither re-claim the run nor write to it.
+-- Additive and safe on upgrade: rows start at 0, the next claim stamps the current epoch.
+ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS fence_epoch BIGINT NOT NULL DEFAULT 0;
 
 -- ===========================================================================
 -- TASK SHEPHERD (docs/product/TASK_SHEPHERD_DESIGN.md)
