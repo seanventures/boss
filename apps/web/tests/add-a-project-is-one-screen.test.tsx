@@ -17,7 +17,6 @@ import React, { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AddProjectSheet } from "../app/start-project/add-project";
-import { MovedNewBuild } from "../app/projects/moved";
 import { resetCatalogue } from "../components/v2/templates/catalogue";
 import { detect, estimateWords, hostPort, nameFromTitle, type Preview, type Understanding, type Workflow } from "../lib/add-project";
 import { readFileSync } from "node:fs";
@@ -296,13 +295,11 @@ describe("a repo: inline results, Helm's read, onboarding", () => {
   });
 });
 
-describe("Workflows › New build has moved", () => {
-  it("points a new app at Add a project and a feature at Project › New work", async () => {
-    stubFetch(() => undefined);
-    await mountAs(<MovedNewBuild projectId="helpdesk" />);
-    expect(tid("moved-new-build-new-app")!.getAttribute("href")).toContain("new_project=idea");
-    const work = new URLSearchParams(tid("moved-new-build-new-work")!.getAttribute("href")!.slice(1));
-    expect([work.get("area"), work.get("tab"), work.get("compose"), work.get("project_id")]).toEqual(["project", "work", "1", "helpdesk"]);
+describe("adding a feature is Project › New work (BOSSAPP-989: the one door)", () => {
+  it("the add-a-feature patch names the Work tab with New work focused and the app", async () => {
+    const { addFeaturePatch } = await import("../lib/compose-links");
+    const p = addFeaturePatch("helpdesk");
+    expect([p.area, p.tab, p.compose, p.app]).toEqual(["project", "work", "1", "helpdesk"]);
   });
 });
 

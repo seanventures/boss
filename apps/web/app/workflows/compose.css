@@ -154,7 +154,10 @@
 /* A VIEWPORT-HIGH CARD: the overlay never scrolls, the card is never taller than the screen,
    and only .np-ideas-scroll scrolls — so the header, Close and the filters are always on screen.
    (Two classes, so the later `.np-fs { place-items: center }` cannot centre a tall card off-screen.) */
-.np-fs.np-ideas-fs { place-items: center; overflow: hidden; }
+.np-fs.np-ideas-fs { place-items: center; overflow: hidden;
+  /* Also the Add-project wizard's Ideas surface (BOSSAPP-989): drawn above its sheet (--z-sheet). */
+  z-index: calc(var(--z-sheet, 1300) + 10);
+}
 .np-ideas-card {
   width: min(1120px, 100%); max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); min-height: 0;
   border: 1px solid var(--border-strong); border-radius: 18px; overflow: hidden;

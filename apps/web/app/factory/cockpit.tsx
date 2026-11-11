@@ -368,7 +368,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           {/* THE EVERYDAY JOB, IN THE OPEN: a feature added to this app, built on its branch with its
               tests kept. It used to be ⋯ › Change it; that sheet stays for a rebuild. */}
           <a className="ag-btn fx-add-feature" data-testid="fx-add-feature"
-             href={addFeatureHref(c.run.id, c.outputs.preview?.status === "running" ? c.outputs.preview.id : null)}
+             href={addFeatureHref(c.run.id)}
              title="New build, adding to this app: its branch, its PR, its tests">＋ Add a feature</a>
           {/* THE APP'S SETTINGS, IN THE OPEN: secrets, deploy settings and the sign-in guide were
               behind Factory › Apps › ⋯ › Setup, which an operator asked for twice could not find. */}

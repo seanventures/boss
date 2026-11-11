@@ -138,7 +138,8 @@ describe("adding a feature is on every app's row", () => {
     const key = first.run_id;
     const add = $(`[data-testid="fx-app-add-${key}"]`) as HTMLAnchorElement;
     const href = new URLSearchParams(add.getAttribute("href")!.replace(/^\?/, ""));
-    expect([href.get("area"), href.get("compose")]).toEqual(["delivery_workflows", "add"]);
+    // BOSSAPP-989: adding a feature is Project › New work (it builds onto the app's branch).
+    expect([href.get("area"), href.get("tab"), href.get("compose")]).toEqual(["project", "work", "1"]);
     expect(href.get("app")).toMatch(/^crun_/);
     await click($(`[data-testid="fx-app-more-${key}"]`));
     expect($(`[data-testid="fx-app-menu-add-${key}"]`)?.getAttribute("href")).toBe(add.getAttribute("href"));

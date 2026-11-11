@@ -303,17 +303,18 @@ describe("the page opens on what needs you", () => {
   const SOURCE = readFileSync(
     new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
 
-  it("keeps Start a project on its own tab, never over the runs", () => {
+  it("keeps the start form out of the Runs list, never over the runs", () => {
     // It occupied the whole top of the page, pushing what is actually running below the fold;
     // then it was a button that opened the composer ABOVE the runs ("where are my runs?").
-    // Now it is the New project tab (tests/workflows-has-a-new-project-tab.test.tsx).
-    expect(SOURCE).toContain('shownTab === "new" ? (');
+    // BOSSAPP-989: the New build tab is gone; what remains is Library › Start's form, drawn in
+    // place of the tab panels (tests/workflows-has-a-new-project-tab.test.tsx).
+    expect(SOURCE).toContain(") : startWith ? (");
     expect(SOURCE).not.toContain("composerOpen");
   });
 
-  it("still opens the composer when there is nothing else to look at", () => {
-    // An empty page with a closed box is a dead end.
-    expect(SOURCE).toContain('!tabNamed && tab === "runs" && runs.length === 0 ? "new" : tab');
+  it("an empty Runs list offers the one Add-project wizard", () => {
+    // An empty page with a closed box is a dead end; the wizard is the one door (BOSSAPP-989).
+    expect(SOURCE).toContain('onNewProject={() => openNewProject("idea")}');
   });
 
   it("opens a run automatically, once", () => {

@@ -44,7 +44,8 @@ import { notePress } from "../../lib/user-gesture";
 import { IdentityError } from "../../lib/identity/api";
 import { withConsent } from "../../lib/identity/consent";
 import { openPlan } from "../../lib/converse-doors";
-import { useCatalogue } from "../../components/v2/templates/catalogue";
+import { useCatalogue, useIdeas, type IdeaItem } from "../../components/v2/templates/catalogue";
+import { IdeasDialog } from "../../components/v2/templates/ideas-dialog";
 import { adapterLanguage, useStackAdapters } from "../../components/v2/templates/stack-warning";
 import { templatesApi } from "../../lib/templates";
 import { ageShort, hostFolders, type FolderFacts, type FolderHost } from "../../lib/host-folder";
@@ -600,8 +601,20 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
     } catch (e) { setError(refusalText(e)); setBusy(null); }
   };
   const [ways, setWays] = useState<"menu" | "presets" | null>(null);
+  // START FROM AN IDEA (BOSSAPP-989): the one ideas gallery (the old composer's card dialog —
+  // previews, All · Starter apps · Team tools) is the wizard's Ideas surface, over the text list.
   const [ideas, setIdeas] = useState(false);
+  const ideaItems = useIdeas();
   const [undo, setUndo] = useState<string | null>(null);
+  /** Picking a card fills the brief and the name; both stay editable before Create and start. */
+  const pickIdea = (idea: IdeaItem) => {
+    setUndo(ideaText);
+    setIdeaText(idea.brief);
+    setIdeas(false);
+    touched.current.delete("name");
+    auto({ name: nameFromTitle(idea.title) });
+    window.setTimeout(() => box.current?.focus(), 0);
+  };
 
   // ── keys: Esc closes, ⌘↵ creates ───────────────────────────────────────────────────────
   const createRef = useRef(create);
@@ -772,19 +785,9 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
               {door === "new" ? (
                 <>
                   <button type="button" className="npx-link-chip" data-testid="ap-full" title="Full screen editor (Esc closes)" onClick={() => setFull(true)}><ArrowsOut size={13} aria-hidden /></button>
-                  <span className="npx-node-wrap">
-                    <button type="button" className="npx-link-chip" data-testid="ap-ideas" aria-expanded={ideas} title="Start from an idea: example briefs" onClick={() => setIdeas((v) => !v)}><Sparkle size={12} aria-hidden />Ideas</button>
-                    {ideas ? (
-                      <BoxPop className="npx-pop npx-ideas" role="listbox" aria-label="Example briefs" data-testid="ap-ideas-list" onEscape={() => setIdeas(false)}>
-                        {allPresets().filter((p) => p.kind === "app").slice(0, 10).map((p) => (
-                          <button key={p.key} type="button" role="option" aria-selected={false} className="npx-opt" data-testid={`ap-idea-${p.key}`}
-                                  onClick={() => { setUndo(ideaText); setIdeaText(p.kind === "app" ? p.brief : ""); setIdeas(false); touched.current.delete("name"); }}>
-                            <Sparkle size={12} aria-hidden /><b>{p.title}</b>
-                          </button>
-                        ))}
-                      </BoxPop>
-                    ) : null}
-                  </span>
+                  <button type="button" className="npx-link-chip" data-testid="ap-ideas" aria-haspopup="dialog" aria-expanded={ideas}
+                          title="Start from an idea: picking one fills in the brief and the name, both editable"
+                          onClick={() => setIdeas(true)}><Sparkle size={12} aria-hidden />Ideas</button>
                   {undo !== null ? <button type="button" className="npx-link" data-testid="ap-undo" onClick={() => { setIdeaText(undo); setUndo(null); }}>Undo</button> : null}
                 </>
               ) : (
@@ -924,6 +927,8 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
         </div>
         {foot}
       </div>
+      {/* The ideas gallery portals to document.body on its own; drawn above the sheet. */}
+      {ideas ? <IdeasDialog ideas={ideaItems} onPick={pickIdea} onClose={() => setIdeas(false)} /> : null}
       {full ? (
         <div className="npx-full" role="dialog" aria-label="Full screen editor" data-testid="ap-full-editor">
           <div className="npx-full-h"><b>Describe the app</b><span className="npx-spacer" />

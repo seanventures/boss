@@ -23,7 +23,7 @@ import {
 } from "../../lib/multirepo";
 import { withConsent } from "../../lib/identity/consent";
 import { Sheet } from "../../components/identity/kit";
-import { NEW_BUILD_TIP } from "../../lib/compose-links";
+import { NEW_BUILD_TIP, addFeaturePatch } from "../../lib/compose-links";
 import { useNow } from "../agents/live-util";
 import { areaHref } from "../factory/cockpit-util";
 import { showToast } from "../client-forms";
@@ -144,7 +144,7 @@ export function AppComponentsView({ projectId, appKey, onBack }: { projectId: st
         ) : (
           <GatedButton permission="workflow_run:start" className="ag-btn ag-btn-primary" data-testid="mr-cmp-new"
                        title={NEW_BUILD_TIP}
-                       onClick={() => { window.location.assign(areaHref({ area: "delivery_workflows", compose: "add", app: appKey })); }}>
+                       onClick={() => { window.location.assign(areaHref(addFeaturePatch(appKey))); }}>
             New change
           </GatedButton>
         )}
