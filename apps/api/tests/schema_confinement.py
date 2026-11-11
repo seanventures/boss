@@ -64,6 +64,11 @@ def confine_to_private_schema(base_url: str) -> str | None:
         cleanup = create_engine(base_url, future=True, isolation_level="AUTOCOMMIT")
         try:
             with cleanup.connect() as connection:
+                # A connection this process leaked "idle in transaction" (it holds a lock on a
+                # table in the schema) made the DROP wait forever at exit, after every test had
+                # passed: an API shard of the CI p0 job hung for 18 minutes. Wait a bounded time;
+                # a schema left behind is tidy-up, not a failure.
+                connection.execute(text("SET lock_timeout = '20s'"))
                 connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         except Exception:  # noqa: BLE001 — a leaked schema is tidy-up, not a failure
             log.warning("could not drop test schema %s", schema)

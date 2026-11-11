@@ -1,0 +1,2013 @@
+{
+ "schema": "boss-harness-bench/1",
+ "run": {
+  "id": "hbr_48a420d589ba4f129c76",
+  "suite": "boss-harness",
+  "suite_version": "1",
+  "suite_sha256": "711fd0435f6eced602b7cbfae28c82c8a8f90a7d968e5ed4e396d7b33a904f1a",
+  "engine": "scripted",
+  "model": null,
+  "level": "delegate",
+  "boss_sha": "e3082f3d8acda02554930dcae78bf79b9e493548",
+  "boss_dirty": false,
+  "config": {
+   "engine": "scripted",
+   "model": null,
+   "level": "delegate",
+   "profile": "balanced",
+   "risk_tier": 1,
+   "settings": {
+    "code_repair_max_retries": 0,
+    "code_review_inrun_max_rounds": 2,
+    "code_review_repair_max_rounds": 2,
+    "code_review_panel_size": 1,
+    "code_gate_never_block": true,
+    "open_pr_when_checks_fail": 1,
+    "model_routing_mode": "fixed",
+    "pipeline_profile": "balanced",
+    "governed_coding_pipeline": true
+   },
+   "overrides": {},
+   "scripted": {
+    "caps": "resume,read_only,turn_limit,reports_cost,streams_turns",
+    "extra_faults": []
+   }
+  },
+  "config_fingerprint": "64fa40c044a6b57f",
+  "rules": {
+   "k_stdev": 2.0,
+   "metrics": {
+    "success_rate": {
+     "abs_floor": 0.0
+    },
+    "wall_s": {
+     "abs_floor": 30,
+     "rel_floor": 0.1
+    },
+    "tokens_in": {
+     "abs_floor": 200,
+     "rel_floor": 0.02
+    },
+    "tokens_out": {
+     "abs_floor": 50,
+     "rel_floor": 0.02
+    },
+    "cache_share": {
+     "abs_floor": 0.02
+    },
+    "cost_usd": {
+     "abs_floor": 0.05,
+     "rel_floor": 0.05
+    },
+    "model_calls": {
+     "abs_floor": 0
+    },
+    "turns": {
+     "abs_floor": 0
+    },
+    "repair_rounds": {
+     "abs_floor": 0
+    },
+    "interventions": {
+     "abs_floor": 0
+    }
+   },
+   "guards": {
+    "success_rate": {
+     "max_drop": 0.0
+    },
+    "cost_usd": {
+     "max_rise_pct": 15
+    },
+    "interventions": {
+     "max_rise": 0
+    },
+    "model_calls": {
+     "max_rise": 0
+    },
+    "turns": {
+     "max_rise": 0
+    },
+    "repair_rounds": {
+     "max_rise": 0
+    }
+   }
+  },
+  "task_ids": [
+   "helpdesk-classify-case",
+   "helpdesk-blank-title",
+   "textkit-word-count",
+   "helpdesk-priority",
+   "helpdesk-stats",
+   "textkit-truncate",
+   "new-slug-service",
+   "new-tempconv"
+  ],
+  "repeat": 1,
+  "budget_usd": null,
+  "started_at": "2026-11-10T20:16:45+00:00",
+  "project_id": "p_benchc563c0b931",
+  "status": "completed",
+  "finished_at": "2026-11-10T20:18:29+00:00",
+  "baseline_name": "scripted"
+ },
+ "results": [
+  {
+   "task_id": "helpdesk-classify-case",
+   "kind": "fix",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "ffd490310b4d03849c1216ba7395d95803038d43",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "scripted_faults": [],
+   "code_task_run_id": "crun_f0480273a92b445fa92c",
+   "lineage": [
+    "crun_f0480273a92b445fa92c"
+   ],
+   "components": {
+    "completed": true,
+    "pr_opened": true,
+    "verify_passed": true,
+    "review_passed": true,
+    "gates_passed": true,
+    "no_checks_failing_pr": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "phase": "done",
+   "error": null,
+   "pull_request_url": "https://github.com/bench/bench-helpdesk-classify-case-1-2cae98/pull/1",
+   "metrics": {
+    "wall_s": 14.33,
+    "tokens_in": 9993,
+    "tokens_out": 231,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 9,
+    "turns": 9,
+    "tool_calls": 2,
+    "agent_turn_rows": 22,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "calls": {
+    "by_stage": {
+     "design": {
+      "calls": 1,
+      "tokens_in": 861,
+      "tokens_out": 88,
+      "cost_usd_micros": 0
+     },
+     "review_plan": {
+      "calls": 1,
+      "tokens_in": 293,
+      "tokens_out": 14,
+      "cost_usd_micros": 0
+     },
+     "write_tests": {
+      "calls": 1,
+      "tokens_in": 1608,
+      "tokens_out": 19,
+      "cost_usd_micros": 0
+     },
+     "implement": {
+      "calls": 1,
+      "tokens_in": 1913,
+      "tokens_out": 13,
+      "cost_usd_micros": 0
+     },
+     "quality": {
+      "calls": 1,
+      "tokens_in": 587,
+      "tokens_out": 16,
+      "cost_usd_micros": 0
+     },
+     "security_check": {
+      "calls": 1,
+      "tokens_in": 1341,
+      "tokens_out": 27,
+      "cost_usd_micros": 0
+     },
+     "check_tests": {
+      "calls": 1,
+      "tokens_in": 465,
+      "tokens_out": 4,
+      "cost_usd_micros": 0
+     },
+     "consistency_check": {
+      "calls": 1,
+      "tokens_in": 1217,
+      "tokens_out": 21,
+      "cost_usd_micros": 0
+     },
+     "review_code": {
+      "calls": 1,
+      "tokens_in": 1708,
+      "tokens_out": 29,
+      "cost_usd_micros": 0
+     }
+    },
+    "engines": [
+     "scripted"
+    ],
+    "models": [
+     "scripted-v1"
+    ],
+    "routes": [
+     "route_4cefcc6787fe41c2",
+     "route_7a0b7e2c956848f2",
+     "route_8987896f60b94faf",
+     "route_a8f3e5b84b374f40",
+     "route_aa4d944fabdc4d9f",
+     "route_c3d8e9b095964e5d",
+     "route_ca5e35fcc65749c9",
+     "route_ecce42343e0d4e80"
+    ],
+    "failed_calls": 0,
+    "price_estimated_calls": 0,
+    "included_calls": 9
+   },
+   "gates": {
+    "status": "pass",
+    "tests_passed": true,
+    "adversarial_verdict": "survived",
+    "review": "passed",
+    "passed": [
+     "app_serves",
+     "code_review_passed",
+     "code_written",
+     "coder_did_not_edit_tests",
+     "consistent",
+     "existing_tests_intact",
+     "nothing_broke",
+     "security_clean",
+     "tests_written_first",
+     "web_package_honest",
+     "written_tests_pass"
+    ],
+    "failed": [],
+    "repair_attempts": 0
+   },
+   "interventions_asked": [],
+   "events": [
+    "code_task.app_serve_checked",
+    "code_task.auto_preview_skipped",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.ci_waited",
+    "code_task.design_persisted",
+    "code_task.effort_chosen",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.integration_ref",
+    "code_task.pr_opened",
+    "code_task.precheck_app_env",
+    "code_task.quality_pass",
+    "code_task.retrospective",
+    "code_task.review_comments_posted",
+    "code_task.started",
+    "code_task.streams_chosen",
+    "code_task.test_budget",
+    "code_task.work_checkpointed"
+   ],
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 9994bff0e6 base ffd490310b"
+     },
+     {
+      "check": "src/classify.js changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: npm test",
+      "ok": true,
+      "detail": "exit 0 in 0.2s: n more confidence (0.230709ms)\n\u2714 capital letters do not hide a keyword (0.315416ms)\n\u2714 a new ticket is open and filed under its category (1.411583ms)\n\u2714 a ticket needs a title (0.189291ms)\n\u2714 tickets are listed newest first (0.095542ms)\n\u2714 a ticket can be closed, and only to a known status (0.099042ms)\n\u2139 tests 12\n\u2139 suites 0\n\u2139 pass 12\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 90.623833\n"
+     },
+     {
+      "check": "held acceptance tests: node --test bench_acceptance/classify_case.accept.mjs",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: \u2714 a keyword matches whatever its case (0.33675ms)\n\u2714 case does not change confidence (0.373416ms)\n\u2714 unmatched words are still Other (0.048042ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 32.17575\n"
+     }
+    ],
+    "head": "9994bff0e64e5c9dea6423d695db93d9ae59bec1",
+    "changed_files": [
+     "package-lock.json",
+     "src/classify.js",
+     "test/classify_case.test.js"
+    ]
+   },
+   "gate_agent_checks": [
+    {
+     "check": "completed with a PR",
+     "ok": true,
+     "detail": "status=completed pr=https://github.com/bench/bench-helpdesk-classify-case-1-2cae98/pull/1"
+    },
+    {
+     "check": "no advisory-failing gates",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "no checks failing on the PR",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "the app started",
+     "ok": true,
+     "detail": "ok=True"
+    },
+    {
+     "check": "the install works",
+     "ok": true,
+     "detail": "no install failure"
+    },
+    {
+     "check": "test budget not over",
+     "ok": true,
+     "detail": "{\"written\": 1, \"budget\": 12, \"over\": false}"
+    },
+    {
+     "check": "build profile recorded",
+     "ok": true,
+     "detail": "present"
+    }
+   ]
+  },
+  {
+   "task_id": "helpdesk-blank-title",
+   "kind": "fix",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "ade8c45df88dd43a442520f231a314c40640d2fe",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "scripted_faults": [],
+   "code_task_run_id": "crun_a31dc7c3785347d19c5e",
+   "lineage": [
+    "crun_a31dc7c3785347d19c5e"
+   ],
+   "components": {
+    "completed": true,
+    "pr_opened": true,
+    "verify_passed": true,
+    "review_passed": true,
+    "gates_passed": true,
+    "no_checks_failing_pr": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "phase": "done",
+   "error": null,
+   "pull_request_url": "https://github.com/bench/bench-helpdesk-blank-title-1-67f38f/pull/2",
+   "metrics": {
+    "wall_s": 13.35,
+    "tokens_in": 8758,
+    "tokens_out": 144,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 7,
+    "turns": 7,
+    "tool_calls": 2,
+    "agent_turn_rows": 18,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "calls": {
+    "by_stage": {
+     "implement": {
+      "calls": 1,
+      "tokens_in": 1857,
+      "tokens_out": 13,
+      "cost_usd_micros": 0
+     },
+     "write_tests": {
+      "calls": 1,
+      "tokens_in": 1534,
+      "tokens_out": 37,
+      "cost_usd_micros": 0
+     },
+     "quality": {
+      "calls": 1,
+      "tokens_in": 585,
+      "tokens_out": 16,
+      "cost_usd_micros": 0
+     },
+     "security_check": {
+      "calls": 1,
+      "tokens_in": 1370,
+      "tokens_out": 26,
+      "cost_usd_micros": 0
+     },
+     "consistency_check": {
+      "calls": 1,
+      "tokens_in": 1211,
+      "tokens_out": 20,
+      "cost_usd_micros": 0
+     },
+     "review_code": {
+      "calls": 1,
+      "tokens_in": 1737,
+      "tokens_out": 28,
+      "cost_usd_micros": 0
+     },
+     "check_tests": {
+      "calls": 1,
+      "tokens_in": 464,
+      "tokens_out": 4,
+      "cost_usd_micros": 0
+     }
+    },
+    "engines": [
+     "scripted"
+    ],
+    "models": [
+     "scripted-v1"
+    ],
+    "routes": [
+     "route_3224d5f45c9f4c3e",
+     "route_8009b7ab0c974dfb",
+     "route_ad402e223c194acf",
+     "route_bae41bc489124cba",
+     "route_ead449a3656f4e72",
+     "route_ed264c8fbcd64292"
+    ],
+    "failed_calls": 0,
+    "price_estimated_calls": 0,
+    "included_calls": 7
+   },
+   "gates": {
+    "status": "pass",
+    "tests_passed": true,
+    "adversarial_verdict": "survived",
+    "review": "passed",
+    "passed": [
+     "app_serves",
+     "code_review_passed",
+     "code_written",
+     "coder_did_not_edit_tests",
+     "consistent",
+     "existing_tests_intact",
+     "nothing_broke",
+     "security_clean",
+     "tests_written_first",
+     "web_package_honest",
+     "written_tests_pass"
+    ],
+    "failed": [],
+    "repair_attempts": 0
+   },
+   "interventions_asked": [],
+   "events": [
+    "code_task.app_serve_checked",
+    "code_task.auto_preview_skipped",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.ci_waited",
+    "code_task.effort_chosen",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.integration_ref",
+    "code_task.pr_opened",
+    "code_task.precheck_app_env",
+    "code_task.quality_pass",
+    "code_task.retrospective",
+    "code_task.review_comments_posted",
+    "code_task.started",
+    "code_task.streams_chosen",
+    "code_task.test_budget",
+    "code_task.work_checkpointed"
+   ],
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 8526c6758c base ade8c45df8"
+     },
+     {
+      "check": "src/store.js changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: npm test",
+      "ok": true,
+      "detail": "exit 0 in 0.2s: hing are Other (0.272958ms)\n\u2714 more matching words mean more confidence (0.294666ms)\n\u2714 a new ticket is open and filed under its category (1.354541ms)\n\u2714 a ticket needs a title (0.215334ms)\n\u2714 tickets are listed newest first (0.141125ms)\n\u2714 a ticket can be closed, and only to a known status (0.116333ms)\n\u2139 tests 13\n\u2139 suites 0\n\u2139 pass 13\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 90.477833\n"
+     },
+     {
+      "check": "held acceptance tests: node --test bench_acceptance/blank_title.accept.mjs",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: \u2714 blank and whitespace titles are refused in the store (2.652084ms)\n\u2714 a whitespace title is a 400 over HTTP and creates nothing (10.850458ms)\n\u2714 a padded title is kept, trimmed (1.339584ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 83.16775\n"
+     }
+    ],
+    "head": "8526c6758c7417228ffda4466793fbdbce6551c0",
+    "changed_files": [
+     "package-lock.json",
+     "src/store.js",
+     "test/blank_title.test.js"
+    ]
+   },
+   "gate_agent_checks": [
+    {
+     "check": "completed with a PR",
+     "ok": true,
+     "detail": "status=completed pr=https://github.com/bench/bench-helpdesk-blank-title-1-67f38f/pull/2"
+    },
+    {
+     "check": "no advisory-failing gates",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "no checks failing on the PR",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "the app started",
+     "ok": true,
+     "detail": "ok=True"
+    },
+    {
+     "check": "the install works",
+     "ok": true,
+     "detail": "no install failure"
+    },
+    {
+     "check": "test budget not over",
+     "ok": true,
+     "detail": "{\"written\": 2, \"budget\": 12, \"over\": false}"
+    },
+    {
+     "check": "build profile recorded",
+     "ok": true,
+     "detail": "present"
+    }
+   ]
+  },
+  {
+   "task_id": "textkit-word-count",
+   "kind": "fix",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "textkit",
+    "commit": "55c37e201c259dffcff17db75bd1c6adae95a8de",
+    "sha256": "f63c43bf762a2d2b4d74deac81b2d11ba10703f8430893454acad6ad719a9878"
+   },
+   "scripted_faults": [],
+   "code_task_run_id": "crun_ca6abd7a33564a05a55d",
+   "lineage": [
+    "crun_ca6abd7a33564a05a55d"
+   ],
+   "components": {
+    "completed": true,
+    "pr_opened": true,
+    "verify_passed": true,
+    "review_passed": true,
+    "gates_passed": true,
+    "no_checks_failing_pr": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "phase": "done",
+   "error": null,
+   "pull_request_url": "https://github.com/bench/bench-textkit-word-count-1-deb01f/pull/3",
+   "metrics": {
+    "wall_s": 5.88,
+    "tokens_in": 7912,
+    "tokens_out": 117,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 7,
+    "turns": 7,
+    "tool_calls": 2,
+    "agent_turn_rows": 18,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "calls": {
+    "by_stage": {
+     "write_tests": {
+      "calls": 1,
+      "tokens_in": 1473,
+      "tokens_out": 4,
+      "cost_usd_micros": 0
+     },
+     "implement": {
+      "calls": 1,
+      "tokens_in": 1819,
+      "tokens_out": 14,
+      "cost_usd_micros": 0
+     },
+     "quality": {
+      "calls": 1,
+      "tokens_in": 583,
+      "tokens_out": 16,
+      "cost_usd_micros": 0
+     },
+     "security_check": {
+      "calls": 1,
+      "tokens_in": 1121,
+      "tokens_out": 27,
+      "cost_usd_micros": 0
+     },
+     "consistency_check": {
+      "calls": 1,
+      "tokens_in": 962,
+      "tokens_out": 23,
+      "cost_usd_micros": 0
+     },
+     "review_code": {
+      "calls": 1,
+      "tokens_in": 1489,
+      "tokens_out": 29,
+      "cost_usd_micros": 0
+     },
+     "check_tests": {
+      "calls": 1,
+      "tokens_in": 465,
+      "tokens_out": 4,
+      "cost_usd_micros": 0
+     }
+    },
+    "engines": [
+     "scripted"
+    ],
+    "models": [
+     "scripted-v1"
+    ],
+    "routes": [
+     "route_3bee4617d6e140e8",
+     "route_6330ffbe2111427e",
+     "route_7c6f8a020b824019",
+     "route_a04a8ea4faff4c4e",
+     "route_dbed226407384886",
+     "route_de38027dd28f48f8"
+    ],
+    "failed_calls": 0,
+    "price_estimated_calls": 0,
+    "included_calls": 7
+   },
+   "gates": {
+    "status": "pass",
+    "tests_passed": true,
+    "adversarial_verdict": "survived",
+    "review": "passed",
+    "passed": [
+     "app_serves",
+     "code_review_passed",
+     "code_written",
+     "coder_did_not_edit_tests",
+     "consistent",
+     "existing_tests_intact",
+     "nothing_broke",
+     "security_clean",
+     "tests_written_first",
+     "web_package_honest",
+     "written_tests_pass"
+    ],
+    "failed": [],
+    "repair_attempts": 0
+   },
+   "interventions_asked": [],
+   "events": [
+    "code_task.app_serve_checked",
+    "code_task.auto_preview_skipped",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.ci_waited",
+    "code_task.effort_chosen",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.integration_ref",
+    "code_task.pr_opened",
+    "code_task.precheck_app_env",
+    "code_task.quality_pass",
+    "code_task.retrospective",
+    "code_task.review_comments_posted",
+    "code_task.started",
+    "code_task.streams_chosen",
+    "code_task.test_budget",
+    "code_task.work_checkpointed"
+   ],
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head b8b0a0e748 base 55c37e201c"
+     },
+     {
+      "check": "textkit/words.py changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: python3 -m unittest discover -s tests -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.0s: ........\n----------------------------------------------------------------------\nRan 8 tests in 0.000s\n\nOK\n"
+     },
+     {
+      "check": "held acceptance tests: python3 -m unittest discover -s bench_acceptance -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.0s: ..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n"
+     }
+    ],
+    "head": "b8b0a0e748689c14609c2f7c42c1d3689654f7c5",
+    "changed_files": [
+     "tests/test_word_count_spacing.py",
+     "textkit/words.py"
+    ]
+   },
+   "gate_agent_checks": [
+    {
+     "check": "completed with a PR",
+     "ok": true,
+     "detail": "status=completed pr=https://github.com/bench/bench-textkit-word-count-1-deb01f/pull/3"
+    },
+    {
+     "check": "no advisory-failing gates",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "no checks failing on the PR",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "the app started",
+     "ok": true,
+     "detail": "ok=True"
+    },
+    {
+     "check": "the install works",
+     "ok": true,
+     "detail": "no install failure"
+    },
+    {
+     "check": "test budget not over",
+     "ok": true,
+     "detail": "{\"written\": 3, \"budget\": 12, \"over\": false}"
+    },
+    {
+     "check": "build profile recorded",
+     "ok": true,
+     "detail": "present"
+    }
+   ]
+  },
+  {
+   "task_id": "helpdesk-priority",
+   "kind": "feature",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "5dd6fe0dec03951619674c0c2d04777743610e94",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "scripted_faults": [
+    "blocker"
+   ],
+   "code_task_run_id": "crun_50e11da8c7fd475591d3",
+   "lineage": [
+    "crun_50e11da8c7fd475591d3"
+   ],
+   "components": {
+    "completed": true,
+    "pr_opened": true,
+    "verify_passed": true,
+    "review_passed": true,
+    "gates_passed": true,
+    "no_checks_failing_pr": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "phase": "done",
+   "error": null,
+   "pull_request_url": "https://github.com/bench/bench-helpdesk-priority-1-c569f3/pull/4",
+   "metrics": {
+    "wall_s": 17.81,
+    "tokens_in": 14348,
+    "tokens_out": 219,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 9,
+    "turns": 9,
+    "tool_calls": 3,
+    "agent_turn_rows": 24,
+    "repair_rounds": 1,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "calls": {
+    "by_stage": {
+     "write_tests": {
+      "calls": 1,
+      "tokens_in": 1579,
+      "tokens_out": 50,
+      "cost_usd_micros": 0
+     },
+     "implement": {
+      "calls": 2,
+      "tokens_in": 2658,
+      "tokens_out": 32,
+      "cost_usd_micros": 0
+     },
+     "quality": {
+      "calls": 1,
+      "tokens_in": 587,
+      "tokens_out": 16,
+      "cost_usd_micros": 0
+     },
+     "review_code": {
+      "calls": 2,
+      "tokens_in": 4976,
+      "tokens_out": 66,
+      "cost_usd_micros": 0
+     },
+     "security_check": {
+      "calls": 1,
+      "tokens_in": 2120,
+      "tokens_out": 29,
+      "cost_usd_micros": 0
+     },
+     "consistency_check": {
+      "calls": 1,
+      "tokens_in": 1961,
+      "tokens_out": 22,
+      "cost_usd_micros": 0
+     },
+     "check_tests": {
+      "calls": 1,
+      "tokens_in": 467,
+      "tokens_out": 4,
+      "cost_usd_micros": 0
+     }
+    },
+    "engines": [
+     "scripted"
+    ],
+    "models": [
+     "scripted-v1"
+    ],
+    "routes": [
+     "route_1c95a670f19d4167",
+     "route_8aad7e48589a4ca2",
+     "route_9b337a186fdd404d",
+     "route_d73f6075a1834fb1",
+     "route_d8ef84b686fc4033",
+     "route_ed1a173746524dca"
+    ],
+    "failed_calls": 0,
+    "price_estimated_calls": 0,
+    "included_calls": 9
+   },
+   "gates": {
+    "status": "pass",
+    "tests_passed": true,
+    "adversarial_verdict": "refuted",
+    "review": "passed",
+    "passed": [
+     "app_serves",
+     "code_review_passed",
+     "code_written",
+     "coder_did_not_edit_tests",
+     "consistent",
+     "existing_tests_intact",
+     "nothing_broke",
+     "security_clean",
+     "tests_written_first",
+     "web_package_honest",
+     "written_tests_pass"
+    ],
+    "failed": [],
+    "repair_attempts": 0
+   },
+   "interventions_asked": [],
+   "events": [
+    "code_task.app_serve_checked",
+    "code_task.auto_preview_skipped",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.ci_waited",
+    "code_task.effort_chosen",
+    "code_task.fix_round_noop",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.inrun_convergence_pass",
+    "code_task.inrun_convergence_round",
+    "code_task.integration_ref",
+    "code_task.pr_opened",
+    "code_task.precheck_app_env",
+    "code_task.quality_pass",
+    "code_task.retrospective",
+    "code_task.review_comments_posted",
+    "code_task.review_comments_recorded",
+    "code_task.started",
+    "code_task.streams_chosen",
+    "code_task.test_budget",
+    "code_task.work_checkpointed"
+   ],
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head fec6dd2c97 base 5dd6fe0dec"
+     },
+     {
+      "check": "src/store.js changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "src/app.js changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: npm test",
+      "ok": true,
+      "detail": "exit 0 in 0.2s: nown priority is refused (0.248709ms)\n\u2714 tickets can be listed by priority (0.980666ms)\n\u2714 a new ticket is open and filed under its category (1.604ms)\n\u2714 a ticket needs a title (0.212125ms)\n\u2714 tickets are listed newest first (0.197583ms)\n\u2714 a ticket can be closed, and only to a known status (0.120291ms)\n\u2139 tests 14\n\u2139 suites 0\n\u2139 pass 14\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 94.973792\n"
+     },
+     {
+      "check": "held acceptance tests: node --test bench_acceptance/priority.accept.mjs",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: \u2714 priority defaults to normal and is kept when given (17.418166ms)\n\u2714 an unknown priority is a 400 and creates nothing (4.150625ms)\n\u2714 the list filters by priority, newest first, and unfiltered lists everything (2.966667ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 85.808667\n"
+     }
+    ],
+    "head": "fec6dd2c97a29485d72b5e539b7358388c2f087f",
+    "changed_files": [
+     "package-lock.json",
+     "src/app.js",
+     "src/store.js",
+     "test/priority.test.js"
+    ]
+   },
+   "gate_agent_checks": [
+    {
+     "check": "completed with a PR",
+     "ok": true,
+     "detail": "status=completed pr=https://github.com/bench/bench-helpdesk-priority-1-c569f3/pull/4"
+    },
+    {
+     "check": "no advisory-failing gates",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "no checks failing on the PR",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "the app started",
+     "ok": true,
+     "detail": "ok=True"
+    },
+    {
+     "check": "the install works",
+     "ok": true,
+     "detail": "no install failure"
+    },
+    {
+     "check": "test budget not over",
+     "ok": true,
+     "detail": "{\"written\": 3, \"budget\": 15, \"over\": false}"
+    },
+    {
+     "check": "build profile recorded",
+     "ok": true,
+     "detail": "present"
+    }
+   ]
+  },
+  {
+   "task_id": "helpdesk-stats",
+   "kind": "feature",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "c1d8a886b5d1e77915d26cb61d676d6f18ad3f93",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "scripted_faults": [],
+   "code_task_run_id": "crun_296bb42175a14a2c8e28",
+   "lineage": [
+    "crun_296bb42175a14a2c8e28"
+   ],
+   "components": {
+    "completed": true,
+    "pr_opened": true,
+    "verify_passed": true,
+    "review_passed": true,
+    "gates_passed": true,
+    "no_checks_failing_pr": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "phase": "done",
+   "error": null,
+   "pull_request_url": "https://github.com/bench/bench-helpdesk-stats-1-4be93a/pull/5",
+   "metrics": {
+    "wall_s": 14.38,
+    "tokens_in": 10816,
+    "tokens_out": 145,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 7,
+    "turns": 7,
+    "tool_calls": 3,
+    "agent_turn_rows": 20,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "calls": {
+    "by_stage": {
+     "write_tests": {
+      "calls": 1,
+      "tokens_in": 1543,
+      "tokens_out": 27,
+      "cost_usd_micros": 0
+     },
+     "implement": {
+      "calls": 1,
+      "tokens_in": 1854,
+      "tokens_out": 16,
+      "cost_usd_micros": 0
+     },
+     "quality": {
+      "calls": 1,
+      "tokens_in": 582,
+      "tokens_out": 16,
+      "cost_usd_micros": 0
+     },
+     "consistency_check": {
+      "calls": 1,
+      "tokens_in": 1895,
+      "tokens_out": 22,
+      "cost_usd_micros": 0
+     },
+     "review_code": {
+      "calls": 1,
+      "tokens_in": 2421,
+      "tokens_out": 31,
+      "cost_usd_micros": 0
+     },
+     "security_check": {
+      "calls": 1,
+      "tokens_in": 2054,
+      "tokens_out": 29,
+      "cost_usd_micros": 0
+     },
+     "check_tests": {
+      "calls": 1,
+      "tokens_in": 467,
+      "tokens_out": 4,
+      "cost_usd_micros": 0
+     }
+    },
+    "engines": [
+     "scripted"
+    ],
+    "models": [
+     "scripted-v1"
+    ],
+    "routes": [
+     "route_00c2ebe993844041",
+     "route_6b5239b84bd94a0d",
+     "route_737949f71b194525",
+     "route_8160ef369b954059",
+     "route_8d9d14cf65b6485d",
+     "route_908610bc24364558"
+    ],
+    "failed_calls": 0,
+    "price_estimated_calls": 0,
+    "included_calls": 7
+   },
+   "gates": {
+    "status": "pass",
+    "tests_passed": true,
+    "adversarial_verdict": "survived",
+    "review": "passed",
+    "passed": [
+     "app_serves",
+     "code_review_passed",
+     "code_written",
+     "coder_did_not_edit_tests",
+     "consistent",
+     "existing_tests_intact",
+     "nothing_broke",
+     "security_clean",
+     "tests_written_first",
+     "web_package_honest",
+     "written_tests_pass"
+    ],
+    "failed": [],
+    "repair_attempts": 0
+   },
+   "interventions_asked": [],
+   "events": [
+    "code_task.app_serve_checked",
+    "code_task.auto_preview_skipped",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.ci_waited",
+    "code_task.effort_chosen",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.integration_ref",
+    "code_task.pr_opened",
+    "code_task.precheck_app_env",
+    "code_task.quality_pass",
+    "code_task.retrospective",
+    "code_task.review_comments_posted",
+    "code_task.started",
+    "code_task.streams_chosen",
+    "code_task.test_budget",
+    "code_task.work_checkpointed"
+   ],
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 92c8e41300 base c1d8a886b5"
+     },
+     {
+      "check": "src/app.js changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: npm test",
+      "ok": true,
+      "detail": "exit 0 in 0.2s: \u2714 no tickets, all zero (0.828208ms)\n\u2714 counts by status and by category (0.656209ms)\n\u2714 a new ticket is open and filed under its category (1.664042ms)\n\u2714 a ticket needs a title (0.205834ms)\n\u2714 tickets are listed newest first (0.110334ms)\n\u2714 a ticket can be closed, and only to a known status (0.102167ms)\n\u2139 tests 13\n\u2139 suites 0\n\u2139 pass 13\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 94.001167\n"
+     },
+     {
+      "check": "held acceptance tests: node --test bench_acceptance/stats.accept.mjs",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: \u2714 an empty desk answers zeros for every status and every category (11.285709ms)\n\u2714 the counts follow the tickets and their status (7.998791ms)\n\u2714 the existing routes still answer (2.329292ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 88.502416\n"
+     }
+    ],
+    "head": "92c8e4130025ac247f585b4de621a6fd390d4438",
+    "changed_files": [
+     "package-lock.json",
+     "src/app.js",
+     "src/store.js",
+     "test/stats.test.js"
+    ]
+   },
+   "gate_agent_checks": [
+    {
+     "check": "completed with a PR",
+     "ok": true,
+     "detail": "status=completed pr=https://github.com/bench/bench-helpdesk-stats-1-4be93a/pull/5"
+    },
+    {
+     "check": "no advisory-failing gates",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "no checks failing on the PR",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "the app started",
+     "ok": true,
+     "detail": "ok=True"
+    },
+    {
+     "check": "the install works",
+     "ok": true,
+     "detail": "no install failure"
+    },
+    {
+     "check": "test budget not over",
+     "ok": true,
+     "detail": "{\"written\": 2, \"budget\": 12, \"over\": false}"
+    },
+    {
+     "check": "build profile recorded",
+     "ok": true,
+     "detail": "present"
+    }
+   ]
+  },
+  {
+   "task_id": "textkit-truncate",
+   "kind": "feature",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "textkit",
+    "commit": "559e8c92de3f87e8bc4fbc82e99e95240e7e513b",
+    "sha256": "f63c43bf762a2d2b4d74deac81b2d11ba10703f8430893454acad6ad719a9878"
+   },
+   "scripted_faults": [],
+   "code_task_run_id": "crun_768821b397ef4319ac24",
+   "lineage": [
+    "crun_768821b397ef4319ac24"
+   ],
+   "components": {
+    "completed": true,
+    "pr_opened": true,
+    "verify_passed": true,
+    "review_passed": true,
+    "gates_passed": true,
+    "no_checks_failing_pr": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "phase": "done",
+   "error": null,
+   "pull_request_url": "https://github.com/bench/bench-textkit-truncate-1-3aee53/pull/6",
+   "metrics": {
+    "wall_s": 6.2,
+    "tokens_in": 8578,
+    "tokens_out": 135,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 7,
+    "turns": 7,
+    "tool_calls": 3,
+    "agent_turn_rows": 20,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "calls": {
+    "by_stage": {
+     "write_tests": {
+      "calls": 1,
+      "tokens_in": 1491,
+      "tokens_out": 4,
+      "cost_usd_micros": 0
+     },
+     "review_code": {
+      "calls": 1,
+      "tokens_in": 1699,
+      "tokens_out": 34,
+      "cost_usd_micros": 0
+     },
+     "quality": {
+      "calls": 1,
+      "tokens_in": 579,
+      "tokens_out": 16,
+      "cost_usd_micros": 0
+     },
+     "consistency_check": {
+      "calls": 1,
+      "tokens_in": 1172,
+      "tokens_out": 26,
+      "cost_usd_micros": 0
+     },
+     "check_tests": {
+      "calls": 1,
+      "tokens_in": 471,
+      "tokens_out": 4,
+      "cost_usd_micros": 0
+     },
+     "implement": {
+      "calls": 1,
+      "tokens_in": 1834,
+      "tokens_out": 19,
+      "cost_usd_micros": 0
+     },
+     "security_check": {
+      "calls": 1,
+      "tokens_in": 1332,
+      "tokens_out": 32,
+      "cost_usd_micros": 0
+     }
+    },
+    "engines": [
+     "scripted"
+    ],
+    "models": [
+     "scripted-v1"
+    ],
+    "routes": [
+     "route_5b365c1c5a2346e2",
+     "route_73cb9449c2b142ce",
+     "route_87d30b33141b4e05",
+     "route_b09bad0d35c7490f",
+     "route_ddb12f425db64f4d",
+     "route_e22b5f22c0c74c06"
+    ],
+    "failed_calls": 0,
+    "price_estimated_calls": 0,
+    "included_calls": 7
+   },
+   "gates": {
+    "status": "pass",
+    "tests_passed": true,
+    "adversarial_verdict": "survived",
+    "review": "passed",
+    "passed": [
+     "app_serves",
+     "code_review_passed",
+     "code_written",
+     "coder_did_not_edit_tests",
+     "consistent",
+     "existing_tests_intact",
+     "nothing_broke",
+     "security_clean",
+     "tests_written_first",
+     "web_package_honest",
+     "written_tests_pass"
+    ],
+    "failed": [],
+    "repair_attempts": 0
+   },
+   "interventions_asked": [],
+   "events": [
+    "code_task.app_serve_checked",
+    "code_task.auto_preview_skipped",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.ci_waited",
+    "code_task.effort_chosen",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.integration_ref",
+    "code_task.pr_opened",
+    "code_task.precheck_app_env",
+    "code_task.quality_pass",
+    "code_task.retrospective",
+    "code_task.review_comments_posted",
+    "code_task.started",
+    "code_task.streams_chosen",
+    "code_task.test_budget",
+    "code_task.work_checkpointed"
+   ],
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head d68ca5d003 base 559e8c92de"
+     },
+     {
+      "check": "textkit/words.py changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "textkit/__init__.py changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: python3 -m unittest discover -s tests -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.0s: .........\n----------------------------------------------------------------------\nRan 9 tests in 0.000s\n\nOK\n"
+     },
+     {
+      "check": "held acceptance tests: python3 -m unittest discover -s bench_acceptance -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.0s: .....\n----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n"
+     }
+    ],
+    "head": "d68ca5d003013f89f2ce40f5130d107664206515",
+    "changed_files": [
+     "tests/test_truncate.py",
+     "textkit/__init__.py",
+     "textkit/words.py"
+    ]
+   },
+   "gate_agent_checks": [
+    {
+     "check": "completed with a PR",
+     "ok": true,
+     "detail": "status=completed pr=https://github.com/bench/bench-textkit-truncate-1-3aee53/pull/6"
+    },
+    {
+     "check": "no advisory-failing gates",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "no checks failing on the PR",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "the app started",
+     "ok": true,
+     "detail": "ok=True"
+    },
+    {
+     "check": "the install works",
+     "ok": true,
+     "detail": "no install failure"
+    },
+    {
+     "check": "test budget not over",
+     "ok": true,
+     "detail": "{\"written\": 4, \"budget\": 15, \"over\": false}"
+    },
+    {
+     "check": "build profile recorded",
+     "ok": true,
+     "detail": "present"
+    }
+   ]
+  },
+  {
+   "task_id": "new-slug-service",
+   "kind": "new_app",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "empty",
+    "commit": "afa595b81d97056355e0cf6624f9c3fcfea2cbc9",
+    "sha256": "4d7a4904a9b4ab587165510784c5fe2c5193e7a0acc090eb8a9cff5d9d1782be"
+   },
+   "scripted_faults": [
+    "failing_test"
+   ],
+   "code_task_run_id": "crun_c529c56be97644439a0a",
+   "lineage": [
+    "crun_c529c56be97644439a0a"
+   ],
+   "components": {
+    "completed": true,
+    "pr_opened": true,
+    "verify_passed": true,
+    "review_passed": true,
+    "gates_passed": true,
+    "no_checks_failing_pr": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "phase": "done",
+   "error": null,
+   "pull_request_url": "https://github.com/bench/bench-new-slug-service-1-39791f/pull/7",
+   "metrics": {
+    "wall_s": 17.48,
+    "tokens_in": 9380,
+    "tokens_out": 195,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 8,
+    "turns": 8,
+    "tool_calls": 7,
+    "agent_turn_rows": 30,
+    "repair_rounds": 1,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "calls": {
+    "by_stage": {
+     "implement": {
+      "calls": 2,
+      "tokens_in": 2804,
+      "tokens_out": 37,
+      "cost_usd_micros": 0
+     },
+     "quality": {
+      "calls": 1,
+      "tokens_in": 578,
+      "tokens_out": 16,
+      "cost_usd_micros": 0
+     },
+     "review_code": {
+      "calls": 1,
+      "tokens_in": 1629,
+      "tokens_out": 35,
+      "cost_usd_micros": 0
+     },
+     "security_check": {
+      "calls": 1,
+      "tokens_in": 1261,
+      "tokens_out": 33,
+      "cost_usd_micros": 0
+     },
+     "check_tests": {
+      "calls": 1,
+      "tokens_in": 468,
+      "tokens_out": 14,
+      "cost_usd_micros": 0
+     },
+     "write_tests": {
+      "calls": 1,
+      "tokens_in": 1538,
+      "tokens_out": 35,
+      "cost_usd_micros": 0
+     },
+     "consistency_check": {
+      "calls": 1,
+      "tokens_in": 1102,
+      "tokens_out": 25,
+      "cost_usd_micros": 0
+     }
+    },
+    "engines": [
+     "scripted"
+    ],
+    "models": [
+     "scripted-v1"
+    ],
+    "routes": [
+     "route_22968cb6a07f483e",
+     "route_2d0931367e1a4f11",
+     "route_450b7d046ff449bf",
+     "route_546c60eb2a894e4a",
+     "route_7acb9388edc242fa",
+     "route_b952b862cd3b486e",
+     "route_c805137a02bb490d"
+    ],
+    "failed_calls": 0,
+    "price_estimated_calls": 0,
+    "included_calls": 8
+   },
+   "gates": {
+    "status": "pass",
+    "tests_passed": true,
+    "adversarial_verdict": "survived",
+    "review": "passed",
+    "passed": [
+     "app_serves",
+     "code_review_passed",
+     "code_written",
+     "coder_did_not_edit_tests",
+     "consistent",
+     "existing_tests_intact",
+     "nothing_broke",
+     "security_clean",
+     "tests_written_first",
+     "web_package_honest",
+     "written_tests_pass"
+    ],
+    "failed": [],
+    "repair_attempts": 1
+   },
+   "interventions_asked": [],
+   "events": [
+    "code_task.app_serve_checked",
+    "code_task.app_start",
+    "code_task.auto_preview_skipped",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.ci_waited",
+    "code_task.effort_chosen",
+    "code_task.escalation_skipped",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.integration_ref",
+    "code_task.pr_opened",
+    "code_task.precheck_app_env",
+    "code_task.preview_app_declared",
+    "code_task.quality_pass",
+    "code_task.retrospective",
+    "code_task.review_comments_posted",
+    "code_task.started",
+    "code_task.streams_chosen",
+    "code_task.test_budget",
+    "code_task.work_checkpointed"
+   ],
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 85e743351e base afa595b81d"
+     },
+     {
+      "check": "src/slug.js exists",
+      "ok": true,
+      "detail": ""
+     },
+     {
+      "check": "src/server.js exists",
+      "ok": true,
+      "detail": ""
+     },
+     {
+      "check": "package.json exists",
+      "ok": true,
+      "detail": ""
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: npm test",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: \n> plain-node@1.0.0 test\n> node --test\n\n\u2714 slug lowercases and joins words with hyphens (0.309125ms)\n\u2714 slug trims separators and survives nothing (0.063875ms)\n\u2139 tests 2\n\u2139 suites 0\n\u2139 pass 2\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 33.412209\n"
+     },
+     {
+      "check": "held acceptance tests: node --test bench_acceptance/slug.accept.mjs",
+      "ok": true,
+      "detail": "exit 0 in 0.2s: \u2714 slug lowercases, joins words with single hyphens and trims them (0.328792ms)\n\u2714 the server answers GET /?q= with the slug as JSON on $PORT (122.64225ms)\n\u2139 tests 2\n\u2139 suites 0\n\u2139 pass 2\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 153.448\n"
+     }
+    ],
+    "head": "85e743351ec11081195698c26d01d609555d32b7",
+    "changed_files": [
+     "boss.preview.app",
+     "boss.preview.command",
+     "package-lock.json",
+     "package.json",
+     "src/server.js",
+     "src/slug.js",
+     "test/slug.test.js"
+    ]
+   },
+   "gate_agent_checks": [
+    {
+     "check": "completed with a PR",
+     "ok": true,
+     "detail": "status=completed pr=https://github.com/bench/bench-new-slug-service-1-39791f/pull/7"
+    },
+    {
+     "check": "no advisory-failing gates",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "no checks failing on the PR",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "the app started",
+     "ok": true,
+     "detail": "ok=True"
+    },
+    {
+     "check": "the install works",
+     "ok": true,
+     "detail": "no install failure"
+    },
+    {
+     "check": "test budget not over",
+     "ok": true,
+     "detail": "{\"written\": 2, \"budget\": 12, \"over\": false}"
+    },
+    {
+     "check": "build profile recorded",
+     "ok": true,
+     "detail": "present"
+    }
+   ]
+  },
+  {
+   "task_id": "new-tempconv",
+   "kind": "new_app",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "empty",
+    "commit": "0527a589846960529f58e4b887352c46a6a6ca81",
+    "sha256": "4d7a4904a9b4ab587165510784c5fe2c5193e7a0acc090eb8a9cff5d9d1782be"
+   },
+   "scripted_faults": [],
+   "code_task_run_id": "crun_93c8166f930a4415a991",
+   "lineage": [
+    "crun_93c8166f930a4415a991"
+   ],
+   "components": {
+    "completed": true,
+    "pr_opened": true,
+    "verify_passed": true,
+    "review_passed": true,
+    "gates_passed": true,
+    "no_checks_failing_pr": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "phase": "done",
+   "error": null,
+   "pull_request_url": "https://github.com/bench/bench-new-tempconv-1-95f65d/pull/8",
+   "metrics": {
+    "wall_s": 6.6,
+    "tokens_in": 10332,
+    "tokens_out": 144,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 7,
+    "turns": 7,
+    "tool_calls": 4,
+    "agent_turn_rows": 22,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "calls": {
+    "by_stage": {
+     "implement": {
+      "calls": 1,
+      "tokens_in": 2152,
+      "tokens_out": 20,
+      "cost_usd_micros": 0
+     },
+     "security_check": {
+      "calls": 1,
+      "tokens_in": 1705,
+      "tokens_out": 33,
+      "cost_usd_micros": 0
+     },
+     "check_tests": {
+      "calls": 1,
+      "tokens_in": 472,
+      "tokens_out": 4,
+      "cost_usd_micros": 0
+     },
+     "write_tests": {
+      "calls": 1,
+      "tokens_in": 1804,
+      "tokens_out": 4,
+      "cost_usd_micros": 0
+     },
+     "review_code": {
+      "calls": 1,
+      "tokens_in": 2072,
+      "tokens_out": 35,
+      "cost_usd_micros": 0
+     },
+     "quality": {
+      "calls": 1,
+      "tokens_in": 582,
+      "tokens_out": 16,
+      "cost_usd_micros": 0
+     },
+     "consistency_check": {
+      "calls": 1,
+      "tokens_in": 1545,
+      "tokens_out": 32,
+      "cost_usd_micros": 0
+     }
+    },
+    "engines": [
+     "scripted"
+    ],
+    "models": [
+     "scripted-v1"
+    ],
+    "routes": [
+     "route_890d70fcde4f47aa",
+     "route_9ad30003b4e645e2",
+     "route_ab2295684ade4529",
+     "route_aff002a45e11436a",
+     "route_cf0949e7236f4d62",
+     "route_d437e934f9bb4c0a"
+    ],
+    "failed_calls": 0,
+    "price_estimated_calls": 0,
+    "included_calls": 7
+   },
+   "gates": {
+    "status": "pass",
+    "tests_passed": true,
+    "adversarial_verdict": "survived",
+    "review": "passed",
+    "passed": [
+     "app_serves",
+     "code_review_passed",
+     "code_written",
+     "coder_did_not_edit_tests",
+     "consistent",
+     "existing_tests_intact",
+     "nothing_broke",
+     "security_clean",
+     "tests_written_first",
+     "web_package_honest",
+     "written_tests_pass"
+    ],
+    "failed": [],
+    "repair_attempts": 0
+   },
+   "interventions_asked": [],
+   "events": [
+    "code_task.app_serve_checked",
+    "code_task.auto_preview_skipped",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.ci_waited",
+    "code_task.effort_chosen",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.integration_ref",
+    "code_task.pr_opened",
+    "code_task.precheck_app_env",
+    "code_task.quality_pass",
+    "code_task.retrospective",
+    "code_task.review_comments_posted",
+    "code_task.started",
+    "code_task.streams_chosen",
+    "code_task.test_budget",
+    "code_task.work_checkpointed"
+   ],
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 8b548ba74e base 0527a58984"
+     },
+     {
+      "check": "tempconv/__init__.py exists",
+      "ok": true,
+      "detail": ""
+     },
+     {
+      "check": "tempconv/__main__.py exists",
+      "ok": true,
+      "detail": ""
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: python3 -m unittest discover -s tests -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.0s: ...\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n"
+     },
+     {
+      "check": "held acceptance tests: python3 -m unittest discover -s bench_acceptance -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: ...\n----------------------------------------------------------------------\nRan 3 tests in 0.045s\n\nOK\n"
+     }
+    ],
+    "head": "8b548ba74e98de7c2f1c273efcbc2b1612537ae0",
+    "changed_files": [
+     "tempconv/__init__.py",
+     "tempconv/__main__.py",
+     "tests/__init__.py",
+     "tests/test_tempconv.py"
+    ]
+   },
+   "gate_agent_checks": [
+    {
+     "check": "completed with a PR",
+     "ok": true,
+     "detail": "status=completed pr=https://github.com/bench/bench-new-tempconv-1-95f65d/pull/8"
+    },
+    {
+     "check": "no advisory-failing gates",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "no checks failing on the PR",
+     "ok": true,
+     "detail": "none"
+    },
+    {
+     "check": "the app started",
+     "ok": true,
+     "detail": "ok=True"
+    },
+    {
+     "check": "the install works",
+     "ok": true,
+     "detail": "no install failure"
+    },
+    {
+     "check": "test budget not over",
+     "ok": true,
+     "detail": "{\"written\": 3, \"budget\": 15, \"over\": false}"
+    },
+    {
+     "check": "build profile recorded",
+     "ok": true,
+     "detail": "present"
+    }
+   ]
+  }
+ ],
+ "summary": {
+  "tasks": [
+   "helpdesk-blank-title",
+   "helpdesk-classify-case",
+   "helpdesk-priority",
+   "helpdesk-stats",
+   "new-slug-service",
+   "new-tempconv",
+   "textkit-truncate",
+   "textkit-word-count"
+  ],
+  "runs": 8,
+  "skipped": 0,
+  "successes": 8,
+  "metrics": {
+   "success_rate": {
+    "n": 1,
+    "mean": 1.0,
+    "stdev": 0.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "wall_s": {
+    "n": 1,
+    "mean": 96.03,
+    "stdev": 0.0,
+    "min": 96.03,
+    "max": 96.03
+   },
+   "tokens_in": {
+    "n": 1,
+    "mean": 80117.0,
+    "stdev": 0.0,
+    "min": 80117.0,
+    "max": 80117.0
+   },
+   "tokens_out": {
+    "n": 1,
+    "mean": 1330.0,
+    "stdev": 0.0,
+    "min": 1330.0,
+    "max": 1330.0
+   },
+   "cache_share": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "cost_usd": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "model_calls": {
+    "n": 1,
+    "mean": 61.0,
+    "stdev": 0.0,
+    "min": 61.0,
+    "max": 61.0
+   },
+   "turns": {
+    "n": 1,
+    "mean": 61.0,
+    "stdev": 0.0,
+    "min": 61.0,
+    "max": 61.0
+   },
+   "repair_rounds": {
+    "n": 1,
+    "mean": 2.0,
+    "stdev": 0.0,
+    "min": 2.0,
+    "max": 2.0
+   },
+   "interventions": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   }
+  }
+ }
+}

@@ -172,21 +172,7 @@ class World:
 
     def _patch_github(self) -> None:
         """BOSS's two GitHub seams, pointed at the local one (never github.com)."""
-        from boss_engine.services import github_adapter, repo_host
-
-        hub = self.hub
-        real_init = github_adapter.GitHubAdapter.__init__
-
-        def init(adapter, settings, owner=None, repo=None, token=None, api_base_url=None):
-            real_init(adapter, settings, owner=owner, repo=repo, token=token or "gate-local-token",
-                      api_base_url=hub.api_url)
-
-        def clone_url_for(host, owner, repo, token=""):
-            return hub.git_url(owner, repo)
-
-        github_adapter.GitHubAdapter.__init__ = init
-        repo_host.clone_url_for = clone_url_for
-        self.stack.callback(setattr, github_adapter.GitHubAdapter, "__init__", real_init)
+        self.stack.callback(self.hub.point_boss_at_me())
 
     def close(self) -> None:
         with contextlib.suppress(Exception):

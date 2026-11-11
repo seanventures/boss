@@ -17,7 +17,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 _STUBS = Path(__file__).resolve().parents[1] / "stubs"
 if str(_STUBS) not in sys.path:
@@ -153,3 +153,28 @@ class LocalGitHub:
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()
+
+    def point_boss_at_me(self) -> "Callable[[], None]":
+        """BOSS's two seams for a GitHub address (repo_host.clone_url_for, GitHubAdapter),
+        pointed at this local GitHub — never github.com. Returns the function that undoes it.
+        Used by the engines gate and the harness benchmark (scripts/harness_bench.py)."""
+        from boss_engine.services import github_adapter, repo_host
+
+        hub = self
+        real_init = github_adapter.GitHubAdapter.__init__
+        real_clone_url = repo_host.clone_url_for
+
+        def init(adapter, settings, owner=None, repo=None, token=None, api_base_url=None):
+            real_init(adapter, settings, owner=owner, repo=repo, token=token or "gate-local-token",
+                      api_base_url=hub.api_url)
+
+        def clone_url_for(host, owner, repo, token=""):
+            return hub.git_url(owner, repo)
+
+        github_adapter.GitHubAdapter.__init__ = init
+        repo_host.clone_url_for = clone_url_for
+
+        def undo() -> None:
+            github_adapter.GitHubAdapter.__init__ = real_init
+            repo_host.clone_url_for = real_clone_url
+        return undo

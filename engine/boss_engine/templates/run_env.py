@@ -84,6 +84,52 @@ def is_demo_login_name(name: str) -> bool:
     return bool(_DEMO_LOGIN_NAME.match(name or "")) and not _NOT_A_DEMO_LOGIN.search(name or "")
 
 
+#: The platform's demo-seed opt-in: the variable an app's seed script gates itself on (the
+#: coder checklist and the deploy misfit hint both name it). An app that declares a demo login
+#: is declaring demo seeding; this flag is how a run turns it on.
+DEMO_SEED_FLAG = "ALLOW_DEMO_SEED"
+
+#: Target environments where demo users belong: rehearsals. Anything NOT clearly a rehearsal —
+#: "production", "live", an operator's own name for a customer-facing environment, or no name
+#: at all (create_stack_target defaults to production) — is production-kind and never seeded.
+_DEMO_SEED_ENVIRONMENTS = frozenset((
+    "staging", "stage", "preview", "previews", "demo", "dev", "development",
+    "test", "testing", "qa", "uat", "sandbox", "integration"))
+
+
+def demo_seed_target(environment: Optional[str]) -> bool:
+    """Is this deploy environment one whose runs get demo users seeded? Previews and
+    staging-kind targets only; an unknown or empty name counts as production."""
+    return str(environment or "").strip().lower() in _DEMO_SEED_ENVIRONMENTS
+
+
+def declares_demo_seeding(declared: Mapping[str, "Need"]) -> bool:
+    """The app's DECLARED contract for demo seeding, never a match on the app's name: it names
+    the opt-in flag itself (boss.deploy.yaml / .env.example), or declares a demo login password
+    (kind "demo") whose seeded users are what the flag turns on."""
+    return DEMO_SEED_FLAG in (declared or {}) or any(
+        n.kind == "demo" for n in (declared or {}).values())
+
+
+def with_demo_seed(values: Mapping[str, str], *, environment: Optional[str],
+                   person_set: Iterable[str] = ()) -> dict[str, str]:
+    """A DEPLOY's environment with the demo-seed policy applied (a throwaway run gets it in
+    `resolve`). A staging-kind target whose environment carries a demo login password gets
+    ALLOW_DEMO_SEED=true, so the seeded users the password belongs to actually exist
+    (HelpDesk's staging revealed a DEMO_PASSWORD that opened nothing: the seed never ran). A
+    production-kind target NEVER carries it — not even as a literal the repository's manifest
+    wrote, because the repo does not get to seed demo users into production — unless a person
+    deliberately bound it for this app's deploy (`person_set` names those keys)."""
+    out = dict(values or {})
+    if not demo_seed_target(environment):
+        if DEMO_SEED_FLAG not in set(person_set or ()):
+            out.pop(DEMO_SEED_FLAG, None)
+        return out
+    if DEMO_SEED_FLAG not in out and any(is_demo_login_name(k) for k in out):
+        out[DEMO_SEED_FLAG] = "true"
+    return out
+
+
 @dataclass(frozen=True)
 class Need:
     """One variable the app declares. `kind`: generated | demo | secret | stub | listed | literal.
@@ -282,6 +328,13 @@ def resolve(declared: Mapping[str, Need], *, purpose: str,
             env.unset.append(name)
         else:
             env.needs.append(need)
+    if purpose in THROWAWAY and DEMO_SEED_FLAG not in env.values and declares_demo_seeding(declared):
+        # The app declares demo seeding (a demo login password, or the flag itself) and nothing
+        # set the flag: a throwaway run turns it on, or the seed never runs and the DEMO_PASSWORD
+        # BOSS generated and showed the reviewer opens nothing ("invalid credentials"). A value
+        # something bound or declared (a literal "false") was taken above and is respected; a
+        # deploy's answer is the target's kind (`with_demo_seed`), never decided here.
+        env.supply({DEMO_SEED_FLAG: "true"})
     env.supply(names=[n for n in PLATFORM_NAMES if n in declared or n in bound])
     env.supply(supplied)
     if env.generated:

@@ -1,4 +1,6 @@
 # Keyword decision eval. Scores the in-repo keyword rules and does not call a model.
+# `make eval-decisions` runs it with --check: a family below its floor in
+# evals/task_rigor/thresholds.json (today's measured numbers) fails this workflow.
 name: Keyword decision eval
 
 on:

@@ -5,9 +5,12 @@ reports the numbers the strategy turns on: gate pass-rate, retries, wall-clock, 
 $/verified-outcome per config, plus false-pass counts from known-bad probes.
 
 This module is the importable core (request building + aggregation + rendering) so it is
-unit-testable; scripts/run_bakeoff.py is the thin CLI driver around it. Batch identity
-rides in code_task_runs.finalize_ctx->'bakeoff' (no extra tables); results are derived
-on demand, so a batch can be re-aggregated at any time.
+unit-testable. Its driver is the harness benchmark (scripts/harness-bench, BOSSAPP-959): every
+build it starts carries finalize_ctx->'bakeoff' with the benchmark run's id as the batch, so
+`aggregate_batch(<harness_bench_runs.id>)` and GET /v1/bakeoff/{batch}/report read a benchmark
+run as one batch. (The scripts/run_bakeoff.py this docstring once named was never committed.)
+Batch identity rides in code_task_runs.finalize_ctx->'bakeoff' (no extra tables); results are
+derived on demand, so a batch can be re-aggregated at any time.
 
 Cost accounting invariant: llm_calls is the SINGLE source of dollars. The same spend also
 appears aggregated in code_task_runs.usage and quality_gates.evidence — never add those

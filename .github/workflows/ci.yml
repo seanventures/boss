@@ -1,0 +1,159 @@
+# CI that runs tests (BOSSAPP-959, phase 0 of BOSSAPP-958).
+#
+#   p0              ruff's real-bug subset (E9,F63,F7,F82) over engine/ and apps/, then
+#                   the P0 tier of tests/tiers.yaml (engine + API) on Postgres with pgvector,
+#                   through scripts/test-tier.sh; only NEW failures fail (tests/known-failures.txt)
+#   web             pnpm install --frozen-lockfile, the type check, and the whole web unit suite;
+#                   a file that fails and is not in tests/web-quarantine.txt fails the job, and so
+#                   does a quarantined file that now passes (the list only shrinks)
+#   bench-scripted  the harness benchmark on the scripted engine (no model, no cost), compared
+#                   with the committed baseline bench/harness/baselines/scripted.json; a failed
+#                   guard fails the job (docs/architecture/HARNESS_BENCHMARK.md)
+#
+# Apache AGE is not in this Postgres image: the tests that need it (the knowledge graph's
+# cypher / rules / call-graph DB tests) skip themselves with "Apache AGE is not available", and
+# none of them is in P0.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  p0:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: boss
+          POSTGRES_PASSWORD: boss
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U boss" --health-interval 5s --health-timeout 5s
+          --health-retries 20
+    env:
+      BOSS_TEST_PG_URL: postgresql://boss:boss@localhost:5432
+      TEST_TIER_SUITES: engine,api
+      TEST_TIER_RUN_TIMEOUT: "900"
+      TEST_TIER_OUT: ${{ github.workspace }}/.tier-out
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            apps/api/requirements.txt
+            engine/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install the Python dependencies
+        run: python -m pip install -r apps/api/requirements.txt -r engine/requirements.txt
+      - name: A git identity for the tests that commit
+        run: |
+          git config --global user.name "BOSS CI"
+          git config --global user.email "ci@boss.invalid"
+      - name: Lint (the real-bug subset ruff.toml names for CI)
+        run: python -m ruff check --select E9,F63,F7,F82 engine apps
+      - name: Give the API suite room for its locks (the default 64 ran out of shared memory)
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U boss -d postgres -qc "ALTER SYSTEM SET max_locks_per_transaction = 256"
+          docker restart ${{ job.services.postgres.id }}
+          for _ in $(seq 1 60); do docker exec ${{ job.services.postgres.id }} pg_isready -U boss -q && break; sleep 1; done
+      - name: Apply the schema to the engine suite's database
+        run: python scripts/ci_apply_schema.py boss_test
+      - name: Run the P0 tier
+        run: |
+          mkdir -p "$TEST_TIER_OUT"
+          scripts/test-tier.sh P0
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-logs
+          path: .tier-out
+          if-no-files-found: ignore
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install the web dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Type check
+        run: pnpm --filter boss-web lint
+      - name: Web unit suite (quarantine in tests/web-quarantine.txt)
+        run: python scripts/web-unit-ci.py
+
+  bench-scripted:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: boss
+          POSTGRES_PASSWORD: boss
+          POSTGRES_DB: boss_test_bench
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U boss" --health-interval 5s --health-timeout 5s
+          --health-retries 20
+    env:
+      BOSS_BENCH_DATABASE_URL: postgresql+psycopg://boss:boss@localhost:5432/boss_test_bench
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            apps/api/requirements.txt
+            engine/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install the Python dependencies
+        run: python -m pip install -r apps/api/requirements.txt -r engine/requirements.txt
+      - name: A git identity for the builds' commits
+        run: |
+          git config --global user.name "BOSS CI"
+          git config --global user.email "ci@boss.invalid"
+      - name: Harness benchmark on the scripted engine, against the committed baseline
+        timeout-minutes: 10
+        run: >
+          scripts/harness-bench run --engine scripted --baseline scripted
+          --report bench-report.json --compare-out bench-comparison.json
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-bench-scripted
+          path: |
+            bench-report.json
+            bench-comparison.json
+          if-no-files-found: ignore
