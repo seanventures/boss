@@ -115,6 +115,13 @@ class CliChatBrain:
     #: What `create_text_response` calls the session when the CLI does not name one.
     _session_default = "cli"
 
+    #: Whether this CLI can CONTINUE one of its sessions by id (`--resume`), so a chat turn can
+    #: run as ONE session instead of a fresh process per tool step (BOSSAPP-1007; the same
+    #: mechanics the coding pipeline's fix rounds use, code_agent._invoke). False keeps the
+    #: adapter byte-identical to today — the engine-contract rule for engines without
+    #: `caps.resume`. A True subclass implements `_invoke_resume`.
+    _chat_resume = False
+
     #: The harness name this backend spends against — the key connected_engines and the role
     #: knobs use. Declared so capacity observations land on the right entitlement source
     #: without a second map from class to engine somewhere else.
@@ -166,11 +173,20 @@ class CliChatBrain:
             lines.append(f"  schema: {json.dumps(params)}")
         return "\n".join(lines)
 
-    def _render_conversation(self, messages: list[dict]) -> str:
+    def _render_conversation(self, messages: list[dict], *,
+                             emit_assistant: bool = True) -> str:
+        """The conversation as prompt text. `emit_assistant=False` is the RESUMED step's form
+        (BOSSAPP-1007): the model's own replies are already in the session's transcript, so
+        they are read here only to name each tool result, never re-sent."""
         id_to_name: dict[str, str] = {}
         out: list[str] = []
         for m in messages:
             role = m.get("role")
+            if role == "assistant" and not emit_assistant:
+                for tc in (m.get("tool_calls") or []):
+                    if tc.get("id"):
+                        id_to_name[tc["id"]] = (tc.get("function") or {}).get("name")
+                continue
             if role == "system":
                 out.append(f"[SYSTEM INSTRUCTIONS]\n{m.get('content') or ''}")
             elif role == "user":
@@ -243,6 +259,129 @@ class CliChatBrain:
             "directly as your message — do not attempt to use any tool of your own to do it:"
         )
 
+    # ------------------------------------------------------------ turn session (BOSSAPP-1007)
+    def _turn_state(self):
+        """The open chat turn's session state, when THIS adapter may use it: a turn scope is
+        open (services/cli_chat_session.py), the engine can resume, resuming has not failed
+        this turn, and the session (if any) is this adapter's own. None means exactly today's
+        per-step behaviour — which is also what every engine without `_chat_resume` keeps."""
+        if not self._chat_resume:
+            return None
+        from .cli_chat_session import current
+
+        state = current()
+        if state is None or state.broken:
+            return None
+        if state.owner_adapter not in (None, id(self)):
+            return None  # another backend's session is not ours to resume — or to break
+        return state
+
+    def _invoke_resume(self, prompt: str, session_id: str) -> dict:  # pragma: no cover
+        raise NotImplementedError  # reached only when a subclass declares _chat_resume
+
+    def _seed_session(self, state: Any, data: dict) -> None:
+        """Record the session this call just started (or forked — the CLI issues a NEW id on
+        every resume, so the latest is always the one to resume next). A CLI that named no
+        session leaves the state as it was: nothing to resume, every call stays whole."""
+        sid = str(data.get("session_id") or "").strip()
+        if sid:
+            state.session_id = sid
+            state.owner_adapter = id(self)
+
+    @staticmethod
+    def _tool_names(tools: Optional[list[dict]]) -> set:
+        return {str(((t or {}).get("function") or {}).get("name") or "") for t in (tools or [])}
+
+    def _session_completion(self, state: Any, messages: list[dict],
+                            tools: Optional[list[dict]]) -> dict:
+        """One chat round-trip on the TURN'S session (BOSSAPP-1007): the turn's first call sends
+        the whole prompt and starts the session; every later call RESUMES it and sends only what
+        is new — tool results, user notices, schemas of newly found tools. The conversation so
+        far, the tool schemas and the CLI's own preamble become warm cache instead of a fresh
+        render per step (the same mechanics as the coding pipeline's fix rounds,
+        code_agent._invoke).
+
+        A resume that fails falls back to the per-step call for the REST of the turn
+        (`state.broken`): resuming is an optimisation, never the answer. A turn deadline is not
+        a resume failure — the turn is over, and a fresh full-prompt retry would only overrun
+        it further."""
+        if state.session_id is None:
+            # The turn's first chat call: byte-identical prompt to the per-step path.
+            data = self._invoke(self._build_prompt(messages, tools))
+            state.fresh_calls += 1
+            self._seed_session(state, data)
+            if state.session_id:
+                state.owner_convo = id(messages)
+                state.sent_messages = len(messages)
+                state.sent_tools = self._tool_names(tools)
+            return data
+        # A session exists. The SAME conversation list continues with a delta; a different one
+        # (a later pass of the turn, or the loop after the decision seeded the session) resumes
+        # with its whole prompt and takes ownership — correct either way, cheaper when owned.
+        own = state.owner_convo == id(messages) and len(messages) >= state.sent_messages
+        if own:
+            new_messages = messages[state.sent_messages:]
+            new_tools = [t for t in (tools or [])
+                         if str(((t or {}).get("function") or {}).get("name") or "")
+                         not in state.sent_tools]
+            prompt = self._build_resume_prompt(new_messages, new_tools, bool(tools))
+        else:
+            prompt = self._build_prompt(messages, tools)
+        from ..agent.transient import _looks_transient
+        from .call_deadline import TurnDeadlineExceeded
+
+        try:
+            data = self._invoke_resume(prompt, state.session_id)
+        except TurnDeadlineExceeded:
+            raise  # the TURN is over; a fresh full-prompt retry would only overrun it further
+        except Exception as exc:  # noqa: BLE001 — fall back to today's per-step behaviour
+            if _looks_transient(exc):
+                # A provider hiccup, not a resume fault: the caller's transient retry runs
+                # this same call again, session intact (nothing here was mutated).
+                raise
+            state.broken = f"resume failed: {type(exc).__name__}"[:200]
+            _log.info("chat session resume failed; per-step for the rest of the turn: %s", exc)
+            return self._invoke(self._build_prompt(messages, tools))
+        state.resumed_calls += 1
+        self._seed_session(state, data)
+        state.owner_convo = id(messages)
+        state.sent_messages = len(messages)
+        state.sent_tools = (state.sent_tools | self._tool_names(tools)) if own \
+            else self._tool_names(tools)
+        return data
+
+    def _build_resume_prompt(self, new_messages: list[dict], new_tools: list[dict],
+                             tools_offered: bool) -> str:
+        """What a RESUMED step sends: only what the session has not seen. The session already
+        holds the protocol rules, the tool schemas and the conversation (the turn's first
+        prompt, `_build_prompt`); the closing line restates the one-JSON-object contract so a
+        long turn cannot drift out of it. The model's own replies are already in the session's
+        transcript, so assistant messages are never re-sent."""
+        parts = [
+            "CONTINUING THE SAME TURN. You are still the reasoning core of BOSS: BOSS — not "
+            "you — drives the control loop and executes tools; you decide the single next "
+            "step. Everything established above in this session stands. Below is only what "
+            "happened since your last reply."]
+        if new_tools:
+            parts.append(
+                "ADDITIONAL TOOLS NOW AVAILABLE. Like the earlier list, these are BOSS's "
+                "tools, not yours — you cannot invoke them; NAME one in your JSON and BOSS "
+                "executes it:\n" + self._render_tools(new_tools))
+        rendered = self._render_conversation(new_messages, emit_assistant=False)
+        parts.append(f"=== NEW SINCE YOUR LAST REPLY ===\n{rendered}\n=== END ===")
+        if tools_offered:
+            parts.append(
+                "Reply now with EXACTLY ONE JSON object and NOTHING else — no prose outside "
+                'it, no markdown code fences: {"thought": "<brief reasoning>", "tool_calls": '
+                '[{"name": "<tool>", "arguments": {<args>}}]} to call tools, or '
+                '{"thought": "<brief reasoning>", "final": "<your complete final answer>"} '
+                "when you are done. Do not attempt to use any tool of your own.")
+        else:
+            parts.append(
+                "Now write your complete final answer to the person as plain text — no JSON, "
+                "no code fences, no preamble.")
+        return "\n\n".join(parts)
+
     # ---------------------------------------------------------------- api
     def create_chat_completion(
         self,
@@ -250,8 +389,12 @@ class CliChatBrain:
         tools: Optional[list[dict]] = None,
         tool_choice: str = "auto",
     ) -> Tuple[dict, dict]:
-        prompt = self._build_prompt(messages, tools)
-        data = self._invoke(prompt)
+        state = self._turn_state()
+        if state is not None:
+            data = self._session_completion(state, messages, tools)
+        else:
+            prompt = self._build_prompt(messages, tools)
+            data = self._invoke(prompt)
         usage = self._usage(data)
         result_text = data.get("result") or ""
 
@@ -348,6 +491,7 @@ class CliChatBrain:
             self._observe_capacity(ok=False, error=str(exc))
             raise
         self._observe_capacity(ok=True, error=None)
+        self._seed_turn_session(data)
         return (data.get("session_id", self._session_default),
                 (data.get("result") or ""), self._usage(data))
 
@@ -363,7 +507,20 @@ class CliChatBrain:
             self._observe_capacity(ok=False, error=str(exc))
             raise
         self._observe_capacity(ok=True, error=None)
+        self._seed_turn_session(data)
         return (data.get("result") or ""), self._usage(data)
+
+    def _seed_turn_session(self, data: dict) -> None:
+        """THE MERGED DECISION CALL (BOSSAPP-1006). A chat turn's first model call is the
+        router's turn decision — a lean one-shot through here — and it used to leave nothing
+        behind: the tool loop then opened a session of its own. Inside a turn scope, the
+        turn's FIRST completed call now names the session the rest of the turn resumes
+        (the merge the kernel's decision reading proved: decide and work in ONE conversation,
+        agent_decision._ask_reading_on_kernel). Never resumes, never overwrites: a generation
+        made mid-turn joins nothing."""
+        state = self._turn_state()
+        if state is not None and state.session_id is None:
+            self._seed_session(state, data)
 
     def _invoke_plain(self, system_prompt: str, prompt: str) -> dict:
         return self._invoke(f"{system_prompt}\n\n{prompt}" if system_prompt else prompt)
@@ -393,6 +550,10 @@ class ClaudeCliAdapter(CliChatBrain):
 
     _session_default = "claude-cli"
     _engine_name = "claude_code"
+    #: Claude Code resumes a session by id (`--resume` — the engine contract's caps.resume,
+    #: and what the coding pipeline's fix rounds already ride): a chat turn runs as ONE
+    #: session, each tool step a delta on it (BOSSAPP-1007).
+    _chat_resume = True
 
     # ---------------------------------------------------------------- cli
     def _claude_bin(self) -> str:
@@ -497,7 +658,8 @@ class ClaudeCliAdapter(CliChatBrain):
                 f"{str((data or {}).get('result') or '')[:160]!r}")
 
     def _command(self, prompt: str, system_prompt: Optional[str], *,
-                 output: tuple[str, ...] = ("--output-format", "json")) -> tuple[list[str], bool]:
+                 output: tuple[str, ...] = ("--output-format", "json"),
+                 resume: Optional[str] = None) -> tuple[list[str], bool]:
         """The `claude -p` command for one call, and whether the prompt goes on stdin."""
         # A LONG CONVERSATION IS NOT AN ARGUMENT. Linux caps a single argv entry at
         # MAX_ARG_STRLEN (128 KiB), and this prompt is the whole conversation plus ~48 tool
@@ -530,6 +692,11 @@ class ClaudeCliAdapter(CliChatBrain):
         ]
         if system_prompt is not None:
             cmd += ["--system-prompt", system_prompt]
+        if resume:
+            # THE TURN'S ONE SESSION (BOSSAPP-1007), the coding pipeline's own fix-round
+            # mechanics (code_agent._invoke): the conversation so far rides the warm prompt
+            # cache as a READ instead of being re-rendered and re-ingested per tool step.
+            cmd += ["--resume", resume]
         from .claude_credential import split_pick
         from .model_router.compat import fits
 
@@ -559,10 +726,18 @@ class ClaudeCliAdapter(CliChatBrain):
                 f"({int(timeout)}s for this call)")
         return RuntimeError(f"claude CLI timed out after {int(timeout)}s")
 
-    def _invoke(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
+    def _invoke_resume(self, prompt: str, session_id: str) -> dict:
+        return self._invoke(prompt, resume=session_id)
+
+    def _invoke(self, prompt: str, *, system_prompt: Optional[str] = None,
+                resume: Optional[str] = None) -> dict:
         # One "Not logged in" is a report, not a verdict (model_failures.confirm_login_rejection).
         # A governed receipt cannot hide that second process on the same key.
         def once() -> dict:
+            if resume:
+                return self._invoke_once(prompt, system_prompt=system_prompt, resume=resume)
+            # Without a session, the exact call shape subclasses have always overridden
+            # (AgentSdkChatAdapter's _invoke_once takes no resume and never sees one).
             return self._invoke_once(prompt, system_prompt=system_prompt)
 
         from .openai_adapter import in_single_attempt
@@ -573,9 +748,10 @@ class ClaudeCliAdapter(CliChatBrain):
 
         return confirm_login_rejection(once)
 
-    def _invoke_once(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
+    def _invoke_once(self, prompt: str, *, system_prompt: Optional[str] = None,
+                     resume: Optional[str] = None) -> dict:
         timeout, own_timeout = self._timeouts()
-        cmd, via_stdin = self._command(prompt, system_prompt)
+        cmd, via_stdin = self._command(prompt, system_prompt, resume=resume)
         try:
             # Mostly network wait, but it is still a node process in the API's container and
             # nothing here is latency-critical. See services/scheduling.py.

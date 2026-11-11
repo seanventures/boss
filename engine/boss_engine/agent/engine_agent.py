@@ -33,6 +33,7 @@ from .._compat import services_module
 from ..services import protocol_reply
 from ..tools import ToolError, ToolRegistry, build_discuss_read_registry
 from ..tools.registry import offer_warning
+from ..services.cli_chat_session import in_turn_scope
 from ..services.low_trust import Ledger, outside_origin, release, remember
 from ..services.tool_result_text import clip_for_model
 
@@ -48,7 +49,11 @@ _UNSCOPED_SQL_TOOLS = frozenset({"query_db", "write_db"})
 KERNEL_CHAT_FLAG = "BOSS_KERNEL_CHAT"
 
 #: Chat lanes whose create_chat_completion is the JSON-in-text protocol over a CLI. The kernel
-#: has no native engine for them until K8 (subscription chat over MCP), so they fall through.
+#: has no native engine for them until K8 (subscription chat over MCP), so they fall through —
+#: to the loop below, which since BOSSAPP-1006/1007 scopes their tool schemas the kernel's way
+#: (kernel/scoped_tools) and runs each turn as ONE resumed CLI session where the engine can
+#: (claude_cli_adapter). Flipping BOSS_KERNEL_CHAT alone never changed CLI-engine chat; these
+#: two fixes are how a subscription install's chat gets the kernel's economies.
 _CLI_TEXT_BRAINS = frozenset({"claude_code", "claude_agent_sdk", "codex"})
 
 #: The same brains recognised by adapter type, for an adapter built outside the router (no
@@ -62,6 +67,29 @@ def kernel_chat() -> bool:
 
     return (os.environ.get(KERNEL_CHAT_FLAG) or "").strip().lower() in ("1", "true", "yes",
                                                                         "on")
+
+
+def _cli_text_adapter(adapter: Any) -> bool:
+    """Whether `adapter` answers over a CLI TEXT protocol (the JSON-in-text contract), under
+    any of the router's wrappers. Those are the engines whose every chat round-trip re-renders
+    the whole conversation plus every tool schema into a prompt — the reason the loop scopes
+    their schemas (BOSSAPP-1006) where a native function-calling adapter keeps the full set."""
+    choice = getattr(adapter, "_boss_choice", None)
+    if choice is not None:
+        return str(getattr(choice, "engine", "") or "") in _CLI_TEXT_BRAINS
+    from ..services.claude_cli_adapter import CliChatBrain, FallingBackAdapter
+
+    seen, inner = 0, adapter
+    while inner is not None and seen < 8:
+        if isinstance(inner, CliChatBrain):
+            return True
+        if isinstance(inner, FallingBackAdapter):
+            inner = inner.primary
+        else:
+            nxt = getattr(inner, "_inner", None)
+            inner = nxt if nxt is not None and nxt is not inner else None
+        seen += 1
+    return False
 
 
 _SYSTEM_PROMPT = """You are the BOSS Agent — the conversational interface to the \
@@ -476,6 +504,12 @@ class EngineAgent:
             self._adapter_routed = True
         return self._adapter
 
+    # THE CHAT TURN SCOPE (BOSSAPP-1007): on a CLI engine that can resume, every model call of
+    # the turn rides ONE CLI session instead of a fresh process per tool step
+    # (services/cli_chat_session.py). The router opens the scope around the whole turn
+    # (decision included); this one is for direct callers — MCP, tests — and is a no-op inside
+    # an open scope (outermost wins). functools.wraps keeps the signature and source readable.
+    @in_turn_scope
     def chat(
         self,
         *,
@@ -528,12 +562,42 @@ class EngineAgent:
                 return on_kernel
         schemas = [schema for schema in self.registry.openai_schema()
                    if schema["function"]["name"] not in _UNSCOPED_SQL_TOOLS]
+        # SCOPED TOOLS ON THE CLI TEXT LOOP (BOSSAPP-1006). A CLI text brain re-renders EVERY
+        # schema into EVERY prompt (~168 tools ≈ 37k tokens a call, audit BOSSAPP-997 §1a), and
+        # its JSON-in-text protocol demonstrably degrades past ~53 tools — so here the turn is
+        # offered the chat CORE (Exposure.core_for, ≤20) plus `find_tools`, and every other
+        # chat-exposed tool joins the offer once a `find_tools` call of this turn returns it.
+        # THE SAME derivation and the same found-tools reading as the kernel's ScopedTools
+        # (kernel/scoped_tools.surface_view / found_in_trace) — one mechanism, not a second
+        # list. Native function-calling adapters keep today's full set; BOSS_SCOPED_TOOLS set
+        # to an off word turns this off too (scoped_tools.cli_text_default).
+        from ..kernel import scoped_tools as _scoped
+
+        scoped_view = None
+        if _scoped.cli_text_default() and _cli_text_adapter(self._adapter_obj()):
+            scoped_view = _scoped.surface_view(self.registry, "chat")
+
         messages: list[dict] = [{"role": "system", "content": system or _SYSTEM_PROMPT}]
         if history:
             messages.extend(history)
         messages.append({"role": "user", "content": message})
 
         trace: list[dict] = []
+
+        def offered_schemas() -> list[dict]:
+            """This step's schemas: everything, or the scoped core plus what this turn FOUND —
+            found tools are only ever appended (the kernel's cache-stable rule, §4.3)."""
+            if scoped_view is None:
+                return schemas
+            found = _scoped.found_in_trace(trace)
+            out = []
+            for schema in schemas:
+                standing = scoped_view.get(schema["function"]["name"], "core")
+                if standing == "core" or (standing == "deferred"
+                                          and schema["function"]["name"] in found):
+                    out.append(schema)
+            return out
+
         #: How many times each tool has FAILED this turn. See the nudge below `_run_tool`.
         tool_failures: dict[str, int] = {}
         pending: list[dict] = []
@@ -550,7 +614,7 @@ class EngineAgent:
         # produces no text. So when the budget ran out mid-investigation the operator got
         # "(reached the step limit while working; ask me to continue.)" — carrying NONE of what
         # had just been read. With max_steps=4 from the router that was the ORDINARY outcome of
-        # any real question: the prompt lists ~47 tools and says "chain tools, several calls is
+        # any real question: the prompt offers the turn's tools and says "chain tools, several calls is
         # normal", and four round-trips are consumed before anything can be written down.
         #
         # The last step is therefore reserved: it runs with NO tools, so the model has nothing
@@ -665,7 +729,7 @@ class EngineAgent:
                     msg, _usage = _with_transient_retry(
                         lambda: self._adapter_obj().create_chat_completion(
                             messages, tools=(offer_schemas if closing_offer
-                                             else None if last else schemas)
+                                             else None if last else offered_schemas())
                         )
                     )
             except TurnDeadlineExceeded:
