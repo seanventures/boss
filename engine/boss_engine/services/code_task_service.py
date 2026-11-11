@@ -1826,6 +1826,31 @@ def lineage_kept_work(engine, prev: Optional[dict], run_id: str) -> bool:
     return True
 
 
+def resumable_implement_session(load, *, run_id: str, state: dict, seed_from: str,
+                                seeded: bool) -> Optional[dict]:
+    """The implement session a retry child may RESUME instead of cold-starting (BOSSAPP-1001).
+
+    The session must match the TREE the child starts from: a seeded child starts from
+    `seed_from`'s saved workspace, so it carries that attempt's session; an unseeded repair
+    builds onto the lineage branch, which holds the newest attempt's work — `run_id`'s own.
+    Only a native engine session is worth carrying: a BOSS-issued fallback id names a
+    process-local ledger entry the child's worker does not hold (`impl_session.native` False).
+    The child still re-checks role, engine, model and capability at the moment it runs
+    (governed_code_task_service.carried_implement_session); this is the carry, not the decision.
+
+    Returns ``{"session_id", "engine", "model", "from_run"}`` or None (cold start, as today)."""
+    src = seed_from if seeded else run_id
+    src_state = state if src == run_id else ((load(src) or {}).get("state") or {})
+    rec = src_state.get("impl_session") if isinstance(src_state, dict) else None
+    if not isinstance(rec, dict) or rec.get("native") is False:
+        return None
+    sid = str(rec.get("session_id") or "").strip()
+    if not sid:
+        return None
+    return {"session_id": sid, "engine": str(rec.get("engine") or ""),
+            "model": str(rec.get("model") or ""), "from_run": src}
+
+
 #: How many times BOSS itself retries a held delivery before it is a person's to retry.
 AUTO_DELIVERY_RETRIES = 2
 
@@ -2135,6 +2160,17 @@ def retry_code_task(
         **({"substrate_fallback": substrate_fallback_note} if substrate_fallback_note else {}),
     })
 
+    # THE PARENT'S IMPLEMENT SESSION FOLLOWS THE WORK (BOSSAPP-1001): a repair/CI-repair/retry
+    # child resumes it for its repair pass instead of cold-starting a fresh CLI session onto the
+    # same tree. A fresh build carries none — there is no work of this lineage to continue.
+    def _load_attempt(rid: str) -> Optional[dict]:
+        with _transaction(engine) as c:
+            return load_code_task_run(c, rid)
+
+    resume_impl = (None if fresh else resumable_implement_session(
+        _load_attempt, run_id=run_id, state=state, seed_from=seed_from,
+        seeded=bool(seed_files)))
+
     started: dict = {}
     with _transaction(engine) as c:
         new_id = start_code_task(
@@ -2168,6 +2204,9 @@ def retry_code_task(
                              else {}),
                           "feedback_history": history,
                           **({"seed_workspace_from": seed_from} if seed_files else {}),
+                          # The parent's implement session, for the child's repair pass to
+                          # resume (BOSSAPP-1001); re-validated at run time, never a promise.
+                          **({"resume_implement_session": resume_impl} if resume_impl else {}),
                           # UNRESOLVED REVIEW COMMENTS FOLLOW THE WORK, NOT THE ATTEMPT.
                           #
                           # Comments are stored per run, and a retry mints a NEW run — so a
