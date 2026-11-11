@@ -11916,7 +11916,7 @@ CREATE TABLE IF NOT EXISTS harness_bench_runs (
   suite_sha256 TEXT NOT NULL,
   engine TEXT NOT NULL,                       -- scripted | claude_code | codex | native:<model>
   model TEXT,
-  level TEXT NOT NULL DEFAULT 'delegate',     -- the scaffold level (delegate today)
+  level TEXT NOT NULL DEFAULT 'delegate',     -- delegate (the governed pipeline) | bare (the engine's own loop)
   boss_sha TEXT,
   boss_dirty BOOLEAN NOT NULL DEFAULT false,  -- the checkout had uncommitted changes
   config JSONB NOT NULL DEFAULT '{}'::jsonb,  -- repair retries, review rounds, profile, routing ...

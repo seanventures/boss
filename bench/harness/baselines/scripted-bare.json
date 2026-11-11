@@ -1,0 +1,809 @@
+{
+ "schema": "boss-harness-bench/1",
+ "run": {
+  "id": "hbr_5380409520f84da38bfa",
+  "suite": "boss-harness",
+  "suite_version": "1",
+  "suite_sha256": "711fd0435f6eced602b7cbfae28c82c8a8f90a7d968e5ed4e396d7b33a904f1a",
+  "engine": "scripted",
+  "model": null,
+  "level": "bare",
+  "boss_sha": "58392150c9f6ba45af37776c9d07d042741467b7",
+  "boss_dirty": true,
+  "config": {
+   "engine": "scripted",
+   "model": null,
+   "level": "bare",
+   "profile": null,
+   "risk_tier": null,
+   "settings": {},
+   "overrides": {},
+   "bare": {
+    "max_turns": 80
+   },
+   "scripted": {
+    "caps": "resume,read_only,turn_limit,reports_cost,streams_turns",
+    "extra_faults": []
+   }
+  },
+  "config_fingerprint": "fb5db41dfc37d71e",
+  "rules": {
+   "k_stdev": 2.0,
+   "metrics": {
+    "success_rate": {
+     "abs_floor": 0.0
+    },
+    "wall_s": {
+     "abs_floor": 30,
+     "rel_floor": 0.1
+    },
+    "tokens_in": {
+     "abs_floor": 200,
+     "rel_floor": 0.02
+    },
+    "tokens_out": {
+     "abs_floor": 50,
+     "rel_floor": 0.02
+    },
+    "cache_share": {
+     "abs_floor": 0.02
+    },
+    "cost_usd": {
+     "abs_floor": 0.05,
+     "rel_floor": 0.05
+    },
+    "model_calls": {
+     "abs_floor": 0
+    },
+    "turns": {
+     "abs_floor": 0
+    },
+    "repair_rounds": {
+     "abs_floor": 0
+    },
+    "interventions": {
+     "abs_floor": 0
+    }
+   },
+   "guards": {
+    "success_rate": {
+     "max_drop": 0.0
+    },
+    "cost_usd": {
+     "max_rise_pct": 15
+    },
+    "interventions": {
+     "max_rise": 0
+    },
+    "model_calls": {
+     "max_rise": 0
+    },
+    "turns": {
+     "max_rise": 0
+    },
+    "repair_rounds": {
+     "max_rise": 0
+    }
+   }
+  },
+  "task_ids": [
+   "helpdesk-classify-case",
+   "helpdesk-blank-title",
+   "textkit-word-count",
+   "helpdesk-priority",
+   "helpdesk-stats",
+   "textkit-truncate",
+   "new-slug-service",
+   "new-tempconv"
+  ],
+  "repeat": 1,
+  "budget_usd": null,
+  "started_at": "2026-11-11T16:30:34+00:00",
+  "project_id": "p_benchc92da94f58",
+  "status": "completed",
+  "finished_at": "2026-11-11T16:30:42+00:00",
+  "baseline_name": "scripted-bare"
+ },
+ "results": [
+  {
+   "task_id": "helpdesk-classify-case",
+   "kind": "fix",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "2b9155d7d09d19b2b8d117209f57886c3a3d5f55",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "scripted_faults": [],
+   "components": {
+    "completed": true,
+    "changed": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "error": null,
+   "metrics": {
+    "wall_s": 0.52,
+    "tokens_in": 251,
+    "tokens_out": 20,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 1,
+    "turns": 1,
+    "tool_calls": 2,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head a18ee6996b base 2b9155d7d0"
+     },
+     {
+      "check": "src/classify.js changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: npm test",
+      "ok": true,
+      "detail": "exit 0 in 0.2s: mean more confidence (0.234041ms)\n\u2714 capital letters do not hide a keyword (0.330166ms)\n\u2714 a new ticket is open and filed under its category (1.706334ms)\n\u2714 a ticket needs a title (0.199ms)\n\u2714 tickets are listed newest first (0.125083ms)\n\u2714 a ticket can be closed, and only to a known status (0.102125ms)\n\u2139 tests 12\n\u2139 suites 0\n\u2139 pass 12\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 91.068584\n"
+     },
+     {
+      "check": "held acceptance tests: node --test bench_acceptance/classify_case.accept.mjs",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: \u2714 a keyword matches whatever its case (0.286167ms)\n\u2714 case does not change confidence (0.367041ms)\n\u2714 unmatched words are still Other (0.043791ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 30.109083\n"
+     }
+    ],
+    "head": "a18ee6996b2009ebb7dec2a4d119cd2a81edae7e",
+    "changed_files": [
+     "src/classify.js",
+     "test/classify_case.test.js"
+    ]
+   },
+   "branch": "bare/helpdesk-classify-case-1",
+   "session": {
+    "model": "scripted-v1",
+    "session_id": "scr-4ce8ac408ed5",
+    "stop_reason": "done",
+    "summary": "Implemented the slug service. Changed: src/classify.js, test/classify_case.test.js."
+   }
+  },
+  {
+   "task_id": "helpdesk-blank-title",
+   "kind": "fix",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "266235e9c1513c35b6f6e0babd30dcde4d322d76",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "scripted_faults": [],
+   "components": {
+    "completed": true,
+    "changed": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "error": null,
+   "metrics": {
+    "wall_s": 0.04,
+    "tokens_in": 235,
+    "tokens_out": 19,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 1,
+    "turns": 1,
+    "tool_calls": 2,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 0d7301bbbe base 266235e9c1"
+     },
+     {
+      "check": "src/store.js changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: npm test",
+      "ok": true,
+      "detail": "exit 0 in 0.2s: thing are Other (0.277166ms)\n\u2714 more matching words mean more confidence (0.223041ms)\n\u2714 a new ticket is open and filed under its category (1.48425ms)\n\u2714 a ticket needs a title (0.191708ms)\n\u2714 tickets are listed newest first (0.169042ms)\n\u2714 a ticket can be closed, and only to a known status (0.116875ms)\n\u2139 tests 13\n\u2139 suites 0\n\u2139 pass 13\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 88.800458\n"
+     },
+     {
+      "check": "held acceptance tests: node --test bench_acceptance/blank_title.accept.mjs",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: \u2714 blank and whitespace titles are refused in the store (2.650709ms)\n\u2714 a whitespace title is a 400 over HTTP and creates nothing (10.8305ms)\n\u2714 a padded title is kept, trimmed (1.358167ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 82.189917\n"
+     }
+    ],
+    "head": "0d7301bbbe49bde91a7240d0731ac783aa7329ee",
+    "changed_files": [
+     "src/store.js",
+     "test/blank_title.test.js"
+    ]
+   },
+   "branch": "bare/helpdesk-blank-title-1",
+   "session": {
+    "model": "scripted-v1",
+    "session_id": "scr-aa5487ae10ec",
+    "stop_reason": "done",
+    "summary": "Implemented the slug service. Changed: src/store.js, test/blank_title.test.js."
+   }
+  },
+  {
+   "task_id": "textkit-word-count",
+   "kind": "fix",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "textkit",
+    "commit": "b7bf31983b9ae0cfdbcd06ffe90f1a8d28aa1d80",
+    "sha256": "f63c43bf762a2d2b4d74deac81b2d11ba10703f8430893454acad6ad719a9878"
+   },
+   "scripted_faults": [],
+   "components": {
+    "completed": true,
+    "changed": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "error": null,
+   "metrics": {
+    "wall_s": 0.04,
+    "tokens_in": 228,
+    "tokens_out": 22,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 1,
+    "turns": 1,
+    "tool_calls": 2,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head f1c62bf935 base b7bf31983b"
+     },
+     {
+      "check": "textkit/words.py changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: python3 -m unittest discover -s tests -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.0s: ........\n----------------------------------------------------------------------\nRan 8 tests in 0.000s\n\nOK\n"
+     },
+     {
+      "check": "held acceptance tests: python3 -m unittest discover -s bench_acceptance -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.0s: ..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n"
+     }
+    ],
+    "head": "f1c62bf9354c34b98974c761cd7528c904cdce1f",
+    "changed_files": [
+     "tests/test_word_count_spacing.py",
+     "textkit/words.py"
+    ]
+   },
+   "branch": "bare/textkit-word-count-1",
+   "session": {
+    "model": "scripted-v1",
+    "session_id": "scr-47dec70959ac",
+    "stop_reason": "done",
+    "summary": "Implemented the slug service. Changed: textkit/words.py, tests/test_word_count_spacing.py."
+   }
+  },
+  {
+   "task_id": "helpdesk-priority",
+   "kind": "feature",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "275d773564320feef4ae8b20ea8c5b6dd462d566",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "scripted_faults": [
+    "blocker"
+   ],
+   "components": {
+    "completed": true,
+    "changed": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "error": null,
+   "metrics": {
+    "wall_s": 0.04,
+    "tokens_in": 280,
+    "tokens_out": 21,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 1,
+    "turns": 1,
+    "tool_calls": 3,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 823c2f5268 base 275d773564"
+     },
+     {
+      "check": "src/store.js changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "src/app.js changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: npm test",
+      "ok": true,
+      "detail": "exit 0 in 0.2s: n priority is refused (0.210208ms)\n\u2714 tickets can be listed by priority (0.936208ms)\n\u2714 a new ticket is open and filed under its category (1.407333ms)\n\u2714 a ticket needs a title (0.204792ms)\n\u2714 tickets are listed newest first (0.184917ms)\n\u2714 a ticket can be closed, and only to a known status (0.145458ms)\n\u2139 tests 14\n\u2139 suites 0\n\u2139 pass 14\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 94.293666\n"
+     },
+     {
+      "check": "held acceptance tests: node --test bench_acceptance/priority.accept.mjs",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: \u2714 priority defaults to normal and is kept when given (19.138833ms)\n\u2714 an unknown priority is a 400 and creates nothing (4.405459ms)\n\u2714 the list filters by priority, newest first, and unfiltered lists everything (3.693459ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 88.687875\n"
+     }
+    ],
+    "head": "823c2f52689dd82b7748a94f1db374ddba01155d",
+    "changed_files": [
+     "src/app.js",
+     "src/store.js",
+     "test/priority.test.js"
+    ]
+   },
+   "branch": "bare/helpdesk-priority-1",
+   "session": {
+    "model": "scripted-v1",
+    "session_id": "scr-5f84487c9933",
+    "stop_reason": "done",
+    "summary": "Implemented the slug service. Changed: src/app.js, src/store.js, test/priority.test.js."
+   }
+  },
+  {
+   "task_id": "helpdesk-stats",
+   "kind": "feature",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "5b167f4bd0fc148666e1b6d338001d161205661c",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "scripted_faults": [],
+   "components": {
+    "completed": true,
+    "changed": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "error": null,
+   "metrics": {
+    "wall_s": 0.04,
+    "tokens_in": 244,
+    "tokens_out": 21,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 1,
+    "turns": 1,
+    "tool_calls": 3,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 3362fed756 base 5b167f4bd0"
+     },
+     {
+      "check": "src/app.js changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: npm test",
+      "ok": true,
+      "detail": "exit 0 in 0.2s: s)\n\u2714 no tickets, all zero (0.751375ms)\n\u2714 counts by status and by category (0.655958ms)\n\u2714 a new ticket is open and filed under its category (1.791ms)\n\u2714 a ticket needs a title (0.247209ms)\n\u2714 tickets are listed newest first (0.123583ms)\n\u2714 a ticket can be closed, and only to a known status (0.104125ms)\n\u2139 tests 13\n\u2139 suites 0\n\u2139 pass 13\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 88.638208\n"
+     },
+     {
+      "check": "held acceptance tests: node --test bench_acceptance/stats.accept.mjs",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: \u2714 an empty desk answers zeros for every status and every category (9.939083ms)\n\u2714 the counts follow the tickets and their status (7.501167ms)\n\u2714 the existing routes still answer (2.415084ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 84.223084\n"
+     }
+    ],
+    "head": "3362fed756442e1eeb433116d0a05f8f08e6cdb7",
+    "changed_files": [
+     "src/app.js",
+     "src/store.js",
+     "test/stats.test.js"
+    ]
+   },
+   "branch": "bare/helpdesk-stats-1",
+   "session": {
+    "model": "scripted-v1",
+    "session_id": "scr-c1e0faf69d7b",
+    "stop_reason": "done",
+    "summary": "Implemented the slug service. Changed: src/app.js, src/store.js, test/stats.test.js."
+   }
+  },
+  {
+   "task_id": "textkit-truncate",
+   "kind": "feature",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "textkit",
+    "commit": "d58e081d0e6c701f6ade008681c1bd949af6226f",
+    "sha256": "f63c43bf762a2d2b4d74deac81b2d11ba10703f8430893454acad6ad719a9878"
+   },
+   "scripted_faults": [],
+   "components": {
+    "completed": true,
+    "changed": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "error": null,
+   "metrics": {
+    "wall_s": 0.04,
+    "tokens_in": 245,
+    "tokens_out": 25,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 1,
+    "turns": 1,
+    "tool_calls": 3,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 3380bef288 base d58e081d0e"
+     },
+     {
+      "check": "textkit/words.py changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "textkit/__init__.py changed",
+      "ok": true,
+      "detail": "changed"
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: python3 -m unittest discover -s tests -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.0s: .........\n----------------------------------------------------------------------\nRan 9 tests in 0.000s\n\nOK\n"
+     },
+     {
+      "check": "held acceptance tests: python3 -m unittest discover -s bench_acceptance -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.0s: .....\n----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n"
+     }
+    ],
+    "head": "3380bef288d8cf027ea2ca22e0574fbe9c6f0ef2",
+    "changed_files": [
+     "tests/test_truncate.py",
+     "textkit/__init__.py",
+     "textkit/words.py"
+    ]
+   },
+   "branch": "bare/textkit-truncate-1",
+   "session": {
+    "model": "scripted-v1",
+    "session_id": "scr-a6041ea3c6bb",
+    "stop_reason": "done",
+    "summary": "Implemented the slug service. Changed: textkit/__init__.py, textkit/words.py, tests/test_truncate.py."
+   }
+  },
+  {
+   "task_id": "new-slug-service",
+   "kind": "new_app",
+   "iteration": 1,
+   "success": false,
+   "fixture": {
+    "name": "empty",
+    "commit": "fa4f35e123a45e891b4bb780fc1ac47f5f40a949",
+    "sha256": "4d7a4904a9b4ab587165510784c5fe2c5193e7a0acc090eb8a9cff5d9d1782be"
+   },
+   "scripted_faults": [
+    "failing_test"
+   ],
+   "components": {
+    "completed": true,
+    "changed": true,
+    "acceptance_passed": false
+   },
+   "status": "completed",
+   "error": null,
+   "metrics": {
+    "wall_s": 0.04,
+    "tokens_in": 239,
+    "tokens_out": 30,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 1,
+    "turns": 1,
+    "tool_calls": 5,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "acceptance": {
+    "passed": false,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 15e938e346 base fa4f35e123"
+     },
+     {
+      "check": "src/slug.js exists",
+      "ok": true,
+      "detail": ""
+     },
+     {
+      "check": "src/server.js exists",
+      "ok": true,
+      "detail": ""
+     },
+     {
+      "check": "package.json exists",
+      "ok": true,
+      "detail": ""
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: npm test",
+      "ok": false,
+      "detail": "exit 1 in 0.1s: ts (node:internal/test_runner/test:744:18)\n      at Test.postRun (node:internal/test_runner/test:1173:19)\n      at Test.run (node:internal/test_runner/test:1101:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:297:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: '  --Plain Node--  ',\n    expected: 'plain-node',\n    operator: 'strictEqual'\n  }\n"
+     },
+     {
+      "check": "held acceptance tests: node --test bench_acceptance/slug.accept.mjs",
+      "ok": false,
+      "detail": "exit 1 in 0.2s:   \n      at TestContext.<anonymous> (file:///private/var/folders/rb/0g9fpvt513j0npwz6ghck0f80000gn/T/boss-harness-bench-5vgw_ush/accept/new-slug-service-a7e698/bench_acceptance/slug.accept.mjs:42:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)\n      at async Test.run (node:internal/test_runner/test:1054:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:744:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: { slug: 'Ship It Now' },\n    expected: { slug: 'ship-it-now' },\n    operator: 'deepS"
+     }
+    ],
+    "head": "15e938e346a99dc3e94f99b0cb2851e353119f4f",
+    "changed_files": [
+     "boss.preview.command",
+     "package.json",
+     "src/server.js",
+     "src/slug.js",
+     "test/slug.test.js"
+    ]
+   },
+   "branch": "bare/new-slug-service-1",
+   "session": {
+    "model": "scripted-v1",
+    "session_id": "scr-98319603fae4",
+    "stop_reason": "done",
+    "summary": "Implemented the slug service. Changed: package.json, src/server.js, src/slug.js, boss.preview.command, test/slug.test.js."
+   }
+  },
+  {
+   "task_id": "new-tempconv",
+   "kind": "new_app",
+   "iteration": 1,
+   "success": true,
+   "fixture": {
+    "name": "empty",
+    "commit": "6d0653805cad63a353f0f6436d91368a2e755a24",
+    "sha256": "4d7a4904a9b4ab587165510784c5fe2c5193e7a0acc090eb8a9cff5d9d1782be"
+   },
+   "scripted_faults": [],
+   "components": {
+    "completed": true,
+    "changed": true,
+    "acceptance_passed": true
+   },
+   "status": "completed",
+   "error": null,
+   "metrics": {
+    "wall_s": 0.04,
+    "tokens_in": 306,
+    "tokens_out": 31,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "cache_share": 0.0,
+    "cost_usd": 0.0,
+    "model_calls": 1,
+    "turns": 1,
+    "tool_calls": 4,
+    "repair_rounds": 0,
+    "continuations": 0,
+    "lineage_runs": 1,
+    "interventions": 0
+   },
+   "acceptance": {
+    "passed": true,
+    "checks": [
+     {
+      "check": "the branch carries a change",
+      "ok": true,
+      "detail": "head 61623ddc61 base 6d0653805c"
+     },
+     {
+      "check": "tempconv/__init__.py exists",
+      "ok": true,
+      "detail": ""
+     },
+     {
+      "check": "tempconv/__main__.py exists",
+      "ok": true,
+      "detail": ""
+     },
+     {
+      "check": "the task's own tests pass on a clean checkout: python3 -m unittest discover -s tests -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.0s: ...\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n"
+     },
+     {
+      "check": "held acceptance tests: python3 -m unittest discover -s bench_acceptance -t .",
+      "ok": true,
+      "detail": "exit 0 in 0.1s: ...\n----------------------------------------------------------------------\nRan 3 tests in 0.044s\n\nOK\n"
+     }
+    ],
+    "head": "61623ddc6149e1cce9c85ed28db5a0a30f4e9d6b",
+    "changed_files": [
+     "tempconv/__init__.py",
+     "tempconv/__main__.py",
+     "tests/__init__.py",
+     "tests/test_tempconv.py"
+    ]
+   },
+   "branch": "bare/new-tempconv-1",
+   "session": {
+    "model": "scripted-v1",
+    "session_id": "scr-24f2d53f8cdf",
+    "stop_reason": "done",
+    "summary": "Implemented the slug service. Changed: tempconv/__init__.py, tempconv/__main__.py, tests/__init__.py, tests/test_tempconv.py."
+   }
+  }
+ ],
+ "summary": {
+  "tasks": [
+   "helpdesk-blank-title",
+   "helpdesk-classify-case",
+   "helpdesk-priority",
+   "helpdesk-stats",
+   "new-slug-service",
+   "new-tempconv",
+   "textkit-truncate",
+   "textkit-word-count"
+  ],
+  "runs": 8,
+  "skipped": 0,
+  "successes": 7,
+  "metrics": {
+   "success_rate": {
+    "n": 1,
+    "mean": 0.875,
+    "stdev": 0.0,
+    "min": 0.875,
+    "max": 0.875
+   },
+   "wall_s": {
+    "n": 1,
+    "mean": 0.8,
+    "stdev": 0.0,
+    "min": 0.8,
+    "max": 0.8
+   },
+   "tokens_in": {
+    "n": 1,
+    "mean": 2028.0,
+    "stdev": 0.0,
+    "min": 2028.0,
+    "max": 2028.0
+   },
+   "tokens_out": {
+    "n": 1,
+    "mean": 189.0,
+    "stdev": 0.0,
+    "min": 189.0,
+    "max": 189.0
+   },
+   "cache_share": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "cost_usd": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "model_calls": {
+    "n": 1,
+    "mean": 8.0,
+    "stdev": 0.0,
+    "min": 8.0,
+    "max": 8.0
+   },
+   "turns": {
+    "n": 1,
+    "mean": 8.0,
+    "stdev": 0.0,
+    "min": 8.0,
+    "max": 8.0
+   },
+   "repair_rounds": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "interventions": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   }
+  }
+ }
+}
