@@ -1041,17 +1041,31 @@ class ModelGatewayService:
             model_route_decision_id=lease["route_decision_id"],
             dedupe_key=f"model-invocation:{invocation_id}", status=status,
         )
+        # THE ROW NAMES ITS OWN STAGE. The invocation's metadata already declares it
+        # (typed_decision_spend passes `stage`, "connection_proof" for proofs and login
+        # checks), so settlement no longer ledgers those as anonymous `model_gateway` work —
+        # 303 failed codex login checks in one month read as gateway calls (BOSSAPP-1008).
+        invocation_metadata = invocation.get("metadata") or {}
+        if isinstance(invocation_metadata, str):
+            try:
+                invocation_metadata = json.loads(invocation_metadata)
+            except ValueError:
+                invocation_metadata = {}
+        if not isinstance(invocation_metadata, dict):
+            invocation_metadata = {}
         connection.execute(
             text(
                 """
                 INSERT INTO llm_calls (
                   id,project_id,stage,engine,model,prompt_tokens,completion_tokens,
                   total_tokens,cost_usd_micros,ok,error,included_in_subscription
-                ) VALUES (:id,:p,'model_gateway',:engine,:model,:prompt,:completion,
+                ) VALUES (:id,:p,:stage,:engine,:model,:prompt,:completion,
                           :total,:cost,:ok,:error,:included)
                 """
             ),
-            {"id": make_id("llm"), "p": project_id, "engine": lease["source_id"],
+            {"id": make_id("llm"), "p": project_id,
+             "stage": str(invocation_metadata.get("stage") or "") or "model_gateway",
+             "engine": lease["source_id"],
              "model": lease.get("model_id"), "prompt": int(usage_units.get("prompt_tokens", 0)),
              "completion": int(usage_units.get("completion_tokens", 0)),
              "total": int(usage_units.get("total_tokens", 0)),

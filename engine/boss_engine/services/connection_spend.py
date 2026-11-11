@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from threading import Event, Thread
+from time import monotonic
 from types import SimpleNamespace
 from typing import Any
 
@@ -32,6 +33,12 @@ def _safe(error: BaseException) -> RuntimeError:
     from .redaction import redact_secrets
 
     return RuntimeError(f"{type(error).__name__}: {redact_secrets(str(error))}"[:500])
+
+
+#: The outer wall for one proof's provider call: comfortably above the proof-sized session
+#: timeout (setup_service.PROOF_TIMEOUT_SECONDS) and the key proof's HTTP timeout, far below
+#: the hours a hung session used to be kept alive. Read at call time so tests can shrink it.
+PROOF_WALL_SECONDS = 300
 
 
 class ConnectionSpend(TypedDecisionSpend):
@@ -344,7 +351,19 @@ class ConnectionSpend(TypedDecisionSpend):
         errors = []
 
         def heartbeat():
+            # A PROOF IS BOUNDED LIKE ANY SHORT JOB. The provider call must answer within the
+            # proof-sized wall; past it, this stops renewing the job and model leases, they
+            # expire, and jobs.reap_lost_leases retires the job (max_attempts is 1) while any
+            # late answer settles as unknown/reconcile. Without the wall a hung engine session
+            # was heartbeated forever: two connection.proof jobs sat "running" for 15 h
+            # (boss-1, 11 Nov; BOSSAPP-1008).
+            deadline = monotonic() + PROOF_WALL_SECONDS
             while not stop.wait(max(0.1, self.ttl_seconds / 3)):
+                if monotonic() >= deadline:
+                    errors.append(self._safe_error(RuntimeError(
+                        f"connection proof exceeded its {PROOF_WALL_SECONDS}s wall; "
+                        "its leases are left to expire")))
+                    return
                 try:
                     self._ensure_lease(authority)
                 except Exception as error:
