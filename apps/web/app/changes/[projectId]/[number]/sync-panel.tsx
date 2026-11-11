@@ -19,6 +19,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ArrowsClockwise, CaretDown, CircleNotch, GitCommit, StackSimple, Warning } from "@phosphor-icons/react";
 
+import { BoxPop } from "../../../../components/box-pop";
 import { useGuardedCall } from "../../../../components/identity/identity-provider";
 import { refusalSentence } from "../../../../lib/identity/api";
 import type { ChangeSet } from "../../../../lib/repo-links";
@@ -31,7 +32,9 @@ export function SyncPanel({ cs, at, reread }: { cs: ChangeSet; at: ChangeAt; rer
   const [open, setOpen] = useState(false);
   const guarded = useGuardedCall();
   const headSha = cs.head_sha;
-  const look = useCallback(() => getSyncPreview(at).then(setP).catch(() => setP(null)), [at]);
+  const look = useCallback(() => getSyncPreview(at)
+    .then((v) => setP(v.unreachable || v.state !== "open" ? null : v))
+    .catch(() => setP(null)), [at]);
   useEffect(() => {
     if (cs.state !== "open") { setP(null); return; }
     void look();
@@ -79,14 +82,15 @@ export function SyncPanel({ cs, at, reread }: { cs: ChangeSet; at: ChangeAt; rer
             <Warning size={12} aria-hidden />{p.conflictsKnown ? `${p.conflicts.length} conflicting file${p.conflicts.length === 1 ? "" : "s"}` : "Conflicts with base"}
             <CaretDown size={10} aria-hidden /></button>
           {open ? (
-            <div className="gr-pop gr-conflicts-list" role="dialog" aria-label="Conflicting files" data-testid="gr-conflicts-list">
+            <BoxPop className="gr-conflicts-list" aria-label="Conflicting files" data-testid="gr-conflicts-list"
+                    onEscape={() => setOpen(false)}>
               {p.conflictsKnown && p.conflicts.length
                 ? <ul>{p.conflicts.map((f) => <li key={f}><code>{f}</code></li>)}</ul>
                 : <p className="cs-faint">GitHub says this {word} conflicts with {p.base}; it does not name the files.</p>}
               <p className="cs-faint cs-small">{p.restack
                 ? `Restack first: its last change merged as one commit, so these may clear on their own.`
                 : `Git alone cannot resolve these: Request changes sends an agent to fix them on this branch.`}</p>
-            </div>) : null}
+            </BoxPop>) : null}
         </span>
       ) : null}
       <a className="cs-link" data-testid="gr-history-link"

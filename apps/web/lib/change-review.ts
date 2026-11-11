@@ -130,6 +130,8 @@ export type SyncPreview = {
   conflictsKnown: boolean;
   /** Set when the branch's last change merged as a squash: restacking replays only what came after. */
   restack: { number: number; mergedHeadSha: string } | null;
+  /** GitHub did not answer: the panel does not draw (the page's own stale read says so). */
+  unreachable: boolean;
 };
 export function parseSyncPreview(raw: unknown): SyncPreview {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -139,7 +141,8 @@ export function parseSyncPreview(raw: unknown): SyncPreview {
            mergeable: typeof r.mergeable === "boolean" ? r.mergeable : null,
            conflicts: Array.isArray(r.conflicts) ? r.conflicts.map((p) => str(p)).filter(Boolean) : [],
            conflictsKnown: r.conflicts_known === true,
-           restack: rs ? { number: num(rs.number), mergedHeadSha: str(rs.merged_head_sha) } : null };
+           restack: rs ? { number: num(rs.number), mergedHeadSha: str(rs.merged_head_sha) } : null,
+           unreachable: r.unreachable === true };
 }
 export const getSyncPreview = (at: ChangeAt) =>
   idGet<unknown>(`${changeBase(at)}/sync-preview`).then(parseSyncPreview);

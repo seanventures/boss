@@ -68,47 +68,73 @@ def _restack_of(adapter: Any, branch: str) -> Optional[dict[str, Any]]:
 
 
 def preview(c: Any, settings: Any, src: Any) -> dict[str, Any]:
-    """Where the change's branch stands against its base, and which action would move it."""
+    """Where the change's branch stands against its base, and which action would move it.
+
+    A GitHub host that does not answer gives {"unreachable": true} and a 200 — the panel simply
+    does not draw, the way the page's own stale read behaves — never a 500 on a page view."""
     from . import local_repo
 
+    if src.kind != "local":
+        try:
+            return _github_preview(src)
+        except Exception as error:  # noqa: BLE001 — a page view never fails on a preview
+            log.debug("change_sync: GitHub preview unreachable: %s", error)
+            return {"number": src.number, "source": "github", "state": "unknown",
+                    "unreachable": True, "ahead": 0, "behind": 0, "mergeable": None,
+                    "conflicts": [], "conflicts_known": False, "restack": None,
+                    "why": "GitHub did not answer."}
     adapter = _adapter_of(src)
     snap = adapter.pull_request_snapshot(src.number)
     branch, base = str(snap["head_ref"]), str(snap["base_ref"])
-    out: dict[str, Any] = {"number": src.number, "source": src.kind, "branch": branch,
+    out: dict[str, Any] = {"number": src.number, "source": "local", "branch": branch,
                            "base": base, "state": snap["state"],
                            "merged": bool(snap.get("merged"))}
     if snap["state"] != "open":
         return {**out, "ahead": 0, "behind": 0, "mergeable": None, "conflicts": [],
                 "conflicts_known": True, "restack": None, "why_closed": "The change is not open."}
-    merged = _restack_of(adapter, branch)
-    if src.kind == "local":
-        git_dir = adapter.git_dir
-        stand = local_repo.counts(git_dir, branch, base)
-        try:
-            look = local_repo.merge_preview(git_dir, branch, base)
-        except local_repo.LocalRepoError as error:
-            raise ChangeSyncError(str(error), 422, "sync_preview_failed") from error
-        out.update({**stand, "mergeable": bool(look["mergeable"]),
-                    "conflicts": look["conflicts"], "conflicts_known": True})
-    else:
-        # GitHub says CLEAN or DIRTY; it does not name the conflicting files. Saying so beats
-        # inventing a list (the console words it: "files known after Sync runs").
-        payload = adapter._request(  # noqa: SLF001 — the generic-reader path ci_gate also uses
-            "GET", f"/repos/{adapter.repository_full_name}/compare/"
-                   f"{branch_quote(base)}...{branch_quote(branch)}") or {}
-        mergeable = snap.get("mergeable")
-        out.update({"ahead": int(payload.get("ahead_by") or 0),
-                    "behind": int(payload.get("behind_by") or 0),
-                    "mergeable": bool(mergeable) if mergeable is not None else None,
-                    "conflicts": [], "conflicts_known": False})
-    # A branch whose merged work was squashed cannot merge again without a restack: offer it
-    # FIRST, and say what it replays past.
-    if merged and merged.get("head_sha"):
-        out["restack"] = {"number": merged["number"], "merged_head_sha": merged["head_sha"],
-                          "merged_at": merged.get("merged_at") or ""}
-    else:
-        out["restack"] = None
+    git_dir = adapter.git_dir
+    stand = local_repo.counts(git_dir, branch, base)
+    try:
+        look = local_repo.merge_preview(git_dir, branch, base)
+    except local_repo.LocalRepoError as error:
+        raise ChangeSyncError(str(error), 422, "sync_preview_failed") from error
+    out.update({**stand, "mergeable": bool(look["mergeable"]),
+                "conflicts": look["conflicts"], "conflicts_known": True,
+                "restack": _restack_offer(adapter, branch)})
     return out
+
+
+def _github_preview(src: Any) -> dict[str, Any]:
+    adapter = src.adapter
+    snap = adapter.pull_request_snapshot(src.number)
+    branch, base = str(snap["head_ref"]), str(snap["base_ref"])
+    out: dict[str, Any] = {"number": src.number, "source": "github", "branch": branch,
+                           "base": base, "state": snap["state"], "merged": bool(snap.get("merged"))}
+    if snap["state"] != "open":
+        return {**out, "ahead": 0, "behind": 0, "mergeable": None, "conflicts": [],
+                "conflicts_known": True, "restack": None, "why_closed": "The change is not open."}
+    # GitHub says CLEAN or DIRTY; it does not name the conflicting files. Saying so beats
+    # inventing a list (the console words it accordingly).
+    payload = adapter._request(  # noqa: SLF001 — the generic-reader path ci_gate also uses
+        "GET", f"/repos/{adapter.repository_full_name}/compare/"
+               f"{branch_quote(base)}...{branch_quote(branch)}") or {}
+    mergeable = snap.get("mergeable")
+    out.update({"ahead": int(payload.get("ahead_by") or 0),
+                "behind": int(payload.get("behind_by") or 0),
+                "mergeable": bool(mergeable) if mergeable is not None else None,
+                "conflicts": [], "conflicts_known": False,
+                "restack": _restack_offer(adapter, branch)})
+    return out
+
+
+def _restack_offer(adapter: Any, branch: str) -> Optional[dict[str, Any]]:
+    """A branch whose merged work was squashed cannot merge again without a restack: the offer
+    names the merged change and the head it replays past."""
+    merged = _restack_of(adapter, branch)
+    if merged and merged.get("head_sha"):
+        return {"number": merged["number"], "merged_head_sha": merged["head_sha"],
+                "merged_at": merged.get("merged_at") or ""}
+    return None
 
 
 def branch_quote(ref: str) -> str:
@@ -123,8 +149,14 @@ def propose(connection: Any, settings: Any, src: Any, *, mode: str, actor: str) 
 
     if mode not in MODES:
         raise ChangeSyncError(f"mode must be one of {', '.join(MODES)}.", 422, "bad_mode")
-    adapter = _adapter_of(src)
-    snap = adapter.pull_request_snapshot(src.number)
+    try:
+        adapter = _adapter_of(src)
+        snap = adapter.pull_request_snapshot(src.number)
+    except ChangeSyncError:
+        raise
+    except Exception as error:  # noqa: BLE001 — a host that does not answer is a refusal in words
+        raise ChangeSyncError("The repository host did not answer; try again when it is back.",
+                              503, "host_unreachable") from error
     if snap["state"] != "open":
         raise ChangeSyncError(f"Change #{src.number} is not open.", 409, "not_open")
     branch, base = str(snap["head_ref"]), str(snap["base_ref"])
