@@ -823,7 +823,7 @@ def _subscription_spec(settings: Any, provider: str):
 
 
 def _record_model_check(connection: Connection, project_id: str, source_id: str,
-                        result: dict[str, Any], actor: str) -> None:
+                        result: dict[str, Any], actor: str, settings: Any = None) -> None:
     """Write a model check onto its source (or, for an install key, as an event)."""
     from .core import emit_event
 
@@ -839,12 +839,25 @@ def _record_model_check(connection: Connection, project_id: str, source_id: str,
         emit_event(connection, project_id, "setup.model_checked", actor, "model_source",
                    source_id, last)
         return
+    # WHEN TO ASK AGAIN is decided here, where every real answer lands (proof_schedule.py):
+    # green is cached until its TTL, a failure backs off exponentially — never an hourly beat.
+    from . import proof_schedule
+
+    before = proof_schedule.stored(connection.execute(
+        text("SELECT connection_metadata FROM entitlement_sources "
+             "WHERE project_id = :p AND source_id = :s"),
+        {"p": project_id, "s": source_id}).scalar())
+    schedule = proof_schedule.after_check(
+        ok=last["ok"], state=last["state"], failures_before=before.get("failures") or 0,
+        now=setup_view.parse_time(last["at"]) or now_utc(),
+        settings=settings, retry_at=last["retry_at"])
     connection.execute(
         text("UPDATE entitlement_sources SET connection_metadata = "
              "COALESCE(connection_metadata, '{}'::jsonb) || CAST(:m AS JSONB), "
              "updated_at = now() WHERE project_id = :p AND source_id = :s"),
         {"m": json.dumps({"last_check": last, "checked_at": last["at"],
-                          "verification_state": "verified" if last["ok"] else "failed"}),
+                          "verification_state": "verified" if last["ok"] else "failed",
+                          **({"reproof": schedule} if schedule else {})}),
          "p": project_id, "s": source_id})
     if last["state"] == "rate_limited":
         capacity = {"exhausted": True, "retry_at": last["retry_at"],
@@ -1094,7 +1107,7 @@ def _connect_subscription(connection: Connection, settings: Any, project_id: str
                         {"ok": True, "state": "working",
                          "latency_ms": int((time.monotonic() - started) * 1000),
                          "receipt_id": proof.get("receipt_id"),
-                         "checked_at": proof.get("checked_at")}, actor)
+                         "checked_at": proof.get("checked_at")}, actor, settings)
     return {"ok": True, "source_id": spec.entitlement_source_id or provider}
 
 
@@ -1309,7 +1322,7 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
             connection, project_id, source_id, value=api_key,
             backend=_backend_it_lives_in(connection, project_id, source_id)
             or default_secret_backend(settings), actor=actor)
-    _record_model_check(connection, project_id, source_id, proof, actor)
+    _record_model_check(connection, project_id, source_id, proof, actor, settings)
     if receipt_id:
         from .receipts import ReceiptService
         ReceiptService().merge_result(connection, receipt_id,
@@ -1347,7 +1360,7 @@ def check_model(connection: Connection, settings: Any, project_id: str, source_i
                 key = resolve_secret_ref(connection, row["credential_secret_ref_id"], settings)
             except Exception:  # noqa: BLE001 — BOSS cannot read it; the provider never saw it
                 proof = {"ok": False, "state": "key_unreadable"}
-                _record_model_check(connection, project_id, source_id, proof, actor)
+                _record_model_check(connection, project_id, source_id, proof, actor, settings)
                 return proof
         try:
             proof = _key_proof(connection, settings, project_id, provider, api_key=key,
@@ -1358,7 +1371,7 @@ def check_model(connection: Connection, settings: Any, project_id: str, source_i
                                backend=_backend_it_lives_in(connection, project_id, source_id) or "")
         except Exception as exc:  # noqa: BLE001
             proof = {"ok": False, "state": "unreachable", "error": type(exc).__name__}
-    _record_model_check(connection, project_id, source_id, proof, actor)
+    _record_model_check(connection, project_id, source_id, proof, actor, settings)
     return proof
 
 
@@ -1394,7 +1407,7 @@ def _check_env_model(connection: Connection, settings: Any, project_id: str, pro
                                env_name=env_name, capacity_group=f"env-{provider}")
         except Exception as exc:  # noqa: BLE001
             proof = {"ok": False, "state": "unreachable", "error": type(exc).__name__}
-    _record_model_check(connection, project_id, f"env-{provider}", proof, actor)
+    _record_model_check(connection, project_id, f"env-{provider}", proof, actor, settings)
     return proof
 
 
@@ -1475,7 +1488,8 @@ def remove_model(connection: Connection, settings: Any, project_id: str, source_
     connection.execute(
         text("UPDATE entitlement_sources SET credential_secret_ref_id = NULL, "
              "connection_status = 'not_connected', status = 'declared', "
-             "connection_metadata = COALESCE(connection_metadata, '{}'::jsonb) - 'last_check', "
+             "connection_metadata = COALESCE(connection_metadata, '{}'::jsonb) "
+             "  - 'last_check' - 'reproof', "
              "updated_at = now() WHERE project_id = :p AND source_id = :s"),
         {"p": project_id, "s": source_id})
     emit_event(connection, project_id, "setup.model_removed", actor, "model_source", source_id,

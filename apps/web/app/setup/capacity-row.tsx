@@ -548,6 +548,13 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
             {sentence.text}
           </Tip>
         ) : null}
+        {!busy && !editing && entry?.next_check_at && pill.tone !== "green"
+          && Date.parse(entry.next_check_at) > Date.now() ? (
+          <Tip tip={entry.next_check_why ?? "BOSS proves this connection again then; Re-check tries now."}
+               className="su-faint" testid="su-model-next-check">
+            Next check {lt.full(entry.next_check_at)}
+          </Tip>
+        ) : null}
         {capacityWord ? <Tip tip="The capacity this source last reported." className="su-faint">{capacityWord}</Tip> : null}
         <span className="su-spacer" />
         {primary}
@@ -572,7 +579,11 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
           {entry?.used_for.length ? <><dt>Used for</dt><dd>{entry.used_for.join(", ")}</dd></> : null}
           {said?.billing ? <><dt>Billing</dt><dd>{said.billing}</dd></> : null}
           {entry?.checked_at ? <><dt>Checked</dt><dd>{ageLabel(entry.checked_at)} ago</dd></> : null}
-          {entry?.scope === "org" ? <><dt>Scope</dt><dd><Tip tip="The org's connection: set once, every project in this org uses it." testid="su-model-scope">All projects</Tip></dd></> : null}
+          {entry?.next_check_at ? <><dt>Next check</dt><dd>
+            <Tip tip={entry.next_check_why ?? "BOSS proves this connection again then; Re-check tries now."}>
+              {lt.full(entry.next_check_at)}
+            </Tip></dd></> : null}
+          {entry?.scope === "org" ?<><dt>Scope</dt><dd><Tip tip="The org's connection: set once, every project in this org uses it." testid="su-model-scope">All projects</Tip></dd></> : null}
           {entry?.source === "install" ? <><dt>Set by</dt><dd><Tip tip="Set in the server's settings file. Replace here to manage it in BOSS.">The install</Tip></dd></> : null}
         </dl>
       ) : null}

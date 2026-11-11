@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -115,20 +115,20 @@ def _sweep_one(engine, settings: Any, project_id: str, source_id: str, provider:
             _raise_login_card(conn, project_id, source_id, provider)
 
 
-#: A subscription whose last real answer was "working" is asked again after this long; one that
-#: was not working is asked again every sweep, so a login back after a weekly limit (or a fresh
-#: sign-in) turns green within the hour instead of showing the old failure all day.
-REPROVE_WORKING_AFTER = timedelta(hours=6)
-
-
 def _reprove(engine, settings: Any, project_id: str, *, now: Optional[datetime] = None) -> int:
-    """Ask each connected subscription one real question when its badge could be wrong.
+    """Ask each connected subscription one real question when its schedule says so.
 
     THE BADGE IS THE LAST REAL ANSWER (setup_view.source_state). Nothing re-asked it: Claude
     Code read "Check failed" all day on a check made while its weekly limit was spent, with 40
     successful calls since; Codex read "Working" on a day-old check while revoked. Subscriptions
-    only (a question costs nothing extra there); a metered key is never asked on a timer."""
-    from . import setup_actions, setup_view
+    only (a question costs nothing extra there); a metered key is never asked on a timer.
+
+    WHEN is proof_schedule's one policy, not an hourly beat: a green proof is cached until its
+    TTL, a failing one backs off (1 h, 2 h, 4 h … 24 h) — re-proving every non-green row every
+    sweep burnt 391 engine sessions in a month, 314 of them dying at the engine's 420 s review
+    timeout (BOSSAPP-1008). A fresh sign-in or a live-traffic rejection clears the schedule
+    (model_failures), so those are still caught within the hour."""
+    from . import proof_schedule, setup_actions, setup_view
 
     now = now or datetime.now(timezone.utc)
     try:
@@ -141,10 +141,7 @@ def _reprove(engine, settings: Any, project_id: str, *, now: Optional[datetime] 
     for model in view.get("models") or []:
         if model.get("kind") != "subscription" or model.get("source") != "connected":
             continue
-        tone = str((model.get("pill") or {}).get("tone") or "")
-        checked = setup_view.parse_time(model.get("checked_at")) if model.get("checked_at") else None
-        due = tone != "green" or checked is None or now - checked > REPROVE_WORKING_AFTER
-        if not due:
+        if not proof_schedule.entry_due(model, now, settings):
             continue
         try:
             with engine.begin() as conn:

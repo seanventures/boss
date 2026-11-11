@@ -529,6 +529,18 @@ def mark_login(connection, project_id: str, source_id: Optional[str], *, rejecte
         return
     from sqlalchemy import text
 
+    if rejected:
+        # A REAL FAILURE SIGNAL resets the proof schedule (proof_schedule): a cached green
+        # must not sit out its TTL on a login live traffic just saw refused — the next sweep
+        # re-proves it now. Only on the TRANSITION to rejected: a login that keeps failing
+        # keeps its backoff instead of being re-proved every sweep it is seen failing.
+        connection.execute(
+            text("UPDATE entitlement_sources SET connection_metadata = "
+                 "COALESCE(connection_metadata, '{}'::jsonb) - 'reproof' "
+                 "WHERE project_id = :p AND source_id = :s "
+                 "AND COALESCE(observed_capacity->>'credential_state', '') <> 'rejected'"),
+            {"p": project_id, "s": source_id},
+        )
     connection.execute(
         text("UPDATE entitlement_sources SET observed_capacity = "
              "COALESCE(observed_capacity, '{}'::jsonb) || jsonb_build_object("
@@ -544,9 +556,13 @@ def clear_login_state(connection, project_id: str, source_id: Optional[str]) -> 
         return
     from sqlalchemy import text
 
+    # A fresh credential also starts a fresh proof schedule: the next sweep proves it now
+    # instead of waiting out the old failure's backoff (proof_schedule).
     connection.execute(
         text("UPDATE entitlement_sources SET observed_capacity = "
-             "COALESCE(observed_capacity, '{}'::jsonb) - 'credential_state', updated_at = now() "
+             "COALESCE(observed_capacity, '{}'::jsonb) - 'credential_state', "
+             "connection_metadata = COALESCE(connection_metadata, '{}'::jsonb) - 'reproof', "
+             "updated_at = now() "
              "WHERE project_id = :p AND source_id = :s"),
         {"p": project_id, "s": source_id},
     )

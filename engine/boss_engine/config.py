@@ -1443,6 +1443,13 @@ class Settings(BaseSettings):
     code_agent_timeout_seconds: int = Field(
         default=2700, alias="BOSS_CODE_AGENT_TIMEOUT_SECONDS"
     )
+    # How long a connection proved healthy is believed before the keep-alive asks the provider
+    # again (proof_schedule.py). A proof is a whole engine session, so the TTL is hours, never
+    # an hourly beat: re-proving non-green rows hourly made 391 proof sessions in one month,
+    # 314 dying at the 420 s review timeout (BOSSAPP-1008, audit BOSSAPP-997 finding 5).
+    connection_proof_ttl_hours: int = Field(
+        default=6, alias="BOSS_CONNECTION_PROOF_TTL_HOURS"
+    )
     # Tools the sandboxed Claude Code agent may use (its OWN native tools here —
     # the inverse of claude_cli_adapter, which denies them). Bash is constrained
     # to the sandbox cwd; network egress is the deployment's responsibility.

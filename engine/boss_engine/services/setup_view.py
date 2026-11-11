@@ -700,12 +700,16 @@ def source_entry(row: Any, *, by_entitlement: dict[str, str], now: datetime,
     models = [m for m in _list(row["supported_models"]) if isinstance(m, str) and m.strip()]
     model = models[0] if models else (metadata.get("model") or None)
     last = metadata.get("last_check") if isinstance(metadata.get("last_check"), dict) else {}
+    from . import proof_schedule
+
+    schedule = proof_schedule.stored(metadata)
     return _model_entry(
         source_id=source_id, provider=provider, kind=kind, model=model, state=state,
         checked_at=checked_at, retry_at=retry_at, source="connected", now=now,
         host=last.get("host") or "", latency_ms=last.get("latency_ms"),
         base_url=str(metadata.get("base_url") or ""), budget_period=budget_period,
-        minutes_left=minutes_left, credential=claude)
+        minutes_left=minutes_left, credential=claude,
+        next_check_at=schedule.get("next_at"), next_check_why=schedule.get("why"))
 
 
 def _claude_summary(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
@@ -801,7 +805,9 @@ def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[st
                  checked_at: Optional[str], retry_at: Optional[str], source: str,
                  now: datetime, host: str, latency_ms: Any, base_url: str = "",
                  budget_period: str = "month", minutes_left: Optional[int] = None,
-                 credential: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                 credential: Optional[dict[str, Any]] = None,
+                 next_check_at: Optional[str] = None,
+                 next_check_why: Optional[str] = None) -> dict[str, Any]:
     entry = CATALOGUE_BY_PROVIDER.get(provider) or {}
     pill = setup_pills.pill(
         "model", state, n="" if minutes_left is None else minutes_left,
@@ -821,6 +827,11 @@ def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[st
         "checked_at": checked.isoformat() if checked else None,
         "source": source, "retry_at": retry_at, "latency_ms": latency_ms,
         "stale": checked is None or now - checked > STALE_AFTER,
+        # When BOSS will prove this connection again by itself, and why then (proof_schedule:
+        # a green proof is cached until its TTL; a failing one backs off). Null until a check
+        # has run under that policy. Re-check always proves now.
+        "next_check_at": next_check_at or None,
+        "next_check_why": next_check_why or None,
         # Replace asks for the KEY only: the form keeps where it points (never a password that
         # was written into the URL).
         "base_url": _without_userinfo(base_url) or None,
@@ -1532,13 +1543,21 @@ def basics(view: dict[str, Any], *, router_runnable: Optional[bool] = None) -> d
             "repository_problem": why_repo, "model_problem": why_model}
 
 
-def stale_targets(view: dict[str, Any]) -> list[str]:
-    """Check targets whose last result is over a day old (or missing)."""
+def stale_targets(view: dict[str, Any], *, now: Optional[datetime] = None) -> list[str]:
+    """Check targets whose last result is over a day old (or missing).
+
+    A model row whose proof schedule names a later attempt (a failing connection backing off,
+    proof_schedule) is not re-proved early by the daily sweep; the console's Re-check still is.
+    """
+    from . import proof_schedule
+
+    now = now or now_utc()
     targets = [f"repository:{r['binding_id']}" for r in view["repository"]["repos"]
                if r["stale"] and r["binding_id"]]
     if any(r["stale"] and not r["binding_id"] for r in view["repository"]["repos"]):
         targets.append("repository:install")
-    targets += [f"model:{m['source_id']}" for m in view["models"] if m["stale"]]
+    targets += [f"model:{m['source_id']}" for m in view["models"]
+                if m["stale"] and not proof_schedule.waiting(m, now)]
     return targets
 
 

@@ -767,7 +767,15 @@ def _auth_refusal(text_out: str, *, exit_code: Any = None,
             "error": f"login rejected before any model call: {text_out[:240]}"}
 
 
-def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> dict[str, Any]:
+#: One proof is one trivial prompt ("Reply with BOSS_OK"): it must finish — or time out — in
+#: tens of seconds, never the engine's 420 s review budget. 314 of one month's 391 proof
+#: sessions died at that 420 s wall (BOSSAPP-1008); a timeout is a failure the proof schedule
+#: backs off on, not seven minutes of held leases.
+PROOF_TIMEOUT_SECONDS = 90
+
+
+def prove_coding_agent(settings: Settings, provider: str,
+                       timeout: int = PROOF_TIMEOUT_SECONDS) -> dict[str, Any]:
     """Make the agent complete one real turn before calling it connected.
 
     The same rule as `verify_model_key`, for a thing that has no key to check. A subscription
@@ -793,7 +801,12 @@ def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> 
     spec = load_specs(settings).get(provider)
     if spec is None:
         raise SetupError(f"no CLI coding agent called {provider!r}.")
-    agent = GenericCliCodeAgent(settings, spec)
+    # A PROOF-SIZED DEADLINE: the spec's build/review timeouts bound real work reading a real
+    # repository; this session answers one trivial prompt in an empty directory.
+    from dataclasses import replace
+
+    bound = max(10, int(timeout))
+    agent = GenericCliCodeAgent(settings, replace(spec, timeout=bound, review_timeout=bound))
     read_only = spec.supports_read_only()
     with tempfile.TemporaryDirectory(prefix="boss-agent-probe-") as work:
         try:
