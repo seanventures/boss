@@ -368,4 +368,10 @@ def record_turns(
     except Exception:
         # A build must never fail because its transcript could not be written.
         return 0
+    # THE RUN LEDGER (BOSS_LEDGER_EVENTS): each turn is also a `delegate.turn` event, its body
+    # left here and named by content_ref. Its own savepoint; it never raises.
+    from ..kernel.ledger import record_turn_events
+
+    record_turn_events(connection, rows, project_id=project_id, run_id=code_task_run_id,
+                       act_id=act_id, stage=stage, engine=engine)
     return len(rows)

@@ -159,6 +159,9 @@ _EXPECTED_TOOLS: set[str] = {
     "precheck_workflow",
     # The whole factory in one read, so an open question does not become six lookups.
     "factory_briefing",
+    # The tool-search tool (K5, BOSSAPP-961): the scoped chat core plus this; everything else
+    # is found by name/description/tags and offered from the next step on.
+    "find_tools",
     "create_discovery",
     "decide",
     "describe_schema",
@@ -264,10 +267,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 176, (
+    assert len(reg.names()) == 177, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 100  # + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow)
+    assert len(read) == 101  # + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
     # + list_platform_gaps (BOSSAPP-571's doorway) + kg_rules (the approved business rules, BOSSAPP-768)
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow

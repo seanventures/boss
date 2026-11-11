@@ -6,12 +6,19 @@ API, CLI, and agent-to-agent too." The pipeline is AgentService.chat → IntentR
 through agent_action).
 
 This test fails when a module NOT listed below starts making agent decisions of its own: imports
-the decision model (`agent_decision`), builds or calls the router, calls a model directly, or runs
-its own tool loop. Every listed module says why it is allowed. A worker (a coding engine, a panel
-seat writing a PRD, a reviewer) calls a model to PRODUCE something; it does not choose what BOSS
-does next. Entries marked MIGRATE are conversational agents still outside the pipeline; the
-doc's table says what is left for each. An entry that no longer needs its reason fails too, so
-the list only shrinks."""
+the decision model (`agent_decision`), builds or calls the router, calls a model directly, runs
+its own tool loop, drives a coding engine (`run_role` / `run_research` / `make_code_agent` /
+a CodeAgent constructor), builds a decision model (`TypeSafeDecider`), or runs the harness
+kernel (`kernel.run`). Every listed module says why it is allowed. A worker (a coding engine, a
+panel seat writing a PRD, a reviewer) calls a model to PRODUCE something; it does not choose
+what BOSS does next. Entries marked MIGRATE are conversational agents still outside the
+pipeline; the doc's table says what is left for each. An entry that no longer needs its reason
+fails too, so the list only shrinks.
+
+THE KERNEL (BOSSAPP-961). `boss_engine/kernel` is the one shared loop the old loops move onto
+(K2-K6, K11). KERNEL entries are its own modules; once the moves land (K14), a module outside
+the kernel that calls `create_chat_completion` with tools joins the refused class here — the
+"six loops" problem, enforced."""
 from __future__ import annotations
 
 import ast
@@ -27,12 +34,25 @@ SIGNS = {
     "IntentRouter": "builds a router",
     "create_chat_completion": "calls a model (chat / tools)",
     "create_text_response": "calls a model (text)",
+    "stream_text_response": "calls a model (streamed text)",
+    "create_plain_answer": "calls a model (text)",
     "run_agent_loop": "runs its own tool loop",
+    "run_role": "drives a coding engine",
+    "run_research": "drives a research engine",
+    "make_code_agent": "builds a coding engine",
+    "TypeSafeDecider": "builds a decision model",
 }
+
+#: Classes only `make_code_agent` (and the modules that define or register them) may construct.
+CODE_AGENT_CONSTRUCTORS = frozenset({
+    "ClaudeCodeAgent", "NativeCodeAgent", "CodexCodeAgent", "GenericCliCodeAgent",
+    "PacedCodeAgent",
+})
 
 PIPELINE = "the one pipeline"
 TRANSPORT = "model transport, chooses nothing"
 WORKER = "worker: produces an artifact, chooses no BOSS action"
+KERNEL = "the harness kernel: runs through the one loop"
 MIGRATE = "MIGRATE: a conversational agent still outside the pipeline (see the doc)"
 
 ALLOWED: dict[str, tuple[str, str]] = {
@@ -76,6 +96,62 @@ ALLOWED: dict[str, tuple[str, str]] = {
         WORKER, "runs a workflow agent step's instruction through agent_loop (the worker); "
                 "WHICH agent runs it is a turn through the pipeline (choose_agent → "
                 "AgentService.decide)"),
+    # ── the coding family (visible since the signs widened for BOSSAPP-961 §8.3) ────────────
+    "engine/boss_engine/services/governed_code_task_service.py": (
+        WORKER, "the governed build pipeline: every stage is a run_role on the contracted "
+                "engine make_code_agent built"),
+    "engine/boss_engine/services/code_task_service.py": (
+        WORKER, "builds the run's coding engine (make_code_agent) for the legacy lane, "
+                "retries and guest runs"),
+    "engine/boss_engine/services/engine_contract.py": (
+        TRANSPORT, "the coding contract itself: ContractedAgent wraps every engine's run_role "
+                   "with the capability fallbacks"),
+    "engine/boss_engine/services/cli_harness.py": (
+        TRANSPORT, "defines and drives the generic CLI harnesses (grok/cursor/aider) and "
+                   "their login/catalog probes"),
+    "engine/boss_engine/services/codex_cli_adapter.py": (
+        TRANSPORT, "the Codex CLI as a raw completion backend, on the generic harness"),
+    "engine/boss_engine/services/scripted_engine.py": (
+        TRANSPORT, "the scripted conformance engine: plays a script, calls no model"),
+    "engine/boss_engine/services/workspace_perms.py": (
+        TRANSPORT, "the workspace-permission decorator wrapped around every engine's run_role"),
+    "engine/boss_engine/services/setup_service.py": (
+        WORKER, "Repo and models' CLI probe: a login check and one hello run, never a build"),
+    "engine/boss_engine/services/engine_startup.py": (
+        WORKER, "the start door's probe: can the engine routing picked actually start"),
+    "engine/boss_engine/services/parallel_build.py": (
+        WORKER, "the build split's work packages, each one a run_role"),
+    "engine/boss_engine/services/pr_review_again.py": (
+        WORKER, "re-runs the adversarial review on a pull request's real diff"),
+    "engine/boss_engine/services/self_fix_build.py": (
+        WORKER, "builds a self-fix through the coding contract (BOSSAPP-571)"),
+    "engine/boss_engine/services/docs_agent.py": (
+        WORKER, "writes documentation through the coding contract"),
+    "engine/boss_engine/services/discovery_service.py": (
+        WORKER, "runs web research sessions on a coding engine (run_research)"),
+    "engine/boss_engine/services/verifier_debate.py": (
+        WORKER, "the verifier debate (endpoint-only today)"),
+    "engine/boss_engine/services/verifier_meta_eval.py": (
+        WORKER, "scores the verifiers (endpoint-only today)"),
+    "engine/boss_engine/services/debug_session.py": (
+        MIGRATE, "a debug session on a coding engine; constructs ClaudeCodeAgent directly "
+                 "instead of make_code_agent (the constructor check lists it too)"),
+    "engine/boss_engine/services/typed_decision_spend.py": (
+        TRANSPORT, "reserves, leases and settles a typed decision's spend; decides nothing"),
+    "engine/boss_engine/services/knowledge/rulebook_extract.py": (
+        WORKER, "extracts a rulebook's rules (the analyst's sessions on the coding contract)"),
+    "engine/boss_engine/services/knowledge/rule_scan.py": (
+        WORKER, "scans a repository for a rule through the coding contract"),
+    "engine/boss_engine/services/knowledge/regulatory_trace.py": (
+        WORKER, "traces a regulation to the code that implements it"),
+    "engine/boss_engine/services/knowledge/banking_regulatory_pipeline.py": (
+        WORKER, "the banking regulatory pipeline's sessions on the coding contract"),
+    # ── the kernel (BOSSAPP-961 K1) ─────────────────────────────────────────────────────────
+    "engine/boss_engine/kernel/engine.py": (
+        KERNEL, "the kernel's engine seam: the ONE place a kernel run calls a model"),
+    "engine/boss_engine/kernel/presets.py": (
+        KERNEL, "each old loop's rules as kernel policies; imports the loops' own prompt "
+                "constants so the copies cannot drift"),
 }
 
 #: These may never decide on their own again: Metatron's router and the captain's service were
@@ -85,6 +161,12 @@ NEVER = {"apps/api/app/routers/metatron_captain.py",
          "engine/boss_engine/tools/captain_tools.py",
          "engine/boss_engine/services/focused_agents.py",
          "engine/boss_engine/services/metatron_command.py"}
+
+
+def _called(node: ast.Call) -> str:
+    fn = node.func
+    return fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute)
+                                                   else "")
 
 
 def _signs(path: Path) -> set[str]:
@@ -97,8 +179,20 @@ def _signs(path: Path) -> set[str]:
             names.append(node.attr)
         elif isinstance(node, ast.ImportFrom):
             names += (node.module or "").split(".") + [a.name for a in node.names]
+            # `from boss_engine.kernel… import run / resume` runs the kernel.
+            if "kernel" in (node.module or "") and \
+                    {alias.name for alias in node.names} & {"run", "resume"}:
+                found.add("kernel.run")
         elif isinstance(node, ast.Import):
             names += [part for a in node.names for part in a.name.split(".")]
+        if isinstance(node, ast.Call):
+            called = _called(node)
+            if called in CODE_AGENT_CONSTRUCTORS:
+                found.add(f"{called}(")
+            if called in ("run", "resume") and isinstance(node.func, ast.Attribute) \
+                    and isinstance(node.func.value, ast.Name) \
+                    and node.func.value.id == "kernel":
+                found.add("kernel.run")
         found.update(n for n in names if n in SIGNS)
     return found
 
@@ -168,6 +262,47 @@ def test_the_doc_accounts_for_every_entry_left_to_migrate():
     for path, (kind, _why) in ALLOWED.items():
         if kind == MIGRATE:
             assert Path(path).name in doc, path
+
+
+# ── One constructor for every coding engine (BOSSAPP-961 §8.3 item 4) ─────────────────────────
+
+#: Where a CodeAgent class may be constructed directly, and why. Everything else goes through
+#: `make_code_agent`, so routing, the contract wrapper and governance cannot be skipped by
+#: building an engine by hand. The list only shrinks.
+CONSTRUCTS_ITS_OWN: dict[str, str] = {
+    "engine/boss_engine/services/code_agent.py":
+        "defines the classes; make_code_agent and the harness registry live here",
+    "engine/boss_engine/services/cli_harness.py":
+        "defines GenericCliCodeAgent and builds it for its own login/catalog probes",
+    "engine/boss_engine/services/codex_cli_adapter.py":
+        "builds the generic harness it wraps as a chat backend",
+    "engine/boss_engine/services/setup_service.py":
+        "Repo and models' CLI probe builds the harness it is probing",
+    "engine/boss_engine/services/debug_session.py":
+        "MIGRATE: constructs ClaudeCodeAgent directly; should take make_code_agent's engine",
+}
+
+
+def _constructor_sites() -> dict[str, set[str]]:
+    out: dict[str, set[str]] = {}
+    for base in SCANNED:
+        for path in sorted((ROOT / base).rglob("*.py")):
+            ctors = {_called(node) for node in ast.walk(ast.parse(path.read_text()))
+                     if isinstance(node, ast.Call) and _called(node) in CODE_AGENT_CONSTRUCTORS}
+            if ctors:
+                out[str(path.relative_to(ROOT))] = ctors
+    return out
+
+
+def test_make_code_agent_is_the_only_code_agent_constructor():
+    sites = _constructor_sites()
+    unlisted = {path: sorted(ctors) for path, ctors in sites.items()
+                if path not in CONSTRUCTS_ITS_OWN}
+    assert not unlisted, (
+        "These modules construct a coding engine directly. Build it with make_code_agent so "
+        f"routing, the contract and governance apply, or list the exception with why: {unlisted}")
+    stale = sorted(path for path in CONSTRUCTS_ITS_OWN if path not in sites)
+    assert not stale, f"no longer constructs an engine — remove from CONSTRUCTS_ITS_OWN: {stale}"
 
 
 # ── Domain agents take their turn through the pipeline (AgentService.decide) ─────────────────

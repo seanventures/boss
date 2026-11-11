@@ -28,7 +28,7 @@ from ..services.workflow_drafting import (
     _resolve_subworkflows,
     _spec_from_steps,
 )
-from .registry import PROJECT_ARG, PROJECT_ARG_SCHEMA, ToolRegistry, ToolSpec
+from .registry import PROJECT_ARG, PROJECT_ARG_SCHEMA, Exposure, ToolRegistry, ToolSpec
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "Snapshot of everything happening in a project: counts of running/queued "
         "code tasks, discovery runs, meetings, background jobs and live previews. "
         "The go-to answer for 'what's running / how busy is BOSS right now?'.",
-        _obj({"project_id": {"type": "string", "description": "override the default project"}}), permission="project:read")
+        _obj({"project_id": {"type": "string", "description": "override the default project"}}), permission="project:read",
+        exposure=Exposure(tags=("status",), core_for=("chat",)))
     def project_status(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
@@ -258,7 +259,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "how many repositories each has registered, and `archived_at` when it is archived (it takes no "
         "new work until restore_project). The answer to 'which projects exist / does project "
         "X exist?' — never create a project to find out whether it exists.",
-        _obj({}), permission="project:read")
+        _obj({}), permission="project:read",
+        exposure=Exposure(tags=("projects",)))
     def list_projects(ctx, *, project_id, actor, args):
         from .registry import CURRENT_TOOL_AUTH
 
@@ -287,7 +289,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "project setting with its stored value, its effective value and the values it accepts. "
         "Pass `project` for a project other than this conversation's. Read this before "
         "reporting on or changing a project's repositories or settings.",
-        _obj({}), permission="project:read")
+        _obj({}), permission="project:read",
+        exposure=Exposure(tags=("projects",)))
     def describe_project(ctx, *, project_id, actor, args):
         from ..services import project_settings as ps
 
@@ -337,7 +340,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "(indexed, queued, running, failed, too_large, pending), the commit and branch indexed, "
         "files, nodes and edges, when, and why not. Registering a repository indexes it by "
         "itself; index_repository_code asks for it now. Pass `project` for another project.",
-        _obj({}), permission="knowledge:read")
+        _obj({}), permission="knowledge:read",
+        exposure=Exposure(tags=("code",)))
     def code_graph_status(ctx, *, project_id, actor, args):
         from ..services.knowledge import repo_index
 
@@ -356,7 +360,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
               "force": {"type": "boolean", "description": "re-index an unmoved head"}}),
         # A read-safe action (operator decision 2026-10-24): it refreshes derived data, bounded
         # and deduplicated, and changes no record anyone made — so whoever reads the graph may.
-        permission="knowledge:read")
+        permission="knowledge:read",
+        exposure=Exposure(tags=("code",)))
     def index_repository_code(ctx, *, project_id, actor, args):
         from ..services.knowledge import repo_index
 
@@ -370,7 +375,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "list_code_tasks",
         "Recent coding-agent task runs (newest first) with status, phase, title and "
         "PR link. Use to answer 'show me the builds / what happened to task X'.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="code_task:read")
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="code_task:read",
+        exposure=Exposure(tags=("builds", "runs"), core_for=("chat",)))
     def list_code_tasks(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         limit = int(args.get("limit") or 25)
@@ -382,7 +388,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "get_code_task",
         "Full detail for one code-task run by id (crun_…): status, phase, PR url, "
         "gates, and the failure reason if it failed.",
-        _obj({"run_id": {"type": "string"}}, ["run_id"]), permission="code_task:read")
+        _obj({"run_id": {"type": "string"}}, ["run_id"]), permission="code_task:read",
+        exposure=Exposure(tags=("builds", "runs"), core_for=("chat",)))
     def get_code_task(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         with ctx.begin() as c:
@@ -418,7 +425,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "with a regression test and its reviewers, and installed after a person approved — "
         "with status chip, cause, area, run, upstream state and the one-line progress.",
         _obj({"project_id": {"type": "string"}, "status": {"type": "string"},
-              "limit": _LIMIT}), permission="improvement:read")
+              "limit": _LIMIT}), permission="improvement:read",
+        exposure=Exposure(tags=("boss", "health")))
     def list_self_fixes(ctx, *, project_id, actor, args):
         sf = services_module("self_fix")
         pid = args.get("project_id") or project_id
@@ -438,7 +446,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "rejected hypothesis) → fix → tests (red then green) → review → approval → install → "
         "resumed step → upstream, its events, and the approval card while it waits for one.",
         _obj({"self_fix_id": {"type": "string"}}, ["self_fix_id"]),
-        permission="improvement:read")
+        permission="improvement:read",
+        exposure=Exposure(tags=("boss", "health")))
     def get_self_fix(ctx, *, project_id, actor, args):
         sf = services_module("self_fix")
         si = services_module("self_fix_install")
@@ -462,7 +471,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "weekly trend and the BOSS-side cut.",
         _obj({"project_id": {"type": "string"}, "run_id": {"type": "string"},
               "window": {"type": "string", "enum": ["7d", "30d", "90d"]}}),
-        permission="improvement:read")
+        permission="improvement:read",
+        exposure=Exposure(tags=("costs",)))
     def autonomy_report(ctx, *, project_id, actor, args):
         am = services_module("autonomy_metric")
         pid = args.get("project_id") or project_id
@@ -495,7 +505,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
               "offset": {"type": "integer", "minimum": 0, "default": 0},
               "detail": {"type": "boolean", "default": False},
               "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}}),
-        permission="improvement:read")
+        permission="improvement:read",
+        exposure=Exposure(tags=("boss", "health")))
     def list_platform_gaps(ctx, *, project_id, actor, args):
         """PAGED HONESTLY. The rows carried every prose field, so 14 of them overflowed the
         agent's tool-result budget and arrived as 8 and a cut-off tail; the agent concluded the
@@ -567,7 +578,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         # A READ PERMISSION FOR A WRITE THAT ONLY QUEUES, like kg_propose_fact (knowledge:read):
         # it changes nothing until a person acts, and every agent's Passport holds system:read.
         permission="system:read",
-        queues_for_review=True)
+        queues_for_review=True,
+        exposure=Exposure(tags=("boss", "health")))
     def file_platform_gap(ctx, *, project_id, actor, args):
         from ..services import boss_recommendations as recs
         from ..services.self_fix import PLATFORM_GAP
@@ -628,7 +640,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         kind="write", reversibility="costs_money", permission="improvement:manage",
         operator_only=True,
         offer_note="it only diagnoses and proposes a fix, and nothing installs without a "
-                   "person's approval of the diff")
+                   "person's approval of the diff",
+        exposure=Exposure(tags=("boss", "health")))
     def request_self_fix(ctx, *, project_id, actor, args):
         sf = services_module("self_fix")
         rec_id = str(args.get("recommendation_id") or "").strip()
@@ -656,7 +669,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "Everything actively running in the background right now — running code "
         "tasks and non-terminal jobs — with how long each has been going. Answers "
         "'how many tasks are running in the background?'.",
-        _obj({"project_id": {"type": "string"}}), permission="job:read")
+        _obj({"project_id": {"type": "string"}}), permission="job:read",
+        exposure=Exposure(tags=("builds", "runs"), core_for=("chat",)))
     def list_running_work(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
@@ -680,7 +694,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "list_discovery",
         "Recent research/discovery runs (outcome discovery dossiers) with status.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="discovery:read")
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="discovery:read",
+        exposure=Exposure(tags=("discovery", "research")))
     def list_discovery(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
@@ -690,7 +705,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "list_meetings",
         "Recent multi-agent PRD meeting runs with status and directive.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="meeting:read")
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="meeting:read",
+        exposure=Exposure(tags=("meetings", "prd")))
     def list_meetings(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         limit = int(args.get("limit") or 25)
@@ -722,7 +738,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "`read_preview_log` for the full startup log, then "
         "repair: an app-side fault is fixed with extend_code_task or steer_code_task on the "
         "run, and start_preview tries again.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="preview:read")
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="preview:read",
+        exposure=Exposure(tags=("previews",), core_for=("chat",)))
     def list_previews(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         # list_previews already publicizes: url/open_url are gateway paths, not loopback.
@@ -762,7 +779,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "run_id, then start_preview again.",
         _obj({"preview_id": {"type": "string", "description": "prev_…"},
               "project_id": {"type": "string"}},
-             ["preview_id"]), permission="preview:read")
+             ["preview_id"]), permission="preview:read",
+        exposure=Exposure(tags=("previews",)))
     def read_preview_log(ctx, *, project_id, actor, args):
         from ..services.preview_service import preview_log_snapshot
 
@@ -797,7 +815,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "The live preview URL(s) for one code-task run (crun_…), if any preview is "
         "running — and for the failed attempts, why each failed. Answers 'preview this task / "
         "give me the link' and 'why will this app not come up'.",
-        _obj({"run_id": {"type": "string"}, "project_id": {"type": "string"}}, ["run_id"]), permission="preview:read")
+        _obj({"run_id": {"type": "string"}, "project_id": {"type": "string"}}, ["run_id"]), permission="preview:read",
+        exposure=Exposure(tags=("previews",)))
     def get_task_preview(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         run_id = args["run_id"]
@@ -828,7 +847,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "State of the sandbox/microVM execution fleet: the configured build "
         "substrate, the sandbox agent URL and its reachability, plus any held "
         "sandboxes still attached to running previews/tasks.",
-        _obj({}), permission="sandbox:read")
+        _obj({}), permission="sandbox:read",
+        exposure=Exposure(tags=("setup", "models")))
     def microvm_status(ctx, *, project_id, actor, args):
         s = ctx.settings
         provider = getattr(s, "governed_sandbox_provider", None)
@@ -875,7 +895,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 "max_rows": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
             },
             ["sql"],
-        ), permission="host:exec")
+        ), permission="host:exec",
+        exposure=Exposure(tags=("db",)))
     def query_db(ctx, *, project_id, actor, args):
         if _community_raw_sql_disabled(ctx.settings):
             return {"ok": False, "error": "Unrestricted SQL reads are unavailable in Community. "
@@ -935,7 +956,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "The machines this project can deploy onto: name, address, architecture, status "
         "(registered/verified/degraded/retired), port budget and when each was last checked. "
         "Use for 'what hosts do we have', 'is <host> healthy', 'where can this ship'.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="host:read")
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="host:read",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def list_deployment_hosts(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         limit = int(args.get("limit") or 25)
@@ -958,7 +980,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "findings and problems — plus the apps currently deployed onto it. Accepts the host "
         "id, its name, or its IP address. Use before recommending anything be shipped there.",
         _obj({"host": {"type": "string", "description": "host id, name or address"},
-              "project_id": {"type": "string"}}, ["host"]), permission="host:read")
+              "project_id": {"type": "string"}}, ["host"]), permission="host:read",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def describe_deployment_host(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         needle = str(args.get("host") or "").strip()
@@ -1026,7 +1049,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
               "deployment_id": {
                   "type": "string",
                   "description": "a stack deployment id (sdep_…) to read in full"}}),
-        permission="deployment:read")
+        permission="deployment:read",
+        exposure=Exposure(tags=("deploy", "hosts"), core_for=("chat",)))
     def list_deployments(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         limit = int(args.get("limit") or 25)
@@ -1338,7 +1362,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["title", "instructions"],
         ),
         kind="write",
-        reversibility="costs_money", permission="code_task:create")
+        reversibility="costs_money", permission="code_task:create",
+        exposure=Exposure(tags=("builds", "runs")))
     def create_code_task(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         cts = services_module("code_task_service")
@@ -1472,7 +1497,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["run_id", "instructions"],
         ),
         kind="write",
-        reversibility="costs_money", permission="code_task:retry")
+        reversibility="costs_money", permission="code_task:retry",
+        exposure=Exposure(tags=("builds", "runs")))
     def extend_code_task(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
         result = cts.retry_code_task(
@@ -1530,7 +1556,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["run_id"],
         ),
         kind="write",
-        reversibility="costs_money", permission="code_task:retry")
+        reversibility="costs_money", permission="code_task:retry",
+        exposure=Exposure(tags=("builds", "runs")))
     def retry_code_task(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         with ctx.begin() as c:
@@ -1561,7 +1588,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["seed"],
         ),
         kind="write",
-        reversibility="costs_money", permission="discovery:create")
+        reversibility="costs_money", permission="discovery:create",
+        exposure=Exposure(tags=("discovery", "research")))
     def create_discovery(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         ds = services_module("discovery_service")
@@ -1638,7 +1666,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["workflow_key", "name", "steps"],
         ),
         kind="write",
-        reversibility="safe", permission="workflow:publish")
+        reversibility="safe", permission="workflow:publish",
+        exposure=Exposure(tags=("workflows",)))
     def draft_workflow(ctx, *, project_id, actor, args):
         wf = services_module("workflows")
         caps = services_module("workflow_capabilities")
@@ -1746,7 +1775,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         _obj({"workflow_key": {"type": "string"}, "project_id": {"type": "string"}},
              ["workflow_key"]),
         kind="write",
-        reversibility="destroys_work", permission="workflow:delete")
+        reversibility="destroys_work", permission="workflow:delete",
+        exposure=Exposure(tags=("workflows",)))
     def delete_workflow(ctx, *, project_id, actor, args):
         # THE CONSOLE'S DELETE, not a second one. This deleted the definition row outright,
         # which fails on any workflow that has ever run (runs have no cascade) and would have
@@ -1803,7 +1833,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["step_key", "label"],
         ),
         kind="write",
-        reversibility="safe", permission="workflow:create")
+        reversibility="safe", permission="workflow:create",
+        exposure=Exposure(tags=("workflows",)))
     def draft_custom_step(ctx, *, project_id, actor, args):
         # BOTH BINDINGS, AND EVERY SKILL. This accepted only a skill the project had AUTHORED,
         # so the chat could not place a skill BOSS ships, and could not bind an MCP tool at all
@@ -1921,7 +1952,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["skill_key", "label", "behaviour_kind"],
         ),
         kind="write",
-        reversibility="safe", permission="skill:manage")
+        reversibility="safe", permission="skill:manage",
+        exposure=Exposure(tags=("skills", "agents")))
     def draft_skill(ctx, *, project_id, actor, args):
         skills = services_module("skill_definitions")
         pid = args.get("project_id") or project_id
@@ -1958,7 +1990,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         "it produces, which agent answers for it, and whether it always requires a person. Read "
         "this before drafting a workflow — a step that asks for an input nothing produces is "
         "the most common way a draft fails to publish.",
-        _obj({}), permission="workflow:read")
+        _obj({}), permission="workflow:read",
+        exposure=Exposure(tags=("workflows",)))
     def list_capabilities(ctx, *, project_id, actor, args):
         caps = services_module("workflow_capabilities")
         return {"capabilities": [
@@ -1974,7 +2007,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         "what each needs, its risk tier, whether it forces an approval, and whether it can run "
         "right now (and why not). A skill is what an agent is given and what a custom workflow "
         "step runs.",
-        _obj({"project_id": {"type": "string"}}), permission="skill:read")
+        _obj({"project_id": {"type": "string"}}), permission="skill:read",
+        exposure=Exposure(tags=("skills", "agents")))
     def list_skills(ctx, *, project_id, actor, args):
         # EVERYTHING THIS PROJECT CAN RUN, not only what it wrote — and from THE ONE CATALOGUE
         # (skill_catalogue), so the agent's answer is the same one the runtime and the builder
@@ -2043,7 +2077,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         _obj({"check": {"type": "boolean",
                         "description": "ask each server again now instead of using the last "
                                        "answer (up to a minute old)"},
-              "project_id": {"type": "string"}}), permission="mcp_server:read")
+              "project_id": {"type": "string"}}), permission="mcp_server:read",
+        exposure=Exposure(tags=("mcp", "agents")))
     def list_mcp_servers(ctx, *, project_id, actor, args):
         registry = services_module("mcp_registry")
         pid = args.get("project_id") or project_id
@@ -2078,7 +2113,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["name", "url"]),
         kind="write",
-        reversibility="safe", permission="mcp_server:register")
+        reversibility="safe", permission="mcp_server:register",
+        exposure=Exposure(tags=("mcp", "agents")))
     def register_mcp_server(ctx, *, project_id, actor, args):
         registry = services_module("mcp_registry")
         pid = args.get("project_id") or project_id
@@ -2177,7 +2213,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["directive", "workflow_key"],
         ),
         kind="write",
-        reversibility="costs_money", permission="workflow_run:start")
+        reversibility="costs_money", permission="workflow_run:start",
+        exposure=Exposure(tags=("workflows",)))
     def start_workflow(ctx, *, project_id, actor, args):
         from uuid import uuid4
 
@@ -2348,7 +2385,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["directive"],
         ),
         kind="write",
-        reversibility="costs_money", permission="meeting:convene")
+        reversibility="costs_money", permission="meeting:convene",
+        exposure=Exposure(tags=("meetings", "prd")))
     def request_meeting(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         ms = services_module("meeting_service")
@@ -2426,7 +2464,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["run_id"],
         ),
         kind="write",
-        reversibility="safe", permission="preview:manage")
+        reversibility="safe", permission="preview:manage",
+        exposure=Exposure(tags=("previews",)))
     def start_preview(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         with ctx.begin() as c:
@@ -2473,7 +2512,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["app_key"],
         ),
         kind="write",
-        reversibility="safe", permission="security_scan:run")
+        reversibility="safe", permission="security_scan:run",
+        exposure=Exposure(tags=("security",)))
     def run_security_scan(ctx, *, project_id, actor, args):
         from ..security_scan import scope as scan_scope
         from ..security_scan import service as scan_service
@@ -2707,7 +2747,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "force": {"type": "boolean", "description": "stop it even if running"}},
              required=["job_id", "reason"]),
         kind="write",
-        reversibility="destroys_work", permission="job:control")
+        reversibility="destroys_work", permission="job:control",
+        exposure=Exposure(tags=("jobs", "queue")))
     def cancel_job(ctx, *, project_id, actor, args):
         from ..services.jobs import JobLeaseService
         with ctx.begin() as c:
@@ -2731,7 +2772,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                               "description": "confirm an intentionally unqualified UPDATE/DELETE"}},
              required=["sql", "reason"]),
         kind="write",
-        reversibility="destroys_work", permission="host:exec")
+        reversibility="destroys_work", permission="host:exec",
+        exposure=Exposure(tags=("db",)))
     def write_db(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
         from ..services.core import emit_event
@@ -2788,7 +2830,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "reason": {"type": "string", "description": "why — recorded on the deployment"}},
              required=["run_id"]),
         kind="write",
-        reversibility="safe", permission="deployment:create")
+        reversibility="safe", permission="deployment:create",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def redeploy(ctx, *, project_id, actor, args):
         from ..services.shepherd_service import _act_on_deployment, redeploy_latest_deployment
         reason = args.get("reason") or "operator asked BOSS to retry the deployment"
@@ -2825,7 +2868,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "reason": {"type": "string", "description": "why — recorded on the removal"}},
              required=["app_or_target"]),
         kind="write",
-        reversibility="destroys_work", permission="deployment:create")
+        reversibility="destroys_work", permission="deployment:create",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def remove_app(ctx, *, project_id, actor, args):
         from sqlalchemy import text
 
@@ -2876,7 +2920,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                                                  "leave empty"}},
              required=["run_id", "environment"]),
         kind="write",
-        reversibility="safe", permission="deployment:create")
+        reversibility="safe", permission="deployment:create",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def deploy_app(ctx, *, project_id, actor, args):
         from ..services.delivery_pipeline import deploy_build
         return deploy_build(
@@ -2919,7 +2964,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                        "description": "optional; leave unset and a free one is chosen"}},
              required=["app_name"]),
         kind="write",
-        reversibility="safe", permission="deployment_target:manage")
+        reversibility="safe", permission="deployment_target:manage",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def create_deployment_target(ctx, *, project_id, actor, args):
         from ..services.deployment_fleet import create_deployment_target as _create
 
@@ -2938,7 +2984,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "anything. Read-only. Run this first when a deployment failed with a connection or "
         "health error, so a redeploy is not aimed at a host that is down.",
         _obj({"run_id": {"type": "string"}}, required=["run_id"]),
-        kind="read", permission="deployment:read")
+        kind="read", permission="deployment:read",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def preflight_deployment_target(ctx, *, project_id, actor, args):
         from ..services.shepherd_service import _act_on_deployment
         return {"run_id": args["run_id"],
@@ -2966,7 +3013,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "why": {"type": "string",
                       "description": "one line: what it will do and what it costs"}},
              required=["tool", "label"]),
-        kind="read", permission="decision:read")
+        kind="read", permission="decision:read",
+        exposure=Exposure(tags=("offers",), core_for=("chat",)))
     def propose_action(ctx, *, project_id, actor, args):
         """Records an offer. Executing it is the operator's click, not this call."""
         name = ToolRegistry.canonical_tool_name(str(args.get("tool") or ""))
@@ -3027,7 +3075,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         # A READ OF GITHUB THAT RECORDS WHAT IT SAW. It asks GitHub one question and updates
         # the connection's test state; running it again simply asks again, which is the whole
         # point of it existing.
-        reversibility="safe", permission="setup:manage")
+        reversibility="safe", permission="setup:manage",
+        exposure=Exposure(tags=("repos", "github")))
     def test_github_access(ctx, *, project_id, actor, args):
         # WHY THIS IS A TOOL. Asked why a connection failed, the agent diagnosed it correctly
         # and then said "open BOSS's GitHub view, select the repository, and click Test
@@ -3095,7 +3144,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         kind="write",
         # UNDONE BY SETTING IT BACK, or by sending an empty value to return to the deployment
         # default. It starts nothing and spends nothing; the next run reads the new value.
-        reversibility="safe", permission="settings:update")
+        reversibility="safe", permission="settings:update",
+        exposure=Exposure(tags=("setup", "models")))
     def set_project_setting(ctx, *, project_id, actor, args):
         from ..services import project_settings as ps
 
@@ -3155,7 +3205,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         # A NEW, EMPTY PROJECT: it spends nothing and changes no existing work. The identity gate
         # decides project:create with the caller's own context (a person's fresh step-up; a
         # service account's key); an agent's run token never holds it (not delegable).
-        reversibility="safe", permission="project:create", org_scope=True)
+        reversibility="safe", permission="project:create", org_scope=True,
+        exposure=Exposure(tags=("projects",)))
     def create_project(ctx, *, project_id, actor, args):
         from ..services import projects as project_service
         from .registry import CURRENT_TOOL_AUTH
@@ -3203,7 +3254,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "rejected, or 'the check failed'. Read-only; never calls GitHub or a provider and "
         "never returns a credential.",
         _obj({}),
-        kind="read", permission="setup:read")
+        kind="read", permission="setup:read",
+        exposure=Exposure(tags=("setup", "models")))
     def diagnose_setup(ctx, *, project_id, actor, args):
         # ONE SOURCE WITH THE PAGE. This assembled its own picture from setup_status, raw
         # github_connections rows and CLI detection, so the chat and Repo and models could
@@ -3256,7 +3308,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "running, because load-per-core says whether anything is actually contending. "
         "Read-only; it touches no docker socket.",
         _obj({}),
-        kind="read", permission="system:read")
+        kind="read", permission="system:read",
+        exposure=Exposure(tags=("boss", "health")))
     def inspect_self(ctx, *, project_id, actor, args):
         from ..services.self_observability import self_snapshot
         return self_snapshot()
@@ -3272,7 +3325,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "doctor's 'Updates restarted a build'). Read-only; no docker socket.",
         _obj({"hours": {"type": "number", "minimum": 0.1, "maximum": 336, "default": 24,
                         "description": "how far back to look"}}),
-        kind="read", permission="system:read")
+        kind="read", permission="system:read",
+        exposure=Exposure(tags=("boss", "health")))
     def install_restarts(ctx, *, project_id, actor, args):
         from ..services.install_history import restarts
 
@@ -3293,7 +3347,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "reason": {"type": "string"}},
              required=["job_id", "band", "reason"]),
         kind="write",
-        reversibility="safe", permission="job:control")
+        reversibility="safe", permission="job:control",
+        exposure=Exposure(tags=("jobs", "queue")))
     def set_job_priority(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
         from ..services.jobs import (
@@ -3322,7 +3377,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "progress, not an error, so nothing shows up as failed. Returns each waiting job with "
         "how long it has waited, plus whatever is currently holding a worker slot.",
         _obj({"minutes": {"type": "integer",
-                          "description": "how long queued counts as starved (default 10)"}}), permission="job:read")
+                          "description": "how long queued counts as starved (default 10)"}}), permission="job:read",
+        exposure=Exposure(tags=("jobs", "queue")))
     def find_starved_work(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
         threshold = int(args.get("minutes") or 10)
@@ -3373,7 +3429,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "task_id": {"type": "string"}},
              required=["run_id", "kind"]),
         kind="write",
-        reversibility="safe", permission="code_task:steer")
+        reversibility="safe", permission="code_task:steer",
+        exposure=Exposure(tags=("builds", "runs")))
     def link_run_origin(ctx, *, project_id, actor, args):
         import json as _json
 
@@ -3402,7 +3459,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "queued far longer than anything is running, decisions pending past their deadline. "
         "Use this to answer 'what is inconsistent right now' instead of waiting for someone "
         "to notice a stuck card.",
-        _obj({}), permission="system:read")
+        _obj({}), permission="system:read",
+        exposure=Exposure(tags=("db",)))
     def consistency_report(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
         live_job = ("NOT EXISTS (SELECT 1 FROM jobs j WHERE j.payload->>'run_id' = r.id "
@@ -3466,7 +3524,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "dry_run is true.",
         _obj({"dry_run": {"type": "boolean", "description": "default true"}}),
         kind="write",
-        reversibility="safe", permission="code_task:cancel")
+        reversibility="safe", permission="code_task:cancel",
+        exposure=Exposure(tags=("builds", "runs")))
     def close_orphaned_runs(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
         dry = args.get("dry_run")
@@ -3506,7 +3565,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                        "default": "pending"},
             "limit": _LIMIT,
             "project_id": {"type": "string"},
-        }), permission="decision:read")
+        }), permission="decision:read",
+        exposure=Exposure(tags=("decisions", "gates"), core_for=("chat",)))
     def list_decisions(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         status = args.get("status") or "pending"
@@ -3543,7 +3603,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         reversibility="irreversible", permission="decision:approve",
         # the same operation, the same permission as over HTTP (/v1/decisions/{id}/{action})
         permission_by_arg=("action", (("delegate", "decision:delegate"),
-                                      ("execute", "decision:execute"))))
+                                      ("execute", "decision:execute"))),
+        exposure=Exposure(tags=("decisions", "gates")))
     def decide(ctx, *, project_id, actor, args):
         action = args["action"]
         if action not in _DECISION_ACTIONS:
@@ -3589,7 +3650,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "forever with nothing driving it.",
         _obj({"run_id": {"type": "string"}, "reason": {"type": "string"}}, ["run_id"]),
         kind="write",
-        reversibility="destroys_work", permission="code_task:cancel")
+        reversibility="destroys_work", permission="code_task:cancel",
+        exposure=Exposure(tags=("builds", "runs")))
     def cancel_code_task(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         reason = args.get("reason") or "cancelled via MCP"
@@ -3618,7 +3680,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["run_id", "waive_gates"],
         ),
         kind="write",
-        reversibility="destroys_work", permission="code_task:override")
+        reversibility="destroys_work", permission="code_task:override",
+        exposure=Exposure(tags=("decisions", "gates")))
     def waive_gates(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         with ctx.begin() as c:
@@ -3650,7 +3713,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["run_id", "message"],
         ),
         kind="write",
-        reversibility="safe", permission="code_task:steer")
+        reversibility="safe", permission="code_task:steer",
+        exposure=Exposure(tags=("builds", "runs")))
     def send_feedback(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         with ctx.begin() as c:
@@ -3673,7 +3737,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "start_preview.",
         _obj({"preview_id": {"type": "string"}}, ["preview_id"]),
         kind="write",
-        reversibility="safe", permission="preview:manage")
+        reversibility="safe", permission="preview:manage",
+        exposure=Exposure(tags=("previews",)))
     def stop_preview(ctx, *, project_id, actor, args):
         preview_id = args["preview_id"]
         with ctx.begin() as c:
@@ -3697,7 +3762,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                            "description": "what to do differently, in plain terms"}},
              ["run_id", "guidance"]),
         kind="write",
-        reversibility="safe", permission="code_task:steer")
+        reversibility="safe", permission="code_task:steer",
+        exposure=Exposure(tags=("builds", "runs")))
     def steer_code_task(ctx, *, project_id, actor, args):
         import json as _json
         from datetime import datetime, timezone
@@ -3744,7 +3810,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "server and signed in through their own login. A subscription has no credential to "
         "paste: it signs in inside BOSS (`boss connect codex|claude|grok`, or the console's "
         "+ Add model › Subscription › Sign in). Reports the next step for anything not ready.",
-        _obj({}, []), permission="setup:read")
+        _obj({}, []), permission="setup:read",
+        exposure=Exposure(tags=("setup", "models")))
     def detect_coding_agents(ctx, *, project_id, actor, args):
         from ..services.setup_service import list_coding_agents, with_recorded_connections
 
@@ -3778,7 +3845,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                         "description": "run one real turn before recording it (recommended)"}},
              ["provider"]),
         kind="write",
-        reversibility="safe", permission="model_provider:manage")
+        reversibility="safe", permission="model_provider:manage",
+        exposure=Exposure(tags=("setup", "models")))
     def connect_coding_agent(ctx, *, project_id, actor, args):
         from ..services.setup_service import SetupError, connect_coding_agent as _connect
 
@@ -3811,7 +3879,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
               "dimension": {"type": "string", "enum": ["vendor", "transport"],
                             "default": "vendor",
                             "description": "vendor = whose model; transport = whose endpoint"}},
-             []), permission="model_provider:read")
+             []), permission="model_provider:read",
+        exposure=Exposure(tags=("costs",)))
     def provider_audit(ctx, *, project_id, actor, args):
         from ..services.provider_audit import audit_project
 
@@ -3829,7 +3898,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "Every coding harness BOSS can drive — API lanes and CLI agents — with what each "
         "needs and whether a governed code task has actually completed on it. `verified: "
         "false` means wired but unproven, not broken.",
-        _obj({}, []), permission="setup:read")
+        _obj({}, []), permission="setup:read",
+        exposure=Exposure(tags=("setup", "models")))
     def list_harnesses(ctx, *, project_id, actor, args):
         from ..services.harness_registry import available_harnesses
 
@@ -3860,7 +3930,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                                           "follow-up work"}},
              ["path", "line", "body"]),
         kind="write",
-        reversibility="safe", permission="code_task:steer")
+        reversibility="safe", permission="code_task:steer",
+        exposure=Exposure(tags=("reviews", "pr")))
     def add_review_comment(ctx, *, project_id, actor, args):
         import json as _json
         from ..services.core import make_id
@@ -3933,7 +4004,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
               "status": {"type": "string",
                          "enum": ["open", "addressed", "dismissed", "resolved", "all"],
                          "default": "all"}},
-             []), permission="code_task:read")
+             []), permission="code_task:read",
+        exposure=Exposure(tags=("reviews", "pr")))
     def list_review_comments(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
         want = (args.get("status") or "all").lower()
@@ -3978,7 +4050,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
               "note": {"type": "string", "description": "why, for a dismissal"}},
              ["comment_id", "status"]),
         kind="write",
-        reversibility="safe", permission="code_task:steer")
+        reversibility="safe", permission="code_task:steer",
+        exposure=Exposure(tags=("reviews", "pr")))
     def resolve_review_comment(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
         from ..services import local_review as _local_review
@@ -4038,7 +4111,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
              []),
         kind="write",
         # A model review per call: reversible in state (a new round), not in spend.
-        reversibility="costs_money", permission="code_task:steer")
+        reversibility="costs_money", permission="code_task:steer",
+        exposure=Exposure(tags=("reviews", "pr")))
     def review_pull_request_again(ctx, *, project_id, actor, args):
         pra = services_module("pr_review_again")
         if not args.get("run_id") and not args.get("pull_request_number"):
@@ -4063,7 +4137,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
               "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 40},
               "as_text": {"type": "boolean", "default": True,
                           "description": "terminal-style lines (default) or structured JSON"}},
-             ["run_id"]), permission="code_task:read")
+             ["run_id"]), permission="code_task:read",
+        exposure=Exposure(tags=("builds", "runs")))
     def watch_code_task(ctx, *, project_id, actor, args):
         rid = args["run_id"]
         with ctx.begin() as c:
@@ -4080,7 +4155,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "Per-LLM-call activity for a code-task run: stage, model, tokens, cost, "
         "latency, retries, turns and errors. The answer to 'WHY did this phase fail "
         "or take so long / what did it cost?'.",
-        _obj({"run_id": {"type": "string"}, "limit": _LIMIT}, ["run_id"]), permission="code_task:read")
+        _obj({"run_id": {"type": "string"}, "limit": _LIMIT}, ["run_id"]), permission="code_task:read",
+        exposure=Exposure(tags=("builds", "runs")))
     def get_run_activity(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         limit = int(args.get("limit") or 100)
@@ -4125,7 +4201,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                          "description": "code task run id (crun_...) or meeting run id (mrun_...); "
                                         "omit to use the run this conversation is scoped to"},
               "app": {"type": "string",
-                      "description": "app/run title instead of an id, e.g. 'UnitFlip'"}}), permission="workflow:read")
+                      "description": "app/run title instead of an id, e.g. 'UnitFlip'"}}), permission="workflow:read",
+        exposure=Exposure(tags=("apps",)))
     def read_spec(ctx, *, project_id, actor, args):
         """The spec, from wherever this app's spec actually landed.
 
@@ -4252,7 +4329,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "almost always the answer), cost per stage, repair attempts, turns and the test "
         "verdict. Use this for 'why did this take 152m', 'what went wrong', 'why so "
         "expensive'.",
-        _obj({"run_id": {"type": "string"}}, ["run_id"]), permission="code_task:read")
+        _obj({"run_id": {"type": "string"}}, ["run_id"]), permission="code_task:read",
+        exposure=Exposure(tags=("builds", "runs"), core_for=("chat",)))
     def explain_run(ctx, *, project_id, actor, args):
         """The wall-clock answer, which `get_run_activity` cannot give.
 
@@ -4344,7 +4422,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "What BOSS has spent: total and per-run USD over a recent window, newest "
         "first. Use before launching expensive work, or to explain a spend spike.",
         _obj({"days": {"type": "integer", "minimum": 1, "maximum": 90, "default": 7},
-              "limit": _LIMIT, "project_id": {"type": "string"}}), permission="budget:read")
+              "limit": _LIMIT, "project_id": {"type": "string"}}), permission="budget:read",
+        exposure=Exposure(tags=("costs",), core_for=("chat",)))
     def get_costs(ctx, *, project_id, actor, args):
         # Session project is the fence. args.project_id is stripped by MCP HTTP and
         # the discuss-path pin; never fall back to a model-supplied override here
@@ -4445,7 +4524,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "Every repository registered to this project, with the health of the connection "
         "that owns it. Use before starting work to pick the right repo — BOSS is "
         "multi-repo; do NOT assume one global default.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="repository:read")
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="repository:read",
+        exposure=Exposure(tags=("repos", "github"), core_for=("chat",)))
     def list_repositories(ctx, *, project_id, actor, args):
         rr = services_module("repo_registry")
         pid = args.get("project_id") or project_id
@@ -4464,7 +4544,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "first-pass rates, median time-to-PR, spend and $/PR, plus the recent runs. "
         "The answer to 'how is BOSS performing in my repository?'.",
         _obj({"days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 30},
-              "project_id": {"type": "string"}}), permission="github:read")
+              "project_id": {"type": "string"}}), permission="github:read",
+        exposure=Exposure(tags=("repos", "github")))
     def repo_activity(ctx, *, project_id, actor, args):
         rr = services_module("repo_registry")
         pid = args.get("project_id") or project_id
@@ -4498,7 +4579,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         permission="repository:read",
         # Refreshing writes the registry (the console's Refresh), so it takes the route's key.
         permission_by_arg=("refresh", (("True", "repository:register"),
-                                       ("true", "repository:register"))))
+                                       ("true", "repository:register"))),
+        exposure=Exposure(tags=("repos", "github")))
     def list_org_repositories(ctx, *, project_id, actor, args):
         from ..multirepo import registry
         from ..multirepo.common import MultiRepoError
@@ -4530,7 +4612,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         kind="write",
         # It gives BOSS's agents reach on a GitHub repository through the org's App: a person
         # presses it, as for any grant.
-        reversibility="grants_authority", permission="repository:register")
+        reversibility="grants_authority", permission="repository:register",
+        exposure=Exposure(tags=("repos", "github")))
     def allow_repository(ctx, *, project_id, actor, args):
         from ..multirepo import project_repos, registry
         from ..multirepo.common import MultiRepoError
@@ -4577,7 +4660,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         reversibility="safe", permission="repository:register",
         # The registry path is the project Repositories route (PUT /v1/projects/{id}/repos/{repo}),
         # which needs repository:manage; binding under a named connection keeps repository:register.
-        permission_by_arg=("connection_id", (("", "repository:manage"),)))
+        permission_by_arg=("connection_id", (("", "repository:manage"),)),
+        exposure=Exposure(tags=("repos", "github")))
     def register_repository(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         base_branch = args.get("base_branch") or args.get("default_branch")
@@ -4618,7 +4702,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         _obj({"repository": {"type": "string"}}, ["repository"]),
         kind="write",
         # Undone by adding it again (register_repository); nothing built is lost.
-        reversibility="safe", permission="repository:manage")
+        reversibility="safe", permission="repository:manage",
+        exposure=Exposure(tags=("repos", "github")))
     def remove_project_repository(ctx, *, project_id, actor, args):
         from ..multirepo import project_repos
         from ..multirepo.common import MultiRepoError
@@ -4638,7 +4723,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "token that every project uses. Zero project connections does NOT mean GitHub is "
         "unconnected: repositories come from the org registry (list_org_repositories). Secrets "
         "are never returned — only the reference and its health.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="github:read")
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="github:read",
+        exposure=Exposure(tags=("repos", "github")))
     def list_github_connections(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
@@ -4661,7 +4747,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "get_meeting",
         "Full detail for one PRD meeting run (mrun_…): status, phase, directive, the "
         "panel roles and the linked decision. Read this BEFORE approving its PRD.",
-        _obj({"meeting_id": {"type": "string"}}, ["meeting_id"]), permission="meeting:read")
+        _obj({"meeting_id": {"type": "string"}}, ["meeting_id"]), permission="meeting:read",
+        exposure=Exposure(tags=("meetings", "prd")))
     def get_meeting(ctx, *, project_id, actor, args):
         with ctx.begin() as c:
             row = c.execute(
@@ -5736,7 +5823,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                       "description": "allow it to CHANGE the host, not just look"}},
              required=["question"]),
         kind="write",
-        reversibility="safe", permission="host:exec")
+        reversibility="safe", permission="host:exec",
+        exposure=Exposure(tags=("investigations",)))
     def investigate(ctx, *, project_id, actor, args):
         from ..services.debug_session import open_investigation
 
@@ -5787,7 +5875,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         "next', 'how are we doing' — instead of assembling the same picture from six separate "
         "lookups. Read-only.",
         _obj({}),
-        kind="read", permission="assistant:chat")
+        kind="read", permission="assistant:chat",
+        exposure=Exposure(tags=("status",), core_for=("chat",)))
     def factory_briefing(ctx, *, project_id, actor, args):
         from ..services.factory_briefing import factory_briefing as _briefing
 
@@ -5807,7 +5896,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                           "description": "omit for the active version"},
               "project_id": {"type": "string"}},
              ["workflow_key"]),
-        kind="read", permission="workflow:read")
+        kind="read", permission="workflow:read",
+        exposure=Exposure(tags=("workflows",)))
     def describe_workflow(ctx, *, project_id, actor, args):
         from ..services.workflow_explain import WorkflowExplainError, explain_version
 
@@ -5841,7 +5931,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                                "description": "pre_deploy: the pass-1 build (crun_)"},
               "input": {"type": "object", "description": "the run input it would start with"},
               "project_id": {"type": "string"}}),
-        kind="read", permission="workflow:read")
+        kind="read", permission="workflow:read",
+        exposure=Exposure(tags=("workflows",)))
     def precheck_workflow(ctx, *, project_id, actor, args):
         from ..services import workflow_precheck
 
@@ -5882,7 +5973,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["check", "until"]),
         kind="write",
-        reversibility="safe", permission="autopilot:operate")
+        reversibility="safe", permission="autopilot:operate",
+        exposure=Exposure(tags=("watch", "schedule")))
     def watch(ctx, *, project_id, actor, args):
         """The answer to "keep an eye on this", which BOSS simply did not have.
 
@@ -5935,7 +6027,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         # Each kind reads what its own status tool reads, under that tool's permission.
         permission_by_arg=("what", (("code_task", "code_task:read"),
                                     ("workflow_run", "workflow_run:read"),
-                                    ("code_graph", "knowledge:read"))))
+                                    ("code_graph", "knowledge:read"))),
+        exposure=Exposure(tags=("builds", "runs")))
     def wait_for(ctx, *, project_id, actor, args):
         from ..services import wait_for as waiting
 
@@ -5963,7 +6056,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["prompt", "at_time"]),
         kind="write",
-        reversibility="safe", permission="autopilot:operate")
+        reversibility="safe", permission="autopilot:operate",
+        exposure=Exposure(tags=("watch", "schedule")))
     def schedule_work(ctx, *, project_id, actor, args):
         from ..services.agent_wakeups import WakeupError, schedule as _schedule
 
@@ -5992,7 +6086,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "reason": {"type": "string"},
               "project_id": {"type": "string"}}),
         kind="write",
-        reversibility="safe", permission="autopilot:operate")
+        reversibility="safe", permission="autopilot:operate",
+        exposure=Exposure(tags=("watch", "schedule")))
     def stop_watching(ctx, *, project_id, actor, args):
         from ..services.agent_wakeups import WakeupError, stop
 
@@ -6028,7 +6123,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         "it next wakes, which cycle it is on, and what the last one found.",
         _obj({"all": {"type": "boolean", "description": "include stopped and finished ones"},
               "project_id": {"type": "string"}}),
-        kind="read", permission="autopilot:read")
+        kind="read", permission="autopilot:read",
+        exposure=Exposure(tags=("watch", "schedule")))
     def list_watches(ctx, *, project_id, actor, args):
         from ..services.agent_wakeups import list_wakeups
 
@@ -6057,7 +6153,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["kind", "body"]),
         kind="write",
-        reversibility="safe", permission="memory:manage")
+        reversibility="safe", permission="memory:manage",
+        exposure=Exposure(tags=("memory",)))
     def remember(ctx, *, project_id, actor, args):
         """The write half of the memory plane.
 
@@ -6104,7 +6201,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "include_proposed": {"type": "boolean",
                                    "description": "also show what is awaiting review"},
               "project_id": {"type": "string"}}),
-        kind="read", permission="memory:read")
+        kind="read", permission="memory:read",
+        exposure=Exposure(tags=("memory",), core_for=("chat",)))
     def recall(ctx, *, project_id, actor, args):
         from ..services.agent_memory import recall as _recall
 
@@ -6126,7 +6224,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         _obj({"memory_id": {"type": "string"}, "project_id": {"type": "string"}},
              ["memory_id"]),
         kind="write",
-        reversibility="safe", permission="memory:manage")
+        reversibility="safe", permission="memory:manage",
+        exposure=Exposure(tags=("memory",)))
     def forget(ctx, *, project_id, actor, args):
         from ..services.agent_memory import MemoryError_, forget as _forget
 
@@ -6161,7 +6260,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                                           "stops being re-injected into later turns"},
               "project_id": {"type": "string"}}),
         kind="write",
-        reversibility="safe", permission="assistant:chat")
+        reversibility="safe", permission="assistant:chat",
+        exposure=Exposure(tags=("watch", "schedule")))
     def update_ledger(ctx, *, project_id, actor, args):
         """The session's own memory of itself.
 
@@ -6217,7 +6317,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["run_id", "step_id"]),
         kind="write",
-        reversibility="safe", permission="workflow_run:control")
+        reversibility="safe", permission="workflow_run:control",
+        exposure=Exposure(tags=("workflows",)))
     def retry_workflow_step(ctx, *, project_id, actor, args):
         """The recovery the agent could diagnose and could not perform.
 
@@ -6289,7 +6390,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["run_id", "step_id", "reason"]),
         kind="write",
-        reversibility="safe", permission="workflow_run:control")
+        reversibility="safe", permission="workflow_run:control",
+        exposure=Exposure(tags=("workflows",)))
     def skip_workflow_step(ctx, *, project_id, actor, args):
         """The agent's half of "Skip and proceed".
 
@@ -6338,7 +6440,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         _obj({"run_id": {"type": "string", "description": "the wfr_... to describe"},
               "project_id": {"type": "string"}},
              ["run_id"]),
-        kind="read", permission="workflow_run:read")
+        kind="read", permission="workflow_run:read",
+        exposure=Exposure(tags=("workflows",), core_for=("chat",)))
     def describe_workflow_run(ctx, *, project_id, actor, args):
         """A workflow run, and the way out of it.
 
@@ -6464,7 +6567,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                           "description": "false to report without changing anything"}},
              required=["run_id"]),
         kind="write",
-        reversibility="safe", permission="workflow_run:control")
+        reversibility="safe", permission="workflow_run:control",
+        exposure=Exposure(tags=("workflows",)))
     def recheck_workflow_run(ctx, *, project_id, actor, args):
         from ..services import workflows as _workflows
         from ..services.workflow_recheck import recheck_run
@@ -6485,7 +6589,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         "conversation — while it is still running, say so and answer with what you have.",
         _obj({"investigation_id": {"type": "string",
                                    "description": "optional — defaults to the latest"}}),
-        kind="read", permission="reliability:read")
+        kind="read", permission="reliability:read",
+        exposure=Exposure(tags=("investigations",)))
     def get_investigation(ctx, *, project_id, actor, args):
         from ..services.debug_session import get_investigation as _get
 
@@ -6507,7 +6612,8 @@ def _register_system_health_tools(reg: ToolRegistry) -> None:
         "doctor's open findings with the options each offers, and what BOSS fixed on its own. "
         "Read this before blaming a slow or failed build on BOSS.",
         _obj({"project_id": {"type": "string"}}),
-        kind="read", permission="system:read")
+        kind="read", permission="system:read",
+        exposure=Exposure(tags=("boss", "health")))
     def system_health(ctx, *, project_id, actor, args):
         from ..services import admission, system_doctor
 
@@ -6533,7 +6639,8 @@ def _register_system_health_tools(reg: ToolRegistry) -> None:
         reversibility="destroys_work", permission="system:operate",
         # The doctor acts on the whole install (builds, disk, updates), like its API route
         # (Scope.org): a project-level system:operate binding is not enough (M6).
-        org_scope=True)
+        org_scope=True,
+        exposure=Exposure(tags=("boss", "health")))
     def system_doctor_act(ctx, *, project_id, actor, args):
         from ..services import system_doctor
 
@@ -6569,7 +6676,8 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
         _obj({"run_id": {"type": "string", "description": "the code-task run (crun_...)"},
               "project_id": {"type": "string"}},
              ["run_id"]),
-        kind="read", permission="code_task:read")
+        kind="read", permission="code_task:read",
+        exposure=Exposure(tags=("builds", "runs"), core_for=("chat",)))
     def diagnose_run(ctx, *, project_id, actor, args):
         run_id = str(args.get("run_id") or "").strip()
         pid = project_id
@@ -6792,7 +6900,8 @@ def _register_port_tools(reg: ToolRegistry) -> None:
              ["host"]),
         # A port scan from inside BOSS's network: a person's host operation, never an agent's
         # on its own (host:exec is non-delegable), and only at the project's own hosts (M10).
-        kind="read", permission="host:exec")
+        kind="read", permission="host:exec",
+        exposure=Exposure(tags=("network", "ports")))
     def find_free_port(ctx, *, project_id, actor, args):
         import socket
 
@@ -6886,7 +6995,8 @@ def _register_run_turn_tools(reg: ToolRegistry) -> None:
               "stage": {"type": "string", "description": "only this stage, e.g. implement"},
               "project_id": {"type": "string"}},
              ["run_id"]),
-        kind="read", permission="code_task:read")
+        kind="read", permission="code_task:read",
+        exposure=Exposure(tags=("builds", "runs"), core_for=("chat",)))
     def read_run_turns(ctx, *, project_id, actor, args):
         run_id = str(args.get("run_id") or "").strip()
         if not run_id:
@@ -6986,7 +7096,8 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
         "has mandated, with who mandated each and why. Read before proposing a new one — a "
         "second rule saying the same thing teaches agents that standards are noise.",
         _obj({"project_id": {"type": "string"}}),
-        kind="read", permission="policy:read")
+        kind="read", permission="policy:read",
+        exposure=Exposure(tags=("standards",)))
     def list_standards(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
@@ -7045,7 +7156,8 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
         kind="write",
         reversibility="safe", permission="policy:manage",
         # all_projects=true writes a rule binding EVERY project: decided at org scope (M7).
-        org_scope="all_projects")
+        org_scope="all_projects",
+        exposure=Exposure(tags=("standards",)))
     def mandate_standard(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         key = str(args.get("key") or "").strip()
@@ -7108,7 +7220,8 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
              ["host", "ports"]),
         # Connects out from inside BOSS's network: non-delegable host:exec, and only to the
         # project's own registered hosts (M10).
-        kind="read", permission="host:exec")
+        kind="read", permission="host:exec",
+        exposure=Exposure(tags=("network", "ports")))
     def check_port_exposure(ctx, *, project_id, actor, args):
         import socket
 
@@ -7200,7 +7313,8 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
               "limit": _LIMIT,
               "project_id": {"type": "string"}},
              ["role"]),
-        kind="read", permission="meeting:read")
+        kind="read", permission="meeting:read",
+        exposure=Exposure(tags=("agents", "roles")))
     def recall_role_experience(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         wanted = str(args.get("role") or "").strip()
@@ -7290,7 +7404,8 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
               "limit": _LIMIT,
               "project_id": {"type": "string"}},
              []),
-        kind="read", permission="activity:read")
+        kind="read", permission="activity:read",
+        exposure=Exposure(tags=("builds", "runs")))
     def my_recent_work(ctx, *, project_id, actor, args):
         from ..services.agent_acts import my_recent_work as recent, resolve_role
 
@@ -7311,7 +7426,8 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
         "agent definition carries. Read this before answering as a role, so the answer comes "
         "from that role's actual remit rather than a guess at what the title implies.",
         _obj({"role": {"type": "string"}, "project_id": {"type": "string"}}, ["role"]),
-        kind="read", permission="agent:read")
+        kind="read", permission="agent:read",
+        exposure=Exposure(tags=("agents", "roles")))
     def describe_role(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         wanted = str(args.get("role") or "").strip()
@@ -7486,7 +7602,8 @@ def _register_deployment_target_tools(reg: ToolRegistry) -> None:
         _obj({"app_name": {"type": "string", "description": "the app, e.g. HookWatch"},
               "target_id": {"type": "string", "description": "or the target directly"},
               "project_id": {"type": "string"}}),
-        kind="read", permission="deployment:read")
+        kind="read", permission="deployment:read",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def describe_deployment_target(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         where, params = "project_id = :p", {"p": pid}
@@ -7562,7 +7679,8 @@ def _register_deployment_target_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["target_id"]),
         kind="write",
-        reversibility="safe", permission="deployment_target:manage")
+        reversibility="safe", permission="deployment_target:manage",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def retarget_app(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         target_id = str(args["target_id"])
@@ -7651,7 +7769,8 @@ def _register_image_tools(reg: ToolRegistry) -> None:
                                        "one"}},
              ["prompt", "path"]),
         kind="write",
-        reversibility="costs_money", permission="artifact:rebuild")
+        reversibility="costs_money", permission="artifact:rebuild",
+        exposure=Exposure(tags=("images",)))
     def generate_image(ctx, *, project_id, actor, args):
         import base64
         import urllib.error
@@ -7768,7 +7887,8 @@ def _register_app_identity_tools(reg: ToolRegistry) -> None:
         "run's title NORMALISES to, so it catches the splits punctuation caused ('X.' vs "
         "'X-Y'). Read-only. Use before merge_apps, and whenever a customer says they see "
         "the same app twice.",
-        _obj({"project_id": {"type": "string"}}), permission="code_task:read")
+        _obj({"project_id": {"type": "string"}}), permission="code_task:read",
+        exposure=Exposure(tags=("apps",)))
     def find_split_apps(ctx, *, project_id, actor, args):
         from ..services.naming import identity_key, project_name
 
@@ -7827,7 +7947,8 @@ def _register_app_identity_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["keep_app_id", "merge_app_ids"]),
         kind="write",
-        reversibility="safe", permission="code_task:steer")
+        reversibility="safe", permission="code_task:steer",
+        exposure=Exposure(tags=("apps",)))
     def merge_apps(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         keep = str(args.get("keep_app_id") or "").strip()
@@ -7890,7 +8011,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "path": {"type": "string", "description": "optional subdir, e.g. engine/"},
               "glob": {"type": "string", "description": "optional filename filter, e.g. *.py"},
               "limit": _LIMIT},
-             ["pattern"]), permission="repository:read")
+             ["pattern"]), permission="repository:read",
+        exposure=Exposure(tags=("code",), core_for=("chat",)))
     def search_code(ctx, *, project_id, actor, args):
         import fnmatch as _fn
 
@@ -7951,7 +8073,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "ref": {"type": "string", "description": "explicit branch/tag/sha"},
               "path": {"type": "string", "description": "optional subdir, e.g. server/"},
               "glob": {"type": "string", "description": "optional filter, e.g. *.ts"},
-              "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 200}}), permission="repository:read")
+              "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 200}}), permission="repository:read",
+        exposure=Exposure(tags=("code",)))
     def list_source(ctx, *, project_id, actor, args):
         """WHAT IS IN THIS APP — the question every investigation starts from.
 
@@ -8008,7 +8131,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "ref": {"type": "string", "description": "explicit branch/tag/sha"},
               "start": {"type": "integer", "minimum": 1},
               "end": {"type": "integer", "minimum": 1}},
-             ["file"]), permission="repository:read")
+             ["file"]), permission="repository:read",
+        exposure=Exposure(tags=("code",), core_for=("chat",)))
     def read_code(ctx, *, project_id, actor, args):
         repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
@@ -8040,7 +8164,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "database logs, never shared service log files.",
         _obj({"service": {"type": "string", "enum": ["api", "worker", "web"]},
               "pattern": {"type": "string", "description": "optional regex filter"},
-              "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 120}}), permission="observability:read")
+              "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 120}}), permission="observability:read",
+        exposure=Exposure(tags=("boss", "health"), core_for=("chat",)))
     def read_logs(ctx, *, project_id, actor, args):
         service = (args.get("service") or "api").lower()
         limit = int(args.get("limit") or 120)
@@ -8125,7 +8250,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "schema when troubleshooting; use project-scoped read tools for data. Raw SQL "
         "is unavailable from project-pinned chat.",
         _obj({"table": {"type": "string", "description": "optional: one table's columns"},
-              "like": {"type": "string", "description": "optional name filter, e.g. deployment"}}), permission="system:read")
+              "like": {"type": "string", "description": "optional name filter, e.g. deployment"}}), permission="system:read",
+        exposure=Exposure(tags=("db",)))
     def describe_schema(ctx, *, project_id, actor, args):
         table = (args.get("table") or "").strip()
         like = (args.get("like") or "").strip()
@@ -8174,7 +8300,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                                           "when the table has it)"},
               "limit": {"type": "integer", "minimum": 1, "maximum": PROJECT_DATA_ROW_CAP,
                         "default": 20}},
-             ["table"]), permission="system:read")
+             ["table"]), permission="system:read",
+        exposure=Exposure(tags=("db",)))
     def query_project_data(ctx, *, project_id, actor, args):
         return _query_project_data(ctx, project_id, args)
 
@@ -8187,7 +8314,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         _obj({"host": {"type": "string", "description": "host name or id from the fleet"},
               "command": {"type": "string",
                           "description": "e.g. 'docker ps', 'df -h', 'docker logs --tail 50 app'"}},
-             ["host", "command"]), permission="host:exec")
+             ["host", "command"]), permission="host:exec",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def inspect_host(ctx, *, project_id, actor, args):
         command, error = _inspect_host_command(args.get("command"))
         if error:
@@ -8205,7 +8333,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                       "description": "the app's name, or its deployment target id"},
               "environment": {"type": "string", "description": "e.g. staging; optional"},
               "tail": {"type": "integer", "minimum": 1, "maximum": 400, "default": 80}},
-             ["app"]), permission="host:exec")
+             ["app"]), permission="host:exec",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def read_app_logs(ctx, *, project_id, actor, args):
         """Harbor was asked for HelpDesk's container logs and answered "I have no tool to run
         docker logs": inspect_host can, but only given a container name, and a compose stack's
@@ -8270,7 +8399,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "repo": {"type": "string", "description": "owner/repo; defaults to the target"},
               "with_diff": {"type": "boolean", "default": False},
               "project_id": {"type": "string"}},
-             ["pull_request"]), permission="github:read")
+             ["pull_request"]), permission="github:read",
+        exposure=Exposure(tags=("reviews", "pr")))
     def read_pull_request(ctx, *, project_id, actor, args):
         """The agent could describe a task and not see what it shipped.
 
@@ -8414,7 +8544,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600, "default": 120}},
              ["host", "command"]),
         kind="write",
-        reversibility="irreversible", permission="host:exec")
+        reversibility="irreversible", permission="host:exec",
+        exposure=Exposure(tags=("deploy", "hosts")))
     def run_on_host(ctx, *, project_id, actor, args):
         """A shell on the operator's own machine, off by default and always recorded.
 
@@ -8514,7 +8645,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "bound to the current project and a network policy.",
         _obj({"url": {"type": "string"},
               "timeout_s": {"type": "integer", "minimum": 1, "maximum": 30, "default": 10}},
-             ["url"]), permission="observability:manage")
+             ["url"]), permission="observability:manage",
+        exposure=Exposure(tags=("network", "ports")))
     def http_probe(ctx, *, project_id, actor, args):
         import time as _time
         import urllib.error as _uerr
@@ -8559,7 +8691,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "file": {"type": "string", "description": "optional path to scope the log"},
               "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
               "search": {"type": "string",
-                         "description": "optional: commits touching this string"}}), permission="repository:read")
+                         "description": "optional: commits touching this string"}}), permission="repository:read",
+        exposure=Exposure(tags=("code",)))
     def git_history(ctx, *, project_id, actor, args):
         repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
@@ -8624,7 +8757,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "BOSS's EFFECTIVE runtime configuration — feature flags, model routing, engine "
         "selection, limits. Answers 'why did it behave that way' when the code branches "
         "on a setting. Secret VALUES are never returned, only whether each is set.",
-        _obj({"like": {"type": "string", "description": "optional name filter, e.g. sandbox"}}), permission="settings:read")
+        _obj({"like": {"type": "string", "description": "optional name filter, e.g. sandbox"}}), permission="settings:read",
+        exposure=Exposure(tags=("setup", "models")))
     def get_config(ctx, *, project_id, actor, args):
         like = (args.get("like") or "").lower().strip()
         # A name-based rule, so a setting added later is redacted BY DEFAULT rather than
@@ -8679,6 +8813,63 @@ def _bound_statement(connection) -> None:
     connection.execute(_text(f"SET LOCAL statement_timeout = {int(tool_timeout(3600) * 1000)}"))
 
 
+def search_tools(reg: ToolRegistry, query: str, limit: int = 5) -> dict:
+    """The registry searched by name, description, exposure tags and search hints (K5, design
+    §5.2): ranked word hits, name matches heaviest. Returns ≤5 tools; the kernel's ToolPolicy
+    (kernel/scoped_tools.py) offers them to the run from its next step on."""
+    import re as _re
+
+    words = [w for w in _re.findall(r"[a-z0-9_]+", (query or "").lower()) if len(w) > 1]
+    scored: list = []
+    for spec in reg.specs():
+        if spec.name == FIND_TOOLS:
+            continue
+        name = spec.name.lower()
+        description = (spec.description or "").lower()
+        tags = " ".join(sorted(spec.exposure.tags)) if spec.exposure else ""
+        hint = (spec.exposure.search_hint or "").lower() if spec.exposure else ""
+        score = 0
+        for word in words:
+            score += (4 if word in name else 0) + (3 if word in tags else 0) \
+                + (2 if word in hint else 0) + (1 if word in description else 0)
+        if score:
+            scored.append((-score, spec.name, spec))
+    scored.sort()
+    top = [spec for _s, _n, spec in scored[:max(1, min(int(limit or 5), 5))]]
+    tools = [{"name": s.name, "description": (s.description or "")[:240]} for s in top]
+    return {"ok": True, "tools": tools, "names": [t["name"] for t in tools],
+            "note": ("These tools are offered to you from your next message on."
+                     if tools else "No tool matches; say what you need in other words.")}
+
+
+FIND_TOOLS = "find_tools"
+
+
+def register_find_tools(reg: ToolRegistry) -> None:
+    """THE TOOL-SEARCH TOOL (K5, design §5.2). With BOSS_SCOPED_TOOLS on, a kernel run carries
+    its surface's small core set and finds everything else through this; what it returns is
+    offered from the run's next step on. It searches the registry it is registered IN, so the
+    chat registry finds only what chat may call. Core on every surface: the search tool itself
+    is never deferred."""
+
+    @reg.tool(
+        FIND_TOOLS,
+        "Find more tools by what you need done (e.g. 'retry a workflow step', 'where did the "
+        "deploy go', 'propose a knowledge-graph rule'). Returns up to `limit` matching tools, "
+        "and each one is OFFERED to you from your next message on. When nothing offered fits "
+        "the job, call this FIRST instead of improvising with the tools in hand.",
+        _obj({"query": {"type": "string",
+                        "description": "what you need to do, in a few words"},
+              "limit": {"type": "integer", "minimum": 1, "maximum": 5}},
+             required=["query"]),
+        permission="system:read",
+        exposure=Exposure(tags=("tools", "search"),
+                          surfaces=("chat", "agent_step", "decision", "build", "mcp"),
+                          core_for=("chat", "agent_step", "decision", "build", "mcp")))
+    def find_tools(ctx, *, project_id, actor, args):
+        return search_tools(reg, str(args.get("query") or ""), int(args.get("limit") or 5))
+
+
 def build_default_registry() -> ToolRegistry:
     """The full BOSS engine tool set (read + write)."""
     reg = ToolRegistry()
@@ -8725,6 +8916,9 @@ def build_default_registry() -> ToolRegistry:
     from .knowledge_project_tools import register_knowledge_project_tools
 
     register_knowledge_project_tools(reg)
+    # The tool-search tool (K5): registered last, and it searches at call time, so it sees
+    # everything above whatever order they landed in.
+    register_find_tools(reg)
     return reg
 
 
@@ -9035,6 +9229,10 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
     for spec in admitted:
         if spec.name in _DISCUSS_EXCLUDED_READ_TOOLS:
             continue
+        if spec.name == FIND_TOOLS:
+            # Registered fresh below, closing over THIS registry: it must search what this
+            # registry offers, not the full default set it was first registered in.
+            continue
         if (edition is not None
                 and edition.strip().lower() not in _PAID_EFFECT_EDITIONS
                 and spec.name in {"query_db", "write_db", "generate_image",
@@ -9110,8 +9308,12 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
                 also_requires=spec.also_requires,
                 # ...AND THE TOOL'S OWN TRUE WORDS ON ITS BUTTON (offer_warning).
                 offer_note=spec.offer_note,
+                # ...AND WHERE IT IS RELEVANT (K5): the rebuilt spec keeps its exposure, or the
+                # scoped chat registry would defer everything and find nothing.
+                exposure=spec.exposure,
             )
         )
+    register_find_tools(reg)
     return reg
 
 

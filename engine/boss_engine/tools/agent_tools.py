@@ -18,7 +18,7 @@ from typing import Any
 from sqlalchemy import text
 
 from .._compat import services_module
-from .registry import ToolRegistry
+from .registry import Exposure, ToolRegistry
 
 
 def _obj(props: dict, required: list[str]) -> dict:
@@ -40,7 +40,8 @@ def register_agent_tools(reg: ToolRegistry) -> None:
             "project_id": {"type": "string"},
         }, ["agent", "skill"]),
         kind="write",
-        reversibility="safe", permission="agent_ability:assign")
+        reversibility="safe", permission="agent_ability:assign",
+        exposure=Exposure(tags=("skills", "agents")))
     def assign_skill_to_agent(ctx, *, project_id, actor, args) -> dict[str, Any]:
         skills = services_module("skill_definitions")
         agents = services_module("agents")
@@ -117,7 +118,8 @@ def register_agent_tools(reg: ToolRegistry) -> None:
         # at first, which let the chat model give any agent any registered server on its own;
         # now the model proposes it and an operator's click runs it. Taking a server back goes
         # through the same button, which costs one click and keeps the tool one tool.
-        reversibility="grants_authority", permission="agent_ability:assign")
+        reversibility="grants_authority", permission="agent_ability:assign",
+        exposure=Exposure(tags=("mcp", "agents")))
     def assign_mcp_to_agent(ctx, *, project_id, actor, args) -> dict[str, Any]:
         agents = services_module("agents")
         pid = args.get("project_id") or project_id
