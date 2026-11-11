@@ -93,6 +93,8 @@ export type BuildRow = {
   origin: Origin | null;
   /** BOSS's own build (the Captain's quality passes): still a build, drawn with a BOSS tag. */
   internal?: boolean;
+  /** The change the build produced — "Change #N" / "PR #N" on the row (BOSSAPP-994). */
+  pr: { number: number; url: string | null } | null;
 };
 
 export type FloorOutcome = {
@@ -202,6 +204,7 @@ export function parseBuildRow(w: unknown): BuildRow {
     preview: o.preview ? parsePreviewFlag(o.preview) : null,
     origin: o.origin ? parseOrigin(o.origin) : null,
     internal: o.internal === true || undefined,
+    pr: (() => { const p = obj(o.pr); const pn = num(p.number); return pn > 0 ? { number: pn, url: opt(p.url) ?? null } : null; })(),
   };
 }
 

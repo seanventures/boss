@@ -13,6 +13,7 @@
 import React from "react";
 
 import type { BuildRow as Build } from "../../lib/factory-floor";
+import { ChangeLink } from "../change-link";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { localTime, span, type Band } from "../agents/live-util";
 import { StationLine, WaitGlyph, activeStation, stationMoves } from "./station-line";
@@ -111,6 +112,10 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
             <span className={p.cls} title={p.tip}>{p.text}</span>
           </React.Fragment>
         ))}
+        {/* The change this build produced (BOSSAPP-994): the row said "PR open" with no way
+            to open it — the one link a shipped row owes its reader. */}
+        {b.pr ? <ChangeLink url={b.pr.url} number={b.pr.number} className="ag-link fx-row-pr" icon={false}
+                            merged={b.state === "merged" || b.state === "deployed"} testid={`fx-build-pr-${b.runId}`} /> : null}
       </span>
       {cost && band !== "narrow" && !phone
         ? <span className="fx-row-cost" title="Metered model spend so far">{cost}</span>

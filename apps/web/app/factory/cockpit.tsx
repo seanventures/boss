@@ -16,6 +16,7 @@
  */
 import { AVATAR_STATES } from "../../lib/avatar-kit/states";
 import { logHref } from "../../lib/log-url";
+import { changeRef } from "../../lib/repo-links";
 import { DotsThree, SpinnerGap } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -451,7 +452,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                             data-testid={`fx-attempt-${l.runId}`} title={l.title || undefined}
                             onClick={() => { setAttempts(false); if (l.runId !== c.run.id) onOpenBuild(l.runId); }}>
                       {l.sameLineage || !l.kind ? `Attempt ${l.attempt}` : l.kind}, {l.word}
-                      {l.prNumber ? `, PR #${l.prNumber}` : ""}
+                      {l.prNumber ? `, ${changeRef(l.prUrl, l.prNumber)}` : ""}
                       {c.metered && l.costUsd > 0 ? `, ${money(l.costUsd)}` : ""}
                       {l.at ? `, ${secondsWord(Math.max(0, Math.round(((now ?? Date.parse(l.at)) - Date.parse(l.at)) / 1000)))}` : ""}
                     </button>

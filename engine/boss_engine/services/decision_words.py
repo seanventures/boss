@@ -37,6 +37,7 @@ _BY_ACTION: dict[str, tuple[str, str]] = {
     "incident_needs_owner": ("An acknowledged incident needs an owner", "Shepherd"),
     "sign_in_to_subscription_again": ("Sign in to a subscription again", "Models"),
     "review_pull_request": ("Review a pull request", "Factory"),
+    "change_sync_branch": ("Sync a change's branch", "Changes"),
 }
 
 #: Refusal families (decision_actions.REFUSALS): (title, source).

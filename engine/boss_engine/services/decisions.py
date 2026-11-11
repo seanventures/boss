@@ -1272,6 +1272,17 @@ class DecisionService:
             from ..platform.operations import on_decision_approved as approve_infra_operation
 
             approve_infra_operation(connection, self.settings, row, actor)
+        elif action == "change_sync_branch":
+            # Pull/sync a change's branch, or restack it after a squash merge (BOSSAPP-996,
+            # services/change_sync.py) — the console's governed git actions, run through the one
+            # repo-host seam. A real conflict refuses (the approval is not recorded): the change
+            # page lists the conflicting files, and fixing those needs an agent, not a git call.
+            from . import change_sync
+
+            try:
+                change_sync.on_decision_approved(connection, self.settings, row, actor)
+            except change_sync.ChangeSyncError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action == "review_architecture":
             # A person approved an architecture: recorded on its review, which the waiting
             # workflow step reads at the next tick.

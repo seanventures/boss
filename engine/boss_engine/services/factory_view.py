@@ -214,6 +214,9 @@ class BuildRow(TypedDict, total=False):
     preview: Optional[PreviewFlag]
     origin: Optional[Origin]
     internal: bool                 # BOSS's own housekeeping build (D14)
+    #: The change the build produced ({"number", "url"}), None before a PR/change set opens.
+    #: Every card that says a build shipped must link what it shipped (BOSSAPP-994).
+    pr: Optional[dict]
 
 
 class FloorOutcome(TypedDict, total=False):
@@ -1625,6 +1628,11 @@ def build_row(run: Mapping[str, Any], facts: Facts, *, now: datetime,
         "origin": origin,
         # BOSS's own housekeeping build (the Captain's quality pass): drawn, and marked (D14).
         "internal": _is_internal(run),
+        # The change the build produced, so the row can link it (BOSSAPP-994). The number may
+        # be read out of the URL (a run that recorded only the URL); a URL alone is never
+        # linked without a number to name it.
+        "pr": ({"number": _pr_number(run), "url": str(run.get("pull_request_url") or "") or None}
+               if _pr_number(run) else None),
     }
 
 

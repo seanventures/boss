@@ -99,7 +99,8 @@ export function DiffTable({ file, inline, review, layout = "unified" }: {
                 const under = review ? [left, right].filter((a): a is NonNullable<typeof a> => !!a && review.has(a)) : [];
                 return (
                   <React.Fragment key={pi}>
-                    <tr className="cs-ln gr-pair" data-c={under.length ? true : undefined}>
+                    <tr className="cs-ln gr-pair" data-c={under.length ? true : undefined}
+                        id={right ? lineAnchor(file.path, right.line, "new") : left ? lineAnchor(file.path, left.line, "old") : undefined}>
                       <td className="cs-no lr-gut" data-k={p.left?.kind}>{review && left ? review.gutter(left) : null}{p.left && p.left.kind !== "note" ? p.left.oldNo ?? "" : ""}</td>
                       <td className="cs-code" data-k={p.left?.kind}>{p.left ? (p.left.kind === "note" ? <span className="cs-faint">{p.left.text}</span> : <Code1 text={p.left.text} lang={lang} />) : null}</td>
                       <td className="cs-no lr-gut" data-k={p.right?.kind}>{review && right ? review.gutter(right) : null}{p.right?.newNo ?? ""}</td>
@@ -130,7 +131,8 @@ export function DiffTable({ file, inline, review, layout = "unified" }: {
                 const threaded = !!(review && anchor && review.has(anchor));
                 return (
                   <React.Fragment key={li}>
-                    <tr className="cs-ln" data-k={l.kind} data-c={threaded || undefined}>
+                    <tr className="cs-ln" data-k={l.kind} data-c={threaded || undefined}
+                        id={anchor ? lineAnchor(file.path, anchor.line, anchor.side) : undefined}>
                       <td className="cs-no lr-gut">{review && anchor ? review.gutter(anchor) : null}{l.oldNo ?? ""}</td>
                       <td className="cs-no">{l.newNo ?? ""}</td>
                       <td className="cs-code"><span className="cs-sign" aria-hidden>{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</span>
@@ -338,6 +340,11 @@ export function FilesTab({ cs, at, commits, files, diff, loading, error, review,
 }
 
 export const fileAnchor = (path: string) => `gr-f-${path.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+
+/** A diff row's id: the file's anchor + R<line> (new side) or L<line> (old side), so a link can
+ *  land on the exact code piece a comment talks about (BOSSAPP-995). */
+export const lineAnchor = (path: string, line: number, side: "new" | "old" = "new") =>
+  `${fileAnchor(path)}-${side === "old" ? "L" : "R"}${line}`;
 
 export function RangePicker({ cs, commits, range, setRange }: { cs: ChangeSet; commits: Commit[]; range: Range; setRange: (r: Range) => void }) {
   const [open, setOpen] = useState(false);

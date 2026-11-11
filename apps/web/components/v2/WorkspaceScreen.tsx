@@ -1,6 +1,7 @@
 "use client";
 
-import { changeHref, linkTarget } from "../../lib/repo-links";
+import { changeRef } from "../../lib/repo-links";
+import { ChangeLink } from "../../app/change-link";
 import Link from "next/link";
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
 // so a component rendered in a test must have React in scope, see app/previews-ui.tsx.
@@ -306,16 +307,11 @@ function RunRow({ run }: { run: V2Run }) {
               {/* Linked from the URL the run itself recorded. A card once linked to a PR
                   number that had been guessed and did not exist. */}
               {run.pull_request_url ? (
-                <a
-                  className="v2-meta-link"
-                  href={changeHref(run.pull_request_url)}
-                  {...linkTarget(run.pull_request_url)}
-                  data-testid={`v2-run-pr-${run.id}`}
-                >
-                  PR #{run.pull_request_number} ↗
-                </a>
+                <ChangeLink url={run.pull_request_url} number={run.pull_request_number}
+                            className="v2-meta-link" icon={false}
+                            testid={`v2-run-pr-${run.id}`} />
               ) : (
-                <span className="v2-row-meta-dim">PR #{run.pull_request_number}</span>
+                <span className="v2-row-meta-dim">{changeRef(null, run.pull_request_number)}</span>
               )}
             </>
           ) : null}

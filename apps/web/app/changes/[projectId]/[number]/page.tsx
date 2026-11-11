@@ -24,6 +24,11 @@ export default async function ChangeSetPage({ params, searchParams }: {
   // the browser's read gate judges the change set's read with it from the first paint (a page
   // that waited for the browser's own read showed "Locked" on arrival).
   const boot = await loadIdentity(pid);
+  // ?file=…&line=… (BOSSAPP-995): a link straight to one row of the diff.
+  const file = one(q.file);
+  const line = Number(one(q.line) || "");
+  const loc = file ? { path: file, line: Number.isFinite(line) && line > 0 ? line : null,
+                       side: one(q.side) === "old" ? ("old" as const) : ("new" as const) } : null;
   return <ChangeSetView projectId={pid} number={decodeURIComponent(number)} repo={repo && /^[^/\s]+\/[^/\s]+$/.test(repo) ? repo : null}
-                        tab={one(q.tab)} commit={one(q.commit)} me={boot.me} org={boot.org} project={boot.project} />;
+                        tab={one(q.tab)} commit={one(q.commit)} loc={loc} me={boot.me} org={boot.org} project={boot.project} />;
 }

@@ -207,9 +207,15 @@ describe("URLs: tabs and commits are links, and Back reads them", () => {
     expect(changeUrl({ ...at, repo: "acme/store" }, "commits", "abcdef1")).toBe("/changes/p1/3/commits/abcdef1?repo=acme%2Fstore");
     expect(changeUrl(at, "files")).toBe("/changes/p1/3");
     expect(changeUrl(at, "checks")).toBe("/changes/p1/3?tab=checks");
-    expect(readChangeUrl("/changes/p1/3/commits/abcdef1", "")).toEqual({ tab: "commits", commit: "abcdef1" });
-    expect(readChangeUrl("/changes/p1/3", "?tab=code")).toEqual({ tab: "code", commit: null });
+    expect(readChangeUrl("/changes/p1/3/commits/abcdef1", "")).toEqual({ tab: "commits", commit: "abcdef1", loc: null });
+    expect(readChangeUrl("/changes/p1/3", "?tab=code")).toEqual({ tab: "code", commit: null, loc: null });
     expect(changeBase({ ...at, repo: "acme/store" })).toBe("/v1/projects/p1/github-changes/acme/store/3");
+  });
+  it("a link can name the exact file and line of the diff (BOSSAPP-995)", () => {
+    expect(changeUrl(at, "files", null, { path: "src/app.js", line: 39 })).toBe("/changes/p1/3?file=src%2Fapp.js&line=39");
+    expect(readChangeUrl("/changes/p1/3", "?file=src%2Fapp.js&line=39"))
+      .toEqual({ tab: "files", commit: null, loc: { path: "src/app.js", line: 39, side: "new" } });
+    expect(readChangeUrl("/changes/p1/3", "?file=a.py&side=old").loc).toEqual({ path: "a.py", line: null, side: "old" });
   });
   it("Previous is the older commit, Next the newer", () => {
     const commits = [C("c"), C("b"), C("a")];
