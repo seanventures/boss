@@ -28,7 +28,7 @@ import { previewWebHref } from "../../lib/browser-links";
 import { areaHref, costWord } from "./cockpit-util";
 import { formatMonthDay } from "../../lib/datetime";
 import { GatedButton } from "../../components/gated";
-import { NEW_BUILD_TIP } from "../../lib/compose-links";
+import { NEW_BUILD_TIP, addFeaturePatch } from "../../lib/compose-links";
 import { LINKS_TIP, LinksSheet } from "./links-sheet";
 import { SecuritySheet, readSecurityParam, writeSecurityParam } from "./security/security-sheet";
 import { SIGN_IN_TIP } from "./sign-in-sheet";
@@ -37,9 +37,10 @@ import { parseSetupNeeds, setupChip, type SetupNeeds } from "../../lib/app-conne
 import { LabLinks } from "./lab-links";
 import { useOnScreen } from "../../lib/area-shown";
 
-/** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
-export function addFeatureHref(appKey: string, previewId?: string | null): string {
-  return areaHref({ area: "delivery_workflows", compose: "add", app: appKey, preview: previewId ?? null });
+/** Where "＋ Add a feature" goes (BOSSAPP-989): Project › New work, with this app named — it
+ *  builds onto the app's branch. The old composer door (compose=add) is gone. */
+export function addFeatureHref(appKey: string): string {
+  return areaHref(addFeaturePatch(appKey));
 }
 
 /** One build of an app. `row` is the full Floor row when the server sends one (walk D21): then

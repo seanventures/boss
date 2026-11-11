@@ -168,13 +168,13 @@ describe("the editor is full width, not a tab", () => {
   });
 });
 
-describe("every Start lands on the New project tab, preselected", () => {
+describe("every Start opens the workflow's start form, preselected (BOSSAPP-989: not a tab)", () => {
   it("from a Library card", async () => {
     window.history.replaceState(null, "", "/?area=delivery_workflows&tab=library");
     await mount();
     await click($('[data-testid="wf-card-start-family_video"]'));
-    expect(params().get("tab")).toBe("new");
-    expect($('[data-testid="dw-tab-new"]')?.getAttribute("aria-selected")).toBe("true");
+    // The form draws in place of the tab panels; the URL does not change (it is not a place).
+    expect(params().get("tab")).toBe("library");
     expect($('[data-testid="dw-new-project"]')).not.toBeNull();
     // Preselected: the composer is on that workflow and opens on its own start form.
     expect($('[data-testid="dw-new-project"]')?.dataset.workflow).toBe("family_video");
@@ -185,7 +185,6 @@ describe("every Start lands on the New project tab, preselected", () => {
     await mount();
     await click($('[data-testid="editor-start"]'));
     expect(params().get("wf")).toBeNull();
-    expect(params().get("tab")).toBe("new");
     // Preselected: the composer is on that workflow and opens on its own start form.
     expect($('[data-testid="dw-new-project"]')?.dataset.workflow).toBe("family_video");
   });

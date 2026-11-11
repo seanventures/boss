@@ -191,13 +191,13 @@ describe("a build's page keeps what its old page said", () => {
     expect(starters).toContain("Which of the 2 acceptance criteria are not actually covered by a test?");
   });
 
-  it("＋ Add a feature is on the header, and opens New project on this app (with its live preview)", async () => {
+  it("＋ Add a feature is on the header, and opens Project › New work on this app (BOSSAPP-989)", async () => {
     await mount(view());
     const add = $('[data-testid="fx-add-feature"]') as HTMLAnchorElement;
     expect(add?.textContent).toBe("＋ Add a feature");
     const href = new URLSearchParams(add.getAttribute("href")!.replace(/^\?/, ""));
-    expect(href.get("area")).toBe("delivery_workflows");
-    expect(href.get("compose")).toBe("add");
+    expect(href.get("area")).toBe("project");
+    expect([href.get("tab"), href.get("compose")]).toEqual(["work", "1"]);
     expect(href.get("app")).toBe("crun_fresh2");
   });
 

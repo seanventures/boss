@@ -31,7 +31,7 @@ describe("a workflow that declares inputs opens the form", () => {
     // Every Start (a Library card, the editor) opens the composer on that workflow.
     expect(AREA).toContain("setStartWith(key)");
     expect(AREA).toContain("onStart={(key, example) => openComposerOn(key, example)}");
-    expect(AREA).toContain("onStart={(key) => { setEditing(null); openComposerOn(key); }}");
+    expect(AREA).toContain("onStart={(key) => { setEditing(null); setAreaUrl(EDITOR_PARAMS, \"replace\"); openComposerOn(key); }}");
   });
 
   it("and the composer opens on the step that collects them, already on that workflow", () => {

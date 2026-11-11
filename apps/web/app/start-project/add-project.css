@@ -274,7 +274,6 @@
 .npx-own-form { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px dashed var(--border); }
 .npx-check { display: flex; align-items: center; gap: 6px; font-size: var(--fs-meta); }
 .npx-check button { margin-left: auto; background: none; border: 0; color: var(--faint); cursor: pointer; }
-.npx-ideas { width: 280px; left: auto; right: 0; }
 .npx-ways { top: auto; bottom: calc(100% + 8px); left: auto; right: 0; width: 280px; }
 .npx-presets { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
 
@@ -338,8 +337,7 @@
   .npx-node-wrap { flex-direction: column; }
   .npx-chips-row > .npx-node-wrap { display: flex; width: 100%; }
   .npx-flow > .npx-node-wrap .npx-pop, .npx-chips-row .npx-pop, .npx-pop, .npx-pop[data-wide] { position: static; margin-top: 8px; width: auto; max-width: none; left: auto; right: auto; top: auto; bottom: auto; }
-  .npx-ways, .npx-ideas { position: absolute !important; bottom: calc(100% + 8px) !important; right: 0 !important; width: min(300px, 86vw) !important; }
-  .npx-ideas { top: calc(100% + 8px) !important; bottom: auto !important; }
+  .npx-ways { position: absolute !important; bottom: calc(100% + 8px) !important; right: 0 !important; width: min(300px, 86vw) !important; }
   .npx-ub { padding: 10px 12px; }
   .npx-ub-grid { grid-template-columns: minmax(0, 1fr); }
   .npx-ub-f { grid-template-columns: minmax(0, 1fr) .75rem; }

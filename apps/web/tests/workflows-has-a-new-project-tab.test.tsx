@@ -5,12 +5,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * WORKFLOWS: NEW BUILD · RUNS · LIBRARY (operator, 2026-10-13; the tab was "New project" until the
- * operator-approved rename to "New build" — "New project" is the project menu's alone). "+ New project" opened the
- * composer ABOVE the runs list, which pushed the runs down and read as "where are my runs?".
- * The composer is now its own tab; Runs is only ever the list; a Start lands on Runs with the
- * new run highlighted and scrolled to; every New project door opens the tab; the tab is in the
- * URL; the tablist is one tab stop with arrow keys.
+ * WORKFLOWS: RUNS · LIBRARY, AND ONE WIZARD (BOSSAPP-989). The "New build" tab's screens (new
+ * app · add a feature) are gone: the tab row's "+ New build" and every old door — `tab=new`,
+ * `?new=1`, `?compose=new|template`, a `brief=` hand-over — open the one Add-project wizard
+ * (`?new_project=idea`), and `?compose=add[&app=]` lands on Project › New work. What remains
+ * here is the workflow START FORM: Library › Start opens the composer on that workflow, not a
+ * tab and not in the URL; a Start lands on Runs with the new run highlighted.
  *
  * The composer is a stand-in here (its own behaviour is tests/new-project-compose.test.tsx):
  * this is about where the area puts it and where it sends you after.
@@ -113,27 +113,27 @@ const navigateTo = async (search: string) => {
   await settle();
 };
 
-describe("three tabs: New build · Runs · Library", () => {
-  it("in that order, Runs counting, opening on Runs", async () => {
+describe("two tabs: Runs · Library, and the + New build door", () => {
+  it("the tablist is Runs (counting) and Library, opening on Runs", async () => {
     await mount();
     const tabs = [...host!.querySelectorAll<HTMLElement>('[role="tablist"][aria-label="Workflows"] [role="tab"]')];
-    expect(tabs.map((t) => t.textContent)).toEqual(["New build", "Runs (1)", "Library"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["Runs (1)", "Library"]);
     expect(selected()).toBe("dw-tab-runs");
     // Runs is only the list: no composer in it, and no button that would stack one over it.
     expect($('[data-testid="dw-panel-runs"]')).not.toBeNull();
     expect($('[data-testid="np-stub"]')).toBeNull();
-    expect($('[data-testid="dw-composer-open"]')).toBeNull();
     expect(host!.querySelectorAll('[data-testid="dw-run"]')).toHaveLength(1);
   });
 
-  it("New project is the whole composer, with the runs off screen", async () => {
+  it("+ New build is not a tab: it opens the one Add-project wizard and leaves the tab alone", async () => {
     await mount();
-    await click($('[data-testid="dw-tab-new"]'));
-    expect(params().get("tab")).toBe("new");
-    expect(params().get("org")).toBe("o1");
-    expect($('[data-testid="dw-panel-new"]')?.getAttribute("role")).toBe("tabpanel");
-    expect($('[data-testid="np-stub"]')).not.toBeNull();
-    expect($('[data-testid="dw-run"]')).toBeNull();
+    const door = $('[data-testid="dw-tab-new"]');
+    expect(door?.getAttribute("role")).not.toBe("tab");
+    await click(door);
+    expect(selected()).toBe("dw-tab-runs");
+    expect(params().get("new_project")).toBe("idea");
+    // No composer: the wizard (start-host) draws over the area.
+    expect($('[data-testid="np-stub"]')).toBeNull();
   });
 
   it("a tab is a tabpanel's label (aria-controls / aria-labelledby)", async () => {
@@ -143,10 +143,28 @@ describe("three tabs: New build · Runs · Library", () => {
   });
 });
 
-describe("Start lands on Runs, on the new run", () => {
-  it("switches to Runs, opens the run, highlights it and scrolls it into view", async () => {
+describe("Library › Start opens the workflow's start form; Start lands on Runs", () => {
+  const library = () => stub.fetchLibrary.mockResolvedValue([
+    { definition_id: "def_v", workflow_key: "family_video", name: "Family video", is_catalogue: false,
+      version: 2, step_count: 1, run_count: 0, steps: [{ id: "fetch", title: "Fetch" }] },
+  ]);
+
+  it("a Library card's Start opens the form on that workflow, not a tab, not in the URL", async () => {
+    library();
+    window.history.replaceState(null, "", "/?area=delivery_workflows&org=o1&tab=library");
     await mount();
-    await click($('[data-testid="dw-tab-new"]'));
+    await click($('[data-testid="wf-card-start-family_video"]'));
+    expect($('[data-testid="np-stub"]')?.dataset.workflow).toBe("family_video");
+    // Never the deprecated two-job screen: the form is the chosen workflow's, mode fixed.
+    expect($('[data-testid="np-stub"]')?.dataset.mode).toBe("new");
+    expect(params().get("tab")).toBe("library");
+  });
+
+  it("Start switches to Runs, opens the run, highlights it and scrolls it into view", async () => {
+    library();
+    window.history.replaceState(null, "", "/?area=delivery_workflows&org=o1&tab=library");
+    await mount();
+    await click($('[data-testid="wf-card-start-family_video"]'));
     runs = [run("wfr_1", "Shift swap board"), run("wfr_2", "Invoice chaser")];
     await click($('[data-testid="np-stub-start"]'));
     expect(selected()).toBe("dw-tab-runs");
@@ -160,69 +178,78 @@ describe("Start lands on Runs, on the new run", () => {
     expect($('[data-testid="np-stub"]')).toBeNull();
   });
 
-  it("Cancel goes back to Runs", async () => {
+  it("Cancel leaves the form and returns to the tab it came from", async () => {
+    library();
+    window.history.replaceState(null, "", "/?area=delivery_workflows&org=o1&tab=library");
     await mount();
-    await click($('[data-testid="dw-tab-new"]'));
+    await click($('[data-testid="wf-card-start-family_video"]'));
     await click($('[data-testid="np-stub-cancel"]'));
-    expect(selected()).toBe("dw-tab-runs");
-    expect(params().get("tab")).toBe("runs");
+    expect($('[data-testid="np-stub"]')).toBeNull();
+    expect(selected()).toBe("dw-tab-library");
   });
 });
 
-describe("every New project door opens the tab", () => {
+describe("every old New build door lands in the one wizard or on New work (BOSSAPP-989)", () => {
   it.each([
-    ["the top bar / Factory / Command Center (openNewProject → compose=new)", "?area=delivery_workflows&org=o1&compose=new", "new", ""],
-    ["Add a feature on an app card (compose=add&app=)", "?area=delivery_workflows&org=o1&compose=add&app=helpdesk", "add", "helpdesk"],
-    ["the Factory menu's legacy ?new=1", "?area=delivery_workflows&org=o1&new=1", "", ""],
-    ["an old compose=template link", "?area=delivery_workflows&org=o1&compose=template", "new", ""],
-  ])("%s", async (_door, search, mode, app) => {
+    ["the legacy openNewProject door (compose=new)", "?area=delivery_workflows&org=o1&compose=new"],
+    ["the Factory menu's legacy ?new=1", "?area=delivery_workflows&org=o1&new=1"],
+    ["an old compose=template link", "?area=delivery_workflows&org=o1&compose=template"],
+  ])("%s opens Add a project", async (_door, search) => {
     window.history.replaceState(null, "", `/${search}`);
     await mount();
-    expect(selected()).toBe("dw-tab-new");
-    expect($('[data-testid="np-stub"]')?.dataset.mode).toBe(mode);
-    expect($('[data-testid="np-stub"]')?.dataset.app).toBe(app);
-    // The command is consumed; the URL names the tab, so a reload stays on it.
-    expect([params().get("compose"), params().get("new"), params().get("tab")]).toEqual([null, null, "new"]);
+    // No composer screen: the command is consumed and the wizard asked for instead.
+    expect($('[data-testid="np-stub"]')).toBeNull();
+    expect(params().get("new_project")).toBe("idea");
+    expect([params().get("compose"), params().get("new")]).toEqual([null, null]);
+    expect(params().get("org")).toBe("o1");
   });
 
-  it("while already on Runs, openNewProject opens Add a project and leaves the tab alone (v2)", async () => {
+  it("Add a feature (compose=add&app=) lands on Project › New work with the app named", async () => {
+    window.history.replaceState(null, "", "/?area=delivery_workflows&org=o1&compose=add&app=helpdesk");
+    await mount();
+    expect($('[data-testid="np-stub"]')).toBeNull();
+    expect([params().get("area"), params().get("tab"), params().get("compose"), params().get("app")])
+      .toEqual(["project", "work", "1", "helpdesk"]);
+    expect(params().get("org")).toBe("o1");
+  });
+
+  it("an old Build-it hand-over (brief= and title=) opens the wizard with both kept", async () => {
+    window.history.replaceState(null, "", "/?area=delivery_workflows&org=o1&brief=A+helpdesk&title=HelpDesk");
+    await mount();
+    expect($('[data-testid="np-stub"]')).toBeNull();
+    expect(params().get("new_project")).toBe("idea");
+    expect(params().get("brief")).toBe("A helpdesk");
+    expect(params().get("title")).toBe("HelpDesk");
+  });
+
+  it("while on Runs, openNewProject opens Add a project and leaves the tab alone (v2)", async () => {
     await mount();
     expect(selected()).toBe("dw-tab-runs");
     await act(async () => { openNewProject(); });
     await settle();
-    // A new app is Add a project now (the one screen); Workflows › New build has moved.
     expect(selected()).toBe("dw-tab-runs");
     expect(params().get("new_project")).toBe("idea");
-  });
-
-  it("a Library card's Start opens it on that workflow", async () => {
-    stub.fetchLibrary.mockResolvedValue([
-      { definition_id: "def_v", workflow_key: "family_video", name: "Family video", is_catalogue: false,
-        version: 2, step_count: 1, run_count: 0, steps: [{ id: "fetch", title: "Fetch" }] },
-    ]);
-    window.history.replaceState(null, "", "/?area=delivery_workflows&tab=library");
-    await mount();
-    await click($('[data-testid="wf-card-start-family_video"]'));
-    expect(selected()).toBe("dw-tab-new");
-    expect($('[data-testid="np-stub"]')?.dataset.workflow).toBe("family_video");
   });
 });
 
 describe("the tab is in the URL", () => {
-  it("a reload on tab=new opens New project", async () => {
+  it("an old tab=new link opens the wizard and the URL lands on Runs, honestly", async () => {
     window.history.replaceState(null, "", "/?area=delivery_workflows&org=o1&tab=new");
     await mount();
-    expect(selected()).toBe("dw-tab-new");
+    expect(selected()).toBe("dw-tab-runs");
+    expect($('[data-testid="np-stub"]')).toBeNull();
+    expect(params().get("tab")).toBe("runs");
+    expect(params().get("new_project")).toBe("idea");
   });
 
   it("Back and Forward move between the tabs", async () => {
     await mount();
-    await click($('[data-testid="dw-tab-new"]'));
     await click($('[data-testid="dw-tab-library"]'));
-    await navigateTo("?area=delivery_workflows&org=o1&tab=new");
-    expect(selected()).toBe("dw-tab-new");
+    expect(selected()).toBe("dw-tab-library");
     await navigateTo("?area=delivery_workflows&org=o1&tab=runs");
     expect(selected()).toBe("dw-tab-runs");
+    await navigateTo("?area=delivery_workflows&org=o1&tab=library");
+    expect(selected()).toBe("dw-tab-library");
   });
 
   it("a link to a run opens Runs even when the URL still said tab=new, and the URL says so", async () => {
@@ -243,17 +270,9 @@ describe("the tab is in the URL", () => {
     expect(urlWithTab("?tab=new&wfr=w", "runs")).toBeNull();
   });
 
-  it("New project drops the run the URL named, so the next read stays on it", async () => {
-    window.history.replaceState(null, "", "/?area=delivery_workflows&wfr=wfr_1");
-    await mount();
-    await click($('[data-testid="dw-tab-new"]'));
-    expect(params().get("wfr")).toBeNull();
-    expect(readAreaUrl(window.location.search).tab).toBe("new");
-  });
-
-  it("reads tab=new, and nothing else invents it", () => {
-    expect(readAreaUrl("?tab=new")).toEqual({ tab: "new", wf: null });
-    expect(readAreaUrl("?tab=new&wfr=wfr_1").tab).toBe("runs");
+  it("tab=new is not a place any more: readAreaUrl never returns it", () => {
+    expect(readAreaUrl("?tab=new")).toEqual({ tab: "runs", wf: null });
+    expect(readAreaUrl("?tab=library").tab).toBe("library");
     expect(readAreaUrl("?tab=NEW").tab).toBe("runs");
     expect(namesATab("?tab=runs")).toBe(true);
     expect(namesATab("?area=delivery_workflows")).toBe(false);
@@ -261,29 +280,21 @@ describe("the tab is in the URL", () => {
 });
 
 describe("an empty project", () => {
-  it("opens on New project when the URL names no tab", async () => {
+  it("stays on Runs, whose empty state opens the wizard", async () => {
     runs = [];
-    await mount();
-    expect(selected()).toBe("dw-tab-new");
-    // Nothing to go back to: no Cancel.
-    expect($('[data-testid="np-stub-cancel"]')).toBeNull();
-  });
-
-  it("an empty Runs tab asked for by name has a way to New project", async () => {
-    runs = [];
-    window.history.replaceState(null, "", "/?area=delivery_workflows&tab=runs");
     await mount();
     expect(selected()).toBe("dw-tab-runs");
     await click($('[data-testid="dw-empty-new"]'));
-    expect(selected()).toBe("dw-tab-new");
+    expect(selected()).toBe("dw-tab-runs");
+    expect(params().get("new_project")).toBe("idea");
   });
 });
 
 describe("keyboard: one tab stop, arrows move and select", () => {
   it("only the selected tab is in the tab order", async () => {
     await mount();
-    const order = ["dw-tab-new", "dw-tab-runs", "dw-tab-library"].map((id) => $(`[data-testid="${id}"]`)?.tabIndex);
-    expect(order).toEqual([-1, 0, -1]);
+    const order = ["dw-tab-runs", "dw-tab-library"].map((id) => $(`[data-testid="${id}"]`)?.tabIndex);
+    expect(order).toEqual([0, -1]);
   });
 
   it("→ and ← move (wrapping), Home and End go to the ends", async () => {
@@ -292,18 +303,18 @@ describe("keyboard: one tab stop, arrows move and select", () => {
     expect(selected()).toBe("dw-tab-library");
     expect(document.activeElement?.getAttribute("data-testid")).toBe("dw-tab-library");
     await key($('[data-testid="dw-tab-library"]'), "ArrowRight");
-    expect(selected()).toBe("dw-tab-new");
-    await key($('[data-testid="dw-tab-new"]'), "ArrowLeft");
+    expect(selected()).toBe("dw-tab-runs");
+    await key($('[data-testid="dw-tab-runs"]'), "ArrowLeft");
     expect(selected()).toBe("dw-tab-library");
     await key($('[data-testid="dw-tab-library"]'), "Home");
-    expect(selected()).toBe("dw-tab-new");
-    await key($('[data-testid="dw-tab-new"]'), "End");
+    expect(selected()).toBe("dw-tab-runs");
+    await key($('[data-testid="dw-tab-runs"]'), "End");
     expect(selected()).toBe("dw-tab-library");
   });
 
   it("the move, as a pure function", () => {
-    expect([tabKeyTarget("ArrowRight", 2, 3), tabKeyTarget("ArrowLeft", 0, 3),
-            tabKeyTarget("Home", 1, 3), tabKeyTarget("End", 0, 3), tabKeyTarget("a", 0, 3)])
-      .toEqual([0, 2, 0, 2, -1]);
+    expect([tabKeyTarget("ArrowRight", 1, 2), tabKeyTarget("ArrowLeft", 0, 2),
+            tabKeyTarget("Home", 1, 2), tabKeyTarget("End", 0, 2), tabKeyTarget("a", 0, 2)])
+      .toEqual([0, 1, 0, 1, -1]);
   });
 });

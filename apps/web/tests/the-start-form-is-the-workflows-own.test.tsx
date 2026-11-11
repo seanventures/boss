@@ -277,9 +277,10 @@ describe("a catalogue product template keeps the product brief", () => {
     // What the product questions and "Where it lives" collect is not asked twice.
     expect($$('[data-testid^="dw-workflow-input-"]').map((e) => e.dataset.testid))
       .toEqual(["dw-workflow-input-notify_channel"]);
-    // The product brief is New project: the mode switch, and "Lives in" because it builds.
+    // The product brief, and "Lives in" because it builds. No mode switch (BOSSAPP-989): a
+    // chosen workflow's start form starts that workflow; New app and Add a feature left here.
     expect(mode()).toBe("new");
-    expect($('[data-testid="np-mode"]')).not.toBeNull();
+    expect($('[data-testid="np-mode"]')).toBeNull();
     expect($('[data-testid="np-lives"]')?.textContent).toContain("acme/app");
   });
 

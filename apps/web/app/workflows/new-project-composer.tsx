@@ -787,7 +787,10 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const description = lockedForm
     ? String(chosen?.description || entry?.description || "").split("\n")[0].trim()
     : "";
-  const heading = lockedForm
+  // ONE WIZARD (BOSSAPP-989): the composer only draws as a chosen workflow's START FORM
+  // (Library › Start). "New build" and its New app · Add a feature switch are gone — a new app
+  // is Add a project, a feature is Project › New work.
+  const heading = startWith
     ? (chosen?.name ?? entry?.name ?? draft.workflowKey)
     : "New build";
 
@@ -1697,18 +1700,19 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
              data-workflow={flowKey || undefined} onKeyDown={onKey}>
       <header className="np-head">
         <h2 data-testid="dw-new-heading" data-user-text={lockedForm || undefined}>{heading}</h2>
-        {lockedForm ? (
-          description ? (
-            <p className="np-sub" data-testid="dw-new-subtitle" title={description} data-user-text>{description}</p>
-          ) : null
-        ) : (
+        {lockedForm && description ? (
+          <p className="np-sub" data-testid="dw-new-subtitle" title={description} data-user-text>{description}</p>
+        ) : null}
+        {/* The New app · Add a feature switch is gone (BOSSAPP-989): those jobs live in the
+            Add-project wizard and Project › New work. This screen only starts the workflow named. */}
+        {!lockedForm && !startWith ? (
           <div className="np-mode" role="radiogroup" aria-label="What are you making?" data-testid="np-mode">
             <button type="button" role="radio" aria-checked={mode === "new"} data-testid="np-mode-new"
                     onClick={() => setMode("new")}>New app</button>
             <button type="button" role="radio" aria-checked={adding} data-testid="np-mode-add"
                     onClick={() => setMode("add")}>Add a feature</button>
           </div>
-        )}
+        ) : null}
         <span className="np-spacer" />
         {onCancel ? (
           <button type="button" className="np-x" aria-label="Close" data-testid="np-close" onClick={onCancel}>✕</button>

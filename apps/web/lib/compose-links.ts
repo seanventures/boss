@@ -10,10 +10,10 @@
  */
 export const COMPOSE_AREA = "delivery_workflows";
 
-/** ADDING A FEATURE MOVED (Add a project v2, c-after-create.html note 3): it is Project › New
- *  work, which already builds onto the app's branch. The door opens the project's Work tab with
- *  New work focused (`compose=1`); Workflows › New build shows "Moved" for one release. */
-export function addFeaturePatch(appKey?: string | null): Record<string, string | null> {
+/** ADDING A FEATURE IS PROJECT › NEW WORK (Add a project v2, c-after-create.html note 3; the
+ *  main use case): the door opens the project's Work tab with New work focused (`compose=1`).
+ *  Workflows › New build is gone (BOSSAPP-989): every old door lands here or on Add a project. */
+export function addFeaturePatch(appKey?: string | null): { area: "project" } & Record<string, string | null> {
   return { area: "project", tab: "work", compose: "1", app: appKey ?? null, view: null, role: null, build: null };
 }
 

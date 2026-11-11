@@ -18,7 +18,7 @@ import { AgentsOnThis } from "./agents-on-this";
 import { consoleHref, readComposeIntent } from "./url-intent";
 import { SelfFixStrip } from "./self-fix/strip";
 import { RunAutonomy } from "./self-fix/run-autonomy";
-import { NEW_BUILD_TIP } from "../lib/compose-links";
+import { NEW_BUILD_TIP, addFeaturePatch, openNewProject } from "../lib/compose-links";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
@@ -51,7 +51,6 @@ import { CaptainCanRunIt } from "./workflows/captain-can-run-it";
 import { Library, type Schedule } from "./workflows/library";
 import { get, post } from "./workflows/delivery-api";
 import { NewProjectComposer } from "./workflows/new-project-composer";
-import { MovedNewBuild } from "./projects/moved";
 import { DossierCompact } from "./discoveries-ui";
 import { MeetingCompact } from "./meeting-room-ui";
 import { ArchitecturePanel } from "./architecture-ui";
@@ -595,23 +594,23 @@ export async function sendRunAnswer(projectId: string, actor: string, runId: str
   }, key));
 }
 
-/** The Workflows area's three tabs (operator, 2026-10-13): New project, Runs, Library. The
- *  composer is its own tab, never stacked over the runs ("where are my runs?"). The editor is not
- *  a tab: `&wf=` replaces all three, full width. */
-export type AreaTab = "new" | "runs" | "library";
+/** The Workflows area's two tabs: Runs and Library. ONE WIZARD (BOSSAPP-989): the "New build"
+ *  tab's screens (new app · add a feature) are gone — every door opens the one Add-project
+ *  wizard, and adding a feature is Project › New work. What remains here is the workflow START
+ *  FORM (Library › Start, `startWith`), which is not a tab. The editor is not a tab either:
+ *  `&wf=` replaces both, full width. */
+export type AreaTab = "runs" | "library";
 
 /** The tabs in order, for the tablist and its arrow keys. */
-export const AREA_TABS: readonly AreaTab[] = ["new", "runs", "library"];
+export const AREA_TABS: readonly AreaTab[] = ["runs", "library"];
 
-/** What the URL says this area is showing. Read on every popstate, so Back works.
- *
- *  A run named in the URL (`wfr=`) is a place in Runs: a link to a run opens Runs even when the
- *  URL still says `tab=new` from an earlier visit, because a link copies the query it was on. */
+/** What the URL says this area is showing. Read on every popstate, so Back works. An old link's
+ *  `tab=new` is not a place any more: the read() effect opens the Add-project wizard for it. */
 export function readAreaUrl(search: string): { tab: AreaTab; wf: string | null } {
   const params = new URLSearchParams(search);
   const raw = params.get("tab");
   return {
-    tab: raw === "library" ? "library" : raw === "new" && !params.get("wfr") ? "new" : "runs",
+    tab: raw === "library" ? "library" : "runs",
     wf: params.get("wf")?.trim() || null,
   };
 }
@@ -667,8 +666,6 @@ const EDITOR_PARAMS = { wf: null, step: null, view: null, v: null, from: null, [
 
 export function DeliveryWorkflows({ projectId, actor }: { projectId: string; actor: string }) {
   const [tab, setTabState] = useState<AreaTab>("runs");
-  /** Whether the URL named the tab; when it did not, an empty project opens on New project. */
-  const [tabNamed, setTabNamed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   /** `page=full`: the workflow, or the run, the URL names, with the whole window. */
   const [fullPage, setFullPage] = useState(false);
@@ -676,6 +673,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     const read = () => {
       const now = readAreaUrl(window.location.search);
       setFullPage(readFullPage(window.location.search) !== null);
+      // AN OLD "New build" LINK (`tab=new`, BOSSAPP-989): the screen is gone; the one Add-project
+      // wizard opens instead (the URL lands on Runs below, and the wizard draws over it).
+      const wantsNew = new URLSearchParams(window.location.search).get("area") === "delivery_workflows"
+        && new URLSearchParams(window.location.search).get("tab") === "new";
       // THE URL SAYS WHERE YOU ARE (rc10.5 walk m4): a run link opened Runs over a stale
       // `tab=new`, and the URL went on saying New project, so a reload or a copied link lied.
       const fixed = urlWithTab(window.location.search, now.tab);
@@ -685,19 +686,17 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         } catch { /* non-browser */ }
       }
       setTabState(now.tab);
-      setTabNamed(namesATab(window.location.search));
       setEditing(now.wf);
+      if (wantsNew) openNewProject("idea");
     };
     read();
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
   }, []);
-  /** Switch tab, in the URL (pushed, so Back returns to the tab you were on). New project drops
-   *  the run the URL named: `wfr=` is a place in Runs and would win the next read. */
+  /** Switch tab, in the URL (pushed, so Back returns to the tab you were on). */
   const setTab = useCallback((next: AreaTab, mode: "push" | "replace" = "push") => {
     setTabState(next);
-    setTabNamed(true);
-    setAreaUrl({ tab: next, ...EDITOR_PARAMS, ...(next === "new" ? { wfr: null } : {}) }, mode);
+    setAreaUrl({ tab: next, ...EDITOR_PARAMS }, mode);
   }, []);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   /** The tab an arrow key moved to, to focus once its panel has rendered. */
@@ -814,18 +813,14 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   /** "Try example", the standard's own example brief, filled in for the operator to read. */
   const [startExample, setStartExample] =
     useState<{ title?: string; directive?: string } | null>(null);
-  /** What a compose link asked for: the mode, the app, and a running preview of it. */
-  const [compose, setCompose] = useState<{ mode: "new" | "add" | null; app: string | null;
-                                           preview: string | null; n: number } | null>(null);
   /** EVERY START OPENS THE FORM: the composer on that workflow, with its readiness. A run is
-   *  never started blind on a sample directive (boss-1 map, 2026-10-02). */
+   *  never started blind on a sample directive (boss-1 map, 2026-10-02). The form draws in place
+   *  of the tab panels while `startWith` is set; it is not a tab and not in the URL (BOSSAPP-989). */
   const openComposerOn = useCallback((key: string,
                                       example?: { title?: string; directive?: string } | null) => {
     setStartWith(key);
     setStartExample(example ?? null);
-    setCompose(null);
-    setTab("new");
-  }, [setTab]);
+  }, []);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   // TEST RUNS ARE LEFT OUT OF THE LIST unless asked for (#512): a test is not production work.
   const [showTests, setShowTests] = useState(false);
@@ -923,57 +918,38 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     return () => window.clearInterval(t);
   }, [awaited, load, onScreen]);
 
-  // SENT HERE TO START SOMETHING. `?new=1` and `?compose=new|add[&app=…]` (the Factory's and
-  // the Command Center's "Add a feature") are one-shot commands, consumed on read so a later
-  // navigation cannot re-deliver them.
+  // SENT HERE TO START SOMETHING — old links; the screens they opened are gone (BOSSAPP-989).
+  // `?compose=add[&app=…]` (adding a feature) lands on Project › New work, which builds onto the
+  // app's branch; `?new=1` / `?compose=new|template` open the one Add-project wizard. Each is a
+  // one-shot command, consumed on read so a later navigation cannot re-deliver it.
   useEffect(() => {
     const read = () => {
       const intent = readComposeIntent(window.location.search);
       if (!intent.open) return;
-      setTabState("new");
-      setTabNamed(true);
-      setStartWith(undefined);
-      setStartExample(null);
-      setCompose((c) => ({ mode: intent.mode, app: intent.app, preview: intent.preview,
-                           n: (c?.n ?? 0) + 1 }));
-      window.setTimeout(() => {
-        document.querySelector<HTMLTextAreaElement>(
-          intent.mode === "add" ? '[data-testid="np-gain"]' : '[data-testid="dw-new-directive"]')?.focus();
-      }, 0);
       try {
-        // Consumed, and the URL says where it landed: the New project tab, not an editor left
-        // open, and not a run (`wfr=` is a place in Runs).
         const next = new URLSearchParams(intent.nextSearch);
-        next.set("tab", "new");
         next.delete("wfr");
-        for (const key of Object.keys(EDITOR_PARAMS)) next.delete(key);
         window.history.replaceState(null, "",
-          `${window.location.pathname}?${next}${window.location.hash}`);
-        setEditing(null);
-      } catch { /* non-browser, the composer is on screen either way */ }
+          `${window.location.pathname}${next.toString() ? `?${next}` : ""}${window.location.hash}`);
+      } catch { /* non-browser */ }
+      if (intent.mode === "add") {
+        setAreaUrl(addFeaturePatch(intent.app), "replace");
+        return;
+      }
+      openNewProject("idea");
     };
     read();
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
   }, []);
 
-  // PREFILLED FROM WHERE IT CAME. A dossier outcome's or a panel's "Build it" carries its brief
-  // (lib/research-panels composerHref): the composer opens on the product path with it written
-  // in, and the brief is consumed like `new=1`, so a later navigation cannot re-deliver it.
+  // PREFILLED FROM WHERE IT CAME. An old "Build it" link carries its brief (`?brief=&title=`):
+  // the Add-project wizard opens with it written in (start-host reads both), never started unseen.
   useEffect(() => {
     const read = () => {
       const pre = readComposerPrefill(window.location.search);
       if (!pre) return;
-      setStartWith("standard_product_delivery");
-      setStartExample(pre);
-      setTabState("new");
-      setTabNamed(true);
-      try {
-        const next = new URLSearchParams(window.location.search);
-        for (const key of ["compose", "brief", "title", "new", "wfr"]) next.delete(key);
-        next.set("tab", "new");
-        window.history.replaceState(null, "", `${window.location.pathname}?${next}${window.location.hash}`);
-      } catch { /* non-browser, the composer is on screen either way */ }
+      setAreaUrl({ compose: null, new: null, wfr: null, new_project: "idea" }, "replace");
     };
     read();
     window.addEventListener("popstate", read);
@@ -1101,7 +1077,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                         onFullPage={() => setAreaUrl({ [PAGE_PARAM]: fullPage ? null : FULL_PAGE })}
                         usedFor={installed.find((w) => w.workflow_key === editing)?.used_for}
                         onBack={() => { setEditing(null); setTab("library"); }}
-                        onStart={(key) => { setEditing(null); openComposerOn(key); }}
+                        onStart={(key) => { setEditing(null); setAreaUrl(EDITOR_PARAMS, "replace"); openComposerOn(key); }}
                         // The schedule popover lives on the workflow's Library card.
                         onSchedule={(key) => { setEditing(null); setScheduleFor(key); setTab("library"); }} />
         </div>
@@ -1120,10 +1096,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     );
   }
 
-  // AN EMPTY PROJECT OPENS ON NEW PROJECT, unless the URL asked for a tab: a list with nothing
-  // in it is a dead end, and starting something is all there is to do.
-  const shownTab: AreaTab = !tabNamed && tab === "runs" && runs.length === 0 ? "new" : tab;
+  const shownTab: AreaTab = tab;
   const tabs = (
+    <>
     <div className="wf-tabs" role="tablist" aria-label="Workflows">
       {AREA_TABS.map((key, i) => (
         // ONE TAB STOP: the selected tab is the stop, the arrows move along (and select), Home
@@ -1132,7 +1107,6 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                 id={`dw-tab-${key}`} aria-controls={`dw-panel-${key}`}
                 tabIndex={shownTab === key ? 0 : -1} ref={(el) => { tabRefs.current[i] = el; }}
                 data-testid={`dw-tab-${key}`}
-                title={key === "new" ? NEW_BUILD_TIP : undefined}
                 onKeyDown={(e) => {
                   const to = tabKeyTarget(e.key, i, AREA_TABS.length);
                   if (to < 0) return;
@@ -1144,14 +1118,20 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                   setTab(AREA_TABS[to]);
                 }}
                 onClick={() => setTab(key)}>
-          {key === "new" ? <>New build</> : key === "runs" ? <>Runs <em>({runs.length})</em></> : "Library"}
+          {key === "runs" ? <>Runs <em>({runs.length})</em></> : "Library"}
         </button>
       ))}
     </div>
+    {/* ONE WIZARD (BOSSAPP-989): the New build tab is gone; its door opens Add a project. */}
+    <GatedButton permission="workflow_run:start" type="button" className="wf-tab wf-tab-door" data-testid="dw-tab-new"
+                 title={NEW_BUILD_TIP} onClick={() => openNewProject("idea")}>
+      + New build
+    </GatedButton>
+    </>
   );
   /** Leave the composer: its choices cleared, back to the runs. */
   const closeComposer = () => {
-    setStartWith(undefined); setStartExample(null); setCompose(null);
+    setStartWith(undefined); setStartExample(null);
   };
   const installedStandards = new Set(installed.filter((i) => i.is_catalogue).map((i) => i.workflow_key));
 
@@ -1172,7 +1152,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                       onDismiss={() => setRefusal(null)} />
       ) : null}
 
-      {shownTab === "library" ? (
+      {/* THE START FORM FIRST: Library › Start opens it from the Library tab (BOSSAPP-989). */}
+      {shownTab === "library" && !startWith ? (
         <div role="tabpanel" id="dw-panel-library" aria-labelledby="dw-tab-library">
         <Library
           projectId={projectId} tabs={tabs} busy={busy} schedules={schedules}
@@ -1254,25 +1235,24 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onStepsChanged={() => void load()}
         />
         </div>
-      ) : shownTab === "new" ? (
-        <div className="wf-runs-area" role="tabpanel" id="dw-panel-new" aria-labelledby="dw-tab-new"
-             data-testid="dw-panel-new">
+      ) : startWith ? (
+        // THE WORKFLOW START FORM (Library › Start): the one place the composer still draws
+        // (BOSSAPP-989). New app and Add a feature left it: the Add-project wizard and Project ›
+        // New work own those. It is not a tab and not in the URL; Cancel returns to the tab.
+        <div className="wf-runs-area" data-testid="dw-panel-new">
           <header className="wf-lib-head">
             {tabs}
           </header>
-          {/* ADD A PROJECT v2: this tab has moved; it keeps working for one release. */}
-          <MovedNewBuild projectId={projectId} />
           <div className="dw-composer-open">
             <NewProjectComposer
               projectId={projectId} actor={actor} workflows={installed} catalogue={catalogue}
               startWith={startWith} example={startExample}
-              mode={compose?.mode ?? (startWith ? "new" : null)} appKey={compose?.app}
-              previewId={compose?.preview}
-              // KEYED ON THE CHOICE, so Start on a different workflow (or a link to another
-              // app) rebuilds the composer rather than leaving it on the first one's inputs.
-              key={`${startWith ?? "blank"}:${startExample ? "example" : "own"}:${compose?.n ?? 0}`}
-              // Cancel goes back to the runs; with no runs yet there is nothing to go back to.
-              onCancel={runs.length ? () => { closeComposer(); setTab("runs"); } : undefined}
+              mode="new" appKey={null}
+              previewId={null}
+              // KEYED ON THE CHOICE, so Start on a different workflow rebuilds the composer
+              // rather than leaving it on the first one's inputs.
+              key={`${startWith}:${startExample ? "example" : "own"}`}
+              onCancel={() => closeComposer()}
               // STARTED: to Runs, on the new run, opened, highlighted and scrolled into view.
               onStarted={(runId) => {
                 closeComposer();
@@ -1302,7 +1282,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           <RunsView
             projectId={projectId}
             runs={runs} openRun={openRun} setOpenRun={setOpenRun} busy={busy}
-            highlightRun={justStarted} onNewProject={() => setTab("new")}
+            highlightRun={justStarted} onNewProject={() => openNewProject("idea")}
             capabilities={capabilities} targets={targets} hosts={hosts}
             actor={actor} roles={roles}
             // FROM A RUN, THE WORKFLOW OPENS FULL PAGE: a run is read at the whole flow's scale.
@@ -1680,7 +1660,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   if (runs.length === 0) {
     return (
       <div className="dw-empty" data-testid="dw-no-runs">
-        <p title="Start one in New build, or press Start on a workflow in the Library">
+        <p title="Start one with + New build (Add a project), or press Start on a workflow in the Library">
           Nothing running yet
         </p>
         {onNewProject ? (

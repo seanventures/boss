@@ -106,8 +106,11 @@ describe("no New build door opens the agent chat", () => {
     for (const f of PROJECT_DOORS) {
       expect(readFileSync(join(ROOT, f), "utf8"), f).not.toMatch(/openNewProject|compose=/);
     }
+    // ONE WIZARD (BOSSAPP-989): the Workflows tab row's New build is a door to Add a project,
+    // not a tab and not the composer.
     const workflows = readFileSync(join(ROOT, "app", "delivery-workflows-ui.tsx"), "utf8");
-    expect(workflows).toContain('key === "new" ? <>New build</>');
+    expect(workflows).toContain('data-testid="dw-tab-new"');
+    expect(workflows).toMatch(/data-testid="dw-tab-new"[\s\S]{0,200}openNewProject\("idea"\)/);
     const composer = readFileSync(join(ROOT, "app", "workflows", "new-project-composer.tsx"), "utf8");
     expect(composer).toMatch(/:\s*"New build";/);
   });
