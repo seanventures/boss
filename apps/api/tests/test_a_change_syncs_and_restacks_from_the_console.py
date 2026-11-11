@@ -6,7 +6,6 @@ Real git in temporary bare repositories, the real database, the real routes and 
 decision transition (propose → approve as one press)."""
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import text
 
 from apps.api.tests.test_change_review import (  # noqa: F401 — pytest fixtures
@@ -30,7 +29,7 @@ def _sync_decisions(engine, pid):
 
 # ── a local change set ────────────────────────────────────────────────────────────────────────
 
-def test_the_preview_says_where_the_branch_stands(client, world, engine, repo_root):
+def test_the_preview_says_where_the_branch_stands(client, world, engine, repo_root):  # noqa: F811
     pid, _b, bare, _branch, _pr, _r = _project_with_change(engine, world)
     with _viewer(world):
         r = client.get(f"/v1/projects/{pid}/local-changes/1/sync-preview")
@@ -41,7 +40,7 @@ def test_the_preview_says_where_the_branch_stands(client, world, engine, repo_ro
     assert p["restack"] is None and p["base"] == "main"
 
 
-def test_sync_pulls_the_base_in_as_one_recorded_decision(client, world, engine, repo_root):
+def test_sync_pulls_the_base_in_as_one_recorded_decision(client, world, engine, repo_root):  # noqa: F811
     pid, _b, bare, branch, _pr, _r = _project_with_change(engine, world)
     local_repo.commit_files(bare, "main", {"docs/notes.md": "moved on\n"}, "base moves")
     with _viewer(world):
@@ -60,8 +59,8 @@ def test_sync_pulls_the_base_in_as_one_recorded_decision(client, world, engine, 
     assert after["behind"] == 0
 
 
-def test_a_conflict_names_its_files_and_the_decision_stays_pending(client, world, engine,
-                                                                   repo_root):
+def test_a_conflict_names_its_files_and_the_decision_stays_pending(client, world, engine,  # noqa: F811
+                                                                   repo_root):  # noqa: F811
     pid, _b, bare, branch, _pr, _r = _project_with_change(engine, world)
     # Both sides rewrite line 5 of src/app.js: the base cannot merge in cleanly.
     local_repo.commit_files(bare, "main", {"src/app.js": APP_V1.replace("line 5\n", "line V\n")},
@@ -81,8 +80,8 @@ def test_a_conflict_names_its_files_and_the_decision_stays_pending(client, world
     assert local_repo.merge_base(bare, main_tip, head) != main_tip
 
 
-def test_restack_replays_only_what_came_after_the_squash_merge(client, world, engine, repo_root,
-                                                               monkeypatch):
+def test_restack_replays_only_what_came_after_the_squash_merge(client, world, engine, repo_root,  # noqa: F811
+                                                               monkeypatch):  # noqa: F811
     from boss_engine.config import get_settings
     from boss_engine.services.local_repo_host import LocalGitAdapter
 
@@ -112,7 +111,7 @@ def test_restack_replays_only_what_came_after_the_squash_merge(client, world, en
     assert ("approved", "restack") in {(d["status"], d["mode"]) for d in rows}
 
 
-def test_a_viewer_reads_the_preview_but_cannot_run_the_action(client, world, engine, repo_root):
+def test_a_viewer_reads_the_preview_but_cannot_run_the_action(client, world, engine, repo_root):  # noqa: F811
     pid, _b, _bare, _branch, _pr, _r = _project_with_change(engine, world)
     with _viewer(world):
         read = client.get(f"/v1/projects/{pid}/local-changes/1/sync-preview")
@@ -152,7 +151,7 @@ def _teach_sync(fake: FakeGitHub, *, mergeable, update_ok: bool = True):
     fake.last_merged_pull_request = lambda b: None
 
 
-def test_a_github_pr_syncs_the_same_way(client, world, engine, github):
+def test_a_github_pr_syncs_the_same_way(client, world, engine, github):  # noqa: F811
     _teach_sync(github["fake"], mergeable=True)
     with _viewer(world):
         p = client.get(f"{github['base']}/sync-preview").json()
@@ -168,7 +167,7 @@ def test_a_github_pr_syncs_the_same_way(client, world, engine, github):
     assert [(d["status"], d["mode"]) for d in rows] == [("approved", "update")]
 
 
-def test_a_github_refusal_keeps_the_decision_pending(client, world, engine, github):
+def test_a_github_refusal_keeps_the_decision_pending(client, world, engine, github):  # noqa: F811
     _teach_sync(github["fake"], mergeable=False, update_ok=False)
     with _owner(world):
         r = client.post(f"{github['base']}/sync", json={"mode": "update"})

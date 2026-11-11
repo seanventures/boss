@@ -183,6 +183,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
       const row = line ? document.getElementById(lineAnchor(path, line, side)) : null;
       (row ?? document.getElementById(fileAnchor(path)))?.scrollIntoView({ block: "center", behavior: "smooth" });
       row?.setAttribute("data-hit", "");
+      if (row) window.setTimeout(() => row.removeAttribute("data-hit"), 2400);
     }, 160);
   }, []);
   const onJumpLoc = useCallback((path: string, line?: number | null, side: "new" | "old" = "new") => {
