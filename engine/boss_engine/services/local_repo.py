@@ -379,6 +379,49 @@ def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "m
     return branch_sha(git_dir, base) or ""
 
 
+def restack(git_dir: Path, branch: str, merged_head: str, base: str) -> dict[str, Any]:
+    """PUT A WORK BRANCH BACK ON ITS BASE AFTER ITS CHANGE SET MERGED (BOSSAPP-980).
+
+    A squash merge writes the branch's work onto `base` as ONE new commit, so the branch's own
+    commits are not in base's history: the next change set from the same branch re-proposes
+    everything already merged, every shared file is an add/add conflict, and nothing committed
+    to that branch can EVER merge again (helpdesk-laptop, change #2 after #1 squash-merged,
+    2026-11-10). The commits made AFTER `merged_head` (the branch's head when it merged) are
+    replayed onto `base` (git rebase --onto) and the branch moves there, so it proposes only
+    what came after the merge — the local half of GitHubAdapter.restack_after_merge.
+
+    Returns {"restacked", "paths", "base"} (plus "why" when it refuses). A refusal changes
+    nothing: a replay that conflicts (base moved beyond the merge in a way the commits do not
+    absorb) needs an agent, not a git call."""
+    head_sha = branch_sha(git_dir, branch)
+    base_sha = branch_sha(git_dir, base)
+    if not head_sha:
+        raise LocalRepoError(f"There is no branch {branch!r} to restack.")
+    if not base_sha:
+        raise LocalRepoError(f"There is no branch {base!r} to restack onto.")
+    merged_sha = rev_parse(git_dir, merged_head) if merged_head else None
+    if not merged_sha:
+        return {"restacked": False, "paths": [], "why": "no merged head on record"}
+    if merge_base(git_dir, base_sha, head_sha) == base_sha:
+        return {"restacked": False, "paths": [], "why": "already on its base"}
+    if merge_base(git_dir, merged_sha, head_sha) != merged_sha:
+        return {"restacked": False, "paths": [], "why": "the merged head is not in the branch"}
+    paths = sorted({p for p in git(["diff", "--name-only", f"{merged_sha}..{head_sha}"],
+                                   git_dir=git_dir).splitlines() if p.strip()})
+    with worktree(git_dir, branch) as wt:
+        done = subprocess.run(["git", "rebase", "--onto", base_sha, merged_sha],
+                              cwd=str(wt), capture_output=True, env=_env(), timeout=300)
+        if done.returncode != 0:
+            subprocess.run(["git", "rebase", "--abort"], cwd=str(wt), capture_output=True,
+                           env=_env(), timeout=60)
+            said = (done.stderr or b"").decode("utf-8", "replace").strip()[-200:]
+            return {"restacked": False, "paths": paths,
+                    "why": f"replaying the commits made after the merge onto {base} "
+                           f"conflicted: {said}"}
+        git(["push", "--quiet", "--force", "origin", f"HEAD:refs/heads/{branch}"], cwd=wt)
+    return {"restacked": True, "paths": paths, "base": base}
+
+
 # ── a local project's repository ─────────────────────────────────────────────────────────────
 
 def _now() -> str:

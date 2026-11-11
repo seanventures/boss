@@ -2796,7 +2796,14 @@ class SoftwareFactoryService:
             # deploy follow-on — merge succeeded on GitHub, BOSS said it failed.
             _msg = str(error)
             merge = None
-            if ("405" in _msg or "not mergeable" in _msg.lower()) and hasattr(
+            # ONE classifier decides what counts as a conflict (merge_failures.classify):
+            # GitHub says "405"/"not mergeable", a LOCAL change set says "does not merge
+            # cleanly" (local_repo.LocalMergeConflict) — the same state, the same recovery
+            # (BOSSAPP-980: helpdesk-laptop change #2 after #1 squash-merged could never
+            # merge, and nothing here even tried).
+            from . import merge_failures as _mf
+
+            if _mf.classify(_msg) == _mf.NOT_MERGEABLE and hasattr(
                     self.github, "update_pull_request_branch"):
                 try:
                     if self.github.update_pull_request_branch(pull_request_number):
@@ -2812,7 +2819,7 @@ class SoftwareFactoryService:
                 except Exception as retry_error:  # noqa: BLE001
                     _msg = f"{_msg} | retry after branch update: {retry_error}"
                     merge = None
-            if merge is None and ("405" in _msg or "not mergeable" in _msg.lower()):
+            if merge is None and _mf.classify(_msg) == _mf.NOT_MERGEABLE:
                 # TIER 1b: the branch still carries an EARLIER pull request's commits that a
                 # squash merge left off the base (PR #237 after #236). Put it back on the base
                 # holding only what changed after that merge, then merge once more.

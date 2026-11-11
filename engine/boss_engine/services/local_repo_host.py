@@ -293,6 +293,51 @@ class LocalGitAdapter:
         except local_repo.LocalRepoError:
             return False
 
+    def open_pull_request_for(self, branch_name: str) -> Optional[dict]:
+        """The open change set whose head is this branch ({number, url, title}), or None —
+        GitHubAdapter.open_pull_request_for, for pr_follow_up.prepare_branch."""
+        with self.engine.begin() as c:
+            row = c.execute(text(
+                "SELECT number, title FROM local_change_sets WHERE repository = :r "
+                "AND branch = :b AND state = 'open' ORDER BY number DESC LIMIT 1"),
+                {"r": self.repository_full_name, "b": branch_name}).mappings().first()
+        if row is None:
+            return None
+        return {"number": int(row["number"]),
+                "url": change_set_url(self.repository_full_name, row["number"]),
+                "title": str(row["title"] or "")}
+
+    def last_merged_pull_request(self, branch_name: str) -> Optional[dict]:
+        """The newest MERGED change set from this branch, or None. A work branch outlives its
+        first change set — the lineage's follow-ups keep committing to it — and the install's
+        default squash merge leaves its commits off the base's history, so without
+        pr_follow_up's restack every later change set from it is an add/add conflict that can
+        never merge (BOSSAPP-980, helpdesk-laptop change #2, 2026-11-10)."""
+        with self.engine.begin() as c:
+            row = c.execute(text(
+                "SELECT number, head_sha, merged_sha, merged_at FROM local_change_sets "
+                "WHERE repository = :r AND branch = :b AND state = 'merged' "
+                "ORDER BY merged_at DESC NULLS LAST, number DESC LIMIT 1"),
+                {"r": self.repository_full_name, "b": branch_name}).mappings().first()
+        if row is None:
+            return None
+        return {"number": int(row["number"]),
+                "url": change_set_url(self.repository_full_name, row["number"]),
+                "head_sha": str(row["head_sha"] or ""),
+                "merged_at": str(row["merged_at"] or ""),
+                "merge_commit_sha": str(row["merged_sha"] or "")}
+
+    def restack_after_merge(self, branch_name: str, merged_head_sha: str, *,
+                            base: Optional[str] = None, number: Optional[int] = None) -> dict:
+        """Put the work branch back on its base after its change set merged
+        (local_repo.restack): it then proposes only what changed AFTER the merge. `number` is
+        accepted for interface parity with GitHubAdapter and not needed here — the branch's
+        own commits are replayed, not re-written into one synthetic commit."""
+        if not merged_head_sha:
+            return {"restacked": False, "paths": [], "why": "no merged head on record"}
+        return local_repo.restack(self._require(), branch_name, merged_head_sha,
+                                  base or self.default_branch())
+
     def pull_request_snapshot(self, pull_number: int) -> dict:
         row = self.change_set(pull_number)
         git_dir = self._require()
