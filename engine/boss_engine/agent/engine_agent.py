@@ -39,6 +39,30 @@ from ..services.tool_result_text import clip_for_model
 
 _UNSCOPED_SQL_TOOLS = frozenset({"query_db", "write_db"})
 
+#: K6 (BOSSAPP-961, HARNESS_KERNEL_DESIGN.md §8.1): with this set, a chat turn whose engine the
+#: kernel can serve natively (an OpenAI-compatible adapter, or the Anthropic Messages engine on
+#: an API key under BOSS_CHAT_ANTHROPIC_NATIVE) runs through `kernel.run` with
+#: presets.engine_agent instead of the loop below. A CLI text brain (claude_code,
+#: claude_agent_sdk, codex on a subscription login) keeps the loop below UNCHANGED until K8.
+#: Off (the default) is byte-identical to today on every engine.
+KERNEL_CHAT_FLAG = "BOSS_KERNEL_CHAT"
+
+#: Chat lanes whose create_chat_completion is the JSON-in-text protocol over a CLI. The kernel
+#: has no native engine for them until K8 (subscription chat over MCP), so they fall through.
+_CLI_TEXT_BRAINS = frozenset({"claude_code", "claude_agent_sdk", "codex"})
+
+#: The same brains recognised by adapter type, for an adapter built outside the router (no
+#: `_boss_choice`). FallingBackAdapter wraps a CLI brain, so it falls through too.
+_CLI_ADAPTER_TYPES = frozenset({"ClaudeCliAdapter", "CodexCliAdapter", "AgentSdkChatAdapter",
+                                "FallingBackAdapter"})
+
+
+def kernel_chat() -> bool:
+    import os
+
+    return (os.environ.get(KERNEL_CHAT_FLAG) or "").strip().lower() in ("1", "true", "yes",
+                                                                        "on")
+
 
 _SYSTEM_PROMPT = """You are the BOSS Agent — the conversational interface to the \
 BOSS autonomous software factory's workflow engine.
@@ -430,6 +454,11 @@ class EngineAgent:
         #: Outside text seen this turn. chat() rebuilds it from the turn's history so one
         #: shared agent does not carry another conversation's pages into a write.
         self._ledger = Ledger()
+        #: Whether THIS agent built its adapter through the router (nobody handed one in). The
+        #: kernel path governs only a run whose adapter it owns (kernel/governance, as K2
+        #: narrowed §2.3): a caller's adapter keeps the caller's governance — the router
+        #: reserves the whole turn itself — and wrapping it again would reserve twice.
+        self._adapter_routed = False
 
     def _adapter_obj(self, project_id: Optional[str] = None):
         if self._adapter is None:
@@ -444,6 +473,7 @@ class EngineAgent:
                         connection, self.ctx.settings, project_id)
             else:
                 self._adapter = routing.project_chat_adapter(None, self.ctx.settings, None)
+            self._adapter_routed = True
         return self._adapter
 
     def chat(
@@ -487,6 +517,15 @@ class EngineAgent:
         # This agent object is shared across conversations. The ledger is this turn's only.
         self._ledger = Ledger()
         self._ledger.absorb_messages(history)
+        # K6: the kernel runs the turn when it has a native engine for this project's chat
+        # model; a CLI text brain returns None here and keeps the loop below, unchanged.
+        if kernel_chat():
+            on_kernel = self._chat_on_kernel(
+                project_id=project_id, actor=actor, message=message,
+                allow_writes=allow_writes, max_steps=max_steps, history=history,
+                system=system, on_step=on_step, budget=budget, focus=focus)
+            if on_kernel is not None:
+                return on_kernel
         schemas = [schema for schema in self.registry.openai_schema()
                    if schema["function"]["name"] not in _UNSCOPED_SQL_TOOLS]
         messages: list[dict] = [{"role": "system", "content": system or _SYSTEM_PROMPT}]
@@ -826,6 +865,241 @@ class EngineAgent:
             final_text = _report_from_trace(trace)
 
         return AgentTurn(reply=final_text, trace=trace, pending_writes=pending, steps=steps,
+                         exhausted=exhausted)
+
+    # ── K6: the same turn on the harness kernel (BOSS_KERNEL_CHAT) ────────────────────────────
+
+    def _kernel_engine(self, project_id: str):
+        """The kernel Engine for this turn's adapter, with its budget gate — or None to keep
+        the old loop (a CLI text brain the kernel cannot serve natively until K8).
+
+        Selection (design §4.2, §8.1): `model_routing.kernel_chat_engine` first — the native
+        Anthropic Messages engine when BOSS_CHAT_ANTHROPIC_NATIVE is on, the lane is Claude and
+        the install holds an API key. Otherwise an OpenAI-compatible adapter is wrapped in
+        OpenAIChatEngine (native function calling, which it already speaks); an adapter that IS
+        a kernel engine (the scripted conformance engine) is used as it is; and a CLI text
+        brain falls through to today's path — subscription chat keeps the old adapter."""
+        from .. import kernel
+
+        adapter = self._adapter_obj(project_id)
+        ctx = getattr(self, "ctx", None)
+        settings = getattr(ctx, "settings", None)
+        choice = getattr(adapter, "_boss_choice", None)
+        lane = str(getattr(choice, "engine", "") or "")
+        engine = None
+        if choice is not None and settings is not None:
+            routing = services_module("model_routing")
+            try:
+                if getattr(ctx, "engine", None) is not None:
+                    with ctx.begin() as connection:
+                        engine = routing.kernel_chat_engine(choice, connection, settings,
+                                                            project_id)
+                else:
+                    engine = routing.kernel_chat_engine(choice, None, settings, project_id)
+            except Exception:  # noqa: BLE001 — no native engine is an answer, never a crash
+                engine = None
+        if engine is None:
+            if lane in _CLI_TEXT_BRAINS:
+                return None
+            if callable(getattr(adapter, "complete", None)) \
+                    and getattr(adapter, "traits", None) is not None:
+                engine = adapter  # already a kernel engine (scripted / a test double)
+            elif type(adapter).__name__ in _CLI_ADAPTER_TYPES:
+                return None
+            else:
+                engine = kernel.OpenAIChatEngine(adapter)
+        gate = None
+        if getattr(self, "_adapter_routed", False) and settings is not None and project_id \
+                and getattr(ctx, "engine", None) is not None:
+            # The kernel OWNS this adapter (nobody handed one in), so the kernel governs it:
+            # each call reserved, receipted and settled by the same GovernedChatAdapter code
+            # (kernel/governance.project_gate). A caller's adapter keeps the caller's
+            # governance — the router reserves its turn itself. Chat was ungoverned here
+            # before, so a gate that cannot be built must not end the conversation.
+            try:
+                from ..kernel.governance import project_gate
+
+                with ctx.begin() as connection:
+                    gate = project_gate(
+                        connection, settings, project_id, skill_id="agent.chat",
+                        ref=str((self.ambient or {}).get("_thread_id") or project_id),
+                        adapter=adapter)
+            except Exception:  # noqa: BLE001
+                gate = None
+        return engine, gate
+
+    def _chat_on_kernel(self, *, project_id: str, actor: str, message: Any,
+                        allow_writes: bool, max_steps: int, history: Optional[list[dict]],
+                        system: Optional[str], on_step: Optional[Callable[[str], None]],
+                        budget: Any, focus: str) -> Optional[AgentTurn]:
+        """One chat turn through `kernel.run` with presets.engine_agent (K6, BOSS_KERNEL_CHAT).
+
+        Everything that MOVES, moves whole: `_run_tool` (the write hold, propose-only offers,
+        the escalation guard, consent offers) runs every call through RegistryToolSet's
+        `run_tool` seam, with the turn's tool-time bound around it; the out-of-time report and
+        `_report_from_trace` stay here, written from the kernel's trace. Returns None when this
+        engine has no kernel form (the CLI brains), so the caller falls through unchanged.
+
+        Intended differences from the old loop, pinned by test_kernel_chat.py and listed in
+        HARNESS_KERNEL_DESIGN.md §8.2e/§8.4: a decision structure written as the final text is
+        read for its prose but never re-asked and its "meant" calls never run (native tool
+        calling makes the text protocol a legacy shape); a malformed tool call is refused with
+        its JSON pointer before the tool runs (D3); and read_run_ledger joins the offered tools
+        when the run ledger is on."""
+        picked = self._kernel_engine(project_id)
+        if picked is None:
+            return None
+        from .. import kernel
+        from ..kernel import presets as kernel_presets
+        from . import transient as _transient
+
+        engine, gate = picked
+        pending: list[dict] = []
+        ledger = self._ledger
+
+        def run_tool(name: str, args: dict, state: Any):
+            # NO TOOL OUTLIVES THE TURN (the old loop's rule, kept verbatim): a tool is not
+            # started once the turn's tool time is spent, and one that is waits no longer.
+            from ..services.call_deadline import MIN_TOOL_SECONDS
+            from ..services.call_deadline import until as _until
+
+            if budget is not None:
+                tool_left = budget.seconds - budget.elapsed
+                if tool_left < MIN_TOOL_SECONDS:
+                    state.out_of_time = True
+                    return {"ok": False, "not_run": True,
+                            "error": (f"{name} was not run: this turn's time for tools is "
+                                      "spent. Answer from what is already established and "
+                                      "name this check as the next thing to do.")}
+                scope = _until(budget.deadline(answering=False))
+            else:
+                scope = _no_deadline()
+            with scope:
+                result = self._run_tool(name, args, project_id=project_id, actor=actor,
+                                        allow_writes=allow_writes, pending=pending)
+            return _note_outside(name, args, result, ledger)
+
+        tools = kernel.RegistryToolSet(
+            self.registry, getattr(self, "ctx", None), project_id=project_id, actor=actor,
+            allow_writes=allow_writes, exclude=_UNSCOPED_SQL_TOOLS, run_tool=run_tool,
+            surface="chat")
+        # The run ledger, when this install keeps one: events to the DbSink, and the
+        # read_run_ledger built-in over a DbLedgerReader (design §3.5). Without the ledger the
+        # offered tools are exactly the old loop's.
+        sink = reader = None
+        db = getattr(getattr(self, "ctx", None), "engine", None)
+        if db is not None:
+            try:
+                from ..kernel import ledger as kernel_ledger
+                from ..kernel.ledger_tool import DbLedgerReader
+
+                if kernel_ledger.enabled():
+                    sink = kernel_ledger.DbSink(db)
+                    reader = DbLedgerReader(db)
+            except Exception:  # noqa: BLE001 — chat without its ledger is still chat
+                sink = reader = None
+        on_event = None
+        if on_step is not None:
+            seen = {"model_requests": 0}
+
+            def on_event(event: Any) -> None:  # noqa: ANN401 — kernel Event
+                # The old loop's progress lines, mapped from kernel events: the phase label
+                # before each model round-trip, the subject label as each tool starts.
+                try:
+                    if event.kind == "model.request" \
+                            and int(event.data.get("attempt") or 1) == 1:
+                        first = seen["model_requests"] == 0
+                        seen["model_requests"] += 1
+                        if event.data.get("answering"):
+                            out_of_turn = budget is not None and budget.must_answer_now()
+                            on_step("writing the answer"
+                                    + (" — the turn's time is up" if out_of_turn else ""))
+                        elif first:
+                            on_step(f"reading {focus} and deciding what is still open" if focus
+                                    else "reading your question and deciding what to look at")
+                        else:
+                            on_step(f"weighing what came back about {focus}" if focus
+                                    else "weighing what came back, and what to check next")
+                    elif event.kind == "tool.requested":
+                        args = event.data.get("args")
+                        on_step(_step_label(str(event.data.get("tool") or ""),
+                                            args if isinstance(args, dict) else {}))
+                except Exception:  # noqa: BLE001 — never fail a turn to report progress
+                    pass
+
+        spec = kernel.RunSpec(
+            engine=engine, tools=tools,
+            policies=kernel_presets.engine_agent(max_steps, budget=budget),
+            project_id=project_id or "", system=system or _SYSTEM_PROMPT,
+            messages=list(history or []) + [{"role": "user", "content": message}],
+            actor=actor, gate=gate, sink=sink, ledger_reader=reader, on_event=on_event,
+            # The transient module's sleeper, so the kernel's backoff is silenced exactly
+            # where the old loop's was (tests monkeypatch transient.time.sleep).
+            sleep=lambda seconds: _transient.time.sleep(seconds))
+        try:
+            result = kernel.run(spec)
+        finally:
+            close = getattr(engine, "close", None)
+            if callable(close):
+                try:
+                    close()  # a proxy token must not outlive the turn (K7's contract)
+                except Exception:  # noqa: BLE001 — closing is a courtesy, never the turn
+                    pass
+        return self._turn_from_kernel(result, pending=pending, budget=budget,
+                                      project_id=project_id, actor=actor,
+                                      allow_writes=allow_writes)
+
+    def _turn_from_kernel(self, result: Any, *, pending: list[dict], budget: Any,
+                          project_id: str, actor: str, allow_writes: bool) -> AgentTurn:
+        """A KernelResult as the AgentTurn every caller of chat() reads. Failures keep the
+        seam's contract: the old loop RAISED a provider failure and the budget's own
+        exceptions out of chat(), and the router's handling of them stays as it is."""
+        trace = [{"tool": t.get("tool"), "args": t.get("args") or {}, "result": t.get("result")}
+                 for t in (result.trace or [])]
+        if result.status == "budget_wait":
+            from ..services.model_routing import ModelSpendDeferred
+
+            budget_info = (result.pending or {}).get("budget") or {}
+            raise ModelSpendDeferred(
+                result.error or "the per-minute budget deferred this turn",
+                retry_after_seconds=budget_info.get("retry_after_seconds"))
+        if result.status == "failed":
+            if result.stopped == "budget_stop":
+                from ..services.model_routing import ModelSpendRefused
+
+                raise ModelSpendRefused(result.error or "the budget refused this model turn")
+            raise RuntimeError(result.error or "the model failed this turn")
+        if result.status == "suspended" and isinstance(result.pending, dict):
+            # Chat's own gates never defer (they offer), but a registry tool that does is
+            # surfaced as the offer the old loop would have made, never lost.
+            pending.append({"tool": result.pending.get("tool"),
+                            "args": result.pending.get("args") or {}})
+        exhausted = {"deadline": "budget"}.get(result.exhausted, result.exhausted or "")
+        if result.stopped == "deadline" and not (result.text or "").strip():
+            # Cut off while answering: the trace still holds the findings and the fix — the
+            # old loop's out-of-time report, written caller-side from the kernel's trace.
+            found, fix = _findings_from_trace(trace)
+            if fix and not any(step.get("tool") == "propose_action" for step in trace):
+                offer = {"tool": fix["tool"], "args": fix.get("args") or {},
+                         "label": _button_label_of(fix), "why": fix.get("why") or ""}
+                trace.append({"tool": "propose_action", "args": offer,
+                              "result": self._run_tool(
+                                  "propose_action", offer, project_id=project_id,
+                                  actor=actor, allow_writes=allow_writes, pending=pending)})
+            reply = _out_of_time_report(
+                trace, int(budget.elapsed) if budget is not None else 0, fix, found)
+            return AgentTurn(reply=reply, trace=trace, pending_writes=pending,
+                             steps=result.steps, exhausted=exhausted or "budget")
+        reply = result.text or ""
+        # A DECISION STRUCTURE IS NEVER PRINTED RAW. Its prose is kept; unlike the old loop it
+        # is not re-asked and its "meant" calls do not run — an intended difference (§8.2e):
+        # engines the kernel serves call tools natively, so the text protocol is residue.
+        structure = protocol_reply.parse(reply)
+        if isinstance(structure, dict):
+            reply = protocol_reply.prose_of_final(structure) or ""
+        if not reply.strip():
+            reply = _report_from_trace(trace)
+        return AgentTurn(reply=reply, trace=trace, pending_writes=pending, steps=result.steps,
                          exhausted=exhausted)
 
     def _prose_again(self, messages: list[dict], *, budget: Any = None) -> str:

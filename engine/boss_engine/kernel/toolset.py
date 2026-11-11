@@ -150,6 +150,13 @@ class RegistryToolSet:
         conservative: nothing a surface has today is lost."""
         from .scoped_tools import enabled
 
+        if not callable(getattr(self.registry, "specs", None)):
+            # A registry that only speaks the adapter shape (chat's test doubles hand
+            # EngineAgent an object with `openai_schema()` alone): the same tools, underived —
+            # nothing is scoped or deferred, exactly as the old loop offered them.
+            return [ToolSchema.from_openai(s) for s in self.registry.openai_schema()
+                    if str(((s.get("function") or s) if isinstance(s, Mapping) else {})
+                           .get("name") or "") not in self.exclude]
         scoped = enabled()
         out: list = []
         for s in self.registry.specs():

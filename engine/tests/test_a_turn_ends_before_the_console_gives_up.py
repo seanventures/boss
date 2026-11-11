@@ -160,9 +160,11 @@ def _agent(adapter, ran: list):
     agent._adapter = adapter
     agent._notes = []
     agent.ambient = {}
+    # http_probe is in the offered set because the kernel path (BOSS_KERNEL_CHAT) refuses a
+    # call to a tool that was never offered — the old loop ran any name through _run_tool.
     agent.registry = type("R", (), {"openai_schema": lambda self: [
         {"type": "function", "function": {"name": n, "parameters": {}}}
-        for n in ("diagnose_run", "read_logs", "propose_action")]})()
+        for n in ("diagnose_run", "read_logs", "propose_action", "http_probe")]})()
 
     def run_tool(name, args, **kw):
         ran.append(name)

@@ -114,11 +114,15 @@ def engine_agent(max_steps: int = 6, *, budget: Any = None,
         return head + _ENGINE_AGENT_ANSWER_BODY + (_ENGINE_AGENT_OFFER if offering else "")
 
     from .scoped_tools import ScopedTools
+    # EngineAgent's own JSON encoding of tool results (Decimal -> float, datetime -> isoformat):
+    # the model must see the number a spend question reads, not a quoted string. Imported at
+    # call time: the kernel stays a leaf package.
+    from ..agent.engine_agent import _jsonable
 
     return Policies(
         stop=Caps(max_steps=int(max_steps), answer="within", turn_budget=budget,
                   answer_prompt_text=answer_prompt, version="stop.engine_agent@1"),
-        context=ClipContext(clip=16_000, version="ctx.engine_agent@1"),
+        context=ClipContext(clip=16_000, json_default=_jsonable, version="ctx.engine_agent@1"),
         # K5: chat is the surface scoped tools exist for. With BOSS_SCOPED_TOOLS off this is
         # OfferAll's behaviour exactly; on, a kernel chat run sees its core + find_tools and
         # finds the rest (RegistryToolSet marks the deferred ones from each tool's Exposure).
