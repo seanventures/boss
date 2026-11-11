@@ -232,16 +232,24 @@ class TestDecay:
             result = mem.prune(c, project_id=_pid(), unused_days=90)
         assert result["retired_unused"] == 1
 
-    def test_a_used_memory_survives(self, engine):
+    def test_a_used_memory_survives_but_mere_injection_is_not_use(self, engine):
+        """BOSSAPP-960: pack_for_turn used to count as use, so anything ever injected could
+        never decay — the loop measured its own output. Use is a value signal (the same thing
+        taught again); a memory that was only ever packed ages out like one never packed."""
         with engine.begin() as c:
             row = mem.remember(c, project_id=_pid(), actor="ceo", kind="project",
                                body="still matters")
-            mem.pack_for_turn(c, project_id=_pid(), actor="ceo")     # marks it used
+            mem.remember(c, project_id=_pid(), actor="ceo", kind="project",
+                         body="still matters")                        # re-taught: the use signal
+            only_packed = mem.remember(c, project_id=_pid(), actor="ceo", kind="project",
+                                       body="injected every turn, never once mattered")
+            mem.pack_for_turn(c, project_id=_pid(), actor="ceo")      # injection, not use
             c.execute(text("UPDATE agent_memory SET created_at = now() - interval '200 days' "
-                           " WHERE id=:i"), {"i": row["id"]})
+                           " WHERE id IN (:i, :j)"), {"i": row["id"], "j": only_packed["id"]})
             mem.prune(c, project_id=_pid(), unused_days=90)
             packed = mem.pack_for_turn(c, project_id=_pid(), actor="ceo")
         assert "still matters" in packed
+        assert "never once mattered" not in packed
 
     def test_a_reviewed_rule_does_not_decay_from_disuse(self, engine):
         """Review was a deliberate act; ageing it out silently would undo a human decision."""

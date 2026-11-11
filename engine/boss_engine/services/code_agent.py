@@ -969,7 +969,12 @@ class ClaudeCodeAgent:
     engine = "claude_code"
     capabilities = EngineCapabilities(resume=True, read_only=True, effort=True, sub_agents=True,
                                       turn_limit=True, reports_cost=True, streams_turns=True,
-                                      budget_limit=True)
+                                      budget_limit=True,
+                                      # Its "read-only" review is an allowed-tools list that
+                                      # still includes Bash with auto-approval — an unconfined
+                                      # shell in the tree under review. The contract therefore
+                                      # runs this engine's review seats on the throwaway copy.
+                                      read_only_shell=True)
     #: `_invoke` appends the working rules and sandbox facts itself (engine_contract).
     adds_working_rules = True
 

@@ -1761,13 +1761,23 @@ def previous_failure_block(prev: dict, gates_failed: Optional[list] = None) -> s
     fctx = prev.get("finalize_ctx") or {}
     gates = [str(g) for g in (gates_failed or []) if str(g).strip()] \
         or _prior_failing_gates(fctx, state)
-    tail_lines = str(state.get("last_verify_output") or "").rstrip().splitlines()
+    verify_output = str(state.get("last_verify_output") or "")
+    tail_lines = verify_output.rstrip().splitlines()
     tail = redact_secrets("\n".join(tail_lines[-PREVIOUS_FAILURE_LINES:])).strip()
     if not gates and not tail:
         return ""
     parts = ["## What failed last time (previous attempt)"]
     if gates:
         parts.append("Gates failed: " + ", ".join(gates))
+    # STRUCTURED FIRST (BOSSAPP-960): the failing tests and their assertions, parsed from the
+    # whole verify output — not only its last 60 lines, where a long traceback routinely pushed
+    # the FAILED summary out of view. The raw tail stays below for context.
+    from .repair_findings import find as _find_findings, render as _render_findings
+
+    structured = _render_findings(_find_findings(verify_output))
+    if structured:
+        parts.append("Findings (fix these, each where it points):\n"
+                     + redact_secrets(structured))
     if tail:
         parts.append(f"Last {min(len(tail_lines), PREVIOUS_FAILURE_LINES)} lines of the "
                      f"verify output:\n```\n{tail}\n```")

@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .tool_result_text import clip_for_model
+from ..agent.transient import _with_transient_retry
 from ..config import Settings
 from . import owned_process
 from . import decision_actions
@@ -2477,7 +2478,14 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         step = step0 + i
         last_step = step
         try:
-            message, usage = adapter.create_chat_completion(messages, tools=schemas)
+            # A PROVIDER HICCUP IS RETRIED WHERE IT HAPPENS, NOT BY FAILING THE RUN. The chat
+            # path (EngineAgent.chat) and the coding path both retry a 529/503/timeout before
+            # giving up; this loop was the one model caller that did not, so a single
+            # overloaded_error part-way through an investigation threw away every tool result
+            # it had already paid for. A completion is safe to run again — the tool calls it
+            # returns have not run yet.
+            message, usage = _with_transient_retry(
+                lambda: adapter.create_chat_completion(messages, tools=schemas))
         except Exception as exc:  # noqa: BLE001 — sorted by what it is, one line down
             complaint = _the_provider_refused_the_tool_call(exc)
             if complaint is None or refused_calls >= MAX_REFUSED_TOOL_CALLS:
@@ -2976,7 +2984,10 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 "Partial findings are useful; a report of running out of steps is not."
             ),
         }]
-        message, usage = adapter.create_chat_completion(messages, tools=None)
+        # Same transient-retry policy as the loop's own calls: the wrap-up completion is the
+        # cheapest call of the run and the most expensive one to lose.
+        message, usage = _with_transient_retry(
+            lambda: adapter.create_chat_completion(messages, tools=None))
         add_usage(usage)
         final_text = message.get("content") or (
             "I ran out of tool budget before reaching a conclusion, and could not summarise "

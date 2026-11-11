@@ -58,6 +58,7 @@ def on_status_written(connection: Any, run_id: str) -> None:
                 "SELECT status FROM code_task_runs WHERE id = :r"), {"r": run_id}).scalar()
             if status not in TERMINAL_STATUSES or profiled_at(connection, run_id) == status:
                 return  # the common case: still running, or already recorded at this status
+        _attribute_knowledge(connection, run_id, status)
         try:
             from .scorecards import record_scorecard
 
@@ -68,6 +69,37 @@ def on_status_written(connection: Any, run_id: str) -> None:
         emit_build_profile_in(connection, run_id)
     except Exception:  # noqa: BLE001
         log.warning("run terminal: could not settle %s", run_id, exc_info=True)
+
+
+def _attribute_knowledge(connection: Any, run_id: str, status: Any) -> None:
+    """A build feeds back what it was shown (BOSSAPP-960).
+
+    The KG lessons and rules injected into a build's stages (`learning_context.for_build` →
+    `log_shown` / `log_pack`) were recorded as `shown` and then never attributed: only
+    agent-loop runs and workflow runs called `attribute_run`, so a fact shown to a hundred
+    builds gained and lost nothing — the usefulness ranking those packs sort by never moved.
+    Hung on the terminal TRANSITION, like the profile and the scorecard above, so every path
+    that ends a run attributes it, and the marker makes it once per run: `record_outcome`
+    increments counters and is not idempotent. A run that later turns terminal AGAIN (a failed
+    delivery redelivered) keeps its first verdict — the facts were judged on the build, not on
+    GitHub's availability. Never raises."""
+    try:
+        from sqlalchemy import text
+
+        with connection.begin_nested():
+            project_id = connection.execute(text(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                "|| jsonb_build_object('knowledge_attributed', to_jsonb(CAST(:st AS text))) "
+                "WHERE id = :r AND NOT COALESCE(finalize_ctx ? 'knowledge_attributed', false) "
+                "RETURNING project_id"), {"r": run_id, "st": str(status)}).scalar()
+        if not project_id:
+            return  # already attributed by an earlier terminal write
+        from .knowledge.runtime import attribute_shown_facts
+
+        attribute_shown_facts(connection, project_id=str(project_id), run_id=run_id,
+                              success=(status == "completed"))
+    except Exception:  # noqa: BLE001 — attribution never undoes the status it describes
+        log.warning("run terminal: knowledge not attributed for %s", run_id, exc_info=True)
 
 
 def on_event(connection: Any, event_type: str, entity_type: str, entity_id: str) -> None:

@@ -83,5 +83,24 @@ def prune(connection: Connection, *, days: int | None = None) -> dict[str, Any]:
             log.warning("activity retention skipped %s (non-fatal): %s", table, exc)
         if total:
             removed[table] = total
+    # AGENT MEMORY DECAYS ON THE SAME SWEEP (BOSSAPP-960). `agent_memory.prune` existed with
+    # nothing scheduled to call it, so nothing was ever retired and every project's pack
+    # ranking carried its dead entries for ever. Ridden on the worker's hourly retention call
+    # rather than a new scheduler: one sweep owns decay. Same stance as the tables above —
+    # never raises, and a skipped hour costs nothing.
+    try:
+        from .agent_memory import prune as prune_agent_memory
+
+        projects = connection.execute(
+            text("SELECT DISTINCT project_id FROM agent_memory WHERE status = 'active'")
+        ).scalars().all()
+        retired = 0
+        for project_id in projects:
+            counts = prune_agent_memory(connection, project_id=str(project_id))
+            retired += sum(int(v or 0) for v in counts.values())
+        if retired:
+            removed["agent_memory"] = retired
+    except Exception as exc:  # noqa: BLE001 — housekeeping never fails the worker loop
+        log.warning("agent-memory prune skipped (non-fatal): %s", exc)
     return {"retention_days": window, "removed": removed,
             "total_removed": sum(removed.values())}

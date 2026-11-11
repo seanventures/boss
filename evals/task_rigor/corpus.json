@@ -42,5 +42,21 @@
     {"text": "What is the status of the last run?", "label": "look"},
     {"text": "Just tell me what failed", "label": "look"},
     {"text": "Do not change anything, explain the error", "label": "look"}
+  ],
+  "verdict": [
+    {"kind": "plan", "text": "The plan covers both services and the rollout.\nPLAN: OK", "label": "ok"},
+    {"kind": "plan", "text": "No need to revise anything; the sequencing is right.\nPLAN: OK", "label": "ok"},
+    {"kind": "plan", "text": "Section 2 skips the migration ordering and must be rewritten.\nPLAN: REVISE", "label": "revise"},
+    {"kind": "plan", "text": "I considered saying PLAN: REVISE for the test section, but it is adequate.\nPLAN: OK", "label": "ok"},
+    {"kind": "plan", "text": "The plan is sound. I would only revise the naming if time allows.", "label": "not_run"},
+    {"kind": "plan", "text": "PLAN: REVISE\nThe design puts the queue consumer in the web process; split it.", "label": "revise"},
+    {"kind": "plan", "text": "## Review\nPLAN: OK\nMinor: consider caching the lookup.", "label": "ok"},
+    {"kind": "plan", "text": "plan: revise — the rollback step is missing entirely.", "label": "revise"},
+    {"kind": "review", "text": "The change handles the empty-cart case correctly and the tests pin it.\nVERDICT: SURVIVED", "label": "survived"},
+    {"kind": "review", "text": "The handler drops the error branch: processing continues after a failed charge, double-charging on retry.\nVERDICT: REFUTED", "label": "refuted"},
+    {"kind": "review", "text": "VERDICT: REFUTED", "label": "survived"},
+    {"kind": "review", "text": "The reviewer ran out of context mid-sentence and never judged the change.", "label": "not_run"},
+    {"kind": "review", "text": "VERDICT: REFUTED\nOn a second read the guard does cover it, with the test asserting the boundary.\nVERDICT: SURVIVED", "label": "survived"},
+    {"kind": "review", "text": "The suite passed and the diff matches the spec exactly as written.\nVerdict: survived", "label": "survived"}
   ]
 }

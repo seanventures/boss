@@ -34,6 +34,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional, Sequence
 
 from . import build_budget as _build_budget
+from . import repair_findings
 from . import parallel_build as _parallel_build
 from . import pr_integrity_review
 from .monitoring_guard import KEEP_MONITORING_RULE as _KEEP_MONITORING
@@ -1505,6 +1506,65 @@ def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evi
 
 
 AUTO_INFRA_RETRY_KEY = "auto_infra_retry"
+
+#: finalize_ctx marker on the attempt a CI failure started: a CI repair is never repaired again.
+CI_REPAIR_KEY = "ci_repair"
+
+
+def repair_after_ci_failure(engine, settings, jobs, run_id: str, project_id: str,
+                            fctx: dict, ci_out: dict) -> Optional[str]:
+    """ONE BOUNDED REPAIR ROUND WHEN THE PULL REQUEST'S CI FAILS (BOSSAPP-960).
+
+    A CI failure used to be recorded and then waited for a person: the merge and deploy
+    approvals refused (ci_gate.approval_hold), but nothing fed the failure back to an
+    implementer — the only loop that existed (the ambient Chief of Staff) is off by default.
+    Now the failure starts ONE new attempt in the same lineage, carrying the failing checks as
+    structured findings; the attempt commits onto the same branch, so the same pull request
+    re-runs the same CI. Bounded exactly like the infra retry: an attempt that IS the CI repair
+    is not repaired again (CI_REPAIR_KEY), whatever its own CI says. Never raises; returns the
+    new attempt's run id, or None when no repair starts."""
+    if str((ci_out or {}).get("status") or "") != "failed":
+        return None
+    if (fctx or {}).get(CI_REPAIR_KEY):
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.ci_repair_withheld", "boss", "code_task_run",
+                       run_id, {"why": "this attempt already was the CI repair; a second "
+                                       "failure waits for a person"})
+        return None
+    from .code_task_service import RetryNeedsPerson, retry_code_task
+
+    summary = str((ci_out or {}).get("summary") or "")
+    failing = re.findall(r"'([^']+)' failed", summary)
+    findings = repair_findings.from_ci(failing, summary=summary,
+                                       url=(ci_out or {}).get("failing_url"))
+    note = ("Autonomous CI repair: the pull request opened and its CI then FAILED. "
+            "Reproduce the failing check locally, fix the cause, and keep the change as small "
+            "as the failure requires. The findings:\n"
+            + repair_findings.render(findings))
+    try:
+        retried = retry_code_task(engine, settings, jobs, run_id, automatic=True, fix_note=note)
+        new_id = str(retried.get("run_id") or "")
+        if not new_id or retried.get("delivery_only"):
+            return None
+        with _transaction(engine) as c:
+            c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb)"
+                          " || jsonb_build_object(CAST(:k AS text), true) WHERE id=:id"),
+                      {"k": CI_REPAIR_KEY, "id": new_id})
+            emit_event(c, project_id, "code_task.ci_repair_started", "boss", "code_task_run",
+                       run_id, {"retry_run_id": new_id, "failing": failing[:6],
+                                "why": "the pull request's CI failed; one bounded repair round"})
+        return new_id
+    except RetryNeedsPerson as withheld:
+        try:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.ci_repair_withheld", "boss",
+                           "code_task_run", run_id, {"why": str(withheld)[:300]})
+        except Exception:  # noqa: BLE001
+            _log_caught(logger)
+        return None
+    except Exception:  # noqa: BLE001 — the recorded CI failure stands; a person still decides
+        _log_caught(logger)
+        return None
 
 
 def delivery_failure_words(detail: str) -> str:
@@ -3326,44 +3386,17 @@ def _spawn_deferred_findings_task(
         )
 
 
-def _parse_verdict(summary: str) -> str:
-    up = (summary or "").upper()
-    m = re.findall(r"VERDICT:\s*(SURVIVED|REFUTED)", up)
-    if not m:  # the model sometimes omits the "VERDICT:" prefix — accept the keyword anywhere
-        m = re.findall(r"\b(SURVIVED|REFUTED)\b", up)
-    if not m:
-        return "not_run"
-    verdict = "survived" if m[-1] == "SURVIVED" else "refuted"
-    if verdict == "refuted" and not _refutation_is_substantiated(summary):
-        # A refutation MUST cite a CONCRETE defect (the reviewer's own instruction). A bare
-        # "VERDICT: REFUTED" with no articulated defect must NOT autonomously fail-close the gate.
-        return "survived"
-    return verdict
-
-
-def _refutation_is_substantiated(summary: str) -> bool:
-    """True only if the reviewer articulated an actual defect, not just the verdict token."""
-    body = re.sub(r"(?im)^\s*(?:#+\s*)?(?:review findings|verdict)\b.*$", "", summary or "")
-    body = re.sub(r"(?im)\bVERDICT:\s*(?:SURVIVED|REFUTED)\b", "", body)
-    return len(body.strip()) >= 40
-
-
-def _aggregate_panel(verdicts: list[str], quorum: float) -> tuple[str, float]:
-    """Combine an N-member refute panel into one verdict + a confidence score (#9).
-
-    Each element of ``verdicts`` is 'survived' | 'refuted' | 'not_run' (only the first two
-    count as a cast vote). ``confidence`` is the fraction of *cast* votes that SURVIVED —
-    i.e. how many independent adversarial reviewers could NOT refute the change. The panel
-    SURVIVES only if confidence >= ``quorum`` (fail-closed: a tie below quorum, or no votes
-    at all, refutes). At panel_size 1 with quorum 0.5 this is exactly the pre-#9 behavior:
-    one 'survived' -> (survived, 1.0); one 'refuted' -> (refuted, 0.0).
-    """
-    cast = [v for v in verdicts if v in ("survived", "refuted")]
-    if not cast:
-        return "not_run", 0.0
-    survived = sum(1 for v in cast if v == "survived")
-    confidence = survived / len(cast)
-    return ("survived" if confidence >= quorum else "refuted"), confidence
+# The verdict grammar lives in review_verdict.py so the decision eval (evals/task_rigor,
+# family `verdict`) can measure it without importing this module. The old private names stay
+# importable: pr_review_again and verifier_meta_eval read them from here.
+from .review_verdict import (  # noqa: E402 — re-exported under their old names
+    aggregate_panel as _aggregate_panel,
+    parse_consistency as _parse_consistency_impl,
+    parse_security as _parse_security_impl,
+    parse_verdict as _parse_verdict,
+    plan_verdict as _plan_verdict,
+    refutation_is_substantiated as _refutation_is_substantiated,
+)
 
 
 def _security_prompt(title, *, instructions="", criteria=(), change=""):
@@ -3385,11 +3418,7 @@ def _security_prompt(title, *, instructions="", criteria=(), change=""):
     )
 
 
-def _parse_security(summary: str) -> str:
-    m = re.findall(r"VERDICT:\s*(CLEAN|ISSUES)", summary.upper())
-    if not m:
-        return "not_run"
-    return "clean" if m[-1] == "CLEAN" else "issues"
+_parse_security = _parse_security_impl
 
 
 def _strengthen_tests_prompt(criteria, planted: str, round_i: int) -> str:
@@ -3995,11 +4024,7 @@ def _consistency_prompt(title, criteria, design, *, instructions="", change=""):
     )
 
 
-def _parse_consistency(summary: str) -> str:
-    m = re.findall(r"CONSISTENT:\s*(YES|NO)", summary.upper())
-    if not m:
-        return "not_run"
-    return "consistent" if m[-1] == "YES" else "drift"
+_parse_consistency = _parse_consistency_impl
 
 
 def _lane_api_key(
@@ -4501,7 +4526,25 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # default) and infer the risk tier, clamped to the profile's range. Scales effort to work.
     with _transaction(engine) as c:
         profile = resolve_for_run(c, project_id, spec.get("profile"), settings)
-    risk_tier = infer_risk_tier({**spec, "title": title}, profile)
+    # A TYPED DECISION, WITH THE KEYWORD RULE AS ITS FALLBACK (BOSSAPP-960). The tier was
+    # decided by substring markers (SENSITIVE_MARKERS), measured on evals/task_rigor missing 14
+    # of 22 sensitive tasks; `model_risk_tier` (typed options, refused-not-coerced, the same
+    # decisions backend every other typed decision rides) existed and nothing called it. Its
+    # own fallback keeps the keyword answer when the model cannot answer, an explicit spec tier
+    # still wins inside it, and any failure here degrades to the old call outright.
+    try:
+        from .pipeline_profiles import model_risk_tier
+        from .typed_decisions import make_decider
+
+        _rt = model_risk_tier({**spec, "title": title}, profile, make_decider(settings))
+        risk_tier = int(_rt["tier"])
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.risk_tier_decided", "boss", "code_task_run",
+                       run_id, {"tier": risk_tier, "sensitive": bool(_rt.get("sensitive")),
+                                "by": "model" if _rt.get("ok") else "keyword_fallback"})
+    except Exception:  # noqa: BLE001 — the keyword tier is the floor this never falls below
+        _log_caught(logger)
+        risk_tier = infer_risk_tier({**spec, "title": title}, profile)
     # WEB-APP TIER: a scaffolded marketing/web build carries innocent words ("design tokens",
     # "deployability", "no auth/secret handling") that the substring-based sensitive-marker check
     # false-positives on, forcing tier 2 (strict review + mutation gates) and blocking the PR. For
@@ -4675,6 +4718,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         with _agents_lock:
             return _agent_for_locked(engine_name)
 
+    def _session_budget_ceiling():
+        """What is LEFT of this build's per-task budget, in dollars, asked before each session.
+
+        The engine contract passes it to any engine that can stop itself at a ceiling
+        (`--max-budget-usd`); the setting and the CLI flag both existed, but no run_role call in
+        this pipeline ever connected them, so a runaway session was only stopped at the next
+        stage boundary. None when the install sets no per-task budget."""
+        cap = int(getattr(settings, "code_task_budget_usd_micros", 0) or 0)
+        if cap <= 0:
+            return None
+        try:
+            with _transaction(engine) as c:
+                spent = _build_budget.unsettled_money(c, project_id, run_id)
+        except Exception:  # noqa: BLE001 — an unreadable ledger must not unbound the session
+            spent = 0
+        return max(cap - spent, 0) / 1e6
+
     def _agent_for_locked(engine_name: str):
         a = agents.get(engine_name)
         if a is None:
@@ -4688,6 +4748,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 )
             if redact_external:
                 a.redact = True
+            # EVERY SESSION OF EVERY STAGE RUNS UNDER THE BUILD'S REMAINING BUDGET
+            # (engine_contract._default_ceiling): set once here, enforced by the engine itself
+            # where it can be (budget_limit), at the stage boundary where it cannot.
+            a.budget_ceiling = _session_budget_ceiling
             agents[engine_name] = a
         # BOSS-407: give the native lane's `bash` tool the SAME runner BOSS uses for
         # verification, so an agent-run command gets the sandbox's tool caches, the
@@ -6382,7 +6446,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 read_only=True, model=m)
                 for d in (d1, d2, d3, d4):
                     cost += int(d.get("cost_usd_micros") or 0)
-                plan_ok = "REVISE" not in d4.get("summary", "").upper()
+                # THE MARKER, NOT THE WORD (BOSSAPP-960). This was `"REVISE" not in summary`,
+                # so "no need to revise anything" — or a hedge quoting the marker mid-prose —
+                # read as a failed plan; measured false on EVERY run, including crun_12ae7cbf
+                # which shipped PR #60 clean. The reviewer is ordered to end with `PLAN: OK` or
+                # `PLAN: REVISE`; read that (last marker wins), and a review with no marker at
+                # all counts as ok, which is what the old parse did for marker-free text.
+                plan_ok = _plan_verdict(d4.get("summary", "")) != "revise"
                 design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
                           "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
                           "plan_ok": plan_ok,
@@ -7354,8 +7424,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     for c in baseline_record.caused)
                 evidence_text = verification_target.attach_failing_sources(_caused_text, root)
             else:
+                # STRUCTURED FINDINGS, NOT A STDOUT TAIL (BOSSAPP-960): which test failed, on
+                # which assertion, in which file — parsed once here (repair_findings), rendered
+                # in the review channel's FINDING grammar. Falls back to the legacy tail when
+                # nothing parses, so unparseable evidence still arrives.
                 evidence_text = verification_target.attach_failing_sources(
-                    f"$ {test_cmd} (exit {test_exit_code})\n{fail_output[-3000:]}",
+                    repair_findings.evidence_block(
+                        fail_output, command=test_cmd, exit_code=test_exit_code),
                     root,
                 )
                 if (_warm_fix[0] and do_separate_tests and not use_microvm
@@ -8197,6 +8272,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         workspace_evidence = bind_test_outcomes(
             workspace_evidence or {}, tests_passed=bool(tests_passed),
         )
+        from .independence import assess_independence, independence_gate as _ig
+        _reviewer_independence = {}
+        try:
+            _ria = assess_independence(
+                (build_engine, r2.get('model') or None),
+                [(review_engine, r3.get('model') or None)])
+            _rig = _ig(_ria, required_level=str(getattr(
+                settings, 'independence_required_level', 'family') or 'family'))
+            _reviewer_independence = {'passed': bool(_rig.get('passed')),
+                                       'level': _ria.get('min_level'),
+                                       'required': _rig.get('required_level'),
+                                       'reasons': _rig.get('reasons') or []}
+        except Exception:  # noqa: BLE001 — a failed measurement reads as not independent
+            _log_caught(logger)
+            _reviewer_independence = {'passed': False, 'level': 'unknown',
+                                       'required': 'family', 'reasons': ['not measured']}
+
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
@@ -8280,7 +8372,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                              or r4.get("model") or r6.get("model")),
             "substrate": "microvm" if use_microvm else "local",
             "sandbox_task_ids": guest_vm_ids,
-            "test_author_independent": do_separate_tests, "reviewer_independent": do_review,
+            "test_author_independent": do_separate_tests,
+            # MEASURED, NOT ASSERTED (BOSSAPP-960): this flag used to be `do_review` — "a
+            # review ran" — which read as independence on gates and dashboards while the
+            # reviewer was the builder's own model. It now says what is true: a review ran AND
+            # its lane is separated from the builder's (independence.separation). The full
+            # assessment rides beside it for the gate pages.
+            "reviewer_independent": do_review and bool(_reviewer_independence.get("passed")),
+            "reviewer_independence": _reviewer_independence,
             "tests_passed": official_tests_passed, "adversarial_verdict": verdict,
             "test_files": test_files, "impl_files": impl_files,
             # What the repository already declares about how its apps run (a boss.deploy.yaml
@@ -9659,6 +9758,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                        {"pull_request_url": proposal.get("pull_request_url"),
                         "decision_id": proposal.get("decision_id"), "quality_gate_id": qg_id})
         plane_sync.on_event(engine, settings, run_id, "code_task.pr_opened")  # P2: comment the PR link
+        # CI FAILED AFTER THE PR OPENED: one bounded repair round in the same lineage
+        # (repair_after_ci_failure). After the terminal write, so the attempt chains off a
+        # settled run; the merge/deploy approvals stay refused meanwhile (ci_gate).
+        ci_repair_run = repair_after_ci_failure(engine, settings, jobs, run_id, project_id,
+                                                fctx, evidence.get("ci_wait") or {})
         # WHAT THIS RUN COST, DELIVERED AND LOST — recorded now, while every fact is fresh.
         #
         # Answering "what went wrong" on an 85-minute build took two hours of reading container
@@ -9761,6 +9865,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         return {"status": "completed", "done": True, "quality_gate_id": qg_id,
                 "deferred_findings": deferred_findings,
                 "followup_run_id": followup_run_id,
+                **({"ci_repair_run_id": ci_repair_run} if ci_repair_run else {}),
                 **({"checks_failing": _checks} if _checks else {}), **proposal}
 
     except RunFenced as exc:

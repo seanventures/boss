@@ -1,9 +1,10 @@
 {
-  "about": "Floors for the keyword decision eval (run.py --check). Set to the scores measured on 2026-11-10 at 216ae9646 (sensitivity 7/15 = 0.466667 with 6 false negatives, rigor 10/13 = 0.769231 with 2, look 7/10 = 0.7 with 3; accuracies rounded DOWN to 4 places, less than one case), so CI fails when a keyword rule gets WORSE; raise them as the rules (or their replacements) improve, never lower them to make a change pass.",
+  "about": "Floors for the keyword decision eval (run.py --check). Set to the scores measured on 2026-11-10 at 216ae9646 (sensitivity 7/15 = 0.466667 with 6 false negatives, rigor 10/13 = 0.769231 with 2, look 7/10 = 0.7 with 3; accuracies rounded DOWN to 4 places, less than one case), so CI fails when a keyword rule gets WORSE; raise them as the rules (or their replacements) improve, never lower them to make a change pass. Family `verdict` (review_verdict.py: plan_verdict + parse_verdict) measured 14/14 = 1.0 with 0 false negatives on 2026-11-11 (BOSSAPP-960).",
   "measured_at": "216ae9646",
   "families": {
     "sensitivity": {"min_accuracy": 0.4666, "max_false_negatives": 6},
     "rigor": {"min_accuracy": 0.7692, "max_false_negatives": 2},
-    "look": {"min_accuracy": 0.7, "max_false_negatives": 3}
+    "look": {"min_accuracy": 0.7, "max_false_negatives": 3},
+    "verdict": {"min_accuracy": 1.0, "max_false_negatives": 0}
   }
 }

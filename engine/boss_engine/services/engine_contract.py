@@ -236,6 +236,11 @@ class EngineCapabilities:
     #: Stops itself when a session's spend reaches a ceiling it is given (`max_budget_usd`).
     #: Without it the ceiling is enforced at the caller's next stage boundary.
     budget_limit: bool = False
+    #: Its read-only mode still hands the model an UNCONFINED shell in the working tree
+    #: (Claude's review seat keeps Bash with auto-approval -- an allowed-tools list is not an
+    #: OS sandbox). True sends review seats to the throwaway copy, same as an engine with no
+    #: read-only mode at all: a reviewer must never be able to touch the tree it is judging.
+    read_only_shell: bool = False
 
     def as_dict(self) -> dict[str, bool]:
         return {k: bool(getattr(self, k)) for k in self.__dataclass_fields__}
@@ -414,12 +419,25 @@ class ContractedAgent:
                                       parallel_agents=(int(parallel_agents or 0)
                                                        if caps.sub_agents and not read_only else 0))
         kwargs.update(extra)
+        if caps.budget_limit and kwargs.get("max_budget_usd") is None:
+            # A DEFAULT SPEND CEILING FOR EVERY SESSION OF THIS AGENT. The CLI has honoured
+            # --max-budget-usd all along, but the governed pipeline's forty-odd run_role call
+            # sites never passed it, so a runaway session was only stopped at the next stage
+            # boundary. The pipeline sets `budget_ceiling` ONCE on the agent it builds
+            # (_agent_for_locked) and every session it runs is bounded; an explicit
+            # max_budget_usd from a caller still wins.
+            ceiling = _default_ceiling(self)
+            if ceiling is not None:
+                kwargs["max_budget_usd"] = ceiling
         work = Path(cwd)
         copy: Optional[Path] = None
-        if read_only and not caps.read_only:
-            # NO READ-ONLY MODE: the reviewer judges a copy; nothing it writes reaches the build.
-            # The engine is told it is a review (its review prompt, timeout and argv) and that
-            # BOSS holds the read-only invariant by isolation, so it must not refuse the seat.
+        if read_only and (not caps.read_only or caps.read_only_shell):
+            # NO (TRUSTWORTHY) READ-ONLY MODE: the reviewer judges a copy; nothing it writes
+            # reaches the build. The engine is told it is a review (its review prompt, timeout
+            # and argv) and that BOSS holds the read-only invariant by isolation, so it must
+            # not refuse the seat. `read_only_shell` engines land here too: their review seat
+            # keeps an unconfined shell, and "read-only" that can `echo >` into the live tree
+            # is not read-only.
             copy = _isolated_copy(work)
             work = copy
             kwargs["_contract_read_only_copy"] = True
@@ -435,7 +453,7 @@ class ContractedAgent:
             # answer, so the next stage judged a crash as work.
             raise EngineSessionFailed(
                 f"{self.engine} failed: {result['summary'][:300]}")
-        if read_only and not caps.read_only:
+        if copy is not None:
             result["read_only_by"] = "copy"
         sid = result.get("session_id")
         if not sid or not caps.resume:
@@ -455,6 +473,31 @@ class ContractedAgent:
 
     def run(self, spec: Any, repo: Any, sandbox: Any) -> Any:
         return self._inner.run(spec, repo, sandbox)
+
+
+def _default_ceiling(agent: Any) -> Optional[float]:
+    """The agent's standing per-session spend ceiling, in dollars, or None.
+
+    `budget_ceiling` is a zero-argument callable set on the agent by whoever owns the budget
+    (the governed pipeline binds it to the run's remaining reservation). Asked per session so
+    the ceiling SHRINKS as the run spends. Never raises, and never returns a ceiling of zero or
+    less -- the CLI reads 0 as "stop before the first call", which would fail the stage the
+    cap was meant to protect; a run that is actually out of money is refused by the budget
+    governor at the stage boundary, in its own words."""
+    fn = getattr(agent, "budget_ceiling", None)
+    if not callable(fn):
+        return None
+    try:
+        ceiling = fn()
+    except Exception:  # noqa: BLE001 -- a broken ceiling must not fail the session it bounds
+        return None
+    if ceiling is None:
+        return None
+    try:
+        ceiling = float(ceiling)
+    except (TypeError, ValueError):
+        return None
+    return round(max(ceiling, 0.01), 2)
 
 
 def working_rules() -> str:

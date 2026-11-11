@@ -85,7 +85,18 @@ def lane_engines(connection: Any, settings: Any, project_id: str, spec: dict
     build_engine = (
         _pinned_engine or _resolved_engine or settings.code_agent_engine or "claude_code"
     ).lower()
-    review_engine = (settings.code_review_engine or "").lower() or build_engine
+    review_engine = (settings.code_review_engine or "").lower()
+    if not review_engine:
+        # NO REVIEWER PINNED: a different model FAMILY by default (BOSSAPP-960). The adversary
+        # lane's whole point is that the model that wrote the code is not the one judging it,
+        # but "empty = same as the builder" made self-review the default on every install. When
+        # this project holds a credential for an engine in another family, review runs there;
+        # with one engine connected (the common install) nothing changes.
+        from ..independence import independent_reviewer
+
+        review_engine = independent_reviewer(
+            connection, settings, project_id, build_engine,
+            getattr(settings, "code_agent_model", None)) or build_engine
     return settings, build_engine, review_engine
 
 
