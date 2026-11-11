@@ -85,7 +85,7 @@ def plumbing(x):
     return x + 1
 
 
-def _aggregate_panel(verdicts, quorum):
+def _review_gate_from_findings(summary, verdict):
     return ("pass", 1.0)
 
 
@@ -103,7 +103,7 @@ def test_a_hunk_inside_a_gate_symbol_is_never():
     v = _governed(BASE.replace('    "existing_tests_intact",\n', ""))
     assert not v.ok and "_TEST_GATES" in v.never[0]["why"]
     v = _governed(BASE.replace('return ("pass", 1.0)', 'return ("pass", 0.0)'))
-    assert not v.ok and "_aggregate_panel" in v.never[0]["why"]
+    assert not v.ok and "_review_gate_from_findings" in v.never[0]["why"]
 
 
 def test_a_line_inserted_inside_a_gate_symbol_is_never():
@@ -113,7 +113,7 @@ def test_a_line_inserted_inside_a_gate_symbol_is_never():
 
 
 def test_a_gate_renamed_away_is_never():
-    v = _governed(BASE.replace("def _aggregate_panel(", "def aggregate_panel_v2("))
+    v = _governed(BASE.replace("def _review_gate_from_findings(", "def review_gate_v2("))
     assert not v.ok and "renames" in v.never[0]["why"]
 
 
@@ -126,6 +126,21 @@ def test_a_changed_line_naming_a_gate_is_never_even_outside_the_symbols():
 def test_a_plumbing_hunk_in_the_same_file_is_tier_three():
     v = _governed(BASE.replace("return x + 1", "return x + 2"))
     assert v.ok and v.tier == 3
+
+
+def test_the_verdict_grammar_is_protected_where_it_lives_now():
+    """PR #34 moved the panel aggregation to review_verdict.aggregate_panel; the protection
+    followed it (it had kept naming the old location, failing test_protected_symbols on main).
+    A hunk inside the moved symbol is still never self-fixable."""
+    verdict_file = "engine/boss_engine/services/review_verdict.py"
+    base = ('def helper(x):\n    return x\n\n\n'
+            'def aggregate_panel(verdicts, quorum):\n    return ("survived", 1.0)\n')
+    v = sp.classify([_edit(verdict_file, base,
+                           base.replace('"survived", 1.0', '"survived", 0.0'))], POLICY)
+    assert not v.ok and "aggregate_panel" in v.never[0]["why"]
+    v = sp.classify([_edit(verdict_file, base, base.replace("return x", "return x or x"))],
+                    POLICY)
+    assert v.ok, "a plumbing hunk beside the protected grammar is still fixable"
 
 
 STACK = "engine/boss_engine/services/stack_deploy.py"
@@ -169,7 +184,7 @@ def test_importing_a_protected_module_is_flagged():
 
 
 def test_a_diagnosis_naming_a_gate_symbol_is_refused_and_plumbing_is_not():
-    assert sp.diagnosis_refusal([GOVERNED], ["_aggregate_panel"], policy=POLICY)
+    assert sp.diagnosis_refusal([GOVERNED], ["_review_gate_from_findings"], policy=POLICY)
     assert sp.diagnosis_refusal([GOVERNED], ["plumbing"], policy=POLICY) is None
 
 

@@ -21,6 +21,7 @@ never:            # never self-fixable in v1; a fix that needs these is a recomm
   - engine/boss_engine/services/step_recovery.py # the classifier that decides what is BOSS-side
   - engine/boss_engine/services/scripted_engine.py   # the conformance engine that proves the flow
   - engine/boss_engine/services/governed_code_task_service.py#gates
+  - engine/boss_engine/services/review_verdict.py#gates
   - engine/boss_engine/services/code_task_service.py#gates
   - engine/boss_engine/services/factory_view.py#UNWAIVABLE_GATES
   - engine/boss_engine/services/mutation_probe.py
@@ -85,9 +86,13 @@ symbols:
     engine/boss_engine/services/governed_code_task_service.py:
       symbols: [_TEST_GATES, _ALL_GATE_NAMES, _FAIL_CLOSED_TEST_GATES, _ADVISORY_HARD_FLOOR,
                 _NEVER_SHIP_PAST, classify_gate_faults, resolve_gate_failure_action,
-                _record_quality_gate, _review_gate_from_findings, _aggregate_panel,
+                _record_quality_gate, _review_gate_from_findings,
                 blocked_gate_messages, template_push_hold]
       words_from: [_TEST_GATES, _ALL_GATE_NAMES, _NEVER_SHIP_PAST]
+    # The verdict grammar moved to its own module (PR #34): the panel aggregation it protects
+    # lives there now, under its public name.
+    engine/boss_engine/services/review_verdict.py:
+      symbols: [aggregate_panel, parse_verdict, parse_security, parse_consistency, plan_verdict]
     engine/boss_engine/services/code_task_service.py:
       symbols: [with_existing_tests_criterion, override_code_task, _prior_failing_gates,
                 _recorded_failed_gates]
