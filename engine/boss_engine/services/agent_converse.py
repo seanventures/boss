@@ -1505,6 +1505,18 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                "receipt_id": receipt_id, "cited_acts": cited, "spend_status": "settled"}
     except BaseException as error:
         if not finished:
+            # A cut-off turn whose call was ADMITTED still reached (or could have reached)
+            # the provider; its row is this module's to write (ConversationCallSpend tells the
+            # gateway so), exactly like every other outcome. A turn refused before admission
+            # made no call, and records none.
+            admitted = getattr(getattr(spend, "authority", None), "outcome", None) == "ready"
+            if admitted:
+                try:
+                    record(usage={}, ok=False,
+                           error="stopped" if isinstance(error, GeneratorExit)
+                           else str(error)[:300])
+                except Exception:  # noqa: BLE001 — never let telemetry mask the real error
+                    log.exception("could not record the cut-off turn %s", turn_id)
             try:
                 with begin(engine) as c2:
                     _settle_cut_off(c2, settings, plan.project_id, turn_id, act_id, held,
