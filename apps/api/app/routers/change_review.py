@@ -399,6 +399,81 @@ def github_agent_message(project_id: str, owner: str, repo: str, number: int, re
     return _run(project_id, number, owner, repo, _message(request, payload))
 
 
+# ── governed git actions: sync (pull the base in) and restack (BOSSAPP-996) ──────────────────
+# The operator: "provide few important git commands in the ui, to pull, resolve, showing history
+# etc.. we dont have to go to CLI to execute these things." The preview is the read (where the
+# branch stands, the conflicting files); the action is a person's approved decision
+# (services/change_sync.py), never ambient, and the same for a local change set and a GitHub PR.
+
+class SyncBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: str = Field(default="update", pattern="^(update|restack)$")
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+def _sync_preview(project_id: str, number: int, owner: Optional[str], repo: Optional[str]) -> Any:
+    from boss_engine.services import change_sync
+
+    def go(c: Any, s: Any) -> Any:
+        try:
+            return change_sync.preview(c, _settings, s)
+        except change_sync.ChangeSyncError as error:
+            return _refused(error)
+    return _run(project_id, number, owner, repo, go)
+
+
+def _sync_act(project_id: str, number: int, owner: Optional[str], repo: Optional[str],
+              request: Request, payload: SyncBody) -> Any:
+    from apps.api.app.main import approve_decision_card
+    from boss_engine.schemas import DecisionActionRequest
+    from boss_engine.services import change_sync
+
+    _people_only(request, "Running a git action")
+    made: dict[str, Any] = {}
+
+    def go(c: Any, s: Any) -> Any:
+        try:
+            made["decision_id"] = change_sync.propose(c, _settings, s, mode=payload.mode,
+                                                      actor=_actor(request))
+        except change_sync.ChangeSyncError as error:
+            return _refused(error)
+        return None
+    refused = _run(project_id, number, owner, repo, go)
+    if refused is not None:
+        return refused
+    verb = "Restack" if payload.mode == "restack" else "Sync"
+    return approve_decision_card(made["decision_id"], DecisionActionRequest(
+        actor=_actor(request), note=payload.note or f"{verb} #{number}"))
+
+
+@router.get(LOCAL + "/sync-preview")
+@permit(P.CODE_TASK_READ, scope=Scope.project(path="project_id"))
+def local_sync_preview(project_id: str, number: int) -> Any:
+    return _sync_preview(project_id, number, None, None)
+
+
+@router.post(LOCAL + "/sync")
+@permit(P.DECISION_APPROVE, scope=Scope.project(path="project_id"))
+def local_sync(project_id: str, number: int, request: Request, payload: SyncBody) -> Any:
+    """A PERSON pulls the base into the change's branch (or restacks it after a squash merge):
+    proposed and approved as one press, recorded as a decision either way."""
+    return _sync_act(project_id, number, None, None, request, payload)
+
+
+@router.get(GITHUB + "/sync-preview")
+@permit(P.CODE_TASK_READ, scope=Scope.project(path="project_id"))
+def github_sync_preview(project_id: str, owner: str, repo: str, number: int) -> Any:
+    return _sync_preview(project_id, number, owner, repo)
+
+
+@router.post(GITHUB + "/sync")
+@permit(P.DECISION_APPROVE, scope=Scope.project(path="project_id"))
+def github_sync(project_id: str, owner: str, repo: str, number: int, request: Request,
+                payload: SyncBody) -> Any:
+    """GitHub's "Update branch" (or a restack after a squash merge), through BOSS's decision."""
+    return _sync_act(project_id, number, owner, repo, request, payload)
+
+
 # ── the project's history: its default branch, merged work included ──────────────────────────
 
 @router.get("/v1/projects/{project_id}/history")

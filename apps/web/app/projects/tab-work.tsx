@@ -9,11 +9,12 @@
  * count); Planned is Marshal's rank, re-ranked by drag or Alt+↑/↓ and saved through the plan
  * route. A row opens its drawer in place. List or Board.
  */
-import { changeHref, changeRef, changeWords, isLocalChangeUrl, projectIsLocal } from "../../lib/repo-links";
+import { changeRef, changeWords, projectIsLocal } from "../../lib/repo-links";
+import { ChangeLink } from "../change-link";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowBendDownRight, ArrowDown, ArrowUp, Bug, CaretDown, Check, Code, Compass, Database, DotsSixVertical, EnvelopeSimple, FlowArrow, GitMerge,
-  GitPullRequest, GithubLogo, Globe, HandWaving, Kanban, Lightning, ListBullets, PauseCircle, Play,
+  GithubLogo, Globe, HandWaving, Kanban, Lightning, ListBullets, PauseCircle, Play,
   TerminalWindow, Ticket, XCircle,
 } from "@phosphor-icons/react";
 
@@ -371,7 +372,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
           ) : null}
           {w.links.build && w.state !== "done" ? <PxLink href={w.links.build} title="Build page in Code Tasks" testid={`px-work-build-${w.id}`}><Code size={11} aria-hidden /> Build</PxLink> : null}
           {w.links.log && (w.state === "running" || w.state === "stalled" || (w.state === "needs_you" && !!w.why)) ? <PxLink href={w.links.log} title="This build's live log" testid={`px-work-log-${w.id}`}><TerminalWindow size={11} aria-hidden /> Live log</PxLink> : null}
-          {w.links.pr ? <PxLink href={changeHref(w.links.pr.external_url) ?? ""} title={isLocalChangeUrl(w.links.pr.external_url) ? "Change set in BOSS" : "Pull request on GitHub"} testid={`px-work-pr-${w.id}`}>{w.state === "done" ? <GitMerge size={11} aria-hidden /> : <GitPullRequest size={11} aria-hidden />} {isLocalChangeUrl(w.links.pr.external_url) ? `Change #${w.links.pr.number}` : `PR #${w.links.pr.number}`}</PxLink> : null}
+          {w.links.pr ? <ChangeLink url={w.links.pr.external_url} number={w.links.pr.number} className="px-chip" merged={w.state === "done"} testid={`px-work-pr-${w.id}`} /> : null}
           {w.links.preview ? <PxLink href={w.links.preview} title="The running preview"><Globe size={11} aria-hidden /> Preview</PxLink> : null}
           {w.links.deploy ? <PxLink href={w.links.deploy} title="Where it is deployed"><Globe size={11} aria-hidden /> Staging</PxLink> : null}
         </span>
@@ -428,7 +429,7 @@ function AttemptRow({ t, ctx }: { t: Attempt; ctx: PxCtx }) {
         {ATTEMPT_WORDS[t.state]}</span>
       <span className="px-faint px-hide-phone"><Cost usd={t.cost_usd} list={t.list_usd} /></span>
       <span className="px-row" style={{ gap: 4, justifyContent: "flex-end" }}>
-        {t.pr ? <PxLink href={changeHref(t.pr.external_url) ?? ""} testid={`px-attempt-pr-${t.id}`}><GitPullRequest size={11} aria-hidden /> #{t.pr.number}</PxLink> : null}
+        {t.pr ? <ChangeLink url={t.pr.external_url} number={t.pr.number} className="px-chip" merged={t.state === "done"} testid={`px-attempt-pr-${t.id}`} /> : null}
         <button type="button" className="px-btn" data-size="s" onClick={() => ctx.open("work", t.id)} data-testid={`px-attempt-open-${t.id}`}>Open</button>
       </span>
     </div>

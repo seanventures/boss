@@ -74,6 +74,8 @@
 .fx-row-open:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 4px; }
 .fx-row-now { font-size: var(--fs-ui); color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .fx-kn, .fx-time { font-variant-numeric: tabular-nums; }
+/* The change a build produced, beside its state words (BOSSAPP-994). */
+.fx-row-pr { margin-left: 8px; }
 .fx-word-needs_plan, .fx-word-needs_waiver, .fx-word-needs_person, .fx-word-budget_refused, .fx-word-quiet { color: var(--amber); font-weight: 650; }
 .fx-word-failed, .fx-word-blocked { color: var(--red); font-weight: 650; }
 .fx-word-cancelled { color: var(--muted); }

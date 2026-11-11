@@ -505,3 +505,25 @@
 .gr-crumb-w { min-width: 0; }
 .gr-c-box { width: 13px; }
 .gr-layout[data-focus] .gr-hd, .gr-layout[data-focus] .gr-tabs, .gr-layout[data-focus] .cs-crumb { display: none; }
+
+/* ── Overview (BOSSAPP-995) ──────────────────────────────────────────────────────────────── */
+.gr-overview { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.gr-ov-body { max-width: 72ch; }
+/* A file:line reference is a button that lands on that row of the diff. */
+.gr-loc { font: inherit; cursor: pointer; }
+.gr-loc:hover { border-color: var(--accent-text); color: var(--accent-text); }
+.gr-ov-resolved > summary { cursor: pointer; list-style: none; }
+.gr-ov-resolved > summary::-webkit-details-marker { display: none; }
+.gr-ov-resolved > summary::after { content: "▸"; margin-left: 6px; color: var(--faint); }
+.gr-ov-resolved[open] > summary::after { content: "▾"; }
+/* The row a ?file=&line= link landed on, briefly marked. */
+.cs-ln[data-hit] > .cs-code { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* ── Git actions on the header (BOSSAPP-996) ─────────────────────────────────────────────── */
+.gr-sync { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: var(--fs-meta); min-width: 0; }
+.gr-sync .lr-btn { font-size: var(--fs-meta); }
+.gr-conflicts { cursor: pointer; font: inherit; }
+.gr-conflicts-list { position: absolute; z-index: 30; margin-top: 4px; padding: 10px 12px; min-width: 16rem; max-width: 28rem;
+  border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-2, 0 6px 24px rgba(0,0,0,.14)); }
+.gr-conflicts-list ul { margin: 0 0 6px; padding: 0 0 0 16px; max-height: 14rem; overflow: auto; }
+.gr-conflicts-list li { padding: 1px 0; }

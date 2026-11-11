@@ -95,6 +95,10 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving a held destroy/restore of a provisioned resource queues its leased
     # `infra.operation` job (platform/operations.on_decision_approved).
     "infra_operation",
+    # Approving a change's branch sync (pull the base in, or restack after a squash merge) runs
+    # it through the repo-host seam (change_sync.on_decision_approved); a real conflict refuses
+    # and the decision stays pending (BOSSAPP-996).
+    "change_sync_branch",
     # Approving an architecture records it on its review; the waiting step then succeeds and
     # every later build receives the approved document (architecture_docs.on_decision_answered).
     "review_architecture",

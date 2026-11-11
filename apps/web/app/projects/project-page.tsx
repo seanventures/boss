@@ -15,7 +15,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut, ChatCircleDots, CircleNotch, WarningCircle, Check, ClipboardText, Compass, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
-  Plus, RocketLaunch, TreeStructure, GitMerge, CloudCheck, ListChecks, GithubLogo, HardDrives, type Icon,
+  Plus, RocketLaunch, TreeStructure, GitCommit, GitMerge, CloudCheck, ListChecks, GithubLogo, HardDrives, type Icon,
 } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
@@ -299,6 +299,14 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
             <a className="px-hchip" href="#" data-testid="px-head-norepo" onClick={(e) => { e.preventDefault(); ctx.tab("settings", { section: "repos" }); }}>
               <Plus size={11} aria-hidden /> Add a repo</a>
           )}
+          {/* GIT HISTORY, ONE PRESS AWAY (BOSSAPP-993): the default branch's log lives on
+              Repo & knowledge; this chip names it so nobody reaches for the CLI to see it. */}
+          {repo ? (
+            <a className="px-hchip" href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=knowledge`)} data-testid="px-head-history"
+               title="Commit history — opens Repo & knowledge"
+               onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); ctx.tab("knowledge"); }}>
+              <GitCommit size={11} aria-hidden />History</a>
+          ) : null}
           {/* LOCAL FIRST (BOSSAPP-921): a project whose code is on this machine says so, quietly,
               with Publish to GitHub one press away. */}
           {!ctx.demo && repo && isLocalRepo(repo.full_name) ? <LocalPublishChip projectId={ctx.projectId} onPublished={() => notifyChanged("project.published")} /> : null}

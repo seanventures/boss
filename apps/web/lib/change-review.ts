@@ -117,6 +117,34 @@ export const getCommit = (at: ChangeAt, sha: string) =>
     ...parseFiles({ ...r, base: r.parent, head: r.sha }), sha: str(r.sha), parent: str(r.parent) || null, author: str(r.author),
     date: str(r.date) || null, message: str(r.message), fixes: Array.isArray(r.fixes) ? r.fixes.map(num) : [] }) as CommitView);
 export const getViewed = (at: ChangeAt) => idGet<unknown>(`${changeBase(at)}/viewed`).then(parseViewed);
+
+/** GOVERNED GIT ACTIONS (BOSSAPP-996): where the change's branch stands against its base, and
+ *  the one-press Sync/Restack that runs as an approved decision, never ambiently. */
+export type SyncPreview = {
+  branch: string; base: string; state: string;
+  ahead: number; behind: number;
+  /** null: the host has not said yet (GitHub computes it lazily). */
+  mergeable: boolean | null;
+  conflicts: string[];
+  /** false for GitHub: it says CLEAN or DIRTY but never names the files. */
+  conflictsKnown: boolean;
+  /** Set when the branch's last change merged as a squash: restacking replays only what came after. */
+  restack: { number: number; mergedHeadSha: string } | null;
+};
+export function parseSyncPreview(raw: unknown): SyncPreview {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const rs = (r.restack && typeof r.restack === "object" ? r.restack : null) as Record<string, unknown> | null;
+  return { branch: str(r.branch), base: str(r.base, "main"), state: str(r.state, "open"),
+           ahead: num(r.ahead), behind: num(r.behind),
+           mergeable: typeof r.mergeable === "boolean" ? r.mergeable : null,
+           conflicts: Array.isArray(r.conflicts) ? r.conflicts.map((p) => str(p)).filter(Boolean) : [],
+           conflictsKnown: r.conflicts_known === true,
+           restack: rs ? { number: num(rs.number), mergedHeadSha: str(rs.merged_head_sha) } : null };
+}
+export const getSyncPreview = (at: ChangeAt) =>
+  idGet<unknown>(`${changeBase(at)}/sync-preview`).then(parseSyncPreview);
+export const postSync = (at: ChangeAt, mode: "update" | "restack") =>
+  idPost<unknown>(`${changeBase(at)}/sync`, { mode });
 export const setViewed = (at: ChangeAt, path: string, sha: string | null, viewed = true) =>
   idPost<unknown>(`${changeBase(at)}/viewed`, { path, sha, viewed }).then(parseViewed);
 export const getAgent = (at: ChangeAt) => idGet<unknown>(`${changeBase(at)}/agent`).then(parseAgent);
@@ -341,23 +369,37 @@ export function withoutWhatChanged(body: string): string {
   return out.join("\n").trim();
 }
 
-/** THE CHANGE PAGE'S URLS: /changes/<project>/<n>[/commits/<sha>][?repo=owner/name][&tab=…].
- *  A commit is a real link of its own; the other tabs keep ?tab=, so links and Back work. */
-export function changeUrl(at: ChangeAt, tab: string, commit: string | null = null): string {
+/** A place in the change's diff a link can name: a file, and a line on its new or old side. */
+export type Loc = { path: string; line?: number | null; side?: "new" | "old" };
+
+/** THE CHANGE PAGE'S URLS: /changes/<project>/<n>[/commits/<sha>][?repo=owner/name][&tab=…]
+ *  [&file=…&line=…]. A commit is a real link of its own; the other tabs keep ?tab=, so links
+ *  and Back work. `loc` (BOSSAPP-995) names an exact file and line of the diff, so a comment
+ *  anywhere in BOSS can hand someone the code piece it talks about. */
+export function changeUrl(at: ChangeAt, tab: string, commit: string | null = null, loc: Loc | null = null): string {
   const base = `/changes/${encodeURIComponent(at.projectId)}/${encodeURIComponent(String(at.number))}`;
   const q = new URLSearchParams();
   if (at.repo) q.set("repo", String(at.repo));
   if (tab === "commits" && commit) return `${base}/commits/${encodeURIComponent(commit)}${q.toString() ? `?${q}` : ""}`;
   if (tab !== "files") q.set("tab", tab);
+  if (loc?.path) {
+    q.set("file", loc.path);
+    if (loc.line) q.set("line", String(loc.line));
+    if (loc.side === "old") q.set("side", "old");
+  }
   return `${base}${q.toString() ? `?${q}` : ""}`;
 }
 
-/** Read the tab and commit back from a change page URL (Back, a pasted link). */
-export function readChangeUrl(pathname: string, search: string): { tab: string; commit: string | null } {
+/** Read the tab, commit and place back from a change page URL (Back, a pasted link). */
+export function readChangeUrl(pathname: string, search: string): { tab: string; commit: string | null; loc: Loc | null } {
   const m = /\/commits\/([0-9a-fA-F]{7,40})\/?$/.exec(pathname);
-  if (m) return { tab: "commits", commit: m[1] };
+  if (m) return { tab: "commits", commit: m[1], loc: null };
   const q = new URLSearchParams(search);
-  return { tab: q.get("tab") || "files", commit: q.get("commit") };
+  const path = q.get("file");
+  const line = Number(q.get("line") || "");
+  return { tab: q.get("tab") || "files", commit: q.get("commit"),
+           loc: path ? { path, line: Number.isFinite(line) && line > 0 ? line : null,
+                         side: q.get("side") === "old" ? "old" : "new" } : null };
 }
 
 /** A project commit's page (the default branch's history). */
@@ -386,7 +428,7 @@ export function pageUrl(current: string, tab: string, commit: string | null): st
   const u = new URL(current, "http://x");
   u.searchParams.set("tab", tab);
   if (commit) u.searchParams.set("commit", commit); else u.searchParams.delete("commit");
-  return `${u.pathname}?${u.searchParams.toString()}${u.hash && !/^#(conversation|commits|files|code|checks)$/.test(u.hash) ? u.hash : ""}`;
+  return `${u.pathname}?${u.searchParams.toString()}${u.hash && !/^#(overview|conversation|commits|files|code|checks)$/.test(u.hash) ? u.hash : ""}`;
 }
 
 /** The commit before and after one in the list (the list is newest first: Previous is older). */

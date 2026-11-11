@@ -379,6 +379,38 @@ def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "m
     return branch_sha(git_dir, base) or ""
 
 
+def counts(git_dir: Path, branch: str, base: str) -> dict[str, int]:
+    """How far `branch` stands from `base`: {"ahead", "behind"} in commits."""
+    out = git(["rev-list", "--left-right", "--count", f"refs/heads/{base}...refs/heads/{branch}"],
+              git_dir=git_dir, check=False).split()
+    if len(out) != 2 or not all(p.isdigit() for p in out):
+        return {"ahead": 0, "behind": 0}
+    return {"ahead": int(out[1]), "behind": int(out[0])}
+
+
+def merge_preview(git_dir: Path, branch: str, other: str) -> dict[str, Any]:
+    """Whether `other` merges cleanly INTO `branch`, and the conflicting paths when it does not
+    (the console's guided resolve lists them, BOSSAPP-996). Nothing is written: the merge runs
+    in a throwaway clone that is removed after."""
+    branch_tip = branch_sha(git_dir, branch)
+    other_tip = branch_sha(git_dir, other) or rev_parse(git_dir, other)
+    if not branch_tip:
+        raise LocalRepoError(f"There is no branch {branch!r}.")
+    if not other_tip:
+        raise LocalRepoError(f"There is no branch {other!r} to merge in.")
+    if merge_base(git_dir, other_tip, branch_tip) == other_tip:
+        return {"mergeable": True, "conflicts": [], "already": True}
+    with worktree(git_dir, branch) as wt:
+        # The clone copies every branch, so the other tip is already here to merge against.
+        done = subprocess.run(["git", "merge", "--no-commit", "--no-ff", other_tip],
+                              cwd=str(wt), capture_output=True, env=_env(), timeout=300)
+        if done.returncode == 0:
+            return {"mergeable": True, "conflicts": [], "already": False}
+        conflicts = [p for p in git(["diff", "--name-only", "--diff-filter=U"], cwd=wt,
+                                    check=False).splitlines() if p.strip()]
+    return {"mergeable": False, "conflicts": sorted(conflicts), "already": False}
+
+
 def restack(git_dir: Path, branch: str, merged_head: str, base: str) -> dict[str, Any]:
     """PUT A WORK BRANCH BACK ON ITS BASE AFTER ITS CHANGE SET MERGED (BOSSAPP-980).
 
@@ -553,8 +585,9 @@ def ensure_mirror(owner: str, repo: str, url: str, *, settings: Any = None,
 __all__ = [
     "LocalMergeConflict", "LocalRepoError", "OWNER_PREFIX", "bare_path", "branch_exists",
     "branch_sha", "branches", "changed_files", "clean_name", "commit_files", "commits_between",
-    "create", "default_branch", "delete_project_repos", "describe", "diff", "ensure_branch",
-    "ensure_mirror", "exists", "file_url", "git", "git_available", "import_tree", "init_bare",
-    "is_local", "is_local_owner", "list_paths", "merge", "mirror_path", "owner_for",
-    "project_of", "push", "read_file", "rev_parse", "root",
+    "counts", "create", "default_branch", "delete_project_repos", "describe", "diff",
+    "ensure_branch", "ensure_mirror", "exists", "file_url", "git", "git_available",
+    "import_tree", "init_bare", "is_local", "is_local_owner", "list_paths", "merge",
+    "merge_preview", "mirror_path", "owner_for", "project_of", "push", "read_file",
+    "rev_parse", "root",
 ]

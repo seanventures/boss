@@ -17,7 +17,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, ArrowSquareOut, ChatCircleDots, ChatCircleText, CircleNotch, Code, FileCode, GitCommit, GitMerge,
-  FolderOpen, GithubLogo, HardDrives, PencilSimpleLine, Robot, ShieldCheck, Terminal,
+  FolderOpen, GithubLogo, HardDrives, Info, PencilSimpleLine, Robot, ShieldCheck, Terminal,
 } from "@phosphor-icons/react";
 
 import { BoxPop } from "../../../../components/box-pop";
@@ -29,8 +29,11 @@ import { parseChangeSet, type ChangeSet } from "../../../../lib/repo-links";
 import { commentsByLine, parseUnifiedDiff } from "../../../../lib/diff-view";
 import {
   agoWords, changeBase, changedFiles, changeUrl, getCommits, getFiles, getViewed, readChangeUrl, WHOLE_CHANGE,
-  type ChangeAt, type Commit, type FilesView, type Range, type Viewed,
+  type ChangeAt, type Commit, type FilesView, type Loc, type Range, type Viewed,
 } from "../../../../lib/change-review";
+import { OverviewTab } from "./overview-tab";
+import { SyncPanel } from "./sync-panel";
+import { fileAnchor, lineAnchor } from "./review-panes";
 import { requestChanges, runReview, type Thread } from "../../../../lib/local-review";
 import { CodeTab, useJumpTo, useLineReview } from "./local-review";
 import {
@@ -42,13 +45,15 @@ import "./change-set.css";
 
 export { InlineNote, Review };
 
-export type Tab = "conversation" | "commits" | "files" | "code" | "checks";
-const TABS: Tab[] = ["conversation", "commits", "files", "code", "checks"];
+export type Tab = "overview" | "conversation" | "commits" | "files" | "code" | "checks";
+const TABS: Tab[] = ["overview", "conversation", "commits", "files", "code", "checks"];
 
-export function ChangeSetView({ projectId, number, repo = null, tab = null, commit = null, me = null, org = null, project = null }: {
+export function ChangeSetView({ projectId, number, repo = null, tab = null, commit = null, loc = null, me = null, org = null, project = null }: {
   projectId: string; number: string;
   /** A GitHub PR of the project (`owner/repo`); none for a local change set. */
   repo?: string | null; tab?: string | null; commit?: string | null;
+  /** ?file=…&line=…: the exact row of the diff this link names (BOSSAPP-995). */
+  loc?: Loc | null;
   /** Read on the server (page.tsx): who is here and what they hold, at the org and this project. */
   me?: MeResponse | null; org?: MePermissionsResponse | null; project?: MePermissionsResponse | null;
 }) {
@@ -58,7 +63,7 @@ export function ChangeSetView({ projectId, number, repo = null, tab = null, comm
     <IdentityProvider me={me} org={org} project={project} projectId={projectId}>
       <ReviewLayoutProvider page="change">
         <ChangeSetPage projectId={projectId} number={number} repo={repo} startTab={TABS.includes(tab as Tab) ? (tab as Tab) : null}
-                       startCommit={commit} />
+                       startCommit={commit} startLoc={loc} />
       </ReviewLayoutProvider>
       <ConsentHost />
     </IdentityProvider>
@@ -67,8 +72,8 @@ export function ChangeSetView({ projectId, number, repo = null, tab = null, comm
 
 type Note = { path?: string; line?: number; body: string; author: string };
 
-function ChangeSetPage({ projectId, number, repo, startTab, startCommit }: {
-  projectId: string; number: string; repo: string | null; startTab: Tab | null; startCommit: string | null;
+function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLoc = null }: {
+  projectId: string; number: string; repo: string | null; startTab: Tab | null; startCommit: string | null; startLoc?: Loc | null;
 }) {
   const asked: ChangeAt = useMemo(() => ({ projectId, number, repo }), [projectId, number, repo]);
   const [cs, setCs] = useState<ChangeSet | null>(null);
@@ -131,6 +136,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit }: {
       const r = readChangeUrl(window.location.pathname, window.location.search);
       setTabState(TABS.includes(r.tab as Tab) ? (r.tab as Tab) : "files");
       setShownCommit(r.commit);
+      if (r.loc) setFocus({ path: r.loc.path, n: Date.now() });
     };
     window.addEventListener("popstate", back);
     return () => window.removeEventListener("popstate", back);
@@ -155,7 +161,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit }: {
   const wholeFiles = useMemo(() => changedFiles(cs?.files ?? [], parseUnifiedDiff(cs?.diff)), [cs?.files, cs?.diff]);
   const [codePath, setCodePath] = useState<string | null>(null);
   /** A comment clicked out of the diff: Files changed opens that file, scrolled to its line. */
-  const [focus, setFocus] = useState<{ path: string; n: number } | null>(null);
+  const [focus, setFocus] = useState<{ path: string; n: number } | null>(startLoc ? { path: startLoc.path, n: Date.now() } : null);
   const dock = useReviewLayout();
   const [clone, setClone] = useState(false);
   const [agentKey, setAgentKey] = useState(0);
@@ -170,6 +176,27 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit }: {
     commitFor: (side) => (side === "new" ? cs?.where?.head_sha || cs?.head_sha || null : cs?.base_sha ?? null),
   });
   const openCode = (path: string | null) => { setCodePath(path); go("code"); };
+  /** JUMP TO A CODE PIECE (BOSSAPP-995): Files changed, that file open, scrolled to that row —
+   *  and the URL carries ?file=&line=, so the place can be handed to someone as a link. */
+  const scrollLoc = useCallback((path: string, line?: number | null, side: "new" | "old" = "new") => {
+    window.setTimeout(() => {
+      const row = line ? document.getElementById(lineAnchor(path, line, side)) : null;
+      (row ?? document.getElementById(fileAnchor(path)))?.scrollIntoView({ block: "center", behavior: "smooth" });
+      row?.setAttribute("data-hit", "");
+    }, 160);
+  }, []);
+  const onJumpLoc = useCallback((path: string, line?: number | null, side: "new" | "old" = "new") => {
+    setRange(WHOLE_CHANGE); setFocus({ path, n: Date.now() }); setTabState("files"); setShownCommit(null);
+    try { window.history.pushState({ tab: "files" }, "", changeUrl(asked, "files", null, { path, line, side })); } catch { /* the view still moves */ }
+    scrollLoc(path, line, side);
+  }, [asked, scrollLoc]);
+  // A pasted ?file=&line= link: the page lands on that row once the diff is there.
+  const landed = useRef(false);
+  useEffect(() => {
+    if (!startLoc || landed.current || !cs || tab !== "files" || !diffNow) return;
+    landed.current = true;
+    scrollLoc(startLoc.path, startLoc.line, startLoc.side ?? "new");
+  }, [startLoc, cs, tab, diffNow, scrollLoc]);
   const onJump = (t: Thread) => {
     if (!t.path || t.outdated || t.kept) { setTab("conversation"); jump(t.id); return; }
     if (!(cs?.files ?? []).some((f) => f.path === t.path)) { openCode(t.path); jump(t.id); return; }
@@ -183,6 +210,8 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit }: {
   const projectHref = `/?project_id=${encodeURIComponent(projectId)}&area=project&tab=work`;
   const projectHome = `/?project_id=${encodeURIComponent(projectId)}&area=project`;
   const commentCount = (cs?.review ?? []).reduce((a, n) => a + n.comments.length + (n.body ? 1 : 0), 0) + (cs?.comments.length ?? 0);
+  // The Overview badge: the threads someone still has to act on (open · addressed · disputed).
+  const activeCount = (cs?.comments ?? []).filter((t) => t.state !== "resolved").length;
   const word = cs?.source === "github" ? "PR" : "Change";
   const checkCount = (cs?.checks?.items?.length ?? 0) + (cs?.checks?.run_status ? 2 : 0);
 
@@ -230,8 +259,12 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit }: {
               </span>
             </div>
             <SourceLine cs={cs} />
+            {/* Pull/sync, restack, the conflicting files, History (BOSSAPP-996): the git the
+                page can run itself, each action a recorded decision. */}
+            <SyncPanel cs={cs} at={at} reread={read} />
           </header>
           <nav className="cs-tabs gr-tabs" aria-label="Sections" role="tablist">
+            <TabLink tab="overview" on={tab} set={setTab} icon={<Info size={13} aria-hidden />} label="Overview" n={activeCount || undefined} />
             <TabLink tab="conversation" on={tab} set={setTab} icon={<ChatCircleText size={13} aria-hidden />} label="Conversation" n={commentCount} />
             <TabLink tab="commits" on={tab} set={setTab} icon={<GitCommit size={13} aria-hidden />} label="Commits" n={commits.length || cs.commits.length} />
             <TabLink tab="files" on={tab} set={setTab} icon={<FileCode size={13} aria-hidden />} label="Files changed" n={files.length} />
@@ -250,6 +283,9 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit }: {
                 <CommitsTab cs={cs} at={at} commits={commits} shown={shownCommit} onShow={(sha) => go("commits", sha)}
                             hrefFor={(sha) => changeUrl(asked, "commits", sha)} wholeFiles={wholeFiles} wholeDiff={cs.diff}
                             review={lineReview} inline={inline} onCompare={(r) => { setRange(r); setTab("files"); }} onViewFile={openCode} />
+              ) : tab === "overview" ? (
+                <OverviewTab cs={cs} at={at} files={wholeFiles} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread}
+                             onJump={onJump} onJumpLoc={onJumpLoc} onFiles={() => { setRange(WHOLE_CHANGE); setTab("files"); }} />
               ) : tab === "conversation" ? (
                 <ConversationTab cs={cs} at={at} files={wholeFiles} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread} onJump={onJump} onFiles={() => { setRange(WHOLE_CHANGE); setTab("files"); }} />
               ) : (
