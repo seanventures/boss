@@ -790,7 +790,7 @@ Every step:
 | **K3** | `workflow_precheck_agent.run_agent` → kernel | `BOSS_KERNEL_PRECHECK` | test_workflow_precheck_agent.py | flag |
 | **K4** | `agent_loop._drive_run` → kernel (`AgentStepToolSet`, durable suspend/resume) | `BOSS_KERNEL_AGENT_STEPS` | agent_steps/agent_loop tests, the approval resume e2e, the video workflow battle scenario; P0 real (workflow brief) | flag; `agent_runs` rows are shape-compatible |
 | **K5** | Tool exposure: `Exposure` on every ToolSpec, `strict_schema`, `find_tools`, the lint test. Used by the kernel only | `BOSS_SCOPED_TOOLS` | lint test; agent-battle chat scenarios (tests/agent-battle) on scripted + real; tokens/call down ≥60% | flag |
-| **K6** | `EngineAgent.chat` → kernel on OpenAI-compatible engines | `BOSS_KERNEL_CHAT` | test_one_agent_pipeline + chat tests + agent-battle; console 240 s stall test (tests/test_a_turn_ends_before_the_console_gives_up.py) | flag |
+| **K6** | `EngineAgent.chat` → kernel on OpenAI-compatible engines. **Built 2026-11-10 (feat/958-k6), live behind the flag; CLI text brains fall through until K8; as-built notes §8.2e; live cached-share proof committed-skipped pending a keyed host** | `BOSS_KERNEL_CHAT` | test_one_agent_pipeline + chat tests + agent-battle; console 240 s stall test (tests/test_a_turn_ends_before_the_console_gives_up.py) | flag |
 | **K7** | `AnthropicMessagesEngine` (D2) via model_proxy, strict tools, native tool search, cache breakpoints. API-key chat → kernel | `BOSS_CHAT_ANTHROPIC_NATIVE` | P0 chat suite: cached share ≥70% turn 2+, success ≥ baseline | flag → old SDK text adapter |
 | **K8** | `ClaudeChatSession` (Delegate, subscription) with the scoped MCP server; spike first (stream-json, `--resume`, `--tools ""` + MCP) | `BOSS_CHAT_CLAUDE_NATIVE` | spike report; P0 chat suite on a subscription install (laptop) | flag → JSON protocol |
 | **K9** | Context policy: token accounting, compaction, the "already tried" block, cache-stable ordering (move the decision note, intent_router.py:2671-2673) | `BOSS_CONTEXT_POLICY` | P0: cached share up, no success drop on long threads; a new long-thread battle scenario | flag |
@@ -985,6 +985,71 @@ default off; nothing selects the engine until K6). Corrections and decisions mad
 9. **A CLI model shorthand is not an API model id.** The chat knob may hold "sonnet"; the
    selection seam falls back to the engine default (`claude-sonnet-5`, the Agent SDK engine's
    own default) instead of guessing a family.
+
+### 8.2e What K6 changed against this design (built 2026-11-10, feat/958-k6)
+
+K6 is live behind `BOSS_KERNEL_CHAT` (default off, byte-identical off, asserted by
+test_kernel_chat.py): with the flag on, `EngineAgent.chat` runs the turn through `kernel.run`
+with `presets.engine_agent` — `RegistryToolSet(surface="chat", run_tool=EngineAgent._run_tool)`
+so the write hold, the propose-only offers, the escalation guard, the consent offers and the
+untrusted-content release move whole; a `DbSink` and a `DbLedgerReader` (read_run_ledger) when
+`BOSS_LEDGER_EVENTS` is on; `GovernedEngine` via `kernel.governance.project_gate` when the
+kernel owns the adapter; `engine.close()` on turn end and on error, so a proxy token never
+outlives the turn. The engine: `model_routing.kernel_chat_engine` (K7's Anthropic native, under
+its own flag and an API key), else `OpenAIChatEngine` on the routed adapter; a CLI text brain
+(claude_code / claude_agent_sdk / codex) returns None from the selection and falls through to
+today's loop UNCHANGED — subscription chat keeps the old adapter until K8. Corrections and
+decisions made while building:
+
+1. **The flag branch lives in `EngineAgent.chat`, not in intent_router.** Every caller of chat —
+   route_turn's answer path, the grounding re-asks, the CLI (`boss-engine ask/chat`), the
+   wakeups — gets the kernel through the one seam, and the AgentTurn shape (reply, trace,
+   pending_writes, steps, exhausted) is preserved for all of them. `_report_from_trace`, the
+   out-of-time report (with its propose_action fix button) and the protocol-prose guard stay
+   caller-side, written from the kernel's trace.
+2. **The protocol re-ask is n/a under native tools, by design.** The old loop parsed a decision
+   structure out of the final TEXT, ran the calls it meant, and asked once for prose. Engines
+   the kernel serves call tools natively, so the kernel path keeps only the "never print raw
+   JSON" rule: a structure's prose is extracted (`protocol_reply.prose_of_final`), nothing is
+   re-asked, and "meant" calls do not run (pinned by test_kernel_chat.py; the CLI brains that
+   genuinely need the protocol keep the old loop until K8/K10).
+3. **The chat seam still RAISES what it always raised.** The kernel never raises (§8.4 D4), but
+   chat's callers handle failures as exceptions (the router's failure wording, the fallback
+   brain), so `_turn_from_kernel` re-raises: a failed run as RuntimeError with the provider's
+   words, `budget_stop` as ModelSpendRefused, a durable `budget_wait` park as
+   ModelSpendDeferred with its retry-after. Flag on or off, the caller sees the same contract.
+4. **The turn's tool-time bound moved into the `run_tool` closure, not the kernel.** The kernel
+   bounds model calls by the TurnBudget (step_model) but runs tools unbounded; EngineAgent's
+   rules — no tool starts once the turn's tool time is spent (the `not_run` result sets
+   `state.out_of_time`), and a started tool waits no longer than the turn — wrap `_run_tool`
+   inside the closure, so the 240 s stall tests hold flag-on without a kernel change.
+5. **§2.3's "GovernedEngine applied by the kernel" keeps K2's narrowing.** The gate
+   (`project_gate`, skill_id `agent.chat`) is built only when EngineAgent routed its own
+   adapter; an adapter the caller handed in (the router's, which reserves the whole turn
+   itself) keeps the caller's governance — wrapping it would reserve twice.
+6. **read_run_ledger joins chat only when the ledger exists.** The built-in rides in when
+   `BOSS_LEDGER_EVENTS` is on and the context has a database; otherwise the offered tools are
+   byte-equal to the old loop's (the §3.5 "offered to every kernel run" is therefore
+   ledger-gated for chat).
+7. **`ClipContext` gained `json_default`.** The old loop rendered tool results with
+   EngineAgent's `_jsonable` (Decimal → float, datetime → isoformat); `default=str` would turn
+   a spend figure into a quoted string. The chat preset passes `_jsonable`; every other preset
+   keeps `default=str` as K1 built it.
+8. **`RegistryToolSet.schemas` tolerates an adapter-shaped registry.** Chat's test doubles (and
+   any embedder's) hand EngineAgent an object with `openai_schema()` alone; the kernel derives
+   plain ToolSchemas from it instead of requiring `specs()`. A call to a tool that was never
+   offered is refused by the kernel (`unknown_tool`) where the old loop ran any name through
+   `_run_tool` — the same "no such tool" class, now before the tool layer.
+9. **Proof as run (scripted only, no live model on this host):** test_kernel_chat.py (the
+   EngineAgent conformance scenarios flag-on vs flag-off: transient, empty ×2, same-tool nudge,
+   forced answer with the closing offer, pending-writes hold, propose-only, escalation drop,
+   trace report), the chat suites and the console 240 s stall test green with the flag off and
+   on, test_one_agent_pipeline, and the kernel conformance suite (its old-loop drivers now pin
+   the flag off, since they drive the old loop on purpose). The live cached-share proof
+   (§4.3's ≥70% on turn 2+) is committed and skipped
+   (test_kernel_chat.test_live_a_chat_threads_second_turn_reads_mostly_from_the_cache, gated on
+   BOSS_LIVE_CHAT_CACHE): it runs on a keyed host and prints the cost. The agent-battle set
+   runs with the K6 flag carried by a keyed host's battle run, not here.
 
 ### 8.4 Intended differences pinned by the K1 conformance suite
 

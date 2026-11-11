@@ -135,10 +135,13 @@ def drive_agent_loop(monkeypatch, adapter, max_steps, *, write_fns=None, raises=
 
 
 def engine_agent(adapter, monkeypatch):
-    """EngineAgent on a registry holding the same read tool, transient sleeps silenced."""
+    """EngineAgent on a registry holding the same read tool, transient sleeps silenced. This
+    drives the OLD loop on purpose (the kernel side is `kernel_run`), so BOSS_KERNEL_CHAT is
+    pinned off whatever the ambient environment says."""
     from boss_engine.agent import EngineAgent, transient
     from boss_engine.tools.registry import ToolRegistry, ToolSpec
 
+    monkeypatch.setenv("BOSS_KERNEL_CHAT", "")
     monkeypatch.setattr(transient.time, "sleep", lambda s: None)
     reg = ToolRegistry()
     reg.register(ToolSpec("read_logs", "Read a run's logs.", READ_SCHEMA,
@@ -785,6 +788,7 @@ class TestSameToolNudge:
         old = ScriptedEngine(list(script))
         from boss_engine.agent import EngineAgent, transient
 
+        monkeypatch.setenv("BOSS_KERNEL_CHAT", "")  # this drives the OLD loop on purpose
         monkeypatch.setattr(transient.time, "sleep", lambda s: None)
         agent = EngineAgent(ctx=object(), registry=reg)
         agent._adapter = old

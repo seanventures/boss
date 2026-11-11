@@ -91,6 +91,10 @@ class ClipContext:
     clip: Optional[int] = 16_000
     redact: bool = False
     raw_strings: bool = False
+    #: How a value JSON cannot encode is shown to the model. `str` everywhere except chat
+    #: (K6), which keeps EngineAgent's `_jsonable` — a Decimal stays a number the model can
+    #: compare, not a quoted string ("What is my spend this month?" is the incident).
+    json_default: Optional[Callable[[Any], Any]] = None
     version: str = "ctx@1"
 
     def assemble(self, state: RunState, tools: list) -> ModelRequest:
@@ -102,7 +106,7 @@ class ClipContext:
         if isinstance(content, str) and self.raw_strings:
             body = content
         else:
-            body = json.dumps(content, default=str)
+            body = json.dumps(content, default=self.json_default or str)
         if self.redact:
             from ..services.redaction import redact_secrets
 
