@@ -37,16 +37,24 @@ THE SCRIPTS (each must end in the same BOSS state on every run):
                           adds tests)                                     → awaiting_approval
     secret_in_test        the first test carries a secret-shaped fixture value; told so at RED, the
                           next turn writes it without one                  → awaiting_approval
-    review_test_finding   the first regression review finds fault with the NEW test; the round
+    review_test_finding   the first consistency review finds fault with the NEW test; the round
                           writes the test again from the base, then the fix → awaiting_approval
+    review_batch_garbled  the first batched review session answers without per-seat blocks; the
+                          seats run one by one (the sequential fallback)   → awaiting_approval
     test_wrong            the first fix turn changes nothing and answers TEST_WRONG (the test
                           cannot pass however BOSS is fixed); the round writes the test again
                           from the base, then the fix                     → awaiting_approval
+
+THE BATCHED REVIEW (BOSSAPP-1002): the pipeline asks every co-located seat in ONE session
+(stage `self_fix_review_batch`, seats named by `SEAT <name>:` lines in the prompt). The script
+answers each named seat with the block that seat's own stage would have answered, so every
+per-seat fault above fires inside the batch exactly as it did sequentially.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -54,7 +62,8 @@ ENV = "BOSS_SCRIPTED_SELF_FIX"
 SCRIPTS = ("good_fix", "same_cause", "breaks_health", "weakens_test", "protected_path",
            "protected_diagnosis", "protected_then_outside", "protected_once", "out_of_scope",
            "injection_follower", "no_red", "review_blocker", "review_test_finding",
-           "secret_in_test", "review_asks_for_test", "fix_writes_test", "test_wrong")
+           "review_batch_garbled", "secret_in_test", "review_asks_for_test", "fix_writes_test",
+           "test_wrong")
 
 
 def selected() -> tuple[str, Optional[Path]]:
@@ -148,6 +157,17 @@ def play(stage: str, prompt: str, root: Path, *, read_only: bool, state: Any
             state.fired.add(f"extra:{extra}")
             said.append(_apply(root, fixture / extra, written))
         return "Implemented the fix: " + "; ".join(said or ["already in place"]), written
+    if stage == "self_fix_review_batch":
+        if script == "review_batch_garbled" and "review_batch_garbled" not in state.fired:
+            state.fired.add("review_batch_garbled")
+            return "Reviewed everything at once: looks good to me.", written
+        blocks = []
+        for seat in re.findall(r"(?m)^SEAT ([a-z_]+):", prompt):
+            reply, more = play(f"self_fix_{seat}", prompt, root, read_only=read_only,
+                               state=state)
+            written.extend(more)
+            blocks.append(f"SEAT: {seat}\n{reply}")
+        return "\n\n".join(blocks) or "no seats named", written
     if stage == "self_fix_security_check" and script == "review_blocker" \
             and "review_blocker" not in state.fired:
         state.fired.add("review_blocker")
@@ -159,7 +179,7 @@ def play(stage: str, prompt: str, root: Path, *, read_only: bool, state: Any
         return ("FINDING: MAJOR engine/boss_engine/services/widget.py:4 — scripted fault: keep "
                 "the old behaviour for two and add a regression covering this combination.\n"
                 "VERDICT: FINDINGS"), written
-    if stage == "self_fix_regression" and script == "review_test_finding" \
+    if stage == "self_fix_consistency_check" and script == "review_test_finding" \
             and "review_test_finding" not in state.fired:
         state.fired.add("review_test_finding")
         tests = sorted(p.relative_to(fixture / "tests").as_posix().removesuffix(".txt")
