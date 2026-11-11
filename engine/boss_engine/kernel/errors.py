@@ -79,6 +79,13 @@ def classify(error: BaseException) -> Classified:
     refused = provider_refused_the_call(error)
     if refused is not None:
         return Classified("refused_call", refused)
+    # AN ENGINE THAT KNOWS ITS PROVIDER SAYS SO (K7): the Anthropic engine raises typed errors
+    # carrying `boss_error_kind`, because a 429's text matches none of the transient markers
+    # below and a 400's must never be retried as though it could. Checked after the refused-call
+    # sniff so a provider's refusal of a malformed tool call stays one feedback behaviour.
+    declared = getattr(error, "boss_error_kind", "")
+    if declared in ("transient", "fatal"):
+        return Classified(declared, text[:600])
     from ..agent.transient import _looks_transient
 
     if _looks_transient(error):

@@ -414,6 +414,47 @@ def adapter_for(choice: ModelChoice, connection: Any, settings: Any,
     return OpenAIAdapter(bound)
 
 
+#: K7 (HARNESS_KERNEL_DESIGN.md §4.2, §8.1): native Claude chat on API-key installs, default off.
+NATIVE_CHAT_FLAG = "BOSS_CHAT_ANTHROPIC_NATIVE"
+
+#: The engines whose chat, on an API key, the kernel can serve natively over /v1/messages.
+_ANTHROPIC_NATIVE_ENGINES = frozenset({"claude_code", "claude_agent_sdk"})
+
+
+def native_anthropic_chat() -> bool:
+    import os
+
+    return (os.environ.get(NATIVE_CHAT_FLAG) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def kernel_chat_engine(choice: ModelChoice, connection: Any, settings: Any,
+                       project_id: Optional[str], *, model: Optional[str] = None):
+    """The kernel Engine for this project's chat turn, or None to keep today's adapter.
+
+    This is K7's selection seam, and nothing calls it yet: K6 moves chat onto the kernel and K8
+    covers subscriptions. It answers an AnthropicMessagesEngine only when all three hold —
+    BOSS_CHAT_ANTHROPIC_NATIVE is set (default off), the routed chat engine is a Claude lane,
+    and the install holds an Anthropic API key (never the subscription login; design §4.2) —
+    so flipping the flag off, or holding no key, is exactly today's path."""
+    if not native_anthropic_chat():
+        return None
+    engine = _engine_name(getattr(choice, "engine", choice))
+    if engine not in _ANTHROPIC_NATIVE_ENGINES:
+        return None
+    from ..kernel.anthropic_engine import NoAnthropicKey, engine_for
+
+    picked = (model or (getattr(settings, chat_model_knob(engine), "") or "").strip()
+              or (getattr(settings, "agent_sdk_model", "") or "").strip() or None)
+    if picked and not picked.startswith("claude"):
+        # The CLI knob accepts shorthands ("sonnet") the Messages API does not; the engine's
+        # default names a real model rather than guessing which family the word meant.
+        picked = None
+    try:
+        return engine_for(settings, connection=connection, project_id=project_id, model=picked)
+    except NoAnthropicKey:
+        return None
+
+
 from contextlib import contextmanager as _contextmanager
 from contextvars import ContextVar as _ContextVar
 

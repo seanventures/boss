@@ -38,3 +38,8 @@ segno==1.6.6
 # The claude_agent_sdk engine (services/agent_sdk_engine.py): Anthropic's Agent SDK, which
 # bundles the Claude Code CLI it drives. Keep in step with agent_sdk_engine.SDK_PIN.
 claude-agent-sdk==0.2.166
+# The kernel's AnthropicMessagesEngine (kernel/anthropic_engine.py, design D2/K7): native tool
+# calling, strict tools, prompt-cache breakpoints, count_tokens and the tool-search server tool
+# over /v1/messages. 0.125.0 (2026-08-19) is the last line on httpx<1, the stack this manifest
+# already pins — the 1.x/2.x lines moved to httpx2, a second HTTP stack nothing here needs.
+anthropic==0.125.0

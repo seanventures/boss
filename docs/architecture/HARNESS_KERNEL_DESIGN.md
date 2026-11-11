@@ -940,6 +940,51 @@ consumers — no old loop reads the flag. Corrections made while building:
    K4); the decision surface's exposure exists for them.
 6. **Measured (test_scoped_tools.py, scripted chat turn pair: one find_tools call + answer):**
    schema tokens 74,326 flag-off → 8,683 flag-on, an 88.3% cut (bar: ≥60%), asserted in CI.
+### 8.2d What K7 changed against this design (built 2026-11-10, feat/958-k7)
+
+`kernel/anthropic_engine.py` + `model_routing.kernel_chat_engine` (flag `BOSS_CHAT_ANTHROPIC_NATIVE`,
+default off; nothing selects the engine until K6). Corrections and decisions made while building:
+
+1. **D2 taken as `anthropic==0.125.0`** (engine, api and worker manifests). It is the last line
+   on `httpx<1`, the stack these manifests already pin; the SDK's 1.x/2.x lines moved to
+   `httpx2`, a second HTTP stack nothing in BOSS needs. It covers tool use, strict tools,
+   explicit caching, `count_tokens` and the `tool_search_tool_bm25_20251119`/`defer_loading`
+   shapes.
+2. **The key never reaches the engine.** `engine_for` resolves it exactly as the Agent SDK
+   engine does (`claude_credential.resolve_anthropic_api_key`: console vault, else the
+   install's environment, never the login) and immediately trades it for a model-proxy run
+   token on a loopback base URL; `close()` revokes the token. There is no environment read of
+   the engine's own.
+3. **§2.3's "typed errors" needed a seam `classify` did not have.** A 429's text matches none of
+   the transient markers and a 400's must never read as one, so the engine raises
+   `ProviderTransient`/`ProviderPermanent` carrying `boss_error_kind`, and `errors.classify`
+   reads that attribute — after the refused-call sniff, so a provider's refusal of a malformed
+   tool call stays the kernel's one feedback behaviour on every engine.
+4. **The checkpoint stays OpenAI-shaped** (engine.py's contract; K4 depends on it). The
+   provider-native content blocks ride beside the assistant message under `anthropic_content`
+   and are replayed verbatim, so thinking signatures and server-tool blocks survive the round
+   trip; a checkpoint written by another engine replays by rebuilding blocks from
+   text + `tool_calls`.
+5. **§4.3 enforced at the engine, loudly.** `Block.cache` marks the system breakpoints, the
+   engine adds the tool-prefix breakpoint itself, at most 4 survive (earliest extra marks
+   dropped), and a cached block after an uncached one raises rather than silently burying a
+   breakpoint behind changing state. Deferred tools follow the search tool, carry no
+   `cache_control`, and an all-deferred set is sent plain (the API refuses one with nothing
+   loaded).
+6. **`strict: true` goes up only when the schema qualifies** (`additionalProperties: false`,
+   every property required) — K5's `strict_schema` derivation makes every kernel tool qualify;
+   until then a non-conforming schema is sent unstrict rather than refused by the API.
+7. **`response_schema` is not sent.** Decisions' typed answers are enforced by
+   `ParsedAnswer`'s re-ask, the same as on `OpenAIChatEngine`; provider structured outputs can
+   be measured in K6 if the re-ask rate says they are worth a request shape change.
+8. **The §8.1 proof is split.** This slice proves the engine against a fake Messages API at the
+   httpx transport seam (round trip, cache placement, usage/cost mapping, typed errors,
+   streaming + cancellation, counting) plus the engine-generic conformance scenarios; no
+   Anthropic key was available on the build host, so the live P0 chat suite (cached share ≥70%)
+   runs with the K6 switchover, where the flag first carries traffic.
+9. **A CLI model shorthand is not an API model id.** The chat knob may hold "sonnet"; the
+   selection seam falls back to the engine default (`claude-sonnet-5`, the Agent SDK engine's
+   own default) instead of guessing a family.
 
 ### 8.4 Intended differences pinned by the K1 conformance suite
 
