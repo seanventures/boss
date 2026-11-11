@@ -161,7 +161,7 @@ WRITING_STAGES = frozenset({"write_tests", "implement", "solo", "repair", "guest
 #: Stages that JUDGE or DESIGN: their thinking is the product, so they run at high.
 REASONING_STAGES = frozenset({"standards", "spec", "plan", "design", "review_plan",
                               "review_code", "security_check", "consistency_check",
-                              "check_tests", "quality"})
+                              "review_panel", "check_tests", "quality"})
 WRITING_EFFORT_DEFAULT = "low"
 REASONING_EFFORT = "high"
 

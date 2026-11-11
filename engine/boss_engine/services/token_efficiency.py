@@ -130,6 +130,7 @@ KNOWN_STAGES: tuple[str, ...] = (
     "review_code",
     "consistency_check",
     "security_check",
+    "review_panel",
     "check_tests",
     "run_all_tests",
     "guest",
@@ -139,7 +140,7 @@ KNOWN_STAGES: tuple[str, ...] = (
 # Stages the default profiles route to low_cost — used for recommendations.
 _CHEAP_STAGES = frozenset({"standards", "spec", "plan", "review_plan", "design"})
 _STRONG_STAGES = frozenset(
-    {"review_code", "security_check", "consistency_check", "check_tests"}
+    {"review_code", "security_check", "consistency_check", "review_panel", "check_tests"}
 )
 
 # Default per-stage token budgets (tokens). Operators override via PUT /policies.
@@ -191,6 +192,11 @@ _DEFAULT_STAGE_CAPS: dict[str, dict[str, Any]] = {
     },
     "consistency_check": {
         "max_total_tokens_per_call": 48_000,
+        "preferred_model_class": "strong",
+    },
+    # The merged panel (BOSSAPP-1000): one session doing the three seats' reading once.
+    "review_panel": {
+        "max_total_tokens_per_call": 96_000,
         "preferred_model_class": "strong",
     },
 }

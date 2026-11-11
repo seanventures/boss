@@ -14,11 +14,17 @@ fail. Three rules, all here so the first probe and a fix round's re-probe obey t
 3. ONLY FILES THE ACCEPTANCE CRITERIA COVER, NEVER A CONNECTOR'S. A connector is pre-tested in its
    own tier and its tests are not this build's; config, docs and manifests carry no behaviour a
    criterion names (`targets`).
+4. THE PLANT IS CODE, NOT A MODEL (BOSSAPP-1004, audit 997 §7.7). The probe spent a
+   write-capable model session (87 calls, $13.93/month) to flip one operator, while the
+   re-probe already replanted without a model (`reapply`). `plant` / `plant_first` now flip
+   the first boundary-shaped operator deterministically — same input, same mutant, no model,
+   and no write-capable session left in the panel's attack surface.
 """
 from __future__ import annotations
 
 import difflib
 import re
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Callable, Iterable, Optional
 
@@ -100,6 +106,125 @@ def targets(impl_files: Iterable[str], criteria: Iterable[str], *,
         if any(w in hay for w in words):
             covered.append(p)
     return covered or source
+
+
+#: The operator flips the deterministic plant knows, tried in order at each position; the
+#: longest match at the earliest position wins. Each one changes a boundary or a branch —
+#: exactly the one-line, spec-violating bug the probe's prompt used to ask a model for.
+_FLIPS: tuple[tuple[str, re.Pattern], ...] = (
+    ("===", re.compile(r"===")),
+    ("!==", re.compile(r"!==")),
+    ("==", re.compile(r"(?<![=!<>+\-*/%&|^])==(?!=)")),
+    ("!=", re.compile(r"(?<![=!<>])!=(?!=)")),
+    ("<=", re.compile(r"(?<![<=])<=(?!=)")),
+    (">=", re.compile(r"(?<![>=])>=(?!=)")),
+    ("<", re.compile(r"(?<= )<(?= )")),
+    (">", re.compile(r"(?<= )>(?= )")),
+    ("&&", re.compile(r"&&")),
+    ("||", re.compile(r"\|\|")),
+    ("and", re.compile(r"(?<= )and(?= )")),
+    ("or", re.compile(r"(?<= )or(?= )")),
+    ("True", re.compile(r"\bTrue\b")),
+    ("true", re.compile(r"\btrue\b(?!['\"-])")),
+    ("+", re.compile(r"(?<= )\+(?= )")),
+)
+_FLIP_TO = {"===": "!==", "!==": "===", "==": "!=", "!=": "==", "<=": ">", ">=": "<",
+            "<": ">=", ">": "<=", "&&": "||", "||": "&&", "and": "or", "or": "and",
+            "True": "False", "true": "false", "+": "-"}
+
+#: Lines the plant never touches: comments, imports, and lines whose flip would be invisible
+#: to a test that imports the module (`__main__` guards) or would change tooling, not behaviour.
+_SKIP_LINE = re.compile(
+    r"^\s*(?:#|//|/\*|\*|<!--|--\s|'''|\"\"\"|import\s|from\s[\w.]+\s+import\b|package\s)"
+    r"|__name__|__main__")
+
+
+def _in_string(line: str, pos: int) -> bool:
+    """Approximately: is `pos` inside a quoted string on this line? Counts unescaped quotes
+    before it; an odd count of either kind means inside. Approximate on purpose — a flip
+    inside a string is a survivable false target, not a crash."""
+    head = line[:pos]
+    for quote in ("'", '"', "`"):
+        if len(re.findall(rf"(?<!\\){re.escape(quote)}", head)) % 2:
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class Planted:
+    """One deterministic mutant: where it is, what it changed, and the mutated file text."""
+
+    path: str
+    mutated: str
+    line: int          # 1-based
+    before: str        # the line as written
+    after: str         # the line as planted
+    operator: str      # which flip ("==" -> "!=", …)
+
+    @property
+    def description(self) -> str:
+        return (f"Mutation probe (deterministic plant): {self.path}:{self.line} changed "
+                f"`{self.before.strip()}` to `{self.after.strip()}` "
+                f"(`{self.operator}` -> `{_FLIP_TO[self.operator]}`).")
+
+
+def plant(path: str, text: str) -> Optional[Planted]:
+    """The first boundary-shaped operator in `text`, flipped — or None when the file holds
+    nothing the plant knows how to flip. Deterministic: the same text plants the same bug."""
+    lines = (text or "").splitlines(keepends=True)
+    for i, raw in enumerate(lines):
+        if _SKIP_LINE.search(raw):
+            continue
+        best: Optional[tuple[int, int, str, re.Match]] = None  # (pos, -len, op, match)
+        for op, pattern in _FLIPS:
+            for m in pattern.finditer(raw):
+                if _in_string(raw, m.start()):
+                    continue
+                key = (m.start(), -len(op))
+                if best is None or key < (best[0], best[1]):
+                    best = (m.start(), -len(op), op, m)
+                break  # only the first non-string match of this operator matters
+        if best is None:
+            continue
+        _pos, _neg, op, m = best
+        flipped = raw[:m.start()] + _FLIP_TO[op] + raw[m.end():]
+        if flipped == raw:
+            continue
+        mutated = "".join(lines[:i]) + flipped + "".join(lines[i + 1:])
+        if mutated == text:
+            continue
+        return Planted(path=path, mutated=mutated, line=i + 1,
+                       before=raw.rstrip("\n"), after=flipped.rstrip("\n"), operator=op)
+    return None
+
+
+def plant_first(targets: Iterable[str], read: Callable[[str], Optional[str]]) -> Optional[Planted]:
+    """One mutant across `targets` (the first file, in sorted order, that yields one).
+    `read(path)` returns the file's text or None. None when no target can be mutated —
+    recorded as a probe that did not run, never a model fallback."""
+    for p in sorted({str(t) for t in targets or ()}):
+        try:
+            text = read(p)
+        except Exception:  # noqa: BLE001 — an unreadable file is simply not a target
+            continue
+        if not isinstance(text, str) or not text:
+            continue
+        planted = plant(p, text)
+        if planted is not None:
+            return planted
+    return None
+
+
+def apply_command(planted: Planted) -> str:
+    """A shell command that writes the mutated file — how the plant reaches a micro-VM guest,
+    where the suite runs: the echo engine clones the work branch and runs test commands, so the
+    first command plants the bug and the rest run the suite against it. Base64 keeps the file
+    text out of shell quoting."""
+    import base64
+    import shlex
+
+    payload = base64.b64encode((planted.mutated or "").encode("utf-8")).decode("ascii")
+    return f"printf %s {payload} | base64 -d > {shlex.quote(planted.path)}"
 
 
 #: One file's mutant: (text before, text after) of each changed block, enough to plant it again.

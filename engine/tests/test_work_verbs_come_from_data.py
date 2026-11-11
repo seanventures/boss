@@ -18,6 +18,7 @@ TABLE = {
     "design": "Designing",
     "implement": "Coding", "repair": "Coding", "solo": "Coding", "guest": "Coding",
     "review_code": "Reviewing", "consistency_check": "Reviewing", "security_check": "Reviewing",
+    "review_panel": "Reviewing",
     "write_tests": "Testing", "check_tests": "Testing", "run_all_tests": "Testing",
 }
 

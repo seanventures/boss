@@ -1809,7 +1809,7 @@ const PHASE_STAGES: Record<string, string[]> = {
   write_tests: ["write_tests"],
   implement: ["implement", "solo", "repair", "guest"],
   run_tests: ["check_tests", "run_all_tests"],
-  review_panel: ["review_code", "security_check", "consistency_check"],
+  review_panel: ["review_code", "security_check", "consistency_check", "review_panel"],
   check_tests: ["check_tests"],
 };
 
@@ -1825,7 +1825,7 @@ const STAGE_AGENT: Record<string, string> = {
   implement: "software_engineer", repair: "software_engineer",
   solo: "software_engineer", guest: "software_engineer",
   review_code: "adversarial_reviewer", consistency_check: "adversarial_reviewer",
-  security_check: "security_reviewer",
+  security_check: "security_reviewer", review_panel: "adversarial_reviewer",
 };
 
 /** How an agent key reads to a person. The API sends the key; nobody wants to read one. */

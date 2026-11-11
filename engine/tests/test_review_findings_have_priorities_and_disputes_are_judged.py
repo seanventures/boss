@@ -136,4 +136,6 @@ def test_every_review_seat_is_handed_the_feedback():
     import inspect
 
     src = inspect.getsource(g)
-    assert src.count("operator=_operator_review_block(") == 3
+    # The first panel seat, the merged panel section (BOSSAPP-1000) and the fix round's
+    # re-review each hand the reviewer the operator's feedback.
+    assert src.count("operator=_operator_review_block(") == 4
