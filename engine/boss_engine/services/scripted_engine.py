@@ -189,7 +189,11 @@ class ScriptedEngine:
             "turns": 1,
             "tool_calls": len(written),
             "model": MODEL,
-            "session_id": (f"scr-{uuid.uuid4().hex[:12]}" if self.capabilities.resume else None),
+            # A resumed session keeps its id, as on every real engine (Claude's --resume answers
+            # with the same session_id): what lets a conformance test assert a repair round
+            # REUSED the builder's session instead of cold-starting (BOSSAPP-1001).
+            "session_id": ((resume_session_id or f"scr-{uuid.uuid4().hex[:12]}")
+                           if self.capabilities.resume else None),
             "stop_reason": "done",
         }
 

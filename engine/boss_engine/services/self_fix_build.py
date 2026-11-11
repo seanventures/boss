@@ -681,6 +681,10 @@ class Build:
     _work: Optional[Path] = None
     _history: Optional[str] = None
     _base: str = ""
+    #: One live session per RESUMABLE stage (today only the fix stage, "self_fix_implement"):
+    #: a repair round resumes the stage's own session instead of cold-starting (BOSSAPP-1001).
+    #: Never a reviewer's — each review seat stays a fresh, independent session.
+    _sessions: dict = field(default_factory=dict)
 
     # -- the record -------------------------------------------------------------------------
     def sfx(self) -> dict[str, Any]:
@@ -760,7 +764,8 @@ class Build:
         return max(budget - int(self.cost_micros), 0) / 1e6
 
     def turn(self, agent: Any, stage: str, prompt: str, cwd: Path, *, read_only: bool,
-             model: Optional[str] = None) -> str:
+             model: Optional[str] = None, resume_key: Optional[str] = None) -> str:
+        from .engine_contract import SESSION_PREFIX, capabilities_of
         from .llm_telemetry import clear_llm_context, set_llm_context
 
         sfx = self.sfx()
@@ -768,15 +773,35 @@ class Build:
                         role_key=sf.ACTOR_AGENT, workflow_run_id=sfx.get("run_id"),
                         db_engine=self.engine)
         limit = self.turn_budget_usd(agent)
+        kwargs: dict[str, Any] = dict(read_only=read_only, max_turns=60, model=model,
+                                      **({"max_budget_usd": limit} if limit is not None else {}))
+        # A REPAIR ROUND RESUMES THE STAGE'S OWN SESSION (BOSSAPP-1001): same role, the same
+        # persistent work tree, the same engine — only the findings are new, so the session's
+        # task context and repo exploration are warm cache reads instead of a cold re-ingestion.
+        # `resume_key` is passed ONLY by the fix stage; a reviewer never inherits a session.
+        # Native sessions only, and a failed resume falls back to the cold turn below — the
+        # degradation re-adds only the old cost.
+        sid = self._sessions.get(resume_key) if resume_key else None
+        result = None
         try:
-            result = agent.run_role(prompt, cwd, read_only=read_only, max_turns=60,
-                                    model=model,
-                                    **({"max_budget_usd": limit} if limit is not None else {}))
+            if sid and capabilities_of(agent).resume:
+                try:
+                    result = agent.run_role(prompt, cwd, resume_session_id=sid, **kwargs)
+                except Exception:  # noqa: BLE001 — a failed resume is a cold start, not a stop
+                    log.info("self_fix %s: could not resume the %s session; cold start",
+                             self.sfx_id, resume_key)
+                    result = None
+            if result is None:
+                result = agent.run_role(prompt, cwd, **kwargs)
         except Exception as error:  # noqa: BLE001 — an engine failing is a refusal, said so
             raise Stop("engine", f"{getattr(agent, 'engine', 'the engine')} failed at {stage}: "
                                  f"{type(error).__name__}: {str(error)[:300]}") from error
         finally:
             clear_llm_context()
+        if resume_key:
+            new_sid = str((result or {}).get("session_id") or "")
+            if new_sid and not new_sid.startswith(SESSION_PREFIX):
+                self._sessions[resume_key] = new_sid
         self.cost_micros += int((result or {}).get("cost_usd_micros") or 0)
         return str((result or {}).get("summary") or "")
 
@@ -1138,7 +1163,10 @@ class Build:
         said = self.turn(self.engines.builder, "self_fix_implement",
                          implement_prompt(sfx, diagnosis, red_output=red_output, note=note,
                                           policy=self.policy, work=work, history=self.history()),
-                         work, read_only=False, model=self.engines.builder_model)
+                         work, read_only=False, model=self.engines.builder_model,
+                         # A later fix round resumes THIS stage's session (BOSSAPP-1001): the
+                         # same role on the same tree, with the round's note as what is new.
+                         resume_key="self_fix_implement")
         edited = si.tests_edited(tests, src.snapshot(work, tests))
         if edited:
             # coder_did_not_edit_tests: a fix that changed its own test proves nothing. Final.

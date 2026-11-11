@@ -53,6 +53,7 @@ from .bakeoff import (
     stage_fixture as stage_bakeoff_fixture,
 )
 from .code_agent import make_code_agent
+from .engine_contract import SESSION_PREFIX, capabilities_of
 from .model_rate_limiter import get_rate_limiter, provider_of, is_rate_limit_error
 from .code_task_service import (
     _fail,
@@ -2899,6 +2900,66 @@ def _repair_resume_prompt(evidence: str, attempt: int) -> str:
         "itself; your self-report is not trusted). The tests are FROZEN and correct — do "
         "NOT edit, delete, or weaken any test file. Fix ONLY the implementation. Concrete "
         f"evidence from the failed check:\n{evidence}\n"
+    )
+
+
+def carried_implement_session(fctx, *, agent, model, stage: str = "implement") -> Optional[str]:
+    """The parent attempt's implement session id, when THIS attempt may resume it — or None,
+    which is a cold start exactly as before (BOSSAPP-1001).
+
+    A repair round used to pay a fresh CLI session per attempt: the ~34k preamble plus the whole
+    repo re-onboarded, to patch work the parent's session already holds warm (audit BOSSAPP-997:
+    ~78% of claude-sonnet-5 spend was cache re-read/write from cold starts). retry_code_task
+    carries the parent's implement session (`resume_implement_session`, recorded on the run as
+    `state.impl_session`), and the child's FIRST implement pass — which for a cross-run repair IS
+    the repair — resumes it, sending only the findings as the next user turn.
+
+    Never-when (each returns None, i.e. today's cold start):
+      * any stage but the implementer's own ("implement"/"solo"): a reviewer or test author must
+        NEVER inherit the builder's conversation — review independence is judged, not assumed;
+      * the engine cannot resume (capabilities.resume False), or the id is one BOSS issued for a
+        sessionless engine (SESSION_PREFIX): that names a process-local ledger entry a new worker
+        does not hold, and "resuming" it would silently DROP the task context;
+      * a different engine or model than the session ran on: a conversation is never switched to
+        another model mid-flight (same rule as the in-run `_same_route` guard).
+
+    A resume that then FAILS (expired session, engine error) falls back to the cold start at the
+    call site — degradation only ever re-adds the old cost.
+    """
+    rec = (fctx or {}).get("resume_implement_session")
+    if not isinstance(rec, dict):
+        return None
+    if stage not in ("implement", "solo"):
+        return None
+    sid = str(rec.get("session_id") or "").strip()
+    if not sid or sid.startswith(SESSION_PREFIX):
+        return None
+    if not capabilities_of(agent).resume:
+        return None
+    if str(rec.get("engine") or "") != str(getattr(agent, "engine", "") or ""):
+        return None
+    if str(rec.get("model") or "") != str(model or ""):
+        return None
+    return sid
+
+
+def _cross_run_resume_prompt(evidence: str, attempt: int) -> str:
+    """The repair child's first turn when it RESUMES the parent attempt's implement session:
+    only the findings travel — the task, the repo and the session's own work are warm cache
+    reads. The tree note matters: the child runs in a FRESH checkout of the lineage branch
+    (a new directory seeded with the session's work), so the session's memory of file contents
+    may be stale even though the paths hold."""
+    return (
+        f"--- REPAIR ATTEMPT {attempt} (resuming your implement session) ---\n"
+        "This build did NOT pass its quality gates, and you are resuming your own session to "
+        "repair it. Your working directory is a FRESH checkout that already contains your "
+        "earlier work: paths from earlier turns hold relative to the current working directory, "
+        "but THE TREE IS THE TRUTH — re-read a file before editing it rather than trusting your "
+        "memory of it (a checkpoint rewind or a seeded workspace may differ from your last "
+        "turn). The tests are FROZEN and correct — do NOT edit, delete, or weaken any test "
+        "file. Address EVERY finding below with the smallest correct change, run the tests, and "
+        "end with a one-line summary of what you fixed.\n"
+        f"The findings:\n{evidence}\n"
     )
 
 
@@ -7036,6 +7097,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                over_budget=_impl_over_budget, emit=_emit)
             return sid[0]
 
+        def _remember_impl_session(agent, model) -> None:
+            """The implement session that wrote this run's tree, on the run row
+            (state.impl_session): what a repair child of this lineage resumes
+            (carried_implement_session) instead of cold-starting — BOSSAPP-1001. Recorded with
+            the engine and model the session ran on, so the child resumes only the SAME route.
+            Best-effort bookkeeping, never fatal; reads the enclosing impl_session_id."""
+            if not impl_session_id:
+                return
+            try:
+                rec = {"session_id": str(impl_session_id),
+                       "engine": str(getattr(agent, "engine", "") or ""),
+                       "model": str(model or ""),
+                       "native": not str(impl_session_id).startswith(SESSION_PREFIX)}
+                with _transaction(engine) as c:
+                    c.execute(sql(
+                        "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                        "'{impl_session}', CAST(:s AS JSONB)), updated_at=now() WHERE id=:id"),
+                        {"s": json.dumps(rec), "id": run_id})
+            except Exception:  # noqa: BLE001 — bookkeeping never fails a run
+                _log_caught(logger)
+
         test_arbitrations: list[dict] = []  # CODE_WRONG/TEST_WRONG rulings on failing tests
 
         def _arbitrate_tests(test_output: str, round_i) -> str:
@@ -7152,6 +7234,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            or _hist[-1].get("fix_note")
                            or "(see the iteration feedback in the task instructions)")
                 impl_prompt = _repair_prompt(base_impl_prompt, _ev, max(1, attempt))
+                _repair_evidence = _ev
             if use_microvm:
                 res2 = _guest_stage(
                     "implement", "implement" if do_separate_tests else "solo", impl_prompt,
@@ -7215,13 +7298,53 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     stage_routes["implement"].get("engine"), stage_routes["implement"].get("model"))
                 resume_sid = impl_session_id if (attempt and not escalate_impl
                                                  and _same_route) else None
+                # A CROSS-RUN REPAIR RESUMES THE PARENT ATTEMPT'S SESSION (BOSSAPP-1001). The
+                # child's first pass IS the repair, and the parent's implement session already
+                # holds the task, the repo and its own work warm — a cold start here re-paid the
+                # CLI preamble plus full repo re-onboarding every round (audit BOSSAPP-997).
+                # Same role only, same engine+model only, native sessions only
+                # (carried_implement_session); anything else keeps today's cold start.
+                _carried_resume = False
+                if resume_sid is None and _cross_run_repair and not escalate_impl:
+                    resume_sid = carried_implement_session(
+                        fctx, agent=a, model=m,
+                        stage="implement" if do_separate_tests else "solo")
+                    _carried_resume = bool(resume_sid)
                 if resume_sid:
                     try:
                         r2 = a.run_role(
-                            _repair_resume_prompt(evidence_text, attempt), root,
+                            (_cross_run_resume_prompt(_repair_evidence, max(1, attempt))
+                             + (_guidance_block(_steer) if _steer else "")
+                             if _carried_resume
+                             else _repair_resume_prompt(evidence_text, attempt)), root,
                             model=m, resume_session_id=resume_sid)
+                        if _carried_resume:
+                            _from = (fctx.get("resume_implement_session") or {}).get("from_run")
+                            with _transaction(engine) as c:
+                                emit_event(c, project_id, "code_task.implement_session_resumed",
+                                           "boss", "code_task_run", run_id,
+                                           {"from_run": _from, "session_id": resume_sid,
+                                            # The engine's word, not BOSS's: a resume an engine
+                                            # quietly answered with a NEW session shows here and
+                                            # in the ledger's session ids.
+                                            "reused": r2.get("session_id") == resume_sid})
                     except Exception:
                         _log_caught(logger)
+                        if _carried_resume:
+                            # HONESTY RULE: a failed resume (expired session, engine error)
+                            # falls back to the cold start it does today — the degradation
+                            # re-adds only the old cost, and says so.
+                            try:
+                                with _transaction(engine) as c:
+                                    emit_event(c, project_id,
+                                               "code_task.implement_resume_fell_back", "boss",
+                                               "code_task_run", run_id,
+                                               {"from_run": (fctx.get("resume_implement_session")
+                                                             or {}).get("from_run"),
+                                                "why": "the engine could not resume the parent "
+                                                       "attempt's session; cold start instead"})
+                            except Exception:  # noqa: BLE001 — the fallback still runs
+                                _log_caught(logger)
                         if _impl_over_budget():
                             r2 = {"summary": "(the implement stage reached its time limit)",
                                   "cost_usd_micros": 0, "usage": {}, "model": m,
@@ -7284,6 +7407,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     r2 = {**r2, "summary": (rc.get("summary") or r2.get("summary", ""))}
                 # BOSS's own install passes before the hand-off is judged (or the rounds end).
                 impl_session_id = _install_until_it_passes(a, m, impl_session_id, "implement")
+                _remember_impl_session(a, m)
                 cost += _cost_extra[0]
                 _cost_extra[0] = 0
                 # A FIX ROUND'S REQUIRED INPUTS (BOSSAPP-948, local_review.fix_brief): the brief
@@ -8613,6 +8737,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         cost += int(rfix.get("cost_usd_micros") or 0)
                         impl_session_id = _install_until_it_passes(
                             a_fix, m_fix, impl_session_id, "fix_round")
+                        _remember_impl_session(a_fix, m_fix)
                         cost += _cost_extra[0]
                         _cost_extra[0] = 0
                         _after = {fc.path: fc.content for fc in sandbox.diff()}
@@ -8941,6 +9066,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     cost += int(r_sec.get("cost_usd_micros") or 0)
                     impl_session_id = _install_until_it_passes(
                         a_sec, m_sec, impl_session_id, "secret_repair")
+                    _remember_impl_session(a_sec, m_sec)
                     cost += _cost_extra[0]
                     _cost_extra[0] = 0
                     return r_sec
