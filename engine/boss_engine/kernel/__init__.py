@@ -16,6 +16,7 @@ the tool-call audit write the ledger through it) without a cycle.
 from __future__ import annotations
 
 from . import presets
+from .anthropic_engine import AnthropicMessagesEngine
 from .engine import Block, CancelToken, EngineTraits, ModelRequest, OpenAIChatEngine
 from .governance import GovernedEngine
 from .loop import cancel, resume, run
@@ -25,7 +26,8 @@ from .toolset import Composite, FunctionToolSet, ReadOnlyToolSet, RegistryToolSe
 from .types import (Acceptance, ControllerState, Event, Finding, KernelResult, ModelTurn, Step,
                     StopReason, ToolCall, ToolResult, ToolSchema, Usage)
 
-__all__ = ["AcceptAny", "Acceptance", "Block", "CancelToken", "Caps", "ClipContext", "Composite",
+__all__ = ["AcceptAny", "Acceptance", "AnthropicMessagesEngine", "Block", "CancelToken", "Caps",
+           "ClipContext", "Composite",
            "ControllerState", "EngineTraits", "Event", "Finding", "FunctionToolSet",
            "GovernedEngine", "KernelResult", "ModelRequest", "ModelTurn", "OfferAll",
            "OpenAIChatEngine", "ParsedAnswer", "Policies", "ReadOnlyToolSet", "Recover",
