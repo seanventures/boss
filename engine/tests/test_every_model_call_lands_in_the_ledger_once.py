@@ -208,6 +208,27 @@ def test_a_caller_that_records_its_own_turns_switches_the_wrapper_off(
     assert _rows(pg, project) == [], "the wrapper must not record when the caller does"
 
 
+def test_a_plain_verdict_rides_the_seam_once_with_the_ambient_stage(pg, project):
+    """BOSSAPP-1005's run_verdict (one single-turn structured ask) is an ENGINE call: the
+    engine records it, once, under the ambient stage — the plain transport changes the cost,
+    never the ledger shape."""
+    from boss_engine.services.engine_contract import contracted, run_verdict
+    from boss_engine.services.scripted_engine import ScriptedEngine
+
+    engine = ScriptedEngine(caps={"plain_completion", "reports_cost"}, faults=set())
+    set_llm_context(db_engine=pg, project_id=project, stage="consistency_check")
+    try:
+        out = run_verdict(contracted(engine), "Is the scripted app consistent?")
+    finally:
+        clear_llm_context()
+    assert out["transport"] == "plain", out
+    rows = _rows(pg, project)
+    assert len(rows) == 1, f"one verdict, one row: {rows}"
+    assert rows[0]["stage"] == "consistency_check"
+    assert rows[0]["engine"] == "scripted"
+    assert rows[0]["ok"] is True
+
+
 # ── The gateway settlement: one row per call, whoever writes it ───────────────────────────────
 
 def _budget(pg, pid: str) -> None:
