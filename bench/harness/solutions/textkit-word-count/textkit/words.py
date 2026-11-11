@@ -1,0 +1,16 @@
+"""Counting and picking words in plain text."""
+from __future__ import annotations
+
+
+def word_count(text: str) -> int:
+    """How many words `text` holds."""
+    if not text:
+        return 0
+    return len(text.split())
+
+
+def first_words(text: str, n: int) -> str:
+    """The first `n` words of `text`, joined by single spaces."""
+    if n < 0:
+        raise ValueError("n must not be negative")
+    return " ".join(text.split()[:n])

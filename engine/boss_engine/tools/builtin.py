@@ -7109,7 +7109,11 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
                 {"p": pid}).mappings().all()
         return {
             "project_id": pid,
-            "platform_standards": ["observability (metrics, health, route cardinality)"],
+            "platform_standards": [
+                "observability (metrics, health, route cardinality)",
+                "dependency_integrity (lockfile-exact image installs, no optional-dependency "
+                "prunes, same base image family as the deploy)",
+            ],
             "mandated": [
                 {**dict(r), "applies_to": ("every project" if r["project_id"] is None
                                            else "this project"),

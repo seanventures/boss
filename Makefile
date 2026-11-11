@@ -81,4 +81,4 @@ e2e-selftest:
 # Keyword decision eval only. No .env, no docker, no model: model rows stay unmeasured.
 PYTHON ?= python3
 eval-decisions:
-	PYTHONPATH=engine:. $(PYTHON) evals/task_rigor/run.py
+	PYTHONPATH=engine:. $(PYTHON) evals/task_rigor/run.py --check

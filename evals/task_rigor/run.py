@@ -118,15 +118,45 @@ def _section(name: str, correct: int, false_negatives: int, total: int, p95_ms: 
     return "\n".join(lines)
 
 
-def main() -> None:
+def check(scores: dict[str, tuple[int, int, int, float]], thresholds: dict) -> list[str]:
+    """Every family below its floor in thresholds.json, as sentences. Empty: all at or above."""
+    failures = []
+    for family, floor in thresholds["families"].items():
+        if family not in scores:
+            failures.append(f"{family}: not scored")
+            continue
+        correct, false_negatives, total, _ = scores[family]
+        accuracy = correct / total
+        if accuracy + 1e-9 < float(floor["min_accuracy"]):
+            failures.append(f"{family}: accuracy {accuracy:.6f} is below the floor "
+                            f"{float(floor['min_accuracy']):.6f}")
+        if false_negatives > int(floor["max_false_negatives"]):
+            failures.append(f"{family}: {false_negatives} false negatives, the most allowed is "
+                            f"{int(floor['max_false_negatives'])}")
+    return failures
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
     corpus = json.loads((Path(__file__).parent / "corpus.json").read_text())
-    sections = [
-        _section("sensitivity", *_score_sensitivity(corpus["sensitivity"])),
-        _section("rigor", *_score_rigor(corpus["rigor"])),
-        _section("look", *_score_look(corpus["look"])),
-    ]
-    print("\n".join(sections))
+    scores = {
+        "sensitivity": _score_sensitivity(corpus["sensitivity"]),
+        "rigor": _score_rigor(corpus["rigor"]),
+        "look": _score_look(corpus["look"]),
+    }
+    print("\n".join(_section(name, *score) for name, score in scores.items()))
+    if "--check" not in args:
+        return 0
+    # The table above stays exactly as it was; the verdict goes to stderr.
+    thresholds = json.loads((Path(__file__).parent / "thresholds.json").read_text())
+    failures = check(scores, thresholds)
+    for line in failures:
+        print(f"BELOW THE FLOOR: {line}", file=sys.stderr)
+    if not failures:
+        print("decision eval: every family at or above its floor (thresholds.json)",
+              file=sys.stderr)
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
