@@ -58,6 +58,61 @@ This run proves the plumbing and the measuring:
 - model calls, turns and repair rounds are fixed numbers, so a harness change that adds a call
   or a round shows up exactly.
 
+### The bare level: the plain-coding-agent baseline, in dollars (BOSSAPP-977)
+
+`--level bare` is the standing bar made measurable: beat a plain coding agent on time, tokens
+and quality. The task brief (the same title, instructions, acceptance criteria and test
+commands the pipeline receives) goes to the **engine's own loop** — one `run_role` session of
+`claude_code`, `codex`, or any registered harness — in an isolated clone of the fixture. No
+pipeline, no stages, no review panel, no gates, no approvals, no repair rounds, no PR.
+
+The bench still does its part, identically to the governed levels:
+
+- it seeds the same pinned fixture into the local GitHub;
+- it lands the session's work on a branch itself (`bare/<task>-<pass>`) and runs the **same
+  acceptance checks** on a clean checkout of it: the task's own tests and the held tests the
+  agent never sees;
+- it reads wall time, tokens and dollars from the **engine's own telemetry** — Claude Code's
+  session/cost output, codex's event stream priced at list — via each engine's `run_role`
+  result. An engine that reports no number gets **UNKNOWN** (null in the report, named in the
+  result's `telemetry_unknown`), never a fabricated zero; the numeric store columns coerce
+  null to 0, so the report's `detail` is the record of what was actually known.
+
+Results land in the same tables and report shape, so the compare table and the CI guard read
+them unchanged. Success with no pipeline is `completed` + `changed` + `acceptance_passed`
+(the pipeline's components are not pretended); `repair_rounds` and `interventions` are exactly
+0 by construction. The session's turn budget is fixed (80: a whole task in one session, where
+the pipeline's 40 is per stage), and the pipeline's `--set` knobs are refused — the bare level
+runs none of them.
+
+```bash
+scripts/harness-bench run --engine scripted --level bare --baseline scripted-bare   # CI, free
+scripts/harness-bench run --engine claude_code --level bare --repeat 3 --budget-usd 40 \
+    --allow-unisolated                                           # the real baseline
+scripts/harness-bench run --engine codex --level bare --budget-usd 15 --allow-unisolated
+```
+
+A comparison across levels is refused unless asked for:
+
+```bash
+scripts/harness-bench compare <pipeline run id> --baseline claude_code-bare --cross-level
+```
+
+On the scripted engine the bare lane is deterministic and guarded in CI against the committed
+baseline `bench/harness/baselines/scripted-bare.json`. That baseline honestly fails
+`new-slug-service` (7/8 pass): the suite plays its `failing_test` fault there, and with no
+pipeline nothing runs the repair round — which is precisely the pipeline value the lane exists
+to show. In the harness score, a run that named no baseline is scored against
+`<engine class>-<level>` (`scripted-bare`, `claude_code-bare` …), never against a pipeline
+baseline by accident.
+
+**What a real bare run costs**: one session per task instead of the pipeline's many stages.
+Against the same 60-day claude_code history as below (whole builds, every stage: p50 $4.27),
+a single implement-sized session on these small tasks is roughly $0.50–1.50 and 3–10 minutes;
+one pass of eight tasks about **$4–12 and 25–80 minutes** per engine, three passes about three
+times that. `--budget-usd` still bounds the whole run, and an engine with the `budget_limit`
+capability (Claude Code) is additionally told its per-task share.
+
 ### A real engine: costs money, needs a budget
 
 ```bash
@@ -113,7 +168,8 @@ The comparison refuses with exit code 2 when:
 | Option | Meaning |
 |---|---|
 | `--engine` | `scripted`, `claude_code`, `codex`, `native:<model>`, or any registered harness `name[:model]` |
-| `--level` | the scaffold level: `delegate` today; phase 3 adds `guided` and `stepwise` |
+| `--level` | the scaffold level: `delegate` (the governed pipeline) or `bare` (the engine's own loop: the plain-coding-agent baseline); phase 3 adds `guided` and `stepwise` |
+| `--cross-level` | compare across scaffold levels on purpose: BOSS's pipeline vs the bare baseline |
 | `--tasks` | `all` or comma-separated task ids |
 | `--repeat N` | N passes over the tasks. Spread needs at least 2; use 3 for a real engine |
 | `--set key=value` | a harness setting for this run, e.g. `code_repair_max_retries=2`. It is recorded in the config, and unknown keys are refused |

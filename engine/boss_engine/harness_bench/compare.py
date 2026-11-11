@@ -78,7 +78,7 @@ def config_diff(base: dict[str, Any], cand: dict[str, Any]) -> dict[str, list[An
 
 
 def comparable(base: dict[str, Any], cand: dict[str, Any], *, allow_suite_change: bool = False,
-               allow_cross_engine: bool = False) -> list[str]:
+               allow_cross_engine: bool = False, allow_cross_level: bool = False) -> list[str]:
     """Why these two reports cannot be compared (an empty list: they can)."""
     b, c = base.get("run") or {}, cand.get("run") or {}
     why = []
@@ -91,16 +91,19 @@ def comparable(base: dict[str, Any], cand: dict[str, Any], *, allow_suite_change
     if b.get("engine") != c.get("engine") and not allow_cross_engine:
         why.append(f"different engines ({b.get('engine')} vs {c.get('engine')}): pass "
                    "--cross-engine to compare engines on purpose")
-    if b.get("level") != c.get("level"):
-        why.append(f"different scaffold levels ({b.get('level')} vs {c.get('level')})")
+    if b.get("level") != c.get("level") and not allow_cross_level:
+        why.append(f"different scaffold levels ({b.get('level')} vs {c.get('level')}): pass "
+                   "--cross-level to compare BOSS's pipeline with the bare baseline on purpose")
     return why
 
 
 def compare(base: dict[str, Any], cand: dict[str, Any], rules: dict[str, Any], *,
-            allow_suite_change: bool = False, allow_cross_engine: bool = False) -> dict[str, Any]:
+            allow_suite_change: bool = False, allow_cross_engine: bool = False,
+            allow_cross_level: bool = False) -> dict[str, Any]:
     """The comparison of two reports under `rules` (suite.rules_for). See the module docstring."""
     reasons = comparable(base, cand, allow_suite_change=allow_suite_change,
-                         allow_cross_engine=allow_cross_engine)
+                         allow_cross_engine=allow_cross_engine,
+                         allow_cross_level=allow_cross_level)
     base_tasks = {r["task_id"] for r in base.get("results") or [] if not r.get("skipped")}
     cand_tasks = {r["task_id"] for r in cand.get("results") or [] if not r.get("skipped")}
     common = sorted(base_tasks & cand_tasks)
@@ -179,6 +182,17 @@ def compare(base: dict[str, Any], cand: dict[str, Any], rules: dict[str, Any], *
                             "against noise (run --repeat 3 for a real engine)")
     if out["only_in_baseline"] or out["only_in_candidate"]:
         out["notes"].append("compared on the tasks both runs measured only")
+    if (base.get("run") or {}).get("level") != (cand.get("run") or {}).get("level"):
+        out["notes"].append("different scaffold levels compared on purpose (--cross-level)")
+    unknown = sorted({name for r in (base.get("results") or []) + (cand.get("results") or [])
+                      for name in (r.get("telemetry_unknown") or [])})
+    if unknown:
+        # A bare session's engine that reported no number stored it as UNKNOWN; in this table an
+        # unknown aggregates as 0, which must never pass silently as a measured zero.
+        out["notes"].append("some results report unknown telemetry ("
+                            + ", ".join(unknown)
+                            + "): an unreported number reads as 0 here — judge those metrics "
+                              "only on engines that report them")
     if worse and not failed:
         out["notes"].append(f"worse beyond noise but unguarded: {', '.join(worse)}")
     out["per_task"] = _per_task(base["results"], cand["results"], common)

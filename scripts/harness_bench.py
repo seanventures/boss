@@ -4,7 +4,9 @@
     scripts/harness-bench run --engine scripted [--tasks all|<ids>] [--repeat N]
                               [--baseline NAME] [--save-baseline NAME] [--dry-run] ...
     scripts/harness-bench run --engine claude_code --budget-usd 20 --allow-unisolated ...
-    scripts/harness-bench compare <run-id | report.json> --baseline NAME
+    scripts/harness-bench run --engine claude_code --level bare --budget-usd 40 ...   the
+                              plain-coding-agent baseline (BOSSAPP-977): the engine's own loop
+    scripts/harness-bench compare <run-id | report.json> --baseline NAME [--cross-level]
     scripts/harness-bench report                  the harness score: latest run per engine/level
     scripts/harness-bench estimate --history-db-url URL [--engine claude_code]
 
@@ -19,6 +21,15 @@ itself: the task's own tests again, files that must exist or change, and tests h
 benchmark that the agent never saw. Each result is stored (harness_bench_runs / _results) and
 written to a JSON report; with --baseline it is compared (harness_bench/compare.py) and the exit
 code says whether a guard failed.
+
+THE BARE LEVEL (--level bare, BOSSAPP-977): the plain-coding-agent baseline, in dollars. The
+task brief goes to the engine's OWN loop (one run_role session: claude_code, codex, or any
+registered harness) in an isolated clone of the fixture — no pipeline, no review panel, no
+gates, no PR. The bench still seeds the same fixture, lands the session's work on a branch
+itself, runs the SAME acceptance checks on a clean checkout, and reads tokens/cost from the
+engine's own telemetry (an unreported number is recorded UNKNOWN, never 0). Results land in the
+same store and shape, so `compare --cross-level` shows BOSS's pipeline against the bare
+baseline with numbers.
 
 WHERE. Only on a database named boss_test* (--db-url, else BOSS_BENCH_DATABASE_URL, else
 DATABASE_URL): the runner refuses any other, as scripts/e2e/devapi.py does, so it can never touch
@@ -197,6 +208,14 @@ def run_config(*, suite, engine_spec, model, level, settings, overrides, caps, e
         "settings": knobs,
         "overrides": dict(sorted(overrides.items())),
     }
+    if level == "bare":
+        # The bare level runs NONE of the pipeline, so the pipeline's knobs are not part of its
+        # configuration: two bare runs under different pipeline settings are the same run. Its
+        # one knob is the session's fixed turn budget.
+        from boss_engine.harness_bench.bare import BARE_MAX_TURNS
+
+        config.update(profile=None, risk_tier=None, settings={},
+                      bare={"max_turns": BARE_MAX_TURNS})
     if scripted:
         config["scripted"] = {"caps": caps, "extra_faults": sorted(extra_faults)}
     fp = hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()[:16]
@@ -456,6 +475,125 @@ def run_task(world: World, suite: dict[str, Any], task: dict[str, Any], *, itera
     return result
 
 
+def run_bare_task(world: World, suite: dict[str, Any], task: dict[str, Any], *, iteration: int,
+                  harness: str, model: Optional[str], caps: str, extra_faults: list[str],
+                  budget_cap_micros: Optional[int], timeout_s: int) -> dict[str, Any]:
+    """One task handed to the ENGINE'S OWN LOOP (`--level bare`, BOSSAPP-977): the
+    plain-coding-agent baseline. No pipeline, no stages, no review panel, no gates, no PR —
+    one `run_role` session on the task brief, in an isolated clone of the fixture. The bench
+    still seeds the same pinned fixture, lands the session's work on a branch itself, runs the
+    SAME acceptance checks on a clean checkout of that branch, and reads wall time, tokens and
+    dollars from the engine's own telemetry (harness_bench/bare.py). Never raises: an error is
+    the result's `error`."""
+    from boss_engine.config import get_settings
+    from boss_engine.harness_bench.bare import (
+        BARE_MAX_TURNS, bare_brief, bare_components, bare_metrics,
+    )
+    from boss_engine.services import scripted_engine
+    from boss_engine.services.harness_registry import build_harness
+    from boss_engine.services.llm_telemetry import clear_llm_context, set_llm_context
+
+    result: dict[str, Any] = {"task_id": task["id"], "kind": task["kind"], "iteration": iteration,
+                              "success": False}
+    repo = f"bench-bare-{task['id']}-{iteration}-{uuid.uuid4().hex[:6]}"
+    fixture = resolve(suite, suite["fixtures"][task["fixture"]]["path"])
+    files = {rel: data.decode("utf-8") for rel, data in tree_files(fixture).items()}
+    bare_repo = world.hub.seed(OWNER, repo, files)
+    base_sha = _git("--git-dir", str(bare_repo), "rev-parse", "HEAD")
+    result["fixture"] = {"name": task["fixture"], "commit": base_sha,
+                         "sha256": suite["fixtures"][task["fixture"]]["sha256"]}
+    if harness == "scripted":
+        scripted = task.get("scripted") or {}
+        faults = sorted(set(scripted.get("faults") or []) | set(extra_faults))
+        os.environ.update({"BOSS_SCRIPTED_ENGINE": "1", "BOSS_SCRIPTED_FAULTS": ",".join(faults),
+                           "BOSS_SCRIPTED_CAPS": caps, "BOSS_SCRIPTED_APP_DIR": "",
+                           "BOSS_SCRIPTED_FIXTURE": str(resolve(suite, scripted["solution"]))})
+        scripted_engine.reset()
+        result["scripted_faults"] = faults
+    workspace = world.work / "bare" / f"{task['id']}-{iteration}-{uuid.uuid4().hex[:6]}"
+    error: Optional[str] = None
+    session: Optional[dict[str, Any]] = None
+    # The session's own ceiling is the benchmark's per-task limit. `run_role` cannot be
+    # interrupted from outside the way cancel_run stops a pipeline build, so an engine whose
+    # adapter floors its timeout higher may run past it; the result is then marked timed out
+    # and failed, exactly as a cancelled pipeline task is.
+    settings = get_settings().model_copy(update={
+        "code_agent_engine": harness,
+        "code_agent_timeout_seconds": int(timeout_s),
+        "code_agent_max_turns": BARE_MAX_TURNS,
+    })
+    t0 = time.monotonic()
+    try:
+        _git("clone", "--quiet", str(bare_repo), str(workspace))
+        agent = build_harness(harness, settings)
+        # The engine's telemetry rows (llm_calls/agent_turns) land in the bench database under
+        # the bench's project. "solo" is the stage name BOSS already has for "one session does
+        # the whole task"; there is no code task run to attach them to, by design.
+        set_llm_context(db_engine=world.engine, project_id=world.project, stage="solo")
+        extra: dict[str, Any] = {}
+        if budget_cap_micros is not None and getattr(getattr(agent, "capabilities", None),
+                                                     "budget_limit", False):
+            # An engine that can stop itself at a spend ceiling is told the task's share.
+            extra["max_budget_usd"] = budget_cap_micros / 1_000_000
+        session = agent.run_role(bare_brief(task), workspace, read_only=False, model=model,
+                                 max_turns=BARE_MAX_TURNS, **extra)
+    except Exception as exc:  # noqa: BLE001 — the result's record says what happened; keep going
+        error = f"{type(exc).__name__}: {exc}"[:500]
+        traceback.print_exc()
+    finally:
+        clear_llm_context()
+    wall = time.monotonic() - t0
+    timed_out = wall > timeout_s
+    # The bench, not the agent, lands the work on a branch: `git status` says whether the
+    # session changed anything, and the branch is what the SAME acceptance checks run against.
+    branch = f"bare/{task['id']}-{iteration}"
+    changed = False
+    if session is not None:
+        try:
+            if _git("status", "--porcelain", cwd=workspace):
+                _git("add", "-A", cwd=workspace)
+                _git("-c", "user.name=harness bench", "-c", "user.email=bench@boss.invalid",
+                     "commit", "--quiet", "-m", f"bare: {task['title']}", cwd=workspace)
+            changed = _git("rev-parse", "HEAD", cwd=workspace) != base_sha
+            if changed:
+                _git("push", "--quiet", "origin", f"HEAD:refs/heads/{branch}", cwd=workspace)
+        except (RuntimeError, subprocess.TimeoutExpired) as exc:
+            error = error or f"the session's work could not be landed on a branch: {exc}"[:400]
+            changed = False
+    if changed:
+        acceptance = acceptance_checks(suite, task, bare=bare_repo, branch=branch,
+                                       base_sha=base_sha, pull_request=f"branch {branch}",
+                                       work=world.work)
+    else:
+        acceptance = {"passed": False, "checks": [
+            {"check": "the session produced a change", "ok": False,
+             "detail": (error or "the engine's own loop changed nothing")[:600]}]}
+    metrics, unknown = bare_metrics(session, wall_s=wall)
+    components = bare_components(session_ok=session is not None, changed=changed,
+                                 acceptance_passed=bool(acceptance.get("passed")),
+                                 timed_out=timed_out)
+    result.update(
+        success=all(components.values()),
+        components=components,
+        status=("completed" if session is not None and not timed_out else "failed"),
+        error=error,
+        metrics=metrics,
+        acceptance=acceptance,
+        branch=(branch if changed else None),
+    )
+    if timed_out:
+        result["timed_out"] = True
+    if unknown:
+        # The engine reported no number for these: null in the report, never a made-up zero.
+        result["telemetry_unknown"] = unknown
+    if session is not None:
+        result["session"] = {"model": session.get("model"),
+                             "session_id": session.get("session_id"),
+                             "stop_reason": session.get("stop_reason"),
+                             "summary": str(session.get("summary") or "")[:2000]}
+    return result
+
+
 # ── the commands ─────────────────────────────────────────────────────────────────────────────
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -464,7 +602,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     harness, model = parse_engine(args.engine)
     model = args.model or model
     if args.level not in LEVELS:
-        raise Refused(f"--level {args.level!r}: only {', '.join(LEVELS)} exists today "
+        raise Refused(f"--level {args.level!r}: one of {', '.join(LEVELS)} "
                       "(guided and stepwise arrive with phase 3)")
     if args.repeat < 1:
         raise Refused("--repeat must be at least 1")
@@ -481,6 +619,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     db_url = database_url(args.db_url)
     os.environ["DATABASE_URL"] = db_url
     overrides = parse_sets(args.set)
+    if args.level == "bare" and overrides:
+        raise Refused("--set configures the governed pipeline; the bare level runs none of it")
     from boss_engine.config import get_settings
 
     settings = get_settings().model_copy(update={**FORCED, **overrides})
@@ -541,19 +681,32 @@ def cmd_run(args: argparse.Namespace) -> int:
                     cap = min(int(settings.code_task_budget_usd_micros or budget_micros),
                               budget_micros - spent_micros)
                 say(f"pass {iteration} {tid}: building ...")
-                r = run_task(world, suite, task, iteration=iteration, bench_run_id=run_id,
-                             harness=harness, model=model, overrides=overrides,
-                             caps=args.scripted_caps, extra_faults=extra_faults,
-                             budget_cap_micros=cap,
-                             timeout_s=int((suite.get("defaults") or {}).get("timeout_s", 1800)))
+                timeout_s = int((suite.get("defaults") or {}).get("timeout_s", 1800))
+                if args.level == "bare":
+                    r = run_bare_task(world, suite, task, iteration=iteration, harness=harness,
+                                      model=model, caps=args.scripted_caps,
+                                      extra_faults=extra_faults, budget_cap_micros=cap,
+                                      timeout_s=timeout_s)
+                else:
+                    r = run_task(world, suite, task, iteration=iteration, bench_run_id=run_id,
+                                 harness=harness, model=model, overrides=overrides,
+                                 caps=args.scripted_caps, extra_faults=extra_faults,
+                                 budget_cap_micros=cap, timeout_s=timeout_s)
                 spent_micros += int(round(float((r.get("metrics") or {}).get("cost_usd") or 0)
                                           * 1_000_000))
+                if budget_micros is not None and "cost_usd" in (r.get("telemetry_unknown") or []):
+                    say(f"pass {iteration} {tid}: the engine reported no cost, so the budget "
+                        "cannot meter it (recorded as unknown, never 0)")
                 m = r.get("metrics") or {}
                 failing = [k for k, v in (r.get("components") or {}).items() if not v]
+                unknown = r.get("telemetry_unknown") or []
+                cost = m.get("cost_usd")
                 say(f"pass {iteration} {tid}: {'PASS' if r.get('success') else 'FAIL'} "
                     f"{m.get('wall_s', 0):.1f}s calls={m.get('model_calls', 0)} "
-                    f"turns={m.get('turns', 0)} repair={m.get('repair_rounds', 0)} "
-                    f"interventions={m.get('interventions', 0)} cost=${m.get('cost_usd', 0):.4f}"
+                    f"turns={m.get('turns', 0)} repair={m.get('repair_rounds') or 0} "
+                    f"interventions={m.get('interventions') or 0} "
+                    + ("cost=UNKNOWN" if cost is None else f"cost=${cost:.4f}")
+                    + (f"  telemetry unknown: {', '.join(unknown)}" if unknown else "")
                     + (f"  failing: {', '.join(failing)}" if failing else "")
                     + (f"  error: {r['error'][:160]}" if r.get("error") else ""))
             results.append(r)
@@ -593,7 +746,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 say(f"no baseline named {args.baseline}")
                 return EXIT_REFUSED
             cmp = cmp_mod.compare(base, report, rules, allow_suite_change=args.allow_suite_change,
-                                  allow_cross_engine=args.cross_engine)
+                                  allow_cross_engine=args.cross_engine,
+                                  allow_cross_level=args.cross_level)
             print(cmp_mod.render(cmp), flush=True)
             with contextlib.suppress(Exception), world.engine.begin() as c:
                 store.record_comparison(c, run_id, args.baseline, cmp)
@@ -606,6 +760,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not args.keep_work:
             shutil.rmtree(work / "github", ignore_errors=True)
             shutil.rmtree(work / "accept", ignore_errors=True)
+            shutil.rmtree(work / "bare", ignore_errors=True)
     return code
 
 
@@ -645,7 +800,8 @@ def cmd_compare(args: argparse.Namespace) -> int:
     if args.suite or not rules:
         rules = rules_for(load_suite(Path(args.suite) if args.suite else None), cand["run"]["engine"])
     cmp = cmp_mod.compare(base, cand, rules, allow_suite_change=args.allow_suite_change,
-                          allow_cross_engine=args.cross_engine)
+                          allow_cross_engine=args.cross_engine,
+                          allow_cross_level=args.cross_level)
     if args.json:
         print(json.dumps(cmp, indent=1, default=str))
     else:
@@ -747,6 +903,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="let a real engine run without boss-sandbox-exec (as you, unisolated)")
     run.add_argument("--allow-suite-change", action="store_true")
     run.add_argument("--cross-engine", action="store_true")
+    run.add_argument("--cross-level", action="store_true",
+                     help="compare across scaffold levels on purpose (pipeline vs bare)")
     run.add_argument("--keep-work", action="store_true", help="keep the local GitHub and checkouts")
     comp = sub.add_parser("compare", help="compare a run with a baseline")
     comp.add_argument("run", help="a run id (in --db-url) or a report .json")
@@ -756,6 +914,8 @@ def build_parser() -> argparse.ArgumentParser:
     comp.add_argument("--json", action="store_true")
     comp.add_argument("--allow-suite-change", action="store_true")
     comp.add_argument("--cross-engine", action="store_true")
+    comp.add_argument("--cross-level", action="store_true",
+                      help="compare across scaffold levels on purpose (pipeline vs bare)")
     rep = sub.add_parser("report", help="the harness score: the latest run per engine and level")
     rep.add_argument("--db-url")
     rep.add_argument("--json", action="store_true")

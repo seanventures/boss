@@ -8,7 +8,9 @@
 #                   does a quarantined file that now passes (the list only shrinks)
 #   bench-scripted  the harness benchmark on the scripted engine (no model, no cost), compared
 #                   with the committed baseline bench/harness/baselines/scripted.json; a failed
-#                   guard fails the job (docs/architecture/HARNESS_BENCHMARK.md)
+#                   guard fails the job (docs/architecture/HARNESS_BENCHMARK.md). The same job
+#                   runs the bare lane (--level bare: the engine's own loop, no pipeline)
+#                   against bench/harness/baselines/scripted-bare.json (BOSSAPP-977).
 #
 # Apache AGE is not in this Postgres image: the tests that need it (the knowledge graph's
 # cypher / rules / call-graph DB tests) skip themselves with "Apache AGE is not available", and
@@ -148,6 +150,12 @@ jobs:
         run: >
           scripts/harness-bench run --engine scripted --baseline scripted
           --report bench-report.json --compare-out bench-comparison.json
+      - name: The bare lane (the engine's own loop, no pipeline), against its committed baseline
+        if: always()
+        timeout-minutes: 10
+        run: >
+          scripts/harness-bench run --engine scripted --level bare --baseline scripted-bare
+          --report bench-bare-report.json --compare-out bench-bare-comparison.json
       - name: Keep the report
         if: always()
         uses: actions/upload-artifact@v4
@@ -156,4 +164,6 @@ jobs:
           path: |
             bench-report.json
             bench-comparison.json
+            bench-bare-report.json
+            bench-bare-comparison.json
           if-no-files-found: ignore

@@ -199,9 +199,18 @@ def load_baseline(name: str, connection=None, *,
 
 # ── the harness score: the latest run per engine and level, against its baseline ───────────
 
+def default_baseline_name(engine: str, level: Optional[str]) -> str:
+    """The baseline a run is scored against when it named none: the engine class for the
+    pipeline's own level, `<engine class>-<level>` for any other (scripted-bare, claude_code-bare
+    ...), so a bare run is never scored against a pipeline baseline by accident."""
+    base = engine_class(engine)
+    return base if (level or "delegate") == "delegate" else f"{base}-{level}"
+
+
 def harness_score(connection, *, baselines_dir: Path = BASELINES_DIR) -> list[dict[str, Any]]:
     """One row per (engine, level): the latest completed run and its verdict per metric against
-    the baseline it was compared with, else the baseline named after its engine class."""
+    the baseline it was compared with, else the default baseline for its engine class and level
+    (default_baseline_name)."""
     rows = connection.execute(text("""
         SELECT DISTINCT ON (engine, level) id, engine, level, compared_to
           FROM harness_bench_runs WHERE status = 'completed'
@@ -210,7 +219,7 @@ def harness_score(connection, *, baselines_dir: Path = BASELINES_DIR) -> list[di
     out = []
     for row in rows:
         cand = load_report(connection, row["id"])
-        name = row.get("compared_to") or engine_class(row["engine"])
+        name = row.get("compared_to") or default_baseline_name(row["engine"], row["level"])
         base = load_baseline(name, connection, baselines_dir=baselines_dir)
         entry: dict[str, Any] = {"engine": row["engine"], "level": row["level"],
                                  "run": cand["run"], "baseline": name}
