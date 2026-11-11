@@ -7074,6 +7074,13 @@ CREATE TABLE IF NOT EXISTS agent_memory (
   -- then actually mattered is what survives, and `last_used_at` is what the pruner reads.
   use_count INTEGER NOT NULL DEFAULT 0,
   last_used_at TIMESTAMPTZ,
+  -- INJECTION IS OPPORTUNITY; USE IS VALUE — counted apart (BOSSAPP-960). `use_count` used to
+  -- be bumped on every injection, so whatever got injected ranked higher, got injected again,
+  -- and could never be pruned: the loop measured its own output. `injected_count` is how often
+  -- a memory was put in front of a model; `use_count` moves only on a real signal of value
+  -- (the same thing being taught again).
+  injected_count INTEGER NOT NULL DEFAULT 0,
+  last_injected_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ,
   -- Dedupe. The same correction said twice must not become two rules that both get injected.
   content_hash TEXT NOT NULL,

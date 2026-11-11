@@ -1469,7 +1469,14 @@ class Settings(BaseSettings):
     # soften the gate. 0 = off (single-pass, pre-Phase-3 behavior). Executable checks
     # re-run per retry (cheap); the frontier panel re-judges only candidates whose tests
     # pass. Per-run override: spec["repair_retries"].
-    code_repair_max_retries: int = Field(default=0, alias="BOSS_CODE_REPAIR_MAX_RETRIES")
+    #
+    # DEFAULT 1, NOT 0 (BOSSAPP-960): the whole feedback apparatus above — the evidence
+    # assembly, the arbiter, repair_policy's budget-variable depth and tier escalation —
+    # was built and then shipped OFF by default, so a plain install got single-pass builds
+    # and none of it ever ran. One retry is the smallest default that turns the loop on;
+    # depth is still capped by what the remaining budget affords (repair_policy), so a
+    # doomed attempt cannot double a build's cost, and 0 remains an explicit opt-out.
+    code_repair_max_retries: int = Field(default=1, alias="BOSS_CODE_REPAIR_MAX_RETRIES")
     # VAG #105 verifier meta-eval: the quality bar the VERIFIER itself must clear when run over
     # the labeled bugged/clean corpus. min_recall = floor on bug-detection (catch bugs); max_fp_rate
     # = ceiling on false alarms (don't reject clean code). A verifier below the bar fails the gate.

@@ -18,7 +18,7 @@ RUNNER = ROOT / "evals" / "task_rigor" / "run.py"
 CORPUS = ROOT / "evals" / "task_rigor" / "corpus.json"
 BASE = "73d3ebecc6d5f65763a8071ded79f67c76206667"
 
-FAMILIES = ("sensitivity", "rigor", "look")
+FAMILIES = ("sensitivity", "rigor", "look", "verdict")
 COLUMNS = ("accuracy", "false_negatives", "p95_latency_ms", "cost_per_call")
 MODEL_ROWS = ("jev", "jev+claude", "claude")
 NOT_MEASURED = "not measured"
@@ -50,6 +50,15 @@ REQUIRED_LOOK = {
     "I told you it was slow yesterday too, why?": "look",
     "Can you check why the build is slow?": "look",
     "Fix and retry the deployment": "act",
+}
+# The review-verdict grammar's hard cases: the substring parse (`"REVISE" not in summary`) got
+# the first two wrong on every run measured, and a bare unsubstantiated refutation must not
+# fail-close the gate. Dropping one to make the score perfect is a failure, not a better score.
+REQUIRED_VERDICT = {
+    "No need to revise anything; the sequencing is right.\nPLAN: OK": "ok",
+    "I considered saying PLAN: REVISE for the test section, but it is adequate.\nPLAN: OK": "ok",
+    "Section 2 skips the migration ordering and must be rewritten.\nPLAN: REVISE": "revise",
+    "VERDICT: REFUTED": "survived",
 }
 
 
@@ -132,6 +141,21 @@ def _expected_look(rows: list[dict]) -> tuple[int, int, int]:
     return correct, false_negatives, len(rows)
 
 
+def _expected_verdict(rows: list[dict]) -> tuple[int, int, int]:
+    from boss_engine.services.review_verdict import parse_verdict, plan_verdict
+
+    false_negatives = 0
+    correct = 0
+    for row in rows:
+        fn = plan_verdict if row["kind"] == "plan" else parse_verdict
+        predicted = fn(row["text"])
+        if row["label"] in ("revise", "refuted") and predicted != row["label"]:
+            false_negatives += 1
+        if predicted == row["label"]:
+            correct += 1
+    return correct, false_negatives, len(rows)
+
+
 def _run_report() -> str:
     assert RUNNER.is_file(), "evals/task_rigor/run.py is missing"
     env = os.environ.copy()
@@ -182,6 +206,9 @@ def test_corpus_keeps_the_hard_cases():
         ), text
     for text, label in REQUIRED_LOOK.items():
         assert any(row["text"] == text and row["label"] == label for row in corpus["look"]), text
+    for text, label in REQUIRED_VERDICT.items():
+        assert any(row["text"] == text and row["label"] == label
+                   for row in corpus["verdict"]), text
 
 
 def test_report_measures_keyword_rules_and_leaves_models_unmeasured():
@@ -192,6 +219,7 @@ def test_report_measures_keyword_rules_and_leaves_models_unmeasured():
         "sensitivity": _expected_sensitivity(corpus["sensitivity"]),
         "rigor": _expected_rigor(corpus["rigor"]),
         "look": _expected_look(corpus["look"]),
+        "verdict": _expected_verdict(corpus["verdict"]),
     }
     for family, (correct, false_negatives, total) in expected.items():
         assert total > 0

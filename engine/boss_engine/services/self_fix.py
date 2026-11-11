@@ -447,9 +447,16 @@ def confidence_for(connection: Connection, settings: Any, *, kind: str, entry: M
     app_failed = any(isinstance(d, Mapping) and d.get("signature") == signature
                      and d.get("action") in (step_recovery.FIX_APP, step_recovery.CLEAN_AND_RETRY)
                      for d in state.get("decisions") or [])
+    # "Validated" is a FACT ABOUT THE EVIDENCE, not a restatement of the choice. This used to
+    # pass `model_validated=model_on_boss`, so the §5.2 "model evidence validated" signal (+2)
+    # fired whenever the model chose a BOSS-side action at all — the same event counted twice,
+    # and a citation-free claim scored exactly like one whose evidence survived
+    # `step_recovery.validate`'s grounding check. A decision only carries `evidence` entries
+    # when that check accepted them, so their presence is the record of the validation.
+    cited = [c for c in (entry.get("evidence") or []) if str(c or "").strip()]
     return score_confidence(
         coded_on_boss=coded_on_boss, model_on_boss=model_on_boss,
-        model_validated=model_on_boss, code_found=_code_exists(settings, files),
+        model_validated=bool(model_on_boss and cited), code_found=_code_exists(settings, files),
         occurrences=_occurrences(connection, class_signature(signature)),
         app_action_failed=app_failed, injection=injection_markers(evidence),
         disagree=disagree)

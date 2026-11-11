@@ -128,6 +128,47 @@ def shares_trace(review_context: str, builder_trace: str, *, min_run: int = 40) 
     return False
 
 
+def independent_reviewer(connection: Any, settings: Any, project_id: str,
+                         build_engine: str, build_model: Optional[str] = None
+                         ) -> Optional[str]:
+    """A CONNECTED engine in a different model family than the builder, or None (BOSSAPP-960).
+
+    `BOSS_CODE_REVIEW_ENGINE` empty has always meant "the builder reviews itself", and nothing
+    ever called this module's gate on a real build — the docstring above says it plainly:
+    independence was a convention. This is the default's other half: when the operator has NOT
+    pinned a reviewer and the install actually holds a credential for an engine in another
+    family, the review lane uses that engine. One engine connected (the common install) changes
+    nothing: there is no independent reviewer to pick, and the builder keeps the seat.
+
+    Only engines this project can actually run (setup_service.connected_engines) and that the
+    harness registry can drive are considered, `independence_required_level: off` switches the
+    behaviour off, and any failure answers None — review must happen even when this lookup
+    cannot."""
+    try:
+        level = str(getattr(settings, "independence_required_level", "family") or "").lower()
+        if level == "off":
+            return None
+        from .harness_registry import UnknownHarness, get_harness
+        from .setup_service import connected_engines
+
+        build_family = family_of(build_engine, build_model)
+        connected = connected_engines(connection, settings, project_id)
+        for engine in sorted(connected):
+            if engine == (build_engine or "").lower():
+                continue
+            if family_of(engine) == build_family:
+                continue
+            try:
+                if get_harness(engine).kind == "conformance":
+                    continue
+            except UnknownHarness:
+                continue  # connected for chat, not a coding harness
+            return engine
+        return None
+    except Exception:  # noqa: BLE001 — a failed lookup must not take the review seat with it
+        return None
+
+
 def configured_contract(settings, *, required_level: Optional[str] = None) -> dict[str, Any]:
     """Audit BOSS's CURRENT configuration: is the reviewer independent of the builder? Reads the
     builder vs review engines/models from settings so an operator can check their setup at a glance."""

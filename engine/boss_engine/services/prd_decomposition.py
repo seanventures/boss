@@ -183,7 +183,37 @@ def decompose_prd_into_tasks(settings: Settings, prd_or_directive: str, *,
             "depends_on": [int(x) for x in deps if str(x).isdigit()],
         })
     out.sort(key=lambda x: x["order"])
-    return out
+    return order_by_dependencies(out)
+
+
+def order_by_dependencies(tasks: list[dict]) -> list[dict]:
+    """The tasks in an order that honours every `depends_on`, stable by `order` otherwise.
+
+    The decomposition prompt asks the model for `depends_on` and the parser kept it, but the
+    chain then ran strictly by `order` — so a task whose dependency the model numbered LATER
+    started before the code it builds on existed, and the field was dead weight. This is the
+    one place the plan's execution order is decided; `advance_decomposition` walks the list
+    front to back, so honouring the dependencies here honours them for the whole lineage.
+
+    Deliberately forgiving: a dependency on an order-number that is not in the plan is ignored
+    (the model named a task the parser dropped), a self-dependency is ignored, and a CYCLE
+    degrades to the plain order sort for the tasks still waiting — a wrong plan must start
+    imperfectly, not not at all."""
+    pending = sorted(tasks, key=lambda t: t["order"])
+    known = {t["order"] for t in pending}
+    ordered: list[dict] = []
+    done: set[int] = set()
+    while pending:
+        ready = [t for t in pending
+                 if all(d in done for d in (t.get("depends_on") or [])
+                        if d in known and d != t["order"])]
+        if not ready:  # a dependency cycle: `order` is the only truth left
+            ordered.extend(pending)
+            break
+        ordered.append(ready[0])
+        done.add(ready[0]["order"])
+        pending.remove(ready[0])
+    return ordered
 
 
 def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "engine"))
 
 from boss_engine.services.intent_router import asked_only_to_look
+from boss_engine.services.review_verdict import parse_verdict, plan_verdict
 from boss_engine.services.pipeline_profiles import (
     PROFILES,
     SENSITIVE_MARKERS,
@@ -106,6 +107,26 @@ def _score_look(rows: list[dict]) -> tuple[int, int, int, float]:
     return correct, false_negatives, len(rows), _p95(samples)
 
 
+def _score_verdict(rows: list[dict]) -> tuple[int, int, int, float]:
+    """The review-verdict grammar (review_verdict.py): a plan row is judged by plan_verdict,
+    a review row by parse_verdict. A false negative is the dangerous direction — a summary
+    labelled revise/refuted that the parse reads as passing."""
+    correct = 0
+    false_negatives = 0
+    samples: list[float] = []
+    for row in rows:
+        text = row["text"]
+        fn = plan_verdict if row["kind"] == "plan" else parse_verdict
+        predicted, elapsed = _timed(lambda fn=fn, text=text: fn(text))
+        samples.append(elapsed)
+        label = row["label"]
+        if label in ("revise", "refuted") and predicted != label:
+            false_negatives += 1
+        if predicted == label:
+            correct += 1
+    return correct, false_negatives, len(rows), _p95(samples)
+
+
 def _section(name: str, correct: int, false_negatives: int, total: int, p95_ms: float) -> str:
     accuracy = f"{correct / total:.6f}"
     lines = [
@@ -143,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         "sensitivity": _score_sensitivity(corpus["sensitivity"]),
         "rigor": _score_rigor(corpus["rigor"]),
         "look": _score_look(corpus["look"]),
+        "verdict": _score_verdict(corpus["verdict"]),
     }
     print("\n".join(_section(name, *score) for name, score in scores.items()))
     if "--check" not in args:

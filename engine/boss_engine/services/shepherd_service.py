@@ -1392,7 +1392,12 @@ def _open_fix_task(engine, settings, jobs, run_id: str, p: dict, remedy, note: s
             spec = {}
     spec = spec or {}
 
-    evidence = str(p.get("evidence") or p.get("check") or "")[:4000]
+    # STRUCTURED FINDINGS FIRST (BOSSAPP-960): the shepherd used to pass a one-line note and a
+    # truncated blob; the fix task now gets the failing tests/errors parsed out of that blob in
+    # the same FINDING grammar every other repair path speaks, with the raw output kept below.
+    from .repair_findings import evidence_block
+
+    evidence = evidence_block(str(p.get("evidence") or p.get("check") or ""))[:4000]
     instructions = (
         f"{note}\n\n"
         f"The change in run {run_id} merged or completed, but the step AFTER it failed: "

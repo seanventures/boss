@@ -107,6 +107,12 @@ def remember(
             -- entries that both get injected; it refreshes the one that exists instead.
             ON CONFLICT (project_id, kind, scope, scope_ref, content_hash) DO UPDATE
                SET updated_at = now(),
+                   -- SAYING IT AGAIN IS THE USE SIGNAL. Injection is counted apart
+                   -- (injected_count, in pack_for_turn); use_count moves only when something
+                   -- real says the memory mattered, and a person or agent recording the same
+                   -- thing twice is exactly that.
+                   use_count = agent_memory.use_count + 1,
+                   last_used_at = now(),
                    source_thread_id = COALESCE(EXCLUDED.source_thread_id,
                                                agent_memory.source_thread_id),
                    -- TEACHING IT AGAIN AFTER IT WAS RETIRED MUST REVIVE IT.
@@ -184,6 +190,21 @@ def forget(
     return dict(row)
 
 
+def relevance(query: str, body: str) -> float:
+    """How much of `query`'s vocabulary `body` shares: 0.0 (nothing) to 1.0 (all of it).
+
+    Deliberately plain word overlap — this ranks a few hundred one-sentence memories inside one
+    turn, so it must cost nothing and depend on nothing. Case-insensitive; words shorter than
+    three characters carry no signal and are ignored."""
+    import re as _re
+
+    words = {w for w in _re.findall(r"[a-z0-9]+", (query or "").lower()) if len(w) >= 3}
+    if not words:
+        return 0.0
+    have = {w for w in _re.findall(r"[a-z0-9]+", (body or "").lower()) if len(w) >= 3}
+    return len(words & have) / len(words)
+
+
 def recall(
     connection: Connection,
     *,
@@ -193,12 +214,16 @@ def recall(
     kinds: Optional[tuple[str, ...]] = None,
     include_proposed: bool = False,
     limit: int = 100,
+    query: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """What applies to this turn, most useful first.
 
     Scope filtering is the whole subtlety: an `actor` memory belongs to one person and must not
     leak into another's session, while `project` and `org` memories apply to everyone here.
-    """
+
+    With `query`, entries are ranked BY RELEVANCE TO IT inside each kind (then by use and
+    recency as always): a session asking about deploys should meet the deploy lessons before an
+    unrelated preference spends the pack budget."""
     statuses = ["active", "proposed"] if include_proposed else ["active"]
     rows = connection.execute(
         text(
@@ -226,9 +251,22 @@ def recall(
         ),
         {"p": project_id, "statuses": statuses,
          "kinds": list(kinds) if kinds else None,
-         "actor": actor or "", "role": role or "", "lim": max(1, min(int(limit), 500))},
+         "actor": actor or "", "role": role or "",
+         # With a query the ranking happens below, over the whole candidate set — a LIMIT
+         # applied before relevance is known would cut the very rows the query asks for.
+         "lim": 500 if (query or "").strip() else max(1, min(int(limit), 500))},
     ).mappings().all()
-    return [dict(r) for r in rows]
+    entries = [dict(r) for r in rows]
+    if (query or "").strip():
+        kind_rank = {"lesson": 0, "project": 1}
+        entries.sort(key=lambda e: (
+            kind_rank.get(e["kind"], 2),
+            -relevance(query, e["body"]),
+            -int(e.get("use_count") or 0),
+            -(e["created_at"].timestamp() if e.get("created_at") else 0.0),
+        ))
+        entries = entries[: max(1, min(int(limit), 500))]
+    return entries
 
 
 def pack_for_turn(
@@ -238,6 +276,7 @@ def pack_for_turn(
     actor: Optional[str] = None,
     role: Optional[str] = None,
     budget: int = DEFAULT_PACK_BUDGET,
+    query: Optional[str] = None,
 ) -> str:
     """The block injected into a turn. Empty string when there is nothing to say.
 
@@ -245,7 +284,7 @@ def pack_for_turn(
     budget has to be applied to the RENDERED size — counting rows would let one long entry blow
     past it.
     """
-    entries = recall(connection, project_id=project_id, actor=actor, role=role)
+    entries = recall(connection, project_id=project_id, actor=actor, role=role, query=query)
     if not entries:
         return ""
 
@@ -267,11 +306,14 @@ def pack_for_turn(
     if not lines:
         return ""
 
-    # USAGE IS WHAT KEEPS A MEMORY ALIVE. The pruner reads `last_used_at`, so this is the
-    # signal that separates a rule that matters from one recorded once and never relevant again.
+    # INJECTION IS COUNTED AS INJECTION, NOT AS USE (BOSSAPP-960). This used to bump
+    # `use_count`, so every memory that fit the budget "was used" every turn: the ranking fed
+    # on itself (injected -> higher use_count -> injected first again) and the pruner's
+    # `use_count = 0` test was unsatisfiable for anything ever packed. `injected_count` now
+    # records the opportunities; `use_count` stays a value signal (see `remember`'s dedupe).
     connection.execute(
-        text("UPDATE agent_memory SET use_count = use_count + 1, last_used_at = now() "
-             " WHERE id = ANY(:ids)"),
+        text("UPDATE agent_memory SET injected_count = injected_count + 1, "
+             " last_injected_at = now() WHERE id = ANY(:ids)"),
         {"ids": used_ids},
     )
     return (

@@ -6200,6 +6200,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                         "description": "filter: lesson, preference, project"},
               "include_proposed": {"type": "boolean",
                                    "description": "also show what is awaiting review"},
+              "query": {"type": "string",
+                        "description": "rank by relevance to this text (what you are doing)"},
               "project_id": {"type": "string"}}),
         kind="read", permission="memory:read",
         exposure=Exposure(tags=("memory",), core_for=("chat",)))
@@ -6212,7 +6214,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
             rows = _recall(c, project_id=pid, actor=actor,
                            role=str(args.get("role") or "").strip() or None,
                            kinds=kinds or None,
-                           include_proposed=bool(args.get("include_proposed")))
+                           include_proposed=bool(args.get("include_proposed")),
+                           query=str(args.get("query") or "").strip() or None)
         return {"ok": True, "count": len(rows), "memories": [_json_safe(r) for r in rows],
                 "note": ("nothing recorded yet for this project" if not rows else
                          "these are already in your prompt; do not read them back verbatim")}
