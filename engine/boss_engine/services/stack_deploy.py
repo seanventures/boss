@@ -810,6 +810,19 @@ PORT_HELD = re.compile(
     r"|(?:listen|bind)[^\n]*?:(\d{1,5}):? ?(?:bind: )?address already in use", re.I)
 
 
+#: A platform-specific native package a build tool resolves per platform and ships as an
+#: OPTIONAL dependency: @rollup/rollup-linux-x64-musl, @esbuild/linux-x64,
+#: @swc/core-linux-x64-musl, @next/swc-linux-x64-gnu…
+_PRUNED_NATIVE_PKG = re.compile(
+    r"@(?:rollup|esbuild|swc|next)/[A-Za-z0-9._-]*"
+    r"(?:linux|darwin|win32|android|freebsd)[A-Za-z0-9._-]*", re.I)
+
+#: …and the words a build dies with when the install pruned it out of the image.
+_PRUNED_NATIVE_MISS = re.compile(
+    r"cannot find module|could not be found|failed to load native binding"
+    r"|no prebuilt binaries found", re.I)
+
+
 def _explained(step: str, returncode: int, output: str, *,
                host: str, url: str, timeout: int) -> dict[str, str]:
     lowered = (output or "").lower()
@@ -868,6 +881,21 @@ def _explained(step: str, returncode: int, output: str, *,
                 "action": "This is BOSS's network wiring, not the app: the app's compose project "
                           "must share the resources' project. Update BOSS and deploy again.",
                 "cause": CAUSE_HOST}
+    pruned = _PRUNED_NATIVE_PKG.search(output or "")
+    if pruned and _PRUNED_NATIVE_MISS.search(output or ""):
+        # THE FAILURE CLASS, named from the failure text (a hint for the fix round, never an
+        # auto-edit): rollup/esbuild/swc ship their native binary as a platform-specific
+        # OPTIONAL dependency, and an image install that prunes optional dependencies
+        # (`npm install --omit=optional`, npm/cli#4828 even without it) strips the one the
+        # image's platform needs — `vite build` then dies on exactly this module.
+        return {"headline": f"The image build is missing {pruned.group(0)}: the install pruned "
+                            "the platform-specific optional dependency the image needs.",
+                "action": "In the image's install step, install dependencies exactly as the "
+                          "lockfile resolves them — `npm ci`, with no --omit=optional / "
+                          "--no-optional / --production prune before the build (npm/cli#4828) — "
+                          "and build on the same base image family (musl vs glibc) the deploy "
+                          "runs. Then deploy again.",
+                "cause": CAUSE_APP}
     if step == "health":
         return {"headline": f"The app did not answer as expected at {url} within {timeout}s.",
                 "action": "Read the log tail for what the install printed, fix it and deploy "
@@ -2915,6 +2943,14 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
             app_env = app_deploy_env(connection, project_id, target,
                                      deployment.get("code_task_run_id"), manifest=manifest)
             env_values, hidden = merge_app_env(manifest, env_values, hidden, app_env)
+            # DEMO SEEDING FOLLOWS THE TARGET'S KIND (templates.run_env.with_demo_seed): a
+            # staging target carrying a demo login password gets ALLOW_DEMO_SEED=true, so the
+            # DEMO_PASSWORD the app's Settings reveals signs into users that exist; a
+            # production-kind target never carries it (only a person's own deploy value may).
+            from ..templates.run_env import with_demo_seed
+
+            env_values = with_demo_seed(env_values, environment=target.get("environment"),
+                                        person_set=app_env)
             for key, value in address_env(target, host).items():
                 env_values.setdefault(key, value)
         except (StackStepFailed, StackDeployError, ManifestError) as exc:
