@@ -42,6 +42,13 @@ _TRANSIENT_MARKS = ("500 ", "502", "503", "504", "timed out", "timeout", "connec
 
 def classify(message: str) -> str:
     low = str(message or "").lower()
+    # "does not merge cleanly" is a LOCAL change set's conflict (local_repo.LocalMergeConflict):
+    # the same not-mergeable state as GitHub's 405, and it gets the same recovery (BOSSAPP-980).
+    # Checked BEFORE the status-code heuristics: the message embeds branch names like
+    # boss/code/crun_<hex>, and hex happily contains "409"/"405" — which would misread a real
+    # conflict as a moved head and retry it forever.
+    if "does not merge cleanly" in low:
+        return NOT_MERGEABLE
     if "409" in low:
         return HEAD_CHANGED
     if "405" in low or "not mergeable" in low or "merge conflict" in low:
@@ -200,5 +207,54 @@ def handle(service: Any, connection: Any, project_id: str, decision_id: str, num
     return {**base, "status": "failed", "message": f"Merge failed: {reason}."}
 
 
+def on_job_deadlettered(connection: Any, job_row: dict[str, Any], error: dict[str, Any]) -> None:
+    """The merge job died for good (jobs._deadletter): say so ON the decision it was executing.
+
+    BOSSAPP-982 (helpdesk-laptop, dec_4fe0…/job_bb61…, 2026-11-10): POST /v1/decisions/{id}/
+    approve answered 200 "approved", the merge job dead-lettered, and the decision slid back
+    with nothing current on it saying why — the person saw their approval vanish. Whatever path
+    the job died on — including one that never reached handle() — the decision now carries
+    "Merge failed: …" and is answerable again, so Merge is a visible retry, never silence.
+
+    A decision handle() already spoke for (pending, with its merge_failed note) is left as it
+    is; one still APPROVED carries a promise the dead job can no longer keep, so it reopens
+    even over an earlier, now stale, "BOSS is trying the merge again" note."""
+    payload = job_row.get("payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            payload = {}
+    decision_id = str(payload.get("decision_id") or "")
+    if not decision_id:
+        return
+    row = connection.execute(text(
+        "SELECT project_id, status, recommendation FROM decisions WHERE id = :d"),
+        {"d": decision_id}).mappings().first()
+    if row is None:
+        return
+    rec = row["recommendation"]
+    if isinstance(rec, str):
+        try:
+            rec = json.loads(rec)
+        except ValueError:
+            rec = {}
+    status = str(row["status"] or "")
+    already_said = isinstance(rec, dict) and bool(rec.get(KEY))
+    if status != "approved" and not (status == "pending" and not already_said):
+        return
+    message = str((error or {}).get("message") or "the merge job failed")
+    kind = classify(message)
+    reason = reason_words(kind, message, payload.get("pull_request_number"))
+    _mark(connection, decision_id, reason,
+          "The merge job stopped after its last attempt (dead-lettered). "
+          "Press Merge to try again.", kind, reopen=True)
+    from .core import emit_event
+
+    emit_event(connection, str(row["project_id"]), "decision.merge_job_deadlettered", "boss",
+               "decision", decision_id,
+               {"job_id": str(job_row.get("id") or ""), "reason": reason})
+
+
 __all__ = ["FAILED", "HEAD_CHANGED", "KEY", "NOT_MERGEABLE", "TRANSIENT", "classify",
-           "hand_to_builder", "handle", "reason_words"]
+           "hand_to_builder", "handle", "on_job_deadlettered", "reason_words"]

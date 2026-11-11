@@ -1422,6 +1422,20 @@ class JobLeaseService:
             from .governed_host_deploy import fail_for_deadlettered_job as fail_host_run
 
             fail_host_run(connection, dict(row), error, self.settings)
+        if row.get("kind") == "github.pull_request.merge":
+            # An approved merge whose job died must never sit silent (BOSSAPP-982): the person
+            # approved, the API answered "approved", and nothing said the merge then failed.
+            # The failure goes on the decision, reopened so Merge is a visible retry.
+            from .merge_failures import on_job_deadlettered
+
+            try:
+                on_job_deadlettered(connection, dict(row), error)
+            except Exception:  # noqa: BLE001 — the deadletter record itself must stand
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "could not mark the merge decision for deadlettered job %s",
+                    job_id, exc_info=True)
         return {
             "job_id": job_id,
             "status": "deadlettered",
