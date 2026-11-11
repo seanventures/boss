@@ -2,15 +2,16 @@
 /**
  * THE REQUEST CONTRACT (activity-govern spec §8.2). The redesigned Govern sends exactly the
  * requests the old Govern components sent — same method, same API path, same body — plus the
- * two tightenings the operator decided (§10 Q3/Q4: the signed-in actor on Pace, FinOps and
- * token-guide writes), the version it showed as `If-Match`, and `via: govern` on the monthly cap
+ * two tightenings the operator decided (§10 Q3/Q4: the signed-in actor on Pace and FinOps
+ * writes), the version it showed as `If-Match`, and `via: govern` on the monthly cap
  * (spec §4.4.3). Governance semantics do not change because the screen did.
  *
  * Two layers, both pinned: what the screen posts to `/api/govern`, and what that route sends
  * to the API. The goldens below were recorded from the old components on base d29954dd:
  *   SettingsKnobs → /api/settings → PUT /v1/settings/{key}  {key, project_id, actor, value}
  *   setBudgetIntensityAction → POST /v1/budget/set_intensity  {scope_id, intensity, actor: "executive_console"}
- *   setStageTokenCapAction → PUT /v1/token-efficiency/policies  {project_id, policies: [{stage, max_total_tokens_per_call}]}
+ *   (setStageTokenCapAction's per-call token write left Govern with BOSSAPP-999 §3: the cap it
+ *   edited never stopped a call; volume governance is the `call_classes` project setting.)
  *   Setup's Budget row → /api/setup → PUT /v1/setup/budget  {project_id, monthly_cap_usd}
  *   reconcileCommitmentsAction → POST /v1/finops/reconcile-commitments  {project_id, actor: "system"}
  *   requestInitiativeBudgetAction → POST /v1/finops/initiative-budget  {project_id, title, tier, amount_usd_micros, actor: "system"}
@@ -40,8 +41,6 @@ const OLD = {
                body: { key: "code_review_inrun_max_rounds", project_id: "p1", actor: "ceo", value: null } },
   intensity: { method: "POST", path: "/v1/budget/set_intensity",
                body: { scope_id: "p1", intensity: 50, actor: "executive_console" } },
-  token: { method: "PUT", path: "/v1/token-efficiency/policies",
-           body: { project_id: "p1", policies: [{ stage: "implement", max_total_tokens_per_call: 48000 }] } },
   monthly: { method: "PUT", path: "/v1/setup/budget", body: { project_id: "p1", monthly_cap_usd: 150 } },
   reconcile: { method: "POST", path: "/v1/finops/reconcile-commitments", body: { project_id: "p1", actor: "system" } },
   initiative: { method: "POST", path: "/v1/finops/initiative-budget",
@@ -50,7 +49,6 @@ const OLD = {
 /** The ONLY differences from the old requests, each decided or specified. */
 const TIGHTENED = {
   intensity: { ...OLD.intensity.body, actor: "ceo" },                      // §10 Q4
-  token: { ...OLD.token.body, actor: "ceo" },                              // §10 Q3
   monthly: { ...OLD.monthly.body, via: "govern", actor: "ceo" },          // §4.4.3 + D5: the signed-in actor
   reconcile: { ...OLD.reconcile.body, actor: "ceo" },                      // §10 Q4
   initiative: { ...OLD.initiative.body, actor: "ceo" },                    // §10 Q4
@@ -137,17 +135,6 @@ describe("the screen posts the old requests (plus the decided tightenings)", () 
     expect([api.method, api.url, api.body]).toEqual(["PUT", `https://boss-api.test${OLD.monthly.path}`, TIGHTENED.monthly]);
   });
 
-  it("a token guide: the old cap form's body, as the signed-in actor", async () => {
-    await mount(<GovernHome projectId="p1" actor="ceo" />);
-    await click($("[data-testid=gv-token-edit]"));
-    await setValue($("[data-testid=gv-token-stage]"), "implement");
-    await setValue($("[data-testid=gv-token-cap]"), "48000");
-    await click($("[data-testid=gv-token-save]"));
-    const [post] = posts("token_cap");
-    expect(post.ifMatch).toBe("unset");
-    const api = await routeSends("token_cap", post.body!);
-    expect([api.method, api.url, api.body]).toEqual(["PUT", `https://boss-api.test${OLD.token.path}`, TIGHTENED.token]);
-  });
 
   it("FinOps: the old posts, as the signed-in actor instead of `system`", async () => {
     g.envelopes = { allocations: [], finops: { state: "no_events", summary: { anomalies_open_count: 0 } },

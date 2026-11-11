@@ -12000,3 +12000,13 @@ CREATE TABLE IF NOT EXISTS harness_bench_results (
 );
 CREATE INDEX IF NOT EXISTS idx_harness_bench_results_run
   ON harness_bench_results (bench_run_id, iteration, task_id);
+
+-- ── BOSSAPP-999: every model call carries its CLASS ───────────────────────────────────────────
+-- call_class is stamped at the recording seam (services/llm_telemetry.record_llm_call) from the
+-- stage the call's boundary named, via the total mapping in services/call_classes.py:
+-- build_stage | chat | panel | decision | proof | kg | bench | gateway | other. New rows are
+-- never NULL ('other' is the mapping's floor); rows that predate this column stay NULL and read
+-- as unclassified history. Per-project governance (the `call_classes` project setting) denies a
+-- class or caps it by calls/tokens per day, counted over this column.
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS call_class TEXT;
+CREATE INDEX IF NOT EXISTS idx_llm_calls_class ON llm_calls (project_id, call_class, created_at DESC);

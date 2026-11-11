@@ -552,6 +552,9 @@ class TypedDecisionSpend:
                 ttl_seconds=self.ttl_seconds,
                 existing_reservation_id=reservation_id,
                 source_id=source_id,
+                # The stage this lease's call is ledgered under, so the call-class gate
+                # (BOSSAPP-999) judges it by its real class (decision / proof / chat).
+                stage=self.stage,
             )
         except ModelCapacityDeniedError as denied:
             self.budget.release(connection, self.project_id, reservation_id, _safe_error(denied))

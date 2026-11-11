@@ -12,7 +12,6 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DotsThree } from "@phosphor-icons/react";
-import { GatedButton } from "../../components/gated";
 
 import {
   effectiveOf, governWrite, money, readNumber, rightsFor, type CapPreview as CapPreviewData, type Control, type Envelope,
@@ -414,15 +413,10 @@ function PaceEditor({ control, projectId, busy, onApply, onCancel }: {
   );
 }
 
-function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
+function TokenGuides({ view }: {
   view: GovernView | null; projectId: string; actor: string; disabled: boolean; onSaved: () => void;
 }) {
   const guides = view?.token_guides;
-  const [editing, setEditing] = useState(false);
-  const [stage, setStage] = useState("");
-  const [cap, setCap] = useState("");
-  const [failure, setFailure] = useState<Failure | null>(null);
-  const [busy, setBusy] = useState(false);
   const def = guides?.default ?? null;
   const steps: TokenPolicy[] = guides?.per_step ?? [];
   const stageWord = (s: string) => s.replace(/_/g, " ");
@@ -434,33 +428,20 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
   const capped = steps.filter((p) => p.max_total_tokens_per_call)
     .sort((a, b) => Number(b.source === "stored") - Number(a.source === "stored"));
   const shownSteps = allSteps ? capped : capped.slice(0, 3);
-  const versionOf = (s: string) => {
-    const p = s === "*" ? def : steps.find((x) => x.stage === s);
-    return p?.source === "stored" && p.updated_at ? p.updated_at : "unset";
-  };
-  const save = async () => {
-    if (!stage) { setFailure({ text: "Pick a stage" }); return; }
-    const { value: n, error } = readNumber(cap, { min: 1000, whole: true });
-    if (n === null) { setFailure({ text: error === "Enter a number" ? "Enter tokens per call" : `${error} tokens` }); return; }
-    setBusy(true);
-    setFailure(null);
-    const r = await governWrite("token_cap", { project_id: projectId, actor, stage, max_total_tokens_per_call: Math.trunc(n) },
-                                versionOf(stage));
-    setBusy(false);
-    if (r.ok) {
-      showToast("success", `${stage === "*" ? "Project default" : stageWord(stage)} saved`);
-      setEditing(false); setStage(""); setCap("");
-      onSaved();
-    } else setFailure(failureOf(r, "token_cap"));
-  };
+  // A STORED daily token cap is enforced at the call gate (BOSSAPP-999 §3): a stage over it
+  // is refused until midnight UTC. The console's documented defaults remain guides — they
+  // must never read as a cap nobody set.
+  const defEnforced = def?.source === "stored" && !!def.max_tokens_per_day;
   return (
     <section className="gv-sec" aria-labelledby="gv-sec-tokens" data-advisory="true">
       <div className="gv-sec-head">
         <h3 id="gv-sec-tokens" className="gv-sec-head">TOKEN GUIDES</h3>
-        <span className="gv-badge" title="Shapes alerts and tips. Doesn't stop model calls.">Advisory</span>
+        <span className="gv-badge" title={defEnforced
+          ? "A stored daily token cap stops that stage's calls until midnight UTC. Per-call guides shape alerts only."
+          : "Shapes alerts and tips. Doesn't stop model calls."}>{defEnforced ? "Daily caps enforced" : "Advisory"}</span>
       </div>
       <ul className="gv-rows" role="list">
-        <li className="gv-row" data-advisory="true" data-testid="gv-control-token_default">
+        <li className="gv-row" data-advisory={defEnforced ? undefined : "true"} data-testid="gv-control-token_default">
           <span className="gv-name">Project default</span>
           <span className="gv-value">
             <span className="gv-value-main" data-testid="gv-value-token_default">
@@ -469,15 +450,17 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
             </span>
           </span>
           <span className="gv-source">{def ? (def.source === "stored" ? "Set here" : "Default") : ""}</span>
-          <span className="gv-enforced" data-advisory title="Shapes alerts and tips. Doesn't stop model calls.">Advisory</span>
+          {defEnforced
+            ? <span className="gv-enforced" title="A stage over its stored daily tokens is refused until midnight UTC">Enforced</span>
+            : <span className="gv-enforced" data-advisory title="Shapes alerts and tips. Doesn't stop model calls.">Advisory</span>}
           <span className="gv-evidence"><span title="BOSS doesn't record when this bites">{"—"}</span></span>
           <span className="gv-act" />
         </li>
-        <li className="gv-row" data-advisory="true" data-testid="gv-control-token_per_step" data-editing={editing || undefined}>
+        <li className="gv-row" data-advisory="true" data-testid="gv-control-token_per_step">
           <span className="gv-name">Per step</span>
           <span className="gv-value">
             <span className="gv-value-main gv-steps" data-user-text
-                  title="Tokens per model call, by step. Edit to change one.">
+                  title="Tokens per model call, by step — guides for alerts and tips.">
               {capped.length
                 ? shownSteps.map((p, i) => (
                   <React.Fragment key={p.stage}>{i ? ", " : ""}<span data-testid={`gv-step-${p.stage}`}
@@ -492,32 +475,16 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
           <span className="gv-source">{steps.some((p) => p.source === "stored") ? "Set here" : "Default"}</span>
           <span className="gv-enforced" data-advisory title="Shapes alerts and tips. Doesn't stop model calls.">Advisory</span>
           <span className="gv-evidence"><span title="BOSS doesn't record when this bites">{"—"}</span></span>
-          <span className="gv-act">
-            <GatedButton permission="policy:manage" type="button" className="ag-btn" data-testid="gv-token-edit" disabled={disabled}
-                    onClick={() => setEditing((e) => !e)}>Edit</GatedButton>
-          </span>
-          {editing ? (
-            <form className="gv-edit gv-edit-form" noValidate data-testid="gv-token-form"
-                  onSubmit={(e) => { e.preventDefault(); void save(); }}
-                  onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setEditing(false); } }}>
-              <select className="gv-input" aria-label="Stage" value={stage} onChange={(e) => setStage(e.target.value)}
-                      data-testid="gv-token-stage">
-                <option value="">Choose a stage…</option>
-                <option value="*">project default (*)</option>
-                {steps.map((p) => <option key={p.stage} value={p.stage}>{p.stage}</option>)}
-              </select>
-              <input className="gv-input" type="number" min={1000} step="any" placeholder="e.g. 48000"
-                     aria-label="Max tokens per call" value={cap} onChange={(e) => setCap(e.target.value)}
-                     data-testid="gv-token-cap" />
-              <span className="gv-edit-buttons">
-                <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="gv-token-save">Save</button>
-                <button type="button" className="ag-btn" onClick={() => setEditing(false)}>Cancel</button>
-              </span>
-              {failure ? <FailureLine failure={failure} onReload={() => { onSaved(); setEditing(false); }} /> : null}
-            </form>
-          ) : null}
+          <span className="gv-act" />
         </li>
       </ul>
+      {/* The per-call cap editor is gone (BOSSAPP-999 §3): it edited a guide that never
+          stopped a call. To stop calls by volume, set per-class caps — the `call_classes`
+          project setting (deny a class, or cap its calls/tokens per day). */}
+      <p className="gv-honesty" data-testid="gv-token-pointer">
+        Per-call figures are guides for alerts. To stop calls by volume, set per-class caps
+        {" "}(project setting <code>call_classes</code>: deny a class, or cap its calls/tokens per day).
+      </p>
     </section>
   );
 }

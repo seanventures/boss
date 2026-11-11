@@ -57,7 +57,7 @@ def ledger():
             " completion_tokens INTEGER, total_tokens INTEGER, cache_read_tokens INTEGER,"
             " cache_write_tokens INTEGER, cost_usd_micros INTEGER, price_estimated BOOLEAN,"
             " latency_ms INTEGER, retries INTEGER, turns INTEGER, ok BOOLEAN, error TEXT,"
-            " included_in_subscription BOOLEAN, act_id TEXT, route_id TEXT,"
+            " included_in_subscription BOOLEAN, call_class TEXT, act_id TEXT, route_id TEXT,"
             " created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"))
     set_llm_context(db_engine=db, project_id="p_contract", stage="implement")
     yield db

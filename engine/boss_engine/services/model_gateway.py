@@ -494,9 +494,13 @@ class ModelGatewayService:
         ttl_seconds: int,
         existing_reservation_id: Optional[str] = None,
         source_id: Optional[str] = None,
+        stage: Optional[str] = None,
     ) -> dict[str, Any]:
         """`source_id` pins the lease to the source that will actually answer — a typed decision
-        knows whether TypeSafe or the Claude CLI makes the call. Unpinned, the router chooses."""
+        knows whether TypeSafe or the Claude CLI makes the call. Unpinned, the router chooses.
+        `stage` is what the leased call will be ledgered under (the caller's invocation stage),
+        so the call-class gate (BOSSAPP-999) judges the lease by its real class; without one the
+        ambient telemetry stage answers, and a lease nobody named is class 'gateway'."""
         job = self.jobs.require_active_lease(
             connection, worker_id, job_id, job_lease_token
         )
@@ -535,6 +539,18 @@ class ModelGatewayService:
                 )
             self._check_legacy_lease(connection, project_id, dict(existing))
             return {"lease": self._serialize_lease(dict(existing)), "lease_token": None, "duplicate": True}
+
+        # THE CALL-CLASS GATE (BOSSAPP-999), on the lease path: a class the project denies or
+        # has capped for the day refuses the lease here, in words, before any source is chosen.
+        from . import call_classes
+        from .llm_telemetry import get_llm_context
+
+        lease_stage = stage or get_llm_context().get("stage")
+        try:
+            call_classes.authorize(connection, self.settings, project_id, stage=lease_stage,
+                                   call_class=None if lease_stage else "gateway")
+        except call_classes.CallClassRefused as refusal:
+            raise ModelCapacityDeniedError(str(refusal)) from refusal
 
         decision = self.entitlements.simulate_model_route_decision(
             connection,

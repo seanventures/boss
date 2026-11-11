@@ -315,6 +315,9 @@ class DiscoveryStageSpend:
                 max_usage={"total_tokens": 2_000_000},
                 dedupe_key=dedupe, ttl_seconds=self.ttl_seconds,
                 existing_reservation_id=reservation_id, source_id=source_id,
+                # A discovery stage's lease is class 'gateway' work unless the stage name
+                # says otherwise (call_classes, BOSSAPP-999).
+                stage=stage or "research",
             )
         except ModelCapacityDeniedError as denied:
             self.budget.release(connection, self.project_id, reservation_id, str(denied))

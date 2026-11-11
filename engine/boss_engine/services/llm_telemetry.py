@@ -15,6 +15,7 @@ controller and the model bake-off need. Two design constraints:
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Optional
 from uuid import uuid4
@@ -69,6 +70,49 @@ def clear_llm_context() -> None:
 
 def get_llm_context() -> dict:
     return dict(_llm_ctx.get())
+
+
+# ── Transient retries are ONE call in the ledger (BOSSAPP-1010) ───────────────────────────────
+#
+# The transient-retry wrapper (agent/transient._with_transient_retry) repeats the SAME logical
+# call on a provider hiccup. Each attempt used to land its own llm_calls row — two failed twins
+# beside the success — so one answer looked like three calls. Inside a retry scope, a FAILED
+# attempt's row is deferred: retried, it is folded into the final row's `retries`; not retried
+# (a non-transient error, attempts exhausted), it is written on the way out, with the fold
+# count it accumulated. Outside a scope nothing changes: a failure records at once, as the
+# BOSSAPP-998 conformance suite pins.
+
+_retry_scope: ContextVar[Optional[dict]] = ContextVar("llm_retry_scope", default=None)
+
+
+@contextmanager
+def transient_retry_scope():
+    """One logical call that may retry inside. Opened by the transient-retry wrapper around its
+    whole attempt loop; the seam defers failed rows into it, `fold_retry()` folds one on each
+    retry, and whatever failure is still pending when the scope closes is written exactly once."""
+    scope: dict = {"retries": 0, "pending": None}
+    token = _retry_scope.set(scope)
+    try:
+        yield scope
+    finally:
+        _retry_scope.reset(token)
+        pending = scope.get("pending")
+        if pending is not None:
+            # The last attempt failed and nobody retried it: ITS row, once, carrying how many
+            # folded attempts came before it. Outside the scope now, so it writes immediately.
+            record_llm_call(**pending)
+
+
+def fold_retry() -> bool:
+    """The attempt that just failed is about to be RETRIED: fold it into the final row instead
+    of recording it. True when a scope absorbed it; False means no scope is open and the
+    failure was already recorded the ordinary way (the caller changes nothing)."""
+    scope = _retry_scope.get()
+    if scope is None:
+        return False
+    scope["retries"] = int(scope.get("retries") or 0) + 1
+    scope["pending"] = None
+    return True
 
 
 # Which AGENT a pipeline stage belongs to — derived at write time so per-agent spend
@@ -239,6 +283,7 @@ def record_llm_call(
     billing: Optional[str] = None,
     connection=None,
     capacity: bool = True,
+    _folded_retries: int = 0,
 ) -> Optional[str]:
     """Insert one llm_calls row from the call result + the ambient context. Never raises.
     `route_id` / `project_id` name the model router's decision and project when the caller
@@ -258,10 +303,30 @@ def record_llm_call(
         from ..db import begin
         from .openai_adapter import price_for_model
 
+        scope = _retry_scope.get()
+        if scope is not None and not ok:
+            # Inside a transient-retry scope a FAILED attempt may be about to be retried as the
+            # same logical call (BOSSAPP-1010). Defer its row: fold_retry() absorbs it on a
+            # retry; the scope's exit writes it exactly once when nothing retried it.
+            scope["pending"] = dict(
+                engine_name=engine_name, usage=usage, cost_usd_micros=cost_usd_micros,
+                latency_ms=latency_ms, turns=turns, ok=ok, error=error, stage=stage,
+                route_id=route_id, project_id=project_id, billing=billing,
+                # Deferred to the scope's exit: the caller's connection/transaction may be gone
+                # by then, so the deferred row writes on its own short transaction.
+                connection=None, capacity=capacity,
+                # What this last attempt inherits when it is the one that lands: the
+                # attempts already folded before it.
+                _folded_retries=int(scope.get("retries") or 0))
+            return None
+
         ctx = dict(_llm_ctx.get())
         if project_id and not ctx.get("project_id"):
             ctx["project_id"] = project_id
         u = dict(usage or {})
+        folded = _folded_retries or (int(scope.get("retries") or 0) if scope else 0)
+        if folded:
+            u["retries"] = int(u.get("retries") or 0) + folded
         # The credential the adapter ran on, for a row whose usage carries no stamp (a failed
         # call): the same answer its successful calls give (included_spend.call_is_included).
         if billing and not u.get("billing"):
@@ -277,6 +342,11 @@ def record_llm_call(
         # model that is not money (included_spend.py): the row says so, and the code task's
         # budget settlement (code_task_service) charges only the rows that are money.
         included = engine_call_is_included(engine_name, u)
+        # EVERY ROW HAS A CLASS (BOSSAPP-999): derived from the stage the boundary named, total
+        # by construction — an unknown stage is 'other', never NULL, never a crash.
+        from .call_classes import class_of
+
+        call_class = class_of(stage or ctx.get("stage"))
         row_id = f"llmc_{uuid4().hex[:20]}"
 
         def _write(c) -> None:
@@ -305,10 +375,10 @@ def record_llm_call(
                         prompt_tokens, completion_tokens, total_tokens,
                         cache_read_tokens, cache_write_tokens, cost_usd_micros,
                         price_estimated, latency_ms, retries, turns, ok, error,
-                        included_in_subscription{signed[0]})
+                        included_in_subscription, call_class{signed[0]})
                     VALUES (:id, :p, :run, :stage, :eng, :model, :role, :pt, :ct, :tt,
                             :crt, :cwt, :cost, :pe, :lat, :retries, :turns, :ok, :err,
-                            :included{signed[1]})
+                            :included, :call_class{signed[1]})
                 """),
                 {
                     "id": row_id,
@@ -334,6 +404,7 @@ def record_llm_call(
                     "ok": bool(ok),
                     "err": (error or None) and str(error)[:500],
                     "included": included,
+                    "call_class": call_class,
                 },
             )
             # A PROVIDER'S CAPACITY IS A GOVERNED FACT, AND THIS IS WHERE IT IS OBSERVED.

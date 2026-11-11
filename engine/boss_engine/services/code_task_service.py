@@ -2872,8 +2872,12 @@ def refused_reservation(engine, jobs, *, run_id: str, project_id: str, reservati
     """
     message = str(reservation.get("message") or "Budget reservation denied.")
     if not reservation.get("transient"):
+        # A call-class refusal (BOSSAPP-999) rides the same refused-start reading, but it is
+        # the project's CLASS POLICY speaking, not the budget — say so, in the policy's words.
+        words = (message if reservation.get("refused_by") == "call_class"
+                 else f"The budget refused this code task: {message}")
         with _transaction(engine) as c:
-            return _fail(c, run_id, project_id, f"The budget refused this code task: {message}",
+            return _fail(c, run_id, project_id, words,
                          status="blocked", failure_class="needs_human",
                          reason_code="budget_denied")
     wait = int(reservation.get("retry_after_seconds") or 30)

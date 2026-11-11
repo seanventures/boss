@@ -515,7 +515,8 @@ def project_chat_adapter(connection: Any, settings: Any, project_id: Optional[st
         from .model_router.failover import RecordedChatAdapter
 
         adapter = RecordedChatAdapter(adapter, engine_name=choice.engine,
-                                      stage=_call_stage(purpose), project_id=project_id)
+                                      stage=_call_stage(purpose), project_id=project_id,
+                                      settings=settings)
     try:
         adapter._boss_choice = choice
         adapter._boss_route = decision
@@ -559,7 +560,7 @@ def _failover(adapter: Any, decision: Any, settings: Any, project_id: Optional[s
     # Every routed call is recorded (the seam, BOSSAPP-998); a caller that records its own
     # turns (agent_converse) switches the wrapper's `_record` off instead.
     return FailoverChatAdapter(adapter, decision, reroute, stage=_call_stage(purpose),
-                               project_id=project_id)
+                               project_id=project_id, settings=settings)
 
 
 def route_call(connection: Any, settings: Any, project_id: Optional[str], purpose: Any = None):
@@ -803,6 +804,15 @@ class GovernedChatAdapter:
         from .budget import BudgetGovernor
         from .receipts import ReceiptService
 
+        # THE CALL-CLASS GATE (BOSSAPP-999): governed() is where a skill's / the kernel's turns
+        # are authorized, so a project's class policy (deny, calls/tokens per day) refuses HERE,
+        # before any budget is held — in words, with an audit event, nothing sent to a model.
+        from . import call_classes
+        from .llm_telemetry import get_llm_context
+
+        call_classes.authorize(connection, self._settings, self._project_id,
+                               stage=(get_llm_context().get("stage")
+                                      or getattr(self._inner, "_stage", None)))
         project_id = self._project_id
         budget = BudgetGovernor(self._settings)
         reservation = budget.reserve(

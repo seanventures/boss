@@ -81,8 +81,6 @@ describe("the class", () => {
       if (cancel) await click(cancel);
     }
     expect(opened.length).toBeGreaterThanOrEqual(3);
-    await click($("[data-testid=gv-token-edit]"));
-    for (const form of $$("form")) expect((form as HTMLFormElement).noValidate, "token guide").toBe(true);
     unmount();
     vi.stubGlobal("fetch", fakeLogApi(newLog({ facets: FACETS })));
     window.history.replaceState({}, "", "/?area=activity");
@@ -101,14 +99,6 @@ describe("the class", () => {
     expect(sent("setting").at(-1)).toMatchObject({ value: "137" }); // the old knob body: a string
   });
 
-  it("a token guide of 48,500 is saved, not dropped by a step of 1,000", async () => {
-    await mount(<GovernHome projectId="p1" actor="ceo" />);
-    await click($("[data-testid=gv-token-edit]"));
-    await type($("[data-testid=gv-token-stage]"), "repair");
-    await type($("[data-testid=gv-token-cap]"), "48500");
-    await click($("[data-testid=gv-token-save]"));
-    expect(sent("token_cap").at(-1)).toMatchObject({ stage: "repair", max_total_tokens_per_call: 48500 });
-  });
 });
 
 describe("money never hides cents that differ", () => {
