@@ -214,6 +214,7 @@ def _plain_answer(wrapper: Any) -> Any:
         return None
 
     def call(*args: Any, **kwargs: Any) -> Any:
+        wrapper._gate()
         started = time.monotonic()
         try:
             result = inner_call(*args, **kwargs)
@@ -227,6 +228,16 @@ def _plain_answer(wrapper: Any) -> Any:
     return call
 
 
+def _class_gate(settings: Any, project_id: Optional[str], stage: str) -> None:
+    """THE CALL-CLASS GATE on the chat seam (BOSSAPP-999): the adapters BOSSAPP-998 made
+    recordable are exactly the ones that were ungoverned, so a project's class policy (deny a
+    class, cap its calls/tokens per day) is checked HERE, before anything reaches a provider.
+    A refusal raises in words — no provider call, no llm_calls row, one audit event."""
+    from ..call_classes import gate_call
+
+    gate_call(settings, project_id, stage)
+
+
 class RecordedChatAdapter:
     """A chat adapter whose every call lands in llm_calls, with the stage its boundary named.
 
@@ -237,12 +248,17 @@ class RecordedChatAdapter:
     `_record = False`, exactly as it does on the failover wrapper."""
 
     def __init__(self, inner: Any, *, engine_name: str, stage: str = "chat",
-                 project_id: Optional[str] = None, record: bool = True):
+                 project_id: Optional[str] = None, record: bool = True,
+                 settings: Any = None):
         self._inner, self._engine_name = inner, engine_name
         self._stage, self._project_id, self._record = stage, project_id, record
+        self._settings = settings
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
+
+    def _gate(self) -> None:
+        _class_gate(self._settings, self._project_id, self._stage)
 
     def _record_call(self, usage: Any, started: float, ok: bool, error: Optional[str]) -> None:
         if not self._record:
@@ -251,6 +267,7 @@ class RecordedChatAdapter:
                          ok=ok, error=error, stage=self._stage, project_id=self._project_id)
 
     def _call(self, method: str, usage_at: int, *args: Any, **kwargs: Any) -> Any:
+        self._gate()
         started = time.monotonic()
         try:
             result = getattr(self._inner, method)(*args, **kwargs)
@@ -278,13 +295,18 @@ class FailoverChatAdapter:
 
     def __init__(self, inner: Any, decision: Any,
                  reroute: Callable[[str], tuple[Any, Any]], *, stage: str = "chat",
-                 record: bool = True, project_id: Optional[str] = None):
+                 record: bool = True, project_id: Optional[str] = None,
+                 settings: Any = None):
         self._inner, self._decision = inner, decision
         self._reroute, self._stage, self._record = reroute, stage, record
         self._project_id = project_id
+        self._settings = settings
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
+
+    def _gate(self) -> None:
+        _class_gate(self._settings, self._project_id, self._stage)
 
     @property
     def route(self) -> Any:
@@ -302,7 +324,9 @@ class FailoverChatAdapter:
         return _plain_answer(self)
 
     def _call(self, method: str, usage_at: int, *args: Any, **kwargs: Any) -> Any:
+        self._gate()   # once per logical call: a failover hop is the same call, already allowed
         hops = 0
+        unfolded_hops = 0
         while True:
             started = time.monotonic()
             try:
@@ -319,10 +343,21 @@ class FailoverChatAdapter:
                 if decision is None or getattr(decision, "refused", False) or \
                         decision.engine in ("", self._decision.engine):
                     raise
+                # ONE LOGICAL CALL, HOWEVER MANY SOURCES IT TOOK (BOSSAPP-1010). Inside a
+                # transient-retry scope the failed attempt above was deferred — fold it into
+                # the final row's `retries`. Outside one it was already recorded (as the
+                # BOSSAPP-998 suite pins), so the success row still says how many attempts.
+                from ..llm_telemetry import fold_retry
+
+                if not fold_retry():
+                    unfolded_hops += 1
                 self._inner, self._decision = inner, decision
                 continue
             usage = result[usage_at] if isinstance(result, tuple) and len(result) > usage_at \
                 else {}
+            if unfolded_hops and isinstance(usage, dict):
+                usage = {**usage,
+                         "retries": int(usage.get("retries") or 0) + unfolded_hops}
             self._record_call(usage, started, True, None)
             return result
 

@@ -615,6 +615,9 @@ def build_agent_class():
                 if result is None:
                     raise RuntimeError("claude agent sdk session ended without a result")
                 data = dict(result)
+                # How many attempts this answer took (BOSSAPP-1010): a session retried past a
+                # transient failure or a lost resume is ONE logical call whose row says so.
+                data["_retries"] = attempt
                 data["_turns"] = list(parser.turns)
                 if parser.rate_limit is not None:
                     data.setdefault("_rate_limit", parser.rate_limit)
@@ -655,6 +658,9 @@ def build_agent_class():
 
             usage["billing"] = BILLING_METERED
             usage["source_id"] = API_KEY_SOURCE_ID
+            if data.get("_retries"):
+                # The session loop's attempt count, onto the row (llm_calls.retries).
+                usage["retries"] = int(usage.get("retries") or 0) + int(data["_retries"])
             return usage, cost
 
     return ClaudeAgentSdkAgent

@@ -478,8 +478,11 @@ def test_thresholds_act_as_before(engine, ledger):
     assert red["defer_seconds"] == 900 and red["reason"] == "red_halts_non_p0_work"
 
 
-def test_token_guides_stay_advisory(client, engine):
-    """A per-call token policy shapes alerts and tips; nothing that runs a model reads it."""
+def test_per_call_token_guides_stay_advisory_daily_caps_now_enforce(client, engine):
+    """The per-CALL token policy still shapes alerts and tips only. The DECIDED change
+    (BOSSAPP-999 §3, audit §7.2): the per-DAY half (max_tokens_per_day) is now enforced through
+    the call-class gate — call_classes.py is the one runtime reader allowed in, and it reads
+    stored rows only (test_call_classes_governed.py holds the enforcement itself)."""
     put = client.put("/v1/token-efficiency/policies", json={
         "project_id": PROJECT, "actor": "ceo",
         "policies": [{"stage": "implement", "max_total_tokens_per_call": 1000}]})
@@ -492,7 +495,10 @@ def test_token_guides_stay_advisory(client, engine):
         path.name for path in services.glob("*.py")
         if "token_budget_policies" in path.read_text(encoding="utf-8")
     )
-    assert readers == ["token_efficiency.py"], readers
+    assert readers == ["call_classes.py", "token_efficiency.py"], readers
+    # And the gate reads only the per-day column: the per-call cap has no runtime reader.
+    gate = (services / "call_classes.py").read_text(encoding="utf-8")
+    assert "max_tokens_per_day" in gate and "max_total_tokens_per_call" not in gate
 
 
 def test_allocation_rules_unchanged(engine, ledger):

@@ -1190,6 +1190,10 @@ class Settings(BaseSettings):
     # BOSSAPP-622: what agents are given from the knowledge graph (project_settings `knowledge_graph`):
     # on | keyword | off (knowledge/runtime.MODES).
     knowledge_graph: str = Field(default="on", alias="BOSS_KNOWLEDGE_GRAPH")
+    # BOSSAPP-999: per-class governance over every model call (project_settings `call_classes`,
+    # services/call_classes.py): {"<class>": {"allow": bool, "calls_per_day": int|null,
+    # "tokens_per_day": int|null}}. None/unset means everything allowed, no caps — inert.
+    call_classes: Optional[dict] = Field(default=None, alias="BOSS_CALL_CLASSES")
     # BOSSAPP-807: what happens when a spend cap (or a project's monthly limit) is reached —
     # project_settings `budget_at_limit` (services/spend_limits.py): pause (ask a person, today's
     # behaviour), cheaper (keep going on low-cost models) or stop (nothing runs until it resets).

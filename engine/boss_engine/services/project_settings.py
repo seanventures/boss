@@ -149,6 +149,20 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "models. stop: nothing runs until the period resets.",
         "kind": "choice", "choices": ["pause", "cheaper", "stop"],
     },
+    # PER-CLASS CALL GOVERNANCE (BOSSAPP-999, services/call_classes.py): deny a class of model
+    # calls outright, or cap it by calls-per-day / tokens-per-day — VOLUME caps, because a
+    # $0-settling subscription call cannot be money-capped. Enforced where calls are authorized
+    # (governed(), the gateway lease, the chat adapter seam). Unset = everything allowed.
+    "call_classes": {
+        "attr": "call_classes",
+        "label": "Model call classes",
+        "help": "Per-class rules over every model call, as JSON: "
+                '{"<class>": {"allow": true|false, "calls_per_day": n, "tokens_per_day": n}}. '
+                "Classes: build_stage, chat, panel, decision, proof, kg, bench, gateway, other. "
+                "A denied or over-cap call is refused in words before anything reaches a model. "
+                "Unset: everything allowed, no caps.",
+        "kind": "call_classes",
+    },
     # THE MODEL PRE-CHECK at the start door (workflow_precheck_agent.py). OFF unless turned on:
     # it is a model call, so it costs money and time on every start it runs at.
     "workflow_precheck_agent": {
@@ -682,6 +696,10 @@ def coerce(key: str, value: Any) -> Any:
                 f"{spec['label']}: '{name}' is not a harness BOSS can drive. "
                 f"Available: {', '.join(allowed)}.")
         return name
+    if spec["kind"] == "call_classes":
+        from .call_classes import coerce_policy
+
+        return coerce_policy(value)
     return value
 
 

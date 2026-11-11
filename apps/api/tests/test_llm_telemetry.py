@@ -106,7 +106,8 @@ CREATE TABLE llm_calls (
     turns INTEGER NOT NULL DEFAULT 0,
     ok BOOLEAN NOT NULL DEFAULT 1,
     error TEXT,
-    included_in_subscription BOOLEAN NOT NULL DEFAULT 0
+    included_in_subscription BOOLEAN NOT NULL DEFAULT 0,
+    call_class TEXT
 )
 """
 

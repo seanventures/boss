@@ -4675,15 +4675,28 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if run.get("reservation_id"):
             _release(budget, c, project_id, run["reservation_id"],
                      "re-entry: the earlier attempt's hold settled", run_id=run_id)
-        # THE BUILD IS UNDER THE PROJECT'S CAPS (build_budget): its estimate at marginal cost
-        # ($0 on a subscription — a gate, refused once the cap's money is spent). A cap with
-        # no room refuses the start here, in the governor's words (refused_reservation).
-        reservation = budget.reserve(
-            c, project_id, category="code_task",
-            amount_usd_micros=_build_budget.reservation_estimate(c, settings, project_id),
-            reason=f"governed code task: {title[:64]}",
-            expires_in_minutes=_build_budget.RESERVATION_MINUTES, job_id=job_id,
-            risk_tier=spec.get("risk_tier"))
+        # THE CALL-CLASS GATE (BOSSAPP-999): a project that denies 'build_stage' calls, or whose
+        # daily class volume is spent, refuses the build HERE — before any budget is held, with
+        # the policy's words on the blocked run, through the same refused-start reading below.
+        try:
+            from .call_classes import CallClassRefused as _ClassRefused
+            from .call_classes import authorize as _authorize_class
+
+            _authorize_class(c, settings, project_id, call_class="build_stage")
+        except _ClassRefused as refusal:
+            reservation = {"status": "refused", "message": str(refusal), "transient": False,
+                           "refused_by": "call_class"}
+        else:
+            # THE BUILD IS UNDER THE PROJECT'S CAPS (build_budget): its estimate at marginal
+            # cost ($0 on a subscription — a gate, refused once the cap's money is spent). A
+            # cap with no room refuses the start here, in the governor's words
+            # (refused_reservation).
+            reservation = budget.reserve(
+                c, project_id, category="code_task",
+                amount_usd_micros=_build_budget.reservation_estimate(c, settings, project_id),
+                reason=f"governed code task: {title[:64]}",
+                expires_in_minutes=_build_budget.RESERVATION_MINUTES, job_id=job_id,
+                risk_tier=spec.get("risk_tier"))
     if reservation.get("status") != "reserved":
         return refused_reservation(engine, jobs, run_id=run_id, project_id=project_id,
                                    reservation=reservation, fencing_token=fencing_token)

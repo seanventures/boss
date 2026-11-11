@@ -14,7 +14,7 @@ import { rawRequestUrl } from "../../../lib/raw-request-url";
  * plus the version the screen showed as `If-Match`.
  *
  * GET  ?project_id=&view=limits|spend|envelopes|daily|project_limits[&window=]
- * POST {op, ...}  setting · pace · pace_preview · cap_preview · monthly_cap · token_cap ·
+ * POST {op, ...}  setting · pace · pace_preview · cap_preview · monthly_cap ·
  *                 reconcile · initiative · limits · project_limit
  */
 export const dynamic = "force-dynamic";

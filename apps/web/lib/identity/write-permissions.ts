@@ -164,7 +164,7 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
   // lib/govern.ts `governWrite(op, …)` → /api/govern → lib/govern-ops.ts (the two previews only read)
   "lib/govern.ts#governWrite": {
     setting: "settings:update", pace: "budget:manage", pace_preview: "self", cap_preview: "self", // budget:read, which opening Govern needs
-    monthly_cap: "budget:manage", token_cap: "policy:manage", reconcile: "budget:manage", initiative: "budget:manage",
+    monthly_cap: "budget:manage", reconcile: "budget:manage", initiative: "budget:manage",
     limits: "budget:manage", project_limit: "budget:manage", // Govern › Limits (BOSSAPP-807)
   },
   // lib/setup-client.ts `setupWrite(projectId, op, …)` → /api/setup → /v1/setup/*

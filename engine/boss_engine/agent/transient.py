@@ -39,24 +39,32 @@ def _with_transient_retry(call, attempts: int = 3, backoff: float = 2.0):
 
     `call` must be safe to run again. A model completion is. A chat turn that has already
     executed redeploy / start_preview / write_db is not — retry that completion, not the turn.
-    """
-    last: BaseException
-    for attempt in range(attempts):
-        try:
-            return call()
-        except BaseException as exc:  # noqa: BLE001 — re-raised below unless transient
-            last = exc
-            if attempt == attempts - 1 or not _looks_transient(exc):
-                raise
-            # A retry that cannot finish inside the turn is not worth starting.
-            from ..services.call_deadline import MIN_CALL_SECONDS, remaining
 
-            left = remaining()
-            if left is not None and left < backoff * (attempt + 1) + MIN_CALL_SECONDS:
-                raise
-            _log.warning(
-                "answer attempt %d/%d hit a transient provider error (%s) — retrying in %.0fs",
-                attempt + 1, attempts, type(exc).__name__, backoff * (attempt + 1),
-            )
-            time.sleep(backoff * (attempt + 1))
-    raise last
+    THE LEDGER SEES ONE CALL (BOSSAPP-1010): the attempts run inside a telemetry retry scope,
+    so a hiccup that is retried here is folded into the final llm_calls row's `retries` instead
+    of landing as its own failed twin — "failed twice then succeeded" is ONE row, retries=2.
+    """
+    from ..services.llm_telemetry import fold_retry, transient_retry_scope
+
+    last: BaseException
+    with transient_retry_scope():
+        for attempt in range(attempts):
+            try:
+                return call()
+            except BaseException as exc:  # noqa: BLE001 — re-raised below unless transient
+                last = exc
+                if attempt == attempts - 1 or not _looks_transient(exc):
+                    raise
+                # A retry that cannot finish inside the turn is not worth starting.
+                from ..services.call_deadline import MIN_CALL_SECONDS, remaining
+
+                left = remaining()
+                if left is not None and left < backoff * (attempt + 1) + MIN_CALL_SECONDS:
+                    raise
+                fold_retry()   # the failed attempt becomes `retries` on the final row
+                _log.warning(
+                    "answer attempt %d/%d hit a transient provider error (%s) — retrying in %.0fs",
+                    attempt + 1, attempts, type(exc).__name__, backoff * (attempt + 1),
+                )
+                time.sleep(backoff * (attempt + 1))
+        raise last
