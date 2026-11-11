@@ -216,6 +216,12 @@ class TypedDecisionSpend:
     skill_id = SKILL_ID
     preferred_capabilities = ("classify",)
     stage = "typed_decision"
+    #: Whether the model call this spend settles ALREADY wrote its own llm_calls row through
+    #: llm_telemetry.record_llm_call (a converse turn, a research session, a CLI proof). True
+    #: tells the gateway settlement to write no second row -- every call lands in the ledger
+    #: exactly once (BOSSAPP-998). A typed decision's decider records nothing itself, so the
+    #: settlement is its recorder.
+    llm_call_recorded = False
 
     def __init__(
         self,
@@ -824,6 +830,7 @@ class TypedDecisionSpend:
             actual_cost_usd_micros=actual,
             observed_capacity={"capacity_state": "available"},
             error={},
+            llm_call_recorded=bool(getattr(self, "llm_call_recorded", False)),
         )
         output = dict(output)
         output["receipt_id"] = authority.receipt_id
@@ -914,6 +921,7 @@ class TypedDecisionSpend:
             actual_cost_usd_micros=actual,
             observed_capacity=capacity_after_failure(error),
             error=evidence,
+            llm_call_recorded=bool(getattr(self, "llm_call_recorded", False)),
         )
         try:
             self.jobs.fail(

@@ -887,11 +887,17 @@ def governed_proof(engine, settings: Settings, project_id: str, provider: str, a
         # submission boundary. Replay and authority refusal create no new call.
         from .llm_telemetry import get_llm_context, set_llm_context
         before = get_llm_context()
+        marker = before.get("last_llm_call_id")
         set_llm_context(route_id=_proof_route(engine, project_id, provider),
                         stage="connection_proof", project_id=project_id, db_engine=engine)
         try:
             return bound_prove(bound) if bound_prove else prove()
         finally:
+            # A CLI proof records its own llm_calls row (cli_harness.run_role); an API-key
+            # probe does not, and a CLI that failed before any model contact (a dead login)
+            # does not either. Tell the settlement which happened, so the gateway writes the
+            # row exactly when nothing else did (one row per call, BOSSAPP-998).
+            spend.llm_call_recorded = get_llm_context().get("last_llm_call_id") != marker
             set_llm_context(**{key: before.get(key) for key in
                               ("route_id", "stage", "project_id", "db_engine")})
 

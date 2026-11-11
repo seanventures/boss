@@ -508,12 +508,27 @@ def project_chat_adapter(connection: Any, settings: Any, project_id: Optional[st
     else:
         choice = choose(connection, resolved, project_id)
         adapter = adapter_for(choice, connection, resolved, project_id)
+        # THE FIXED HALF OF THE RECORDING SEAM (BOSSAPP-998): every adapter this function
+        # returns records its calls to llm_calls exactly once — the Smart path above inside
+        # FailoverChatAdapter, this path here. Before this, Fixed-mode chat turns, panel seats
+        # and decisions (the chattiest call class) wrote no ledger row at all.
+        from .model_router.failover import RecordedChatAdapter
+
+        adapter = RecordedChatAdapter(adapter, engine_name=choice.engine,
+                                      stage=_call_stage(purpose), project_id=project_id)
     try:
         adapter._boss_choice = choice
         adapter._boss_route = decision
     except Exception:  # noqa: BLE001 — a slotted adapter just goes unannotated
         pass
     return adapter
+
+
+def _call_stage(purpose: Any) -> str:
+    """The llm_calls stage a chat-shaped call is ledgered under: the purpose's own step
+    ("chat", "panel_member", "agent_decision", a skill's step), else the router's generic
+    name for an unnamed boundary."""
+    return getattr(purpose, "step", None) or "model_call"
 
 
 def _failover(adapter: Any, decision: Any, settings: Any, project_id: Optional[str],
@@ -541,10 +556,10 @@ def _failover(adapter: Any, decision: Any, settings: Any, project_id: Optional[s
                                 resolved, project_id, model=nxt.model)
         return inner, nxt
 
-    stage = getattr(purpose, "step", None) or "chat"
-    # agent_converse records its own turns; everything that names a purpose is recorded here.
-    return FailoverChatAdapter(adapter, decision, reroute, stage=stage,
-                               record=purpose is not None)
+    # Every routed call is recorded (the seam, BOSSAPP-998); a caller that records its own
+    # turns (agent_converse) switches the wrapper's `_record` off instead.
+    return FailoverChatAdapter(adapter, decision, reroute, stage=_call_stage(purpose),
+                               project_id=project_id)
 
 
 def route_call(connection: Any, settings: Any, project_id: Optional[str], purpose: Any = None):

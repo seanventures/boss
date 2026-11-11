@@ -240,7 +240,7 @@ class ArchitectureSpend(TypedDecisionSpend):
 
     def generate(self, settings, adapter, *, prompt: str, system_prompt: str,
                  version: int, check_work: Callable[[], None]) -> tuple[str, str, dict]:
-        from .model_router.failover import FailoverChatAdapter
+        from .model_router.failover import FailoverChatAdapter, RecordedChatAdapter
         from .openai_adapter import single_attempt
 
         check_work()
@@ -251,7 +251,9 @@ class ArchitectureSpend(TypedDecisionSpend):
                 "Architecture needs a connected, identified model source for a pinned lease.")
         # Smart fallback is another source/call and needs its own authority. This
         # document version makes one pinned call; failures are visible to the operator.
-        if isinstance(adapter, FailoverChatAdapter):
+        # The recording wrapper comes off with it: this call settles through the model
+        # gateway, which ledgers it (one llm_calls row per call, BOSSAPP-998).
+        while isinstance(adapter, (FailoverChatAdapter, RecordedChatAdapter)):
             adapter = adapter._inner
         material = json.dumps({"prompt": prompt, "system_prompt": system_prompt,
                                "version": version}, sort_keys=True)

@@ -40,6 +40,9 @@ class ConversationCallSpend(ArchitectureSpend):
     skill_id = "agent.conversation"
     preferred_capabilities = ("writing",)
     stage = "converse"
+    #: agent_converse records every turn itself (its `record()` writes the stage-converse row
+    #: on success AND failure), so the gateway settlement must not write a second one.
+    llm_call_recorded = True
     max_reply_bytes = 1_048_576
     max_usage_bytes = 65_536
     producer_failed = False
@@ -162,7 +165,7 @@ class ConversationCallSpend(ArchitectureSpend):
         deadline scope at the first `next()`. Its `close()` is the provider's close."""
         from .call_deadline import TurnDeadlineExceeded, until
         from .included_spend import source_by_id, source_is_included
-        from .model_router.failover import FailoverChatAdapter
+        from .model_router.failover import FailoverChatAdapter, RecordedChatAdapter
         from .openai_adapter import single_attempt
 
         check_work()
@@ -172,7 +175,7 @@ class ConversationCallSpend(ArchitectureSpend):
             raise TypedDecisionSpendError(
                 "Conversation needs an identified connected model source."
             )
-        if isinstance(adapter, FailoverChatAdapter):
+        while isinstance(adapter, (FailoverChatAdapter, RecordedChatAdapter)):
             adapter = adapter._inner  # one pinned provider, never a router fallback
         material = json.dumps({"prompt": prompt, "system_prompt": system_prompt}, sort_keys=True)
         identity = (

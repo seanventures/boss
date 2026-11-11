@@ -176,9 +176,13 @@ class DiscoveryStageSpend:
         except (DiscoveryStopped, LeaseNotFoundError, ModelGatewayLeaseError) as stopped:
             self._finish(authority, stage, None, stopped, submitted=False)
             raise
+        from .llm_telemetry import get_llm_context
+
+        marker = get_llm_context().get("last_llm_call_id")
         try:
             result = call()
         except Exception as error:  # noqa: BLE001 — every outcome is recorded below
+            self._note_recorded(marker)
             reason = error
             if _uncertain(reason):
                 self.commit(lambda c: self._reconcile(c, authority, stage, reason))
@@ -188,7 +192,16 @@ class DiscoveryStageSpend:
                 ) from reason
             self._finish(authority, stage, None, reason, submitted=True)
             raise
+        self._note_recorded(marker)
         return self._finish(authority, stage, result, None, submitted=True)
+
+    def _note_recorded(self, marker) -> None:
+        """Whether the stage's call wrote its own llm_calls row while it ran (a research
+        session records itself through llm_telemetry; a stub in a test may not). The gateway
+        settlement then writes no second row — exactly one per call (BOSSAPP-998)."""
+        from .llm_telemetry import get_llm_context
+
+        self.llm_call_recorded = get_llm_context().get("last_llm_call_id") != marker
 
     def check_active(self, connection) -> None:
         from .jobs import job_run_id
@@ -348,6 +361,7 @@ class DiscoveryStageSpend:
             observed_capacity=({"capacity_state": "available"} if succeeded
                                else capacity_after_failure(error)),
             error={} if succeeded else {"reason": str(error)[:500]},
+            llm_call_recorded=bool(getattr(self, "llm_call_recorded", False)),
         )
         # Tell Setup whether this source's login works: a rejected login is shown as broken
         # there instead of green "Connected" while every call fails.
