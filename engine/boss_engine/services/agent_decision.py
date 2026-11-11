@@ -78,6 +78,18 @@ SKILL_ID = "model.agent_decision"
 ROUTE_KIND = "agent"
 ROUTE_STEP = "agent_decision"
 
+#: K2 (BOSSAPP-961, HARNESS_KERNEL_DESIGN.md §8.1): with this set, the READ PHASE and its final
+#: choice run on the harness kernel (`kernel.run` with presets.decision) instead of
+#: `_ask_reading`'s own loop. Off (the default) is byte-identical to today. Jev, the candidates,
+#: the no-model answer and the confidence bar stay caller-side either way.
+KERNEL_FLAG = "BOSS_KERNEL_DECISIONS"
+
+
+def kernel_decisions() -> bool:
+    import os
+
+    return (os.environ.get(KERNEL_FLAG) or "").strip().lower() in ("1", "true", "yes", "on")
+
 DECIDED = "decided"
 CLARIFY = "clarify"
 NO_MODEL = "no_model"
@@ -697,6 +709,83 @@ def _ask_reading(adapter: Any, system: str, prompt: str, *, read: ReadPhase,
             "turns": turns, "by": who}
 
 
+def _ledger_sink(connection: Any) -> Any:
+    """The run-ledger sink for a kernel decision run: DbSink on the caller's engine while
+    BOSS_LEDGER_EVENTS is on, else None. Never raises: the ledger never stops a decision."""
+    try:
+        from ..kernel import ledger
+
+        engine = getattr(connection, "engine", None)
+        if connection is None or engine is None or not ledger.enabled():
+            return None
+        return ledger.DbSink(engine)
+    except Exception:  # noqa: BLE001 — a decision without its ledger is still a decision
+        return None
+
+
+def _ask_reading_on_kernel(adapter: Any, system: str, prompt: str, *, read: ReadPhase,
+                           candidates: Sequence[Candidate],
+                           check: Optional[Callable[[dict, str], str]], corpus: str,
+                           raw_adapter: Any = None, project_id: str = "",
+                           sink: Any = None) -> dict:
+    """`_ask_reading` ON THE HARNESS KERNEL (K2, BOSS_KERNEL_DECISIONS): the same read phase,
+    caps and spend rule (presets.decision), the same acceptance (`_accept` against the corpus
+    plus every read result, re-asked once), run by `kernel.run` — held equal to the old loop by
+    test_kernel_conformance.py, except §8.4's intended differences (a transient provider error
+    is retried; a malformed read call is refused before the tool runs). Returns _ask_reading's
+    dict shape; never raises: a model that fails is a result.
+
+    Governance: when `decide` routed the model itself, the kernel's GovernedEngine reserves,
+    receipts and settles each call through the SAME project gate `_routed` built
+    (GovernedChatAdapter.reserve_turn/settle_turn, kernel/governance.AdapterGate); a caller's
+    own adapter keeps whatever governance it came with, as today."""
+    from .. import kernel
+    from ..kernel.governance import AdapterGate
+    from ..kernel.presets import decision as decision_preset
+    from .workflow_precheck_agent import _who_answered
+
+    raw = raw_adapter if raw_adapter is not None else adapter
+    gate = (AdapterGate(adapter)
+            if adapter is not raw and callable(getattr(adapter, "reserve_turn", None)) else None)
+    engine = kernel.OpenAIChatEngine(raw if gate is not None else adapter)
+    who = _who_answered(adapter)
+
+    def accept(answered: Any, state: Any) -> Any:
+        answer, why = _accept(answered, candidates, check,
+                              "\n".join([corpus] + list(state.rendered)))
+        return kernel.Acceptance(ok=answer is not None, why=why, structured=answer)
+
+    can_tool = bool(read.tools) and read.run is not None
+    tools = kernel.ReadOnlyToolSet(
+        list(read.tools or ()) if can_tool else [],
+        read.run or (lambda name, args: {"ok": False, "error": "no read tools offered"}))
+    result = kernel.run(kernel.RunSpec(
+        engine=engine, tools=tools,
+        policies=decision_preset(max_turns=read.max_turns, max_usd_micros=read.max_usd_micros,
+                                 result_chars=read.result_chars, accept=accept),
+        project_id=project_id or "", system=system,
+        messages=[{"role": "user", "content": prompt}],
+        actor="agent_decision", stage=ROUTE_STEP, gate=gate, sink=sink))
+    cost, turns = int(result.usage.cost_usd_micros or 0), int(result.steps or 0)
+    if result.status == "completed" and isinstance(result.structured, Mapping):
+        return {"answer": dict(result.structured), "cost": cost, "turns": turns,
+                "by": {**who, "model": result.usage.model or who.get("model") or ""}}
+    if result.status == "completed":
+        # The closing turn asked for tools it was not offered instead of answering.
+        return {"answer": None, "refused": result.error or "not the JSON object asked for",
+                "cost": cost, "turns": turns, "by": who}
+    if result.stopped in ("refused", "steps", "cost"):
+        return {"answer": None, "refused": result.error or "no answer within the turn cap",
+                "cost": cost, "turns": turns, "by": who}
+    # A model failure is a result, in _ask_reading's words: a budget deferral is said as such
+    # (never waited for here — a caller may be inside a runner's tick), and nothing is decided.
+    deferred = result.stopped == "budget_wait_limit"
+    return {"answer": None,
+            "error": (("the model budget deferred the turn: " if deferred else "")
+                      + (result.error or result.stopped or "the model gave no answer")[:300]),
+            "cost": cost, "turns": turns, "by": who}
+
+
 # ── The seam ──────────────────────────────────────────────────────────────────────────────────
 
 def decide(connection: Any, settings: Any, project_id: str, *, situation: str, message: str,
@@ -758,11 +847,18 @@ def decide(connection: Any, settings: Any, project_id: str, *, situation: str, m
                 decider = TypeSafeDecider(settings)
             got = _ask_jev(decider, system + "\n\n" + prompt, candidates)
         else:
+            raw = adapter
             if adapter is None and envelope is None:
-                adapter, _raw = _routed(connection, settings, project_id, ref, message)
+                adapter, raw = _routed(connection, settings, project_id, ref, message)
             if read is not None:
-                got = _ask_reading(adapter, system, prompt, read=read, candidates=candidates,
-                                   check=check, corpus=corpus)
+                if kernel_decisions():
+                    got = _ask_reading_on_kernel(
+                        adapter, system, prompt, read=read, candidates=candidates, check=check,
+                        corpus=corpus, raw_adapter=raw, project_id=project_id,
+                        sink=_ledger_sink(connection))
+                else:
+                    got = _ask_reading(adapter, system, prompt, read=read,
+                                       candidates=candidates, check=check, corpus=corpus)
             elif structured:
                 got = _ask_structured(adapter, system, prompt, candidates=candidates,
                                       check=check, corpus=corpus, envelope=envelope)

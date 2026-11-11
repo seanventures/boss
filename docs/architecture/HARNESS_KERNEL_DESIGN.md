@@ -876,6 +876,34 @@ Corrections made while building, each because the design as written would not ho
    writer of the transcript), one event per stored turn with `content_ref` naming the
    `agent_turns` row — not by a new parser beside it.
 
+### 8.2b What K2 changed against this design (built 2026-11-10, feat/958-kernel)
+
+K2 is live behind `BOSS_KERNEL_DECISIONS` (default off, byte-identical off): `agent_decision.
+decide`'s READ PHASE and final choice run on `kernel.run` with `presets.decision`, a
+`ReadOnlyToolSet` over the caller's ReadPhase tools, and `_accept` (the candidate/arguments/
+evidence check plus the caller's own `check`) as the VerifyPolicy's `accept_final`, re-asked
+once (`_ask_reading_on_kernel`, agent_decision.py). Jev, candidates, hints, the confidence bar
+and the no-model reply stay caller-side. Corrections made while building:
+
+1. **§2.3 "GovernedEngine … applied by the kernel, never by call sites" is narrowed to the
+   runs the kernel OWNS the adapter for.** When `decide` routes the model itself, the kernel's
+   `GovernedEngine` reserves/receipts/settles each call through the SAME `GovernedChatAdapter`
+   that `_routed` builds (`kernel/governance.AdapterGate`), and the engine wraps the raw
+   adapter. An adapter the CALLER hands in keeps whatever governance it came with (it may
+   already be governed, or be a test stub) — wrapping it in a second gate would reserve twice.
+2. **§8.1 K2's proof line names `evals/task_rigor`, which lives on feat/958-p0-measure** and
+   scores the keyword rules without touching `decide`. K2 is proven instead by the conformance
+   suite's decision scenarios (flag-independent) plus `test_kernel_decisions.py` at the
+   `decide` seam, and the decision/recovery/stuck-work/incident-squad suites run with the flag
+   on and off.
+3. **One pinned edge:** a model that answers the no-tools closing turn with tool calls ends the
+   run through the kernel's `closing_offer` (completed, no structured answer); the caller maps
+   that to the old loop's refusal words ("not the JSON object asked for") so the AgentDecision
+   a caller reads is the same.
+4. **Ledger:** a kernel decision run hands `kernel.run` a `DbSink` only while
+   `BOSS_LEDGER_EVENTS` is on and the caller has a connection (`_ledger_sink`); a decision
+   without a database still decides, with events on the result only.
+
 ### 8.4 Intended differences pinned by the K1 conformance suite
 
 `engine/tests/test_kernel_conformance.py` holds the kernel byte-equal to each old loop on the
