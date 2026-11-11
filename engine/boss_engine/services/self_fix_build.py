@@ -19,10 +19,16 @@ writes a diagnosis, a test and a diff; BOSS decides everything else.
   6 GATES (F16), none waivable: protected_paths, tests_not_weakened, scope_matches_diagnosis,
     no_new_dependencies, size, red_then_green (re-proven on a clean base), affected_suites
     (nothing that passed on the base fails), p0_tier, no_committed_secrets.
-  7 REVIEW. Code, security, regression and consistency seats, read-only; the security seat on
-    ANOTHER engine when one is connected (always asked whether the change widens what BOSS, its
-    agents or its host commands can do). Open findings get one repair round; still open →
-    `refused: review`.
+  7 REVIEW. Code, security and consistency seats, read-only. Seats on the SAME lane (engine and
+    model) share ONE batched session answering each seat under its own verdict contract
+    (BOSSAPP-1002: four sequential sessions per repair round were 12.6% of spend); the security
+    seat on ANOTHER engine when one is connected (always asked whether the change widens what
+    BOSS, its agents or its host commands can do) keeps its own session. A batched session that
+    does not answer every seat falls back to one session per seat — a seat is never skipped.
+    The regression seat is BOSS's own TEST RUN, not a model opinion: the recorded red_then_green,
+    affected_suites and p0_tier runs on this round's diff (nothing that passed on the base may
+    fail), as the governed pipeline's regression stage is. Open findings get one repair round;
+    still open → `refused: review`.
   8 PR. A commit with Mender's trailers on `boss/self-fix/<sfx>-<slug>` in the mirror (BOSS's
     pipeline writes it, never the sandbox), and the local PR record the console renders.
   9 THE CARD. A tier-2 or tier-3 decision, bound to the exact diff and test results by its
@@ -55,6 +61,11 @@ MAX_REPAIR_ROUNDS = 2
 MAX_DIAGNOSIS_TRIES = 2
 MAX_RED_TRIES = 2
 REVIEW_SEATS = ("review_code", "security_check", "regression", "consistency_check")
+#: The seats a model holds. `regression` is NOT one (BOSSAPP-1002): it is a deterministic
+#: comparison of real test runs (regression_verdict), never a model opinion.
+MODEL_REVIEW_SEATS = ("review_code", "security_check", "consistency_check")
+#: The one batched session carrying every co-located seat's ask (same engine, same model).
+BATCH_STAGE = "self_fix_review_batch"
 TEST_TIMEOUT = 900
 
 
@@ -100,6 +111,10 @@ class Engines:
         mender = {"engine": self.builder_name, "model": self.builder_model or "default"}
         out = {stage: dict(mender) for stage in ("diagnose", "write_test", "fix")}
         for seat in REVIEW_SEATS:
+            if seat == "regression":
+                # No model holds this seat: it is BOSS's own test runs (BOSSAPP-1002).
+                out[seat] = {"engine": "deterministic", "model": "tests"}
+                continue
             _, engine, model = self.seat(seat)
             out[seat] = {"engine": engine, "model": model or "default"}
         return out
@@ -624,6 +639,98 @@ def review_prompt(seat: str, sfx: Mapping[str, Any], diagnosis: Mapping[str, Any
         f"THE DIFF:\n{diff[:30_000]}",
         "Answer with lines `FINDING: <BLOCKER|MAJOR|MINOR> <file>:<line> — <what>` for anything "
         "wrong, then one last line: `VERDICT: PASS` or `VERDICT: FINDINGS`.") if p)
+
+
+def batched_review_prompt(seats: list[str], sfx: Mapping[str, Any],
+                          diagnosis: Mapping[str, Any], diff: str, verdict: sp.PathVerdict,
+                          context: str = "") -> str:
+    """ONE session for every seat on the same lane (BOSSAPP-1002): the seats' asks do not depend
+    on each other's answer, so one read of the diff serves them all. Each seat keeps its own
+    verdict contract; the answer is parsed per seat (parse_batched_review), and an answer that
+    misses a seat falls back to the sequential path."""
+    flags = ", ".join(verdict.flags) or "none"
+    detail = "; ".join(sum((list(v) for v in verdict.flag_detail.values()), []))[:1200]
+    asks = "\n\n".join(
+        f"SEAT {seat}: {_SEAT_ASK[seat]}"
+        + (f"\n{HOST_REMOVAL_RULE}" if seat in ("security_check", "regression") else "")
+        for seat in seats)
+    return "\n\n".join(p for p in (
+        f"You hold {len(seats)} independent review seats for a BOSS self-fix: a change BOSS's "
+        "maintainer agent made to BOSS's own source. Read only. Answer EVERY seat below, each "
+        "on its own question and its own evidence; one seat's verdict never leans on another's.",
+        asks,
+        f"Diagnosis: {diagnosis.get('hypothesis')}",
+        f"Tier {verdict.tier}; flags: {flags}" + (f" ({detail})" if detail else ""),
+        context,
+        f"THE DIFF:\n{diff[:30_000]}",
+        "Answer with one block PER SEAT, in the order above. Each block starts with the line "
+        "`SEAT: <seat name>`, then lines `FINDING: <BLOCKER|MAJOR|MINOR> <file>:<line> — "
+        "<what>` for anything wrong in THAT seat's question, then one line `VERDICT: PASS` or "
+        "`VERDICT: FINDINGS`. Every seat needs its own VERDICT line.") if p)
+
+
+_SEAT_LINE = re.compile(r"^\s*`?SEAT`?:\s*`?([a-z_]+)`?\s*$", re.I | re.M)
+
+
+def parse_batched_review(text: str, seats: list[str]) -> Optional[dict[str, dict[str, Any]]]:
+    """{seat: parse_review of its block} from one batched answer, or None when any asked seat
+    is missing or carries no verdict — the caller then runs the seats one by one, so a batched
+    session that fails never skips a seat."""
+    body = str(text or "")
+    marks = [(m.start(), m.end(), m.group(1).lower()) for m in _SEAT_LINE.finditer(body)]
+    blocks: dict[str, str] = {}
+    for i, (_, end, name) in enumerate(marks):
+        until = marks[i + 1][0] if i + 1 < len(marks) else len(body)
+        blocks[name] = body[end:until]  # a repeated seat name: its last block is the answer
+    out: dict[str, dict[str, Any]] = {}
+    for seat in seats:
+        block = blocks.get(seat, "")
+        parsed = parse_review(block)
+        if parsed["verdict"] == "none":
+            return None
+        parsed["summary"] = block.strip()[-1500:]
+        out[seat] = parsed
+    return out
+
+
+#: The gate runs the regression seat reads: each is a REAL run of BOSS's tests on the base and
+#: with the fix, by the pipeline's own runner, recorded by check() for this round's diff.
+_REGRESSION_RUNS = ("red_then_green", "affected_suites", "p0_tier")
+
+
+def regression_verdict(gates: Mapping[str, Any]) -> dict[str, Any]:
+    """THE REGRESSION SEAT IS A TEST RUN PLUS A COMPARISON, NOT A MODEL OPINION (BOSSAPP-1002,
+    mirroring the governed pipeline's regression stage): did everything that passed on the base
+    still pass with the fix? The evidence is the recorded gate runs of this round's diff
+    (red_then_green, affected_suites, p0_tier — the runner's own base-vs-head comparisons). A
+    missing or failed run is a BLOCKER, never a pass: the seat fails closed. The verdict keeps
+    the model seats' exact shape downstream."""
+    findings: list[dict[str, str]] = []
+    compared = 0
+    for name in _REGRESSION_RUNS:
+        gate = gates.get(name)
+        if not isinstance(gate, Mapping) or "ok" not in gate:
+            findings.append({"severity": "BLOCKER",
+                             "what": f"the {name} test run is missing: the regression check is "
+                                     "a run-and-compare, and this round has no recorded run"})
+            continue
+        detail = gate.get("detail") if isinstance(gate.get("detail"), Mapping) else {}
+        compared += int(detail.get("tests") or 0)
+        if not gate.get("ok"):
+            findings.append({"severity": "BLOCKER",
+                             "what": f"{name}: {gate.get('why') or 'the run failed'}"})
+        for test in [*(detail.get("broke") or []), *(detail.get("gone") or [])][:30]:
+            findings.append({"severity": "BLOCKER",
+                             "what": f"{test} passed on BOSS as it is and fails with the fix "
+                                     f"({name})"})
+    ok = not findings
+    summary = ("Regression by test run, not opinion: " + ", ".join(_REGRESSION_RUNS)
+               + f" compared on the base and with the fix ({compared} affected/P0 test file(s))"
+               + (". Nothing that passed on the base fails." if ok
+                  else f". {len(findings)} finding(s)."))
+    return {"ok": ok, "verdict": "PASS" if ok else "FINDINGS", "findings": findings,
+            "open": [] if ok else list(findings), "engine": "deterministic", "model": "tests",
+            "summary": summary}
 
 
 _VERDICT = re.compile(r"VERDICT:\s*(PASS|FINDINGS|CLEAN|SURVIVED|REFUTED)", re.I)
@@ -1333,21 +1440,67 @@ class Build:
             call_path(work, entry, location) if entry else "",
             # The invariants as the BASE wrote them: the fix may have edited the docstrings.
             self._base_invariants(work, base_sha, location, entry)) if c)
-        for seat in REVIEW_SEATS:
+        # THE REGRESSION SEAT IS DETERMINISTIC (BOSSAPP-1002): a comparison of the test runs
+        # check() just recorded for this round's diff, never a model session.
+        seats["regression"] = regression_verdict(dict(sfx.get("gates") or {}))
+        # The model seats, grouped by lane (the agent, its engine, its model): co-located seats
+        # share ONE batched session; the security seat on another engine keeps its own.
+        groups: list[tuple[tuple[int, str, str], list[str]]] = []
+        for seat in MODEL_REVIEW_SEATS:
             agent, engine_name, model = self.engines.seat(seat)
-            answer = self.turn(agent, f"self_fix_{seat}", review_prompt(
-                seat, sfx, diagnosis, diff, verdict, context), work, read_only=True,
-                model=model)
-            parsed = parse_review(answer)
-            parsed["engine"] = engine_name
-            parsed["model"] = model or "default"
-            parsed["summary"] = answer[-1500:]
-            seats[seat] = parsed
+            key = (id(agent), engine_name, model or "")
+            for existing, members in groups:
+                if existing == key:
+                    members.append(seat)
+                    break
+            else:
+                groups.append((key, [seat]))
+        batched: list[str] = []
+        fell_back = False
+        for _, members in groups:
+            agent, engine_name, model = self.engines.seat(members[0])
+            parsed_many: Optional[dict[str, dict[str, Any]]] = None
+            if len(members) > 1:
+                try:
+                    answer = self.turn(agent, BATCH_STAGE, batched_review_prompt(
+                        members, sfx, diagnosis, diff, verdict, context), work,
+                        read_only=True, model=model)
+                    parsed_many = parse_batched_review(answer, members)
+                except Stop as stop:
+                    # A BATCHED SESSION THAT FAILS FALLS BACK to one session per seat — a
+                    # seat is never skipped. A cancel (kill switch, the record gone) stands.
+                    if stop.cancel:
+                        raise
+                    parsed_many = None
+                if parsed_many is None:
+                    fell_back = True
+                    self.say(f"{sf.AGENT_NAME}: the batched review session did not answer "
+                             "every seat; running the seats one by one.")
+                else:
+                    batched.extend(members)
+            if parsed_many is None:
+                parsed_many = {}
+                for seat in members:
+                    answer = self.turn(agent, f"self_fix_{seat}", review_prompt(
+                        seat, sfx, diagnosis, diff, verdict, context), work, read_only=True,
+                        model=model)
+                    parsed = parse_review(answer)
+                    parsed["summary"] = answer[-1500:]
+                    parsed_many[seat] = parsed
+            for seat in members:
+                parsed = parsed_many[seat]
+                parsed["engine"] = engine_name
+                parsed["model"] = model or "default"
+                seats[seat] = parsed
+        seats = {seat: seats[seat] for seat in REVIEW_SEATS}
+        for seat, parsed in seats.items():
             open_findings.extend({**f, "seat": seat} for f in parsed["open"])
         separate = self.engines.separate_reviewer
         self.write(review={"seats": seats, "security_engine": self.engines.reviewer_name,
                            "lanes": self.engines.lanes(),
                            "security_on_another_engine": separate,
+                           "batched_seats": batched,
+                           **({"review_fallback": "sequential"} if fell_back else {}),
                            "note": "" if separate else
                            "reviewed by the same engine in a separate session"})
         return open_findings
@@ -1753,7 +1906,9 @@ def execute_job(engine: Any, settings: Any, *, self_fix_id: str, job_id: str, wo
     return Build(engine=engine, settings=settings, sfx_id=self_fix_id, note=note).run()
 
 
-__all__ = ["Build", "Engines", "MAX_REPAIR_ROUNDS", "REVIEW_SEATS", "Stop", "build_engines",
-           "commit_message", "diagnose_prompt", "engine_names", "execute_job",
-           "implement_prompt", "labels", "parse_diagnosis", "parse_review", "pr_body",
-           "review_prompt", "test_wrong", "trailers", "write_test_prompt"]
+__all__ = ["BATCH_STAGE", "Build", "Engines", "MAX_REPAIR_ROUNDS", "MODEL_REVIEW_SEATS",
+           "REVIEW_SEATS", "Stop", "batched_review_prompt", "build_engines", "commit_message",
+           "diagnose_prompt", "engine_names", "execute_job", "implement_prompt", "labels",
+           "parse_batched_review", "parse_diagnosis", "parse_review", "pr_body",
+           "regression_verdict", "review_prompt", "test_wrong", "trailers",
+           "write_test_prompt"]

@@ -48,7 +48,8 @@ With this feature, the same decision starts a **self-fix**. The person's only jo
                                    3 smallest fix, test GREEN
                                    4 mechanical gates: protected paths, test integrity,
                                      scope, affected suites, P0 tests                    (R2 R3 R4 R16)
-                                   5 reviewers: code, security, regression, consistency
+                                   5 reviewers: code, security, consistency — one batched
+                                     session per lane; regression = a deterministic test run
                                    6 local PR on boss/self-fix/<sfx>  (+ fork if any)   (R10 R18)
                                          │
                                          ▼
@@ -310,7 +311,7 @@ Test rules written into the brief and checked in Stage 6:
 | `p0_tier` | The P0 list from `tests/tiers.yaml`, including `test_the_public_tree_names_no_private_infrastructure.py` and the redaction tests |
 | `no_committed_secrets` | As today |
 
-**Stage 7. Reviewers.** The existing panel, all seats on: `review_code`, `security_check`, `regression`, `consistency_check`, with profile `strict` and `risk_tier ≥ 2`. Two additions for a self-fix:
+**Stage 7. Reviewers.** The existing panel, all seats on: `review_code`, `security_check`, `regression`, `consistency_check`, with profile `strict` and `risk_tier ≥ 2`. Seats on the same lane (engine and model) share **one batched session** answering each seat under its own verdict contract; a batched session that does not answer every seat falls back to one session per seat (BOSSAPP-1002). The `regression` seat is **deterministic**: a comparison of the recorded test runs on this round's diff (`red_then_green`, `affected_suites`, `p0_tier` — nothing that passed on the base may fail), never a model opinion, mirroring the governed pipeline's regression stage. Two additions for a self-fix:
 - the security seat always runs on a **different engine from the implementer** when more than one is connected (the governed pipeline already supports adversary roles on another engine);
 - the security seat is told what the diff is: BOSS's own code, with the `host_effect` and `protected_adjacent` flags (§8.1), and is asked specifically whether the change widens what BOSS, its agents or its host commands can do.
 
@@ -1172,7 +1173,7 @@ The gates were right; fix quality was the gap. What changed (`5789b1ab2` and aft
 
 | Lever | As built |
 |---|---|
-| Lanes | Mender's diagnose, test and fix stages run on the hard-problems lane (`code_agent_strong_engine`/`_model`, else the build lane; `BOSS_SELF_FIX_MODEL` overrides). The security seat runs on the review engine with its own model; the code, regression and consistency seats in fresh sessions on the review lane's model. A lane's model is never handed to another engine. Recorded as `review.lanes` and `seats[].model`. Config and routing only: no engine-specific path |
+| Lanes | Mender's diagnose, test and fix stages run on the hard-problems lane (`code_agent_strong_engine`/`_model`, else the build lane; `BOSS_SELF_FIX_MODEL` overrides). The security seat runs on the review engine with its own model; the code and consistency seats share one batched session on the review lane's model (the security seat joins it when its lane is the same); the regression seat is a deterministic test-run comparison, on no model at all. A lane's model is never handed to another engine. Recorded as `review.lanes` and `seats[].model`. Config and routing only: no engine-specific path |
 | The production path | `ENTRY_POINTS`: a deploy self-fix whose evidence names the stack deployment failed in `stack_deploy.apply_on_host`. Mender is shown that function's calls into its module (the diagnosed one marked) at every stage, and the reviewers too |
 | Safety invariants | From the base's own source: the docstrings of the diagnosed function and of every function in those files whose source removes something on a host (`docker rm`, `down --remove-orphans`, `rm -rf`, …), and the existing tests that pin the diagnosed function. The reviewers get them from the base, not from the fix |
 | `drives_entry_point` (a new gate) | When the entry point is known, a test that failed on the base must call it, directly or through a helper or fixture of its own file (AST, with the base run's junit outcomes). At RED it is asked once more; among the gates it is re-proven on the clean base and final |
