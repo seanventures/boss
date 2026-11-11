@@ -177,6 +177,9 @@ class FailoverAgent:
     def run_role(self, *args: Any, **kwargs: Any) -> Any:
         return self._call("run_role", *args, **kwargs)
 
+    def run_plain(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call("run_plain", *args, **kwargs)
+
     def run_research(self, *args: Any, **kwargs: Any) -> Any:
         return self._call("run_research", *args, **kwargs)
 

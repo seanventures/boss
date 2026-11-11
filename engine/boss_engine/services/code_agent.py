@@ -969,7 +969,7 @@ class ClaudeCodeAgent:
     engine = "claude_code"
     capabilities = EngineCapabilities(resume=True, read_only=True, effort=True, sub_agents=True,
                                       turn_limit=True, reports_cost=True, streams_turns=True,
-                                      budget_limit=True,
+                                      budget_limit=True, plain_completion=True,
                                       # Its "read-only" review is an allowed-tools list that
                                       # still includes Bash with auto-approval — an unconfined
                                       # shell in the tree under review. The contract therefore
@@ -1569,6 +1569,51 @@ class ClaudeCodeAgent:
             "stop_reason": ("turn_cap" if data.get("subtype") == "error_max_turns" else "done"),
         }
 
+    def _plain_adapter(self, model: Optional[str]):
+        """The lean one-shot backend `run_plain` answers on: `claude -p` with its own short
+        system prompt, no toolbelt and no MCP servers (ClaudeCliAdapter._invoke_plain — the
+        same ~450-token form the chat, meeting and subject_answer generations ride). The Agent
+        SDK engine overrides this with its SDK chat adapter (agent_sdk_engine)."""
+        from .claude_cli_adapter import ClaudeCliAdapter
+
+        return ClaudeCliAdapter(self.settings, model=model)
+
+    def run_plain(self, prompt: str, *, model: Optional[str] = None) -> dict:
+        """One single-turn, tool-less generation (engine_contract.run_verdict's plain path):
+        the verdict's whole context is in the prompt, so nothing of Claude Code's ~34k-token
+        agentic preamble or tool schemas is loaded. Same ledger row as every other call on this
+        engine — record_llm_call, with the stage from the ambient telemetry context."""
+        if getattr(self, "redact", False):  # data-boundary: mask PII for restricted tasks
+            prompt = _redact_pii(prompt)[0]
+        adapter = self._plain_adapter(model)
+        started = time.monotonic()
+        try:
+            data = adapter._invoke_plain("", prompt)   # "" selects its GENERATION_SYSTEM
+        except Exception as exc:
+            failed_model = model or getattr(self.settings, "claude_cli_model", None) or ""
+            record_llm_call(engine_name=self.engine, usage={"model": failed_model},
+                            latency_ms=int((time.monotonic() - started) * 1000),
+                            ok=False, error=str(exc),
+                            billing=getattr(adapter, "_billing", None) or None)
+            raise
+        usage = adapter._usage(data)
+        cost_micros = int(usage.get("cost_usd_micros") or 0)
+        turns = int(data.get("num_turns") or 1)
+        record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
+                        latency_ms=int((time.monotonic() - started) * 1000), turns=turns)
+        summary = _as_text(data.get("result")).strip()
+        record_agent_turns([{"direction": "completion", "content": summary, "turn_index": 0}],
+                           engine_name=self.engine, model=usage.get("model"), prompt=prompt)
+        return {
+            "summary": summary or "(no summary returned)",
+            "usage": usage,
+            "cost_usd_micros": cost_micros,
+            "turns": turns,
+            "model": usage.get("model"),
+            "session_id": data.get("session_id"),
+            "stop_reason": "done",
+        }
+
     def run_research(self, prompt: str, *, model: Optional[str] = None) -> dict:
         """Web-enabled, read-only research invocation: `claude -p` with WebSearch/WebFetch
         (no repo, no edits). Used by the Discovery pipeline to gather real market signals.
@@ -1682,9 +1727,10 @@ class NativeCodeAgent:
 
     engine = "native"
     #: No session store (BOSS seeds a new session instead), no effort or sub-agents; a real
-    #: read-only toolset, a turn budget, an estimated cost and a per-turn transcript.
+    #: read-only toolset, a turn budget, an estimated cost, a per-turn transcript and a plain
+    #: one-shot completion (run_plain) for single-turn verdicts.
     capabilities = EngineCapabilities(read_only=True, turn_limit=True, reports_cost=True,
-                                      streams_turns=True)
+                                      streams_turns=True, plain_completion=True)
 
     _EDIT_SYS = (
         "You are an expert engineer working in a checked-out git repository (files shown below). "
@@ -2001,6 +2047,46 @@ class NativeCodeAgent:
             result["pending_args_preview"] = redacted_preview(pending_args)
         return result
 
+    def run_plain(self, prompt: str, *, model: Optional[str] = None) -> dict:
+        """One single-turn, tool-less completion (engine_contract.run_verdict's plain path):
+        no repo context and no tool loop — the verdict's whole context is in the prompt. The
+        same lean system prompt every plain generation runs on (ClaudeCliAdapter, imported for
+        its words only: this call still goes to THIS engine's chat API)."""
+        from .claude_cli_adapter import ClaudeCliAdapter
+        from .openai_adapter import estimate_cost_usd_micros
+
+        started = time.monotonic()
+        try:
+            msg, usage = self._llm.create_chat_completion(
+                [{"role": "system", "content": ClaudeCliAdapter.GENERATION_SYSTEM},
+                 {"role": "user", "content": prompt}],
+                model_override=model or None,
+                redact=getattr(self, "redact", False),
+            )
+        except Exception as exc:
+            record_llm_call(engine_name=self.engine, usage={"model": model or ""},
+                            latency_ms=int((time.monotonic() - started) * 1000),
+                            ok=False, error=str(exc))
+            raise
+        cost_micros = estimate_cost_usd_micros(usage)
+        record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
+                        latency_ms=int((time.monotonic() - started) * 1000), turns=1)
+        summary = _as_text(msg.get("content")).strip()
+        try:
+            record_agent_turns(
+                [{"direction": "completion", "content": summary, "turn_index": 0}],
+                engine_name=self.engine, model=model or usage.get("model") or "", prompt=prompt)
+        except Exception:  # noqa: BLE001 — a transcript never fails a verdict
+            pass
+        return {
+            "summary": summary or "(no summary)",
+            "usage": usage,
+            "cost_usd_micros": cost_micros,
+            "turns": 1,
+            "model": usage.get("model"),
+            "stop_reason": "done",
+        }
+
     @tidies_workspace
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
@@ -2299,6 +2385,15 @@ class PacedCodeAgent:
 
     def run_role(self, *args, **kwargs):
         return self._paced(self._inner.run_role, *args, **kwargs)
+
+    def run_plain(self, *args, **kwargs):
+        # A plain verdict is still a model call on this provider's lane, so it is paced like
+        # every other. An engine with no plain path answers None without taking a slot.
+        fn = getattr(self._inner, "run_plain", None)
+        if not callable(fn) or not getattr(getattr(self._inner, "capabilities", None),
+                                           "plain_completion", False):
+            return None
+        return self._paced(fn, *args, **kwargs)
 
     def run_research(self, *args, **kwargs):
         return self._paced(self._inner.run_research, *args, **kwargs)

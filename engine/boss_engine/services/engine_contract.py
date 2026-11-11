@@ -241,6 +241,12 @@ class EngineCapabilities:
     #: OS sandbox). True sends review seats to the throwaway copy, same as an engine with no
     #: read-only mode at all: a reviewer must never be able to touch the tree it is judging.
     read_only_shell: bool = False
+    #: Answers a one-shot, tool-less completion on its own lean prompt (`run_plain`). A
+    #: single-turn verdict whose whole context is in the prompt rides it (`run_verdict`) for
+    #: ~450 tokens of per-call overhead instead of the ~34k an agentic CLI session carries.
+    #: False is never a failure: the verdict runs the old route, a read-only agentic session
+    #: in an empty temporary directory.
+    plain_completion: bool = False
 
     def as_dict(self) -> dict[str, bool]:
         return {k: bool(getattr(self, k)) for k in self.__dataclass_fields__}
@@ -465,6 +471,22 @@ class ContractedAgent:
         LEDGER.record(sid, prompt=prompt, summary=result["summary"], parent=parent)
         return result
 
+    def run_plain(self, prompt: str, *, model: Optional[str] = None) -> Optional[dict]:
+        """The engine's plain one-shot completion in the common result schema, or None when
+        the engine has none (the caller keeps the old agentic route — `run_verdict` does
+        exactly that). No session bookkeeping: a plain completion is never resumed."""
+        fn = getattr(self._inner, "run_plain", None)
+        if not callable(fn) or not self.capabilities.plain_completion:
+            return None
+        if model and str(model).strip().lower() == self.engine.lower():
+            model = None   # an engine's NAME is not a model (see run_role)
+        result = normalise_result(fn(prompt, model=model), engine=self.engine, model=model,
+                                  caps=self.capabilities)
+        if result["stop_reason"] == "error":
+            raise EngineSessionFailed(f"{self.engine} failed: {result['summary'][:300]}")
+        result["transport"] = "plain"
+        return result
+
     def run_research(self, *args: Any, **kwargs: Any) -> Any:
         fn = getattr(self._inner, "run_research", None)
         if fn is None:
@@ -543,3 +565,57 @@ def contracted(agent: Any) -> Any:
     if isinstance(inner, ContractedAgent):
         return agent
     return ContractedAgent(agent)
+
+
+# ── Single-turn verdicts ──────────────────────────────────────────────────────────────────────
+
+def _is_no_direct_answer(error: Exception) -> bool:
+    """Whether a plain completion failed only because the model reached for a tool it does
+    not have (claude_cli_adapter._judge_generation) — the one failure the agentic route, which
+    has turns to recover in, would not have had."""
+    try:
+        from .model_failures import NO_DIRECT_ANSWER
+
+        return NO_DIRECT_ANSWER in str(error)
+    except Exception:  # noqa: BLE001 — classification must never mask the real error
+        return False
+
+
+def run_verdict(agent: Any, prompt: str, *, max_turns: Optional[int] = None,
+                model: Optional[str] = None, temp_prefix: str = "boss-verdict-") -> dict:
+    """One single-turn structured ask — a judgement/verdict whose WHOLE context is in the
+    prompt — on whatever engine `agent` is (KG role judgements, rulebook extraction, the
+    regulatory trace judge, rule scans).
+
+    These calls used to each run a full agentic session: a fresh CLI process carrying ~34k
+    tokens of coding preamble and tool schemas into an EMPTY temporary directory, to return one
+    JSON object. An engine that can answer plainly (capabilities.plain_completion) now answers
+    on its own lean completion path (~450 tokens of overhead) in the SAME result schema, with
+    its llm_calls row recorded by the engine as before (the stage comes from the ambient
+    telemetry context either way). An engine with no plain path — and any test fake that only
+    implements run_role — keeps the old route verbatim: a read-only agentic session in an empty
+    temporary directory. A plain answer that failed only because the model reached for a tool
+    falls back to that same old route, so the degradation only ever re-adds the old cost.
+
+    NOT for multi-turn or tool-using work: a session that must read files or run commands keeps
+    run_role and a real working directory.
+    """
+    plain = getattr(agent, "run_plain", None)
+    if callable(plain) and capabilities_of(agent).plain_completion:
+        try:
+            result = plain(prompt, model=model)
+        except Exception as error:  # noqa: BLE001 — only a tool-reach falls back; the rest raise
+            if not _is_no_direct_answer(error):
+                raise
+            log.info("plain verdict on %s reached for a tool; retrying on the agentic route",
+                     getattr(agent, "engine", "?"))
+            result = None
+        if result is not None:
+            out = dict(result)
+            out["transport"] = "plain"
+            return out
+    with tempfile.TemporaryDirectory(prefix=temp_prefix) as cwd:
+        out = dict(agent.run_role(prompt, Path(cwd), read_only=True,
+                                  max_turns=max_turns) or {})
+    out["transport"] = "agentic"
+    return out

@@ -461,6 +461,11 @@ def build_agent_class():
             return (model or getattr(self.settings, "agent_sdk_model", "")
                     or DEFAULT_MODEL)
 
+        def _plain_adapter(self, model: Optional[str]):
+            # The plain one-shot (run_plain) on THIS engine's transport and credential: a
+            # tool-less SDK session on the Anthropic API key, never the `claude` binary.
+            return make_chat_adapter(self.settings, model=self._model(model))
+
         def _options(self, *, cwd: Path, read_only: bool, allowed: str, permission: str,
                      max_turns: int, model: str, resume: Optional[str], shared_ctx: str,
                      fan_out: int, effort: Optional[str],

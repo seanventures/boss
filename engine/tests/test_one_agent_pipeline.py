@@ -38,6 +38,8 @@ SIGNS = {
     "create_plain_answer": "calls a model (text)",
     "run_agent_loop": "runs its own tool loop",
     "run_role": "drives a coding engine",
+    "run_verdict": "drives a coding engine (a single-turn verdict on the contract)",
+    "run_plain": "calls a model (a plain one-shot on a coding engine)",
     "run_research": "drives a research engine",
     "make_code_agent": "builds a coding engine",
     "TypeSafeDecider": "builds a decision model",

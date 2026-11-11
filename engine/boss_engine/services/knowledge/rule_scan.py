@@ -39,7 +39,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1073,9 +1072,13 @@ def scan(
                 report["stopped_by"], detail = "budget_refused", str(refused)[:300]
                 break
             try:
-                with tempfile.TemporaryDirectory(prefix="boss-rule-scan-") as cwd:
-                    result = agent.run_role(prompt, Path(cwd), read_only=True,
-                                            max_turns=MAX_TURNS) or {}
+                # A single-turn structured ask: the code is in the prompt (numbered above), so
+                # a plain-capable engine answers on its lean completion path; any other engine
+                # keeps the old agentic session in an empty temp dir (engine_contract.run_verdict).
+                from ..engine_contract import run_verdict
+
+                result = run_verdict(agent, prompt, max_turns=MAX_TURNS,
+                                     temp_prefix="boss-rule-scan-") or {}
             except Exception as error:  # noqa: BLE001 — said in the report; what was proposed stays
                 governor.fail(held_budget, error)
                 from ..redaction import redact_secrets
