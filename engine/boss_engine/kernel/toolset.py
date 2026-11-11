@@ -148,7 +148,7 @@ class RegistryToolSet:
         not exposed here is left out, one not CORE here is `deferred` (offered only once
         find_tools returns it). A spec with no exposure, or the flag off, is offered plainly —
         conservative: nothing a surface has today is lost."""
-        from .scoped_tools import enabled
+        from .scoped_tools import enabled, surface_view
 
         if not callable(getattr(self.registry, "specs", None)):
             # A registry that only speaks the adapter shape (chat's test doubles hand
@@ -157,21 +157,20 @@ class RegistryToolSet:
             return [ToolSchema.from_openai(s) for s in self.registry.openai_schema()
                     if str(((s.get("function") or s) if isinstance(s, Mapping) else {})
                            .get("name") or "") not in self.exclude]
-        scoped = enabled()
+        # The ONE derivation of a surface's view (core/deferred/hidden), shared with the old
+        # CLI chat loop (scoped_tools.surface_view) so the two paths cannot disagree.
+        view = surface_view(self.registry, self.surface) if enabled() else None
         out: list = []
         for s in self.registry.specs():
             if s.name in self.exclude:
                 continue
-            deferred = False
-            exposure = getattr(s, "exposure", None)
-            if scoped and exposure is not None:
-                if self.surface not in exposure.surfaces:
-                    continue
-                deferred = self.surface not in exposure.core_for
+            standing = (view or {}).get(s.name, "core")
+            if standing == "hidden":
+                continue
             out.append(ToolSchema(name=s.name, description=s.description,
                                   parameters=dict(s.parameters), kind=s.kind,
                                   reversibility=getattr(s, "reversibility", "safe"),
-                                  deferred=deferred))
+                                  deferred=standing == "deferred"))
         return out
 
     def invoke(self, call: ToolCall, *, state: RunState,

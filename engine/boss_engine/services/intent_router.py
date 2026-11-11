@@ -17,6 +17,7 @@ from .canonical import CanonicalObjectService
 from .capability_manifest import CapabilityManifest
 from . import agent_decision, model_routing
 from .code_task_service import start_code_task
+from .cli_chat_session import in_turn_scope
 from .core import stable_dedupe_key, emit_event, make_id
 from .offer_label import button_label as _offer_label
 from .turn_budget import TurnBudget, continue_steps, for_turn as _budget_for_turn
@@ -1787,6 +1788,11 @@ class IntentRouter:
             )
         return self._answer_agent_obj
 
+    # THE CHAT TURN SCOPE (BOSSAPP-1006 + 1007): on a CLI engine that can resume, the turn's
+    # decision call STARTS the turn's one CLI session and every answer pass's tool steps RESUME
+    # it — one session per turn instead of a fresh `claude -p` per step
+    # (services/cli_chat_session.py). On any other engine the scope is inert.
+    @in_turn_scope
     def route_turn(
         self,
         connection: Connection,
@@ -2799,7 +2805,7 @@ class IntentRouter:
                         # FOUR STEPS WAS THE BUG, not a tuning choice.
                         #
                         # A step is one model round-trip, and a step that calls tools produces
-                        # no text. The system prompt above lists ~47 tools and says "chain
+                        # no text. The system prompt above offers the turn's tools and says "chain
                         # tools — several calls is normal and correct"; four round-trips were
                         # consumed investigating and none was left to answer, so every real
                         # diagnostic question returned "(reached the step limit while working)"

@@ -694,6 +694,10 @@ def make_chat_adapter(settings: Any, *, model: Optional[str] = None):
     class AgentSdkChatAdapter(ClaudeCliAdapter):
         _session_default = "agent-sdk"
         _engine_name = ENGINE
+        #: Each SDK call is its own session; this adapter does not resume one by id, so a chat
+        #: turn here stays byte-identical to before BOSSAPP-1007 (the engine-contract rule for
+        #: engines without caps.resume).
+        _chat_resume = False
 
         def _child_env(self) -> dict:
             env, cred = key_env(self.settings, agent_environment(os.environ))
