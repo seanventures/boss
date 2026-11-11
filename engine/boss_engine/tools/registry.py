@@ -78,6 +78,91 @@ def offer_warning(spec: "ToolSpec") -> str:
 # handler(ctx, *, project_id, actor, args) -> dict
 ToolHandler = Callable[..., dict]
 
+#: The surfaces a tool can be offered on (HARNESS_KERNEL_DESIGN.md §5.1).
+SURFACES = ("chat", "agent_step", "decision", "build", "mcp")
+
+
+@dataclass(frozen=True)
+class Exposure:
+    """WHERE A TOOL IS RELEVANT BY DEFAULT (K5, design §5.1). Grants stay where they are
+    (role_skills / role_mcp_servers hold what an agent MAY use); Exposure says where a tool is
+    worth a model's context. The offered set is grant ∩ surface ∩ (core ∪ found): a kernel run
+    with BOSS_SCOPED_TOOLS on (kernel/scoped_tools.py) sees the surface's `core_for` tools plus
+    `find_tools`, and every other surface-eligible tool is DEFERRED — found by name/description
+    search, then offered from the next step on. With the flag off nothing changes.
+
+    Conservative by construction: `surfaces` defaults to everything chat and MCP see today, so
+    declaring an Exposure never takes a tool away from a surface that has it — only `core_for`
+    (what rides in every call's schema block) is the scarce set, capped by the lint test
+    (test_tool_exposure.py).
+
+      surfaces      where the tool may be offered at all: chat | agent_step | decision | build | mcp
+      tags          one or two words find_tools ranks on ("builds", "deploy", "kg", ...)
+      core_for      surfaces that always see it un-deferred (chat core ≤20, lint-capped)
+      stages        build stage nodes allowed to see it (empty = none; used from K12)
+      search_hint   extra words for find_tools ranking
+    """
+
+    surfaces: frozenset = frozenset({"chat", "mcp"})
+    tags: frozenset = frozenset()
+    core_for: frozenset = frozenset()
+    stages: frozenset = frozenset()
+    search_hint: str = ""
+
+    def __post_init__(self) -> None:
+        # Accept any iterable of strings; store frozensets, so Exposure stays hashable and a
+        # registration reads `exposure=Exposure(tags=("builds",), core_for=("chat",))`.
+        for field_name in ("surfaces", "tags", "core_for", "stages"):
+            value = getattr(self, field_name)
+            if not isinstance(value, frozenset):
+                object.__setattr__(self, field_name, frozenset(value))
+        unknown = (self.surfaces | self.core_for) - frozenset(SURFACES)
+        if unknown:
+            raise ValueError(f"unknown surface(s) {sorted(unknown)}; the surfaces are {SURFACES}")
+        if not self.core_for <= self.surfaces:
+            raise ValueError("core_for must name surfaces the tool is exposed on")
+
+
+def strict_parameters(schema: Optional[dict]) -> dict:
+    """THE STRICT FORM of a tool's JSON schema (K5, design §5.3, §9.5): every property listed in
+    `required`, originally-optional properties made nullable (type gains "null"; an enum gains
+    None), `additionalProperties: false` at every object level, and `default`/`format` dropped
+    (the provider strict subsets reject them). The original schema is never mutated.
+
+    Handlers already treat a missing optional as None, and the derivation test
+    (test_tool_exposure.py) holds that calls valid under the original schema stay valid under
+    the strict one once their omitted optionals are written as null — across EVERY registry
+    tool, so a tool whose handler distinguishes "missing" from null is found before K7 flips
+    strict mode on."""
+    if not isinstance(schema, dict):
+        return {"type": "object", "properties": {}, "required": [],
+                "additionalProperties": False}
+    return _strictify(schema, make_nullable=False)
+
+
+def _strictify(schema: dict, *, make_nullable: bool) -> dict:
+    out = {k: v for k, v in schema.items() if k not in ("default", "format")}
+    if make_nullable:
+        declared = out.get("type")
+        if isinstance(declared, str) and declared != "null":
+            out["type"] = [declared, "null"]
+        elif isinstance(declared, list) and "null" not in declared:
+            out["type"] = list(declared) + ["null"]
+        if isinstance(out.get("enum"), list) and None not in out["enum"]:
+            out["enum"] = list(out["enum"]) + [None]
+    properties = out.get("properties")
+    if isinstance(properties, dict):
+        required = {str(r) for r in (out.get("required") or [])}
+        out["properties"] = {
+            name: _strictify(prop, make_nullable=name not in required)
+            if isinstance(prop, dict) else prop
+            for name, prop in properties.items()}
+        out["required"] = sorted(properties)
+        out["additionalProperties"] = False
+    if isinstance(out.get("items"), dict):
+        out["items"] = _strictify(out["items"], make_nullable=False)
+    return out
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -135,6 +220,10 @@ class ToolSpec:
     #: A TRUE FOLLOW-ON TO THE OFFER'S WARNING, owned by the tool ("nothing installs without a
     #: person's approval of the diff"). Optional; see `offer_warning`.
     offer_note: str = ""
+    #: WHERE THIS TOOL IS RELEVANT (K5, design §5.1): declared at the registration, next to the
+    #: tool, never in a separate list. Required in practice: the lint test
+    #: (test_tool_exposure.py) fails any registered tool that leaves it None.
+    exposure: Optional[Exposure] = None
 
     def permission_for(self, args: Optional[dict]) -> Optional[str]:
         """The permission THIS call needs (see `permission_by_arg`)."""
@@ -198,6 +287,10 @@ class ToolSpec:
             "inputSchema": self.parameters,
         }
 
+    def strict_schema(self) -> dict:
+        """This tool's parameters in the provider strict form (see `strict_parameters`)."""
+        return strict_parameters(self.parameters)
+
 
 class ToolError(Exception):
     """Raised when a tool is unknown or its handler fails cleanly."""
@@ -235,6 +328,7 @@ class ToolRegistry:
         operator_only: bool = False,
         queues_for_review: bool = False,
         offer_note: str = "",
+        exposure: Optional[Exposure] = None,
     ) -> Callable[[ToolHandler], ToolHandler]:
         """Decorator form: @registry.tool("list_x", "…", {...}, kind="read")."""
 
@@ -258,6 +352,7 @@ class ToolRegistry:
                     operator_only=operator_only,
                     queues_for_review=queues_for_review,
                     offer_note=offer_note,
+                    exposure=exposure,
                 )
             )
             return fn

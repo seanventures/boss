@@ -113,11 +113,16 @@ def engine_agent(max_steps: int = 6, *, budget: Any = None,
         offering = out_of_turn and bool(offer) and not state.extra.get("_offer_spent")
         return head + _ENGINE_AGENT_ANSWER_BODY + (_ENGINE_AGENT_OFFER if offering else "")
 
+    from .scoped_tools import ScopedTools
+
     return Policies(
         stop=Caps(max_steps=int(max_steps), answer="within", turn_budget=budget,
                   answer_prompt_text=answer_prompt, version="stop.engine_agent@1"),
         context=ClipContext(clip=16_000, version="ctx.engine_agent@1"),
-        tools=OfferAll(answer_offer=tuple(offer), version="tools.engine_agent@1"),
+        # K5: chat is the surface scoped tools exist for. With BOSS_SCOPED_TOOLS off this is
+        # OfferAll's behaviour exactly; on, a kernel chat run sees its core + find_tools and
+        # finds the rest (RegistryToolSet marks the deferred ones from each tool's Exposure).
+        tools=ScopedTools(answer_offer=tuple(offer), version="tools.engine_agent.scoped@1"),
         verify=AcceptAny(),
         recovery=Recover(nudge=ENGINE_AGENT_NUDGE, version="recover.engine_agent@1"))
 

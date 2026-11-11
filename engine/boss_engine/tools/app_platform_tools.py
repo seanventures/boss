@@ -25,7 +25,7 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
-from .registry import ToolRegistry
+from .registry import Exposure, ToolRegistry
 
 
 def _obj(props: dict, required: list[str]) -> dict:
@@ -78,7 +78,8 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
             "label": {"type": "string"},
             "project_id": {"type": "string"},
         }, []),
-        kind="read", permission="template:read")
+        kind="read", permission="template:read",
+        exposure=Exposure(tags=("templates", "apps")))
     def list_templates(ctx, *, project_id, actor, args) -> dict[str, Any]:
         from ..templates import service
 
@@ -101,7 +102,8 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
             "template_id": {"type": "string", "description": "the template's id or key"},
             "project_id": {"type": "string"},
         }, ["template_id"]),
-        kind="read", permission="template:read")
+        kind="read", permission="template:read",
+        exposure=Exposure(tags=("templates", "apps")))
     def describe_template(ctx, *, project_id, actor, args) -> dict[str, Any]:
         from ..templates import service
         from ..templates.service import TemplateError
@@ -126,7 +128,8 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
         "abandoned; with the workflow run and build of each. Also says which of the templates' "
         "secrets are set (presence and mode only, never a value).",
         _obj({"app_key": _APP, "project_id": {"type": "string"}}, ["app_key"]),
-        kind="read", permission="project:read")
+        kind="read", permission="project:read",
+        exposure=Exposure(tags=("templates", "apps")))
     def template_status(ctx, *, project_id, actor, args) -> dict[str, Any]:
         from ..templates import apply as apply_service
         from ..templates import secrets as secrets_service
@@ -177,7 +180,8 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
             "project_id": {"type": "string"},
         }, ["stack"]),
         kind="write", reversibility="costs_money", permission="workflow_run:start",
-        also_requires=("template:read",))
+        also_requires=("template:read",),
+        exposure=Exposure(tags=("templates", "apps")))
     def apply_template(ctx, *, project_id, actor, args) -> dict[str, Any]:
         refs = args.get("templates")
         single = str(args.get("template_id") or "").strip()
@@ -346,7 +350,8 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
             "limit": {"type": "integer", "minimum": 1, "maximum": 50},
             "project_id": {"type": "string"},
         }, []),
-        kind="read", permission="project:read")
+        kind="read", permission="project:read",
+        exposure=Exposure(tags=("security",)))
     def security_scan_status(ctx, *, project_id, actor, args) -> dict[str, Any]:
         from ..security_scan import service
 
@@ -374,7 +379,8 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
             "status": {"type": "string", "enum": ["open", "fixed", "accepted", "false_positive"]},
             "project_id": {"type": "string"},
         }, ["scan_id"]),
-        kind="read", permission="project:read")
+        kind="read", permission="project:read",
+        exposure=Exposure(tags=("security",)))
     def list_security_findings(ctx, *, project_id, actor, args) -> dict[str, Any]:
         from ..security_scan import service
 
@@ -402,7 +408,8 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
             "format": {"type": "string", "enum": ["json", "md"]},
             "project_id": {"type": "string"},
         }, ["app_key"]),
-        kind="read", permission="project:read")
+        kind="read", permission="project:read",
+        exposure=Exposure(tags=("security",)))
     def security_report(ctx, *, project_id, actor, args) -> dict[str, Any]:
         from ..security_scan import report
 
@@ -430,7 +437,8 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
             "app_key": _APP,
             "project_id": {"type": "string"},
         }, []),
-        kind="read", permission="project:read")
+        kind="read", permission="project:read",
+        exposure=Exposure(tags=("security",)))
     def security_review_status(ctx, *, project_id, actor, args) -> dict[str, Any]:
         from ..services import security_review_steps
 

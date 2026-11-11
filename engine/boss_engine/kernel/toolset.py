@@ -130,7 +130,8 @@ class RegistryToolSet:
 
     def __init__(self, registry: Any, ctx: Any, *, project_id: str, actor: str,
                  allow_writes: bool = False, exclude: Sequence[str] = (),
-                 run_tool: Optional[Callable[[str, dict, RunState], Any]] = None):
+                 run_tool: Optional[Callable[[str, dict, RunState], Any]] = None,
+                 surface: str = "chat"):
         self.registry = registry
         self.ctx = ctx
         self.project_id = project_id
@@ -138,12 +139,33 @@ class RegistryToolSet:
         self.allow_writes = allow_writes
         self.exclude = frozenset(exclude)
         self.run_tool = run_tool
+        self.surface = surface
         self.pending: list = []
 
     def schemas(self, *, step: int, state: RunState) -> list:
-        return [ToolSchema(name=s.name, description=s.description, parameters=dict(s.parameters),
-                           kind=s.kind, reversibility=getattr(s, "reversibility", "safe"))
-                for s in self.registry.specs() if s.name not in self.exclude]
+        """Every registry tool as a ToolSchema. With BOSS_SCOPED_TOOLS on (K5,
+        kernel/scoped_tools.py), each ToolSpec's `Exposure` decides this surface's view: a tool
+        not exposed here is left out, one not CORE here is `deferred` (offered only once
+        find_tools returns it). A spec with no exposure, or the flag off, is offered plainly —
+        conservative: nothing a surface has today is lost."""
+        from .scoped_tools import enabled
+
+        scoped = enabled()
+        out: list = []
+        for s in self.registry.specs():
+            if s.name in self.exclude:
+                continue
+            deferred = False
+            exposure = getattr(s, "exposure", None)
+            if scoped and exposure is not None:
+                if self.surface not in exposure.surfaces:
+                    continue
+                deferred = self.surface not in exposure.core_for
+            out.append(ToolSchema(name=s.name, description=s.description,
+                                  parameters=dict(s.parameters), kind=s.kind,
+                                  reversibility=getattr(s, "reversibility", "safe"),
+                                  deferred=deferred))
+        return out
 
     def invoke(self, call: ToolCall, *, state: RunState,
                approved: Optional[dict] = None) -> ToolResult:

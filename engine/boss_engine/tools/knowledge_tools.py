@@ -6,7 +6,7 @@ kg_rules reads approved rules, the trusted ones, and proposed rules only when as
 """
 from __future__ import annotations
 
-from .registry import ToolSpec
+from .registry import Exposure, ToolSpec
 from ..services.knowledge.runtime import knowledge_mode
 from ..services.knowledge.scopes import KEYWORD_TOOLS, current_policy, offers_tool
 from ..services.knowledge.service import KnowledgeService
@@ -456,6 +456,8 @@ def register_knowledge_tools(reg) -> None:
                 queues_for_review=(kind == "write"),
                 reversibility="safe",
                 requires_durable_workspace=True,
+                # Every kg_* tool: found by search (never chat-core), tagged as the graph's.
+                exposure=Exposure(tags=("kg", "knowledge")),
                 permission="knowledge:read",
                 # Precedent is past decisions: reading it also needs decision:read.
                 also_requires=("decision:read",) if name == "kg_precedent" else (),

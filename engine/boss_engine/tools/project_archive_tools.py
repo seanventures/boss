@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .registry import ToolSpec
+from .registry import Exposure, ToolSpec
 
 _PROJECT_ARG = {
     "type": "object",
@@ -142,6 +142,7 @@ def register_project_archive_tools(reg) -> None:
             # Undone by the other one, and nothing is deleted. Still a person's press: archiving
             # stops every schedule and monitor of a project at once.
             reversibility="safe", operator_only=True,
+            exposure=Exposure(tags=("projects",)),
             requires_durable_workspace=True, permission="project:delete", org_scope=True))
     # DELETING IS ON THE LIST WHERE PEOPLE DECIDE (decide_list "Deleting data"): irreversible and
     # operator_only, so the model can only OFFER it; a person's press runs it, with their own
@@ -158,5 +159,6 @@ def register_project_archive_tools(reg) -> None:
             "first unless they asked to take production down too."),
         parameters=_DELETE_ARG, handler=_delete, kind="write",
         reversibility="irreversible", operator_only=True, requires_durable_workspace=True,
+        exposure=Exposure(tags=("projects",)),
         permission="project:delete", org_scope=True,
         offer_note="everything the project holds in BOSS goes; its GitHub repository stays"))

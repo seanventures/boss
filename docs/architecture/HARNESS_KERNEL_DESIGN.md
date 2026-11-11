@@ -904,6 +904,43 @@ and the no-model reply stay caller-side. Corrections made while building:
    `BOSS_LEDGER_EVENTS` is on and the caller has a connection (`_ledger_sink`); a decision
    without a database still decides, with events on the result only.
 
+### 8.2c What K5 changed against this design (built 2026-11-10, feat/958-kernel)
+
+K5 is live behind `BOSS_SCOPED_TOOLS` (default off): every registry tool declares an `Exposure`
+at its registration (`tools/registry.Exposure`, 177 tools classified), `ToolSpec.strict_schema()`
+derives the strict form, `find_tools` searches the rest, and the kernel's `ScopedTools`
+ToolPolicy (kernel/scoped_tools.py) plus `RegistryToolSet`'s deferred marking are the ONLY
+consumers — no old loop reads the flag. Corrections made while building:
+
+1. **§5.1 `Exposure.surfaces` defaults to `{"chat", "mcp"}`, not `{"chat"}`.** Chat and MCP see
+   every registry tool today; a declaration must never silently take a tool away from a surface
+   that has it. The conservative default means classification can only NARROW what rides in the
+   schema block (`core_for`), never what is reachable.
+2. **§5.1 the lint caps as built:** the chat core is pinned at exactly 20 (`find_tools`
+   included) and the count of tools per surface is asserted (test_tool_exposure.py), so a new
+   tool fails the lint until its registration declares `exposure=` and the counts are updated
+   consciously. The agent-step (≤12) and scaffold-heavy (≤8) cores arrive with K4/K11, when
+   those surfaces run on the kernel; until then only `find_tools` is exposed to them.
+3. **§5.2 `find_tools` is a registry tool, not a kernel built-in, and the ranking is ranked
+   word hits** over name (4) + tags (3) + search_hint (2) + description (1), not BM25 — the
+   corpus is 177 short strings; a scorer without a dependency answers in microseconds and the
+   lint keeps tags honest. It is registered per registry (the discuss registry re-registers it
+   over itself), so a scoped surface finds only what that surface may call. The kernel side
+   reads what it returned from the run's own TRACE (`scoped_tools.found_names`), so a resumed
+   run keeps its found tools and §4.3 holds (found tools are appended, never inserted).
+4. **§5.3 as built:** `strict_parameters` makes every property required, optionals nullable (a
+   typed optional gains `"null"`, an optional enum gains `None`), `additionalProperties: false`
+   at every level, and drops `default`/`format`. §9.5's derivation test validates, for all 177
+   tools, calls built from each tool's own schema (required-only and every-property, completed
+   with nulls the way a strict model writes them) against the strict form — rather than
+   invoking every handler, which would need a live database per tool. No engine SENDS strict
+   schemas yet; K7 flips `EngineTraits.strict_tools` and pays that bill with an exact test.
+5. **Decision runs keep the caller's ReadPhase tools.** A K2 decision run has no registry in
+   hand, so "scoped set + find_tools" applies to registry-backed runs (chat at K6, steps at
+   K4); the decision surface's exposure exists for them.
+6. **Measured (test_scoped_tools.py, scripted chat turn pair: one find_tools call + answer):**
+   schema tokens 74,326 flag-off → 8,683 flag-on, an 88.3% cut (bar: ≥60%), asserted in CI.
+
 ### 8.4 Intended differences pinned by the K1 conformance suite
 
 `engine/tests/test_kernel_conformance.py` holds the kernel byte-equal to each old loop on the

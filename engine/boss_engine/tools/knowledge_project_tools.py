@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from sqlalchemy import text
 
-from .registry import ToolSpec
+from .registry import Exposure, ToolSpec
 
 
 def _setup(ctx, *, project_id, actor, args):
@@ -247,6 +247,7 @@ KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
                           "description": "the agents' role keys, e.g. chief_architect, sre"}},
             "required": ["role_keys"], "additionalProperties": False},
         "handler": _set_team, "kind": "write", "permission": "work_item:manage",
+        "exposure": Exposure(tags=("agents", "projects")),
     },
     "add_regulation_document": {
         "description": (
@@ -339,4 +340,5 @@ def register_knowledge_project_tools(reg) -> None:
             # Setting a team is undone by setting it again; it starts and spends nothing.
             reversibility="safe", permission=spec["permission"],
             operator_only=spec.get("operator_only", False),
+            exposure=spec.get("exposure") or Exposure(tags=("knowledge", "samples")),
             queues_for_review=spec.get("queues_for_review", False)))

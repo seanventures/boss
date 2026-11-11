@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .registry import ToolSpec
+from .registry import Exposure, ToolSpec
 
 _NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
 
@@ -137,5 +137,6 @@ def register_captain_tools(reg) -> None:
             reversibility="costs_money" if operator_only else "safe",
             requires_durable_workspace=True, permission=permission,
             operator_only=operator_only,
+            exposure=Exposure(tags=("captain",)),
             offer_note=("it applies moves a person has not seen one by one, and a build may "
                         "start" if operator_only else "")))

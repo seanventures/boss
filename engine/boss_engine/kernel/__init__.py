@@ -20,6 +20,7 @@ from .engine import Block, CancelToken, EngineTraits, ModelRequest, OpenAIChatEn
 from .governance import GovernedEngine
 from .loop import cancel, resume, run
 from .policies import (AcceptAny, Caps, ClipContext, OfferAll, ParsedAnswer, Policies, Recover)
+from .scoped_tools import ScopedTools
 from .spec import RunSpec
 from .toolset import Composite, FunctionToolSet, ReadOnlyToolSet, RegistryToolSet, Tool
 from .types import (Acceptance, ControllerState, Event, Finding, KernelResult, ModelTurn, Step,
@@ -29,5 +30,5 @@ __all__ = ["AcceptAny", "Acceptance", "Block", "CancelToken", "Caps", "ClipConte
            "ControllerState", "EngineTraits", "Event", "Finding", "FunctionToolSet",
            "GovernedEngine", "KernelResult", "ModelRequest", "ModelTurn", "OfferAll",
            "OpenAIChatEngine", "ParsedAnswer", "Policies", "ReadOnlyToolSet", "Recover",
-           "RegistryToolSet", "RunSpec", "Step", "StopReason", "Tool", "ToolCall",
+           "RegistryToolSet", "RunSpec", "ScopedTools", "Step", "StopReason", "Tool", "ToolCall",
            "ToolResult", "ToolSchema", "Usage", "cancel", "presets", "resume", "run"]

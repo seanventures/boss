@@ -12,7 +12,7 @@ switching the graph back on loses nothing (runtime.MODES).
 """
 from __future__ import annotations
 
-from .registry import ToolSpec
+from .registry import Exposure, ToolSpec
 
 _EVIDENCE = {
     "type": "array", "minItems": 1, "maxItems": 10,
@@ -120,6 +120,7 @@ def register_learning_tools(reg) -> None:
             # rather than holding it behind a confirm button (brec_9157d2686df34517addc).
             queues_for_review=True,
             requires_durable_workspace=True,
+            exposure=Exposure(tags=("knowledge", "learning")),
             permission="knowledge:read",
         )
     )
