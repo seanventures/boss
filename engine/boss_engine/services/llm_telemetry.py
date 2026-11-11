@@ -193,6 +193,22 @@ def _signed_by(c, ctx: dict, stage: Optional[str]) -> tuple[Optional[str], Optio
     return found["act_id"], canonical_role(found.get("role_key"))
 
 
+def _ledger_columns(c, ctx: dict, *, act_id: Optional[str], row_id: str) -> dict:
+    """The row's run-ledger columns, or {} — always {} while BOSS_LEDGER_EVENTS is off and no
+    kernel run is recording, without touching the database. In a savepoint: a database that
+    predates the ledger loses the columns, never the call's row."""
+    from ..kernel import ledger
+
+    if not (ledger.enabled() or ctx.get("ledger_seq") is not None):
+        return {}
+    try:
+        with c.begin_nested():
+            return ledger.llm_call_fields(c, ctx, act_id=act_id, row_id=row_id)
+    except Exception as exc:  # noqa: BLE001 — the ledger copy never costs the spend row
+        log.warning("run ledger: llm_calls ledger columns not written (non-fatal): %s", exc)
+        return {}
+
+
 def engine_call_is_included(engine_name: Optional[str], usage: Optional[dict]) -> bool:
     """Whether a call on `engine_name` ran on included capacity (a subscription or a local
     model). The adapter's own `billing` stamp wins; otherwise the engine decides, by the same
@@ -253,6 +269,15 @@ def record_llm_call(
                 or ctx.get("route_id")
             if route_id:
                 signed = (signed[0] + ", route_id", signed[1] + ", :route")
+            row_id = f"llmc_{uuid4().hex[:20]}"
+            # THE RUN LEDGER (BOSS_LEDGER_EVENTS, kernel/ledger.py): the run, its sequence, its
+            # retry lineage and the policies that produced the call. Only the columns that
+            # have a value are written, so a store that predates them records as before.
+            ledger = _ledger_columns(c, ctx, act_id=act_id, row_id=row_id)
+            for column, value in ledger.items():
+                if value is not None:
+                    cast = f"CAST(:l_{column} AS jsonb)" if column == "policy" else f":l_{column}"
+                    signed = (signed[0] + f", {column}", signed[1] + f", {cast}")
             c.execute(
                 text(f"""
                     INSERT INTO llm_calls (
@@ -266,7 +291,8 @@ def record_llm_call(
                             :included{signed[1]})
                 """),
                 {
-                    "id": f"llmc_{uuid4().hex[:20]}",
+                    "id": row_id,
+                    **{f"l_{column}": value for column, value in ledger.items()},
                     "p": ctx.get("project_id"),
                     "run": ctx.get("run_id"),
                     "stage": stage or ctx.get("stage"),

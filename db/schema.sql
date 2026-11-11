@@ -11695,3 +11695,212 @@ CREATE TABLE IF NOT EXISTS tool_policies (
   revoked_at TIMESTAMPTZ,
   CHECK (status IN ('active', 'revoked'))
 );
+
+-- ============================ RUN LEDGER (BOSSAPP-961, K0) ==================================
+-- docs/architecture/HARNESS_KERNEL_DESIGN.md §3. The ledger is ONE VIEW over llm_calls (model
+-- calls), tool_call_audit (tool calls) and run_events (everything else a run does: findings,
+-- verification, decisions, escalations, compaction, workspace snapshots, budget waits,
+-- outcomes, native-loop turns). Written only while BOSS_LEDGER_EVENTS is on; read through
+-- boss_engine/kernel/ledger_read.py, never by a tool's own SQL.
+--
+-- SEQ COMES FROM ONE SEQUENCE. A partitioned table cannot hold UNIQUE (run_id, seq) without the
+-- partition key, and a per-run counter row would make every writer of a run wait behind the
+-- longest open transaction of that run (an agent run's tick is one transaction). nextval never
+-- waits and never rolls back, so seq is unique everywhere and increases within every run.
+CREATE SEQUENCE IF NOT EXISTS run_ledger_seq;
+
+-- Append-only, range-partitioned by month on recorded_at: retention (30 days of content, 400 of
+-- metadata, design D6) drops whole partitions and never deletes a row.
+CREATE TABLE IF NOT EXISTS run_events (
+  id TEXT NOT NULL,                          -- 'evt_' + a time-ordered id
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,                      -- agent_runs.id, code_task_runs.id or a kernel run
+  act_id TEXT,                               -- agent_acts span
+  root_act_id TEXT,                          -- denormalised for whole-build queries
+  seq BIGINT NOT NULL,                       -- from run_ledger_seq: increasing within the run
+  step INT NOT NULL DEFAULT 0,
+  stage TEXT,                                -- build stage node; NULL for chat
+  kind TEXT NOT NULL,                        -- kernel EventKind (kernel/types.py)
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,   -- redacted, at most 8 KB, shape per kind (ledger.py)
+  content_ref TEXT,                          -- agent_turns.id or an artifact path for big bodies
+  input_tokens BIGINT NOT NULL DEFAULT 0,
+  output_tokens BIGINT NOT NULL DEFAULT 0,
+  cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+  cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+  cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  included_in_subscription BOOLEAN NOT NULL DEFAULT false,
+  latency_ms INT NOT NULL DEFAULT 0,
+  engine TEXT,
+  model TEXT,
+  scaffold_level TEXT,
+  policy JSONB NOT NULL DEFAULT '{}'::jsonb, -- the policy versions that produced the event
+  workspace_ref TEXT,                        -- git tree or commit sha after this step
+  attempt INT NOT NULL DEFAULT 1,            -- position in the retry lineage
+  lineage_id TEXT,                           -- the first run of the retry chain
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (id, recorded_at)
+) PARTITION BY RANGE (recorded_at);
+CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events (run_id, seq);
+CREATE INDEX IF NOT EXISTS idx_run_events_root ON run_events (root_act_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_run_events_lineage ON run_events (lineage_id, kind, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_run_events_kind ON run_events (project_id, kind, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_run_events_policy ON run_events USING GIN (policy jsonb_path_ops);
+
+-- A row outside every month partition lands here rather than failing its write.
+CREATE TABLE IF NOT EXISTS run_events_default PARTITION OF run_events DEFAULT;
+
+-- This month and the next N, made at every boot. A month whose rows already sit in the default
+-- partition cannot be split out of it: it stays there, said in a notice, never a failed boot.
+CREATE OR REPLACE FUNCTION run_events_ensure_partitions(months_ahead INT) RETURNS INT
+LANGUAGE plpgsql AS $parts$
+DECLARE
+  first_day DATE;
+  part TEXT;
+  made INT := 0;
+BEGIN
+  FOR i IN 0..GREATEST(months_ahead, 0) LOOP
+    first_day := (date_trunc('month', now()) + make_interval(months => i))::date;
+    part := 'run_events_' || to_char(first_day, 'YYYY_MM');
+    IF to_regclass(part) IS NULL THEN
+      BEGIN
+        EXECUTE format('CREATE TABLE %I PARTITION OF run_events FOR VALUES FROM (%L) TO (%L)',
+                       part, first_day, (first_day + interval '1 month')::date);
+        made := made + 1;
+      EXCEPTION WHEN others THEN
+        RAISE NOTICE 'run_events partition % not made: %', part, SQLERRM;
+      END;
+    END IF;
+  END LOOP;
+  RETURN made;
+END $parts$;
+SELECT run_events_ensure_partitions(2);
+
+-- Never changed, never deleted row by row: a purge (a test cleaning up, retention of the default
+-- partition) says so with SET LOCAL boss.ledger_purge = 'on'. Its own function, not
+-- boss_append_only_ledger: that one reads OLD.outcome, a column only agent_act_decisions has.
+-- On the partitioned table, so every partition carries it.
+CREATE OR REPLACE FUNCTION boss_ledger_rows_are_final() RETURNS trigger
+LANGUAGE plpgsql AS $final$
+BEGIN
+  IF TG_OP = 'DELETE' AND COALESCE(current_setting('boss.ledger_purge', true), '') = 'on' THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION '% is append-only: write a new row instead of changing or deleting one',
+    TG_TABLE_NAME;
+END $final$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'run_events_append_only'
+                 AND tgrelid = 'run_events'::regclass) THEN
+    CREATE TRIGGER run_events_append_only BEFORE UPDATE OR DELETE ON run_events
+      FOR EACH ROW EXECUTE FUNCTION boss_ledger_rows_are_final();
+  END IF;
+END $$;
+
+-- Model-call and tool-call rows join the ledger by run, sequence and lineage.
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS seq BIGINT;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS lineage_id TEXT;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS policy JSONB;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS scaffold_level TEXT;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS workspace_ref TEXT;
+CREATE INDEX IF NOT EXISTS idx_llm_calls_ledger ON llm_calls (run_id, seq) WHERE run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_llm_calls_lineage ON llm_calls (lineage_id, created_at)
+  WHERE lineage_id IS NOT NULL;
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS act_id TEXT;
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS seq BIGINT;
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS lineage_id TEXT;
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_call_idem ON tool_call_audit (idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tool_call_audit_ledger ON tool_call_audit (run_id, seq)
+  WHERE seq IS NOT NULL;
+
+-- llm_calls IS INSERT-ONLY EXCEPT ITS FILL-ONCE COLUMNS. agent_acts back-fills act_id on rebuilt
+-- stages (_backfill_build) and the BOSS-280 backfill above fills role: a NULL may be filled, a
+-- value is never changed, nothing else is ever rewritten. Deletes (retention, a project going
+-- away) are not this trigger's business. A test seeding history says so with
+-- SET LOCAL boss.ledger_purge = 'on'.
+CREATE OR REPLACE FUNCTION llm_calls_fill_once() RETURNS trigger LANGUAGE plpgsql AS $fill$
+BEGIN
+  IF COALESCE(current_setting('boss.ledger_purge', true), '') = 'on' THEN
+    RETURN NEW;
+  END IF;
+  IF (to_jsonb(NEW) - 'act_id' - 'run_id' - 'seq' - 'lineage_id' - 'role' - 'policy'
+        - 'scaffold_level' - 'workspace_ref')
+     IS DISTINCT FROM
+     (to_jsonb(OLD) - 'act_id' - 'run_id' - 'seq' - 'lineage_id' - 'role' - 'policy'
+        - 'scaffold_level' - 'workspace_ref') THEN
+    RAISE EXCEPTION 'llm_calls is append-only: write a new row instead of changing one';
+  END IF;
+  IF (OLD.act_id IS NOT NULL AND NEW.act_id IS DISTINCT FROM OLD.act_id)
+     OR (OLD.run_id IS NOT NULL AND NEW.run_id IS DISTINCT FROM OLD.run_id)
+     OR (OLD.seq IS NOT NULL AND NEW.seq IS DISTINCT FROM OLD.seq)
+     OR (OLD.lineage_id IS NOT NULL AND NEW.lineage_id IS DISTINCT FROM OLD.lineage_id)
+     OR (OLD.role IS NOT NULL AND NEW.role IS DISTINCT FROM OLD.role)
+     OR (OLD.policy IS NOT NULL AND NEW.policy IS DISTINCT FROM OLD.policy)
+     OR (OLD.scaffold_level IS NOT NULL AND NEW.scaffold_level IS DISTINCT FROM OLD.scaffold_level)
+     OR (OLD.workspace_ref IS NOT NULL AND NEW.workspace_ref IS DISTINCT FROM OLD.workspace_ref)
+  THEN
+    RAISE EXCEPTION 'llm_calls is append-only: a filled ledger column is never changed';
+  END IF;
+  RETURN NEW;
+END $fill$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'llm_calls_fill_once'
+                 AND tgrelid = 'llm_calls'::regclass) THEN
+    CREATE TRIGGER llm_calls_fill_once BEFORE UPDATE ON llm_calls
+      FOR EACH ROW EXECUTE FUNCTION llm_calls_fill_once();
+  END IF;
+END $$;
+
+-- What "stop@1" or "prompt:implement@sha256:…" meant when an event named it. Immutable.
+CREATE TABLE IF NOT EXISTS policy_versions (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  body JSONB NOT NULL,
+  source TEXT NOT NULL,                      -- the defining module, or a file path + git sha
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'policy_versions_append_only'
+                 AND tgrelid = 'policy_versions'::regclass) THEN
+    CREATE TRIGGER policy_versions_append_only BEFORE UPDATE OR DELETE ON policy_versions
+      FOR EACH ROW EXECUTE FUNCTION boss_ledger_rows_are_final();
+  END IF;
+END $$;
+
+-- THE ONE READ SURFACE. Model and tool calls join once they carry a ledger run (written while
+-- BOSS_LEDGER_EVENTS is on); every run event is in it.
+CREATE OR REPLACE VIEW run_ledger AS
+  SELECT 'model'::text AS src, c.id, c.project_id, c.run_id, c.act_id, c.seq, 0 AS step,
+         c.stage, CASE WHEN c.ok THEN 'model.response' ELSE 'model.error' END AS kind,
+         jsonb_build_object('turns', c.turns, 'retries', c.retries, 'ok', c.ok,
+                            'error', c.error, 'role', c.role) AS data,
+         NULL::text AS content_ref,
+         c.prompt_tokens::bigint AS input_tokens, c.completion_tokens::bigint AS output_tokens,
+         c.cache_read_tokens::bigint AS cache_read_tokens,
+         c.cache_write_tokens::bigint AS cache_write_tokens,
+         c.cost_usd_micros::bigint AS cost_usd_micros,
+         c.included_in_subscription, c.latency_ms, c.engine, c.model, c.scaffold_level,
+         COALESCE(c.policy, '{}'::jsonb) AS policy, c.workspace_ref, c.lineage_id,
+         c.created_at AS recorded_at
+    FROM llm_calls c WHERE c.run_id IS NOT NULL
+  UNION ALL
+  SELECT 'tool'::text, t.id, t.project_id, t.run_id, t.act_id, t.seq, 0, NULL::text,
+         'tool.result'::text,
+         jsonb_build_object('tool', t.tool, 'args_sha256', t.args_sha256,
+                            'args', t.args_redacted, 'decision', t.decision,
+                            'outcome', t.outcome, 'decision_id', t.decision_id,
+                            'server_id', t.server_id),
+         NULL::text, 0::bigint, 0::bigint, 0::bigint, 0::bigint, 0::bigint, false, t.latency_ms,
+         NULL::text, NULL::text, NULL::text, '{}'::jsonb, NULL::text, t.lineage_id,
+         t.recorded_at
+    FROM tool_call_audit t WHERE t.seq IS NOT NULL AND t.run_id IS NOT NULL
+  UNION ALL
+  SELECT 'event'::text, e.id, e.project_id, e.run_id, e.act_id, e.seq, e.step, e.stage, e.kind,
+         e.data, e.content_ref, e.input_tokens, e.output_tokens, e.cache_read_tokens,
+         e.cache_write_tokens, e.cost_usd_micros, e.included_in_subscription, e.latency_ms,
+         e.engine, e.model, e.scaffold_level, e.policy, e.workspace_ref, e.lineage_id,
+         e.recorded_at
+    FROM run_events e;
+-- ============================ end RUN LEDGER ================================================

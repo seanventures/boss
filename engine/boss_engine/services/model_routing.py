@@ -660,6 +660,19 @@ class GovernedChatAdapter:
 
         return stream
 
+    # THE GATE, WITHOUT THE CALL (kernel/governance.py). The harness kernel makes the model call
+    # itself and wraps it in these three, so a kernel run is reserved, receipted and settled by
+    # exactly this code rather than by a second copy of it.
+    def reserve_turn(self) -> tuple[str, str]:
+        """Reserve one turn and open its receipt (raises ModelSpendRefused/Deferred)."""
+        return self._open()
+
+    def settle_turn(self, held: tuple[str, str], usage: Any) -> None:
+        self._settle(held, usage)
+
+    def release_turn(self, held: tuple[str, str], error: BaseException) -> None:
+        self._fail(held, error)
+
     def create_chat_completion(self, *args: Any, **kwargs: Any):
         return self._governed("create_chat_completion", args, kwargs, usage_at=1)
 
