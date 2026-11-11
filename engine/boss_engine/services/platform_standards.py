@@ -137,6 +137,37 @@ backslashes are escaped, and templated routes collapse to one series.
 """.strip()
 
 
+# Applies to any app whose image a deploy builds. The builder model writes the Dockerfile, and
+# nothing in any repository can teach it that pruning optional dependencies breaks the image:
+# that knowledge is the PLATFORM's, exactly like the observability contract above.
+DEPENDENCY_INTEGRITY_STANDARD = """
+## Dependency integrity (BOSS platform standard — applies to every app image BOSS builds)
+
+INSTALL EXACTLY WHAT THE LOCKFILE RESOLVES
+In a Dockerfile (or any image build step), install dependencies exactly as the lockfile
+resolves them: `npm ci` for npm (or a plain `npm install` with no pruning flags), the frozen
+install for other package managers. NEVER pass `--omit=optional`, `--no-optional`,
+`--production`, `--omit=dev` before the build runs, or any prune that drops packages the
+lockfile names.
+
+WHY: build tools ship their native binaries as PLATFORM-SPECIFIC OPTIONAL DEPENDENCIES —
+@rollup/rollup-linux-x64-musl, @esbuild/linux-x64, @swc/core-linux-x64-musl. An install that
+omits optional dependencies strips the one binary the image's platform needs, and the build
+dies deterministically at `vite build` / `next build` with "Cannot find module
+@rollup/rollup-linux-x64-musl" (npm/cli#4828 can drop them even on a plain reinstall). The
+failure only exists INSIDE the image — never on the machine that wrote the Dockerfile — so it
+is always found at deploy time, the most expensive place. Prune dev dependencies only AFTER
+the build artefacts exist (a multi-stage copy, or `npm prune --omit=dev` after `npm run
+build`).
+
+BUILD ON THE BASE IMAGE FAMILY THE DEPLOY RUNS
+Build with the same base image family — the same libc (alpine/musl vs debian/glibc) — that the
+deploy runs. A native binary resolved for one libc does not exist on the other, and a
+multi-stage build that switches family between its build stage and its runtime stage
+reintroduces exactly the missing-binary failure above.
+""".strip()
+
+
 #: What QA must assert about instrumentation, in the QA stage's own words.
 #:
 #: The observability standard told the BUILDER what to expose and said rendering "must be
@@ -173,6 +204,7 @@ tests that pass around the gap.
 # receiving every rule BOSS has for every kind of software.
 STANDARDS: dict[str, str] = {
     "observability": OBSERVABILITY_STANDARD,
+    "dependency_integrity": DEPENDENCY_INTEGRITY_STANDARD,
 }
 
 
@@ -326,4 +358,5 @@ def platform_standards(instructions: str = "", *, force: bool = False) -> str:
         return mandated
     signals = ("\n\n" + _signals_standard()) if wants_signals(instructions) else ""
     return ("\n\n=== BOSS PLATFORM STANDARDS (mandatory — these come from the platform, not "
-            "from this repository) ===\n" + STANDARDS["observability"] + signals + mandated)
+            "from this repository) ===\n" + STANDARDS["observability"]
+            + "\n\n" + STANDARDS["dependency_integrity"] + signals + mandated)

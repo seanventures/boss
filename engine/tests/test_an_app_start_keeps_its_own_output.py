@@ -218,7 +218,9 @@ def test_the_environment_record_names_each_variable_and_where_it_came_from(tmp_p
     assert env["DEMO_PASSWORD"] == "generated (demo login)"
     assert env["DATABASE_URL"] == "build services"
     assert env["GOOGLE_CLIENT_ID"] == "unset (declared in .env.example)"
-    assert env["ALLOW_DEMO_SEED"] == "unset (declared in .env.example)"
+    # The app declares demo seeding (DEMO_PASSWORD + the flag), so a throwaway run turns it on —
+    # left "unset", the generated DEMO_PASSWORD signed into users that did not exist.
+    assert env["ALLOW_DEMO_SEED"] == "demo seeding (set by BOSS for this run)"
     assert env["PORT"] == "launcher"
 
 

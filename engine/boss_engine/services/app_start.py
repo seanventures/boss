@@ -139,7 +139,12 @@ def env_sources(*, run_env: Any = None, launcher: Iterable[str] = ("PORT", "HOST
             if name in generated:
                 out[name] = "generated (demo login)" if name in shown else "generated"
             elif name in supplied:
-                out[name] = "build services"
+                from ..templates.run_env import DEMO_SEED_FLAG
+
+                # The one supplied name that is not the run's database: BOSS turning the app's
+                # declared demo seeding on for a throwaway run (run_env.resolve).
+                out[name] = ("demo seeding (set by BOSS for this run)" if name == DEMO_SEED_FLAG
+                             else "build services")
             else:
                 out[name] = "bound"
         for name in supplied:
