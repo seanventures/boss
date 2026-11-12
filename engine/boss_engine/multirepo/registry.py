@@ -12,6 +12,15 @@ GitHub's one-hour expiry and the run-end revocation are the backstop.
 
 An install that never used the registry (no rows for the org) keeps today's behaviour: nothing
 here refuses anything until the registry has been refreshed once.
+
+A repository bound through a PROJECT connection (Add a GitHub account, BOSSAPP-1015..1017) is one
+no installation lists, so the lister never writes its row — and on an install whose registry is in
+use, `mint_allowed` refused every mint for it (BOSSAPP-1030, found live on the third link of the
+multi-account chain). The operator explicitly picking the repository IS the allow action:
+creating or activating a binding registers the row (`register_binding`, source 'binding',
+allowed) — unless the operator already unticked it, which still wins. `refresh` keeps those rows:
+they are folded in beside what GitHub lists, and the gone-sweep never touches them (gone from the
+installation says nothing about a repository the installation was never meant to list).
 """
 from __future__ import annotations
 
@@ -135,9 +144,21 @@ def refresh(db: Any, settings: Any, project_id: str, *, actor: str = "operator",
              "priv": bool(item.get("private")) if item.get("private") is not None else None,
              "arch": bool(item.get("archived")),
              "pushed": str(item["pushed_at"]) if item.get("pushed_at") else None})
-    # Gone from the installation: not reachable, never silently still allowed.
-    rows = db.execute(sql("SELECT id, full_name FROM github_repos WHERE org_id = :o"), {"o": org_id}).mappings().all()
-    gone = [r["id"] for r in rows if norm_repo(r["full_name"]) not in seen]
+    # Repositories a project bound through its own connection (BOSSAPP-1030): no installation
+    # lists them, so the lister above never writes their rows. They are part of what the org
+    # uses — fold them in, so the first refresh grandfathers them like every used repository
+    # and a later refresh never counts them gone.
+    for full in _bound_full_names(db, org_id):
+        if norm_repo(full) in seen:
+            continue
+        seen.add(norm_repo(full))
+        _upsert_bound(db, org_id, full)
+    # Gone from the installation: not reachable, never silently still allowed. A 'binding' row is
+    # not the installation's to take away — its repository was never meant to be listed, and the
+    # operator's tick stays theirs even after the binding is deactivated.
+    rows = db.execute(sql("SELECT id, full_name, source FROM github_repos WHERE org_id = :o"),
+                      {"o": org_id}).mappings().all()
+    gone = [r["id"] for r in rows if norm_repo(r["full_name"]) not in seen and r["source"] != "binding"]
     if gone:
         db.execute(sql("UPDATE github_repos SET reachable = false, allowed = false, updated_at = now() "
                        "WHERE id = ANY(:ids)"), {"ids": gone})
@@ -157,6 +178,70 @@ def _used_full_names(db: Any, org_id: str) -> set[str]:
         "JOIN workspaces w ON w.id = p.workspace_id WHERE w.org_id = :o AND b.status = 'active'"),
         {"o": org_id}).scalars().all()
     return {str(r) for r in rows}
+
+
+def _bound_full_names(db: Any, org_id: str) -> list[str]:
+    """The org's actively bound GitHub repositories, spelled as the bindings spell them. A
+    repository BOSS keeps on this machine (`local_<project>/<name>`) is never the registry's."""
+    from ..services.local_repo import is_local
+
+    rows = db.execute(sql(
+        "SELECT DISTINCT b.full_name FROM github_repository_bindings b JOIN projects p ON p.id = b.project_id "
+        "JOIN workspaces w ON w.id = p.workspace_id WHERE w.org_id = :o AND b.status = 'active'"),
+        {"o": org_id}).scalars().all()
+    out, seen = [], set()
+    for full in rows:
+        name = str(full or "")
+        if "/" not in name or is_local(name) or norm_repo(name) in seen:
+            continue
+        seen.add(norm_repo(name))
+        out.append(name)
+    return sorted(out, key=norm_repo)
+
+
+def _upsert_bound(db: Any, org_id: str, full_name: str) -> str:
+    """One row for a bound repository, deduped exactly like the lister's rows (the same conflict
+    target). An existing row keeps its source and everything the operator decided; a binding is
+    evidence the repository is reachable through its own connection."""
+    return str(db.execute(sql(
+        "INSERT INTO github_repos (id, org_id, source, full_name, reachable, last_seen_at) "
+        "VALUES (:id, :o, 'binding', :full, true, now()) "
+        "ON CONFLICT (org_id, lower(full_name)) DO UPDATE SET reachable = true, last_seen_at = now(), "
+        "updated_at = now() RETURNING id"),
+        {"id": make_id("ghr"), "o": org_id, "full": full_name}).scalar())
+
+
+def register_binding(db: Any, project_id: str, full_name: str, *, actor: str = "operator",
+                     connection_id: Optional[str] = None) -> Optional[str]:
+    """Creating or activating a repository binding tells the registry (BOSSAPP-1030).
+
+    The operator explicitly picking the repository IS the allow action, so an org whose registry
+    is in use gets the row (source 'binding') and the allow — unless the operator already decided
+    this repository (`allowed_by` set): their explicit untick still wins, binding or not. An org
+    that never used the registry stays ungoverned (`mint_allowed` keeps returning None), and an
+    older schema without the registry is a no-op, never a refused bind."""
+    name = str(full_name or "").strip()
+    from ..services.local_repo import is_local
+
+    if "/" not in name or is_local(name):
+        return None
+    org_id = org_of_project(db, project_id)
+    if not org_id:
+        return None
+    try:
+        with db.begin_nested():
+            if not _registry_in_use(db, org_id):
+                return None
+            row_id = _upsert_bound(db, org_id, name)
+            db.execute(sql(
+                "UPDATE github_repos SET allowed = true, allowed_by = :a, allowed_at = now(), "
+                "updated_at = now() WHERE id = :i AND NOT allowed AND allowed_by IS NULL"),
+                {"a": actor, "i": row_id})
+    except Exception:  # noqa: BLE001 — an older schema: no registry to tell
+        return None
+    event(db, project_id, "github.repository_bound_registered", actor, "github_repo", row_id,
+          {"repository": name, "connection_id": connection_id})
+    return row_id
 
 
 # ── reading ────────────────────────────────────────────────────────────────────────────────────
