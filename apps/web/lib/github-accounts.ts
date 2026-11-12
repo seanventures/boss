@@ -16,6 +16,9 @@ export type FoundAccount = {
 export type AccountApp = {
   slug: string; owner_login: string | null; owner_type: string | null; public: boolean | null;
   page_url: string | null; settings_url: string | null; install_url?: string | null; is_owner?: boolean;
+  /** The install page behind GitHub's own sign-in (github.com/login?return_to=…): a personal
+   *  account's install page only answers to that very person's session (a wrong one is a 404). */
+  signin_install_url?: string | null;
 };
 
 export type AccountPlan = {
@@ -44,10 +47,12 @@ export type AllowResult = {
 export const lookupAccount = (account: string) =>
   idPost<AccountLookup>("/v1/identity/github/accounts/lookup", { account });
 
-/** The poll: in the background (never a step-up sheet in the middle of watching). */
-export const watchAccount = (login: string, accountId: string) =>
+/** The poll: in the background (never a step-up sheet in the middle of watching). The type the
+ *  lookup reported rides along so a personal target keeps the private-app rule between polls. */
+export const watchAccount = (login: string, accountId: string, accountType?: string | null) =>
   idFetch<AccountPlan & { account: { login: string; id: string } }>(
-    "POST", "/v1/identity/github/accounts/watch", { login, account_id: accountId }, { background: true });
+    "POST", "/v1/identity/github/accounts/watch",
+    { login, account_id: accountId, account_type: accountType ?? "" }, { background: true });
 
 export const installationRepos = (installationId: string) =>
   idGet<{ installation_id: string; account: string | null; account_type: string | null; repos: InstallationRepo[] }>(
@@ -71,8 +76,10 @@ export function refusalWords(error: unknown): string {
 export type StepState = "done" | "run" | "todo";
 export type Step = { key: string; label: string; sub: string; state: StepState };
 
-/** The steps for a path. `sawGate`: the one-time "let it install" step was needed on this
- *  account (it stays on the list, done, once the app is public). `allowed`: Allow was pressed. */
+/** The steps for a path. `sawGate`: the account hit the private-app wall before the app route
+ *  opened (the one-time switch stays on the list, done, once the app is public). `allowed`:
+ *  Allow was pressed. The make_public path leads with the direct connection — a private app
+ *  installs only on its owner, so "Install on <account>" would be a dead button there. */
 export function stepsFor(path: AccountPath, login: string, kind: FoundAccount["type"], opts: {
   sawGate?: boolean; allowing?: boolean; allowed?: boolean;
 } = {}): Step[] {
@@ -86,10 +93,13 @@ export function stepsFor(path: AccountPath, login: string, kind: FoundAccount["t
     return [found, { key: "create", label: "Create the BOSS app", sub: "on GitHub · you", state: "run" },
             { key: "install", label: `Install on ${login}`, sub: "on GitHub · you", state: "todo" }, pick, check];
   }
+  if (path === "make_public") {
+    return [found, { key: "connect", label: `Connect ${login}`, sub: "sign in or token · you", state: "run" },
+            pick, check];
+  }
   const steps: Step[] = [found];
-  if (path === "make_public" || opts.sawGate) {
-    steps.push({ key: "gate", label: "Let it install", sub: "one time · you",
-                 state: path === "make_public" ? "run" : "done" });
+  if (opts.sawGate) {
+    steps.push({ key: "gate", label: "Let it install", sub: "one time · you", state: "done" });
   }
   steps.push({ key: "install", label: `Install on ${login}`, sub: "on GitHub · you",
                state: path === "install" ? "run" : path === "pick" ? "done" : "todo" });

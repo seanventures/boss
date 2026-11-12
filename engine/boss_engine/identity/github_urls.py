@@ -130,6 +130,17 @@ def install_app_on(slug: str, target_id: object = None) -> Optional[str]:
     return f"{base}/permissions?{urlencode({'target_id': tid})}"
 
 
+def login_then(url: Optional[str]) -> Optional[str]:
+    """GitHub's sign-in page, going on to `url` after (BOSSAPP-1015). A personal account's install
+    page only answers to that very person's session — a wrong session gets a bare 404, not 403 —
+    so the sure route is through GitHub's own sign-in, which asks for the right account and
+    returns. Only a URL on GitHub itself is wrapped; anything else is None, never guessed."""
+    base = web_base()
+    if not url or not url.startswith(f"{base}/"):
+        return None
+    return f"{base}/login?{urlencode({'return_to': url[len(base):]})}"
+
+
 # ---- OAuth (a person's own connection; GitHub as a sign-in provider) ------------------------------------
 
 def oauth_authorize(params: Optional[dict[str, str]] = None) -> str:

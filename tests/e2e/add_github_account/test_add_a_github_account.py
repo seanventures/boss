@@ -1,13 +1,16 @@
-"""ADD A GITHUB ACCOUNT, as a person does it (BOSSAPP-945), at 1440 and 390, against a fake GitHub.
+"""ADD A GITHUB ACCOUNT, as a person does it (BOSSAPP-945, 1015, 1016), at 1440 and 390, against
+a fake GitHub.
 
-  1 the whole way for an organisation: found on GitHub → the one-time switch (no "I did it") →
-    the app made public on GitHub, noticed by BOSS → Install aimed at the account → the
-    installation appearing on GitHub, noticed by BOSS → Pick repos with "used by" → Allow, the
-    access check's results in words;
+  1 the whole way for an organisation: found on GitHub → the walled app route (direct connection
+    primary, the owner's switch behind a note, no "I did it") → the app made public on GitHub,
+    noticed by BOSS → Install aimed at the account → the installation appearing on GitHub,
+    noticed by BOSS → Pick repos with "used by" → Allow, the access check's results in words;
   2 a name GitHub does not know, said in words;
   3 an account already installed: straight to Pick repos;
-  4 a person, with the app public: straight to Install, aimed at them;
-  5 Other ways: the token (with its exact permissions), the org's own app.
+  4 a person, with the app public: Install through GitHub's own sign-in, said plainly before;
+  5 a foreign person on a private app: the direct connection, never a dead Install button;
+  6 the app's owner: the app route, unchanged;
+  7 Other ways: the token (with its exact permissions), the org's own app.
 """
 from __future__ import annotations
 
@@ -24,14 +27,19 @@ def test_an_organisation_from_name_to_allowed_repositories(person):
     assert "kaappu" in found and "organisation" in found and "14 public repositories" in found, found
     assert person.path() == "make_public"
     assert "Agent actions" in person.tid("ga-agent-actions").inner_text()
+    # The app route is walled (private app, foreign account): the direct connection leads, the
+    # owner's one-time switch sits behind a note, and there is NO Install button to a 404.
+    assert person.tid("ga-install").count() == 0
+    assert person.tid("ga-connect-direct").inner_text() == "Paste a token for kaappu"
+    assert "bare 404" in person.tid("ga-gate-private").inner_text()
+    person.tid("ga-owner-note").locator("summary").click()
     settings = person.tid("ga-open-settings")
     assert settings.get_attribute("href") == f"https://github.com/settings/apps/{SLUG}/advanced"
     assert settings.get_attribute("target") == "_blank"
     sheet = person.tid("ga-sheet").inner_text()
     assert "I did it" not in sheet
-    assert person.tid("ga-waiting").is_disabled()
-    person.check("the one-time switch")
-    person.shot("1-let-it-install")
+    person.check("the walled app route")
+    person.shot("1-walled-app-route")
 
     github(public=True)                                   # the owner pressed Make public on GitHub
     took = person.wait_path("install")
@@ -39,6 +47,7 @@ def test_an_organisation_from_name_to_allowed_repositories(person):
     install = person.tid("ga-install")
     assert install.get_attribute("href") == f"https://github.com/apps/{SLUG}/installations/new/permissions?target_id=7202"
     assert install.get_attribute("target") == "_blank"
+    assert "needs one of its admins" in person.tid("ga-install-note").inner_text()
     assert "Switch account" in person.tid("ga-gate-install").inner_text()
     assert person.tid("ga-step-gate").get_attribute("data-s") == "done"
     person.check("install")
@@ -92,16 +101,52 @@ def test_an_account_already_installed_goes_straight_to_pick_repos(person):
     person.shot("6-already-installed")
 
 
-def test_a_person_with_the_app_public_goes_straight_to_install(person):
+def test_a_person_with_the_app_public_installs_through_githubs_own_sign_in(person):
     github(public=True)
     person.open_sheet()
     person.look_up("octo-person")
     assert "person" in person.tid("ga-found").inner_text()
     assert person.path() == "install"
-    assert person.tid("ga-install").get_attribute("href").endswith("target_id=8303")
-    assert person.tid("ga-gate-public").count() == 0
+    # Said plainly BEFORE the button, and the link goes through github.com/login (a wrong session
+    # gets a bare 404 from GitHub on a person's install page).
+    assert "signed into GitHub as octo-person" in person.tid("ga-install-note").inner_text()
+    href = person.tid("ga-install").get_attribute("href")
+    assert href.startswith("https://github.com/login?return_to=")
+    assert "target_id%3D8303" in href
+    assert person.tid("ga-gate-private").count() == 0
     person.check("a person")
     person.shot("7-person-install")
+
+
+def test_a_foreign_person_on_a_private_app_gets_the_direct_route(person):
+    person.open_sheet()
+    person.look_up("octo-person")
+    assert person.path() == "make_public"
+    assert person.tid("ga-install").count() == 0          # never a dead Install button (a 404)
+    direct = person.tid("ga-connect-direct")
+    assert direct.inner_text() == "Paste a token for octo-person"
+    person.tid("ga-owner-note").locator("summary").click()         # the owner's note, expanded
+    assert "Make public" in person.tid("ga-owner-note").inner_text()
+    person.check("the direct route")
+    person.shot("10-foreign-person-private-app")
+    direct.click()                                        # straight into the token way, prefilled
+    person.p.wait_for_selector("[data-testid='su-how-token-form']")
+    assert "target_name=octo-person" in person.tid("su-account-create-token").get_attribute("href")
+    person.shot("11-token-prefilled")
+
+
+def test_the_apps_owner_keeps_the_app_route(person):
+    state = github()                                       # the owner's own installation, removed on GitHub
+    for iid in list(state["installations"]):
+        github(uninstall=iid)
+    person.open_sheet()
+    person.look_up("paramg")
+    assert person.path() == "install"
+    note = person.tid("ga-install-note").inner_text()
+    assert "signed into GitHub as paramg" in note          # the owner is a person too
+    assert person.tid("ga-install").get_attribute("href").startswith("https://github.com/login?return_to=")
+    person.check("the owner")
+    person.shot("12-owner-install")
 
 
 def test_other_ways_keep_the_token_and_the_orgs_own_app(person):

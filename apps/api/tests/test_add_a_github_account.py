@@ -3,8 +3,10 @@ installation that appears, its repositories and allowing them — through the re
 as an Owner, against a fake GitHub (github_accounts_fake.py). Nothing reaches github.com.
 
   lookup   a user, an organisation, a name GitHub does not know, a github.com link pasted;
-  path     installed -> pick; private App and not its owner -> make_public (Advanced settings link);
-           public App -> install (aimed at the account's id); the App's owner itself -> install;
+  path     installed -> pick; private App and not its owner -> make_public (the direct connection
+           leads; the owner's Advanced settings link is a note) — visibility GitHub would not
+           confirm counts as private for a personal target; public App -> install (aimed at the
+           account's id; a person goes through github.com/login); the App's owner itself -> install;
   watch    the App made public, then the installation appearing (recorded beside the default);
   repos    the installation's repositories with "used by <project>";
   allow    the registry's allow + the access check, each in words; the token comes from the
@@ -129,8 +131,44 @@ def test_an_organisation_with_the_app_private_asks_its_owner_to_make_it_installa
     # The App is owned by a person: its Advanced settings live under /settings, never /organizations.
     assert app["settings_url"] == f"https://github.com/settings/apps/{SLUG}/advanced"
     assert app["install_url"] == f"https://github.com/apps/{SLUG}/installations/new/permissions?target_id=7202"
-    assert out["line"].endswith("It is private, so one switch first.")
+    assert out["line"] == ("The BOSS app is private, so GitHub only installs it on @paramg — the sure way "
+                           "in for kaappu is to connect it directly.")
     assert "GET /users/kaappu" in hub.calls and f"GET /apps/{SLUG}" in hub.calls
+
+
+def test_a_person_with_the_app_private_is_never_sent_to_the_dead_install_page(hub, owner):
+    """BOSSAPP-1015/1016: GitHub 404s a private App's install page for ANY account but its owner,
+    so a foreign personal target gets the direct-connection path, not an Install button."""
+    out = _lookup(owner, "octo-person").json()
+    assert out["account"]["type"] == "User"
+    assert out["path"] == "make_public"
+    assert out["app"]["public"] is False and out["app"]["is_owner"] is False
+
+
+def test_visibility_github_would_not_confirm_counts_as_private_for_a_person(hub, owner, monkeypatch):
+    from boss_engine.identity import github_accounts as ga
+
+    monkeypatch.setattr(ga, "app_is_public", lambda slug: None)
+    person = _lookup(owner, "octo-person").json()
+    assert person["path"] == "make_public" and person["app"]["public"] is None
+    assert person["line"].startswith("GitHub would not say")
+    org = _lookup(owner, "kaappu").json()      # an organisation's page says what is wrong: app route kept
+    assert org["path"] == "install" and org["app"]["public"] is None
+    # The sheet's poll carries the type the lookup reported, so the rule holds between polls.
+    seen = owner.post("/v1/identity/github/accounts/watch",
+                      json={"login": "octo-person", "account_id": "8303", "account_type": "User"}).json()
+    assert seen["path"] == "make_public"
+
+
+def test_a_personal_install_goes_through_githubs_own_sign_in(hub, owner):
+    """BOSSAPP-1015: a person's install page only answers to that very person's session (a wrong
+    one is a bare 404, not 403), so the install link is wrapped in github.com/login?return_to=."""
+    hub.make_public()
+    out = _lookup(owner, "octo-person").json()
+    assert out["path"] == "install"
+    assert out["app"]["signin_install_url"] == (
+        "https://github.com/login?return_to=%2Fapps%2F" + SLUG
+        + "%2Finstallations%2Fnew%2Fpermissions%3Ftarget_id%3D8303")
 
 
 def test_a_pasted_link_is_looked_up_as_its_account(hub, owner):

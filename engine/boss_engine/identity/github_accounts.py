@@ -8,12 +8,16 @@ from what GitHub itself says about that account and about this install's GitHub 
            key), and whether a GitHub connection BOSS already holds is this account.
   path     as data:
              pick         the App is installed there already: straight to its repositories;
-             make_public  the App is private and the account is not its owner: GitHub installs a
-                          private App only on its owner, so the owner flips "Make public" once
-                          (the App's Advanced settings). BOSS sees the change on the App's public
-                          page; there is no "I did it" button;
+             make_public  the App is private (or, for a foreign personal target, GitHub would not
+                          confirm it is public) and the account is not its owner: GitHub installs
+                          a private App only on its owner, and the install page for anyone else is
+                          a bare 404. The sheet leads with the direct connection (sign-in or a
+                          token) and keeps the owner's "Make public" switch (the App's Advanced
+                          settings) behind a note; BOSS still watches the App's public page and
+                          offers the app route the moment it opens;
              install      otherwise: GitHub's install page aimed at this account
-                          (github_urls.install_app_on with its id);
+                          (github_urls.install_app_on with its id; a personal target goes through
+                          github.com/login so GitHub asks for the right session first);
              no_app       this install has no Setup-created App yet (the other ways stay).
   watch    the sheet's poll: the App's public page and installations again; an installation for
            the account is recorded (github_setup.record_installation) the moment GitHub lists it.
@@ -202,8 +206,12 @@ def _line(path: str, account: dict[str, Any], app: Optional[dict[str, Any]]) -> 
     if path == "pick":
         return f"The BOSS app is already installed on {login}: pick the repositories BOSS may use."
     if path == "make_public":
-        return (f"The fastest way for this account: the BOSS app you already own, installed on {login}. "
-                "It is private, so one switch first.")
+        owner = (app or {}).get("owner_login") or "its owner"
+        if (app or {}).get("public") is False:
+            return (f"The BOSS app is private, so GitHub only installs it on @{owner} — the sure way "
+                    f"in for {login} is to connect it directly.")
+        return (f"GitHub would not say whether the BOSS app can install on {login}, so the sure way "
+                "in is to connect it directly.")
     if path == "install":
         return f"The fastest way for this account: the BOSS app you already own, installed on {login}."
     return "This install has no BOSS GitHub app yet. Create it first, or use another way below."
@@ -230,8 +238,16 @@ def plan(db: Any, org_id: str, account: dict[str, Any], *, by: str = "",
     if public is None and not is_owner:
         public = app_is_public(app["slug"])
     install_url = github_urls.install_app_on(app["slug"], account.get("id"))
-    app = {**app, "public": public, "install_url": install_url, "is_owner": is_owner}
-    path = "install" if is_owner or public is not False else "make_public"
+    app = {**app, "public": public, "install_url": install_url, "is_owner": is_owner,
+           # A personal account's install page needs that very person's GitHub session (a wrong
+           # one is a bare 404), so the console routes people through GitHub's own sign-in.
+           "signin_install_url": github_urls.login_then(install_url)}
+    # A private App installs only on its owner (BOSSAPP-1015/1016). Visibility GitHub would not
+    # confirm (public is None) counts as private for a foreign personal target: a dead Install
+    # button there is a raw 404, so the honest route is the direct connection. For an organisation
+    # the page says what is wrong, so an unconfirmed App keeps the app route.
+    foreign_person = not is_owner and account.get("type") != github_urls.ORGANIZATION
+    path = "install" if is_owner or public is True or (public is None and not foreign_person) else "make_public"
     return {"path": path, "app": app, "installation": None, "line": _line(path, account, app)}
 
 
@@ -242,13 +258,16 @@ def lookup(db: Any, org_id: str, raw: str, *, person_id: str = "") -> dict[str, 
     return {"account": account, "connection": _connection(db, org_id, person_id, account["login"]), **out}
 
 
-def watch(db: Any, org_id: str, login: str, account_id: str, *, person_id: str = "") -> dict[str, Any]:
+def watch(db: Any, org_id: str, login: str, account_id: str, *, person_id: str = "",
+          account_type: Optional[str] = None) -> dict[str, Any]:
     """The sheet's poll while the person is on GitHub: no lookup of the account again (GitHub
-    limits those), only the App's installations and, while it matters, its public page."""
+    limits those), only the App's installations and, while it matters, its public page. The
+    account's type comes back from the sheet (the lookup said it), so a personal target keeps the
+    private-App rule between polls."""
     name = parse_account(login)
     if account_id and not str(account_id).isdigit():
         raise GitHubSetupError("bad_account_id", 422)
-    account = {"login": name, "id": str(account_id or ""), "type": None}
+    account = {"login": name, "id": str(account_id or ""), "type": github_urls.account_type(account_type)}
     out = plan(db, org_id, account, by=person_id)
     return {"account": {"login": name, "id": account["id"]}, **out}
 

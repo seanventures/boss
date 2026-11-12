@@ -80,6 +80,23 @@ def test_a_github_enterprise_or_test_host_is_followed(monkeypatch):
     assert G.install_app("s") == "https://ghe.example/apps/s/installations/new"
 
 
+def test_a_personal_install_link_goes_through_githubs_own_sign_in():
+    """BOSSAPP-1015: a person's install page only answers to that person's session (a wrong one is
+    a bare 404), so the sure route wraps it in github.com/login?return_to=…."""
+    install = G.install_app_on("boss-x", 8303)
+    assert G.login_then(install) == ("https://github.com/login?return_to="
+                                     "%2Fapps%2Fboss-x%2Finstallations%2Fnew%2Fpermissions%3Ftarget_id%3D8303")
+    assert G.login_then(None) is None
+    assert G.login_then("https://evil.example/apps/x") is None     # only GitHub's own pages
+
+
+def test_login_then_follows_a_github_enterprise_host(monkeypatch):
+    monkeypatch.setenv(G.WEB_BASE_ENV, "https://ghe.example")
+    assert G.login_then("https://ghe.example/apps/s/installations/new") == \
+        "https://ghe.example/login?return_to=%2Fapps%2Fs%2Finstallations%2Fnew"
+    assert G.login_then("https://github.com/apps/s") is None       # the other host is foreign now
+
+
 def test_hostile_names_cannot_change_the_path():
     assert G.installation_settings("1/../2", ORG) is None
     assert G.app_permissions("a/b", ORG).endswith("/apps/a%2Fb/permissions")

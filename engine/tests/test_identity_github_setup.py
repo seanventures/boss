@@ -163,8 +163,18 @@ def test_the_manifest_asks_for_least_privilege_and_returns_to_this_boss(env):
     body = m["manifest"]
     assert body["redirect_url"] == "https://boss.acme.test/v1/identity/github/app/created"
     assert body["setup_url"] == "https://boss.acme.test/v1/identity/github/app/installed"
-    assert body["public"] is False and "administration" not in body["default_permissions"]
+    assert "administration" not in body["default_permissions"]
     assert "workflows" not in body["default_permissions"]
+
+
+def test_the_app_is_created_public_so_every_account_can_use_the_app_route(env):
+    """BOSSAPP-1016: a private GitHub App installs ONLY on its creator, GitHub has no API to flip
+    visibility later, and a second account's install page is a bare 404 — so the manifest creates
+    the App public. Public only means other accounts MAY install it; each installation still
+    grants only its own repositories and permissions."""
+    for owner in ("acme", "paramg", None):
+        body = github_setup.manifest(origin="https://boss.acme.test", person_id=env.alice, owner=owner)["manifest"]
+        assert body["public"] is True
     with pytest.raises(github_setup.GitHubSetupError) as e:
         github_setup.manifest(origin="", person_id=env.alice)
     assert e.value.code == "public_url_required"
