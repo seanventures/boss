@@ -315,8 +315,8 @@ def complete_install(*, installation_id: str, state: Optional[str], org_id: str,
 
 
 #: A state GitHub carried back that no longer opens the install path: signed for another
-#: moment, already used, or expired. On GitHub's own return (a repository-access change at
-#: github.com/settings/installations) that is not a failure — the change is already saved on
+#: moment, already used, or expired. On GitHub's own return (a repository-access change on
+#: GitHub's installation-settings page) that is not a failure — the change is already saved on
 #: GitHub — so the callback confirms it through the signed-in session and the App's API instead.
 STALE_STATE_CODES = frozenset({"bad_state", "state_expired", "state_replayed"})
 

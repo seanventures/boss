@@ -184,7 +184,7 @@ _NAMED_REPOS = 20
 
 def _access_updated(db: Any, installation_id: str) -> RedirectResponse:
     """GITHUB'S OWN RETURN, CONFIRMED (operator, 2026-11-06: changing the App's repository access
-    at github.com/settings/installations came back to "The link expired or was used"). The
+    on GitHub's installation-settings page came back to "The link expired or was used"). The
     signed-in session is the proof of who; the App's API says whether the installation is ITS
     own; then the stored verification is refreshed and the repositories the App reaches now are
     named, so Setup says "Access updated" with them instead of a failure."""
