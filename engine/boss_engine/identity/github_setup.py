@@ -249,7 +249,12 @@ def manifest(*, origin: str, person_id: str, owner: Optional[str] = None,
         "callback_urls": [f"{origin}/v1/identity/me/connections/github/callback"],
         "setup_url": f"{origin}/v1/identity/github/app/installed",
         "setup_on_update": True,
-        "public": False,
+        # PUBLIC ON PURPOSE (BOSSAPP-1016). A private GitHub App installs ONLY on its creator, and
+        # GitHub has no API to change visibility later — `False` here walled every second account
+        # out of the app route (a raw 404 on the install page). Public only means other accounts
+        # MAY install the App; each installation still grants only the repositories and
+        # permissions that installation itself picked. Multi-account is table stakes.
+        "public": True,
         "request_oauth_on_install": False,
         "default_permissions": app_permissions(allow_workflows),
         "default_events": [],

@@ -18,7 +18,7 @@ That's it. Your next step in Setup is choosing a model.
 - **Access never runs out.** The app belongs to your install, and its key does not expire. Before every GitHub call, BOSS asks GitHub for fresh access that lasts an hour, so a build of any length never stops because access expired.
 - **BOSS only touches the repos you picked.** It never pushes to your default branch. Everything comes to you as a pull request.
 - **Add or remove repos later** with **Add repos on GitHub** in Setup, or on GitHub under **Settings › Applications › Installed GitHub Apps**. Then come back to Setup and the list updates.
-- **The app is private to you.** It is created on your account or organisation, not shared with anyone else.
+- **The app is public on purpose — your repos are not.** GitHub installs a *private* app only on the account that created it and offers no way to change that later by API, which would wall every other account (a second personal account, another organisation) out with a bare 404. So BOSS creates the app public. Public only means other accounts *may* install it: each installation grants access to exactly the repos that installation picked, nothing is shared, and nobody can see or touch your repos through it.
 - **Your install only needs to be reachable from your own browser.** GitHub sends you back through your browser, so this works on a laptop, a tailnet or a private network.
 
 ## If something goes wrong
@@ -30,6 +30,8 @@ That's it. Your next step in Setup is choosing a model.
 | "The link expired or was used. Start again." | The GitHub step took more than 10 minutes. Click **Connect GitHub** again. |
 | Back in BOSS, but no repos are listed | You installed the app without picking repos. Click **Add repos on GitHub**, tick them, and come back. |
 | "Set BOSS_PUBLIC_URL first" | BOSS doesn't know its own address yet. Claim the install from its address first (see [Getting started](GETTING_STARTED.md)), then try again. |
+| GitHub shows a bare 404 on the app's install page | Two known causes. (1) Your app was created before BOSS made apps public: a private app installs only on its creator. Owner: `github.com/settings/apps/<slug>` → **Advanced** → **Make public** — or skip the app route and connect the account with a sign-in or token (the Add-account sheet offers this itself). (2) A personal account's install page only opens signed in as that very person: switch accounts on GitHub (avatar menu) and try again. |
+| Adding a second account lands on a 404 | Same as above — the Add a GitHub account sheet detects both cases and leads with a route that works. |
 
 ## Other ways
 

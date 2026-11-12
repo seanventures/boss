@@ -80,6 +80,9 @@ class AccountLookupBody(_Body):
 class AccountWatchBody(_Body):
     login: str = Field(min_length=1, max_length=100)
     account_id: str = Field(default="", max_length=30, pattern=r"^[0-9]*$")
+    #: The type the lookup reported ("User"/"Organization"): a personal target keeps the
+    #: private-App rule between polls. Anything else is treated as unknown, never guessed.
+    account_type: str = Field(default="", max_length=20)
 
 
 class AccountAllowBody(_Body):
@@ -422,7 +425,7 @@ def build_identity_github_router() -> APIRouter:
             with begin() as db:
                 ctx = current_context(request, db)
                 return github_accounts.watch(db, ctx.principal.org_id, body.login, body.account_id,
-                                             person_id=ctx.principal.id)
+                                             person_id=ctx.principal.id, account_type=body.account_type)
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 

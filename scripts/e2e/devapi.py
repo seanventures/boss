@@ -501,6 +501,108 @@ def _seam_answer(body):
 LF_SEAMS = {"answer": _seam_answer,"conn": _seam_conn, "onboard": _seam_onboard,"github": _seam_github, "stage": _seam_stage, "run-merges": _seam_run_merges,
             "preview": _seam_preview, "outage-run": _seam_outage_run, "push-pending": _seam_push_pending}
 
+# ── Add a GitHub account (BOSSAPP-945/1015/1016): the accounts fake + its /__dev/gh seam ─────
+# The fake GitHub the API tests use (apps/api/tests/github_accounts_fake.py) answers every read
+# the sheet makes; POST /__dev/gh does what a person does on github.com (make the app public,
+# install it on an account), exactly as tests/e2e/add_github_account expects.
+from urllib.parse import urlsplit as _urlsplit  # noqa: E402
+
+from apps.api.tests.github_accounts_fake import demo_world as _gh_world  # noqa: E402
+from boss_engine.identity import github_app as _gh_app, github_setup as _gh_setup  # noqa: E402
+from boss_engine.identity.authn_support import default_org_id as _gh_org  # noqa: E402
+from boss_engine.services import setup_checks as _gh_checks  # noqa: E402
+
+GH_SLUG = "boss-localhost-ab12"
+_GH = _gh_world(slug=GH_SLUG)
+_gh_app.TRANSPORT = _GH
+_gh_app.app_jwt = lambda db, now=None: "eyJfake.app.jwt"
+
+
+def _gh_ready(db, org_id=None):
+    cfg = _gh_setup.app_config(db, org_id)
+    return bool(cfg["app_id"] and cfg["installation_id"])
+
+
+_gh_setup.app_ready = _gh_ready
+
+# Only GitHub's own hosts go to the accounts fake; every other probe keeps the real client
+# (the plumbing-gate fakes answer their own URLs).
+_gh_http0 = _gh_checks.default_http
+
+
+def _gh_http(method, url, *, headers, json_body=None, timeout=15.0):
+    if _urlsplit(url).netloc in ("api.github.com", "github.com"):
+        return _GH.http(method, url, headers=headers, json_body=json_body, timeout=timeout)
+    return _gh_http0(method, url, headers=headers, json_body=json_body, timeout=timeout)
+
+
+_gh_checks.default_http = _gh_http
+
+
+def _gh_project_ready(org: str) -> None:
+    """The guided sheet lives on the blocks layout, which only shows once the project is proven
+    (a working repository AND a checked model). Prove the repo through the product's own ops —
+    the checks run against this fake — and keep one checked model source."""
+    from boss_engine.services import setup_actions as _sa
+
+    pid = os.environ.get("BOSS_DEFAULT_PROJECT_ID", "helpdesk-ai-demo")
+    with eng.begin() as db:
+        db.execute(_t(
+            "INSERT INTO entitlement_sources (id, project_id, provider, source_id, source_kind, "
+            "entitlement_kind, owner_type, owner_id, status, auth_method, connection_status, "
+            "connection_metadata, supported_models) VALUES ('es_dev_model', :p, 'claude_code', "
+            "'claude_code', 'subscription', 'subscription', 'org', :o, 'connected', 'oauth', "
+            "'connected', :m, '[\"claude\"]'::jsonb) ON CONFLICT (project_id, source_id) DO NOTHING"),
+            {"p": pid, "o": org,
+             "m": _json.dumps({"last_check": {"ok": True, "state": "working",
+                                              "at": "2026-01-01T00:00:00Z"}})})
+        bound = db.execute(_t("SELECT 1 FROM github_repository_bindings WHERE project_id = :p "
+                              "AND status = 'active' LIMIT 1"), {"p": pid}).first()
+    if bound:
+        return
+    settings = get_settings()
+    with eng.begin() as db:
+        out = _sa.repository_from_app(db, settings, pid, actor="dev")
+    with eng.begin() as db:
+        _sa.select_repository(db, settings, pid, out["connection_id"], f"paramg/{pid}",
+                              make_default=True, actor="dev")
+
+
+def _seam_gh(body):
+    from sqlalchemy.exc import DBAPIError
+    try:
+        with eng.begin() as db:
+            org = _gh_org(db)
+    except DBAPIError:
+        # A pooled connection Postgres had already terminated: it is invalidated by the error,
+        # so one retry gets a fresh connection (seen once as a flaky 500 in the e2e fixture).
+        with eng.begin() as db:
+            org = _gh_org(db)
+    if body.get("reset"):
+        fresh = _gh_world(slug=GH_SLUG)
+        _GH.public, _GH.users, _GH.repos = False, fresh.users, fresh.repos
+        _GH.installations, _GH.read_only, _GH.tokens, _GH.calls = {}, set(), {}, []
+        default = _GH.install("paramg")
+        with eng.begin() as db:
+            db.execute(_t("DELETE FROM identity_github_installations WHERE org_id = :o"), {"o": org})
+            db.execute(_t("DELETE FROM identity_github_app WHERE org_id = :o"), {"o": org})
+            db.execute(_t("DELETE FROM github_repos WHERE org_id = :o"), {"o": org})
+            db.execute(_t(
+                "INSERT INTO identity_github_app (org_id, app_id, slug, client_id, installation_id, "
+                "account_login, account_type, owner_login, owner_type, created_by) VALUES "
+                "(:o, '777', :s, 'Iv1.x', :i, 'paramg', 'User', 'paramg', 'User', 'dev')"),
+                {"o": org, "s": GH_SLUG, "i": default})
+        _gh_project_ready(org)
+    if "public" in body:
+        _GH.make_public(bool(body["public"]))
+    if body.get("install"):
+        _GH.install(str(body["install"]))
+    if body.get("uninstall"):
+        _GH.uninstall(str(body["uninstall"]))
+    if "read_only" in body:
+        _GH.read_only = {str(r).lower() for r in (body["read_only"] or [])}
+    return {"public": _GH.public, "installations": dict(_GH.installations)}
+
 from apps.api.app.main import app  # noqa: E402
 from apps.api.app import main as _main  # noqa: E402
 # Merge = a person approving the review decision queues the governed merge (as the API test does).
@@ -522,6 +624,13 @@ async def _dev(request: Request, call_next):
             if body.get("clear_calls"):
                 STATE["calls"] = []
         return JSONResponse({k: v for k, v in STATE.items()})
+    if path == "/__dev/gh" and request.method == "POST":
+        from starlette.concurrency import run_in_threadpool
+        try:
+            return JSONResponse(await run_in_threadpool(_seam_gh, await request.json()))
+        except Exception as e:  # noqa: BLE001
+            import traceback; traceback.print_exc()
+            return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500)
     if path.startswith("/__dev/lf/") and request.method == "POST":
         from starlette.concurrency import run_in_threadpool
         body = await request.json()

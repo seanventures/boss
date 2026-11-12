@@ -10,12 +10,20 @@
  *   2 Agent actions    the path BOSS picked, as steps, from GitHub's own answers:
  *                        installed already            -> Pick repos
  *                        the app is private, and this
- *                        account is not its owner      -> the one-time "let it install" switch
+ *                        account is not its owner      -> the direct connection (sign in or a
+ *                                                         token), never a dead Install button:
+ *                                                         GitHub 404s a private app's install
+ *                                                         page for anyone but its owner
+ *                                                         (BOSSAPP-1015/1016)
  *                        otherwise                     -> Install on <account>
- *   3 the switch       a link to the app's Advanced settings; BOSS watches the app's public page,
- *                      never an "I did it" button.
- *   4 install          GitHub's install page aimed at the account, in a new tab; BOSS watches the
- *                      app's installations and moves on when the new one appears.
+ *   3 the wall         why the app route is walled, with the owner's one-time "Make public"
+ *                      switch (the app's Advanced settings) behind an expander; BOSS watches the
+ *                      app's public page, never an "I did it" button.
+ *   4 install          GitHub's install page aimed at the account, in a new tab; a personal
+ *                      target goes through github.com/login (GitHub only shows a person's install
+ *                      page to that very person, and hides it with a 404 otherwise); BOSS watches
+ *                      the app's installations and moves on when the new one appears — and after
+ *                      a silent minute says the likely causes instead of waiting mutely.
  *   5 Other ways       a pasted access token and the org's own GitHub App (the steps that were
  *                      here before, kept whole), and Sign in with GitHub where it is set up.
  *   6 Pick repos       the installation's repositories with "used by" tags; Allow runs the
@@ -41,9 +49,11 @@ import type { How } from "./add-account-panel";
 import "./add-github-account.css";
 
 const PAUSE_MS = 600;
+//: A silent minute after pressing Install: say the likely causes instead of waiting mutely.
+const STUCK_MS = 60_000;
 const STEP_ICON: Record<string, React.ReactNode> = {
-  found: <Check weight="bold" />, gate: <LockOpen />, create: <Wrench />, install: <DownloadSimple />,
-  pick: <ListChecks />, check: <SealCheck />,
+  found: <Check weight="bold" />, gate: <LockOpen />, connect: <Key />, create: <Wrench />,
+  install: <DownloadSimple />, pick: <ListChecks />, check: <SealCheck />,
 };
 
 function Steps({ steps }: { steps: Step[] }) {
@@ -59,12 +69,12 @@ function Steps({ steps }: { steps: Step[] }) {
   );
 }
 
-function Out({ href, children, testid, primary = true }: {
-  href: string; children: React.ReactNode; testid: string; primary?: boolean;
+function Out({ href, children, testid, primary = true, onClick }: {
+  href: string; children: React.ReactNode; testid: string; primary?: boolean; onClick?: () => void;
 }) {
   return (
     <a className={`ga-btn${primary ? " ga-btn-primary" : ""}`} href={href} target="_blank" rel="noreferrer noopener"
-       data-testid={testid}>
+       data-testid={testid} onClick={onClick}>
       <ArrowSquareOut aria-hidden="true" size={14} />{children}
     </a>
   );
@@ -90,6 +100,7 @@ export function AddGitHubAccount({ onClose, onAdvanced, onOther }: {
   const [sawGate, setSawGate] = useState(false);
   const [installation, setInstallation] = useState<string | null>(null);
   const [watchedAt, setWatchedAt] = useState<number | null>(null);
+  const [pressed, setPressed] = useState<number | null>(null);   // Install opened: when
   const [repos, setRepos] = useState<InstallationRepo[] | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [allowing, setAllowing] = useState(false);
@@ -113,7 +124,7 @@ export function AddGitHubAccount({ onClose, onAdvanced, onOther }: {
       setPath(out.path);
       setSawGate(out.path === "make_public");
       setInstallation(out.installation?.installation_id ?? null);
-      setRepos(null); setResults(null); setPicked([]);
+      setRepos(null); setResults(null); setPicked([]); setPressed(null);
     } catch (e) {
       if (asked.current !== q) return;
       setFound(null); setPath(null);
@@ -132,12 +143,13 @@ export function AddGitHubAccount({ onClose, onAdvanced, onOther }: {
   // ---- 3/4 · watch GitHub while the person is there -----------------------------------------------
   const login = found?.account.login ?? "";
   const accountId = found?.account.id ?? "";
+  const accountType = found?.account.type ?? null;
   const watching = path === "make_public" || path === "install";
   const pollNow = useCallback(async () => {
     if (!login) return;
     lastPoll.current = Date.now();
     try {
-      const out = await watchAccount(login, accountId);
+      const out = await watchAccount(login, accountId, accountType);
       setWatchedAt(Date.now());
       if (out.path === "make_public") setSawGate(true);
       setPath(out.path);
@@ -146,7 +158,7 @@ export function AddGitHubAccount({ onClose, onAdvanced, onOther }: {
     } catch {
       setWatchedAt(Date.now());                 // a miss: the next poll asks again
     }
-  }, [login, accountId]);
+  }, [login, accountId, accountType]);
 
   useEffect(() => {
     if (!watching) return undefined;
@@ -229,6 +241,12 @@ export function AddGitHubAccount({ onClose, onAdvanced, onOther }: {
   const app = found?.app ?? null;
   const done = !!results;
   const ago = watchedAt ? Math.max(0, Math.round((Date.now() - watchedAt) / 1000)) : null;
+  // The app route is walled (private app, foreign account): the direct connection leads. A person
+  // already signed in keeps that sign-in (one per person), so the token is their way in.
+  const directHow: How = signin?.configured && signin?.me?.status !== "active" ? "own" : "token";
+  // Install pressed, and a minute of polls heard nothing: say the likely causes (1015).
+  const stuck = path === "install" && !installation && pressed !== null
+    && watchedAt !== null && watchedAt - pressed >= STUCK_MS;
 
   let primary: React.ReactNode;
   if (done) {
@@ -249,6 +267,16 @@ export function AddGitHubAccount({ onClose, onAdvanced, onOther }: {
         {busy ? <CircleNotch className="ga-spin" size={14} aria-hidden /> : <GithubLogo size={14} aria-hidden />}
         Create the BOSS app
       </GatedButton>
+    );
+  } else if (path === "make_public") {
+    // Never a dead Install button here: GitHub 404s a private app's install page for anyone but
+    // its owner. The direct connection is the primary action; the owner's switch is a note below.
+    primary = (
+      <button type="button" className="ga-btn ga-btn-primary" data-testid="ga-connect-direct"
+              onClick={() => onOther(directHow, login)}>
+        {directHow === "own" ? <GithubLogo size={14} aria-hidden /> : <Key size={14} aria-hidden />}
+        {directHow === "own" ? `Sign in as ${login} on GitHub` : `Paste a token for ${login}`}
+      </button>
     );
   } else if (watching) {
     primary = (
@@ -304,36 +332,65 @@ export function AddGitHubAccount({ onClose, onAdvanced, onOther }: {
         </section>
       ) : null}
 
-      {/* 3 · the one-time switch */}
+      {/* 3 · the app route is walled: the direct connection leads, the owner's switch is a note */}
       {path === "make_public" && app ? (
-        <section className="ga-gate" data-testid="ga-gate-public">
+        <section className="ga-gate" data-testid="ga-gate-private">
           <div className="ga-gate-h"><span className="ga-hand" aria-hidden="true">✋</span>
-            <div><b>One time: let other accounts install the BOSS app</b>
-              <small>Your app <code>{app.slug}</code> is private to @{app.owner_login ?? "you"}, and GitHub only lets a private
-                app be installed on its owner. Making it installable gives nobody access by itself.</small></div></div>
-          <div className="ga-row">
-            {app.settings_url ? <Out href={app.settings_url} testid="ga-open-settings">Open the app&apos;s settings on GitHub</Out> : null}
-            <span className="ga-faint">Press <b>Make public</b> there. BOSS sees it and moves on.</span>
-          </div>
+            <div><b>The app route can&apos;t reach {login}</b>
+              <small>{app.public === false
+                ? <>Your app <code>{app.slug}</code> is private, and GitHub only installs a private app on its
+                  owner (@{app.owner_login ?? "you"}) — for anyone else the install page is a bare 404.</>
+                : <>GitHub would not confirm that <code>{app.slug}</code> can install on other accounts — a
+                  private app&apos;s install page is a bare 404 for everyone but its owner.</>}
+                {" "}Connect {login} directly instead ({directHow === "own" ? "sign in as it on GitHub"
+                  : "paste a token for it"}, below) — no owner needed.</small></div></div>
+          <details className="ga-owner-note" data-testid="ga-owner-note">
+            <summary>Prefer the app route? One switch, by the app&apos;s owner <CaretDown size={12} aria-hidden="true" /></summary>
+            <p className="ga-faint">The app route needs the app public — owner:{" "}
+              {app.settings_url
+                ? <a className="ga-link" href={app.settings_url} target="_blank" rel="noreferrer noopener"
+                     data-testid="ga-open-settings">github.com/settings/apps/{app.slug}</a>
+                : <>github.com/settings/apps/{app.slug}</>}
+              {" "}→ <b>Advanced</b> → <b>Make public</b>. Public only means other accounts may install it;
+              it gives nobody access by itself. BOSS sees the change and offers the app route here.</p>
+          </details>
         </section>
       ) : null}
 
       {/* 4 · install, aimed at the account */}
-      {(path === "make_public" || path === "install") && app?.install_url ? (
-        <section className="ga-gate" data-dim={path === "make_public" || undefined} data-testid="ga-gate-install">
+      {path === "install" && app?.install_url ? (
+        <section className="ga-gate" data-testid="ga-gate-install">
           <div className="ga-gate-h"><span className="ga-hand" aria-hidden="true">↗</span>
             <div><b>Install on {login}</b>
-              <small>Opens GitHub&apos;s install page aimed at {login}. If GitHub shows another account, use your avatar
-                menu → Switch account, then press Install.</small></div></div>
+              <small data-testid="ga-install-note">{kind === "User"
+                ? <>GitHub only shows a person&apos;s install page signed in as that person — you must be signed
+                  into GitHub as <b>{login}</b> for this step. The link goes through GitHub&apos;s sign-in and
+                  returns to the install page.</>
+                : <>Opens GitHub&apos;s install page aimed at {login}. Installing on an organisation needs one of
+                  its admins; if GitHub shows a 404, your signed-in account lacks that (avatar menu →
+                  Switch account).</>}</small></div></div>
           <div className="ga-row">
-            {path === "install"
-              ? <Out href={app.install_url} testid="ga-install">Install the BOSS app on {login}</Out>
-              : <span className="ga-btn" aria-disabled="true" data-testid="ga-install-later">Install the BOSS app on {login}</span>}
+            <Out href={(kind === "User" && app.signin_install_url) || app.install_url} testid="ga-install"
+                 onClick={() => setPressed(Date.now())}>Install the BOSS app on {login}</Out>
             <span className="ga-faint" aria-live="polite" data-testid="ga-watch">
-              {path === "install" ? "BOSS watches for the new installation and continues here on its own." : "Next, once the app can install."}
+              BOSS watches for the new installation and continues here on its own.
               {ago !== null ? ` Checked ${ago < 5 ? "just now" : `${ago} s ago`}.` : ""}
             </span>
           </div>
+          {stuck ? (
+            <div className="ga-stuck" role="status" data-testid="ga-stuck">
+              <b>A minute, and GitHub has not reported an installation.</b>
+              <ul>
+                {kind === "User"
+                  ? <li>A personal install only works signed in as <b>{login}</b>. A 404 on GitHub means the
+                    wrong account is signed in: avatar menu → <b>Switch account</b> (or sign out), then try again.</li>
+                  : <li>Installing on {login} needs one of its organisation admins. A 404 on GitHub means your
+                    signed-in account lacks that, or is the wrong account (avatar menu → <b>Switch account</b>).</li>}
+                <li>Pressed Install on GitHub already? BOSS checks every few seconds and moves on by itself.</li>
+                <li>Or skip the app route: <b>Other ways</b> below connects {login} with a sign-in or a token.</li>
+              </ul>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -410,7 +467,8 @@ export function AddGitHubAccount({ onClose, onAdvanced, onOther }: {
 
       <footer className="ga-foot">
         <span className="ga-tag" data-testid="ga-foot-note">{done ? (summary || "access checked") : path === "pick"
-          ? "BOSS checks access after" : "≈ 1 minute · 2 clicks on GitHub"}</span>
+          ? "BOSS checks access after" : path === "make_public" ? "≈ 1 minute · no owner needed"
+          : "≈ 1 minute · 2 clicks on GitHub"}</span>
         <span className="ga-spacer" />
         {done ? null : <button type="button" className="ga-btn" onClick={onClose} data-testid="ga-cancel">Cancel</button>}
         {primary}
