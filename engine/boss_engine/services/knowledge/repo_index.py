@@ -352,10 +352,29 @@ def _head(dest: Path) -> str:
     return (proc.stdout or "").strip() if proc.returncode == 0 else ""
 
 
+def default_branch(url: str, *, env: Optional[dict] = None, timeout: int = 120) -> str:
+    """The remote's own default branch (`git ls-remote --symref <url> HEAD`), or "". Asked, never
+    guessed: a binding registered without one had its index fetch a branch the repository may not
+    even have (BOSSAPP-1027 saw `"branch": "master"` on a repo whose default is main)."""
+    proc = _git(["ls-remote", "--symref", url, "HEAD"], env=env, timeout=timeout)
+    if proc.returncode != 0:
+        return ""
+    for line in (proc.stdout or "").splitlines():
+        ref, _, name = line.partition("\t")
+        if ref.startswith("ref: refs/heads/") and name.strip() == "HEAD":
+            return ref[len("ref: refs/heads/"):].strip()
+    return ""
+
+
 def fetch_branch(url: str, branch: str, dest: Path, *, env: Optional[dict] = None,
                  timeout: int = 900) -> tuple[str, str]:
     """The branch's head, checked out (detached) in `dest`, one commit deep: (previous head,
-    new head). An existing checkout fetches one commit instead of cloning again."""
+    new head). An existing checkout fetches one commit instead of cloning again. An empty
+    `branch` is the remote's default branch, read from the remote itself."""
+    if not branch:
+        branch = default_branch(url, env=env, timeout=min(timeout, 120))
+        if not branch:
+            raise RuntimeError("could not read the remote's default branch (ls-remote HEAD)")
     previous = _head(dest)
     if previous:
         fetched = _git(["fetch", "--quiet", "--depth", "1", url, branch], cwd=dest, env=env, timeout=timeout)
@@ -635,7 +654,9 @@ def execute_job(engine: Any, settings: Any, *, job_id: str, worker_id: str, leas
             {"p": job["project_id"], "b": payload.get("binding_id")}).mappings().first()
         if row is None or row["binding_status"] != "active":
             return {"status": "failed", "retry": False, "error": "the repository is no longer registered"}
-        row = {**dict(row), "repo": row["full_name"], "branch": row["live_branch"] or "main"}
+        # No base branch on the binding: "" lets the fetch read the remote's own default
+        # (fetch_branch -> default_branch) instead of indexing a guessed name (BOSSAPP-1027).
+        row = {**dict(row), "repo": row["full_name"], "branch": row["live_branch"] or ""}
         c.execute(text("UPDATE kg_repo_index SET status = 'running', job_id = :j, repo = :r, branch = :br, "
                        "updated_at = now() WHERE project_id = :p AND binding_id = :b"),
                   {"j": job_id, "r": row["repo"], "br": row["branch"], "p": row["project_id"], "b": row["binding_id"]})

@@ -140,6 +140,7 @@ class InstallationToken:
     repositories: tuple[str, ...] = ()
     permissions: Mapping[str, str] = field(default_factory=dict)
     #: "installation" (the App's, revoked at run end) | "as_me" (the person's own connection) |
+    #: "connection" (the project connection the run's repos are bound to, BOSSAPP-1027) |
     #: "org_token" (the org's fine-grained token) | "control_plane" (the worker's own App token for
     #: this run's PR, github_setup). Only App tokens (installation, control_plane) are revoked at GitHub.
     kind: str = "installation"
@@ -296,9 +297,15 @@ def _credential_for_run(claims: RunTokenClaims, repos: list[str], perms: Mapping
                         db: Any) -> InstallationToken:
     """WHICH GitHub credential egress uses for this run (Setup › Repo; github_setup):
       1. the person's own connection, when their grant says "act as me on GitHub";
-      2. the org's GitHub App: an installation token for exactly these repos and permissions;
-      3. the org's fine-grained token, only when it was given for every one of these repos.
-    None of them ever reaches the sandbox: egress injects it and applies every rule to the request."""
+      2. the connection the repos are BOUND to, when every one of this run's repos is bound to
+         the same usable project connection (github_repository_bindings, BOSSAPP-1027);
+      3. the org's GitHub App, when its installations COVER these repos: an installation token
+         for exactly these repos and permissions;
+      4. the org's fine-grained token, only when it was given for every one of these repos.
+    A credential resolves by the repository's own linkage, never by provider priority (as a PR's
+    repo does since BOSSAPP-990): "an App installation exists" must never beat the token that
+    actually covers the repo. None of them ever reaches the sandbox: egress injects it and
+    applies every rule to the request."""
     from . import grants, github_setup, tokens, vault
 
     if claims.mode.value == "obo" and claims.grant_id and grants.allows_as_user(claims.grant_id, "github", db=db):
@@ -310,19 +317,89 @@ def _credential_for_run(claims: RunTokenClaims, repos: list[str], perms: Mapping
             raise GitHubRefused("as_me_not_connected", 409) from None
         return InstallationToken(token=cred.token, expires_at=cred.expires_at, repositories=tuple(repos),
                                  permissions=dict(perms), kind="as_me")
-    if github_setup.app_ready(db, claims.org_id):
+    bound = _bound_connection_token(claims, repos, db=db)
+    if bound:
+        return InstallationToken(token=bound, expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+                                 repositories=tuple(repos), permissions=dict(perms), kind="connection")
+    ready = github_setup.app_ready(db, claims.org_id)
+    if ready and _app_covers(db, claims.org_id, repos):
         return mint_installation_token(repos, perms, db=db)
     # An org may hold several tokens (one per GitHub account, BOSSAPP-808): the one that covers
     # this run's repos is used; none covering them is the same refusal as before.
     org = (github_setup.org_token_for(db, repos, claims.org_id) if repos
            else github_setup.org_token(db, claims.org_id))
-    if org is None and github_setup.org_token(db, claims.org_id) is not None:
-        raise GitHubRefused("repo_outside_org_token")
     if org is not None:
         return InstallationToken(token=vault.org_github_token(org["id"], db=db),
                                  expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
                                  repositories=tuple(repos), permissions=dict(perms), kind="org_token")
+    if github_setup.org_token(db, claims.org_id) is not None:
+        raise GitHubRefused("repo_outside_org_token")
+    if ready:
+        # The App is installed, just not on the account that owns these repos, and nothing else
+        # covers them: the honest refusal, never a doomed mint against the wrong installation.
+        raise GitHubRefused("app_not_installed")
     raise GitHubRefused("github_not_connected", 503)
+
+
+def _bound_connection_token(claims: RunTokenClaims, repos: list[str], *, db: Any) -> Optional[str]:
+    """The credential of the ONE project connection every one of this run's repos is bound to
+    (github_repository_bindings.connection_id), or None (BOSSAPP-1027).
+
+    The binding names the account that connected the repository — a second GitHub account's
+    token, connected minutes ago with its access check green, was never consulted because "the
+    App is installed" won the ladder, and the KG indexer's fetch 403'd at egress. A connection's
+    credential serves only repositories bound to it: one unbound repo in the set, or a second
+    connection, and the rest of the ladder decides. The Setup App's own connections
+    (credential_ref identity_github:app) fall through too: the App step mints repo-scoped, with
+    the run's permissions, where this would hand over a control-plane token."""
+    project_id = getattr(claims.task, "project_id", None)
+    if not project_id or not repos:
+        return None
+    from sqlalchemy import text
+
+    from . import github_setup
+
+    wanted = sorted({str(r).strip().lower() for r in repos})
+
+    def resolve() -> Optional[str]:
+        rows = db.execute(text(
+            "SELECT lower(b.full_name) AS full_name, b.connection_id, c.credential_ref "
+            "FROM github_repository_bindings b JOIN github_connections c ON c.id = b.connection_id "
+            "WHERE b.project_id = :p AND b.status = 'active' AND c.status IN ('configured', 'active') "
+            "AND lower(b.full_name) = ANY(:r)"), {"p": project_id, "r": wanted}).mappings().all()
+        if {r["full_name"] for r in rows} != set(wanted) or len({r["connection_id"] for r in rows}) != 1:
+            return None
+        if any(str(r["credential_ref"]) == "identity_github:app" for r in rows):
+            return None
+        from ..config import get_settings
+        from ..services.github_connections import GitHubConnectionService
+
+        owner, _, name = wanted[0].partition("/")
+        return GitHubConnectionService(get_settings()).token_for_repository(
+            db, project_id=project_id, owner=owner, repo=name) or None
+
+    # An older schema has no bindings, and an unreadable secret is not a reason to refuse here:
+    # the rest of the ladder decides. The savepoint keeps a failed read out of the transaction.
+    return github_setup._savepoint(db, resolve, None)  # noqa: SLF001 — the module's own guard
+
+
+def _app_covers(db: Any, org_id: Optional[str], repos: list[str]) -> bool:
+    """The App is installed on every account that owns one of `repos` (BOSSAPP-1027). `app_ready`
+    says an installation EXISTS somewhere; only an installation on the owner's account can mint
+    for the repo, so "exists" never arbitrates: a repo owned by an account that only connected a
+    token falls through to that token. An env-configured App, or an install that recorded no
+    account logins (older installs), keeps the old behaviour: the App answers."""
+    from . import github_setup
+
+    cfg = github_setup.app_config(db, org_id)
+    if cfg.get("source") != "setup":
+        return True
+    known = {str(r.get("account_login") or "").lower() for r in github_setup.recorded_installations(db, org_id)}
+    known.add(str(cfg.get("account_login") or "").lower())
+    known.discard("")
+    if not known:
+        return True
+    return {r.split("/", 1)[0].lower() for r in repos if "/" in r} <= known
 
 
 def cached_for_run(run_id: str) -> Optional[InstallationToken]:

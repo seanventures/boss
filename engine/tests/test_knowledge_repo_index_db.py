@@ -397,3 +397,24 @@ def test_three_indexes_at_once_all_succeed_one_writing_at_a_time(pg_engine, worl
     with pg_engine.begin() as c:
         held = c.execute(text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted")).scalar()
     assert held == 0, "the index lock is released after every run"
+
+
+def test_a_binding_without_a_branch_indexes_the_remotes_own_default(pg_engine, world, tmp_path):
+    """BOSSAPP-1027: a binding registered without a default_branch had the job fetch a GUESSED
+    branch name (the live event carried `"head": "", "branch": "master"` for a repo whose default
+    is main). The fetch now asks the remote itself (git ls-remote --symref HEAD)."""
+    root = tmp_path / "trunk-origin"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "trunk")
+    _write(root, {"tools/report.py": "def one():\n    return 1\n"})
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "first")
+    assert repo_index.default_branch(str(root)) == "trunk"
+
+    bid = _register(pg_engine, world, full_name="bank/trunky", branch=None)
+    assert _row(pg_engine, world, bid)["branch"] == ""              # recorded empty, never a guess
+    assert repo_index.enqueue_due(pg_engine, world["settings"], project_id=world["project"])["queued"] == 1
+    out = _run_job(pg_engine, world, root, inline=True)
+    assert out["status"] == "succeeded"
+    row = _row(pg_engine, world, bid)
+    assert row["status"] == "indexed" and row["indexed_sha"] == _git(root, "rev-parse", "HEAD")
