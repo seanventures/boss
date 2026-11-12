@@ -33,7 +33,7 @@ from ..schemas import FileChange
 from .verification_target import run_until_failure
 from .repo_files import MAX_SCAN_BYTES, RepoFileRefused, RepoFiles
 from .agent_turns import StreamParser, capture_enabled, parse_stream
-from .llm_telemetry import record_agent_turns, record_llm_call
+from .llm_telemetry import get_llm_context, record_agent_turns, record_llm_call
 from . import harness_failures
 from .engine_contract import EngineCapabilities
 
@@ -1869,15 +1869,50 @@ class NativeCodeAgent:
             autonomy=autonomy,
         )
         schemas = tool_schemas(read_only, autonomy=autonomy)
+        # Procedural priors (BOSSAPP-1031): ranked first moves from earlier runs, behind
+        # BOSS_PROCEDURAL_PRIORS (off by default). Native EDIT lane only - the reviewer's
+        # toolset and prompt stay untouched - and with the knob off every prompt below is
+        # byte-identical to before this existed. The advisory block goes at the END of the
+        # user message, never into the system prompt: the shared prefix is what the prompt
+        # cache keys on.
+        priors_mode = "off"
+        priors_tracker = None
+        priors_block = ""
+        priors_base_schemas = schemas
+        priors_ranked_cache: dict[str, list] = {}
+        if not read_only:
+            from .knowledge import procedural_priors as priors
+
+            priors_mode = priors.mode(self.settings)
+        if priors_mode != "off":
+            llm_ctx = get_llm_context()
+
+            def _priors_ranked(key: str) -> list:
+                if key not in priors_ranked_cache:
+                    priors_ranked_cache[key] = priors.runtime_ranked(
+                        self.settings, project_id=llm_ctx.get("project_id"),
+                        fingerprint_key=key, db_engine=llm_ctx.get("db_engine"))
+                return priors_ranked_cache[key]
+
+            priors_tracker = priors.SituationTracker(
+                stage=llm_ctx.get("stage") or priors.SOLO_STAGE,
+                repo_language=priors.repo_language_of(cwd))
+            priors_last_key = priors_tracker.key
+            ranked = _priors_ranked(priors_last_key)
+            priors_block = priors.advisory_block(ranked, priors_last_key)
+            if priors_mode == "ordered" and ranked:
+                schemas = priors.order_tool_schemas(priors_base_schemas, ranked)
         guide = load_repo_guide(
             cwd, max_chars=int(getattr(self.settings, "repo_guide_max_chars", 32_000)))
         system = (self._TOOL_SYS_REVIEW if read_only else self._TOOL_SYS_EDIT) + _PARALLEL_TOOLS_RULE
         if guide:
             system += "\n\nREPO GUIDE (the repository's own instructions - follow them):\n" + guide
+        user_content = f"{prompt}\n\n{self._repo_context(cwd, task=prompt, model=model)}"
+        if priors_block:
+            user_content += "\n\n" + priors_block
         messages: list[dict] = [
             {"role": "system", "content": system},
-            {"role": "user", "content": (
-                f"{prompt}\n\n{self._repo_context(cwd, task=prompt, model=model)}")},
+            {"role": "user", "content": user_content},
         ]
 
         total_cost = 0
@@ -2011,8 +2046,23 @@ class NativeCodeAgent:
                     "tool_call_id": call.get("id"),
                     "content": outcome.text,
                 })
+                if priors_tracker is not None:
+                    priors_tracker.observe_result(
+                        name, outcome.text,
+                        ok=not bool(getattr(outcome, "is_error", False)))
             if held:
                 break
+            if priors_tracker is not None and priors_tracker.key != priors_last_key:
+                # The situation flipped (a test failed, the first edit landed): recompute the
+                # priors once per change, as a user message so the earlier prompt bytes stand.
+                priors_last_key = priors_tracker.key
+                ranked = _priors_ranked(priors_last_key)
+                if priors_mode == "ordered":
+                    schemas = (priors.order_tool_schemas(priors_base_schemas, ranked)
+                               if ranked else priors_base_schemas)
+                block = priors.advisory_block(ranked, priors_last_key)
+                if block:
+                    messages.append({"role": "user", "content": block})
 
         if capped:
             # The turn cap is a real outcome, not a crash: BOSS re-runs the tests itself

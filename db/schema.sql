@@ -5004,6 +5004,25 @@ CREATE TABLE IF NOT EXISTS kg_change_links (
   PRIMARY KEY (project_id, source_kind, source_id, symbol_key)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_change_links_symbol ON kg_change_links(project_id, symbol_key);
+
+-- Procedural priors (BOSSAPP-1031, services/knowledge/procedural_priors.py): the scorekeeper
+-- behind RANKED MOVES. One row per (org, situation fingerprint, canonical tool): how often
+-- that first move led to progress in replayed agent_turns. Content-blind by construction —
+-- example_excerpt holds ONE short scrubbed ARGS-SHAPE (key names and value sizes), never the
+-- arguments. The UNIQUE constraint is also the lookup index (org, fingerprint prefix).
+CREATE TABLE IF NOT EXISTS kg_action_priors (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  fingerprint_key TEXT NOT NULL,             -- deterministic: v1|<stage>|<language>|<situation>
+  action TEXT NOT NULL,                      -- engine_contract.canonical_tool_name vocabulary
+  success_count INTEGER NOT NULL DEFAULT 0,  -- progress credit (procedural_priors._credit)
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  last_seen_at TIMESTAMPTZ,
+  example_run_id TEXT,
+  example_excerpt TEXT,
+  UNIQUE(org_id, fingerprint_key, action)
+);
+
 -- BOSSAPP-622: the database image carries pgvector and Apache AGE (scripts/install/db-image).
 -- This is the schema step of the upgrade: an existing data directory gets the extensions on its
 -- first boot on the new image. A server without them (a stock postgres image, a test database)
