@@ -107,6 +107,54 @@ def test_read_file_is_line_numbered_and_windowed(repo: Path) -> None:
     assert "1\tdef add" not in out.text
 
 
+def test_a_weak_models_doubly_escaped_write_lands_as_real_lines(repo: Path) -> None:
+    """BOSSAPP-1022, watched live: llama3.1:8b wrote a whole test file as ONE line of literal
+    backslash-n text (its JSON tool arguments were escaped twice). The harness absorbs that
+    instead of committing a file no test runner can parse — that absorption is precisely the
+    'harness knowledge compensates for weak models' mechanism."""
+    ts = SandboxToolset(repo)
+    out = ts.call("write_file", {
+        "path": "tests/test_weak.py",
+        "content": "import unittest\\nclass T(unittest.TestCase):\\n    def test_a(self):\\n        self.assertEqual(1, 1)\\n",
+    })
+    assert not out.is_error and "normalized doubly-escaped newlines" in out.text
+    written = (repo / "tests/test_weak.py").read_text()
+    assert written.splitlines()[0] == "import unittest"
+    assert "\\n" not in written and written.count("\n") >= 4
+    compile(written, "test_weak.py", "exec")   # a runner could actually parse it
+
+
+def test_a_single_literal_backslash_n_is_left_exactly_as_written(repo: Path) -> None:
+    """One literal \\n is normal code (a printf, a regex) — never rewritten."""
+    ts = SandboxToolset(repo)
+    content = 'print("a\\nb")'
+    out = ts.call("write_file", {"path": "src/one.py", "content": content})
+    assert not out.is_error and "normalized" not in out.text
+    assert (repo / "src/one.py").read_text() == content
+
+
+def test_a_file_with_real_newlines_keeps_its_literal_escapes(repo: Path) -> None:
+    """Real newlines prove the model escaped correctly: its literal \\n sequences are data."""
+    ts = SandboxToolset(repo)
+    content = 'SEP = "\\n"\nJOINED = "a\\nb"\n'
+    ts.call("write_file", {"path": "src/sep.py", "content": content})
+    assert (repo / "src/sep.py").read_text() == content
+
+
+def test_an_edit_whose_literal_text_missed_retries_un_double_escaped(repo: Path) -> None:
+    """The un-double-escape on edit_file runs only AFTER an exact miss, so a correct model's
+    edits never change behavior (BOSSAPP-1022)."""
+    ts = SandboxToolset(repo)
+    ts.call("write_file", {"path": "src/two.py", "content": "a = 1\nb = 2\n"})
+    out = ts.call("edit_file", {
+        "path": "src/two.py",
+        "old_string": "a = 1\\nb = 2",
+        "new_string": "a = 10\\nb = 20",
+    })
+    assert not out.is_error, out.text
+    assert (repo / "src/two.py").read_text() == "a = 10\nb = 20\n"
+
+
 def test_edit_file_refuses_an_ambiguous_match_instead_of_guessing(repo: Path) -> None:
     (repo / "dup.py").write_text("x = 1\nx = 1\n")
     ts = SandboxToolset(repo)

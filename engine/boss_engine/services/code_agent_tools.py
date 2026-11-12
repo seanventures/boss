@@ -115,6 +115,37 @@ def _truncate(text: str, limit: int) -> str:
     return text[:limit] + f"\n…[truncated, {len(text) - limit} more characters]"
 
 
+#: The escape sequences a doubly-JSON-escaping model leaves behind, decoded one to one. Only
+#: these: unicode_escape would also mangle non-ASCII text, and an unknown sequence means the
+#: text was probably MEANT literally.
+_DOUBLED_ESCAPES = {"\\n": "\n", "\\t": "\t", "\\r": "\r", "\\\"": "\"", "\\\\": "\\"}
+
+
+def undouble_escapes(text: str) -> str:
+    """The text with doubly-escaped sequences decoded once (\\n -> newline), scanning left to
+    right so an escaped backslash never re-combines with what follows it."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        pair = text[i:i + 2]
+        if pair in _DOUBLED_ESCAPES:
+            out.append(_DOUBLED_ESCAPES[pair])
+            i += 2
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def looks_doubly_escaped(content: str) -> bool:
+    """A whole FILE arriving as one line riddled with literal \n is a weak model escaping its
+    JSON twice (watched live: llama3.1:8b wrote a test file as one line of backslash-n text,
+    BOSSAPP-1022) — a real one-line file with two or more LITERAL backslash-n sequences and no
+    newline at all is the rarer thing by far. Single occurrences are left alone: a printf or a
+    regex legitimately holds one."""
+    return "\n" not in content and content.count("\\n") >= 2
+
+
 class SandboxToolset:
     """The tools a coding agent may use, all confined to ``root``."""
 
@@ -257,11 +288,17 @@ class SandboxToolset:
 
     def write_file(self, path: str, content: str) -> str:
         self._require_writable("write_file")
+        normalized = ""
+        if content and looks_doubly_escaped(content):
+            # The harness absorbs a weak model's double escaping instead of committing a
+            # one-line file of backslash-n text that no test runner can even parse.
+            content = undouble_escapes(content)
+            normalized = ", normalized doubly-escaped newlines"
         existed = self._write(path, content if content is not None else "")
         rel = path
         self.written_paths.append(rel)
         n = len((content or "").splitlines())
-        return f"{'overwrote' if existed else 'created'} {rel} ({n} lines)"
+        return f"{'overwrote' if existed else 'created'} {rel} ({n} lines{normalized})"
 
     def edit_file(self, path: str, old_string: str, new_string: str,
                   replace_all: bool = False) -> str:
@@ -271,6 +308,12 @@ class SandboxToolset:
         if old_string == "":
             raise ToolError("old_string must not be empty — use write_file to create a file.")
         count = original.count(old_string)
+        if count == 0 and "\\n" in old_string and undouble_escapes(old_string) in original:
+            # The literal text missed but its un-double-escaped form is in the file: the model
+            # escaped its JSON twice (BOSSAPP-1022). Only ever tried AFTER an exact miss, so a
+            # correct model's edits are untouched.
+            old_string, new_string = undouble_escapes(old_string), undouble_escapes(new_string)
+            count = original.count(old_string)
         if count == 0:
             raise ToolError(
                 f"old_string was not found in {rel}. Read the file again and "
