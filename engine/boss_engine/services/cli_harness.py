@@ -1141,6 +1141,209 @@ def _looks_like_revoked_credential(*streams: Optional[str]) -> bool:
     return bool(_re.search(_REVOKED_CREDENTIAL, blob))
 
 
+def _cli_home_for(spec: CliHarnessSpec) -> str:
+    """Where this CLI keeps its own state (CliHarness.cli_home, for callers with no harness)."""
+    configured = os.environ.get(spec.home_env, "") if spec.home_env else ""
+    return os.path.expanduser(configured or spec.default_home or "~")
+
+
+def _read_cli_auth_file(spec: CliHarnessSpec, cli_home: Optional[str] = None) -> Optional[str]:
+    """The CLI's own credential file as it is right now, or None."""
+    path = os.path.join(cli_home or _cli_home_for(spec), spec.auth_file_name)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def _store_metadata(store, key: str) -> dict:
+    """{store_version, store_updated_at} for one key, where the backend can say — never the
+    value. `describe` is optional on a backend; a store without it reports nothing."""
+    describe = getattr(store, "describe", None)
+    if not callable(describe):
+        return {}
+    try:
+        meta = describe(key) or {}
+    except Exception:  # noqa: BLE001 — metadata is a courtesy, never a failure
+        return {}
+    out = {}
+    if meta.get("version") is not None:
+        out["store_version"] = meta["version"]
+    if meta.get("updated_at"):
+        out["store_updated_at"] = meta["updated_at"]
+    return out
+
+
+def sync_rotated_credential(spec: CliHarnessSpec, settings,
+                            *, cli_home: Optional[str] = None, proven: bool = False) -> dict:
+    """Write the CLI's CURRENT credential file back to the secret store — the ONE sync-back seam.
+
+    These credentials rotate when refreshed, and the rotation REVOKES every other copy. So
+    whoever performed a refresh calls this immediately afterwards — a run that rotated on use
+    (`remember_rotated_credential`), the control plane's own refresher
+    (codex_login.refresh_if_due), a reconnect being recorded (setup_service.connect_coding_agent)
+    — and the store always holds the LIVE generation, so `_authorise_from_file` heals surfaces
+    instead of poisoning them. Measured the other way (laptop install, 2026-11-12): the
+    control-plane refresher kept its own file alive for six weeks while the store froze at its
+    1 Oct copy, and every restore from the store signed a working surface out.
+
+    Opt-in by spec: only a CLI with a travelling credential file (`auth_file_secret` +
+    `auth_file_name`, today codex) has anything to sync; claude/other specs opt in by declaring
+    theirs. Never raises, and never goes backwards: a store holding a NEWER credential than the
+    file is left alone (`_newer_credential` is the guard — writing an older generation over it
+    would revoke a live session), unless the caller passes `proven` because this file just
+    answered a live turn, which outranks any timestamp.
+
+    Returns metadata only — never any part of a credential value:
+      state  — wrote | already_current | nothing_to_sync | env_pinned | store_newer |
+               no_file_route | failed
+      synced — True exactly when state == "wrote"
+      detail — one sentence for a log or an error message
+      key    — the spec's secret name, when it has one
+      store_version / store_updated_at — what the backend reports, when it can
+    """
+    out: dict = {"synced": False, "state": "no_file_route", "detail": "", "key": None}
+    if not (spec.auth_file_secret and spec.auth_file_name):
+        out["detail"] = f"{spec.name} has no credential file that travels"
+        return out
+    out["key"] = spec.auth_file_secret
+    if os.environ.get(spec.auth_file_secret):
+        # An operator who sets the environment variable themselves owns that value, and
+        # writing over it would take a decision that is theirs to make.
+        out.update(state="env_pinned",
+                   detail=f"{spec.auth_file_secret} is set in the environment; the operator "
+                          "owns that value and BOSS never writes over it")
+        return out
+    current = (_read_cli_auth_file(spec, cli_home) or "").strip()
+    if not current:
+        out.update(state="nothing_to_sync",
+                   detail=f"the CLI holds no {spec.auth_file_name} to keep")
+        return out
+    try:
+        from .secret_backends import backend_for, default_secret_backend
+        from .secrets_service import ref_key_for
+
+        store = backend_for(default_secret_backend(settings), settings)
+        key = ref_key_for(SUBSCRIPTION_SECRET_SCOPE, spec.auth_file_secret)
+        stored: Optional[str] = None
+        try:
+            stored = (store.get(key) or "").strip() or None
+        except Exception:  # noqa: BLE001 — absent is a reason to write, not to stop
+            stored = None
+        if stored == current:
+            out.update(state="already_current",
+                       detail="the store already holds this generation",
+                       **_store_metadata(store, key))
+            return out
+        # NEVER GO BACKWARDS. A credential carries the moment it was issued, and an older one
+        # is not merely redundant — it is revoked, because every refresh invalidates what came
+        # before. Writing it over a newer store copy would revoke the live generation.
+        # `proven` overrides the timestamp: a file that just answered a live turn IS the live
+        # generation, whatever another machine's clock stamped on the store's copy — Connect
+        # passes it, because its governed proof is stronger evidence than any timestamp.
+        if (not proven and stored is not None
+                and _newer_credential(current, stored) == "candidate"):
+            out.update(state="store_newer",
+                       detail="the store holds a NEWER credential than the CLI's file; writing "
+                              "this one back would revoke it")
+            return out
+        store.put(key, current)
+        # READ IT BACK. "put returned" is not "the store now serves this generation" — the
+        # silent decay this seam exists to end was a store that took writes nobody verified.
+        try:
+            after = (store.get(key) or "").strip()
+        except Exception:  # noqa: BLE001 — a store that cannot read back still took the write
+            after = current
+        if after != current:
+            out.update(state="failed",
+                       detail="the store accepted the write but reads back a different value")
+            _log.warning("could not write back the rotated %s credential: the store reads "
+                         "back a different value", spec.name)
+            return out
+        out.update(state="wrote", synced=True,
+                   detail="the rotated credential replaced the store's copy",
+                   **_store_metadata(store, key))
+        _log.info("%s credential rotated; the stored copy was updated", spec.name)
+        return out
+    except Exception as exc:  # noqa: BLE001 — a run must not fail because a cache is stale
+        out.update(state="failed",
+                   detail=f"the secret store refused the write ({type(exc).__name__})")
+        _log.warning("could not write back the rotated %s credential (%s)",
+                     spec.name, type(exc).__name__)
+        return out
+
+
+def credential_provenance(spec: CliHarnessSpec, settings,
+                          *, cli_home: Optional[str] = None) -> str:
+    """WHICH copy of the credential was in play, in one sentence — metadata only, never a value.
+
+    A 401 that says only "reconnect the subscription" is not actionable once the store and the
+    CLI's file diverge (laptop install, 2026-11-12: three generations in play — the container's
+    live file, the store's 1 Oct copy, the host CLI's own file — and the error named none of
+    them, so the operator's reconnect changed nothing it could see). The sentence names the copy
+    by its metadata: the store key with its version/updatedAt where the backend reports them,
+    the file with the issue timestamp the credential itself carries. Never raises; diagnostics
+    never break the error they decorate.
+    """
+    try:
+        if not (spec.auth_file_secret and spec.auth_file_name):
+            return ""
+        if os.environ.get(spec.auth_file_secret):
+            return (f"credential used: the {spec.auth_file_secret} environment variable "
+                    "(operator-set); the store's copy is not what ran")
+        on_disk = (_read_cli_auth_file(spec, cli_home) or "").strip() or None
+        stored: Optional[str] = None
+        meta: dict = {}
+        key_shown = spec.auth_file_secret
+        try:
+            from .secret_backends import backend_for, default_secret_backend
+            from .secrets_service import ref_key_for
+
+            store = backend_for(default_secret_backend(settings), settings)
+            key = ref_key_for(SUBSCRIPTION_SECRET_SCOPE, spec.auth_file_secret)
+            key_shown = key    # the name the operator finds in the store itself
+            try:
+                stored = (store.get(key) or "").strip() or None
+            except Exception:  # noqa: BLE001 — no store copy is an answer here, not a failure
+                stored = None
+            if stored is not None:
+                meta = _store_metadata(store, key)
+        except Exception:  # noqa: BLE001 — an unreachable store is an answer here too
+            stored = None
+        bits = []
+        if meta.get("store_version") is not None:
+            bits.append(f"version {meta['store_version']}")
+        if meta.get("store_updated_at"):
+            bits.append(f"updated {meta['store_updated_at']}")
+        issued = _credential_issued_at(stored)
+        if issued and not meta.get("store_updated_at"):
+            bits.append(f"issued {issued}")
+        said_store = f"the stored {key_shown}" + (f" ({', '.join(bits)})" if bits else "")
+        disk_issued = _credential_issued_at(on_disk)
+        said_disk = f"the CLI's own {spec.auth_file_name}" + (
+            f" (issued {disk_issued})" if disk_issued else "")
+        if on_disk is None:
+            if stored is None:
+                return (f"credential used: none — no {spec.auth_file_name} on disk and "
+                        f"nothing stored as {key_shown}")
+            return f"credential used: none on disk; {said_store} is all this install holds"
+        if stored is None:
+            return f"credential used: {said_disk}; nothing is stored as {key_shown}"
+        if stored == on_disk:
+            return (f"credential used: {said_store}, which the CLI's "
+                    f"{spec.auth_file_name} matches")
+        newer = _newer_credential(on_disk, stored)
+        if newer == "disk":
+            return f"credential used: {said_disk}, newer than {said_store}"
+        if newer == "candidate":
+            return (f"credential used: {said_disk}, OLDER than {said_store} — the copies "
+                    "have diverged")
+        return f"credential used: {said_disk}, which differs from {said_store}"
+    except Exception:  # noqa: BLE001 — never let diagnostics mask the failure being reported
+        return ""
+
+
 def _auth_detail(spec: CliHarnessSpec, out: str) -> str:
     """The most informative line of an auth-status output, as a SENTENCE.
 
@@ -1518,32 +1721,17 @@ class GenericCliCodeAgent:
         Only when the credential came FROM the store. An operator who sets the environment
         variable themselves owns that value, and writing over it would take a decision that is
         theirs to make.
-        """
-        if not (self.spec.auth_file_secret and self.spec.auth_file_name):
-            return False
-        if os.environ.get(self.spec.auth_file_secret):
-            return False
-        current = self._current_auth_file()
-        if not current or not current.strip():
-            return False
-        try:
-            from .secret_backends import backend_for, default_secret_backend
-            from .secrets_service import ref_key_for
 
-            store = backend_for(default_secret_backend(self.settings), self.settings)
-            key = ref_key_for(SUBSCRIPTION_SECRET_SCOPE, self.spec.auth_file_secret)
-            try:
-                if (store.get(key) or "").strip() == current.strip():
-                    return False        # unchanged; writing would churn the store for nothing
-            except Exception:  # noqa: BLE001 — absent is a reason to write, not to stop
-                pass
-            store.put(key, current.strip())
-        except Exception as exc:  # noqa: BLE001 — a run must not fail because a cache is stale
-            _log.info("could not write back the rotated %s credential (%s)",
-                      self.spec.name, type(exc).__name__)
-            return False
-        _log.info("%s credential rotated; the stored copy was updated", self.spec.name)
-        return True
+        The work lives in `sync_rotated_credential` — the one seam every rotation owner calls
+        (this run path, codex_login's control-plane refresher, Connect) — so no owner can
+        rotate without the store keeping up.
+        """
+        return sync_rotated_credential(self.spec, self.settings,
+                                       cli_home=self.cli_home()).get("synced", False)
+
+    def _credential_provenance(self) -> str:
+        """Which credential copy this harness is running on, for an auth-failure message."""
+        return credential_provenance(self.spec, self.settings, cli_home=self.cli_home())
 
     def _resolve_secret(self, name: str) -> Optional[str]:
         """A stored value: the environment, then the secret store, under either key.
@@ -1614,6 +1802,16 @@ class GenericCliCodeAgent:
             verdict = harness_failures.classify(f"{summary}\n{stderr or ''}",
                                                 engine=self.engine, where="engine")
         if verdict is not None:
+            if verdict.kind == "auth_refused":
+                # NAME THE COPY. "Reconnect in Repo and models" is only actionable when the
+                # store and the CLI's file agree; when they have diverged, which copy failed is
+                # the whole diagnosis (BOSSAPP-1026). Metadata only — never a value.
+                said = self._credential_provenance()
+                if said:
+                    import dataclasses
+
+                    verdict = dataclasses.replace(verdict,
+                                                  message=f"{verdict.message} [{said}]")
             raise harness_failures.trip(verdict)
 
     @tidies_workspace

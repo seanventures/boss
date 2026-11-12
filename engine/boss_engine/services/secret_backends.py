@@ -360,6 +360,18 @@ class InfisicalBackend:
             raise SecretNotFound(f"{key} is not present in infisical")
         return value
 
+    def describe(self, key: str) -> dict[str, Any]:
+        """One secret's version and updatedAt — the metadata BOSS may repeat, never the value.
+
+        What lets a reconnect say WHICH generation the store now holds, and a 401 say which
+        one just ran (cli_harness.sync_rotated_credential / credential_provenance)."""
+        data = self._request("GET", f"{self._secret_url(key)}?{self._query()}",
+                             token=self._access_token())
+        secret = (data or {}).get("secret") or data or {}
+        if not isinstance(secret, dict):
+            return {}
+        return {"version": secret.get("version"), "updated_at": secret.get("updatedAt")}
+
     def put(self, key: str, value: str) -> None:
         token = self._access_token()
         payload = {**self._scope(), "secretValue": value}

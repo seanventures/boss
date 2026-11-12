@@ -46,6 +46,11 @@ def _signed_in_codex(monkeypatch):
     monkeypatch.setattr(cli_harness, "detect", lambda _spec: {
         "installed": True, "authenticated": True, "version": "1.0", "auth_detail": "signed in",
     })
+    # NEVER THE DEVELOPER'S OWN LOGIN. Connect now keeps the store current from the CLI's
+    # credential file (sync_rotated_credential), and with CODEX_HOME unset that file is the
+    # real ~/.codex/auth.json of whoever runs these tests.
+    monkeypatch.setenv("CODEX_HOME", "/nonexistent-codex-home-for-tests")
+    monkeypatch.delenv("CODEX_AUTH_JSON", raising=False)
 
 
 @pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", "enterprise"])

@@ -316,3 +316,62 @@ def test_start_all_starts_the_one_codex_login_refresher(monkeypatch):
 
     assert calls == ["codex"]
     assert started.get("codex_login") is True
+
+
+# --- the refresh writes the rotation back to the secret store (BOSSAPP-1026) --------------
+#
+# This module is the ONLY process that rotates the real refresh token, so it is the only place
+# the store can be kept live from. On a live install the store froze at its 1 Oct credential for
+# six weeks while this refresher kept the container alive — and every restore-from-store then
+# signed a working surface out.
+
+
+class _FakeStore:
+    def __init__(self):
+        self.values = {}
+        self.versions = {}
+
+    def get(self, key):
+        if key not in self.values:
+            raise KeyError(key)
+        return self.values[key]
+
+    def put(self, key, value):
+        self.values[key] = value
+        self.versions[key] = self.versions.get(key, 0) + 1
+
+    def describe(self, key):
+        return {"version": self.versions.get(key), "updated_at": "now"}
+
+
+def test_a_successful_refresh_writes_the_rotation_back_to_the_store(tmp_path, monkeypatch):
+    store = _FakeStore()
+    monkeypatch.setattr("boss_engine.services.secret_backends.default_secret_backend",
+                        lambda settings: "database")
+    monkeypatch.setattr("boss_engine.services.secret_backends.backend_for",
+                        lambda kind, settings: store)
+    monkeypatch.delenv("CODEX_AUTH_JSON", raising=False)
+    src = _login(tmp_path, monkeypatch, expires_in=10 * 60)
+
+    out = codex_login.refresh_if_due(post=_Endpoint())
+
+    assert out["result"] == "refreshed"
+    assert out["store_synced"] is True
+    held = json.loads(store.values["BOSS_SUBSCRIPTION_CODEX_AUTH_JSON"])
+    assert held == json.loads(src.read_text()), "the store holds the LIVE generation"
+    assert held["tokens"]["access_token"] == "ACCESS_2"
+    assert store.versions["BOSS_SUBSCRIPTION_CODEX_AUTH_JSON"] == 1
+
+
+def test_a_store_failure_never_fails_the_refresh(tmp_path, monkeypatch):
+    """The refresh already happened; losing it over a store would revoke the live login."""
+    monkeypatch.setattr("boss_engine.services.secret_backends.default_secret_backend",
+                        lambda settings: (_ for _ in ()).throw(RuntimeError("store is down")))
+    monkeypatch.delenv("CODEX_AUTH_JSON", raising=False)
+    src = _login(tmp_path, monkeypatch, expires_in=10 * 60)
+
+    out = codex_login.refresh_if_due(post=_Endpoint())
+
+    assert out["result"] == "refreshed", "the refresh stands"
+    assert out["store_synced"] is False, "and the miss is visible, never silent"
+    assert _tokens(src)["access_token"] == "ACCESS_2"

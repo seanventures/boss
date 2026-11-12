@@ -1086,6 +1086,11 @@ def _connect_subscription(connection: Connection, settings: Any, project_id: str
     except SetupError as exc:
         message = str(exc)
         lowered = message.lower()
+        if "could not keep its credential current" in lowered:
+            # The loud store-sync refusal (BOSSAPP-1026) keeps its own words: they name the
+            # store, the key and what to do next, and the generic "failed" pill below would
+            # hide exactly the silence this refusal exists to end.
+            raise _failure(provider, "failed", summary=message) from None
         if "legacy claude token" in lowered:
             state = "legacy_token"
         elif "not installed" in lowered:
@@ -1108,7 +1113,12 @@ def _connect_subscription(connection: Connection, settings: Any, project_id: str
                          "latency_ms": int((time.monotonic() - started) * 1000),
                          "receipt_id": proof.get("receipt_id"),
                          "checked_at": proof.get("checked_at")}, actor, settings)
-    return {"ok": True, "source_id": spec.entitlement_source_id or provider}
+    out: dict[str, Any] = {"ok": True, "source_id": spec.entitlement_source_id or provider}
+    if connected.get("credential_store"):
+        # The write's receipt (store version/updatedAt — metadata only): the reconnect reports
+        # the generation it stored, so "it worked" is checkable in the answer itself.
+        out["credential_store"] = connected["credential_store"]
+    return out
 
 
 def subscription_import_refusal() -> SetupActionError:
