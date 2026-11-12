@@ -67,7 +67,7 @@ class TestTheStepReportsOnlyThatApp:
 
     def test_and_only_when_the_run_says_which_app(self):
         source = inspect.getsource(runner._observed_monitoring)
-        assert "if wanted:" in source
+        assert "if target_id or wanted:" in source
 
     def test_an_app_with_no_target_says_so_about_itself(self):
         """Not "this project has no target" — the project may have several. The claim has to be
@@ -79,6 +79,108 @@ class TestTheStepReportsOnlyThatApp:
     def test_the_unscoped_message_still_exists_for_a_project_with_nothing(self):
         source = inspect.getsource(runner._observed_monitoring)
         assert "this project has no active deployment target" in source
+
+
+class _Rows:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self.rows
+
+    def first(self):
+        return self.rows[0] if self.rows else None
+
+
+class TestTheRunsOwnLinkageWinsOverNames:
+    """Run wfr_8e29328778054a248433: merge and deploy succeeded, the deployment was healthy, its
+    staging target ACTIVE — and this step deadlettered with "nothing is watching this app",
+    because the run's title spelt the app 'HelpDesk AI' while the target's app_name was
+    'helpdesk-laptop'. The console then put the step back, Beacon re-ran it, and it deadlettered
+    again identically: a loop no retry could end, because the rows never change.
+
+    A run whose deploy succeeded can never deadletter here for "no target": the deploy recorded
+    WHICH target it shipped to, and that id — not any spelling — is the scope.
+    """
+
+    TARGET_ID = "deptgt_cc05188d69e54dd995d7"
+    #: The code task's title names a different app than the target, on purpose.
+    TITLE = ("Follow-up: More tests — HelpDesk AI – a support desk with AI-suggested "
+             "ticket categorization and routing")
+
+    def _db(self):
+        target = {"id": self.TARGET_ID, "app_name": "helpdesk-laptop", "environment": "staging",
+                  "domains": ["2.29.2.202:8009"], "health_checks": []}
+        title = self.TITLE
+
+        class Db:
+            queried: list[str] = []
+
+            def execute(self, statement, params=None):
+                sql = str(statement)
+                Db.queried.append(sql)
+                if "FROM deployment_targets" in sql:
+                    return _Rows([dict(target)])
+                if "FROM stack_deployments" in sql:
+                    return _Rows([{"target_id": target["id"]}])
+                if "FROM code_task_runs" in sql:
+                    return _Rows([{"title": title}])
+                return _Rows([])
+
+        return Db()
+
+    def test_a_succeeded_deploy_is_scoped_by_its_target_id_not_by_name(self, monkeypatch):
+        monkeypatch.setattr(runner, "_monitoring_host", lambda c, p: "")
+        db = self._db()
+        context = {"steps": {"deploy": {"capability": "deploy", "status": "succeeded",
+                                        "stack_target_id": self.TARGET_ID,
+                                        "code_task_run_id": "crun_a6f238f73fbe468096db"}}}
+        out = runner._observed_monitoring(db, "helpdesk-laptop", context)
+        assert [w["target_id"] for w in out["targets"]] == [self.TARGET_ID]
+        # The id answered the question; no name was consulted, so no name can mis-scope it.
+        assert not any("FROM code_task_runs" in q for q in db.queried)
+
+    def test_the_deployment_id_alone_is_enough(self, monkeypatch):
+        """An older deploy output may carry only `stack_deployment_id`; its row names the
+        target."""
+        monkeypatch.setattr(runner, "_monitoring_host", lambda c, p: "")
+        context = {"steps": {"deploy": {"capability": "deploy", "status": "succeeded",
+                                        "stack_deployment_id": "sdep_b46140f3e4834c24a0d9"}}}
+        out = runner._observed_monitoring(self._db(), "helpdesk-laptop", context)
+        assert [w["target_id"] for w in out["targets"]] == [self.TARGET_ID]
+
+    def test_a_linked_target_gone_inactive_still_speaks_about_this_app(self, monkeypatch):
+        """Deactivate the target after the deploy and "nothing is watching this app" becomes
+        true — the step may say it then, and only then."""
+        monkeypatch.setattr(runner, "_monitoring_host", lambda c, p: "")
+        context = {"steps": {"deploy": {"capability": "deploy", "status": "succeeded",
+                                        "stack_target_id": "deptgt_deactivated",
+                                        "code_task_run_id": "crun_a6f238f73fbe468096db"}}}
+        with pytest.raises(runner.SettledCapabilityError) as caught:
+            runner._observed_monitoring(self._db(), "helpdesk-laptop", context)
+        assert "nothing is watching this app" in str(caught.value)
+
+    def test_the_target_id_is_read_from_the_deploy_step(self):
+        context = {"steps": {"deploy": {"stack_target_id": " deptgt_x "}}}
+        assert runner._this_runs_target_id(None, context) == "deptgt_x"
+
+    def test_or_resolved_through_the_deployment_row(self):
+        context = {"steps": {"deploy": {"stack_deployment_id": "sdep_1"}}}
+        assert runner._this_runs_target_id(self._db(), context) == self.TARGET_ID
+
+    def test_a_run_with_no_deploy_has_no_linkage(self):
+        assert runner._this_runs_target_id(None, {"steps": {"build": {"other": "x"}}}) is None
+
+    def test_a_database_failure_leaves_it_unscoped_rather_than_failing_the_step(self):
+        class Boom:
+            def execute(self, *a, **kw):
+                raise RuntimeError("gone")
+
+        context = {"steps": {"deploy": {"stack_deployment_id": "sdep_1"}}}
+        assert runner._this_runs_target_id(Boom(), context) is None
 
 
 class TestTheLinksFollow:
