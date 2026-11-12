@@ -115,7 +115,10 @@ def test_groq_qwen_caps_max_tokens_below_tpm_window(monkeypatch):
         is_groq_qwen_model_class,
     )
 
-    assert is_groq_qwen_model_class("qwen/qwen3-32b")
+    # The caps are the GROQ LANE's, never a model family's: a bare qwen id on an unknown or
+    # local endpoint must not clamp (BOSSAPP-1019 — local Ollama qwen kneecapped to 1024 tokens).
+    assert not is_groq_qwen_model_class("qwen/qwen3-32b")
+    assert is_groq_qwen_model_class("qwen/qwen3-32b", base_url="https://api.groq.com/openai/v1")
     assert is_groq_qwen_model_class("openai/gpt-oss", base_url="https://api.groq.com/openai/v1")
     assert is_groq_qwen_model_class("gpt-4o", engine="groq")
     assert not is_groq_qwen_model_class("gpt-4o", base_url="https://api.openai.com/v1")
@@ -156,7 +159,7 @@ def test_groq_qwen_context_pack_is_smaller_than_default():
     )
 
     files, max_bytes, head = groq_qwen_context_limits(
-        "qwen/qwen3-32b", file_limit=14
+        "qwen/qwen3-32b", base_url="https://api.groq.com/openai/v1", file_limit=14
     )
     assert files == GROQ_QWEN_CONTEXT_FILES
     assert files <= 4
@@ -169,7 +172,9 @@ def test_groq_qwen_context_pack_is_smaller_than_default():
     )
     assert default_files == 14
     assert default_bytes > max_bytes
-    assert groq_qwen_context_limits("qwen", file_limit=0)[0] == 0
+    assert groq_qwen_context_limits("groq:qwen", file_limit=0)[0] == 0
+    assert groq_qwen_context_limits(
+        "qwen3:8b", base_url="http://localhost:11434/v1", file_limit=14)[0] == 14
 
 
 def test_native_max_output_tokens_cap_passed(monkeypatch):

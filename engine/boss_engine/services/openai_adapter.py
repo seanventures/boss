@@ -71,9 +71,14 @@ def is_groq_qwen_model_class(
     base_url: str = "",
     engine: str = "",
 ) -> bool:
-    """True when the request will hit Groq or a Qwen model (incl. groq:qwen/…)."""
+    """True only when the request actually goes through Groq — the 6k-TPM free tier these caps
+    exist for: its base_url, a groq engine, or a groq-prefixed model id. A model FAMILY name
+    proves nothing about the endpoint: matching bare "qwen" clamped LOCAL Ollama qwen models to
+    1024 output tokens, so a thinking qwen burned its whole budget reasoning and never reached
+    content or a tool call (BOSSAPP-1019). When Groq routes a qwen, "groq" is in the resolved
+    base_url, so the protection still holds where it is real."""
     blob = " ".join(str(part or "") for part in (model, base_url, engine)).lower()
-    return "groq" in blob or "qwen" in blob
+    return "groq" in blob
 
 
 def capped_max_output_tokens(
