@@ -145,6 +145,21 @@ def test_a_person_with_the_app_private_is_never_sent_to_the_dead_install_page(hu
     assert out["app"]["public"] is False and out["app"]["is_owner"] is False
 
 
+def test_visibility_is_read_from_the_api_because_the_html_page_lies(hub, owner):
+    """BOSSAPP-1017: real github.com serves the App's HTML page (github.com/apps/<slug>) with 200
+    whether the App is public or private — probing it called a private App public and aimed a
+    second account at an install page GitHub never shows it. Only GET /apps/{slug} on the API
+    tells the truth (200 public, 404 private), and the fake now models both."""
+    from boss_engine.identity import github_accounts as ga
+
+    assert ga.app_is_public(SLUG) is False                    # private: the API said 404
+    out = _lookup(owner, "octo-person").json()
+    assert out["path"] == "make_public"                       # never the dead Install button
+    hub.make_public()
+    assert ga.app_is_public(SLUG) is True
+    assert _lookup(owner, "octo-person").json()["path"] == "install"
+
+
 def test_visibility_github_would_not_confirm_counts_as_private_for_a_person(hub, owner, monkeypatch):
     from boss_engine.identity import github_accounts as ga
 

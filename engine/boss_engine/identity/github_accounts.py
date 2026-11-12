@@ -116,14 +116,15 @@ def github_account(db: Any, login: str) -> dict[str, Any]:
 
 
 def app_is_public(slug: str) -> Optional[bool]:
-    """Whether other accounts may install the App: its public page (github.com/apps/<slug>)
-    answers to anyone only when the App is public; a private App's page is a 404. None: GitHub
+    """Whether other accounts may install the App. Only the REST API tells the truth here:
+    GET /apps/{slug} answers 200 for a public App and 404 for a private one, while the HTML page
+    github.com/apps/<slug> serves 200 EITHER WAY — probing it called a private App public and
+    aimed a second account at an install page GitHub never shows it (BOSSAPP-1017). None: GitHub
     did not say."""
-    url = github_urls.app_public(slug)
-    if not url:
+    if not slug:
         return None
     try:
-        resp = github_app.TRANSPORT("GET", url, {"Accept": "text/html", "User-Agent": "boss-identity"}, None)
+        resp = github_app._call("GET", f"/apps/{slug}", token="")  # noqa: SLF001 — anonymous public read
     except Exception:  # noqa: BLE001 — unreachable: not known
         return None
     if resp.status == 200:
