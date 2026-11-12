@@ -8,7 +8,8 @@ changes as a person would on github.com:
   POST /app/installations/{id}/access_tokens   an installation token (repos limited to that account)
   GET  /installation/repositories              the installation's repositories (by its token)
   DELETE /installation/token                   revoke
-  GET  {web}/apps/{slug}                       the App's public page: 200 when public, 404 when private
+  GET  /apps/{slug}                            the App via the API: 200 when public, 404 when private
+  GET  {web}/apps/{slug}                       the App's HTML page: 200 either way, as real github.com does
   GET  /repos/{owner}/{repo}, POST …/git/blobs, POST …/pulls   the access check's three probes
 
 Control (what a person does on GitHub): `make_public()`, `install(login)`, `uninstall(id)`.
@@ -88,10 +89,18 @@ class FakeGitHub:
 
         if parts.netloc == self.web_host and method == "GET":
             if path.rstrip("/") == f"/apps/{self.slug}":
-                return Response(200 if self.public else 404, b"<html>BOSS app</html>")
+                # Real github.com serves this HTML page 200 whether the App is public or private
+                # (measured live, BOSSAPP-1017) — only the REST API distinguishes them. The fake
+                # used to answer 404 here when private, which let a page-probing app_is_public()
+                # pass every test while calling a private App public in production.
+                return Response(200, b"<html>BOSS app</html>")
             return Response(404, b"")
         if path.startswith("/api/"):                     # a local fake served under /api
             path = path[4:]
+        if method == "GET" and path.rstrip("/") == f"/apps/{self.slug}":
+            if self.public:
+                return ok({"slug": self.slug, "name": "BOSS", "owner": {"login": self.owner}})
+            return ok({"message": "Not Found"}, 404)
         if method == "GET" and path.startswith("/users/"):
             u = self.users.get(path.split("/")[2].lower())
             return ok(u) if u else ok({"message": "Not Found"}, 404)
