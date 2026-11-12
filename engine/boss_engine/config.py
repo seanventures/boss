@@ -1190,6 +1190,12 @@ class Settings(BaseSettings):
     # BOSSAPP-622: what agents are given from the knowledge graph (project_settings `knowledge_graph`):
     # on | keyword | off (knowledge/runtime.MODES).
     knowledge_graph: str = Field(default="on", alias="BOSS_KNOWLEDGE_GRAPH")
+    # BOSSAPP-1031: procedural priors — the scorekeeper that hands a model the ranked first
+    # moves earlier runs took in the same situation (services/knowledge/procedural_priors.py).
+    # off (the default: today's prompts, byte-identical) | advisory (a quoted RANKED MOVES
+    # block at the END of the user message) | ordered (advisory + the native lane's tool
+    # schema list reordered for the situation). Native lane only; an unknown value reads off.
+    procedural_priors_mode: str = Field(default="off", alias="BOSS_PROCEDURAL_PRIORS")
     # BOSSAPP-999: per-class governance over every model call (project_settings `call_classes`,
     # services/call_classes.py): {"<class>": {"allow": bool, "calls_per_day": int|null,
     # "tokens_per_day": int|null}}. None/unset means everything allowed, no caps — inert.
