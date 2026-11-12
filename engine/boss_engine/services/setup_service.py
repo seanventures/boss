@@ -758,13 +758,18 @@ def cli_auth_failed(text_out: object) -> bool:
 
 
 def _auth_refusal(text_out: str, *, exit_code: Any = None,
-                  read_only: Optional[bool] = None) -> dict[str, Any]:
+                  read_only: Optional[bool] = None, provenance: str = "") -> dict[str, Any]:
     """A proof the CLI's own sign-in refused: HTTP-401-shaped, so the governed proof treats it
     as a known rejection (reservation released, nothing held) and the pill says Login
-    expired. The CLI's words are kept short; `connection_spend` redacts them again."""
+    expired. The CLI's words are kept short; `connection_spend` redacts them again.
+    `provenance` names WHICH credential copy was in play (cli_harness.credential_provenance) —
+    metadata only, never a value — because "sign in again" is not actionable when the store and
+    the CLI's file have diverged (BOSSAPP-1026)."""
+    error = f"login rejected before any model call: {text_out[:240]}"
+    if provenance and provenance not in error:
+        error = f"{error} [{provenance}]"
     return {"ok": False, "status": 401, "state": "login_expired", "exit_code": exit_code,
-            "read_only_probe": read_only,
-            "error": f"login rejected before any model call: {text_out[:240]}"}
+            "read_only_probe": read_only, "error": error}
 
 
 #: One proof is one trivial prompt ("Reply with BOSS_OK"): it must finish — or time out — in
@@ -816,7 +821,8 @@ def prove_coding_agent(settings: Settings, provider: str,
             )
         except (CliHarnessUnavailable, HarnessFailure) as exc:
             if cli_auth_failed(exc):
-                return _auth_refusal(str(exc), read_only=read_only)
+                return _auth_refusal(str(exc), read_only=read_only,
+                                     provenance=agent._credential_provenance())
             if isinstance(exc, HarnessFailure):
                 raise                    # the harness could not run: its outcome is unknown
             return {"ok": False, "error": str(exc)}
@@ -826,7 +832,8 @@ def prove_coding_agent(settings: Settings, provider: str,
     exited_ok = out.get("exit_code") == 0
     replied = PROOF_REPLY in text_out
     if not replied and cli_auth_failed(text_out):
-        return _auth_refusal(text_out, exit_code=out.get("exit_code"), read_only=read_only)
+        return _auth_refusal(text_out, exit_code=out.get("exit_code"), read_only=read_only,
+                             provenance=agent._credential_provenance())
     ok = exited_ok and replied
     error = None
     if not ok:
@@ -1029,7 +1036,43 @@ def connect_coding_agent(
             f"{proof.get('error')}. Signed in is not the same as working — check the "
             f"subscription is active on this account.")
 
+    stored_now: Optional[dict[str, Any]] = None
+    if getattr(spec, "auth_file_secret", ""):
+        # A CONNECT THAT LEAVES THE STORE STALE IS NOT A CONNECT (BOSSAPP-1026). The operator
+        # reconnected exactly as the error told them to, the sign-in worked, the proof passed —
+        # and the store silently kept its 1 Oct credential, so every later restore-from-store
+        # signed the working login out again. The store must hold the LIVE generation when
+        # Connect answers ok, and a store that cannot take it is said out loud, never settled.
+        from .cli_harness import sync_rotated_credential
+
+        # `proven` exactly when a governed proof turn just answered on this credential file:
+        # live evidence outranks the never-backwards timestamp guard. An unproved record
+        # (prove=False) keeps the guard.
+        stored_now = sync_rotated_credential(spec, settings,
+                                             proven=not proof.get("skipped", False))
+        if stored_now["state"] in ("failed", "env_pinned", "store_newer"):
+            raise SetupError(
+                f"{provider} is signed in and answered its proof, but BOSS could not keep its "
+                f"credential current in the secret store: {stored_now['detail']}. A store "
+                f"holding an old {spec.auth_file_secret} generation signs this install out on "
+                "the next restore, so nothing was connected. Fix that, then press Connect "
+                "again.")
+
     record: dict[str, Any] = {"connected": True, "entitlement_recorded": False}
+    if stored_now is not None:
+        # THE RECEIPT FOR THE WRITE: which store generation now holds the credential — version
+        # and updatedAt where the backend reports them, never any part of the value. This is
+        # what lets a person (and the next forensic read) see the reconnect actually landed.
+        record["credential_store"] = {key: stored_now.get(key) for key in
+                                      ("state", "key", "store_version", "store_updated_at")}
+        try:
+            from .core import emit_event
+
+            emit_event(connection, project_id, "subscription.credential_stored", actor,
+                       "entitlement_source", spec.entitlement_source_id or provider,
+                       {"provider": provider, **record["credential_store"]})
+        except Exception:  # noqa: BLE001 — the receipt event never fails the connect
+            pass
     if spec.entitlement_source_id:
         from .entitlements import WORKSPACE_OPERATOR_ID, EntitlementBrokerService
 

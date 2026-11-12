@@ -340,7 +340,40 @@ def refresh_if_due(min_valid: float = REFRESH_WINDOW_SECONDS, *, post: Optional[
         _write_private(_path(AUTH_NAME, home), json.dumps(doc))
         _record(home, state=OK, error=None)
         _log.info("Codex login refreshed; valid for %d minutes", int(expires_in // 60))
-        return {"result": "refreshed", "seconds_left": int(expires_in)}
+        return {"result": "refreshed", "seconds_left": int(expires_in),
+                "store_synced": _store_sync_after_refresh()}
+
+
+def _store_sync_after_refresh() -> bool:
+    """The refresh that just succeeded ROTATED the credential: the secret store's copy is now
+    revoked. Write the new generation back at once (cli_harness.sync_rotated_credential).
+
+    This module is the only process that ever rotates the real refresh token (see the module
+    docstring), so it is the only place the store can be kept live from — the run-path
+    write-back (`remember_rotated_credential`) stopped mattering the day rotation moved here,
+    and nobody moved the sync with it. Measured (laptop install, 2026-11-12): this refresher
+    kept the container's login alive for six weeks while the store froze at its 1 Oct copy,
+    and every restore from the store signed a working surface out.
+
+    Never raises, and the refresh stands either way: a failed sync is loud in the log and in
+    the returned flag, never a reason to lose the refresh that already happened."""
+    try:
+        from ..config import get_settings
+        from .cli_harness import load_specs, sync_rotated_credential
+
+        settings = get_settings()
+        spec = load_specs(settings).get("codex")
+        if spec is None:
+            return False
+        out = sync_rotated_credential(spec, settings)
+        if out.get("state") == "failed":
+            _log.warning("the refreshed Codex login was NOT written back to the secret store: "
+                         "%s", out.get("detail"))
+        return bool(out.get("synced"))
+    except Exception as exc:  # noqa: BLE001 — the refresh stands; the sync says why it did not
+        _log.warning("the refreshed Codex login was NOT written back to the secret store (%s)",
+                     type(exc).__name__)
+        return False
 
 
 def ensure_fresh(min_valid: float, *, post: Optional[Post] = None,
