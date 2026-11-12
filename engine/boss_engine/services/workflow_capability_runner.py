@@ -982,6 +982,38 @@ def _this_runs_app(connection: Connection, context: dict[str, Any]) -> Optional[
     return identity_key(display) if display and display != "Untitled app" else None
 
 
+def _this_runs_target_id(connection: Connection, context: dict[str, Any]) -> Optional[str]:
+    """The deployment target THIS run shipped to, by id, or None.
+
+    The deploy step records which target it shipped to — `stack_target_id`, or a
+    `stack_deployment_id` whose row names one — and an id survives any spelling. Run
+    wfr_8e29328778054a248433 titled its app 'HelpDesk AI', shipped it to a target named
+    'helpdesk-laptop', and the name comparison scoped a healthy, actively watched deployment
+    down to nothing.
+    """
+    deployment_id = ""
+    for produced in (context.get("steps") or {}).values():
+        if not isinstance(produced, dict):
+            continue
+        target_id = produced.get("stack_target_id")
+        if isinstance(target_id, str) and target_id.strip():
+            return target_id.strip()
+        value = produced.get("stack_deployment_id")
+        if isinstance(value, str) and value.strip():
+            deployment_id = value.strip()
+    if not deployment_id:
+        return None
+    try:
+        row = connection.execute(
+            text("SELECT target_id FROM stack_deployments WHERE id = :d"),
+            {"d": deployment_id},
+        ).mappings().first()
+    except Exception:  # noqa: BLE001 — an unscoped step is better than a failed one
+        return None
+    target_id = str((row or {}).get("target_id") or "").strip()
+    return target_id or None
+
+
 def _reason_of_last_resort(output: dict[str, Any], step: dict[str, Any]) -> str:
     """What to say when a capability failed and offered no explanation.
 
@@ -1065,15 +1097,25 @@ def _observed_monitoring(
     # narrowed to nothing would be worse than one that over-reports.
     from .naming import identity_key
 
-    wanted = _this_runs_app(connection, context)
+    # BY THE RUN'S OWN LINKAGE FIRST; NAMES ARE THE FALLBACK, never the arbiter.
+    #
+    # Names are how run wfr_8e29328778054a248433 deadlettered here: its title said 'HelpDesk AI',
+    # its target's app_name said 'helpdesk-laptop', and the name comparison narrowed a healthy,
+    # actively watched deployment to nothing — then every console put-back re-read the same rows
+    # and deadlettered again, identically. The deploy step wrote down WHICH target it shipped
+    # to, so a run whose deploy succeeded is scoped by that id, whatever anything is named.
+    target_id = _this_runs_target_id(connection, context)
+    mine = [t for t in targets if str(t["id"]) == target_id] if target_id else []
+    wanted = None if mine else _this_runs_app(connection, context)
     if wanted:
         mine = [t for t in targets if identity_key(str(t["app_name"] or "")) == wanted]
+    if target_id or wanted:
         # An app with no target of its own is a real answer — "nothing is watching this yet" —
         # and far better than listing the neighbours. The caller reports the empty case.
         targets = mine
 
     if not targets:
-        if wanted:
+        if wanted or target_id:
             raise SettledCapabilityError(
                 "nothing is watching this app: it has no active deployment target, so no health "
                 "probe will ever run against it. Other apps in this project may be watched; "
