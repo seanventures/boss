@@ -9671,9 +9671,40 @@ CREATE TABLE IF NOT EXISTS github_repos (
   last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (source IN ('app', 'token'))
+  -- 'binding': registered by a project binding its own connection to it (BOSSAPP-1030) — no
+  -- installation lists it, so the refresh gone-sweep never marks it gone.
+  CHECK (source IN ('app', 'token', 'binding'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS github_repos_org_full_name ON github_repos (org_id, lower(full_name));
+-- Widened in place on an install whose table predates the 'binding' source (BOSSAPP-1030).
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'github_repos_source_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%binding%'
+  ) THEN
+    ALTER TABLE github_repos DROP CONSTRAINT github_repos_source_check;
+    ALTER TABLE github_repos
+      ADD CONSTRAINT github_repos_source_check
+      CHECK (source IN ('app', 'token', 'binding'));
+  END IF;
+END $$;
+-- BOSSAPP-1030 backfill: a repository the add-account flow bound while the org's registry was in
+-- use has no row here, so egress refused every mint for it (repo_not_allowed). The operator
+-- explicitly picking it was the allow action; give each one its row once. Idempotent: the id is
+-- derived, ON CONFLICT leaves every existing row — and so every operator decision — exactly as
+-- it is, and a registry not in use (no rows for the org) stays ungoverned.
+INSERT INTO github_repos (id, org_id, source, full_name, allowed, allowed_by, allowed_at, reachable)
+SELECT DISTINCT ON (w.org_id, lower(b.full_name))
+       'ghr_' || substr(md5(w.org_id || ':' || lower(b.full_name)), 1, 20), w.org_id, 'binding',
+       b.full_name, true, b.created_by, now(), true
+FROM github_repository_bindings b
+JOIN projects p ON p.id = b.project_id
+JOIN workspaces w ON w.id = p.workspace_id
+WHERE b.status = 'active' AND position('/' in b.full_name) > 0
+  AND lower(b.full_name) NOT LIKE 'local\_%'
+  AND EXISTS (SELECT 1 FROM github_repos g WHERE g.org_id = w.org_id)
+ON CONFLICT (org_id, lower(full_name)) DO NOTHING;
 -- A project's repositories are its github_repository_bindings (one row per repository); these
 -- columns carry the multi-repo role hint and the registry row the binding was chosen from.
 ALTER TABLE github_repository_bindings ADD COLUMN IF NOT EXISTS role_hint TEXT;

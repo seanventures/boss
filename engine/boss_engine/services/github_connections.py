@@ -660,6 +660,13 @@ class GitHubConnectionService:
                 "role": normalized_role,
             },
         )
+        # The operator picking this repository IS the org allow action (BOSSAPP-1030): a registry
+        # in use hears about it, or egress refuses every mint for it (repo_not_allowed).
+        from ..multirepo import registry as repo_registry
+
+        repo_registry.register_binding(
+            connection, project_id, full_name, actor=actor, connection_id=connection_id
+        )
         return self.get_repository_binding(connection, project_id, binding_id)
 
     def update_repository_binding(
@@ -752,6 +759,18 @@ class GitHubConnectionService:
                 "default_branch": next_default_branch,
             },
         )
+        if next_status == "active" and existing["status"] != "active":
+            # Reactivating is the same explicit pick as binding (BOSSAPP-1030); an operator's
+            # earlier registry untick still wins inside register_binding.
+            from ..multirepo import registry as repo_registry
+
+            repo_registry.register_binding(
+                connection,
+                project_id,
+                existing["full_name"],
+                actor=actor,
+                connection_id=existing["connection_id"],
+            )
         return self.get_repository_binding(connection, project_id, binding_id)
 
     def test_connection(

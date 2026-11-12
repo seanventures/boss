@@ -452,6 +452,12 @@ def publish(c: Any, settings: Any, project_id: str, *, owner: str, repo: str,
                 {"id": gh_id, "p": project_id, "c": reach.connection_id, "o": owner, "n": repo,
                  "f": target, "d": default, "v": "private" if private else "public", "m": meta,
                  "a": actor})
+        # The just-published repository is now actively bound: a registry in use hears about it
+        # (BOSSAPP-1030), or egress refuses every mint for it (repo_not_allowed).
+        from ..multirepo import registry as repo_registry
+
+        repo_registry.register_binding(c, project_id, target, actor=actor,
+                                       connection_id=reach.connection_id)
         state["step"] = "switched"
         _save(path, state)
         local_repo.update_marker(path, published={"to": target, "by": actor})
