@@ -410,6 +410,10 @@ services:
       BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
       BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
       BOSS_AUTHZ_MODE: ${BOSS_AUTHZ_MODE:-enforce}
+      # The harness kernel's enablement flags (BOSSAPP-961): .env sets them, compose must
+      # forward them or the kernel can never turn on (defaults off, matching config.py).
+      BOSS_KERNEL_DECISIONS: ${BOSS_KERNEL_DECISIONS:-0}
+      BOSS_KERNEL_CHAT: ${BOSS_KERNEL_CHAT:-0}
       BOSS_AUTHZ_ROUTER_MODES: ${BOSS_AUTHZ_ROUTER_MODES:-}
       BOSS_AUTHZ_COVERAGE: ${BOSS_AUTHZ_COVERAGE:-}
       # The sandbox: required (a build never runs as the API's uid), network fenced, and every
@@ -669,6 +673,10 @@ services:
       # link of a laptop install): identity/authn_support.local_console_origin.
       BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
       BOSS_AUTHZ_MODE: ${BOSS_AUTHZ_MODE:-enforce}
+      # The harness kernel's enablement flags (BOSSAPP-961): .env sets them, compose must
+      # forward them or the kernel can never turn on (defaults off, matching config.py).
+      BOSS_KERNEL_DECISIONS: ${BOSS_KERNEL_DECISIONS:-0}
+      BOSS_KERNEL_CHAT: ${BOSS_KERNEL_CHAT:-0}
       BOSS_AUTHZ_ROUTER_MODES: ${BOSS_AUTHZ_ROUTER_MODES:-}
       BOSS_AUTHZ_COVERAGE: ${BOSS_AUTHZ_COVERAGE:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
