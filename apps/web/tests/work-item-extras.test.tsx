@@ -6,8 +6,9 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SearchResults } from "../app/projects/search-results";
 import { WatchSection } from "../app/projects/work-item-extras";
-import { parseWatchdogs } from "../lib/work-ux";
+import { parseSearch, parseWatchdogs } from "../lib/work-ux";
 import { $, mount, settle, unmount } from "./_helpers/live-render";
 
 type Call = { url: string; method: string; body: unknown };
@@ -48,5 +49,32 @@ describe("the watchdog on a work tree", () => {
     ($('[data-testid="wt-unwatch"]') as HTMLButtonElement).click();
     await settle();
     expect(calls.some((c) => c.method === "DELETE" && c.url.startsWith("/v1/work-items/w2/watchdogs/wdg_1?project_id=p1"))).toBe(true);
+  });
+});
+
+describe("⌘K Found in (one search over work)", () => {
+  it("asks /v1/search for the open project and draws each hit as a palette item", async () => {
+    const calls: Call[] = [];
+    serve(calls, () => ({ items: [
+      { kind: "meeting", id: "mrun_1", title: "Checkout PRD", snippet: "Accept Apple Pay at checkout", href: "?project_id=p1&area=meetings", match: "body" },
+      { kind: "decision", id: "dec_1", title: "Ship Apple Pay?", snippet: "", href: "?project_id=p1&area=decisions", match: "title" },
+      { kind: "run", id: "", title: "dropped: no id", href: "?x" },
+    ], searched: ["meeting", "decision"] }));
+    expect(parseSearch({ items: [{ kind: "run", id: "r", href: "" }] }).items).toEqual([]);
+    await mount(<SearchResults query="apple pay" projectId="p1" onDone={() => {}} />);
+    await new Promise((r) => setTimeout(r, 260));
+    await settle();
+    expect(calls[0]?.url).toBe("/v1/search?project_id=p1&q=apple%20pay&limit=12");
+    expect($('[data-testid="palette-search-meeting"]')?.textContent).toContain("Accept Apple Pay at checkout");
+    expect($('[data-testid="palette-search-decision"]')?.className).toContain("bx-palette-item");
+  });
+
+  it("a one-letter query asks nothing", async () => {
+    const calls: Call[] = [];
+    serve(calls, () => ({ items: [] }));
+    await mount(<SearchResults query="a" projectId="p1" onDone={() => {}} />);
+    await new Promise((r) => setTimeout(r, 260));
+    expect(calls).toEqual([]);
+    expect($('[data-testid="palette-search"]')).toBeNull();
   });
 });

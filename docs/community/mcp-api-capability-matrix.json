@@ -4,9 +4,9 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 1987,
+  "operation_count": 1988,
   "counts": {
-    "api_policy_gated": 1702,
+    "api_policy_gated": 1703,
     "excluded": 116,
     "human_confirmation_gated": 73,
     "operator_only_unavailable": 96
@@ -29729,6 +29729,24 @@
       "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
+    },
+    {
+      "method": "GET",
+      "path": "/v1/search",
+      "alias": "get_v1_search_526aadb3",
+      "domain": "other",
+      "summary": "Search Work",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": true
     },
     {
       "method": "GET",

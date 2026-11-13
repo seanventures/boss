@@ -27,6 +27,7 @@ import { FX_JUMP } from "../../lib/project-experience-fixtures";
 import { PX_PATHS, isPxDemo, navigateTo, projectHref, pxHref } from "../../lib/project-experience";
 import { AgentAvatar } from "../agent-avatar";
 import { askCaptain } from "./project-page";
+import { SearchResults } from "./search-results";
 import "./jump.css";
 
 export type JumpRow = {
@@ -200,6 +201,7 @@ export function JumpResults({ query, projectId, projects, onDone }: {
           </div>
         );
       })}
+      {scoped && projectId ? <SearchResults query={q} projectId={projectId} onDone={onDone} /> : null}
       {nothing ? (
         <button type="button" className="bx-palette-item pxj-i pxj-empty" data-testid="palette-jump-empty"
                 onClick={() => { onDone(); askCaptain(projectId, captain ? { name: captain.label, role_key: captain.role_key } : null, q); }}>

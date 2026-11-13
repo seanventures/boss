@@ -5,6 +5,8 @@
   (POST /v1/decisions/{id}/approve with ``choose``).
 * 880 a person's watchdog on a work item's subtree (services/work_watchdogs): attach, list,
   detach. The monitor tick evaluates it and tells the watcher once per stop.
+* 881 one search over work (services/work_search): GET /v1/search, only the sources the caller
+  may read.
 
 WHO MAY DO WHAT: reading follows the thing read (decision:read, work_item:read ...); every change
 is attributed to the signed-in member (require_write_actor), never to a claimed actor.
@@ -13,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from boss_engine.db import begin
@@ -124,5 +126,42 @@ def build_work_ux_router(*, engine, settings: Callable[[], Any],
             _errors(lambda: work_watchdogs.detach(c, project_id=project_id,
                                                   watchdog_id=watchdog_id, actor=who))
         return {"detached": watchdog_id}
+
+    # ── 881: one search over work ──────────────────────────────────────────────────────────
+    def _readable_sources(request: Request, project_id: str) -> list[str]:
+        """The sources this caller may read, by the same permission each source's own routes
+        need. Asked without recording a denial: a missing one only drops that source. With no
+        identity on the request (shadow mode, a legacy key) the project reader check is the gate,
+        as for every other legacy read."""
+        from boss_engine.services.work_search import SOURCES
+
+        from .identity_access import request_identity
+
+        ctx = request_identity(request)
+        if ctx is None:
+            return list(SOURCES)
+        from boss_engine.identity import authz
+        from boss_engine.identity.scope import ResolvedScope
+
+        held = authz.effective_permissions(
+            ctx, ResolvedScope.in_project(ctx.principal.org_id, project_id)).permissions
+        return [kind for kind, permission in SOURCES.items() if permission in held]
+
+    @router.get("/v1/search")
+    @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+    def search_work(request: Request, project_id: str, q: str = Query("", max_length=200),
+                    kinds: Optional[str] = None, limit: int = Query(30, ge=1, le=60)) -> dict:
+        """Runs, builds, decisions, PRD panels, artifacts, work items and knowledge in one box:
+        title hits first, then newest, each with a snippet and a console link. Only the sources
+        the caller may read are searched (``searched`` says which)."""
+        from boss_engine.services import work_search
+
+        allowed = _readable_sources(request, project_id)
+        if kinds:
+            asked = {k.strip() for k in kinds.split(",") if k.strip()}
+            allowed = [k for k in allowed if k in asked]
+        with begin(engine) as c:
+            require_reader(c, project_id)
+            return work_search.search(c, project_id=project_id, q=q, kinds=allowed, limit=limit)
 
     return router

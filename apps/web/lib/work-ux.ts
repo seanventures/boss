@@ -39,3 +39,22 @@ export const attachWatchdog = (projectId: string, id: string, body: { conditions
 export const detachWatchdog = (projectId: string, id: string, watchdogId: string): Promise<WriteResult> =>
   obsWrite(`${item(id)}/watchdogs/${encodeURIComponent(watchdogId)}?${q(projectId)}`, {}, press(`watch:${id}`, "Stop watching"), "DELETE");
 
+// ── 881: one search over work ────────────────────────────────────────────────────────────────
+export type SearchHit = { kind: string; id: string; title: string; snippet: string; status: string; href: string; match: "title" | "body" };
+export const SEARCH_KIND_WORDS: Record<string, string> = {
+  run: "Run", code_task: "Build", decision: "Decision", meeting: "PRD panel", artifact: "Artifact",
+  work_item: "Work item", knowledge: "Knowledge",
+};
+export function parseSearch(w: unknown): { items: SearchHit[]; searched: string[] } {
+  const o = obj(w);
+  return {
+    items: arr(o.items).map(obj).map((h) => ({
+      kind: str(h.kind), id: str(h.id), title: str(h.title) || str(h.id), snippet: str(h.snippet),
+      status: str(h.status), href: str(h.href), match: (h.match === "title" ? "title" : "body") as "title" | "body",
+    })).filter((h) => h.id && h.href),
+    searched: arr(o.searched).map(str),
+  };
+}
+export const searchWork = (projectId: string, query: string, signal?: AbortSignal) =>
+  aaRead(`/v1/search?${q(projectId)}&q=${encodeURIComponent(query)}&limit=12`, parseSearch, null, signal);
+

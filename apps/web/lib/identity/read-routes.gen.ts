@@ -634,6 +634,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["sandboxes/{}/stats", "sandbox:read"],
   ["sandboxes/{}/tree", "sandbox:read"],
   ["scorecards", "observability:read"],
+  ["search", "project:read"],
   ["secret-refs", "secret:read_metadata"],
   ["secret-refs/{}", "secret:read_metadata"],
   ["secrets", "secret:read_metadata"],

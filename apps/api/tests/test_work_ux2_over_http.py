@@ -66,3 +66,16 @@ def test_a_person_attaches_lists_and_detaches_a_watchdog(client):
     assert gone.status_code == 200, gone.text
     assert client.get(f"/v1/work-items/{item['id']}/watchdogs",
                       params={"project_id": HOME}).json()["watchdogs"] == []
+
+
+def test_one_search_finds_work_by_its_content(client):
+    item = _create(client, "Ledger reconciliation", description="Match the nightly ledger export")
+    r = client.get("/v1/search", params={"project_id": HOME, "q": "nightly ledger"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    hit = next(h for h in body["items"] if h["id"] == item["id"])
+    assert hit["kind"] == "work_item" and "nightly ledger" in hit["snippet"]
+    assert "decision" in body["searched"] and "knowledge" in body["searched"]
+    only = client.get("/v1/search", params={"project_id": HOME, "q": "nightly ledger",
+                                            "kinds": "decision"}).json()
+    assert only["searched"] == ["decision"] and all(h["kind"] == "decision" for h in only["items"])
