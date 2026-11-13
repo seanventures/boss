@@ -23,6 +23,7 @@ import { StatusPill } from "./ability-card";
 import { stepsOf } from "./used-in-section";
 import { DrawerShell } from "./overlay";
 import { RiskDot } from "./tools-section";
+import { SkillHistory, SkillTests } from "./skill-history";
 
 const HOW = [
   { id: "sandboxed_command", label: "Command", tip: "Runs a command in a sandbox, e.g. ffmpeg or pandoc" },
@@ -61,6 +62,8 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
   const [menu, setMenu] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [held, setHeld] = useState<string[]>(holders);
+  // An authored skill's tabs (BOSSAPP-842/844): the form, its versions, its saved test cases.
+  const [tab, setTab] = useState<"skill" | "history" | "tests">("skill");
   const editable = creating || skill !== null;
   const id = skill?.skill_key ?? builtIn?.id ?? "";
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
@@ -171,7 +174,24 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
         <button type="button" className="kit-icon-btn" aria-label="Close" onClick={onClose}><X size={16} /></button>
       </header>
       <div className="kit-drawer-body">
-        {editable ? (
+        {skill ? (
+          <div className="kit-tabs" role="tablist" aria-label="Skill views" data-testid="kit-skill-tabs">
+            {([["skill", "Skill"], ["history", "History"], ["tests", "Tests"]] as const).map(([tabId, label]) => (
+              <button key={tabId} type="button" role="tab" className="kit-tab" aria-selected={tab === tabId}
+                      data-testid={`kit-skill-tab-${tabId}`} onClick={() => setTab(tabId)}>{label}</button>
+            ))}
+          </div>
+        ) : null}
+        {skill && tab === "history" ? (
+          <Section id="history" label="History" tip="Every saved version; Restore makes a new one">
+            <SkillHistory projectId={projectId} actor={actor} skillKey={skill.skill_key}
+                          onChanged={() => onSaved(skill.skill_key)} />
+          </Section>
+        ) : skill && tab === "tests" ? (
+          <Section id="tests" label="Tests" tip="Saved cases, run against a version, graded pass or fail">
+            <SkillTests projectId={projectId} actor={actor} skillKey={skill.skill_key} />
+          </Section>
+        ) : editable ? (
           <Section id="skill" label="Skill" tip="What it is and how it runs">
             <label className="kit-field">
               <span className="kit-field-label">Name</span>
@@ -290,7 +310,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
             <div className="kit-row"><RiskDot tier={tier} />{ability ? <span className="kit-chip" data-tone="accent" data-tip={ability.tip}>{ability.label}</span> : null}</div>
           </Section>
         )}
-        {!creating ? (
+        {!creating && tab === "skill" ? (
           <>
             <Section id="agents" label="Agents" tip="Who holds this skill">
               <ul className="kit-agent-grid">

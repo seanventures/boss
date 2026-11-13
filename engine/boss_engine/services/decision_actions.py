@@ -115,9 +115,18 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "self_fix.install",
     # Approving an agent-drafted skill writes that draft enabled. Until then it is not usable.
     "activate_authored_skill",
+    # Approving a "Tool changed" card clears the MCP tool's quarantine and accepts the new
+    # definition (mcp_registry.accept_tool_change); rejecting turns it Off (BOSSAPP-818).
+    "review_tool_change",
     # Approving the removal of installed self-fixes issues the signed `remove` / `remove_all`
     # ticket (services/self_fix_install.on_remove_approved).
     "self_fix.remove",
+    # Approving a work item's review/approval stage raises the next stage, or completes the item
+    # and wakes what it blocked (execution_policy.on_stage_answered, BOSSAPP-831).
+    "execution_stage",
+    # Answering a typed question records the typed answer, makes the accepted task suggestions
+    # work items and resumes the agent that asked (typed_forms.on_answered, BOSSAPP-832).
+    "answer_form",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -134,6 +143,9 @@ REVISE_CONSUMED = frozenset({
     "approve_change_set",
     # Mender fixes it again from the note, then asks again (self_fix_install.on_revise).
     "self_fix.install",
+    # A review stage sent back: the work returns to its worker with the note, or escalates to
+    # the responsible person at the stage's max_rounds (execution_policy.on_stage_answered).
+    "execution_stage",
 })
 
 #: A workflow decision step (workflows.py) writes this action and no run id. The runner reads
@@ -224,7 +236,17 @@ RECORDED_ON_APPROVAL = frozenset({
     # An incident acknowledged and then left idle with no safe fix (acked_idle._escalate): the
     # person takes it or closes it on the incident; the card records the answer.
     "incident_needs_owner",
+    # A build agent's call parked at the MCP gateway (mcp_gateway, BOSSAPP-814): the answer is
+    # read by the call that is waiting on it — approved, the tool runs; declined, the agent is
+    # told so. The card itself starts nothing.
+    "gateway_tool_call",
+    "gateway_ask_person",
+    "gateway_request_approval",
 })
+#: The parked-call cards above: the waiting agent carries the answer out, so an approved one
+#: has nothing left to mark executed, and Approve says who acts on it.
+PARKED_CALL_ACTIONS = frozenset({
+    "gateway_tool_call", "gateway_ask_person", "gateway_request_approval"})
 #: Producers that build the action from a provider key (comms: configure_or_enable_slack_…).
 RECORDED_ON_APPROVAL_PREFIXES = ("configure_or_enable_",)
 
@@ -448,6 +470,12 @@ def guidance(decision: Mapping[str, Any]) -> Optional[dict[str, str]]:
 def _general_approve(decision: Mapping[str, Any]) -> dict[str, Any]:
     if carries_out_on_approval(decision):
         return _action("approve", "Approve", "approve", "Carries out what this card proposes.")
+    if _action_of(decision) in PARKED_CALL_ACTIONS:
+        return _action(
+            "approve", "Approve", "approve",
+            "Records your answer; BOSS starts nothing from this card by itself. The build "
+            "agent waiting on it reads the answer at once and carries on; a held tool call "
+            "runs only if you approve. Your note is passed to the agent.")
     # The old text promised to carry the card out for EVERY general decision, and for most of
     # them nothing does: a "provide_github_token" card approved stayed exactly as it was.
     return _action(
@@ -500,7 +528,8 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
         # hand, which matters ONLY for the types BOSS cannot carry out itself. A deploy, a gate
         # or a merge BOSS ran itself showed "Mark executed" forever after it was done.
         if carries_out_on_approval(decision) or kind_of(decision) in (
-                "workflow_gate", "deploy_gate", "architecture_review"):
+                "workflow_gate", "deploy_gate", "architecture_review") \
+                or _action_of(decision) in PARKED_CALL_ACTIONS:
             return []
         return [_action(
             "execute", "Mark executed", "approve",
@@ -638,6 +667,31 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "here for approval.", needs="note"),
             _action("reject", "Reject", "reject",
                     "Rejects the architecture. The step fails and the run stops there."),
+            _delegate(),
+        ]
+    if _action_of(decision) == "execution_stage":
+        # A WORK ITEM'S REVIEW OR APPROVAL STAGE (execution_policy, BOSSAPP-831). Sending it back
+        # always says why: the comment is what the worker reads.
+        rec = _rec(decision)
+        return [
+            _action("approve", "Approve", "approve",
+                    "Passes this stage: the next stage is asked, or the work item completes "
+                    "and what it was blocking starts.",
+                    needs="note" if rec.get("comment_required") else None),
+            _action("revise", "Send back", "neutral",
+                    "Returns the work to whoever did it, with your comment. After "
+                    f"{rec.get('max_rounds') or 3} rounds it escalates to the responsible person.",
+                    needs="note"),
+            _delegate(),
+        ]
+    if _action_of(decision) == "answer_form":
+        # A TYPED QUESTION (typed_forms, BOSSAPP-832): the answer is the form.
+        return [
+            _action("approve", "Send answer", "approve",
+                    "Records your answer and the agent that asked carries on with it; accepted "
+                    "suggestions become work items.", needs="form"),
+            _action("reject", "Decline", "reject",
+                    "Tells the agent you will not answer, and why.", needs="note"),
             _delegate(),
         ]
     if _action_of(decision) in ("deploy_host", "deploy_stack"):

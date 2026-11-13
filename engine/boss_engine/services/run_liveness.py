@@ -125,9 +125,12 @@ def seconds_since_activity(connection, run_id: str) -> Optional[float]:
 
 
 def is_progressing(*, status: Optional[str], seconds_since_activity: Optional[float],
-                   horizon_seconds: float, executing: bool = False) -> bool:
-    """Pure: an in-flight run that acted within the horizon (or is executing here) is alive."""
+                   horizon_seconds: float, executing: bool = False, runner_alive: bool = False) -> bool:
+    """Pure: an in-flight run that acted within the horizon (or is executing here, or whose turn a
+    boss-runner still reports alive — BOSSAPP-828) is alive."""
     if executing:
+        return True
+    if runner_alive and str(status or "") in (*IN_FLIGHT, "repairing"):
         return True
     if str(status or "") not in IN_FLIGHT:
         return False
@@ -141,7 +144,17 @@ def progressing(connection, settings: Any, run_id: str) -> bool:
     return is_progressing(status=status,
                           seconds_since_activity=seconds_since_activity(connection, run_id),
                           horizon_seconds=stall_horizon_seconds(settings),
-                          executing=executing_here(run_id))
+                          executing=executing_here(run_id),
+                          runner_alive=runner_alive(connection, run_id))
+
+
+def runner_alive(connection, run_id: str) -> bool:
+    """THE RECLAIM PATH ASKS THE RUNNER REGISTRY FIRST (BOSSAPP-828): a run whose turn a boss-runner
+    still owns and reports alive is not dead, however long the API that started it has been gone.
+    Its stage is re-attached to that turn (runner_dispatch), never re-run from the checkpoint."""
+    from . import runner_registry
+
+    return runner_registry.alive(connection, run_id)
 
 
 #: A run left `repairing` (or `running`) at phase 'done' handed its work on or finished every

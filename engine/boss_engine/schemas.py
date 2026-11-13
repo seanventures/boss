@@ -2834,6 +2834,12 @@ class DecisionCard(BaseModel):
     # shows its Approve as `label` ("Checks running…"), disabled, with `reason` — never a press
     # the gate refuses (BOSSAPP-946).
     held: Optional[dict[str, Any]] = None
+    # A TYPED QUESTION (BOSSAPP-832, services/typed_forms.py): the form the card draws, and once
+    # answered the typed answer and who gave it. None for every decision without a form.
+    form_schema: Optional[dict[str, Any]] = None
+    answer: Optional[dict[str, Any]] = None
+    answered_by: Optional[str] = None
+    answered_at: Optional[str] = None
 
 
 class DecisionInboxResponse(BaseModel):
@@ -2861,6 +2867,9 @@ class DecisionActionRequest(BaseModel):
     # The `action_preview.content_hash` the approver was looking at. When it no longer matches
     # the decision's preview (the content changed while they read it), the approval is refused.
     content_hash: Optional[str] = None
+    # The typed answer to a decision that asks a form (BOSSAPP-832): keyed by the form's field
+    # keys, validated against it on approve (services/typed_forms.validate_answer).
+    answer: Optional[dict[str, Any]] = None
 
 
 class DecisionDigestRequest(BaseModel):

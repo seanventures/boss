@@ -3532,6 +3532,8 @@ def start_run(
     )
     _activate_step(connection, run_id, spec["entry_step"], 0)
     _drain_control_steps(connection, run_id)
+    _link_work_item(connection, project_id=project_id, run_id=run_id, input_data=input_data,
+                    parent_run_id=parent_run_id, actor=actor)
     # SIGNED FROM THE FIRST MOMENT: the person who started the run is the root of its chain.
     from . import agent_acts
 
@@ -3539,6 +3541,32 @@ def start_run(
     result = get_run(connection, project_id, run_id)
     result["duplicate"] = False
     return result
+
+
+def _link_work_item(connection: Connection, *, project_id: str, run_id: str,
+                    input_data: dict[str, Any], parent_run_id: Optional[str], actor: str) -> None:
+    """THE RUN'S WORK ITEM (BOSSAPP-830, services/work_items.link_run), made here at the one
+    door every run is started through. Started FOR an item (input `work_item_id`) it joins it;
+    a child run, or a run adopting a build or panel, joins that work's item; anything else gets
+    its own. A run for an item that is still blocked starts paused, and the item's blocker
+    finishing resumes it (work_items.wake_unblocked). Never fails the start."""
+    from . import work_items
+
+    adopted = [("code_task", v) for k, v in input_data.items()
+               if str(k).startswith(ADOPT_PREFIX) and str(v or "").startswith("crun")]
+    adopted += [("meeting", v) for k, v in input_data.items()
+                if str(k).startswith(ADOPT_PREFIX) and str(v or "").startswith("mrun")]
+    explicit = str(input_data.get("work_item_id") or "").strip() or None
+    item_id = work_items.link_run(
+        connection, kind="workflow_run", run_id=run_id, project_id=project_id,
+        title=str(input_data.get("title") or input_data.get("directive") or "Workflow run"),
+        explicit_id=explicit, inherit=[("workflow_run", parent_run_id), *adopted], actor=actor)
+    if item_id and explicit == item_id and work_items.open_blockers(connection, item_id):
+        try:
+            with connection.begin_nested():
+                pause_run(connection, project_id, run_id, actor)
+        except Exception:  # noqa: BLE001 — a run that could not be held still runs
+            logger.warning("run %s for blocked item %s not paused", run_id, item_id)
 
 
 def _insert_step_run(
@@ -5653,6 +5681,12 @@ def _maybe_finish_run(connection: Connection, run_id: str) -> None:
     withdraw_with_run(connection, run["project_id"], run_id,
                       why=f"its run {run_id} finished without it", actor=run["actor"] or "workflow")
     _attribute_knowledge(connection, run["project_id"], run_id, success=True)
+    # THE RUN'S DONE IS ITS WORK ITEM'S DONE — through the item's execution policy, which may
+    # hold it in review (work_items.on_run_completed → execution_policy.apply_transition).
+    from . import work_items
+
+    work_items.on_run_completed(connection, kind="workflow_run", run_id=run_id,
+                                actor=run["actor"] or "workflow")
 
 
 def _refuse_step(

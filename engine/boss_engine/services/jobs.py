@@ -1697,6 +1697,9 @@ class JobLeaseService:
         out = {"retired": 0, "requeued": 0, "held_unknown": 0}
         for r in rows:
             silent = int((now_utc() - r["lease_expires_at"]).total_seconds() // 60)
+            if self._readopt_runner_turn(connection, r, actor=actor, silent=silent):
+                out["readopted"] = out.get("readopted", 0) + 1
+                continue
             with connection.begin_nested():
                 # The same rule as the claim path (BOSSAPP-986): an irreversible effect whose
                 # holder vanished mid-flight is parked for reconciliation, never requeued blind
@@ -1745,6 +1748,35 @@ class JobLeaseService:
                         emit_event(connection, r["project_id"], "job.requeued_lost_lease", actor, "job",
                                    r["id"], {"kind": r["kind"], "silent_minutes": silent})
         return out
+
+    def _readopt_runner_turn(self, connection: Connection, r: Any, *, actor: str, silent: int) -> bool:
+        """BOSSAPP-828: before a lost lease is retired or requeued blind, ask the runner registry.
+        A code task whose turn a boss-runner still owns and reports alive is RE-ADOPTED: its job
+        goes back to the queue WITHOUT spending the attempt the lost lease took (defer_leased's
+        rule), and the stage that picks it up re-attaches to the live turn instead of re-running.
+        Never for any other kind, and never when nothing is alive (False: the usual path)."""
+        if r["kind"] != "code.task":
+            return False
+        run_id = connection.execute(text("SELECT payload->>'run_id' FROM jobs WHERE id = :id"),
+                                    {"id": r["id"]}).scalar()
+        if not run_id:
+            return False
+        from . import runner_registry
+
+        turn = runner_registry.live_session(connection, str(run_id))
+        if turn is None:
+            return False
+        moved = connection.execute(text(
+            "UPDATE jobs SET status = 'queued', lease_owner = NULL, lease_token_hash = NULL, "
+            "lease_expires_at = NULL, heartbeat_at = NULL, attempt = GREATEST(jobs.attempt - 1, 0), "
+            "run_after = now(), updated_at = now() WHERE id = :id AND status IN ('leased', 'running')"),
+            {"id": r["id"]}).rowcount
+        if moved:
+            emit_event(connection, r["project_id"], "job.readopted_runner", actor, "job", r["id"],
+                       {"kind": r["kind"], "run_id": str(run_id), "runner_session": turn["session_id"],
+                        "runner_id": turn["runner_id"], "acked_seq": int(turn["seq"] or 0),
+                        "silent_minutes": silent})
+        return bool(moved)
 
     def close_abandoned(
         self,

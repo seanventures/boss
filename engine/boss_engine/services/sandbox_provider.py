@@ -179,6 +179,23 @@ class SandboxProvider(Protocol):
     def acquire(self, *, task_id: str, tenant_id: Optional[str] = None) -> Sandbox: ...
 
 
+@runtime_checkable
+class EnvironmentDriver(Protocol):
+    """A pluggable execution environment (BOSSAPP-824): acquire() returns a
+    `Sandbox` (the EXISTING protocol above — everything downstream of the
+    governed pipeline speaks only that), probe() answers the console's Test
+    button, and release() is the teardown/reap seam. A driver is a provider
+    plus health and lifecycle; it never widens the Sandbox surface."""
+
+    kind: str
+
+    def acquire(self, *, task_id: str, tenant_id: Optional[str] = None) -> Sandbox: ...
+
+    def probe(self) -> dict: ...
+
+    def release(self, sandbox: Sandbox) -> None: ...
+
+
 class LocalSubprocessProvider:
     """Per-task EphemeralSandbox (temp clone + allowlisted subprocess). The
     `tenant_id` is accepted for interface parity but unused — there is no
@@ -307,6 +324,7 @@ class MicroVMProvider:
         from ..schemas import FileChange
         from .code_agent import CodeAgentResult
         from .sandbox import CommandResult, DiffSummary
+        from .sandbox_contract import is_terminal
 
         # Community GA honesty: never claim microVM execution while frozen.
         ensure_microvm_execution_allowed(self.settings)
@@ -348,7 +366,11 @@ class MicroVMProvider:
                     ) from exc
                 pdata = pr.json()
                 last_status = pdata.get("status")
-                if last_status in ("done", "failed", "timeout"):
+                # EVERY terminal status ends the poll — the §2 contract's set
+                # (sandbox_contract.is_terminal), not a private subset of it.
+                # "cancelled" was missing here, so a cancelled task was polled
+                # until this loop's own deadline instead of ending at once.
+                if is_terminal(last_status):
                     data = pdata
                     break
             # NOTE: we do NOT release the VM here. The control plane releases it on
@@ -514,6 +536,11 @@ def run_echo_exercise(
                 close()
 
 
+#: Driver kinds an execution-environment ROW must supply (host/cluster config
+#: lives on the row, so the bare settings knob cannot carry them).
+ENVIRONMENT_ONLY_KINDS = ("ssh", "kubernetes", "e2b", "daytona")
+
+
 def make_sandbox_provider(settings: Settings) -> SandboxProvider:
     kind = (getattr(settings, "sandbox_provider", "local") or "local").lower()
     if kind in ("local", "subprocess"):
@@ -526,4 +553,97 @@ def make_sandbox_provider(settings: Settings) -> SandboxProvider:
         if microvm_claims_are_frozen(settings):
             return LocalSubprocessProvider(settings)
         return MicroVMProvider(settings)
+    if kind in ENVIRONMENT_ONLY_KINDS:
+        # Recognized (BOSSAPP-824), but a bare knob names no machine. The row
+        # carries the host/cluster config, so the words say where to put it.
+        raise SandboxPlaneError(
+            f"BOSS_SANDBOX_PROVIDER={kind!r} needs a configured execution "
+            "environment (the row carries the host and its key). Create one "
+            "under Environments and mark it the default instead of setting the "
+            "bare knob.",
+            status_code=422,
+            code="environment_required",
+        )
     raise ValueError(f"Unknown BOSS_SANDBOX_PROVIDER: {settings.sandbox_provider!r}")
+
+
+def make_governed_sandbox_provider(
+    settings: Settings,
+    *,
+    connection=None,
+    engine=None,
+    project_id: Optional[str] = None,
+    agent: Optional[str] = None,
+    spec: Optional[dict] = None,
+) -> SandboxProvider:
+    """The governed pipeline's granular provider seam (BOSSAPP-824).
+
+    Resolution precedence: the step's explicit spec override -> the agent's
+    bound environment -> the project default -> the instance (org-wide)
+    default -> the BOSS_GOVERNED_SANDBOX_PROVIDER knob.
+
+    DEFAULT BEHAVIOUR IS BYTE-IDENTICAL: with no environments configured and no
+    knobs set, this returns `LocalSubprocessProvider(settings)` exactly as the
+    hard-coded line it replaced. The 'local' and 'microvm' answers both return
+    it on purpose — even on the micro-VM substrate the control plane keeps a
+    local checkout as the git state carrier, and the micro-VM dispatch itself
+    stays with `_resolve_use_microvm` / `MicroVMProvider` (the freeze flag
+    included), untouched by this factory.
+    """
+    row = None
+    if connection is not None or engine is not None:
+        from .execution_environments import EnvironmentUnusable, resolve_environment
+
+        try:
+            if connection is not None:
+                row = resolve_environment(
+                    connection, project_id=project_id, agent=agent, spec=spec)
+            else:
+                # The factory owns this transaction: on a pre-824 database the
+                # failed SELECT rolls back HERE and never aborts the caller's.
+                from ..db import begin
+
+                with begin(engine) as own_connection:
+                    row = resolve_environment(
+                        own_connection, project_id=project_id, agent=agent, spec=spec)
+        except (EnvironmentUnusable, LookupError) as exc:
+            # An EXPLICIT ask that cannot be served fails in words — never a
+            # silent fallback to local.
+            raise SandboxPlaneError(str(exc), status_code=422,
+                                    code="environment_unusable") from exc
+        except Exception:  # noqa: BLE001 — a pre-824 database (no table) behaves as before
+            row = None
+    if row is None:
+        knob = (getattr(settings, "governed_sandbox_provider", "local") or "local").lower()
+        if knob in ENVIRONMENT_ONLY_KINDS:
+            raise SandboxPlaneError(
+                f"BOSS_GOVERNED_SANDBOX_PROVIDER={knob!r} needs a configured "
+                "execution environment set as the default (the row carries the "
+                "host and its key); none is configured.",
+                status_code=422,
+                code="environment_required",
+            )
+        # 'local' and 'microvm' knobs both keep today's granular provider; the
+        # micro-VM lane is selected by _resolve_use_microvm, not here.
+        return LocalSubprocessProvider(settings)
+    driver = str(row.get("driver") or "local").lower()
+    if driver in ("local", "microvm"):
+        return LocalSubprocessProvider(settings)
+    if driver == "ssh":
+        if engine is None:
+            raise SandboxPlaneError(
+                "an ssh execution environment needs the database engine for "
+                "leases and host-key pinning; none was passed to the factory.",
+                status_code=422,
+                code="environment_unusable",
+            )
+        from .ssh_environment import SSHEnvironmentDriver
+
+        return SSHEnvironmentDriver(settings, engine=engine, environment=row)
+    raise SandboxPlaneError(
+        f"execution environment {row.get('name')!r} uses driver {driver!r}, "
+        "which is recognized but not implemented in this phase "
+        "(phase 2: kubernetes / e2b / daytona).",
+        status_code=422,
+        code="environment_driver_unavailable",
+    )

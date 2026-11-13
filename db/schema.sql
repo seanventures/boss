@@ -12068,6 +12068,222 @@ CREATE INDEX IF NOT EXISTS idx_llm_calls_class ON llm_calls (project_id, call_cl
 -- a refused call (no result) and on rows that predate the column.
 ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;
 
+-- ===========================================================================
+-- EXECUTION ENVIRONMENTS (BOSSAPP-824 phase 1): pluggable remote execution.
+-- Where a governed build's sandbox runs. A row names a place (a driver plus its
+-- config) a build can run: the control-plane box itself ('local'), a machine
+-- reached over SSH ('ssh', config.host_id names the deployment_hosts row whose
+-- key and pinned host key are reused), the existing micro-VM lane ('microvm'),
+-- or a phase-2 driver ('kubernetes', 'e2b', 'daytona' — recognized, refused in
+-- words until their drivers land). project_id NULL means org-wide: the row is
+-- an instance-level environment every project may resolve to.
+-- Secrets NEVER live here: secret_refs holds secret_refs.id references only
+-- (kubeconfig/service_account kinds already exist in secrets_service).
+-- Resolution precedence (services/sandbox_provider.make_governed_sandbox_provider):
+-- explicit spec override -> agent-bound row (config.agents) -> project default
+-- (config.default) -> instance default (project_id IS NULL, config.default)
+-- -> the BOSS_GOVERNED_SANDBOX_PROVIDER knob. With nothing configured the
+-- factory returns the LocalSubprocessProvider exactly as before.
+CREATE TABLE IF NOT EXISTS execution_environments (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT REFERENCES projects(id) ON DELETE CASCADE,  -- NULL: org-wide
+  name        TEXT NOT NULL,
+  driver      TEXT NOT NULL
+    CHECK (driver IN ('local', 'ssh', 'kubernetes', 'microvm', 'e2b', 'daytona')),
+  config      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- registered: known, not yet probed | verified: probe passed | degraded: last
+  -- probe failed | retired: never resolve here again
+  status      TEXT NOT NULL DEFAULT 'registered',
+  created_by  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- UNIQUE(project_id, name) would not dedupe org-wide rows (NULLs are distinct),
+-- so each scope pins its own partial index.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_environments_project_name
+  ON execution_environments (project_id, name) WHERE project_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_environments_org_name
+  ON execution_environments (name) WHERE project_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_execution_environments_project
+  ON execution_environments (project_id, status, created_at DESC);
+
+-- One build's hold on an environment (the shape preview_sandboxes proved: a
+-- durable reservation with a TTL and one reaper). acquire() writes a row,
+-- teardown releases it, and the resource reaper expires leases whose holder
+-- never came back (services/execution_environments.reap_leases, registered on
+-- resource_reaper.tick).
+CREATE TABLE IF NOT EXISTS environment_leases (
+  id             TEXT PRIMARY KEY,
+  environment_id TEXT NOT NULL REFERENCES execution_environments(id) ON DELETE CASCADE,
+  -- driver+image+cpu/mem of what was asked for — lets a later phase pool and
+  -- re-hand matching sandboxes instead of provisioning again.
+  fingerprint    TEXT NOT NULL DEFAULT '',
+  state          TEXT NOT NULL DEFAULT 'held'
+    CHECK (state IN ('held', 'released', 'expired')),
+  run_id         TEXT,                                  -- the holder
+  acquired_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at     TIMESTAMPTZ,
+  released_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_environment_leases_env
+  ON environment_leases (environment_id, state, acquired_at DESC);
+CREATE INDEX IF NOT EXISTS idx_environment_leases_run
+  ON environment_leases (run_id, state);
+-- ================================ end EXECUTION ENVIRONMENTS (BOSSAPP-824) ==
+
+-- ===========================================================================
+-- BOSSAPP-826
+-- WORKSPACE SNAPSHOTS (BOSSAPP-826): a build's working tree survives an ephemeral
+-- REMOTE sandbox. At each stage checkpoint the uncommitted tree (and, when no
+-- lockfile keys a seed, the dependency dirs) is tarred through the 824 sandbox
+-- sync_out seam into BOSS's object store (S3_*, services/object_store.py); a
+-- repair round of the same root run restores the latest one (sync_in) before its
+-- stage runs. kind='seed' rows hold dependency dirs only (node_modules, venv),
+-- keyed by a hash of the repository's lockfiles (seed_key), so a FRESH run of the
+-- same repo with the same lockfiles warm-starts its dependencies.
+-- Off by default (BOSS_WORKSPACE_SNAPSHOTS=off|remote). Rows past expires_at are
+-- reaped with their object by services/workspace_snapshots.reap_expired,
+-- registered on resource_reaper.tick (the 824 lease-reaper pattern).
+-- Objects live in the store; the row is the index (digest = sha256 of the object).
+CREATE TABLE IF NOT EXISTS workspace_snapshots (
+  id           TEXT PRIMARY KEY,
+  run_id       TEXT NOT NULL,                 -- the run whose sandbox was captured
+  root_run_id  TEXT,                          -- the lineage a repair restores from
+  project_id   TEXT,
+  repo         TEXT NOT NULL DEFAULT '',      -- owner/repo
+  kind         TEXT NOT NULL DEFAULT 'full' CHECK (kind IN ('full', 'seed')),
+  generation   INTEGER NOT NULL DEFAULT 0,    -- full: 1, 2, ... per root run; seed: 0
+  label        TEXT,                          -- the checkpoint label (write_tests, implement…)
+  seed_key     TEXT,                          -- seed: the lockfile hash; full: the seed it leans on
+  object_key   TEXT NOT NULL,
+  digest       TEXT NOT NULL,                 -- sha256 of the stored object
+  bytes        BIGINT NOT NULL DEFAULT 0,
+  manifest     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  expires_at   TIMESTAMPTZ,
+  last_used_at TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_snapshots_generation
+  ON workspace_snapshots (root_run_id, generation) WHERE kind = 'full';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_snapshots_seed
+  ON workspace_snapshots (project_id, repo, seed_key) WHERE kind = 'seed';
+CREATE INDEX IF NOT EXISTS idx_workspace_snapshots_root
+  ON workspace_snapshots (root_run_id, kind, generation DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_snapshots_expiry
+  ON workspace_snapshots (expires_at);
+-- ================================ end WORKSPACE SNAPSHOTS (BOSSAPP-826) ==
+
+-- BOSSAPP-825
+-- TOOLCHAIN IMAGES (BOSSAPP-825): a project's own build-sandbox image, built
+-- interactively. An operator starts a throwaway setup container, installs what
+-- the project needs (a JDK, Go, browsers, private tools) through the console's
+-- terminal, and Capture commits it (`docker commit`, then a push to the local
+-- registry when one is configured). With BOSS_SANDBOX_COMMAND_RUNTIME=docker a
+-- build of that project then runs its commands in the latest READY image
+-- instead of BOSS_SANDBOX_CONTAINER_IMAGE (services/toolchain_images.py). No
+-- ready row: the default image, exactly as before.
+CREATE TABLE IF NOT EXISTS toolchain_images (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  -- the image the setup container started from
+  base          TEXT NOT NULL,
+  -- building: the setup session is open (phase 'session') or Capture is
+  -- committing/pushing it (phase 'capturing') | ready: builds use it |
+  -- failed: capture failed or the session was discarded (error says which)
+  status        TEXT NOT NULL DEFAULT 'building'
+    CHECK (status IN ('building', 'ready', 'failed')),
+  phase         TEXT NOT NULL DEFAULT 'session',
+  -- the setup container while the session is open; cleared once captured
+  container_id  TEXT,
+  -- what a build runs: '<registry>/boss-toolchain/<project>:<id>' or the
+  -- daemon-local tag 'boss-toolchain/<project>:<id>' without a registry
+  image_ref     TEXT,
+  -- sha256 content digest: the registry's manifest digest after a push, else
+  -- the local image id
+  digest        TEXT,
+  -- the setup transcript: every command the operator ran, with exit codes,
+  -- and the Dockerfile that reproduces it (FROM base + RUN per command)
+  transcript    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dockerfile    TEXT,
+  error         TEXT,
+  created_by    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_toolchain_images_project
+  ON toolchain_images (project_id, status, created_at DESC);
+-- One open setup session per project: a second Start is refused, not stacked.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_toolchain_images_open_session
+  ON toolchain_images (project_id) WHERE status = 'building';
+-- ================================ end TOOLCHAIN IMAGES (BOSSAPP-825) ==
+
+-- BOSSAPP-828
+-- boss-runner sessions: a coding-agent turn owned by the runner sidecar instead of the API
+-- (apps/runner, services/runner_dispatch.py, services/runner_registry.py). `seq` is the API's
+-- cumulative ACK of the runner's outbox, `last_heartbeat` is the runner's last push. The reclaim
+-- path (run_liveness.progressing, jobs.reap_lost_leases) asks this registry before it declares a
+-- run dead: a turn whose runner still reports its process alive is re-attached, not re-run.
+CREATE TABLE IF NOT EXISTS runner_sessions (
+    session_id      TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL,                 -- the code-task run (crun_...)
+    identity_run_id TEXT NOT NULL,                 -- the run token's boss_task.run
+    runner_id       TEXT NOT NULL,
+    session_key     TEXT NOT NULL DEFAULT '',
+    seq             BIGINT NOT NULL DEFAULT 0,
+    state           TEXT NOT NULL DEFAULT 'running',
+    alive           BOOLEAN NOT NULL DEFAULT true,
+    last_heartbeat  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_runner_sessions_run ON runner_sessions (run_id, state, last_heartbeat DESC);
+-- BOSSAPP-838 ── scheduled self-backups ─────────────────────────────────────────────────────────
+-- services/backup_scheduler.py: one API thread (whichever holds backup_scheduler_lease) takes a
+-- pg_dump every BOSS_BACKUP_INTERVAL_MINUTES, verifies it with `pg_restore --list`, optionally
+-- uploads it (S3_* settings), and prunes by tier (hourly/daily/weekly/monthly). One row per
+-- attempt: running -> verified or failed, then pruned once retention lets it go. The doctor
+-- raises backup_stale / backup_failed / backup_missing from these rows.
+CREATE TABLE IF NOT EXISTS backups (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL DEFAULT 'scheduled',
+  path TEXT,
+  object_key TEXT,
+  bytes BIGINT,
+  checksum TEXT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  verified_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'running'
+    CHECK (status IN ('running', 'verified', 'failed', 'pruned')),
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_backups_status_started ON backups (status, started_at DESC);
+CREATE TABLE IF NOT EXISTS backup_scheduler_lease (
+  name TEXT PRIMARY KEY,
+  holder TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- BOSSAPP-837 ── org/project export and import ─────────────────────────────────────────────────
+-- services/portability.py: an import is planned (a dry-run diff, validated by replaying it
+-- through the create services and rolling back), then applied chunk by chunk, each chunk its own
+-- transaction. chunks_done is the resume point: applying the same import again carries on from
+-- there. The bundle is kept so a resume needs only the id, and it never holds a secret value.
+CREATE TABLE IF NOT EXISTS portability_imports (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL CHECK (scope IN ('project', 'org')),
+  target_id TEXT NOT NULL,
+  bundle_checksum TEXT NOT NULL,
+  bundle JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'planned'
+    CHECK (status IN ('planned', 'applying', 'applied', 'failed')),
+  chunk_size INTEGER NOT NULL DEFAULT 25,
+  chunks_total INTEGER NOT NULL DEFAULT 0,
+  chunks_done INTEGER NOT NULL DEFAULT 0,
+  plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+  report JSONB NOT NULL DEFAULT '{}'::jsonb,
 -- ── BOSSAPP-833-835: decide from Slack and phone; realtime event push ─────────────────────────
 -- services/chat_channels.py (834) and services/event_stream.py (835).
 --
@@ -12087,6 +12303,251 @@ CREATE TABLE IF NOT EXISTS chat_endpoints (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_portability_imports_target
+  ON portability_imports (scope, target_id, created_at DESC);
+-- BOSSAPP-841-844
+-- ── Skills as a governed supply chain ─────────────────────────────────────────────────────────
+-- 842 VERSIONS. Every save of an authored skill appends a row here (skill_versions.record, called
+-- from skill_definitions.save_skill — the one writer). History is append-only: a restore is a NEW
+-- version copying an old one's content. `current_version_id` names the version the row holds;
+-- `role_skills.pinned_version_id` keeps one agent on an older version (NULL = follow current).
+CREATE TABLE IF NOT EXISTS skill_versions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  skill_id TEXT NOT NULL REFERENCES skill_definitions(id) ON DELETE CASCADE,
+  skill_key TEXT NOT NULL,
+  version_no INTEGER NOT NULL,
+  -- label, summary, behaviour_kind, knowledge, inputs, produces, config, risk_tier
+  content JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- Supporting files a source brought with the skill (path -> text); {} for authored ones.
+  files JSONB NOT NULL DEFAULT '{}'::jsonb,
+  content_hash TEXT NOT NULL,
+  author_kind TEXT NOT NULL DEFAULT 'person'
+    CHECK (author_kind IN ('person', 'agent', 'system', 'sync')),
+  author_id TEXT NOT NULL DEFAULT '',
+  source_note TEXT NOT NULL DEFAULT '',
+  restored_from TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (skill_id, version_no)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_versions_skill
+  ON skill_versions (project_id, skill_key, version_no DESC);
+ALTER TABLE skill_definitions ADD COLUMN IF NOT EXISTS current_version_id TEXT;
+ALTER TABLE role_skills ADD COLUMN IF NOT EXISTS pinned_version_id TEXT;
+
+-- 843 DIFF-BOUND CONSENT. An agent's change to a skill (or a prompt) is written only when a
+-- person approved EXACTLY that change: the write recomputes `diff_hash` from what it is about to
+-- write and the content it would replace, and consumes one approved row with that hash. A
+-- changed base, a changed proposal or a second write finds no row. Console edits are exempt.
+CREATE TABLE IF NOT EXISTS change_consents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('skill', 'prompt')),
+  subject_key TEXT NOT NULL,
+  diff_hash TEXT NOT NULL,
+  base_hash TEXT NOT NULL DEFAULT '',
+  diff TEXT NOT NULL DEFAULT '',
+  proposed JSONB NOT NULL DEFAULT '{}'::jsonb,
+  decision_id TEXT,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'rejected', 'consumed')),
+  requested_by TEXT NOT NULL DEFAULT '',
+  decided_by TEXT,
+  decided_at TIMESTAMPTZ,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_change_consents_subject
+  ON change_consents (project_id, subject_kind, subject_key, status);
+CREATE INDEX IF NOT EXISTS idx_change_consents_decision ON change_consents (decision_id);
+
+-- 841 SOURCES. Where a skill came from outside the project: a GitHub path, a skills.sh entry
+-- (resolved to its GitHub repository) or a plain URL. `pinned_sha` is the commit (GitHub) or the
+-- sha256 of the body (URL) the skill holds. The sync worker never overwrites: an upstream change
+-- becomes a new skill version, applied by itself only when `auto_update` and the skill is
+-- trusted, otherwise parked as a change_consent awaiting a person.
+CREATE TABLE IF NOT EXISTS skill_sources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  org_id TEXT,
+  scope TEXT NOT NULL DEFAULT 'project' CHECK (scope IN ('project', 'org')),
+  kind TEXT NOT NULL CHECK (kind IN ('github', 'url', 'skillsh')),
+  locator TEXT NOT NULL,
+  ref TEXT NOT NULL DEFAULT '',
+  skill_key TEXT NOT NULL,
+  pinned_sha TEXT NOT NULL DEFAULT '',
+  upstream_sha TEXT NOT NULL DEFAULT '',
+  auto_update BOOLEAN NOT NULL DEFAULT false,
+  last_sync_at TIMESTAMPTZ,
+  last_error TEXT,
+  pending_consent_id TEXT,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, skill_key)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_sources_due ON skill_sources (last_sync_at NULLS FIRST);
+
+-- 844 SAVED TEST CASES and VERSION-PINNED RUNS. A run is one case executed against one version
+-- (through eval_harness.run_skill_cases, the same execution and eval_runs record as the suite);
+-- `grade` is the typed answer pass|fail, NULL until graded.
+CREATE TABLE IF NOT EXISTS skill_test_cases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  skill_id TEXT NOT NULL REFERENCES skill_definitions(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (skill_id, name)
+);
+CREATE TABLE IF NOT EXISTS skill_test_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  case_id TEXT NOT NULL REFERENCES skill_test_cases(id) ON DELETE CASCADE,
+  skill_version_id TEXT NOT NULL REFERENCES skill_versions(id) ON DELETE CASCADE,
+  eval_run_id TEXT,
+  status TEXT NOT NULL DEFAULT 'ran' CHECK (status IN ('ran', 'error', 'skipped')),
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  grade TEXT CHECK (grade IS NULL OR grade IN ('pass', 'fail')),
+  notes TEXT NOT NULL DEFAULT '',
+  graded_by TEXT,
+  graded_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_skill_test_runs_case
+  ON skill_test_runs (case_id, skill_version_id, created_at DESC);
+-- ── BOSSAPP-829-832: one work-item graph with execution policy ───────────────────────────────
+-- BOSSAPP-830. work_items is THE canonical node for every piece of work: a workflow run, a code
+-- task, a PRD meeting and a planning ticket each carry the work_item_id of the node they
+-- serve, and the node is made lazily where the run/ticket is made (services/work_items.py
+-- ensure_for) — history is not backfilled by migration. The node gains a tree (parent_id), a
+-- goal, a human key ("BOSS-12"), who works it (assignee: agent:<role> | person:<id>) and who
+-- answers for it (responsible_person). `status` already exists (portfolio 'active'/'done'); the
+-- canonical vocabulary adds backlog | todo | blocked | in_review | cancelled beside them.
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS parent_id TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS goal_id TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS human_key TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS assignee TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS responsible_person TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+-- BOSSAPP-831: the item's execution policy (ordered review/approval stages) and where it is in
+-- them ({stage, round, decision_id, origin, worker}); NULL = no stages, done is done.
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS execution_policy JSONB;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS execution_state JSONB;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_parent_fk'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_parent_fk FOREIGN KEY (parent_id)
+      REFERENCES work_items(id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_not_own_parent'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_not_own_parent
+      CHECK (parent_id IS NULL OR parent_id <> id);
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_items_human_key
+  ON work_items (project_id, human_key) WHERE human_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_work_items_parent ON work_items (parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_work_items_goal ON work_items (goal_id) WHERE goal_id IS NOT NULL;
+-- The next number of a project's human keys (one row per project; prefix is the project's).
+CREATE TABLE IF NOT EXISTS work_item_keys (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  prefix TEXT NOT NULL DEFAULT 'WI',
+  next_number INTEGER NOT NULL DEFAULT 1 CHECK (next_number >= 1)
+);
+-- Goals form their own tree; a work item points at the goal it serves.
+CREATE TABLE IF NOT EXISTS goals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  parent_id TEXT REFERENCES goals(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'achieved', 'dropped')),
+  owner TEXT,
+  target_date DATE,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (parent_id IS NULL OR parent_id <> id)
+);
+CREATE INDEX IF NOT EXISTS idx_goals_project ON goals (project_id, status, created_at);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_goal_fk'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_goal_fk FOREIGN KEY (goal_id)
+      REFERENCES goals(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+-- Relations between items. Only 'blocks' is stored for blocking (from blocks to); "blocked_by"
+-- is the same row read the other way, so the two can never disagree.
+CREATE TABLE IF NOT EXISTS work_item_relations (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  from_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  to_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('blocks', 'relates_to', 'duplicates')),
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (from_id, to_id, kind),
+  CHECK (from_id <> to_id)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_relations_to ON work_item_relations (to_id, kind);
+CREATE TABLE IF NOT EXISTS labels (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT 'gray',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE TABLE IF NOT EXISTS work_item_labels (
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  label_id TEXT NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (work_item_id, label_id)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_labels_label ON work_item_labels (label_id);
+-- Every run, PRD meeting and planning ticket names the node it serves (made lazily at creation).
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS work_item_id TEXT;
+ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS work_item_id TEXT;
+ALTER TABLE meeting_runs ADD COLUMN IF NOT EXISTS work_item_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_work_item ON workflow_runs (work_item_id) WHERE work_item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_code_task_runs_work_item ON code_task_runs (work_item_id) WHERE work_item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_meeting_runs_work_item ON meeting_runs (work_item_id) WHERE work_item_id IS NOT NULL;
+-- The planning store (services/work_plane.py) creates wp_roadmap_items lazily; its column is
+-- added there too, and here when the table already exists.
+DO $$ BEGIN
+  IF to_regclass('public.wp_roadmap_items') IS NOT NULL THEN
+    ALTER TABLE wp_roadmap_items ADD COLUMN IF NOT EXISTS work_item_id TEXT;
+  END IF;
+END $$;
+-- BOSSAPP-831: a run may carry its own policy (it wins over its work item's).
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS execution_policy JSONB;
+ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS execution_policy JSONB;
+-- The stage machine's log: every stage raised, answered, sent back or escalated.
+CREATE TABLE IF NOT EXISTS execution_decisions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  origin TEXT,                                 -- workflow_run:<id> | code_task:<id> | ...
+  stage_index INTEGER NOT NULL,
+  stage_kind TEXT NOT NULL CHECK (stage_kind IN ('review', 'approval')),
+  round INTEGER NOT NULL DEFAULT 1,
+  event TEXT NOT NULL CHECK (event IN ('raised', 'approved', 'rejected', 'escalated',
+                                       'completed', 'skipped')),
+  decision_id TEXT,
+  participants JSONB NOT NULL DEFAULT '[]'::jsonb,
+  actor TEXT NOT NULL DEFAULT 'boss',
+  comment TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_execution_decisions_item
+  ON execution_decisions (work_item_id, created_at);
+-- BOSSAPP-832: a decision can ask a typed form and keep the typed answer it got.
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS form_schema JSONB;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answer JSONB;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_by TEXT;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_chat_endpoints_project ON chat_endpoints (project_id, status);
 
 -- WHO a chat user is in BOSS. A row is born unverified by a press from an unlinked user (with the

@@ -870,7 +870,9 @@ def skill_from_file(connection: Connection, project_id: str, *, actor: str, file
             skill = save_skill(connection, project_id=project_id, actor=actor,
                                skill_key=parsed["skill_key"], label=parsed["label"],
                                behaviour_kind="guide", summary=parsed["summary"],
-                               knowledge=parsed["knowledge"], risk_tier=0, mode="create")
+                               knowledge=parsed["knowledge"], risk_tier=0, mode="create",
+                               # _require_person above: a person's upload (843 exempts it).
+                               origin="person", version_note=f"uploaded {filename}"[:200])
             granted = None
             if grant_to:
                 granted = assign_skill_to_role(connection, project_id=project_id, actor=actor,

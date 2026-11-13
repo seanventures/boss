@@ -1,0 +1,51 @@
+/* The work tree (BOSSAPP-830/831): one tree of work items, status chips, a blocked-by badge,
+   and the row opened in place (status, done, blockers, stages, timeline). Tokens only. */
+.wt { display: flex; flex-direction: column; gap: 10px; }
+.wt-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wt-counts { display: inline-flex; gap: 10px; flex-wrap: wrap; font-size: var(--fs-meta); color: var(--muted); }
+.wt-new { min-width: 0; flex: 1 1 220px; max-width: 360px; }
+.wt-empty { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--fs-meta); }
+.wt-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); overflow: hidden; }
+.wt-rows > li + li { border-top: 1px solid var(--border); }
+.wt-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 10px; flex-wrap: wrap; }
+.wt-fold { display: inline-grid; place-items: center; width: 18px; height: 18px; border: 0; background: none;
+  color: var(--muted); cursor: pointer; padding: 0; flex: none; }
+.wt-open { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; flex: 1 1 200px; border: 0; background: none;
+  padding: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+.wt-open:hover .wt-title, .wt-open:focus-visible .wt-title { text-decoration: underline; text-underline-offset: 2px; }
+.wt-key { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); color: var(--faint); flex: none; }
+.wt-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wt-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: var(--fs-meta);
+  border: 1px solid var(--border); color: var(--muted); background: var(--surface); white-space: nowrap; }
+.wt-chip[data-s="active"] { color: var(--accent-text, var(--accent)); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.wt-chip[data-s="in_review"] { color: var(--amber-text, #9a6700); border-color: color-mix(in srgb, #d4a72c 55%, transparent); }
+.wt-chip[data-s="blocked"] { color: var(--red-text, #b42318); border-color: color-mix(in srgb, #d92d20 45%, transparent); }
+.wt-chip[data-s="done"] { color: var(--green-text, #067647); border-color: color-mix(in srgb, #12b76a 45%, transparent); }
+.wt-chip[data-s="cancelled"] { text-decoration: line-through; }
+.wt-blocked { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 6px; font-size: var(--fs-meta);
+  color: var(--red-text, #b42318); background: color-mix(in srgb, #d92d20 9%, transparent); white-space: nowrap; }
+.wt-label { font-size: var(--fs-meta); color: var(--muted); padding: 0 6px; border-radius: 6px; background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.wt-who { font-size: var(--fs-meta); color: var(--muted); margin-left: auto; }
+.wt-panel { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 14px 36px;
+  background: color-mix(in srgb, var(--ink) 3%, transparent); border-top: 1px dashed var(--border); }
+.wt-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wt-field { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--muted); }
+.wt-faint { font-size: var(--fs-meta); color: var(--faint); }
+.wt-desc { margin: 0; color: var(--muted); }
+.wt-feedback { margin: 0; font-size: var(--fs-meta); color: var(--amber-text, #9a6700); }
+.wt-said { margin: 0; font-size: var(--fs-meta); color: var(--muted); }
+.wt-policy summary { cursor: pointer; font-size: var(--fs-meta); color: var(--ink); }
+.wt-json { width: 100%; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); }
+.wt-timeline { margin: 0; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-meta); }
+.wt-timeline li { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.wt-ev { font-weight: 600; }
+.wt-timeline li[data-e="rejected"] .wt-ev, .wt-timeline li[data-e="escalated"] .wt-ev { color: var(--amber-text, #9a6700); }
+.wt-timeline li[data-e="completed"] .wt-ev, .wt-timeline li[data-e="approved"] .wt-ev { color: var(--green-text, #067647); }
+.wt-comment { color: var(--muted); font-style: italic; }
+@media (max-width: 560px) {
+  .wt-panel { padding-left: 14px; }
+  .wt-who { margin-left: 0; }
+  .wt-new { max-width: none; }
+}
+

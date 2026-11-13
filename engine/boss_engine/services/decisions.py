@@ -345,6 +345,7 @@ class DecisionService:
                        approved_by, approved_at, delegated_to, delegated_by,
                        delegated_at, revision_requested_by, revision_requested_at,
                        executed_by, executed_at, resolution_note, external_ref, via_delegate, via_delegation,
+                       form_schema, answer, answered_by, answered_at,
                        created_at, updated_at
                 FROM decisions
                 WHERE id = :decision_id
@@ -476,6 +477,7 @@ class DecisionService:
         system_policy: bool = False,
         content_hash: Optional[str] = None,
         settle_at: Optional[str] = None,
+        answer: Optional[dict] = None,
     ) -> dict:
         if action not in {"approve", "reject", "revise", "delegate", "execute", "settle"}:
             raise ValueError(f"Unsupported action: {action}")
@@ -735,6 +737,20 @@ class DecisionService:
 
                 _approvals.require_approval(connection, identity_ctx, row, content_hash=current_hash,
                                             delegated=delegated)
+            # A TYPED QUESTION IS ANSWERED WITH ITS FORM (BOSSAPP-832): the answer is validated
+            # against decisions.form_schema and written before the approval is, so an answer
+            # that does not fit refuses the whole approval (typed_forms.record_answer).
+            if answer is not None or (recommendation or {}).get("action") == "answer_form":
+                from . import typed_forms
+
+                try:
+                    with connection.begin_nested():
+                        form_row = {**row, "form_schema": connection.execute(text(
+                            "SELECT form_schema FROM decisions WHERE id = :id"),
+                            {"id": decision_id}).scalar()}
+                        typed_forms.record_answer(connection, form_row, answer, actor=actor)
+                except typed_forms.FormError as refused:
+                    raise InvalidDecisionTransitionError(str(refused)) from refused
             connection.execute(
                 text(
                     """
@@ -1045,6 +1061,19 @@ class DecisionService:
             except MultiRepoError as refused:
                 raise InvalidDecisionTransitionError(refused.message) from refused
             return
+        if action == "execution_stage":
+            # A REVIEW / APPROVAL STAGE PASSED (execution_policy, BOSSAPP-831): the next stage is
+            # raised, or the work item is done and what it blocked wakes.
+            self._answer_execution_stage(connection, row, verdict="approve", actor=actor, note=note)
+            return
+        if action == "answer_form":
+            # A TYPED QUESTION ANSWERED (typed_forms, BOSSAPP-832): accepted task suggestions
+            # become work items in this transaction, and the asking agent run resumes.
+            from . import typed_forms
+
+            typed_forms.on_answered(connection, self.settings, row, verdict="approve",
+                                    actor=actor, note=note)
+            return
         if action == "execute_agent_tool":
             # A high-risk agent tool call that was deferred for approval — run it now.
             from .agent_loop import execute_agent_tool
@@ -1295,12 +1324,34 @@ class DecisionService:
             from .governed_host_deploy import on_decision_approved as approve_host
 
             approve_host(connection, self.settings, row, actor)
-        elif action == "activate_authored_skill":
-            # The draft the card showed becomes the skill other agents can run. Until this, a
-            # create is stored disabled and an update has not been written.
-            from .skill_definitions import activate_authored_skill
+        elif action == "review_tool_change":
+            # A changed MCP tool a person looked at (BOSSAPP-818): its quarantine is cleared and
+            # the definition the card showed becomes the accepted one (reviewer recorded on the
+            # tool). Refused, approval not recorded, when the server changed it again since.
+            from .mcp_registry import McpServerError, accept_tool_change, tool_change_server_id
 
-            activate_authored_skill(connection, row, actor)
+            server_id = tool_change_server_id(connection, str(row["project_id"]), recommendation)
+            try:
+                # A server deleted since leaves nothing to clear; the approval still stands.
+                if server_id:
+                    accept_tool_change(
+                        connection, str(row["project_id"]), server_id,
+                        str(recommendation.get("tool") or ""), actor=actor,
+                        schema_sha256=recommendation.get("schema_sha256"),
+                        description_sha256=recommendation.get("description_sha256"),
+                        decision_id=str(row["id"]))
+            except McpServerError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "activate_authored_skill":
+            # The draft the card showed becomes the skill other agents can run. Until this,
+            # nothing is written: the draft is a diff-bound consent (change_consent, 843), and
+            # a skill changed since the draft refuses rather than writing another diff.
+            from .skill_definitions import ConsentStale, activate_authored_skill
+
+            try:
+                activate_authored_skill(connection, row, actor)
+            except ConsentStale as stale:
+                raise InvalidDecisionTransitionError(str(stale)) from stale
         elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
             # A paid call whose outcome was never settled. Approving settles it: a reply the
             # receipt holds is recorded (usage and cost) and replayed by the step, never paid
@@ -1313,6 +1364,18 @@ class DecisionService:
                 on_reconciliation_approved(connection, self.settings, row, actor)
             except ReconciliationRefused as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
+
+    def _answer_execution_stage(self, connection: Connection, row: dict[str, Any], *,
+                                verdict: str, actor: str, note: Optional[str]) -> None:
+        """One door for a stage's answer, whichever button (execution_policy.on_stage_answered).
+        A stage that needs a comment and got none refuses the answer, so nothing is recorded."""
+        from . import execution_policy
+
+        try:
+            execution_policy.on_stage_answered(connection, self.settings, row, verdict=verdict,
+                                               actor=actor, note=note)
+        except execution_policy.PolicyError as refused:
+            raise InvalidDecisionTransitionError(str(refused)) from refused
 
     def _handle_rejected_follow_on(
         self, connection: Connection, row: dict[str, Any], *, actor: str
@@ -1347,6 +1410,21 @@ class DecisionService:
             from .governed_host_deploy import on_decision_not_approved as refuse_host
 
             refuse_host(connection, self.settings, row, actor, "rejected")
+        elif rec.get("action") == "review_tool_change":
+            # A changed MCP tool refused (BOSSAPP-818): it stays quarantined and is turned Off.
+            # A server deleted since leaves nothing to turn off.
+            from .mcp_registry import refuse_tool_change, tool_change_server_id
+
+            server_id = tool_change_server_id(connection, str(row["project_id"]), rec)
+            if server_id:
+                refuse_tool_change(connection, str(row["project_id"]), server_id,
+                                   str(rec.get("tool") or ""), actor=actor,
+                                   decision_id=str(row["id"]))
+        elif (row["recommendation"] or {}).get("action") == "activate_authored_skill":
+            # A refused draft's consent can never be spent (change_consent, BOSSAPP-843).
+            from .change_consent import reject_for_decision
+
+            reject_for_decision(connection, str(row["id"]), actor)
 
     def _handle_non_approved_follow_on(
         self,
@@ -1359,6 +1437,19 @@ class DecisionService:
     ) -> None:
         recommendation = row["recommendation"] or {}
         recommendation_action = recommendation.get("action")
+        if recommendation_action == "execution_stage":
+            # Sent back (reject or request changes): the work returns to its worker with the
+            # comment, or — at the stage's max_rounds — escalates to the responsible person.
+            self._answer_execution_stage(connection, row, verdict=action, actor=actor, note=note)
+            return
+        from . import typed_forms
+
+        if recommendation_action == typed_forms.ACTION and action == "reject":
+            # Declined: the asking agent run resumes, told the person declined and why. (A form
+            # is never sent back for changes, so it is not in REVISE_CONSUMED.)
+            typed_forms.on_answered(connection, self.settings, row, verdict=action, actor=actor,
+                                    note=note)
+            return
         if recommendation_action == "approve_change_set":
             # Send back: every PR of the set gets a fix build from the note, and the set is asked
             # again. Reject: the set stops; nothing merges, nothing deploys.

@@ -84,7 +84,8 @@ skills:
     description: >-
       Keep a program you just ran, so the next run of this workflow reuses it instead of writing
       it again. Give it a key, a one-line summary and the inputs it expects. Only save something
-      that worked and that would work again on different input.
+      that worked and that would work again on different input. It is kept once a person
+      approves the program (BOSS opens that decision for you); until then it is not reusable.
     data_boundary: internal
     input_schema:
       skill_key: string

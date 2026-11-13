@@ -17,6 +17,13 @@ WHAT IS LEFT OUT, AND WHY
 
 The file carries resolved auth headers, so it is written 0600 in a private temporary directory
 and removed when the run ends (`HarnessMcp.cleanup`).
+
+WITH THE MCP GATEWAY (BOSS_MCP_GATEWAY=on, BOSSAPP-814 — mcp_gateway.py). Every server in the
+file is `http://127.0.0.1:<port>/v1/mcp-gateway/<run token>/<server>`, with no upstream sign-in
+in it, plus `boss_run` (the run's own ask/report tools). Ask tools and unreviewed servers are no
+longer left out: the gateway parks each such call on a decision a person answers. Off and
+ungranted tools stay `--disallowedTools`. Off (the default), the file is byte for byte what it
+was before the gateway existed.
 """
 from __future__ import annotations
 
@@ -38,14 +45,37 @@ class HarnessMcp:
     path: str
     servers: list[str]
     disallowed: list[str] = field(default_factory=list)
+    #: The MCP gateway's run token when the file points at the gateway (BOSSAPP-814), else "".
+    gateway_token: str = field(default="", repr=False)
 
     def argv(self) -> list[str]:
+        self.bind_session()
         if not self.path:
             return ["--strict-mcp-config"]
         out = ["--strict-mcp-config", "--mcp-config", self.path]
         if self.disallowed:
             out += ["--disallowedTools", ",".join(self.disallowed)]
         return out
+
+    def bind_session(self) -> None:
+        """Bind the gateway token to the run whose session is starting (the llm context names
+        it), so its asks, receipts, events and stage-clock pauses are that run's. The token is
+        written before the run is known on the governed path; the first session binds it."""
+        if not self.gateway_token:
+            return
+        from . import mcp_gateway
+        from .llm_telemetry import get_llm_context
+
+        mcp_gateway.get().bind_run(self.gateway_token, get_llm_context().get("run_id"))
+
+    def env(self) -> dict[str, str]:
+        """What the harness's environment needs for this file: with the gateway, an MCP tool
+        timeout past the longest a parked call may wait (Claude Code's MCP_TOOL_TIMEOUT, ms)."""
+        if not self.gateway_token:
+            return {}
+        from .mcp_gateway import ask_timeout_seconds
+
+        return {"MCP_TOOL_TIMEOUT": str(int((ask_timeout_seconds() + 300) * 1000))}
 
     def move_into(self, sandbox: Any) -> None:
         """Into the run's sandbox directory (sandbox_identity): the agent runs as the run's uid
@@ -63,6 +93,10 @@ class HarnessMcp:
         self.path = target
 
     def cleanup(self) -> None:
+        if self.gateway_token:
+            from . import mcp_gateway
+
+            mcp_gateway.get().revoke(self.gateway_token)
         if self.path:
             shutil.rmtree(os.path.dirname(self.path), ignore_errors=True)
             from .resource_ledger import release_dir
@@ -80,22 +114,30 @@ def _cli_name(server_name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", server_name).strip("_") or "server"
 
 
-def plan(connection: Connection, settings: Any, project_id: str, role_key: str
-         ) -> dict[str, Any]:
-    """{servers: {name: {type, url, headers}}, disallowed: [...]} for one agent. No file."""
+def plan(connection: Connection, settings: Any, project_id: str, role_key: str,
+         *, gateway: bool = False) -> dict[str, Any]:
+    """{servers: {name: {type, url, headers}}, disallowed: [...]} for one agent. No file.
+
+    With `gateway` (BOSSAPP-814) an Ask tool is no longer disallowed and an unreviewed server is
+    no longer left out: every call reaches the MCP gateway, which parks it for a person. Off and
+    ungranted tools stay disallowed. The result also carries `gateway_servers`
+    ({name: {server_id, granted_tools}}) for the gateway's grant."""
     from .agents import held_mcp_servers
     from .mcp_registry import auth_headers, needs_person, tool_policy
 
     servers: dict[str, Any] = {}
     disallowed: list[str] = []
+    gateway_servers: dict[str, Any] = {}
     for server in held_mcp_servers(connection, project_id, role_key):
-        if server.get("reachable") is False or needs_person(server):
+        if server.get("reachable") is False or (needs_person(server) and not gateway):
             continue
         name = _cli_name(str(server["name"]))
         granted = set(server.get("granted_tools") or [])
         known = [str(t.get("name")) for t in server.get("tools") or [] if t.get("name")]
         for tool in known:
-            if (granted and tool not in granted) or tool_policy(server, tool) != "allow":
+            policy = tool_policy(server, tool)
+            if (granted and tool not in granted) or (
+                    policy == "off" if gateway else policy != "allow"):
                 disallowed.append(f"mcp__{name}__{tool}")
         if known and all(f"mcp__{name}__{t}" in disallowed for t in known):
             continue  # nothing on it the harness may call
@@ -109,24 +151,68 @@ def plan(connection: Connection, settings: Any, project_id: str, role_key: str
             headers = refuse_passthrough(headers or {})
         except Exception:  # noqa: BLE001 — a token that cannot be read, or a BOSS credential: leave it out
             continue
+        if gateway:
+            # THE GATEWAY SIGNS IN at call time (mcp_registry.auth_headers): the file carries
+            # no upstream credential at all, only the gateway's URL for this server.
+            gateway_servers[name] = {"server_id": str(server["id"]),
+                                     "granted_tools": sorted(granted)}
+            servers[name] = {"type": "http", "url": ""}
+            continue
         servers[name] = {"type": "http", "url": server["url"], **({"headers": headers}
                                                                   if headers else {})}
-    return {"servers": servers,
-            "disallowed": sorted(d for d in disallowed if d.split("__")[1] in servers)}
+    out = {"servers": servers,
+           "disallowed": sorted(d for d in disallowed if d.split("__")[1] in servers)}
+    if gateway:
+        out["gateway_servers"] = gateway_servers
+    return out
+
+
+def _gateway_plan(connection: Connection, settings: Any, project_id: str, role: str,
+                  run_id: Optional[str]) -> tuple[dict[str, Any], str]:
+    """The planned servers pointed at the MCP gateway, plus the run's own `boss_run` tools;
+    returns (planned, gateway token)."""
+    from . import mcp_gateway, model_proxy
+
+    planned = (plan(connection, settings, project_id, role, gateway=True) if role
+               else {"servers": {}, "disallowed": [], "gateway_servers": {}})
+    held = {k: v for k, v in planned["gateway_servers"].items() if k != mcp_gateway.RUN_SERVER}
+    gateway = mcp_gateway.get()
+    # No run named here (the governed path writes the file before the run's context is set,
+    # and a worker thread's context may still name its previous run): the first session binds
+    # it (HarnessMcp.bind_session).
+    token, base = gateway.issue(project_id, held, role_key=role or None, run_id=run_id,
+                                ttl=model_proxy.session_ttl(settings))
+    servers = {name: {"type": "http", "url": f"{base}/{name}"} for name in held}
+    servers[mcp_gateway.RUN_SERVER] = {"type": "http",
+                                       "url": f"{base}/{mcp_gateway.RUN_SERVER}"}
+    planned = {**planned, "servers": servers,
+               "disallowed": [d for d in planned["disallowed"]
+                              if d.split("__")[1] in servers]}
+    return planned, token
 
 
 def prepare(connection: Connection, settings: Any, project_id: str,
-            role_key: Optional[str]) -> Optional[HarnessMcp]:
+            role_key: Optional[str], *, run_id: Optional[str] = None) -> Optional[HarnessMcp]:
     """Write the run's mcp.json, or None for a task not run as an agent.
 
     An agent holding nothing usable gets `--strict-mcp-config` and no config at all, so the
-    harness does not fall back on whatever its own home directory configures."""
+    harness does not fall back on whatever its own home directory configures.
+
+    BOSS_MCP_GATEWAY=on (mcp_gateway): every server in the file is the gateway, and every
+    session — run as an agent or not — also gets the run's own `boss_run` tools (ask a person,
+    report blocked/progress, propose a follow-up). Off: exactly the file it always wrote."""
+    from . import mcp_gateway
+
     role = str(role_key or "").strip().lower()
-    if not role:
-        return None
-    planned = plan(connection, settings, project_id, role)
-    if not planned["servers"]:
-        return HarnessMcp(path="", servers=[])
+    token = ""
+    if mcp_gateway.enabled():
+        planned, token = _gateway_plan(connection, settings, project_id, role, run_id)
+    else:
+        if not role:
+            return None
+        planned = plan(connection, settings, project_id, role)
+        if not planned["servers"]:
+            return HarnessMcp(path="", servers=[])
     from .sandbox_identity import current as _sandbox
 
     sandbox = _sandbox()
@@ -145,4 +231,4 @@ def prepare(connection: Connection, settings: Any, project_id: str,
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         json.dump({"mcpServers": planned["servers"]}, handle)
     return HarnessMcp(path=path, servers=sorted(planned["servers"]),
-                      disallowed=planned["disallowed"])
+                      disallowed=planned["disallowed"], gateway_token=token)

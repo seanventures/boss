@@ -81,6 +81,12 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "waive_gates": {"run_id": CODE_TASK},
     "watch_code_task": {"run_id": CODE_TASK},
     "wait_for": {"id": ("job", CODE_TASK, "workflow_run")},
+    # The work-item graph (BOSSAPP-830/832).
+    "ask_human": {"work_item_id": "work_item"},
+    "complete_work_item": {"item_id": "work_item"},
+    "create_work_item": {"parent_id": "work_item"},
+    "link_work_items": {"item_id": "work_item", "other_id": "work_item"},
+    "list_work_items": {"item_id": "work_item"},
 }
 
 #: tool -> {argument: why it cannot reach another project}. `project_id` is never listed: the
@@ -101,6 +107,8 @@ UNCONFINED: dict[str, dict[str, str]] = {
     "skip_workflow_step": {"step_id": "a step of the (confined) run_id"},
     "system_doctor_act": {"finding_id": "an install-wide health finding; the tool needs "
                                         "system:operate, an install-level permission"},
+    "create_work_item": {"goal_id": "read only WHERE project_id = the call's project "
+                                    "(work_items._check_goal): another project's goal is not found"},
 }
 
 #: Deploying tools: where the target comes from (the same rule the deploy routes declare).

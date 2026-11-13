@@ -203,8 +203,27 @@ def _authored_skill(
         return None
 
 
+def behaviour_executor(behaviour: str) -> Optional[Callable[..., dict[str, Any]]]:
+    """The executor an authored skill of `behaviour` runs through (as resolve_executor picks it),
+    for a caller that holds the content itself — a version-pinned test run (skill_tests)."""
+    return _EXECUTORS.get(f"skill.{str(behaviour or '').strip()}")
+
+
 def registered_executor_ids() -> tuple[str, ...]:
     return tuple(sorted(_EXECUTORS))
+
+
+def _as_held(context: "SkillExecutorContext", skill: dict[str, Any]) -> dict[str, Any]:
+    """The authored skill as THIS caller runs it: a version pin on its grant wins
+    (role_skills.pinned_version_id, BOSSAPP-842); a test run's chosen version wins over both
+    (skill_tests, BOSSAPP-844)."""
+    from .skill_versions import VERSION_OVERRIDE, as_held_by, snapshot
+
+    info = getattr(context.connection, "info", None)
+    override = info.get(VERSION_OVERRIDE) if isinstance(info, dict) else None
+    if override and override.get("skill_key") == skill.get("skill_key"):
+        return {**skill, **snapshot(override["content"])}
+    return as_held_by(context.connection, context.project_id, skill, context.caller)
 
 
 def _required_text(inputs: dict[str, Any], key: str) -> str:
@@ -739,6 +758,7 @@ def execute_sandboxed_command(
         # Fail closed: a disabled skill that no-ops would let a workflow appear to run and do
         # nothing, which is the failure mode `validate_custom_step` already refuses to allow.
         raise SkillExecutorConfigurationError(f"skill {skill_key!r} is disabled.")
+    skill = _as_held(context, skill)
 
     config = skill["config"]
     ready, why = _isolation_available(context.settings)
@@ -1022,6 +1042,7 @@ def execute_guide(
         raise SkillExecutorConfigurationError(f"no skill {skill_key!r} in this project.")
     if not skill["enabled"]:
         raise SkillExecutorConfigurationError(f"skill {skill_key!r} is disabled.")
+    skill = _as_held(context, skill)
     body = str(skill.get("knowledge") or "")
     refused = trusted(body)
     if refused:
@@ -1051,6 +1072,7 @@ def execute_agent_program(
         raise SkillExecutorConfigurationError(f"no skill {skill_key!r} in this project.")
     if not skill["enabled"]:
         raise SkillExecutorConfigurationError(f"skill {skill_key!r} is disabled.")
+    skill = _as_held(context, skill)
 
     config = skill["config"] or {}
     missing = [entry["name"] for entry in skill["inputs"]
@@ -1111,13 +1133,15 @@ def execute_code_remember(
     IT IS NOT AUTOMATICALLY GIVEN TO ANYBODY. Saving records the program; the grant is still a
     separate, explicit act. An agent cannot widen its own reach by writing code.
     """
-    from .skill_definitions import SkillDefinitionError, save_skill
+    from .skill_definitions import SkillDefinitionError, draft_for_approval
 
     key = _required_text(inputs, "skill_key")
     language = str(inputs.get("language") or "python").strip().lower()
     source = str(inputs.get("source") or "")
     try:
-        saved = save_skill(
+        # AN AGENT'S SAVE IS A PROPOSAL (BOSSAPP-843): the program is kept as a diff-bound
+        # consent and written when a person approves exactly it — never saved by the agent.
+        drafted = draft_for_approval(
             context.connection,
             project_id=context.project_id,
             actor=context.actor,
@@ -1142,12 +1166,14 @@ def execute_code_remember(
             # person. Storing the passed tier is how the click disappears: 1 saves a
             # program that later runs unattended. A higher tier is kept.
             risk_tier=_remembered_risk_tier(inputs),
-            trusted=False,
+            mode="upsert",
         )
     except SkillDefinitionError as error:
         raise SkillExecutorConfigurationError(str(error)) from error
-    return {"skill_key": key, "saved": True, "version": saved.get("updated_at"),
-            "note": "kept for the next run. Somebody still has to give it to an agent."}
+    return {"skill_key": key, "saved": False, "status": "pending",
+            "decision_id": drafted.get("decision_id"),
+            "note": "proposed for the next run: kept once a person approves the program "
+                    "(the decision shows it). Somebody still has to give it to an agent."}
 
 
 # ---------------------------------------------------------------------------

@@ -102,6 +102,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/hardware.ts#registerHardwareProvider": "host:manage",      // POST /v1/hardware/places/providers
   // lib/add-server.ts — Infra › Add a server
   "lib/add-server.ts#createServer": "host:manage",                // POST /v1/servers (step-up)
+  // lib/work-items.ts — Project › Work › Tree (BOSSAPP-830/831)
+  "lib/work-items.ts#createItem": "work_item:manage",             // POST /v1/work-items
+  "lib/work-items.ts#updateItem": "work_item:manage",             // PATCH /v1/work-items/{id}
+  "lib/work-items.ts#completeItem": "work_item:manage",           // POST …/{id}/complete
+  "lib/work-items.ts#relateItem": "work_item:manage",             // POST …/{id}/relations
   // lib/watch-app.ts — Project › Health › Watch this app
   "lib/watch-app.ts#startWatching": "observability:manage",       // POST /v1/projects/{id}/watch
   "lib/watch-app.ts#verifyChannel": "observability:manage",       // POST …/watch/{target}/verify
@@ -208,6 +213,10 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     "/v1/alert-rules/": "observability:manage",
     // The incident card's "Tell reporters": POST …/incidents/{id}/tell-reporters.
     "/v1/reliability/incidents/": "reliability:respond",
+    // The work tree (lib/work-items.ts, BOSSAPP-830): every change to the graph.
+    "/v1/work-items": "work_item:manage",
+    // A typed question's Send answer / Decline (app/typed-form-ui.tsx, BOSSAPP-832).
+    "/v1/decisions/": "decision:approve",
   },
 };
 
@@ -225,6 +234,8 @@ export const INLINE_WRITES: Readonly<Record<string, readonly WriteGate[]>> = {
   "app/sandboxes-ui.tsx": ["sandbox:exec"],                        // POST /v1/sandboxes/{id}/exec
   "app/setup/capacity-row.tsx": ["entitlement:manage"],            // /v1/entitlements/…
   "app/skills/skill-drawer.tsx": ["skill:manage", "agent_ability:assign"], // /api/skills enable/disable/delete, assign
+  "app/skills/skill-history.tsx": ["skill:manage", "skill:invoke"], // /api/skill-supply restore/publish/cases/grade, run_tests
+  "app/skills/skill-source-import.tsx": ["skill:manage"],         // /api/skill-supply preview_source/import_source
   "app/skills/youtube-connection.tsx": ["integration:manage"],     // /v1/channels/youtube/*
   "app/workflows/captain-can-run-it.tsx": ["agent_ability:assign"], // /api/skills assign → POST /v1/role-skills
   "app/workflows/editor/define-step-modal.tsx": ["workflow:create"], // custom-steps POST/PATCH
