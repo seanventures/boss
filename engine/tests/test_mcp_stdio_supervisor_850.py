@@ -22,10 +22,15 @@ from boss_engine.services import mcp_registry, mcp_stdio_supervisor as sup
 from boss_engine.services import mcp_stdio_templates as templates
 from boss_engine.services.mcp_client import MCPClient
 
-from ._p29b_support import drop, echo_template, fresh_engine, make_project, subprocess_runtime  # noqa: F401
+from ._p29b_support import drop, echo_template, fresh_engine, make_project, stdio_runtime
 
 PROJECT = "proj_stdio_a"
 OTHER = "proj_stdio_b"
+
+
+@pytest.fixture
+def subprocess_runtime(monkeypatch):
+    yield from stdio_runtime(monkeypatch)
 
 
 @pytest.fixture(scope="module")

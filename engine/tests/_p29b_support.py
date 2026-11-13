@@ -74,9 +74,9 @@ def echo_template(name: str = "echo", **over) -> dict:
     return fields
 
 
-@pytest.fixture
-def subprocess_runtime(monkeypatch):
-    """The supervisor's TEST-ONLY unsandboxed mode, and every instance stopped after."""
+def stdio_runtime(monkeypatch):
+    """The supervisor's TEST-ONLY unsandboxed mode, and every instance stopped after. A
+    generator: each module's `subprocess_runtime` fixture yields from it."""
     from boss_engine.services import mcp_client, mcp_stdio_supervisor
 
     monkeypatch.setenv(mcp_stdio_supervisor.RUNTIME_ENV, "subprocess")
