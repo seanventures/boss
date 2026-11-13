@@ -22,6 +22,7 @@ import { DeploysTab } from "./deploys";
 import { PreviewsTab } from "./previews";
 import { CloudTab } from "./cloud";
 import { PluginsTab } from "./plugins";
+import { ExtensionsTab } from "./extensions";
 import "./infra.css";
 import "../observability/obs.css";
 
@@ -70,6 +71,7 @@ export function InfraHome({ projectId, actor, orgId }: { projectId: string; acto
     previews: <PreviewsTab {...props} />,
     cloud: <CloudTab {...props} />,
     plugins: <PluginsTab {...props} />,
+    extensions: <ExtensionsTab {...props} />,
   };
 
   return (
