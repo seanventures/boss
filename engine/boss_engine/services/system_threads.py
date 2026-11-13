@@ -10,6 +10,7 @@ a job and is blind while one runs, which is exactly when the host needs watching
   (resource_reaper);
 * the Claude login refresher: the ONE owner that refreshes the Claude CLI's own login, well
   before it expires, so no `claude` process ever refreshes (and wipes) it (claude_login);
+* the skill-source sync (skill_sources): upstream skill changes become versions or consents;
 * the system doctor: signals → findings → safe automatic fixes, choices on a card, the
   degradation rung admission and Metatron obey (system_doctor).
 """
@@ -81,4 +82,13 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("system doctor not started", exc_info=True)
         started["system_doctor"] = False
+    try:
+        # Skill sources (BOSSAPP-841): upstream changes become new versions or parked consents.
+        from . import skill_sources
+
+        skill_sources.start(engine, settings)
+        started["skill_sources"] = True
+    except Exception:  # noqa: BLE001
+        _log.warning("skill source sync not started", exc_info=True)
+        started["skill_sources"] = False
     return started
