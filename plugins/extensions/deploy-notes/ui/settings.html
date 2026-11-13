@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font: 13px/1.4 system-ui, sans-serif; margin: 0; padding: 8px 10px; color: #1f2328; background: transparent; }
+  code { font-size: 12px; }
+  @media (prefers-color-scheme: dark) { body { color: #e6edf3; } }
+</style>
+</head>
+<body>
+<p>Deploy notes keeps up to 50 notes per project. Post <code>{"note": "..."}</code> to its
+<code>deploy</code> webhook, signed with the hook's secret, to add one from CI.</p>
+<p id="ver"></p>
+<script>
+  window.bossExt.getContext().then(function (ctx) {
+    document.getElementById("ver").textContent = "Version " + ctx.version;
+    window.bossExt.resize(document.documentElement.scrollHeight);
+  });
+</script>
+</body>
+</html>
