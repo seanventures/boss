@@ -476,6 +476,7 @@ class DecisionService:
         system_policy: bool = False,
         content_hash: Optional[str] = None,
         settle_at: Optional[str] = None,
+        answer: Optional[dict] = None,
     ) -> dict:
         if action not in {"approve", "reject", "revise", "delegate", "execute", "settle"}:
             raise ValueError(f"Unsupported action: {action}")
@@ -735,6 +736,20 @@ class DecisionService:
 
                 _approvals.require_approval(connection, identity_ctx, row, content_hash=current_hash,
                                             delegated=delegated)
+            # A TYPED QUESTION IS ANSWERED WITH ITS FORM (BOSSAPP-832): the answer is validated
+            # against decisions.form_schema and written before the approval is, so an answer
+            # that does not fit refuses the whole approval (typed_forms.record_answer).
+            if answer is not None or (recommendation or {}).get("action") == "answer_form":
+                from . import typed_forms
+
+                try:
+                    with connection.begin_nested():
+                        form_row = {**row, "form_schema": connection.execute(text(
+                            "SELECT form_schema FROM decisions WHERE id = :id"),
+                            {"id": decision_id}).scalar()}
+                        typed_forms.record_answer(connection, form_row, answer, actor=actor)
+                except typed_forms.FormError as refused:
+                    raise InvalidDecisionTransitionError(str(refused)) from refused
             connection.execute(
                 text(
                     """
@@ -1045,6 +1060,19 @@ class DecisionService:
             except MultiRepoError as refused:
                 raise InvalidDecisionTransitionError(refused.message) from refused
             return
+        if action == "execution_stage":
+            # A REVIEW / APPROVAL STAGE PASSED (execution_policy, BOSSAPP-831): the next stage is
+            # raised, or the work item is done and what it blocked wakes.
+            self._answer_execution_stage(connection, row, verdict="approve", actor=actor, note=note)
+            return
+        if action == "answer_form":
+            # A TYPED QUESTION ANSWERED (typed_forms, BOSSAPP-832): accepted task suggestions
+            # become work items in this transaction, and the asking agent run resumes.
+            from . import typed_forms
+
+            typed_forms.on_answered(connection, self.settings, row, verdict="approve",
+                                    actor=actor, note=note)
+            return
         if action == "execute_agent_tool":
             # A high-risk agent tool call that was deferred for approval — run it now.
             from .agent_loop import execute_agent_tool
@@ -1314,6 +1342,18 @@ class DecisionService:
             except ReconciliationRefused as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
 
+    def _answer_execution_stage(self, connection: Connection, row: dict[str, Any], *,
+                                verdict: str, actor: str, note: Optional[str]) -> None:
+        """One door for a stage's answer, whichever button (execution_policy.on_stage_answered).
+        A stage that needs a comment and got none refuses the answer, so nothing is recorded."""
+        from . import execution_policy
+
+        try:
+            execution_policy.on_stage_answered(connection, self.settings, row, verdict=verdict,
+                                               actor=actor, note=note)
+        except execution_policy.PolicyError as refused:
+            raise InvalidDecisionTransitionError(str(refused)) from refused
+
     def _handle_rejected_follow_on(
         self, connection: Connection, row: dict[str, Any], *, actor: str
     ) -> None:
@@ -1359,6 +1399,19 @@ class DecisionService:
     ) -> None:
         recommendation = row["recommendation"] or {}
         recommendation_action = recommendation.get("action")
+        if recommendation_action == "execution_stage":
+            # Sent back (reject or request changes): the work returns to its worker with the
+            # comment, or — at the stage's max_rounds — escalates to the responsible person.
+            self._answer_execution_stage(connection, row, verdict=action, actor=actor, note=note)
+            return
+        from . import typed_forms
+
+        if recommendation_action == typed_forms.ACTION and action == "reject":
+            # Declined: the asking agent run resumes, told the person declined and why. (A form
+            # is never sent back for changes, so it is not in REVISE_CONSUMED.)
+            typed_forms.on_answered(connection, self.settings, row, verdict=action, actor=actor,
+                                    note=note)
+            return
         if recommendation_action == "approve_change_set":
             # Send back: every PR of the set gets a fix build from the note, and the set is asked
             # again. Reject: the set stops; nothing merges, nothing deploys.

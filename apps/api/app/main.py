@@ -3360,7 +3360,25 @@ def decision_card_from_row(row, connection=None, project_id: Optional[str] = Non
         **decision_actions.describe(row),
         prd=prd,
         held=held,
+        **_decision_form(row, rec, connection),
     )
+
+
+def _decision_form(row, rec, connection) -> dict:
+    """A typed question's form and answer (BOSSAPP-832). Read only for a form decision, so the
+    inbox's own SELECT need not carry the columns."""
+    if not isinstance(rec, dict) or rec.get("action") != "answer_form":
+        return {}
+    form = {k: row.get(k) for k in ("form_schema", "answer", "answered_by", "answered_at")}
+    if "form_schema" not in row and connection is not None:
+        found = connection.execute(text(
+            "SELECT form_schema, answer, answered_by, answered_at FROM decisions WHERE id = :id"),
+            {"id": row["id"]}).mappings().first()
+        form = dict(found) if found else form
+    at = form.get("answered_at")
+    return {"form_schema": form.get("form_schema"), "answer": form.get("answer"),
+            "answered_by": form.get("answered_by"),
+            "answered_at": at.isoformat() if hasattr(at, "isoformat") else at}
 
 
 def self_improvement_summary_from_row(row) -> SelfImprovementProposalSummary:
@@ -24238,6 +24256,8 @@ def approve_decision_in(connection, decision_id: str, payload: DecisionActionReq
             # A person overriding the merge gate (CI failed or could not be read), with the
             # note transition() requires. Never a deploy: ci_gate refuses a forced deploy.
             force=payload.force,
+            # A typed question's answer (BOSSAPP-832), validated against its form.
+            answer=payload.answer,
         )
     except DecisionNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error

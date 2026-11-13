@@ -1913,7 +1913,11 @@ AGENT_TOOL_PERMISSIONS: dict[str, str] = {
     "create_followup_task": "work_item:manage",
     "open_incident": "reliability:respond",
     "publish_document": "github:sync",
+    # A typed question to a person (typed_forms, BOSSAPP-832); its answer may create work items.
+    "ask_human": "work_item:manage",
 }
+#: The native typed-question tool (typed_forms.ASK_HUMAN_SCHEMA); offered to unbounded runs.
+_ASK_HUMAN = "ask_human"
 
 
 def _agent_tool_permission(name: str, *, mcp_map: dict, repo_map: dict, skill_map: dict,
@@ -1978,6 +1982,12 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         return {"status": run["status"], "run_id": run_id}
     project_id = run["project_id"]
     pending = run["pending"] or {}
+    if pending.get("kind") == "ask_human":
+        # A TYPED QUESTION, answered or declined (BOSSAPP-832): nothing is executed; the typed
+        # answer replaces the parked result and arrives as a structured user message.
+        from .typed_forms import resume_with_answer
+
+        return resume_with_answer(connection, settings, run)
     # Governance invariant: deferred high-risk tools only execute after the linked
     # Decision is approved. The HTTP resume endpoint is worker-facing and historically
     # had no actor check — without this gate, anyone who knew a suspended run_id could
@@ -2338,7 +2348,10 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     # the grant lists any. Before that table existed a bounded run got no MCP tool at all, so an
     # agent could not be given "post to our Mattermost" short of authoring a skill per tool.
     bounded = isinstance(finalize_ctx.get("agent_step"), dict)
-    schemas = [] if bounded else _native_tool_schemas(settings) + list(_WRITE_SCHEMAS)
+    from .typed_forms import ASK_HUMAN_SCHEMA
+
+    schemas = [] if bounded else (_native_tool_schemas(settings) + list(_WRITE_SCHEMAS)
+                                  + [ASK_HUMAN_SCHEMA])
     occupied = {
         str(schema["function"]["name"])
         for schema in schemas
@@ -2628,6 +2641,29 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         run_id,
                         {"skill_id": requested_id, "step": step},
                     )
+            elif name == _ASK_HUMAN and not bounded and deferred is None:
+                # A TYPED QUESTION (BOSSAPP-832): a form decision is raised and the run parks
+                # until it is answered; resume_agent_run hands the typed answer back.
+                from .typed_forms import FormError, ask_human
+
+                try:
+                    with connection.begin_nested():
+                        asked = ask_human(
+                            connection, project_id=project_id,
+                            question=str(args.get("question") or ""), form=args.get("fields"),
+                            asker=f"agent_run:{run_id}", run_id=run_id,
+                            work_item_id=str(args.get("work_item_id") or "") or None,
+                            task_id=task_id, context=str(args.get("context") or ""))
+                except (FormError, LookupError) as refused:
+                    result = {"status": "refused", "error": str(refused)}
+                else:
+                    result = {"status": "deferred_for_approval",
+                              "decision_id": asked["decision_id"],
+                              "message": "Your question is with a person; the run resumes with "
+                                         "their typed answer."}
+                    is_deferred = True
+                    deferred = {"tool": name, "args": args, "decision_id": asked["decision_id"],
+                                "kind": "ask_human"}
             elif name in mcp_map:
                 server, tool = mcp_map[name]
                 tool_name = str(tool.get("name") or "tool")
