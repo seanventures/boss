@@ -321,6 +321,10 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(toolchain_images_router)
     except ImportError:
         pass
+    # BOSSAPP-837 — project and org export / import (secrets as placeholders)
+    from .portability import router as portability_router
+
+    app.include_router(portability_router)
 
     # Agent-wide OSS key management (KMS)
     try:

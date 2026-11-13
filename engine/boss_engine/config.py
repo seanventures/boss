@@ -86,6 +86,22 @@ class Settings(BaseSettings):
     workspace_seed_ttl_hours: int = Field(
         default=24 * 7, alias="BOSS_WORKSPACE_SEED_TTL_HOURS", ge=1, le=24 * 30
     )
+    # SCHEDULED SELF-BACKUPS (BOSSAPP-838, services/backup_scheduler.py). Off unless the install
+    # turns it on (community-compose.yml does, writing into the boss_community_backups volume).
+    backup_schedule_enabled: bool = Field(default=False, alias="BOSS_BACKUP_SCHEDULE_ENABLED")
+    backup_interval_minutes: int = Field(
+        default=60, alias="BOSS_BACKUP_INTERVAL_MINUTES", ge=5, le=7 * 24 * 60
+    )
+    backup_dir: str = Field(default="/var/lib/boss/backups", alias="BOSS_BACKUP_DIR")
+    backup_keep_hourly: int = Field(default=24, alias="BOSS_BACKUP_KEEP_HOURLY", ge=1)
+    backup_keep_daily: int = Field(default=7, alias="BOSS_BACKUP_KEEP_DAILY", ge=0)
+    backup_keep_weekly: int = Field(default=4, alias="BOSS_BACKUP_KEEP_WEEKLY", ge=0)
+    backup_keep_monthly: int = Field(default=6, alias="BOSS_BACKUP_KEEP_MONTHLY", ge=0)
+    # Upload each verified dump to S3_BUCKET (S3_ENDPOINT for MinIO) under this prefix.
+    backup_s3_upload: bool = Field(default=False, alias="BOSS_BACKUP_S3_UPLOAD")
+    backup_s3_prefix: str = Field(default="boss-backups", alias="BOSS_BACKUP_S3_PREFIX")
+    backup_pg_dump: str = Field(default="pg_dump", alias="BOSS_BACKUP_PG_DUMP")
+    backup_pg_restore: str = Field(default="pg_restore", alias="BOSS_BACKUP_PG_RESTORE")
     temporal_address: Optional[str] = Field(default=None, alias="TEMPORAL_ADDRESS")
     temporal_namespace: Optional[str] = Field(default=None, alias="TEMPORAL_NAMESPACE")
     nextcloud_url: Optional[str] = Field(default=None, alias="NEXTCLOUD_URL")

@@ -271,6 +271,9 @@ def reap_docker(engine: Any, *, install_id: Optional[str], binary: str = "docker
         if x.startswith(legacy_prefix)]
     for ref, created in sorted(set(images)):
         repo = ref.split(":", 1)[0]
+        # The rollback point upgrade.sh keeps (BOSSAPP-839): never reaped.
+        if repo.startswith("boss-community-") and ref.rsplit(":", 1)[-1].startswith("prev-"):
+            continue
         if _age_seconds(created) < min_age:
             continue
         if repo in live["containers"] or ref in used or repo in used:

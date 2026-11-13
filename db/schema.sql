@@ -12238,3 +12238,55 @@ CREATE TABLE IF NOT EXISTS runner_sessions (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_runner_sessions_run ON runner_sessions (run_id, state, last_heartbeat DESC);
+-- BOSSAPP-838 ── scheduled self-backups ─────────────────────────────────────────────────────────
+-- services/backup_scheduler.py: one API thread (whichever holds backup_scheduler_lease) takes a
+-- pg_dump every BOSS_BACKUP_INTERVAL_MINUTES, verifies it with `pg_restore --list`, optionally
+-- uploads it (S3_* settings), and prunes by tier (hourly/daily/weekly/monthly). One row per
+-- attempt: running -> verified or failed, then pruned once retention lets it go. The doctor
+-- raises backup_stale / backup_failed / backup_missing from these rows.
+CREATE TABLE IF NOT EXISTS backups (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL DEFAULT 'scheduled',
+  path TEXT,
+  object_key TEXT,
+  bytes BIGINT,
+  checksum TEXT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  verified_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'running'
+    CHECK (status IN ('running', 'verified', 'failed', 'pruned')),
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_backups_status_started ON backups (status, started_at DESC);
+CREATE TABLE IF NOT EXISTS backup_scheduler_lease (
+  name TEXT PRIMARY KEY,
+  holder TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- BOSSAPP-837 ── org/project export and import ─────────────────────────────────────────────────
+-- services/portability.py: an import is planned (a dry-run diff, validated by replaying it
+-- through the create services and rolling back), then applied chunk by chunk, each chunk its own
+-- transaction. chunks_done is the resume point: applying the same import again carries on from
+-- there. The bundle is kept so a resume needs only the id, and it never holds a secret value.
+CREATE TABLE IF NOT EXISTS portability_imports (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL CHECK (scope IN ('project', 'org')),
+  target_id TEXT NOT NULL,
+  bundle_checksum TEXT NOT NULL,
+  bundle JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'planned'
+    CHECK (status IN ('planned', 'applying', 'applied', 'failed')),
+  chunk_size INTEGER NOT NULL DEFAULT 25,
+  chunks_total INTEGER NOT NULL DEFAULT 0,
+  chunks_done INTEGER NOT NULL DEFAULT 0,
+  plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+  report JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_portability_imports_target
+  ON portability_imports (scope, target_id, created_at DESC);
