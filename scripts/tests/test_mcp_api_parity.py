@@ -178,8 +178,12 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     # BOSSAPP-819 it holds their DELETE/remove tails: DELETE /v1/environments/{id}, DELETE
     # /v1/skill-definitions/{key}/tests/cases/{id}, DELETE /v1/work-items/{id} and the work
     # item's labels/remove and relations/remove. (/v1/tool-calls* are reads: api_policy_gated.)
+    # +2 (BOSSAPP-880/883): DELETE a work item's watchdog and DELETE a status card, DELETE
+    # tails like the work item's own.
     for key in (("DELETE", "/v1/environments/{environment_id}"),
-                ("DELETE", "/v1/work-items/{work_item_id}")):
+                ("DELETE", "/v1/work-items/{work_item_id}"),
+                ("DELETE", "/v1/work-items/{work_item_id}/watchdogs/{watchdog_id}"),
+                ("DELETE", "/v1/status-cards/{card_id}")):
         assert rows[key]["mcp_status"] == "operator_only_unavailable"
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 95  # +8: the P0-P2 Paperclip wave (PRs #68-#74) — tool-policy writes, MCP credential/template/gateway writes, extensions install, org-chain takeover
+               for row in community["operations"]) == 97  # +2 work UX set 2; +8: the P0-P2 Paperclip wave (PRs #68-#74) — tool-policy writes, MCP credential/template/gateway writes, extensions install, org-chain takeover
