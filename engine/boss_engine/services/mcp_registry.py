@@ -1668,7 +1668,9 @@ def call_tool_with_receipt(
     who = policy_context if isinstance(policy_context, dict) else {}
     decided: dict[str, Any] = {}
 
-    audit_agent = str(agent or "").strip() or "mcp_registry"
+    audit_agent = (str(agent or "").strip()
+                   or str((policy_context or {}).get("role_key") or "").strip()
+                   or "mcp_registry")
     audit_principal = str(principal or "").strip() or acting_principal()
 
     def _audit_tool_call(outcome: str, decision: str, *, latency_ms: int = 0,

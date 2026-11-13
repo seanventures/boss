@@ -168,7 +168,7 @@ def _call(w, tool, args=None, *, approved_by=None, role="forge"):
 def _audits(w, tool):
     with w.eng.begin() as c:
         return [dict(r) for r in c.execute(text(
-            "SELECT decision, matched_policy_ids, outcome, screen, principal FROM tool_call_audit "
+            "SELECT decision, matched_policy_ids, outcome, screen, principal, agent FROM tool_call_audit "
             "WHERE project_id = :p AND tool = :t ORDER BY recorded_at, id"),
             {"p": w.pid, "t": tool}).mappings()]
 
@@ -245,7 +245,9 @@ def test_a_deny_rule_is_the_same_answer_at_all_three_doors(world):
     assert isinstance(refused.value, McpToolOff) and rule["id"] in str(refused.value)
     row = _audits(w, "echo")[-1]
     assert row["decision"] == "deny" and row["outcome"] == "refused"
-    assert row["matched_policy_ids"] == [rule["id"]] and row["principal"] == "forge"
+    assert row["matched_policy_ids"] == [rule["id"]]
+    # Post-819 who-semantics: the role rides on `agent`; `principal` is the acting identity.
+    assert row["agent"] == "forge"
     assert row["screen"]["policy"]["rule_id"] == rule["id"]
     assert "rm " in row["screen"]["policy"]["explanation"]
     assert w.fake.calls == []
