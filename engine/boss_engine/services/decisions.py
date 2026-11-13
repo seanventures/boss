@@ -345,6 +345,7 @@ class DecisionService:
                        approved_by, approved_at, delegated_to, delegated_by,
                        delegated_at, revision_requested_by, revision_requested_at,
                        executed_by, executed_at, resolution_note, external_ref, via_delegate, via_delegation,
+                       form_schema, answer, answered_by, answered_at,
                        created_at, updated_at
                 FROM decisions
                 WHERE id = :decision_id
