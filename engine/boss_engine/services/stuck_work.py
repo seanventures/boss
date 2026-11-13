@@ -276,6 +276,12 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
     # A person's move first: it is never "stuck".
     if status == WAITING_ON_PERSON:
         pw = _as_dict(ctx.get("person_wait"))
+        if phase == "awaiting_manager" and pw.get("offered_to"):
+            # BOSSAPP-885: the org chart's chain holds it — its manager may take it over first.
+            manager = str(pw["offered_to"]).split(":", 1)[-1].replace("_", " ").title()
+            return out("manager", "boss",
+                       f"Waiting for {manager} (its manager) to take it over, then a person",
+                       _clip(pw.get("ask") or "", 300), pw.get("opened_at"))
         builder = pw.get("builder") or "the builder"
         return out("person_grant", "you",
                    f"Waiting for you: let {builder} build for you (a standing grant)",
@@ -600,6 +606,12 @@ def triage(ev: Mapping[str, Any]) -> dict[str, Any]:
                  ["ask_person"], "ask_person",
                  "Approve the card to let it start on the project's Captain authority, or reject it.",
                  "you")
+    if code == "manager":
+        return t("manager", reason.get("words") or "Its manager may take it over first",
+                 "The org chart's chain holds it: its manager agent is offered the work before a "
+                 "person is asked (BOSSAPP-885).", ["wait"], "wait",
+                 "BOSS asks the next manager, then a person, if nobody takes it over in time.",
+                 "boss")
     if code == "person_grant" or pw.get("blocker_type") == "authority_no_grant":
         return t("no_grant", f"No person's grant lets {pw.get('builder') or 'its builder'} act",
                  "Started by an always-on agent, not a person; the build refused to run without "

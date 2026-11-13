@@ -357,6 +357,13 @@ def _advance(connection: Any, settings: Any, esc: Mapping[str, Any], *, now: dat
             "deadline = :d, updated_at = :now WHERE id = :i AND status = 'open'"),
             {"to": to["party"], "rung": chain.index(to), "i": esc["id"], "now": now,
              "d": now + timedelta(minutes=_minutes(settings))})
+        if esc["origin"] == "person_wait":
+            # The run's wait reason names who holds it now.
+            connection.execute(text(
+                "UPDATE code_task_runs SET finalize_ctx = jsonb_set(finalize_ctx, "
+                "'{person_wait,offered_to}', to_jsonb(CAST(:to AS text))) WHERE id = :r "
+                "AND finalize_ctx->'person_wait' IS NOT NULL"),
+                {"to": to["party"], "r": esc["run_id"]})
         emit_event(connection, esc["project_id"], "org.takeover_escalated", "boss",
                    "code_task_run", esc["run_id"],
                    {"escalation_id": esc["id"], "from": esc["offered_to"], "offered_to": to["party"],

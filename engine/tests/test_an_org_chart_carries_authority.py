@@ -179,6 +179,14 @@ def test_a_stall_goes_to_the_manager_agent_first_then_up_then_to_the_person(eng,
                                                 "person_wait": {}},
                                       {"cause_code": "quiet"}, "next", "headline") is None
         assert _cards(c, project) == 0
+        # Every surface says who holds it, and the always-on diagnosis just waits.
+        held_row = {"id": rid, "status": run["status"], "phase": run["phase"],
+                    "finalize_ctx": run["finalize_ctx"]}
+        words = stuck_work.wait_reason(c, held_row, job=None)
+        assert words["code"] == "manager" and "Engineering Captain" in words["words"]
+        diag = stuck_work.diagnose(c, None, rid, use_model=False)
+        assert diag["chosen"] == "wait" and diag["card_id"] is None
+        assert _cards(c, project) == 0
 
     silent = lambda esc: {}  # noqa: E731 — the manager does not answer
     with eng.begin() as c:
@@ -189,6 +197,11 @@ def test_a_stall_goes_to_the_manager_agent_first_then_up_then_to_the_person(eng,
         assert out["moved"] == 1
         assert _offer(c, rid)["offered_to"] == "agent:cto", "the deadline moves it one rung up"
         assert _cards(c, project) == 0
+        moved = _run(c, rid)
+        assert "Cto" in stuck_work.wait_reason(c, {"id": rid, "status": moved["status"],
+                                                    "phase": moved["phase"],
+                                                    "finalize_ctx": moved["finalize_ctx"]},
+                                              job=None)["words"]
     with eng.begin() as c:
         out = org_chain.poll_due(c, None, now=_later(40), manager_turn=silent)
         assert out["fell_through"] == 1
