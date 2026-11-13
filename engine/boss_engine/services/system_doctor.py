@@ -103,6 +103,8 @@ class Signals:
     claude_login: dict[str, Any] = field(default_factory=dict)
     #: codex_login.status(): the Codex ChatGPT login's expiry and its last refresh (no secret).
     codex_login: dict[str, Any] = field(default_factory=dict)
+    #: backup_scheduler.health(): the scheduled self-backups' state (BOSSAPP-838).
+    backup: dict[str, Any] = field(default_factory=dict)
 
 
 _VM_LAST: dict[str, Any] = {}
@@ -231,6 +233,13 @@ def collect(engine: Any) -> Signals:
             "SELECT count(*) FROM app_previews WHERE status = 'running' AND "
             "expires_at < now()")).scalar() or 0)
         sig.biggest_request_mb = float(admission.load_profile(c, "code.task").request_mb)
+        try:
+            from . import backup_scheduler
+
+            with c.begin_nested():
+                sig.backup = backup_scheduler.health(c)
+        except Exception:  # noqa: BLE001 — an install before BOSSAPP-838 has no backups table
+            sig.backup = {}
     from .resource_reaper import docker_available
 
     sig.docker = docker_available()
@@ -472,6 +481,34 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
             "options": [_opt("codex_sign_in", "Sign in again",
                              "Opens Repo and models, where Codex signs in."),
                         _opt("wait_15", "Remind me in 15 min", "BOSS asks again.")],
+            "needs_choice": True, "auto": [],
+        })
+
+    # SCHEDULED SELF-BACKUPS (BOSSAPP-838): the last one failed, none is recent, or none was
+    # ever taken. BOSS keeps trying on its own; this tells a person their safety net has a hole.
+    backup = sig.backup or {}
+    state = backup.get("state")
+    if state in ("failed", "stale", "missing"):
+        hours = max(1, int(backup.get("interval_minutes") or 60) // 60)
+        last = backup.get("last_verified_at")
+        copy = {
+            "failed": ("Backup failed",
+                       f"BOSS's scheduled database backup failed: {backup.get('error') or 'no reason given'}. "
+                       "It tries again on its next run."),
+            "stale": ("Backups are out of date",
+                      f"The newest verified backup is from {last}; BOSS backs up every "
+                      f"{hours} h. Check the api logs for the backup scheduler."),
+            "missing": ("No backup yet",
+                        "Scheduled backups are on but none has been verified. Check that the "
+                        "backups volume is writable and pg_dump is in the api image."),
+        }[state]
+        out.append({
+            "kind": f"backup_{state}", "severity": "critical" if state != "stale" else "warn",
+            "title": copy[0], "detail": copy[1],
+            "evidence": {k: backup.get(k) for k in ("state", "error", "last_verified_at",
+                                                    "last_backup_id", "age_minutes")},
+            "options": [_opt("acknowledge", "OK", "Close this notice."),
+                        _opt("dismiss_today", "Dismiss for today", "Hide this until tomorrow.")],
             "needs_choice": True, "auto": [],
         })
 

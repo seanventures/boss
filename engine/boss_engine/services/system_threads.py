@@ -11,7 +11,9 @@ a job and is blind while one runs, which is exactly when the host needs watching
 * the Claude login refresher: the ONE owner that refreshes the Claude CLI's own login, well
   before it expires, so no `claude` process ever refreshes (and wipes) it (claude_login);
 * the system doctor: signals → findings → safe automatic fixes, choices on a card, the
-  degradation rung admission and Metatron obey (system_doctor).
+  degradation rung admission and Metatron obey (system_doctor);
+* the backup scheduler: hourly verified pg_dumps with tiered retention, one holder by DB lease
+  (backup_scheduler, BOSSAPP-838).
 """
 from __future__ import annotations
 
@@ -81,4 +83,17 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("system doctor not started", exc_info=True)
         started["system_doctor"] = False
+    try:
+        # Scheduled self-backups (BOSSAPP-838): every API process starts it; the DB lease lets
+        # exactly one of them back up.
+        from . import backup_scheduler
+
+        if getattr(settings, "backup_schedule_enabled", False):
+            backup_scheduler.start(engine, settings)
+            started["backup_scheduler"] = True
+        else:
+            started["backup_scheduler"] = False
+    except Exception:  # noqa: BLE001
+        _log.warning("backup scheduler not started", exc_info=True)
+        started["backup_scheduler"] = False
     return started

@@ -12067,3 +12067,31 @@ CREATE INDEX IF NOT EXISTS idx_llm_calls_class ON llm_calls (project_id, call_cl
 -- verdict lands here: {"mode", "verdict": clean|suspicious|unscreened, "rules": [...]}. NULL on
 -- a refused call (no result) and on rows that predate the column.
 ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;
+
+-- BOSSAPP-838 ── scheduled self-backups ─────────────────────────────────────────────────────────
+-- services/backup_scheduler.py: one API thread (whichever holds backup_scheduler_lease) takes a
+-- pg_dump every BOSS_BACKUP_INTERVAL_MINUTES, verifies it with `pg_restore --list`, optionally
+-- uploads it (S3_* settings), and prunes by tier (hourly/daily/weekly/monthly). One row per
+-- attempt: running -> verified or failed, then pruned once retention lets it go. The doctor
+-- raises backup_stale / backup_failed / backup_missing from these rows.
+CREATE TABLE IF NOT EXISTS backups (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL DEFAULT 'scheduled',
+  path TEXT,
+  object_key TEXT,
+  bytes BIGINT,
+  checksum TEXT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  verified_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'running'
+    CHECK (status IN ('running', 'verified', 'failed', 'pruned')),
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_backups_status_started ON backups (status, started_at DESC);
+CREATE TABLE IF NOT EXISTS backup_scheduler_lease (
+  name TEXT PRIMARY KEY,
+  holder TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

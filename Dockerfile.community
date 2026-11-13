@@ -178,6 +178,17 @@ RUN chown root:boss /usr/local/libexec/boss/boss-sandbox-exec \
     && chmod 0755 /usr/local/bin/boss-entrypoint /usr/local/libexec/boss/recovery_guard.py
 # Separate from identity/key state; Compose mounts this root read-only in every backend role.
 RUN mkdir -p /var/lib/boss/recovery && chmod 0755 /var/lib/boss/recovery
+# SCHEDULED SELF-BACKUPS (BOSSAPP-838, services/backup_scheduler.py): pg_dump/pg_restore of the
+# SAME major version as BOSS's Postgres 16 (Debian bookworm ships 15, which refuses a 16 server),
+# from the PostgreSQL project's apt repository; and the backups volume's mount point, boss-owned.
+RUN curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/keyrings/pgdg.asc \
+    && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+       > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/boss/backups && chown boss:boss /var/lib/boss/backups \
+    && chmod 700 /var/lib/boss/backups
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
