@@ -16,10 +16,11 @@ Install-wide (like /v1/infra/plugins): an extension is installed once and enable
     POST   /v1/ext/{id}/projects/{p}/mcp         PUBLIC: the per-install bearer (HMAC-derived) is
                                                  the key; BOSS's own MCPClient is the only caller
 
-Permissions mirror the plugin registry's: reading needs infra:read; installing, enabling and the
-webhook secrets need setup:manage (letting third-party code run is an operator decision);
-disabling needs infra:provision (the emergency stop). Install / enable / disable / uninstall are
-audit events (extension.*).
+Permissions mirror the plugin registry's: reading needs infra:read; installing, enabling,
+disabling, removing and the webhook secrets need instance:manage (BOSSAPP-872: running the
+install is an instance admin's job, apart from any org's data; Owner/Admin hold it until the
+first instance admin is named). Install / enable / disable / uninstall are audit events
+(extension.*).
 """
 from __future__ import annotations
 
@@ -111,7 +112,7 @@ def build_extensions_router(engine_getter: Optional[Callable[[], Any]] = None,
         return {"extensions": [e.view(project_id) for e in found]}
 
     @router.post("/v1/extensions/preview")
-    @permit(P.SETUP_MANAGE, scope=Scope.org(), readonly_post=True)
+    @permit(P.INSTANCE_MANAGE, scope=Scope.org(), readonly_post=True)
     def preview_extension(payload: dict = Body(...)) -> Any:
         source = str((payload or {}).get("source") or "").strip()
         if not source:
@@ -122,7 +123,7 @@ def build_extensions_router(engine_getter: Optional[Callable[[], Any]] = None,
             return _refuse(exc.status, exc.code, str(exc))
 
     @router.post("/v1/extensions/install")
-    @permit(P.SETUP_MANAGE, scope=Scope.org())
+    @permit(P.INSTANCE_MANAGE, scope=Scope.org())
     def install_extension(request: Request, payload: dict = Body(...)) -> Any:
         body = payload or {}
         source = str(body.get("source") or "").strip()
@@ -134,7 +135,7 @@ def build_extensions_router(engine_getter: Optional[Callable[[], Any]] = None,
                 ext = registry.install(db, _settings(), source, checksum=str(body.get("checksum") or ""),
                                        accept=[str(a) for a in accept], actor=_actor(request))
                 _audit(request, db, "extension.installed", extension_id=ext.extension_id,
-                       permission=P.SETUP_MANAGE.value,
+                       permission=P.INSTANCE_MANAGE.value,
                        details={"version": ext.version, "checksum": ext.approved_checksum,
                                 "capabilities": [c["capability"] for c in ext.view()["capabilities"]]})
                 return {"extension": ext.view()}
@@ -142,13 +143,13 @@ def build_extensions_router(engine_getter: Optional[Callable[[], Any]] = None,
             return _refuse(exc.status, exc.code, str(exc))
 
     @router.delete("/v1/extensions/{extension_id}")
-    @permit(P.SETUP_MANAGE, scope=Scope.org())
+    @permit(P.INSTANCE_MANAGE, scope=Scope.org())
     def uninstall_extension(extension_id: str, request: Request) -> Any:
         try:
             with _engine().begin() as db:
                 registry.uninstall(db, _settings(), extension_id, actor=_actor(request))
                 _audit(request, db, "extension.uninstalled", extension_id=extension_id,
-                       permission=P.SETUP_MANAGE.value, details={})
+                       permission=P.INSTANCE_MANAGE.value, details={})
         except registry.ExtensionRefused as exc:
             return _refuse(exc.status, exc.code, str(exc))
         return {"ok": True}
@@ -170,17 +171,17 @@ def build_extensions_router(engine_getter: Optional[Callable[[], Any]] = None,
         return {"extension": view}
 
     @router.post("/v1/extensions/{extension_id}/enable")
-    @permit(P.SETUP_MANAGE, scope=Scope.org())
+    @permit(P.INSTANCE_MANAGE, scope=Scope.org())
     def enable_extension(extension_id: str, request: Request, payload: Optional[dict] = Body(None)) -> Any:
-        return _toggle(request, extension_id, payload, enabled=True, permission=P.SETUP_MANAGE.value)
+        return _toggle(request, extension_id, payload, enabled=True, permission=P.INSTANCE_MANAGE.value)
 
     @router.post("/v1/extensions/{extension_id}/disable")
-    @permit(P.INFRA_PROVISION, scope=Scope.org())
+    @permit(P.INSTANCE_MANAGE, scope=Scope.org())
     def disable_extension(extension_id: str, request: Request, payload: Optional[dict] = Body(None)) -> Any:
-        return _toggle(request, extension_id, payload, enabled=False, permission=P.INFRA_PROVISION.value)
+        return _toggle(request, extension_id, payload, enabled=False, permission=P.INSTANCE_MANAGE.value)
 
     @router.get("/v1/extensions/{extension_id}/webhooks")
-    @permit(P.SETUP_MANAGE, scope=Scope.org())
+    @permit(P.INSTANCE_MANAGE, scope=Scope.org())
     def extension_webhooks(extension_id: str) -> Any:
         ext = _load(extension_id)
         if ext is None:

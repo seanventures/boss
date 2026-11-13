@@ -32376,6 +32376,9 @@ app.include_router(build_infra_platform_router())
 from .routes_extensions import build_extensions_router  # noqa: E402  (BOSSAPP-861 extensions)
 
 app.include_router(build_extensions_router())
+from .routes_instance import build_instance_router  # noqa: E402  (BOSSAPP-872 instance admins)
+
+app.include_router(build_instance_router())
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

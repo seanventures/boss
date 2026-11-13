@@ -13053,3 +13053,17 @@ CREATE TABLE IF NOT EXISTS secret_proposals (
 CREATE INDEX IF NOT EXISTS idx_secret_proposals_project ON secret_proposals (project_id, status, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_secret_proposals_decision ON secret_proposals (decision_id)
   WHERE decision_id IS NOT NULL;
+-- 872 (identity/instance_admin.py): instance admins, separate from org roles. A row names a
+-- principal who runs the INSTALL (plugins, extensions, backups, the instance admins) with the
+-- instance:* permissions, whatever org role it holds (none needed: no org data access comes with
+-- it). While no active row exists, org Owner/Admin hold instance:* as before; once one does,
+-- ONLY instance admins do. Removal is a soft end (ended_at), kept for the record.
+CREATE TABLE IF NOT EXISTS identity_instance_admins (
+  principal_id TEXT PRIMARY KEY,
+  granted_by TEXT NOT NULL,
+  granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_by TEXT,
+  ended_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_identity_instance_admins_live
+  ON identity_instance_admins (principal_id) WHERE ended_at IS NULL;

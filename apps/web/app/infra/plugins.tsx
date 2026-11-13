@@ -65,11 +65,11 @@ function PluginRowView({ p, onChanged }: { p: PluginRow; onChanged: () => void }
             <span className="inf-notice" data-testid="inf-plugin-problem" title={p.problems.join("\n")}>Blocked</span>
           ) : null}
           {p.enabled ? (
-            <GatedButton permission="infra:provision" type="button" className="ag-btn" disabled={busy}
+            <GatedButton permission="instance:manage" type="button" className="ag-btn" disabled={busy}
                          data-testid="inf-plugin-off" title="Turn off: new plans stop using it"
                          onClick={() => void write(false)}>{busy ? "…" : "On"}</GatedButton>
           ) : (
-            <GatedButton permission="setup:manage" type="button" className="ag-btn" disabled={busy || p.problems.length > 0}
+            <GatedButton permission="instance:manage" type="button" className="ag-btn" disabled={busy || p.problems.length > 0}
                          data-testid="inf-plugin-on"
                          title={p.problems.length ? p.problems.join("\n") : "Turn on for this install"}
                          onClick={pressOn}>{busy ? "…" : "Off"}</GatedButton>
@@ -82,7 +82,7 @@ function PluginRowView({ p, onChanged }: { p: PluginRow; onChanged: () => void }
             <span>Turn on {p.name}? It may: </span>
             <span data-testid="inf-plugin-perms">{perms.length ? perms.join(", ") : "nothing beyond its own hooks"}</span>
             {" "}
-            <GatedButton permission="setup:manage" type="button" className="ag-btn" disabled={busy}
+            <GatedButton permission="instance:manage" type="button" className="ag-btn" disabled={busy}
                          data-testid="inf-plugin-confirm-on" title="Its code will run for this install"
                          onClick={() => void write(true)}>Turn on</GatedButton>
             <button type="button" className="ag-btn" data-testid="inf-plugin-confirm-cancel" onClick={() => setConfirming(false)}>Cancel</button>
