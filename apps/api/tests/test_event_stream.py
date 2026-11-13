@@ -100,6 +100,13 @@ def test_each_kind_names_the_permission_a_viewer_needs():
     assert es.permission_for("code_task.started") == "activity:read"
 
 
+def test_the_legacy_viewer_never_answers_under_enforce(engine):
+    assert es.LegacyViewer(None, False, engine).allowed("p", "activity:read") is True   # auth off
+    assert es.LegacyViewer(None, True, engine).allowed("p", "activity:read") is False   # no member
+    assert es.LegacyViewer("ceo", False, engine, enforced=True).allowed("p", "activity:read") \
+        is False                                                                        # PDP only
+
+
 def test_a_slow_reader_overflows_into_one_resync_marker():
     hub = es.Hub()
     sub = hub.subscribe(es.Interest(), loop=None, maxlen=3)

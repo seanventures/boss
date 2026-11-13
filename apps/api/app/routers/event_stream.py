@@ -36,10 +36,11 @@ def viewer_for(request: Request, engine) -> object:
     ctx = getattr(request.state, "identity", None) or lineage.current_context()
     if ctx is not None:
         return es.IdentityViewer(ctx, engine)
+    from apps.api.app import identity_guard
     from apps.api.app.main import current_api_principal, current_transport_authenticated
 
     return es.LegacyViewer(current_api_principal.get(), bool(current_transport_authenticated.get()),
-                           engine)
+                           engine, enforced=identity_guard.identity_enforced())
 
 
 @router.get("/v1/events/stream")

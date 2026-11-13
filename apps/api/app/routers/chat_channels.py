@@ -29,6 +29,7 @@ from boss_engine.services import chat_channels as chat
 from boss_engine.services.chat_adapters import ChatVerifyRefused, adapter_for
 
 from ..db import begin, get_engine
+from .identity_me import need_person_session
 
 router = APIRouter(tags=["chat-channels"])
 
@@ -121,27 +122,24 @@ def set_chat_endpoint_status(endpoint_id: str, payload: ChatEndpointStatusBody):
 
 # ---- linking (a person's own act) ------------------------------------------------------------
 
-def _person(request: Request, db: Any):
+def _signed_in(request: Request, db: Any):
+    """(the request's AuthContext, None) or (None, the refusal to answer with)."""
     from boss_engine.identity.authn import AuthnError
 
     from .identity_auth import current_context, refusal
-    from .identity_me import need_person_session
 
     try:
-        ctx = current_context(request, db)
+        return current_context(request, db), None
     except AuthnError as exc:
         return None, refusal(exc)
-    blocked = need_person_session(ctx)
-    if blocked is not None:
-        return None, blocked
-    return ctx, None
 
 
 @router.get("/v1/chat/links")
 @authenticated(self_only=True, people_only=True, note="the caller's own chat links only")
 def my_chat_links(request: Request):
     with begin(get_engine()) as connection:
-        ctx, blocked = _person(request, connection)
+        ctx, blocked = _signed_in(request, connection)
+        blocked = blocked or need_person_session(ctx)
         if blocked is not None:
             return blocked
         return {"links": chat.links_of(connection, ctx.principal.id)}
@@ -152,7 +150,8 @@ def my_chat_links(request: Request):
                note="reads what a one-time link code would link; spends nothing")
 def peek_chat_link(payload: ChatLinkCodeBody, request: Request):
     with begin(get_engine()) as connection:
-        ctx, blocked = _person(request, connection)
+        ctx, blocked = _signed_in(request, connection)
+        blocked = blocked or need_person_session(ctx)
         if blocked is not None:
             return blocked
         try:
@@ -169,7 +168,8 @@ def confirm_chat_link(payload: ChatLinkCodeBody, request: Request):
     presses in that channel answer decisions AS them (and only within what they may decide)."""
     try:
         with begin(get_engine()) as connection:
-            ctx, blocked = _person(request, connection)
+            ctx, blocked = _signed_in(request, connection)
+            blocked = blocked or need_person_session(ctx)
             if blocked is not None:
                 return blocked
             return chat.confirm_link(connection, payload.code, ctx.principal)
@@ -181,7 +181,8 @@ def confirm_chat_link(payload: ChatLinkCodeBody, request: Request):
 @authenticated(self_only=True, people_only=True, note="revokes one of the caller's own links")
 def revoke_chat_link(link_id: str, request: Request):
     with begin(get_engine()) as connection:
-        ctx, blocked = _person(request, connection)
+        ctx, blocked = _signed_in(request, connection)
+        blocked = blocked or need_person_session(ctx)
         if blocked is not None:
             return blocked
         if not chat.revoke_link(connection, ctx.principal.id, link_id):

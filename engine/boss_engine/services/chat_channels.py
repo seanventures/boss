@@ -438,6 +438,13 @@ def _decision(connection, decision_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def _open(decision: Mapping[str, Any]) -> bool:
+    """Still waiting on a person — the Approvals inbox's own definition (decision_actions)."""
+    from .decision_actions import OPEN_STATUSES
+
+    return str(decision.get("status") or "") in OPEN_STATUSES
+
+
 def _max_tier(endpoint: Mapping[str, Any]) -> int:
     try:
         return min(int(_json(endpoint.get("config"), {}).get("max_tier", DEFAULT_MAX_TIER)),
@@ -529,7 +536,7 @@ def on_decision_created(connection, decision_id: str) -> int:
     from .notify import enqueue_chat
 
     decision = _decision(connection, decision_id)
-    if decision is None or decision["status"] not in ("pending", "delegated"):
+    if decision is None or not _open(decision):
         return 0
     endpoints = connection.execute(sql(
         "SELECT id, project_id, kind, config FROM chat_endpoints WHERE project_id = :p AND "
@@ -560,7 +567,7 @@ def deliver(connection, settings: Any, row: Mapping[str, Any]) -> dict[str, Any]
     payload = dict(_json(row.get("payload"), {}))
     if row["kind"] == "decision_card":
         decision = _decision(connection, payload["decision_id"])
-        if decision is None or decision["status"] not in ("pending", "delegated"):
+        if decision is None or not _open(decision):
             return {"skipped": "the decision was answered before its card was sent"}
         card = build_card(connection, settings, endpoint, decision)
         payload["message"] = adapter.render_decision(card)

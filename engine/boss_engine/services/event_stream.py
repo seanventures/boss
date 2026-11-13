@@ -176,15 +176,19 @@ class LegacyViewer:
 
     def __init__(self, principal: Optional[str], transport_authenticated: bool, engine: Any, *,
                  ttl: float = AUTHZ_CACHE_SECONDS, clock: Callable[[], float] = time.monotonic,
-                 settings: Any = None):
+                 settings: Any = None, enforced: bool = False):
         self.principal, self.transport, self.engine = principal, transport_authenticated, engine
-        self.settings = settings
+        self.settings, self.enforced = settings, enforced
         self._cache = _Cached(ttl, clock)
 
     def _member(self, project_id: str) -> bool:
         from ..config import get_settings
         from .members import MemberDirectoryService
 
+        if self.enforced:
+            # Under enforce only the PDP decides (IdentityViewer); a request with no identity
+            # context there sees nothing, never the legacy members table's answer.
+            return False
         try:
             with self.engine.connect() as conn:
                 MemberDirectoryService(self.settings or get_settings()).require_member(
@@ -194,7 +198,7 @@ class LegacyViewer:
             return False
 
     def allowed(self, project_id: str, permission: str) -> bool:
-        if not project_id:
+        if not project_id or self.enforced:
             return False
         if not self.transport:
             return True
