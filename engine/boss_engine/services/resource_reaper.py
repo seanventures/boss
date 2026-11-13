@@ -435,6 +435,19 @@ def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
             return reconcile_unknown_outcomes(engine, settings or get_settings())
 
         report["unknown_outcomes"] = _safe(_reconcile_unknown)
+    if engine is not None:
+        # A build that died without teardown must not hold an execution
+        # environment forever (BOSSAPP-824): held leases past their TTL expire.
+        from . import execution_environments
+
+        report["environment_leases"] = _safe(
+            lambda: execution_environments.reap_leases(engine, settings))
+        # Workspace snapshots past their TTL go with their objects (BOSSAPP-826).
+        # No store configured -> it returns before touching the table.
+        from . import workspace_snapshots
+
+        report["workspace_snapshots"] = _safe(
+            lambda: workspace_snapshots.reap_expired(engine, settings))
     report["dirs"] = _safe(lambda: reap_dirs())
     # A run that died never dropped its build-services database (build_services).
     from . import build_services

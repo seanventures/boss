@@ -8,7 +8,7 @@ SHELL := /bin/sh
 DOCKER := $(shell if docker info >/dev/null 2>&1; then printf 'docker'; elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then printf 'sudo -n docker'; fi)
 COMPOSE := $(DOCKER) compose -f scripts/install/community-compose.yml --env-file .env
 
-.PHONY: help dev seed status check stop metatron mcp-setup mcp docker-ready e2e e2e-selftest eval-decisions
+.PHONY: help dev seed status check stop metatron mcp-setup mcp docker-ready e2e e2e-selftest eval-decisions go-test sandbox-guest-sync
 
 docker-ready:
 	@test -n '$(DOCKER)' || { printf '%s\n' 'Docker is unavailable to this user. Start Docker or grant noninteractive sudo access to Docker; a new login also activates docker-group access.' >&2; exit 1; }
@@ -82,3 +82,12 @@ e2e-selftest:
 PYTHON ?= python3
 eval-decisions:
 	PYTHONPATH=engine:. $(PYTHON) evals/task_rigor/run.py --check
+
+# In-repo S1 Go sandbox-service (fail-closed). Optional: the engine does not require Go.
+go-test:
+	cd services/sandbox-service && go test ./...
+
+# Re-sync the embedded in-guest agent from its canonical copy (a Go test
+# enforces byte equality: internal/backend TestEmbeddedGuestAgentMatchesSandboxHostCopy).
+sandbox-guest-sync:
+	cp sandbox-host/guest/in_guest_agent.py services/sandbox-service/internal/backend/guest/in_guest_agent.py
