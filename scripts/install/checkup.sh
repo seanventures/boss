@@ -23,18 +23,36 @@
 # costs them. Without it, only free checks run; with it, a model is actually asked a question,
 # which is the difference between "configured" and "working" and takes a few seconds and a few
 # tokens to establish.
+#
+# --repair (BOSSAPP-895) maps every FAIL line to its known remedy. Without --apply it only SAYS
+# what it would do (the dry run is the default); with --apply it runs the remedies that are safe
+# and idempotent — start the services that are not running from the images already on this host
+# (no build, no pull, so the prev-<tag> images `boss rollback` needs are never touched), restart
+# an API that does not answer — then runs this checkup again and exits with ITS verdict. A
+# remedy that is not safe to run unattended (a .env edit, a rebuild, the sandbox fence, a model
+# or repository sign-in) is printed as the exact step for a person, never run.
 set -uo pipefail
 
 PROBE=0
+REPAIR=0
+APPLY=0
 for arg in "$@"; do
   case "$arg" in
     --probe) PROBE=1 ;;
+    --repair) REPAIR=1 ;;
+    --apply) APPLY=1 ;;
     -h|--help)
-      echo "usage: checkup.sh [--probe]"
+      echo "usage: checkup.sh [--probe] [--repair [--apply]]"
       echo "  --probe   also ask a model a question (costs a few tokens; proves it works)"
+      echo "  --repair  say the known remedy for each failed check (changes nothing)"
+      echo "  --apply   with --repair: run the safe remedies, then check again"
       exit 0 ;;
   esac
 done
+if [ "$APPLY" -eq 1 ] && [ "$REPAIR" -eq 0 ]; then
+  echo "checkup.sh: --apply goes with --repair" >&2
+  exit 2
+fi
 
 ENV_FILE="${BOSS_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.env}"
 # .env is Docker data, not shell code. A model key or operator-added value may
@@ -135,15 +153,17 @@ AUTH=(); [ -n "$KEY" ] && AUTH=(-H "Authorization: Bearer $KEY")
 
 G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; N=$'\e[0m'
 fail=0
+# Each FAIL may name its remedy (the second argument): what --repair offers for it.
+FAILED=()
 ok()   { printf "  ${G}ok${N}    %s\n" "$1"; }
 warn() { printf "  ${Y}warn${N}  %s\n" "$1"; }
-bad()  { printf "  ${R}FAIL${N}  %s\n" "$1"; fail=1; }
+bad()  { printf "  ${R}FAIL${N}  %s\n" "$1"; fail=1; FAILED+=("${2:-}"); }
 
 printf "\n${B}BOSS checkup${N}  (%s)\n\n" "$API"
 
 # 0. .env itself: a quote that never closes makes Compose refuse the whole file.
 _env_bad="$(env_file_error)"
-[ -z "$_env_bad" ] || bad ".env line $_env_bad: a quote never closes — Compose refuses the file"
+[ -z "$_env_bad" ] || bad ".env line $_env_bad: a quote never closes — Compose refuses the file" env_quote
 
 # 1. containers. FOUR are required; web and the bundled secret store are profiles, and a
 # healthy install that runs neither is still a healthy install. The first version of this
@@ -159,7 +179,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 compiled=""
 if [ "${#DOCKER[@]}" -eq 0 ]; then
-  bad "containers: Docker is unavailable (start Docker or run this checkup with sudo)"
+  bad "containers: Docker is unavailable (start Docker or run this checkup with sudo)" docker_down
 else
   missing=""
   for svc in db api worker; do
@@ -170,13 +190,13 @@ else
   if [ -z "$missing" ]; then
     ok "containers: $running running (db, api, worker required; web and secrets are optional)"
   else
-    bad "containers: missing —$missing  (cd $(dirname "$ENV_FILE") && docker compose -f scripts/install/community-compose.yml --env-file .env up -d)"
+    bad "containers: missing —$missing  (cd $(dirname "$ENV_FILE") && docker compose -f scripts/install/community-compose.yml --env-file .env up -d)" containers_missing
   fi
 fi
 
 # 2. the API answers
 if curl -fsS --max-time 10 "$API/health" >/dev/null 2>&1; then ok "api: /health answers on $API"
-else bad "api: no answer on $API/health"; fi
+else bad "api: no answer on $API/health" api_silent; fi
 
 # 3. the address compiled into the console — the one a browser must reach
 #
@@ -193,7 +213,7 @@ if [ -z "$compiled" ]; then warn "console → API: could not read the address it
 elif printf '%s' "$compiled" | grep -q '127.0.0.1\|localhost'; then
   if [ -n "${BOSS_PUBLIC_URL:-}" ]; then
     bad "console → API: built with $compiled — a browser on another machine cannot reach that.
-        Rebuild web with --public-url (see scripts/install/README.md)"
+        Rebuild web with --public-url (see scripts/install/README.md)" console_loopback
   elif [ -n "${SSH_CONNECTION:-}" ]; then
     warn "console → API: $compiled uses loopback; forward both console :$WEB_PORT and API :$API_PORT over SSH before opening it in a browser"
   else ok "console → API: $compiled (local install)"; fi
@@ -231,7 +251,7 @@ if [ "$PROBE" -eq 1 ]; then
     "$API/v1/engine/agent/chat" \
     -d "{\"project_id\":\"$PROJECT\",\"actor\":\"executive_console\",\"message\":\"Reply with the single word OK.\"}" 2>/dev/null)
   if printf '%s' "$reply" | grep -qi "ok"; then ok "chat: a model answered"
-  else bad "chat: no usable answer — a model is connected but not working"; fi
+  else bad "chat: no usable answer — a model is connected but not working" chat_silent; fi
 else
   warn "chat: not asked (run with --probe to prove a model actually answers)"
 fi
@@ -254,7 +274,7 @@ else:
 ' 2>/dev/null || echo none)
 case "$repo_line" in
   ok\ *) ok "repository: ${repo_line#ok }" ;;
-  bad\ *) bad "repository: ${repo_line#bad } — fix it in Repo and models" ;;
+  bad\ *) bad "repository: ${repo_line#bad } — fix it in Repo and models" repository ;;
   *) warn "repository: not connected — builds cannot open a pull request" ;;
 esac
 
@@ -271,7 +291,7 @@ fi
 # match the api starts anyway and holds every build; say so here, with the fix.
 if [ "${#DOCKER[@]}" -gt 0 ] &&
    "${DOCKER[@]}" exec "${STACK}-api-1" test -f /run/boss-shim/.network-unfenced 2>/dev/null; then
-  bad "sandbox: this host cannot fence the build network, so builds are held — see docs/community/SANDBOX.md (or set BOSS_SANDBOX_NETWORK=off in .env and restart)"
+  bad "sandbox: this host cannot fence the build network, so builds are held — see docs/community/SANDBOX.md (or set BOSS_SANDBOX_NETWORK=off in .env and restart)" sandbox_fence
 fi
 case "$claim" in
   unclaimed)
@@ -325,4 +345,81 @@ fi
 printf "\n"
 if [ "$fail" -eq 0 ]; then printf "  ${G}${B}BOSS is ready.${N}  Mission Control: %s\n\n" "$CONSOLE_URL"
 else printf "  ${R}${B}Not ready.${N} Fix the FAIL lines above, then run this again.\n\n"; fi
+[ "$REPAIR" -eq 1 ] && [ "$fail" -ne 0 ] || exit "$fail"
+
+# ── --repair (BOSSAPP-895): every FAIL to its remedy ────────────────────────────────────────────
+INSTALL_ROOT="$(dirname "$ENV_FILE")"
+COMPOSE_FILE="$INSTALL_ROOT/scripts/install/community-compose.yml"
+# Compose as `boss` runs it (boss.sh compose): the install's profiles, its project name and image
+# tag. --no-build --pull never: only images already on this host, so nothing is rebuilt and the
+# prev-<tag> images kept for `boss rollback` are left exactly as they are.
+repair_compose() {
+  local profiles=()
+  [ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" = 0 ] || profiles+=(--profile web)
+  [ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ] || profiles+=(--profile secrets)
+  [ -z "$(env_value BOSS_EMAIL_DEV_INBOX)" ] || profiles+=(--profile mail)
+  COMPOSE_PROJECT_NAME="$STACK" \
+  BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$(env_value BOSS_COMMUNITY_IMAGE_TAG)}" \
+    "${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+    ${profiles[@]+"${profiles[@]}"} "$@" </dev/null
+}
+wait_for_api() {
+  local i
+  for i in $(seq 1 "${BOSS_REPAIR_WAIT:-30}"); do
+    curl -fsS --max-time 5 "$API/health" >/dev/null 2>&1 && return 0
+    sleep 3
+  done
+  return 1
+}
+SAFE=()     # remedies run with --apply, in this order
+MANUAL=()   # steps for a person
+has() { local c; for c in ${FAILED[@]+"${FAILED[@]}"}; do [ "$c" = "$1" ] && return 0; done; return 1; }
+if has containers_missing; then SAFE+=(start_services)
+elif has api_silent && [ "${#DOCKER[@]}" -gt 0 ]; then SAFE+=(restart_api); fi
+has docker_down && MANUAL+=("Docker: start it (Docker Desktop, or: sudo systemctl start docker), then run this again")
+has env_quote && MANUAL+=(".env line $_env_bad: close the quote (or remove the line); Compose reads nothing until then")
+has console_loopback && MANUAL+=("console address: rebuild web for its public address — scripts/install/README.md (public URL)")
+has chat_silent && MANUAL+=("models: boss connect (or Repo and models) to sign the model in again")
+has repository && MANUAL+=("repository: Repo and models › Test access, then fix what it names")
+has sandbox_fence && MANUAL+=("sandbox: docs/community/SANDBOX.md — turning the fence off is a security choice, never made for you")
+describe() {
+  case "$1" in
+    start_services) echo "start the stopped services from the images on this host (compose up -d --no-build --pull never)" ;;
+    restart_api) echo "restart the API container, then wait for /health" ;;
+  esac
+}
+
+printf "${B}Repairs${N}\n"
+if [ "${#SAFE[@]}" -eq 0 ] && [ "${#MANUAL[@]}" -eq 0 ]; then
+  printf "  none known for the FAIL lines above\n\n"
+  exit "$fail"
+fi
+for remedy in ${SAFE[@]+"${SAFE[@]}"}; do
+  if [ "$APPLY" -eq 1 ]; then printf "  run   %s\n" "$(describe "$remedy")"
+  else printf "  would %s\n" "$(describe "$remedy")"; fi
+done
+for step in ${MANUAL[@]+"${MANUAL[@]}"}; do printf "  you   %s\n" "$step"; done
+if [ "$APPLY" -eq 0 ]; then
+  [ "${#SAFE[@]}" -eq 0 ] || printf "\n  Nothing was changed. Run with --repair --apply to run the safe ones.\n"
+  printf "\n"
+  exit "$fail"
+fi
+applied=0
+for remedy in ${SAFE[@]+"${SAFE[@]}"}; do
+  case "$remedy" in
+    start_services)
+      if repair_compose up -d --no-build --pull never >/dev/null 2>&1; then applied=1
+      else printf "  ${R}could not start the services${N}: boss logs, or Compose's own message above\n"; fi ;;
+    restart_api)
+      if repair_compose restart api >/dev/null 2>&1; then applied=1
+      else printf "  ${R}could not restart the API${N}: boss logs api\n"; fi ;;
+  esac
+done
+if [ "$applied" -eq 1 ]; then
+  wait_for_api || printf "  ${Y}the API is still not answering${N}; checking again anyway\n"
+  printf "\n${B}Checking again${N}\n"
+  again=(); [ "$PROBE" -eq 1 ] && again+=(--probe)
+  exec bash "${BASH_SOURCE[0]}" ${again[@]+"${again[@]}"}
+fi
+printf "\n"
 exit "$fail"
