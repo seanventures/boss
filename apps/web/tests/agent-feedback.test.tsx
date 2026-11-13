@@ -43,7 +43,7 @@ describe("agent feedback", () => {
     }));
     await mount(<AgentFeedback projectId="p1" />);
     await settle();
-    expect(calls[0].url).toBe("/v1/agent-feedback?project_id=p1&status=open");
+    expect(calls.some((c) => c.url === "/v1/agent-feedback?project_id=p1&status=open")).toBe(true);
     expect($$('[data-testid^="agent-feedback-group-"]').map((e) => e.getAttribute("data-testid")))
       .toEqual(["agent-feedback-group-tool-read_logs", "agent-feedback-group-grant-github.write"]);
     expect($('[data-testid="agent-feedback-afb_1"]')?.textContent).toContain("forge in crun_1");
@@ -69,5 +69,41 @@ describe("agent feedback", () => {
     ($('[data-testid="activity-tab-log"]') as HTMLButtonElement).click();
     await settle();
     expect($('[data-testid="the-log"]')).not.toBeNull();
+  });
+});
+
+describe("reflection (BOSSAPP-888)", () => {
+  it("shows paused by default, turns on with one PUT and reflects on one agent", async () => {
+    const calls: { url: string; method: string; body: Record<string, unknown> }[] = [];
+    let enabled = false;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const method = String(init?.method ?? "GET");
+      calls.push({ url: String(url), method, body: init?.body ? JSON.parse(String(init.body)) : {} });
+      if (String(url).startsWith("/v1/reflection?")) {
+        return json({ settings: { enabled, every_hours: 168, roles: [] }, runs: [
+          { id: "rfl_1", role_key: "forge", trigger: "manual", status: "proposed",
+            proposals: [{ kind: "skill_diff", target: "release_notes", decision_id: "dec_1",
+                          cited_runs: ["crun_1", "crun_2"], evidence: 2 }] }] });
+      }
+      if (String(url) === "/v1/reflection/settings") { enabled = true; return json({ settings: { enabled: true } }); }
+      if (String(url) === "/v1/reflection/run") return json({ run: { proposals: [{}, {}] } });
+      return json({ groups: [] });
+    }));
+    await mount(<AgentFeedback projectId="p1" />);
+    await settle();
+    expect($('[data-testid="reflection-panel"]')?.textContent).toContain("paused");
+    expect($('[data-testid="reflection-run-rfl_1"]')?.textContent).toContain("Skill change (release_notes, 2 runs cited)");
+    ($('[data-testid="reflection-toggle"]') as HTMLButtonElement).click();
+    await settle();
+    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ project_id: "p1", enabled: true });
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    const box = $('[aria-label="Agent to reflect on"]') as HTMLInputElement;
+    setter.call(box, "forge");
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    ($('[data-testid="reflection-run"]') as HTMLButtonElement).click();
+    await settle();
+    expect(calls.find((c) => c.url === "/v1/reflection/run")?.body).toEqual({ project_id: "p1", role_key: "forge" });
+    expect($('[data-testid="reflection-said"]')?.textContent).toBe("2 proposals in Needs you.");
   });
 });

@@ -13031,3 +13031,30 @@ CREATE TABLE IF NOT EXISTS skill_policy_rules (
 );
 CREATE INDEX IF NOT EXISTS idx_skill_policy_rules_project ON skill_policy_rules (project_id, status);
 CREATE INDEX IF NOT EXISTS idx_skill_policy_rules_org ON skill_policy_rules (org_id, status) WHERE project_id IS NULL;
+-- 888 (services/reflection.py): one row per reflection over an agent's recent runs — the evidence
+-- it read and the proposals it opened (skill_diff through skill_definitions.propose_change,
+-- agent_prompt_diff through change_consent subject 'prompt'). It only proposes: every change is a
+-- diff-bound consent a person approves. Paused by default: no reflection_settings row, or
+-- enabled = false, means the schedule never runs it (a person may still press Reflect now).
+CREATE TABLE IF NOT EXISTS reflection_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  trigger TEXT NOT NULL CHECK (trigger IN ('manual', 'scheduled')),
+  status TEXT NOT NULL CHECK (status IN ('proposed', 'nothing_to_propose', 'failed')),
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  proposals JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_reflection_runs_project ON reflection_runs (project_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS reflection_settings (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  every_hours INTEGER NOT NULL DEFAULT 168 CHECK (every_hours BETWEEN 1 AND 2160),
+  roles JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_run_at TIMESTAMPTZ,
+  updated_by TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

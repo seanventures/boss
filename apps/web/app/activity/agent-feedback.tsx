@@ -13,6 +13,7 @@ import { GatedButton } from "../../components/gated";
 import {
   readFeedback, setFeedbackStatus, TARGET_WORDS, type FeedbackGroup, type FeedbackStatus,
 } from "../../lib/agent-feedback";
+import { ReflectionPanel } from "./reflection-panel";
 
 type Show = "open" | "all";
 
@@ -37,6 +38,8 @@ export function AgentFeedback({ projectId }: { projectId: string }) {
 
   return (
     <div className="afb" data-testid="agent-feedback">
+      {/* What the reflection agent proposes from these reports (BOSSAPP-888). */}
+      <ReflectionPanel projectId={projectId} />
       <div className="tc-tabs" role="radiogroup" aria-label="Which feedback">
         {(["open", "all"] as const).map((s) => (
           <button key={s} type="button" role="radio" aria-checked={show === s} className="tc-tab"

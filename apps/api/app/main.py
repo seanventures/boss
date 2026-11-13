@@ -31939,6 +31939,13 @@ from .routers.skill_policies import build_skill_policies_router
 app.include_router(build_skill_policies_router(
     engine=engine, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
+# THE REFLECTION AGENT (routers/reflection.py, services/reflection.py; BOSSAPP-888): proposes
+# skill and instruction changes from an agent's runs; paused by default; a person approves each.
+from .routers.reflection import build_reflection_router
+
+app.include_router(build_reflection_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 # The AI SRE incident squad (routers/incident_squad.py, services/incident_squad.py).
 from .routers.incident_squad import build_incident_squad_router
 

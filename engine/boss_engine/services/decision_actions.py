@@ -115,6 +115,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "self_fix.install",
     # Approving an agent-drafted skill writes that draft enabled. Until then it is not usable.
     "activate_authored_skill",
+    # Approving a reflection's instruction proposal adds exactly that document to the agent, as
+    # the approving person (reflection.apply_prompt_diff, BOSSAPP-888).
+    "apply_agent_prompt_diff",
     # Approving a "Tool changed" card clears the MCP tool's quarantine and accepts the new
     # definition (mcp_registry.accept_tool_change); rejecting turns it Off (BOSSAPP-818).
     "review_tool_change",
