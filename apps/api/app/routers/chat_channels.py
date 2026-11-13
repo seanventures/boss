@@ -22,6 +22,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public
@@ -207,10 +208,8 @@ async def _read_bounded(request: Request) -> tuple[bytes, bool]:
 
 
 def _receive(endpoint_id: str, headers: dict[str, str], raw: bytes) -> dict:
-    """Verify, parse and act in ONE transaction; then (committed) open a form and send what the
-    press queued. Runs in the threadpool: it is all blocking I/O."""
-    from boss_engine.services.notify import deliver_chat_due
-
+    """Verify, parse and act in ONE transaction; then (committed) open the note form if the press
+    asked for one (Slack's trigger_id lives 3 s). Runs in the threadpool: it is blocking I/O."""
     engine = get_engine()
     settings = _settings()
     with begin(engine) as connection:
@@ -239,13 +238,18 @@ def _receive(endpoint_id: str, headers: dict[str, str], raw: bytes) -> dict:
             result = {"status": "console_required",
                       "words": f"Could not open the note form ({type(exc).__name__}). "
                                "Answer this decision in BOSS."}
-    try:
-        deliver_chat_due(engine, settings, endpoint_id=endpoint_id, limit=20)
-    except Exception:  # noqa: BLE001 — the outbox tick retries; the press itself is recorded
-        pass
     result["kind"] = endpoint["kind"]
     result["inbound"] = inbound.kind
     return result
+
+
+def _send_queued(endpoint_id: str) -> None:
+    from boss_engine.services.notify import deliver_chat_due
+
+    try:
+        deliver_chat_due(get_engine(), _settings(), endpoint_id=endpoint_id, limit=20)
+    except Exception:  # noqa: BLE001 — the outbox tick retries; the press itself is recorded
+        pass
 
 
 @router.post("/v1/webhooks/inbound/chat/{endpoint_id}")
@@ -259,22 +263,26 @@ async def receive_chat(endpoint_id: str, request: Request):
     headers = {key.lower(): value for key, value in request.headers.items()}
     result = await run_in_threadpool(_receive, endpoint_id, headers, raw)
     status = result.get("status")
+    # What the press queued (the card update, the presser's answer, a link DM) is sent AFTER the
+    # response: Slack wants an answer within 3 s. The outbox tick retries anything that fails.
+    after = BackgroundTask(_send_queued, endpoint_id) if result.get("kind") else None
     if status == "verify_refused":
         code = 404 if result["reason"] == "unknown_endpoint" else 401
         return JSONResponse(status_code=code, content={"error": result["reason"]})
     if status == "bad_body":
         return JSONResponse(status_code=400, content={"error": "bad_body"})
     if status == "handshake":
-        return JSONResponse({"challenge": result.get("challenge", "")})
+        return JSONResponse({"challenge": result.get("challenge", "")}, background=after)
     if result.get("kind") == "slack" and result.get("inbound") == "note_submitted":
         if status in ("done", "pending_second"):
-            return JSONResponse({"response_action": "clear"})
+            return JSONResponse({"response_action": "clear"}, background=after)
         return JSONResponse({"response_action": "errors",
-                             "errors": {"note": str(result.get("words") or "Refused")[:150]}})
+                             "errors": {"note": str(result.get("words") or "Refused")[:150]}},
+                            background=after)
     body = {"ok": True, "status": status}
     if result.get("code"):
         body["code"] = result["code"]
-    return JSONResponse(body)
+    return JSONResponse(body, background=after)
 
 
 __all__ = ["router"]
