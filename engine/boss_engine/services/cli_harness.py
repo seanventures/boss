@@ -1591,7 +1591,15 @@ class GenericCliCodeAgent:
             token = self._resolve_secret(self.spec.token_env)
             if token:
                 env[self.spec.token_env] = token
-        if self.spec.name == "codex" and getattr(self, "_pick", None):
+        # AN OPERATOR'S LLM GATEWAY (llm_gateway, BOSSAPP-887): when this project routes this
+        # harness through one, the run goes there through the model proxy, never on the CLI's
+        # own login. None — the default — changes nothing below.
+        from . import llm_gateway
+
+        gateway = llm_gateway.for_harness(self.spec.name, self.settings)
+        if self.spec.name == "codex" and gateway is not None:
+            llm_gateway.isolate_codex_home(env, home=self.cli_home())
+        elif self.spec.name == "codex" and getattr(self, "_pick", None):
             apply_codex_pick(env, self._pick, home=self.cli_home(),
                              resolve_secret=self._resolve_secret)
         # THE AGENT'S KIT (harness_delivery): a per-run CODEX_HOME, $BOSS_MCP_CONFIG, ... —
@@ -1605,6 +1613,12 @@ class GenericCliCodeAgent:
         # A PROVIDER API KEY NEVER REACHES THE CLI (model_proxy): an Anthropic, OpenAI or
         # OpenRouter key passed through above becomes a run token for the loopback proxy, with
         # the base URL the CLI reads. A CLI's own login (a token, an auth file) is untouched.
+        if gateway is not None:
+            try:
+                return llm_gateway.apply(env, gateway, harness=self.spec.name,
+                                         settings=self.settings)
+            except llm_gateway.GatewayUnavailable as refused:
+                raise CliHarnessUnavailable(str(refused)) from refused
         return _model_proxy.shield_env(env, settings=self.settings)
 
     def _argv(self, prompt: str, *, read_only: bool, model: Optional[str]) -> list[str]:

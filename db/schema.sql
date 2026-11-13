@@ -13058,3 +13058,29 @@ CREATE TABLE IF NOT EXISTS reflection_settings (
   updated_by TEXT NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 887 (services/llm_gateway.py): an operator-named LLM gateway (LiteLLM, Portkey, an internal
+-- one) the coding CLIs are routed through, per project or for the whole org (a project's own
+-- wins). The key lives in the secret store under `secret_key` (never in this table, never in a
+-- sandbox): the CLI gets a model-proxy run token and the loopback base URL, and the proxy forwards
+-- to `base_url` with the real key. One active gateway per protocol per scope.
+CREATE TABLE IF NOT EXISTS llm_gateways (
+  id TEXT PRIMARY KEY,
+  org_id TEXT REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+  base_url TEXT NOT NULL,
+  secret_key TEXT NOT NULL,
+  harnesses JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  last_test JSONB,
+  created_by TEXT NOT NULL,
+  updated_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (project_id IS NOT NULL OR org_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_gateways_project_active
+  ON llm_gateways (project_id, protocol) WHERE status = 'active' AND project_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_gateways_org_active
+  ON llm_gateways (org_id, protocol) WHERE status = 'active' AND project_id IS NULL;

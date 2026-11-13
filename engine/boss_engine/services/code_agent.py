@@ -1023,6 +1023,19 @@ class ClaudeCodeAgent:
         happened to be started with.
         """
         env = agent_environment(os.environ, _shared_tool_caches())
+        # AN OPERATOR'S LLM GATEWAY (llm_gateway, BOSSAPP-887): a project that routes claude_code
+        # through one gets it here, through the model proxy, in place of the login or the key —
+        # so no Anthropic credential of the install's is resolved at all. None (the default)
+        # leaves everything below exactly as it was.
+        from . import llm_gateway
+
+        gateway = llm_gateway.for_harness("claude_code", self.settings)
+        if gateway is not None:
+            from .claude_credential import BILLING_METERED
+
+            llm_gateway.apply(env, gateway, harness="claude_code", settings=self.settings)
+            self._billing = BILLING_METERED
+            return self._finish_child_env(env)
         # The lane binder runs only where a connection and project are in scope and binds its
         # answer onto settings; a sandboxed agent process has neither, so the store is asked
         # directly — through the one resolution every `claude` child uses
@@ -1042,6 +1055,11 @@ class ClaudeCodeAgent:
             model_proxy.shield(env, "anthropic", cred.value, settings=self.settings)
         #: Who pays for this run's calls (included_spend.py), stamped on its usage.
         self._billing = cred.billing
+        return self._finish_child_env(env)
+
+    def _finish_child_env(self, env: dict) -> dict:
+        """What every child environment gets after its credential: the MCP wait and the
+        thinking cap (split out so a gateway-routed run gets exactly the same)."""
         if self.mcp_harness is not None and hasattr(self.mcp_harness, "env"):
             # The MCP gateway's parked calls outlast the CLI's default tool wait (code_task_mcp).
             env.update(self.mcp_harness.env())

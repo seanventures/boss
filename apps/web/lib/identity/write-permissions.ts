@@ -130,6 +130,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/skill-policies.ts#updateSkillRule": "skill:manage",        // PATCH /v1/skill-policies/{id}
   "lib/skill-policies.ts#revokeSkillRule": "skill:manage",        // DELETE /v1/skill-policies/{id}
   "lib/skill-policies.ts#simulateSkillRule": "skill:read",        // POST …/simulate (records nothing)
+  // lib/llm-gateways.ts — Setup › Advanced › Gateways (BOSSAPP-887)
+  "lib/llm-gateways.ts#createGateway": "model_provider:manage",   // POST /v1/llm-gateways
+  "lib/llm-gateways.ts#updateGateway": "model_provider:manage",   // PATCH /v1/llm-gateways/{id}
+  "lib/llm-gateways.ts#deleteGateway": "model_provider:manage",   // DELETE /v1/llm-gateways/{id}
+  "lib/llm-gateways.ts#testGateway": "model_provider:manage",     // POST …/{id}/test (one live call)
   // lib/reflection.ts — Activity › Feedback › Reflection (BOSSAPP-888)
   "lib/reflection.ts#setReflection": "agent:update",              // PUT /v1/reflection/settings
   "lib/reflection.ts#runReflection": "agent:update",              // POST /v1/reflection/run
@@ -252,6 +257,8 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // Skills & MCP › Rules › Skill access (lib/skill-policies.ts, BOSSAPP-890): simulate reads.
     "/v1/skill-policies/simulate": "skill:read",
     "/v1/skill-policies": "skill:manage",
+    // Setup › Advanced › Gateways (lib/llm-gateways.ts, BOSSAPP-887).
+    "/v1/llm-gateways": "model_provider:manage",
     // Activity › Feedback › Reflection (lib/reflection.ts, BOSSAPP-888).
     "/v1/reflection/": "agent:update",
     // Activity › Feedback (lib/agent-feedback.ts, BOSSAPP-889): a person closes a record.

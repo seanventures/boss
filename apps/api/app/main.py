@@ -31946,6 +31946,13 @@ from .routers.reflection import build_reflection_router
 app.include_router(build_reflection_router(
     engine=engine, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
+# LLM GATEWAYS FOR THE CODING CLIS (routers/llm_gateways.py, services/llm_gateway.py;
+# BOSSAPP-887): an operator-named gateway the harnesses are routed through, via the model proxy.
+from .routers.llm_gateways import build_llm_gateways_router
+
+app.include_router(build_llm_gateways_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 # The AI SRE incident squad (routers/incident_squad.py, services/incident_squad.py).
 from .routers.incident_squad import build_incident_squad_router
 
