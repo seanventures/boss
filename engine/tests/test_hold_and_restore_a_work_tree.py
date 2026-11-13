@@ -48,7 +48,8 @@ def test_hold_the_tree_and_restore_it_exactly(eng, project):
                                      root_id=epic["id"], actor="person:ceo", reason="runaway spend")
         assert _status(c, running["id"]) == "paused"
         assert work_items.get_item(c, project, cart["id"])["hold"]["id"] == hold["id"]
-        assert work_items.tree(c, project)["items"][0]["on_hold"] is True
+        roots = {n["id"]: n for n in work_items.tree(c, project)["items"]}
+        assert roots[epic["id"]]["on_hold"] is True and roots[outside["id"]]["on_hold"] is False
         with pytest.raises(work_holds.HoldConflict):
             work_holds.pause_tree(c, project_id=project, root_kind="work_item", root_id=epic["id"],
                                   actor="person:ceo")
