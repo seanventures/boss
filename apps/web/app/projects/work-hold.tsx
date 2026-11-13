@@ -10,7 +10,8 @@ import React, { useState } from "react";
 import { PauseCircle, PlayCircle } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { holdTree, partyName, planWords, restoreHold, type HoldPlanMember, type WorkNode } from "../../lib/work-items";
+import { holdTree, planWords, restoreHold, type HoldPlanMember, type WorkNode } from "../../lib/work-items";
+import { Who } from "../who";
 
 export function ItemHold({ projectId, item, demo, onChanged }: {
   projectId: string; item: WorkNode; demo: boolean; onChanged: () => void;
@@ -38,7 +39,7 @@ export function ItemHold({ projectId, item, demo, onChanged }: {
       {hold ? (
         <span className="wt-blocked" data-testid="wt-hold-banner">
           <PauseCircle size={12} aria-hidden /> On hold{hold.root_id !== item.id ? " with the tree above" : ""}
-          {hold.reason ? ` — ${hold.reason}` : ""} · by {partyName(hold.created_by) || hold.created_by}
+          {hold.reason ? ` — ${hold.reason}` : ""} · by <Who id={hold.created_by} face={false} />
         </span>
       ) : null}
       {!hold || ownHold ? (
