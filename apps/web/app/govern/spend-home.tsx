@@ -18,6 +18,7 @@ import {
 import { usePolledRead } from "../../lib/log-stream";
 import { DailyBars } from "./cap-preview";
 import { LegacyHolds } from "./meter";
+import { ReconciliationCard } from "./reconciliation-card";
 
 export type SpendPeriod = "today" | "week" | "month";
 export const SPEND_PERIODS: { key: SpendPeriod; label: string }[] = [
@@ -241,6 +242,8 @@ export function SpendHome({ view, viewError, onRetry, projectId, paused, period,
               </span>
             ) : days.length ? <span className="gv-axis" data-testid="gv-days-axis" aria-hidden="true"><span>{shortDay(days[0].day)}</span></span> : null}
           </section>
+          {/* BOSSAPP-864: estimated, reconciled to invoices, seat fees. */}
+          <ReconciliationCard projectId={projectId} />
           <div className="gv-pair">
             <section className="gv-card" aria-labelledby="gv-bymodel-h">
               <div className="gv-sec-head"><h3 id="gv-bymodel-h" className="gv-sec-head">BY MODEL</h3><span className="gv-badge">this project</span></div>

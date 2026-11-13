@@ -13089,3 +13089,48 @@ CREATE TABLE IF NOT EXISTS scoped_budget_policies (
 CREATE INDEX IF NOT EXISTS idx_scoped_budget_policies_live
   ON scoped_budget_policies (org_id, scope_type, scope_id) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_llm_calls_role_time ON llm_calls (role, created_at) WHERE role IS NOT NULL;
+-- 864 (services/subscription_fees.py): seat fees and invoice reconciliation. A subscription price is
+-- revisioned (a new one closes the open one; history kept) and amortised into one fee row per day.
+-- An imported invoice line is one cost_adjustments row: the invoice amount, BOSS's estimate for
+-- that provider and period (money on llm_calls), the difference and why. Re-importing is a no-op.
+CREATE TABLE IF NOT EXISTS subscription_prices (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  plan TEXT NOT NULL,
+  seats INTEGER NOT NULL DEFAULT 1 CHECK (seats > 0),
+  monthly_usd_micros BIGINT NOT NULL CHECK (monthly_usd_micros >= 0),
+  effective_from DATE NOT NULL,
+  effective_to DATE,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_subscription_prices_project
+  ON subscription_prices (project_id, provider, plan, effective_from DESC);
+CREATE TABLE IF NOT EXISTS subscription_fee_days (
+  id TEXT PRIMARY KEY,
+  price_id TEXT NOT NULL REFERENCES subscription_prices(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  day DATE NOT NULL,
+  amount_usd_micros BIGINT NOT NULL,
+  UNIQUE (price_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_subscription_fee_days_project ON subscription_fee_days (project_id, day);
+CREATE TABLE IF NOT EXISTS cost_adjustments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL,
+  invoice_ref TEXT NOT NULL,
+  line_ref TEXT NOT NULL,
+  description TEXT,
+  invoice_usd_micros BIGINT NOT NULL,
+  estimated_usd_micros BIGINT NOT NULL,
+  adjustment_usd_micros BIGINT NOT NULL,
+  reason TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, provider, invoice_ref, line_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_cost_adjustments_period ON cost_adjustments (project_id, provider, period_start);
