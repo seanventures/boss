@@ -103,7 +103,7 @@ export function useWho(raw: string | null | undefined): WhoView {
 // ── The component ──────────────────────────────────────────────────────────────────────────
 
 /**
- * The name (bold when asked), a person's initial before it, the raw id in the tooltip. An
+ * The name (bold when asked), its initial before it, the raw id in the tooltip. An
  * unresolved id is shown as itself — attribution is never blank and never invented.
  */
 export function Who({ id, bold, face = true, testId }: {
@@ -116,7 +116,9 @@ export function Who({ id, bold, face = true, testId }: {
   const text = bold ? <b>{shown}</b> : shown;
   return (
     <span className="who" title={w.id && w.id !== shown ? w.id : undefined} data-testid={testId} data-user-text>
-      {face && w.name && w.kind === "person" ? <Face name={w.name} tone={avatarTone(w.id)} size={22} /> : null}
+      {/* The initial for anyone BOSS can name, person or agent; an unnamed id gets none (its
+          "initial" would be a letter of the id, not of anyone). */}
+      {face && w.name ? <Face name={w.name} tone={avatarTone(w.id)} size={22} /> : null}
       {text}
     </span>
   );

@@ -28,11 +28,11 @@ import "../projects/px.css";
 type Caller = { projectId: string; actor: string };
 
 /** Who wrote a revision: the graph by name, a person or agent through <Who> (BOSSAPP-1040). */
-function By({ rev }: { rev: Pick<WikiRevision, "author_kind" | "author_id"> }) {
+function By({ rev, face = false }: { rev: Pick<WikiRevision, "author_kind" | "author_id">; face?: boolean }) {
   if (rev.author_kind === "system") return <>the graph</>;
   const id = (rev.author_id || "").trim() || rev.author_kind;
   const party = rev.author_kind === "agent" && !/^(agent:|agt_)/i.test(id) ? `agent:${id}` : id;
-  return <Who id={party} face={false} />;
+  return <Who id={party} face={face} />;
 }
 
 /** [[slug]] and [[slug|label]] become links that open the page here. */
@@ -111,7 +111,7 @@ function History({ w, slug, onRestored }: { w: Caller; slug: string; onRestored:
           <li key={rev.id} className="kg-doc-clause" data-testid="wiki-revision">
             <span className="kg-doc-clause-section">v{rev.revision_no}</span>
             <span className="kg-doc-clause-text">
-              <By rev={rev} />{rev.source_note ? ` — ${rev.source_note}` : ""}
+              <By rev={rev} face />{rev.source_note ? ` — ${rev.source_note}` : ""}
             </span>
             {rev.created_at ? <span className="kg-quiet">{kgWhen(rev.created_at)}</span> : null}
             <button type="button" className="inf-link" data-testid="wiki-revision-open"

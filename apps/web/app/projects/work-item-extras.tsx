@@ -48,7 +48,7 @@ export function WatchSection({ projectId, id, demo }: { projectId: string; id: s
       <p className="wt-faint">Be told once each time this item or anything under it stops in one of these ways.</p>
       {dogs?.map((d) => (
         <div key={d.id} className="wt-line" data-testid={`wt-watchdog-${d.id}`}>
-          <span className="wt-who"><Who id={d.watcher} face={false} /></span>
+          <span className="wt-who"><Who id={d.watcher} /></span>
           <span className="wt-faint">{d.conditions.map((c) => WATCH_WORDS[c]).join(" · ")}</span>
           {d.fired_count ? <span className="wt-faint">told {d.fired_count}×</span> : null}
           <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo}

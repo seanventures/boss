@@ -43,6 +43,14 @@ describe("<Who>", () => {
     expect(el.getAttribute("title")).toBe("usr_wsw5h4abcdef");
   });
 
+  it("draws the named party's initial, and none for an id nothing names", async () => {
+    primePeople({ usr_wsw5h4abcdef: "Ada Lovelace" });
+    await render(<p><Who id="usr_wsw5h4abcdef" testId="who-named" /> <Who id="usr_nobodyknows1" testId="who-raw" /></p>);
+    expect($('[data-testid="who-named"] .idn-face')?.textContent).toBe("AL");
+    expect($('[data-testid="who-raw"] .idn-face')).toBeNull();
+    expect($('[data-testid="who-raw"]')?.textContent).toBe("usr_nobodyknows1");
+  });
+
   it("reads the directory once for the whole page and names the person when it lands", async () => {
     let reads = 0;
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
