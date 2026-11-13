@@ -1399,6 +1399,36 @@ class DecisionService:
                 carry_out(connection, self.settings, row, choose=choose, actor=actor)
             except OptionError as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "role.hire":
+            # AN AGENT PROPOSED A HIRE (BOSSAPP-884, agent_requests): exactly the signed draft is
+            # created through agents.create_agent, sponsored by the approver. Refused (approval
+            # not recorded) when the draft changed or the agent door says no.
+            from .agent_requests import RequestError, on_hire_approved
+
+            try:
+                on_hire_approved(connection, row, actor)
+            except RequestError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "budget.override":
+            # AN AGENT ASKED TO GO OVER THE CAP FOR ONE BUILD (BOSSAPP-884): the override is
+            # recorded for that build's lineage only; a build the cap already stopped is retried
+            # once this approval has committed.
+            from .agent_requests import RequestError, on_override_approved, resume_after_override
+
+            try:
+                granted = on_override_approved(connection, row, actor)
+            except RequestError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+            if granted["resume"]:
+                settings, jobs, decision_id = self.settings, self.jobs, str(row["id"])
+
+                def _resume() -> None:
+                    from ..db import get_engine
+
+                    resume_after_override(get_engine(), settings, jobs, decision_id=decision_id,
+                                          run_id=granted["run_id"])
+
+                _spawn_as_this_request(_resume)
         elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
             # A paid call whose outcome was never settled. Approving settles it: a reply the
             # receipt holds is recorded (usage and cost) and replayed by the step, never paid

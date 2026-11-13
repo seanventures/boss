@@ -133,6 +133,12 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Choosing one of a decision's options runs exactly that option's signed effects on the
     # work-item graph, skipping any target that changed since (decision_options, BOSSAPP-879).
     "choose_option",
+    # An agent's proposed hire: approving creates exactly the drafted agent through the console's
+    # own create door (agent_requests.on_hire_approved, BOSSAPP-884).
+    "role.hire",
+    # An agent's budget override for one build: approving lets that build lineage spend up to the
+    # cap plus the amount, and resumes a build the cap stopped (agent_requests, BOSSAPP-884).
+    "budget.override",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -719,6 +725,27 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
             *offered,
             _action("reject", "None of these", "reject",
                     "Declines every option; nothing is carried out."),
+            _delegate(),
+        ]
+    if _action_of(decision) == "role.hire":
+        # AN AGENT'S PROPOSED HIRE (agent_requests, BOSSAPP-884): nothing exists until Hire.
+        name = str((_rec(decision).get("draft") or {}).get("name") or "the agent")
+        return [
+            _action("approve", "Hire", "approve",
+                    f"Creates {name} exactly as drafted (purpose, skills, reporting line), with "
+                    "you as its sponsor."),
+            _action("reject", "Don't hire", "reject", "Nothing is created; the agent is told."),
+            _delegate(),
+        ]
+    if _action_of(decision) == "budget.override":
+        # AN AGENT'S BUDGET OVERRIDE FOR ONE BUILD (agent_requests, BOSSAPP-884).
+        extra = int((_rec(decision).get("override") or {}).get("extra_usd_micros") or 0)
+        return [
+            _action("approve", f"Allow ${extra / 1_000_000:.2f} over", "approve",
+                    "This build (and its retries) may spend up to the cap plus this amount for "
+                    "7 days; no other build gains room. A build the cap stopped is resumed."),
+            _action("reject", "Keep the cap", "reject",
+                    "The cap stands; the build stays stopped until the cap has room."),
             _delegate(),
         ]
     if _action_of(decision) in ("deploy_host", "deploy_stack"):

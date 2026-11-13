@@ -13086,4 +13086,21 @@ CREATE TABLE IF NOT EXISTS status_card_revisions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (card_id, revision)
 );
+-- 884 (services/agent_requests.py): an approved `budget.override` decision. The build lineage
+-- (root_run_id: the run and its retries) may spend up to the caps plus extra_usd_micros at the
+-- stage-boundary cap check (build_budget.cap_reached with the run); no other build gains room.
+-- A `role.hire` needs no table: its draft lives on the decision until a person approves it.
+CREATE TABLE IF NOT EXISTS budget_overrides (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  root_run_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  extra_usd_micros BIGINT NOT NULL CHECK (extra_usd_micros > 0),
+  decision_id TEXT NOT NULL UNIQUE REFERENCES decisions(id) ON DELETE CASCADE,
+  approved_by TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_budget_overrides_lineage ON budget_overrides (project_id, root_run_id, status);
 -- ================================ end BOSSAPP-w4-work-ux2 ==

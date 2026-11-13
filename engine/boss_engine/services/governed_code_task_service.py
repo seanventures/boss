@@ -5527,7 +5527,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         try:
             with _transaction(engine) as c:
                 _build_budget.renew(budget, c, project_id, reservation_id)
-                reached = _build_budget.cap_reached(budget, c, project_id)
+                # With the run: an approved budget override for its lineage adds room (884).
+                reached = _build_budget.cap_reached(budget, c, project_id, run_id=run_id)
         except Exception:  # noqa: BLE001 — never let the check itself break a run
             _log_caught(logger)
             return
