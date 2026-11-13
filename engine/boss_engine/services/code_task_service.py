@@ -3415,7 +3415,8 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
             from .code_task_mcp import prepare as _prepare_mcp
 
             with _transaction(engine) as c:
-                harness_mcp = _prepare_mcp(c, settings, project_id, spec.get("role_key"))
+                harness_mcp = _prepare_mcp(c, settings, project_id, spec.get("role_key"),
+                                           run_id=run_id)
                 # AND ITS INSTRUCTIONS (agent-loadout §4.8): only when it runs as a role.
                 from .agent_instructions import for_code_task
 
