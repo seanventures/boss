@@ -37,6 +37,7 @@ import { AddRepoDrawer } from "./add-repo";
 import { DangerZone } from "../project-delete";
 import { isLocalRepo, repoHostLabel, repoHref } from "../../lib/repo-links";
 import { LocalCodePanel } from "./publish-sheet";
+import { ToolchainImageCard } from "./toolchain-image";
 
 /** The section nav and card icons, in the wireframe's order and colours (13-01). */
 const SECTION_ICON: Record<string, { icon: Icon; c: Tone | "grey" }> = {
@@ -154,6 +155,8 @@ export function SettingsTab({ ctx }: { ctx: PxCtx }) {
                 {by.autonomy || by.repos ? <div className="px-grid px-g2">{card("autonomy")}{card("repos")}</div> : null}
                 {card("notifications")}
                 {st.sections.filter((x) => !["demo_logins", "deploy_values", "targets", "captain", "autonomy", "repos", "notifications"].includes(x.key)).map((x) => card(x.key))}
+                {/* BOSSAPP-825: the project's own build image (setup session → Capture → chip). */}
+                {!ctx.demo ? <ToolchainImageCard projectId={ctx.projectId} actor={ctx.actor} /> : null}
                 {/* THE DANGER ZONE, quiet at the foot: Archive (nothing deleted) and Delete project. */}
                 {!ctx.demo ? <DangerZone projectId={ctx.projectId} name={ctx.overview.project.name} home={!!ctx.homeId && ctx.homeId === ctx.projectId} /> : null}
               </div>
