@@ -338,6 +338,11 @@ def answer_message(decision: Mapping[str, Any]) -> dict[str, Any]:
     return body
 
 
+def is_parked_question(pending: Any) -> bool:
+    """Whether an agent run is parked on ask_human (agent_loop writes pending.kind)."""
+    return isinstance(pending, Mapping) and pending.get("kind") == TOOL_NAME
+
+
 def resume_with_answer(connection: Connection, settings: Any, run: Mapping[str, Any]) -> dict:
     """Resume an agent run parked on ask_human: the typed answer replaces the parked tool
     result and arrives as a structured user message; the loop then continues."""
@@ -403,4 +408,4 @@ ASK_HUMAN_SCHEMA = {
 
 __all__ = ["ACTION", "FIELD_TYPES", "FormError", "normalize_form", "validate_answer",
            "ask_human", "record_answer", "on_answered", "queue_agent_resume", "answer_message",
-           "resume_with_answer", "ASK_HUMAN_SCHEMA", "TOOL_NAME"]
+           "resume_with_answer", "is_parked_question", "ASK_HUMAN_SCHEMA", "TOOL_NAME"]

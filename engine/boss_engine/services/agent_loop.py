@@ -1982,11 +1982,12 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         return {"status": run["status"], "run_id": run_id}
     project_id = run["project_id"]
     pending = run["pending"] or {}
-    if pending.get("kind") == "ask_human":
-        # A TYPED QUESTION, answered or declined (BOSSAPP-832): nothing is executed; the typed
-        # answer replaces the parked result and arrives as a structured user message.
-        from .typed_forms import resume_with_answer
+    from .typed_forms import is_parked_question, resume_with_answer
 
+    if is_parked_question(pending):
+        # A TYPED QUESTION, answered or declined (BOSSAPP-832): nothing is executed, so there is
+        # no held call to check; the typed answer replaces the parked result and arrives as a
+        # structured user message.
         return resume_with_answer(connection, settings, run)
     # Governance invariant: deferred high-risk tools only execute after the linked
     # Decision is approved. The HTTP resume endpoint is worker-facing and historically
