@@ -12651,3 +12651,62 @@ DO $$ BEGIN
 END $$;
 -- Last-Event-ID replay reads "the events after this one" in (created_at, id) order.
 CREATE INDEX IF NOT EXISTS idx_events_created_id ON events (created_at, id);
+
+-- BOSSAPP-861 ── general-purpose extensions (boss.extension/v1) ─────────────────────────────────
+-- engine/boss_engine/extensions/: one row per installed extension (the APPROVED whole-tree
+-- checksum is the trust gate's reference; nonce derives the MCP bearer and webhook secrets, so a
+-- reinstall rotates them), its per-project enablement (and the MCP server row its tools ride),
+-- its namespaced key-value state (size-capped), its event-feed ack cursor, and the job leases
+-- that let exactly one API process fire a scheduled callback (backup_scheduler's lease pattern).
+CREATE TABLE IF NOT EXISTS extension_installs (
+  extension_id TEXT PRIMARY KEY,
+  version TEXT NOT NULL,
+  name TEXT NOT NULL,
+  directory TEXT NOT NULL,
+  approved_checksum TEXT NOT NULL,
+  bundle_checksum TEXT NOT NULL,
+  manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+  nonce TEXT NOT NULL,
+  installed_by TEXT,
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS extension_projects (
+  extension_id TEXT NOT NULL REFERENCES extension_installs(extension_id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  mcp_server_id TEXT,
+  updated_by TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (extension_id, project_id)
+);
+CREATE TABLE IF NOT EXISTS extension_state (
+  extension_id TEXT NOT NULL,
+  project_id TEXT NOT NULL DEFAULT '',
+  key TEXT NOT NULL,
+  value JSONB NOT NULL,
+  bytes INTEGER NOT NULL CHECK (bytes >= 0 AND bytes <= 65536),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (extension_id, project_id, key)
+);
+CREATE TABLE IF NOT EXISTS extension_event_cursors (
+  extension_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  last_created_at TIMESTAMPTZ,
+  last_event_id TEXT,
+  delivered BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (extension_id, project_id)
+);
+CREATE TABLE IF NOT EXISTS extension_job_leases (
+  extension_id TEXT NOT NULL,
+  job TEXT NOT NULL,
+  holder TEXT NOT NULL DEFAULT '',
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  next_run_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_run_at TIMESTAMPTZ,
+  last_status TEXT,
+  last_error TEXT,
+  runs BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (extension_id, job)
+);
