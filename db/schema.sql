@@ -13026,3 +13026,30 @@ BEGIN
   END IF;
 END;
 $$;
+-- 871 (services/secret_proposals.py): an agent asks for a secret to be stored. The agent names
+-- it, where it goes and why; it NEVER supplies the value. A decision (recommendation.action
+-- 'store_proposed_secret') opens; the person types the value on the card in the console and
+-- approval writes it through put_secret (and binds it to the named target). This table has no
+-- value column, by design: the value passes from the person's form to the secret store.
+CREATE TABLE IF NOT EXISTS secret_proposals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  decision_id TEXT,
+  name TEXT NOT NULL,
+  secret_kind TEXT NOT NULL DEFAULT 'api_token',
+  target_kind TEXT NOT NULL DEFAULT 'project'
+    CHECK (target_kind IN ('project', 'deployment_target', 'agent')),
+  target_id TEXT,
+  binding_name TEXT,
+  reason TEXT NOT NULL,
+  requested_by TEXT NOT NULL,
+  run_id TEXT,
+  status TEXT NOT NULL DEFAULT 'asked' CHECK (status IN ('asked', 'stored', 'refused')),
+  secret_ref_id TEXT,
+  resolved_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_secret_proposals_project ON secret_proposals (project_id, status, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_secret_proposals_decision ON secret_proposals (decision_id)
+  WHERE decision_id IS NOT NULL;

@@ -14,6 +14,8 @@ _EXPECTED_TOOLS: set[str] = {
     "list_work_items", "create_work_item", "link_work_items", "complete_work_item", "ask_human",
     # AN AGENT ASKS FOR MCP TOOLS (BOSSAPP-848): a Grant card a person answers.
     "request_tool_access",
+    # AN AGENT PROPOSES A SECRET (BOSSAPP-871): a card the person types the value on.
+    "propose_secret",
     # THE KNOWLEDGE GRAPH (BOSSAPP-622): where code is, who depends on it, what a change can
     # break, the facts and precedent behind it; and kg_propose_fact, the one write (an `inferred`
     # fact), offered through the knowledge.propose bundle, which every agent holds.
@@ -271,7 +273,7 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 183, (
+    assert len(reg.names()) == 184, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 102  # + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
@@ -279,7 +281,7 @@ def test_default_registry_shape():
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 81  # + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
+    assert len(write) == 82  # + propose_secret (BOSSAPP-871), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
     # + file_platform_gap, request_self_fix (BOSSAPP-571's doorway) + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
@@ -478,6 +480,9 @@ _SAFE_WRITES = [
     # A TOOL REQUEST IS A QUESTION (BOSSAPP-848): it opens a Grant card and grants nothing; the
     # person's approval is what gives the agent the tools.
     "request_tool_access",
+    # A SECRET PROPOSAL IS A QUESTION (BOSSAPP-871): it opens a card and stores nothing; the value
+    # comes only from the person who types it.
+    "propose_secret",
     # A SCAN READS THE APP AND WRITES FINDINGS. It runs the pinned scanners on the app's own code
     # in a sandbox and against BOSS's own targets only; nothing in the app or the world changes,
     # and running it twice records a second scan (APP_TEMPLATES_AND_SECURITY_LOOP.md §4).

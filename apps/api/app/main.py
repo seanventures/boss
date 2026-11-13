@@ -692,6 +692,7 @@ from .request_bodies import (
     RoleSkillBody,
     SecretKeypairBody,
     SecretPutBody,
+    SecretProposalStoreBody,
     TargetSecretBindBody,
     WebAppBuildBody,
     WorkflowApplyBody,
@@ -9641,6 +9642,50 @@ def bind_secret_endpoint(target_id: str, payload: TargetSecretBindBody):
                 actor=actor)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/v1/secret-proposals/{decision_id}/store")
+@permit(P.SECRET_MANAGE, scope=Scope.of("decision", path="decision_id"))
+def store_proposed_secret_endpoint(decision_id: str, payload: SecretProposalStoreBody):
+    """BOSSAPP-871: a person types the value of a secret an agent proposed, and approves.
+
+    The value goes from this request through the one approval door (the decision's own approval
+    checks, its approver binding, two-person rules) to put_secret, held only in a context
+    variable for this call: it is never written to the decision, its note or an event, and no
+    response carries it. A plain Approve of the same card is refused."""
+    body = payload.payload()
+    value = body.get("value")
+    if not isinstance(value, str) or not value:
+        raise HTTPException(status_code=422, detail="value is required")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.identity.approvals import ApprovalPending
+    from boss_engine.services.secret_proposals import ACTION, typed_value
+
+    with begin(engine) as connection:
+        rec = connection.execute(
+            text("SELECT recommendation FROM decisions WHERE id = :id"), {"id": decision_id},
+        ).scalar()
+        if not isinstance(rec, dict) or rec.get("action") != ACTION:
+            raise HTTPException(status_code=404, detail="No proposed-secret card with that id.")
+        request = DecisionActionRequest(
+            actor=str(body.get("actor") or current_api_principal.get() or "executive_console"),
+            note=body.get("note"))
+        try:
+            with typed_value(decision_id, value):
+                row = approve_decision_in(connection, decision_id, request)
+        except ApprovalPending as pending:
+            # A tier-3 card's first approval cannot hold the value until the second: refuse it.
+            raise HTTPException(status_code=409, detail=(
+                "This card needs a second approver first; store the value on the last "
+                "approval.")) from pending
+        stored = connection.execute(
+            text("SELECT name, secret_ref_id, status FROM secret_proposals WHERE decision_id = :d"),
+            {"d": decision_id}).mappings().first()
+        return {"decision_id": decision_id, "status": row.get("status"),
+                "name": (stored or {}).get("name"),
+                "secret_ref_id": (stored or {}).get("secret_ref_id"),
+                "raw_secret_stored": False}
 
 
 # --------------------------------------------------------------------------- #
