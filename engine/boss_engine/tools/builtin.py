@@ -3555,6 +3555,135 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 "closed": 0 if dry else len(found)}
 
 
+def _register_work_item_tools(reg: ToolRegistry) -> None:
+    """THE ONE WORK-ITEM GRAPH (BOSSAPP-830/832): read the tree, add an item, relate two items,
+    and ask a person a typed question. Each is one call into services/work_items or
+    services/typed_forms — the same doors /v1/work-items and the console use."""
+    _party = {"type": "string", "description": "agent:<role> or person:<id>"}
+
+    @reg.tool(
+        "list_work_items",
+        "The project's work as ONE tree: every work item (epics, stories, tasks — and the "
+        "workflow runs, builds, PRD panels and planning tickets that each belong to one), with "
+        "its key (WI-12), status (backlog | todo | active | blocked | in_review | done | "
+        "cancelled), who works it, its labels and what still blocks it. Read-only.",
+        _obj({"label": {"type": "string", "description": "only items with this label"},
+              "include_closed": {"type": "boolean",
+                                 "description": "include done and cancelled (default true)"},
+              "item_id": {"type": "string",
+                          "description": "one item in full: relations, runs, stage timeline"}}),
+        kind="read", permission="work_item:read",
+        exposure=Exposure(tags=("work", "planning")))
+    def list_work_items(ctx, *, project_id, actor, args):
+        from ..services import work_items as wi
+
+        with ctx.begin() as c:
+            if args.get("item_id"):
+                return {"ok": True, "item": _json_safe(wi.get_item(c, project_id,
+                                                                  str(args["item_id"])))}
+            tree = wi.tree(c, project_id, include_closed=args.get("include_closed") is not False,
+                           label=(str(args["label"]) if args.get("label") else None))
+        return {"ok": True, **_json_safe(tree)}
+
+    @reg.tool(
+        "create_work_item",
+        "Add a work item to the project's tree: a title, optionally under a parent item, for a "
+        "goal, worked by an agent or a person, with labels and an execution policy (review / "
+        "approval stages its 'done' must pass). It plans work; it starts nothing.",
+        _obj({"title": {"type": "string"},
+              "description": {"type": "string"},
+              "parent_id": {"type": "string", "description": "the work item it belongs under"},
+              "goal_id": {"type": "string"},
+              "assignee": _party,
+              "responsible_person": {"type": "string", "description": "person:<id>"},
+              "status": {"type": "string", "description": "backlog | todo (default) | active"},
+              "labels": {"type": "array", "items": {"type": "string"}},
+              "execution_policy": {"type": "object",
+                                   "description": "{stages: [{kind: review|approval, "
+                                                  "participants: [...], comment_required, "
+                                                  "max_rounds}]}"}},
+             required=["title"]),
+        kind="write", reversibility="safe", permission="work_item:manage",
+        exposure=Exposure(tags=("work", "planning")))
+    def create_work_item(ctx, *, project_id, actor, args):
+        from ..services import work_items as wi
+        from ..services.execution_policy import PolicyError
+
+        try:
+            with ctx.begin() as c:
+                item = wi.create_item(
+                    c, getattr(ctx, "settings", None), project_id=project_id,
+                    title=str(args.get("title") or ""),
+                    description=str(args.get("description") or ""),
+                    parent_id=args.get("parent_id") or None, goal_id=args.get("goal_id") or None,
+                    assignee=args.get("assignee") or None,
+                    responsible_person=args.get("responsible_person") or None,
+                    status=str(args.get("status") or "todo"),
+                    labels=[str(x) for x in args.get("labels") or []],
+                    execution_policy=args.get("execution_policy") or None, actor=actor)
+        except (wi.WorkItemError, PolicyError, LookupError) as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": True, "item": _json_safe(item)}
+
+    @reg.tool(
+        "link_work_items",
+        "Relate two work items: blocks / blocked_by (a blocked item waits; when its last blocker "
+        "is done it wakes and its paused runs resume), relates_to, duplicates. remove=true "
+        "takes the relation away. A blocking cycle is refused.",
+        _obj({"item_id": {"type": "string"},
+              "other_id": {"type": "string"},
+              "kind": {"type": "string",
+                       "description": "blocks | blocked_by | relates_to | duplicates"},
+              "remove": {"type": "boolean"}},
+             required=["item_id", "other_id", "kind"]),
+        kind="write", reversibility="safe", permission="work_item:manage",
+        exposure=Exposure(tags=("work", "planning")))
+    def link_work_items(ctx, *, project_id, actor, args):
+        from ..services import work_items as wi
+
+        try:
+            with ctx.begin() as c:
+                fn = wi.remove_relation if args.get("remove") else wi.add_relation
+                relations = fn(c, project_id=project_id, item_id=str(args["item_id"]),
+                               other_id=str(args["other_id"]), kind=str(args["kind"]),
+                               actor=actor)
+        except (wi.WorkItemError, LookupError) as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": True, "relations": _json_safe(relations)}
+
+    @reg.tool(
+        "ask_human",
+        "Ask a person a TYPED question: it lands in Needs you as a small form and the answer "
+        "comes back as data, not prose. Field types: text, select (options), checkbox, "
+        "item_verdicts (items [{id, label}] each given a verdict), task_suggestions "
+        "(suggestions [{title, description}] — the ones the person accepts become work items "
+        "under work_item_id). Returns the decision id; read the answer with list_decisions. "
+        "(Inside an agent run the native ask_human pauses the run and resumes it with the answer.)",
+        _obj({"question": {"type": "string"},
+              "fields": {"type": "array", "items": {"type": "object"},
+                         "description": "[{key, type, label, required?, options?, items?, "
+                                        "suggestions?}]"},
+              "work_item_id": {"type": "string", "description": "the item it is about"},
+              "context": {"type": "string", "description": "one or two sentences of why"}},
+             required=["question", "fields"]),
+        kind="write", reversibility="safe", permission="work_item:manage",
+        exposure=Exposure(tags=("work", "decisions")))
+    def ask_human(ctx, *, project_id, actor, args):
+        from ..services import typed_forms
+
+        try:
+            with ctx.begin() as c:
+                asked = typed_forms.ask_human(
+                    c, project_id=project_id, question=str(args.get("question") or ""),
+                    form={"fields": args.get("fields") or []}, asker=str(actor or "agent"),
+                    work_item_id=args.get("work_item_id") or None,
+                    context=str(args.get("context") or ""))
+        except (typed_forms.FormError, LookupError) as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": True, "status": "asked", "decision_id": asked["decision_id"],
+                "fields": [f["key"] for f in asked["form"]["fields"]]}
+
+
 def _register_governance_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "list_decisions",
@@ -8890,6 +9019,7 @@ def build_default_registry() -> ToolRegistry:
     _register_debug_session_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)
+    _register_work_item_tools(reg)
     _register_governance_tools(reg)
     # Giving an agent a skill or an MCP server: the act Agent Studio exists for, by asking.
     from .agent_tools import register_agent_tools

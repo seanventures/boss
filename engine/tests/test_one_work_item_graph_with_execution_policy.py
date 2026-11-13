@@ -454,3 +454,41 @@ def test_declining_resumes_the_agent_with_the_reason(eng, project):
         assert body == {**body, "status": "declined", "reason": "not my call"}
         assert c.execute(text("SELECT count(*) FROM jobs WHERE project_id = :p "
                               "AND kind = 'agent.resume'"), {"p": project}).scalar() == 1
+
+
+# ── the MCP / chat tools ─────────────────────────────────────────────────────────────────────
+
+class _Ctx:
+    def __init__(self, engine):
+        self.engine = engine
+        self.settings = None
+
+    def begin(self):
+        return self.engine.begin()
+
+
+def test_the_tools_list_create_link_and_ask(eng, project):
+    from boss_engine.tools.builtin import build_default_registry
+
+    tools = {s.name: s for s in build_default_registry().specs()}
+
+    def call(name, **args):
+        return tools[name].handler(_Ctx(eng), project_id=project, actor="agent:planner",
+                                   args=args)
+
+    a = call("create_work_item", title="Design", labels=["ux"])["item"]
+    b = call("create_work_item", title="Build", parent_id=a["id"], assignee="agent:frontend")
+    assert b["ok"] and b["item"]["parent_id"] == a["id"]
+    assert call("create_work_item", title="x", assignee="nobody") == {
+        "ok": False, "error": "assignee must be agent:<role> or person:<id>"}
+    linked = call("link_work_items", item_id=b["item"]["id"], other_id=a["id"],
+                  kind="blocked_by")
+    assert linked["ok"] and linked["relations"][0]["kind"] == "blocked_by"
+    listed = call("list_work_items", label="ux")
+    assert listed["count"] == 1 and listed["items"][0]["id"] == a["id"]
+    one = call("list_work_items", item_id=b["item"]["id"])["item"]
+    assert one["blocked_by"][0]["id"] == a["id"]
+    asked = call("ask_human", question="Which framework?", work_item_id=a["id"],
+                 fields=[{"key": "fw", "type": "select", "options": ["react", "vue"]}])
+    assert asked["ok"] and asked["fields"] == ["fw"]
+    assert call("ask_human", question="?", fields=[{"type": "nope"}])["ok"] is False
