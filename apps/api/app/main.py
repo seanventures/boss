@@ -1327,6 +1327,23 @@ def _install_shipped_cast() -> dict:
         return {}
 
 
+def _sync_connector_catalog() -> dict:
+    """THE CONNECTOR CATALOG INTO EVERY PROJECT (BOSSAPP-849): each definition upserted into
+    integration_definitions as `connector:<key>`. Idempotent by content hash: an unchanged
+    catalog writes nothing; a changed definition publishes its next version. Never blocks boot."""
+    from boss_engine.services import connector_catalog
+
+    try:
+        result = connector_catalog.sync_all(engine, settings, actor="boss")
+        if result["published"]:
+            print(f"[lifespan] connector catalog: {result['published']} definition(s) published "
+                  f"across {result['projects']} project(s)")
+        return result
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] connector catalog sync skipped: {exc}")
+        return {}
+
+
 def _sync_builtin_templates() -> None:
     """THE SHIPPED TEMPLATES, REFRESHED AT BOOT for every org — not by whoever lists them.
 
@@ -1465,6 +1482,7 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
     _install_shipped_cast()
+    _sync_connector_catalog()
     _sync_builtin_templates()
     _seed_work_tracker_defaults()
     _backfill_agent_identities()
@@ -31712,6 +31730,16 @@ app.include_router(build_external_agents_router())
 from .routers.kit import build_kit_router
 
 app.include_router(build_kit_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
+# CONNECTORS, STDIO SERVERS AND GATEWAYS (BOSSAPP-849..851): the connector catalog, stdio launch
+# templates, and curated gateways for outside MCP clients at /mcp/gw/{id} (routers/mcp_connect.py).
+from .routers.mcp_connect import build_mcp_connect_router
+
+app.include_router(build_mcp_connect_router(
     engine=engine,
     settings=get_settings,
     require_write_actor=require_project_write_actor,
