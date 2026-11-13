@@ -492,3 +492,15 @@ def test_the_tools_list_create_link_and_ask(eng, project):
                  fields=[{"key": "fw", "type": "select", "options": ["react", "vue"]}])
     assert asked["ok"] and asked["fields"] == ["fw"]
     assert call("ask_human", question="?", fields=[{"type": "nope"}])["ok"] is False
+
+
+def test_a_chat_turn_that_asked_carries_the_question_for_the_form(eng, project):
+    from boss_engine.services import turn_cards
+    from boss_engine.services.intent_router import tool_call_record
+
+    record = tool_call_record({"tool": "ask_human", "args": {"question": "?"},
+                               "result": {"ok": True, "decision_id": "dec_123"}})
+    assert record["decision_id"] == "dec_123"
+    with eng.begin() as c:
+        cites = turn_cards.citations(c, project, "I asked you which framework to use.", [record])
+    assert cites[0]["kind"] == "ask" and cites[0]["ref"] == "dec_123"

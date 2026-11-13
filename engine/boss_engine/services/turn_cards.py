@@ -33,7 +33,7 @@ from sqlalchemy.engine import Connection
 log = logging.getLogger(__name__)
 
 MAX_CITATIONS = 6
-CITATION_KINDS = ("pr", "run", "file", "doc", "issue", "env", "place")
+CITATION_KINDS = ("pr", "run", "file", "doc", "issue", "env", "place", "ask")
 #: The offers that START work: their arguments are the work's words.
 _WORK_TOOLS = ("create_code_task", "start_workflow")
 _FILE_EXT = ("py|ts|tsx|js|jsx|mjs|cjs|go|rb|java|kt|rs|sql|ya?ml|json|md|css|scss|html|sh|toml"
@@ -200,6 +200,13 @@ def citations(connection: Connection, project_id: str, reply: str,
                          project_href(project_id, tab="settings", drawer="section:demo_logins"),
                          at=at, title="Settings › Demo logins"))
     out.extend(_docs(connection, project_id, said))
+    # A TYPED QUESTION THE TURN ASKED (ask_human, BOSSAPP-832): first, so the answer draws its
+    # form in place (the console reads kind "ask" as the form, not a chip).
+    for call in tool_calls or []:
+        if call.get("tool") == "ask_human" and str(call.get("decision_id") or ""):
+            did = str(call["decision_id"])
+            out.append(_cite("ask", did, "Your answer", f"/?area=decisions&decision={did}",
+                             at=-1, title="A question for you"))
     seen: set[tuple[str, str]] = set()
     ordered = []
     for c in sorted(out, key=lambda c: c["_at"]):

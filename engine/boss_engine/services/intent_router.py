@@ -68,6 +68,10 @@ def tool_call_record(step: dict) -> dict:
     refs = result_refs(step.get("tool"), result)
     if refs:
         record["refs"] = refs
+    # A call that raised a decision names it, so the answer can draw it (a typed question's
+    # form in the chat, BOSSAPP-832 — turn_cards' "ask" citation).
+    if isinstance(result.get("decision_id"), str) and result["decision_id"]:
+        record["decision_id"] = result["decision_id"]
     return record
 
 def _is_acting(tool_name: str) -> bool:

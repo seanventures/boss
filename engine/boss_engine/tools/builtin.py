@@ -9098,6 +9098,9 @@ def build_default_registry() -> ToolRegistry:
 # owning eighteen tools and being allowed five.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "deploy_app",
+    # The work-item graph from chat (BOSSAPP-830/832): plan an item, relate two, and ask the
+    # person a typed question (its form is drawn in the answer, turn_cards "ask" citation).
+    "create_work_item", "link_work_items", "ask_human",
     # "Remember that ..." from chat: one fact, stored `inferred` (quarantined, forgettable, never
     # above a governed or approved fact) until a person promotes it (BOSSAPP-622).
     "kg_propose_fact",
