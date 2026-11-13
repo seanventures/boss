@@ -12284,6 +12284,21 @@ CREATE TABLE IF NOT EXISTS portability_imports (
   chunks_done INTEGER NOT NULL DEFAULT 0,
   plan JSONB NOT NULL DEFAULT '{}'::jsonb,
   report JSONB NOT NULL DEFAULT '{}'::jsonb,
+-- ── BOSSAPP-833-835: decide from Slack and phone; realtime event push ─────────────────────────
+-- services/chat_channels.py (834) and services/event_stream.py (835).
+--
+-- A CHAT ENDPOINT is one two-way channel BOSS posts decisions to and hears answers from: a Slack
+-- app, a Telegram bot (Discord is a stub). Its credentials (Slack's signing secret and bot token,
+-- Telegram's bot token and webhook secret) live in the secret store; `secret_refs` holds only
+-- {"<name>": "<secret_refs.id>"}, never a value.
+CREATE TABLE IF NOT EXISTS chat_endpoints (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('slack', 'telegram', 'discord')),
+  name TEXT NOT NULL,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,      -- channel / chat id, team id, max_tier
+  secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb, -- {"signing_secret": "sref_..", ...}
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -12533,3 +12548,106 @@ ALTER TABLE decisions ADD COLUMN IF NOT EXISTS form_schema JSONB;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answer JSONB;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_by TEXT;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_chat_endpoints_project ON chat_endpoints (project_id, status);
+
+-- WHO a chat user is in BOSS. A row is born unverified by a press from an unlinked user (with the
+-- hash of a one-time link code DMed to them); it becomes a link only when that person signs in
+-- to the console and confirms (`verified_at`, `principal_id`, `person_actor`). Revoked links
+-- stay as history. One live row per (endpoint, external user).
+CREATE TABLE IF NOT EXISTS chat_identity_links (
+  id TEXT PRIMARY KEY,
+  endpoint_id TEXT NOT NULL REFERENCES chat_endpoints(id) ON DELETE CASCADE,
+  external_user_id TEXT NOT NULL,
+  external_name TEXT,
+  principal_id TEXT,                 -- identity_principals.id of the person, once confirmed
+  person_actor TEXT,                 -- the actor decisions record for them (legacy member id)
+  link_code_hash TEXT,               -- sha256 of the one-time code; NULL once spent
+  code_expires_at TIMESTAMPTZ,
+  verified_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_identity_links_live
+  ON chat_identity_links (endpoint_id, external_user_id) WHERE revoked_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_identity_links_code
+  ON chat_identity_links (link_code_hash) WHERE link_code_hash IS NOT NULL;
+
+-- A chat thread bound to BOSS work: the message a decision card was posted as (Slack channel +
+-- ts, Telegram chat + message id), so an answer, an update or a reply lands on the right work.
+CREATE TABLE IF NOT EXISTS chat_threads (
+  id TEXT PRIMARY KEY,
+  endpoint_id TEXT NOT NULL REFERENCES chat_endpoints(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  external_channel_id TEXT NOT NULL,
+  external_thread_id TEXT NOT NULL,
+  decision_id TEXT,
+  run_id TEXT,
+  work_item_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_threads_external
+  ON chat_threads (endpoint_id, external_channel_id, external_thread_id);
+CREATE INDEX IF NOT EXISTS idx_chat_threads_decision ON chat_threads (decision_id);
+
+-- ONE BUTTON, ONE USE. Each Approve/Reject button carries `<id>.<hmac>`; the row is spent by a
+-- compare-and-swap (pending -> used), so a replayed or double press refuses.
+CREATE TABLE IF NOT EXISTS chat_actions (
+  id TEXT PRIMARY KEY,
+  endpoint_id TEXT NOT NULL REFERENCES chat_endpoints(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  decision_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'used', 'expired')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  used_by_external TEXT,
+  used_by_principal TEXT,
+  outcome JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_actions_decision ON chat_actions (decision_id, status);
+
+-- THE CHAT OUTBOX (services/notify.py enqueue_chat / deliver_chat_due): every message to a chat
+-- endpoint is a row before it is sent; retried with backoff, dead after MAX_CHAT_ATTEMPTS.
+CREATE TABLE IF NOT EXISTS chat_outbox (
+  id TEXT PRIMARY KEY,
+  endpoint_id TEXT NOT NULL REFERENCES chat_endpoints(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  kind TEXT NOT NULL,                -- decision_card | message | response
+  dedupe_key TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'failed', 'sent', 'dead')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_error TEXT,
+  receipt JSONB,
+  sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_outbox_dedupe ON chat_outbox (dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_chat_outbox_due ON chat_outbox (status, next_attempt_at);
+
+-- REALTIME PUSH (835). Every committed event row is announced on the `boss_events` channel. A
+-- trigger, not a call in emit_event: a few writers insert events directly (identity/audit.py,
+-- ambient/roadmap_demo.py), and a NOTIFY at the one code seam would miss them. NOTIFY is delivered
+-- at COMMIT, so a rolled-back event is never announced. The payload is the row's identity only
+-- (8000-byte cap); the stream reads the row and authorizes it per viewer before sending a byte.
+CREATE OR REPLACE FUNCTION boss_events_notify() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_notify('boss_events', json_build_object(
+    'id', NEW.id, 'project_id', NEW.project_id, 'event_type', NEW.event_type,
+    'entity_type', NEW.entity_type, 'entity_id', NEW.entity_id)::text);
+  RETURN NULL;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'events_notify_boss_events'
+                 AND tgrelid = 'events'::regclass) THEN
+    CREATE TRIGGER events_notify_boss_events AFTER INSERT ON events
+      FOR EACH ROW EXECUTE FUNCTION boss_events_notify();
+  END IF;
+END $$;
+-- Last-Event-ID replay reads "the events after this one" in (created_at, id) order.
+CREATE INDEX IF NOT EXISTS idx_events_created_id ON events (created_at, id);

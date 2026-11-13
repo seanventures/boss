@@ -518,6 +518,8 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
     out["decisions_expired"] = guard("deadlines", deadlines) or 0
     out["routed"] = guard("routes", routes)
     out["delivery"] = guard("deliver", lambda: notify.deliver_due(engine, settings, now=now))
+    # Two-way chat (BOSSAPP-834): decision cards and answers, retried with backoff, dead-lettered.
+    out["chat"] = guard("chat", lambda: notify.deliver_chat_due(engine, settings, now=now))
     from . import bundled_monitoring
 
     out["bundled"] = guard("bundled", lambda: bundled_monitoring.tick(engine, settings, now))

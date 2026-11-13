@@ -8,6 +8,7 @@ import { consoleParams, resolveLegacyArea } from "./legacy-areas";
 import { GET_STARTED_EVENT, SETUP_BADGE_EVENT } from "../lib/setup-stepper";
 import { onChanged } from "./changed";
 import { createRefreshCoordinator, registerConsoleRefresh, type RefreshCoordinator } from "../lib/console-refresh";
+import { useConsoleEvents } from "./use-console-events";
 import {
   cookieWith,
   loadedAreasCookie,
@@ -716,6 +717,8 @@ function ConsoleShellInner({
     const unregister = registerConsoleRefresh(refreshCoordinator);
     return () => { unregister(); refreshCoordinator.dispose(); };
   }, [refreshCoordinator]);
+  // Realtime push (BOSSAPP-835): a matching event refreshes the area on screen sooner; polling stays.
+  useConsoleEvents(refreshCoordinator, scope.projectId ?? null, active);
   // A shell without a render token (a route page): newly committed server props acknowledge the
   // refresh (rc9). Dispatching router.refresh() can finish the transition before Next delivers
   // its response, so a transition ending is not an acknowledgment. Both objects come from the

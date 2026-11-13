@@ -170,5 +170,9 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     push_pending = rows[("POST", "/v1/repos/push-pending/execute")]
     assert push_pending["mcp_status"] == "excluded"
     assert push_pending["reason"] == "push_pending_worker_lease_protocol"
+    # +1 operator-only: POST /v1/chat/links/{link_id}/revoke (BOSSAPP-834: a person revokes
+    # their own chat link). main was already at 81 when this landed (an unrecorded +1).
+    assert rows[("POST", "/v1/chat/links/{link_id}/revoke")]["mcp_status"] == (
+        "operator_only_unavailable")
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 80
+               for row in community["operations"]) == 82

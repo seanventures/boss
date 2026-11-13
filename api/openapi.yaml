@@ -31242,6 +31242,265 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/chat/endpoints:
+    get:
+      tags:
+      - chat-channels
+      summary: List Chat Endpoints
+      operationId: get_v1_chat_endpoints_8d8930d8
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Chat Endpoints V1 Chat Endpoints Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - chat-channels
+      summary: Create Chat Endpoint
+      description: 'Connect a Slack app or Telegram bot. The response names the URL(s) to paste into the
+
+        channel''s own settings; the secrets go to the secret backend and are never returned.'
+      operationId: post_v1_chat_endpoints_c83d5eca
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatEndpointCreateBody'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/chat/endpoints/{endpoint_id}/status:
+    post:
+      tags:
+      - chat-channels
+      summary: Set Chat Endpoint Status
+      operationId: post_v1_chat_endpoints_endpoint_id_status_d05a9ae7
+      parameters:
+      - name: endpoint_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatEndpointStatusBody'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/chat/links:
+    get:
+      tags:
+      - chat-channels
+      summary: My Chat Links
+      operationId: get_v1_chat_links_18736664
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /v1/chat/links/peek:
+    post:
+      tags:
+      - chat-channels
+      summary: Peek Chat Link
+      operationId: post_v1_chat_links_peek_2b5d76fa
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatLinkCodeBody'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/chat/links/confirm:
+    post:
+      tags:
+      - chat-channels
+      summary: Confirm Chat Link
+      description: 'The handshake''s end: the signed-in person says "that chat user is me". From now on
+        their
+
+        presses in that channel answer decisions AS them (and only within what they may decide).'
+      operationId: post_v1_chat_links_confirm_c373bde2
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatLinkCodeBody'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/chat/links/{link_id}/revoke:
+    post:
+      tags:
+      - chat-channels
+      summary: Revoke Chat Link
+      operationId: post_v1_chat_links_link_id_revoke_3e5c7102
+      parameters:
+      - name: link_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Link Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/webhooks/inbound/chat/{endpoint_id}:
+    post:
+      tags:
+      - chat-channels
+      summary: Receive Chat
+      description: 'A Slack interaction or event, or a Telegram update, for one chat endpoint. Signed by
+        the
+
+        channel (see the module docstring); 401 when the proof fails, 404 for an unknown endpoint.'
+      operationId: post_v1_webhooks_inbound_chat_endpoint_id_2562a846
+      parameters:
+      - name: endpoint_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/events/stream:
+    get:
+      tags:
+      - events
+      summary: Stream Events
+      description: 'Server-sent events: one `data:` JSON object per event the viewer may see.'
+      operationId: get_v1_events_stream_d92da61e
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+      - name: kinds
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Kinds
+      - name: last_event_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Last Event Id
+      - name: max_seconds
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1800
+          minimum: 1
+          default: 600
+          title: Max Seconds
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+
 components:
   schemas:
     WebhookDelivery:
@@ -64329,3 +64588,63 @@ components:
       - tracker
       - issue_key
       title: LinkIssueRequest
+    ChatEndpointCreateBody:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        kind:
+          type: string
+          title: Kind
+          description: slack | telegram | discord (discord is a stub)
+        name:
+          type: string
+          title: Name
+          default: ''
+        config:
+          additionalProperties: true
+          type: object
+          title: Config
+          description: channel (Slack channel id or Telegram chat id), max_tier (<= 2)
+        secrets:
+          additionalProperties:
+            type: string
+          type: object
+          title: Secrets
+          description: 'slack: signing_secret, bot_token; telegram: bot_token, webhook_secret. Stored in the
+            secret backend; never returned.'
+        actor:
+          type: string
+          title: Actor
+          default: executive_console
+      type: object
+      required:
+      - project_id
+      - kind
+      title: ChatEndpointCreateBody
+    ChatEndpointStatusBody:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        status:
+          type: string
+          title: Status
+        actor:
+          type: string
+          title: Actor
+          default: executive_console
+      type: object
+      required:
+      - project_id
+      - status
+      title: ChatEndpointStatusBody
+    ChatLinkCodeBody:
+      properties:
+        code:
+          type: string
+          title: Code
+      type: object
+      required:
+      - code
+      title: ChatLinkCodeBody

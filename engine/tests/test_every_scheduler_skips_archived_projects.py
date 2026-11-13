@@ -125,6 +125,8 @@ EXEMPT: dict[str, str] = {
     "services/meeting_consensus.py::sweep_stalled_meeting_runs": _CLEANUP,
     "services/notify.py::deliver_due": "delivers messages already planned; plans come from the "
                                        "monitor scheduler, which skips archived projects",
+    "services/notify.py::deliver_chat_due": "delivers chat messages already queued (a decision's "
+                                            "card, a press's answer); starts no work",
     "services/owned_process.py::sweep_orphans": _CLEANUP,
     "services/preview_service.py::sweep_preview_workdirs": _CLEANUP,
     "services/resource_reaper.py::tick": _CLEANUP,

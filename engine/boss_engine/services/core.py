@@ -208,6 +208,20 @@ def has_event(connection: Any, entity_id: str, event_type: str) -> bool:
     return row is not None
 
 
+def _queue_chat_cards(connection: Any, decision_id: str) -> None:
+    """A new decision is queued to the project's two-way chat endpoints (BOSSAPP-834,
+    services/chat_channels.on_decision_created) — in a savepoint, never raising: a chat channel
+    never undoes or fails the decision it announces. Every decision.created passes through this
+    writer (create_blocking_decision calls it directly, not emit_event)."""
+    try:
+        from .chat_channels import on_decision_created
+
+        with connection.begin_nested():
+            on_decision_created(connection, decision_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("chat card queue failed for %s", decision_id, exc_info=True)
+
+
 def _emit_event_postgres(
     connection: Any,
     project_id: str,
@@ -241,6 +255,8 @@ def _emit_event_postgres(
             "data": json.dumps(data),
         },
     )
+    if event_type == "decision.created" and entity_type == "decision":
+        _queue_chat_cards(connection, entity_id)
     try:
         # Imported lazily to keep the hot event writer source-compatible and to
         # avoid a module cycle through jobs.enqueue_job -> core.emit_event.
