@@ -45,3 +45,24 @@ def test_decision_options_are_offered_chosen_and_read_back(client):
     assert client.post("/v1/decision-options", json={
         "project_id": HOME, "actor": "ceo", "question": "q",
         "options": [{"label": "x", "effects": [{"type": "explode"}]}]}).status_code == 422
+
+
+def test_a_person_attaches_lists_and_detaches_a_watchdog(client):
+    item = _create(client, "Release epic")
+    r = client.post(f"/v1/work-items/{item['id']}/watchdogs", json={
+        "project_id": HOME, "actor": "ceo", "conditions": ["blocked", "closed"],
+        "instructions": "make sure the changelog shipped"})
+    assert r.status_code == 201, r.text
+    dog = r.json()["watchdog"]
+    assert dog["watcher"].endswith("ceo") and dog["conditions"] == ["blocked", "closed"]
+    listed = client.get(f"/v1/work-items/{item['id']}/watchdogs",
+                        params={"project_id": HOME}).json()
+    assert [w["id"] for w in listed["watchdogs"]] == [dog["id"]]
+    assert "stopped_unfinished" in listed["conditions"]
+    assert client.post(f"/v1/work-items/{item['id']}/watchdogs", json={
+        "project_id": HOME, "actor": "ceo", "conditions": ["nope"]}).status_code == 422
+    gone = client.delete(f"/v1/work-items/{item['id']}/watchdogs/{dog['id']}",
+                         params={"project_id": HOME, "actor": "ceo"})
+    assert gone.status_code == 200, gone.text
+    assert client.get(f"/v1/work-items/{item['id']}/watchdogs",
+                      params={"project_id": HOME}).json()["watchdogs"] == []

@@ -12995,4 +12995,27 @@ CREATE TABLE IF NOT EXISTS decision_effect_runs (
   UNIQUE (decision_id, effect_index)
 );
 CREATE INDEX IF NOT EXISTS idx_decision_effect_runs_project ON decision_effect_runs (project_id, created_at DESC);
+-- 880 (services/work_watchdogs.py): a person's watchdog on a work item's subtree. The monitor
+-- tick evaluates its conditions (stopped_unfinished | blocked | closed | stalled) and fires ONCE
+-- per fingerprint of what matched: an event plus one message per contact point through the
+-- notifications outbox. Nothing matching clears the fingerprint, so the next stop is told again.
+CREATE TABLE IF NOT EXISTS work_item_watchdogs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  root_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  watcher TEXT NOT NULL,                     -- person:<id> | agent:<role>
+  conditions JSONB NOT NULL DEFAULT '["stopped_unfinished", "blocked"]'::jsonb,
+  stall_hours INTEGER NOT NULL DEFAULT 24,
+  instructions TEXT NOT NULL DEFAULT '',
+  contact_point_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  last_fingerprint TEXT,
+  last_fired_at TIMESTAMPTZ,
+  last_fired JSONB,
+  fired_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (root_item_id, watcher)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_watchdogs_project ON work_item_watchdogs (project_id, enabled);
 -- ================================ end BOSSAPP-w4-work-ux2 ==

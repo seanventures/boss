@@ -3757,6 +3757,39 @@ def _register_work_item_tools(reg: ToolRegistry) -> None:
                 "options": [o["id"] for o in offered["options"]]}
 
     @reg.tool(
+        "watch_work_item",
+        "Put a watchdog on a work item's subtree for the person you act for (or yourself): "
+        "BOSS tells them once each time the subtree stops with work still open "
+        "(stopped_unfinished), has blocked work (blocked), was closed (closed: re-verify it) or "
+        "has not moved for stall_hours (stalled). Messages go through the project's "
+        "notification channels. Watching again replaces the conditions; enabled=false pauses.",
+        _obj({"work_item_id": {"type": "string"},
+              "conditions": {"type": "array", "items": {"type": "string", "enum": [
+                  "stopped_unfinished", "blocked", "closed", "stalled"]}},
+              "stall_hours": {"type": "integer", "minimum": 1, "maximum": 720},
+              "instructions": {"type": "string", "description": "what to check when it fires"},
+              "enabled": {"type": "boolean"}},
+             required=["work_item_id"]),
+        kind="write", reversibility="safe", permission="work_item:manage",
+        exposure=Exposure(tags=("work",)))
+    def watch_work_item(ctx, *, project_id, actor, args):
+        from ..services import work_watchdogs
+
+        who = str(actor or "agent")
+        try:
+            with ctx.begin() as c:
+                attached = work_watchdogs.attach(
+                    c, project_id=project_id, root_item_id=str(args.get("work_item_id") or ""),
+                    watcher=who if ":" in who else f"person:{who}",
+                    conditions=args.get("conditions"),
+                    stall_hours=int(args.get("stall_hours") or 24),
+                    instructions=str(args.get("instructions") or ""),
+                    enabled=args.get("enabled") is not False)
+        except (ValueError, LookupError) as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": True, **_json_safe(attached)}
+
+    @reg.tool(
         "request_tool_access",
         "Ask a person for MCP tools you do not hold yet: name the server, EXACTLY the tools you "
         "need (as the server lists them) and why, in a sentence. A Grant card opens in Needs "
