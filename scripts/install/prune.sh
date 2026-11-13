@@ -9,7 +9,8 @@
 # What it removes:
 #   * stopped preview containers (`boss-prev-*`) and preview images no container uses;
 #   * dangling images of the boss-community compose project;
-#   * boss-community-* image tags beyond the two newest per service (never one in use);
+#   * boss-community-* image tags beyond the two newest per service (never one in use, never
+#     the prev-<tag> rollback point upgrade.sh keeps);
 #   * build cache older than 72h, down to 20% of the disk — only above 75% disk AND only with
 #     --dedicated (a host that runs nothing but BOSS: Docker's build cache is not per-project,
 #     so on a shared machine this would also take other projects' cache).
@@ -58,6 +59,8 @@ for repo in $("${D[@]}" images --format '{{.Repository}}' | grep '^boss-communit
   "${D[@]}" images "$repo" --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' | sort -r | tail -n +3 |
     cut -d'|' -f2 | while read -r img; do
       [[ "$img" == *":<none>" ]] && continue
+      # The rollback point upgrade.sh keeps (BOSSAPP-839) is never pruned.
+      [[ "$img" == *":prev-"* ]] && continue
       grep -qxF "$img" <<<"$in_use" || run "${D[@]}" rmi "$img"
     done
 done
