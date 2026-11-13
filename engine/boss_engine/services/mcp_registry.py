@@ -623,6 +623,18 @@ class McpToolDenied(McpToolOff):
     window is spent. An McpToolOff, so every road that answers Off answers this the same way."""
 
 
+class McpToolRateLimited(McpToolDenied):
+    """A rate-limit rule's window is spent (BOSSAPP-868). An McpToolDenied, so every road that
+    answers a denial answers this the same way; ``refusal`` is the structured part a caller backs
+    off by: {code: rate_limited, rule_id, server, tool, max_calls, window_seconds, bucket,
+    bucket_key, retry_after_seconds}."""
+
+    def __init__(self, message: str, refusal: Optional[dict[str, Any]] = None):
+        super().__init__(message)
+        self.refusal = dict(refusal or {})
+        self.retry_after_seconds = self.refusal.get("retry_after_seconds")
+
+
 class McpArgumentsChanged(McpServerError):
     """The arguments are not the call a person approved. Not retryable."""
 
@@ -1815,6 +1827,10 @@ def call_tool_with_receipt(
             screen = {**(screen or {}), "policy": {
                 "decision": decided.get("decision"), "rule_id": decided.get("rule_id"),
                 "explanation": decided.get("explanation")}}
+            if decided.get("refusal"):
+                # A spent rate limit (BOSSAPP-868): the audit row keeps the structured refusal.
+                screen["policy"]["reason"] = decided.get("reason")
+                screen["policy"]["refusal"] = decided.get("refusal")
         record_tool_call(
             connection,
             project_id=project_id,
@@ -1863,6 +1879,11 @@ def call_tool_with_receipt(
                          f"'{server.get('name')}' in Skills & MCP.")
     if decided["decision"] == "deny":
         _audit_tool_call("refused", "deny")
+        if decided.get("reason") == "rate_limited":
+            refusal = decided.get("refusal") or {}
+            raise McpToolRateLimited(
+                f"Did not call {tool_name} on '{server.get('name')}': {decided['explanation']} "
+                f"Try again in {refusal.get('retry_after_seconds') or 'a while'}s.", refusal)
         raise McpToolDenied(f"Did not call {tool_name} on '{server.get('name')}': "
                             f"{decided['explanation']}")
     if policy == "ask" and not approval_stands(connection, project_id, approved_by,

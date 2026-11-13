@@ -317,3 +317,15 @@ The matrix's `request_body_type_enforcement` field makes this distinction explic
 The servers you register on **Skills and MCP** (or ask BOSS to register from the chat) are the other direction: BOSS is the client. A tool on a server nobody has marked **Reviewed** never runs unattended, whatever risk tier it declares. That holds on every road to the tool: an agent calling it directly, an agent holding an authored `mcp_tool` skill that names it, and a workflow custom step bound to the tool or to such a skill. Each call becomes an approval, a custom step on an unreviewed server is always a manual step, and BOSS refuses a call that arrives without an approved decision.
 
 **After upgrading:** servers registered before this rule were never marked, so calls that used to run now ask first. The Skills and MCP page lists every turned-on server that needs review. Open each with **Edit**, check its address, and choose *A person has checked this server*. Changing a server's URL clears its review, including a server BOSS seeded.
+
+### Rate limits on tool calls
+
+A rule on **Skills and MCP › Rules** with the effect **Rate limit** caps how often a tool runs: at most `max_calls` calls in `window_seconds`. The calls counted are the ones that actually ran (succeeded, deduplicated or failed) to that server and tool, read from the tool-call audit. Choose what the count is kept for:
+
+- **per project** (the default): every call in the project. A rule written before buckets existed counts this way.
+- **per run**: each run has its own count, so one looping run is stopped while other runs go on.
+- **per agent**: each agent role has its own count across runs.
+
+When the window is spent the call is refused. The refusal is structured: it names the rule, the limit, the bucket and `retry_after_seconds`, which is when the oldest counted call ages out of the window. The audit row records the refusal under `screen.policy`. An agent on BOSS's own tools receives the same fields. A caller reaching the tool through the receipt door gets `McpToolRateLimited`, which is a kind of `McpToolDenied`, so code that already handles a denial needs no change. The gateway reports the reason `rate_limited`.
+
+**Suggested limits.** Some catalogue servers come with default limits. GitHub, for example, suggests 30 `create_*` calls an hour per run. These defaults appear under **Suggested limits** on the Rules tab once you have added the server. Nothing is applied until you press **Add**. The API lists them at `GET /v1/tool-policies/suggestions?project_id=…`, and each one is a body you can send unchanged to `POST /v1/tool-policies`.

@@ -18,7 +18,8 @@ Rules are DATA, rows in ``tool_policies_v2``:
   effect     allow | ask | deny | rate_limit
   selector   {"server": <glob>, "tool": <glob>}  (fnmatch, case-sensitive; '*' when absent)
   conditions [{"path": "$.a.b[0]", "op": "equals|prefix|regex", "value": ...}, ...]  — ALL hold
-  rate_limit {"max_calls": n, "window_seconds": s}  (effect rate_limit only)
+  rate_limit {"max_calls": n, "window_seconds": s, "bucket"?: project|run|agent}
+             (effect rate_limit only; no bucket = project, as 815 shipped it — BOSSAPP-868)
   source     operator | decision (an "Always allow" from an approval, BOSSAPP-817)
   schema_sha256  a pin on the tool's input schema hash (BOSSAPP-818); a pinned rule never
              applies to a changed tool, and a decision rule is revoked when it changes
@@ -81,6 +82,12 @@ MAX_PATH_STEPS = 12
 #: Expiry choices the "Always allow" option offers (BOSSAPP-817); None = until revoked.
 EXPIRY_CHOICES = {"1h": timedelta(hours=1), "1d": timedelta(days=1), "7d": timedelta(days=7),
                   "30d": timedelta(days=30), "never": None}
+#: What a rate limit counts over (BOSSAPP-868). ``project`` (the default, and what a rule with no
+#: bucket means — exactly the 815 count): every call to the tool in the project. ``run``: calls
+#: made by the same run, so one looping run is stopped while others go on. ``agent``: calls made
+#: by the same agent (role) across runs. A run- or agent-bucket rule decided for a call that names
+#: no run / no agent counts the whole project: the stricter reading, never a free pass.
+RATE_BUCKETS = ("project", "run", "agent")
 
 _SCOPE_RANK = {"workflow": 0, "agent": 1, "project": 2, "org": 3}
 _EFFECT_RANK = {"deny": 0, "rate_limit": 1, "ask": 2, "allow": 3}
@@ -401,8 +408,9 @@ def decide(ctx: PolicyContext, *, rules: Optional[Sequence[Mapping[str, Any]]] =
         ids.append(str(chosen.get("id")))
         if limited:
             cap = (chosen.get("rate_limit") or {})
+            per = {"run": " per run", "agent": " per agent"}.get(_bucket(chosen), "")
             notes.append(f"{_describe(chosen)} is spent: {cap.get('max_calls')} calls per "
-                         f"{cap.get('window_seconds')}s")
+                         f"{cap.get('window_seconds')}s{per}")
             reason = "rate_limited"
         else:
             notes.append(f"{_describe(chosen)} matched first")
@@ -434,36 +442,100 @@ def decide(ctx: PolicyContext, *, rules: Optional[Sequence[Mapping[str, Any]]] =
               "rule_id": str(chosen.get("id")) if chosen is not None else None,
               "base": base, "stale": stale, "reason": reason,
               "explanation": f"{decision.upper()}: " + "; ".join(notes) + "."}
+    if limited and chosen is not None:
+        # THE STRUCTURED REFUSAL (BOSSAPP-868): what a caller (an agent, the gateway, a script)
+        # needs to back off instead of retrying blindly. Present only on a rate-limit denial.
+        result["refusal"] = rate_refusal(connection, chosen, ctx)
+        result["retry_after_seconds"] = result["refusal"]["retry_after_seconds"]
     if record and connection is not None:
         _record(connection, ctx, chosen, stale, rules)
     return result
 
 
+def _bucket(rule: Mapping[str, Any]) -> str:
+    bucket = str((rule.get("rate_limit") or {}).get("bucket") or "project")
+    return bucket if bucket in RATE_BUCKETS else "project"
+
+
+def _rate_where(rule: Mapping[str, Any], ctx: PolicyContext) -> tuple[str, dict]:
+    """The audit rows a rule's window counts: calls that ran in this project, to this server and
+    tool, narrowed to the run or the agent when the rule's bucket says so (BOSSAPP-868)."""
+    where = ("project_id = :p AND tool = :t "
+             "AND (CAST(:sid AS TEXT) IS NULL OR server_id = :sid) "
+             "AND outcome IN ('succeeded', 'deduplicated', 'failed') "
+             "AND recorded_at > now() - make_interval(secs => CAST(:w AS DOUBLE PRECISION))")
+    params: dict[str, Any] = {"p": ctx.project, "t": ctx.tool, "sid": ctx.server_id,
+                              "w": int((rule.get("rate_limit") or {}).get("window_seconds") or 0)}
+    bucket = _bucket(rule)
+    if bucket == "run" and ctx.run:
+        where += " AND run_id = :bucket_run"
+        params["bucket_run"] = ctx.run
+    elif bucket == "agent" and ctx.role:
+        where += " AND agent = :bucket_agent"
+        params["bucket_agent"] = ctx.role
+    return where, params
+
+
 def _rate_spent(connection: Any, rule: Mapping[str, Any], ctx: PolicyContext
                 ) -> tuple[bool, int, int]:
     """Whether the rule's window is spent, counted from the tool-call audit (calls that ran in
-    this project, this server and tool, within the window). No connection: never spent."""
+    this project, this server and tool, within the window — per run or per agent when the rule's
+    bucket says so). No connection: never spent."""
     limit = rule.get("rate_limit") or {}
     try:
         cap = int(limit.get("max_calls"))
-        window = int(limit.get("window_seconds"))
+        int(limit.get("window_seconds"))
     except (TypeError, ValueError):
         return False, 0, 0
     if connection is None or not ctx.project:
         return False, 0, cap
     try:
+        where, params = _rate_where(rule, ctx)
         with connection.begin_nested():
             used = int(connection.execute(text(
-                "SELECT count(*) FROM tool_call_audit WHERE project_id = :p AND tool = :t "
-                "AND (CAST(:sid AS TEXT) IS NULL OR server_id = :sid) "
-                "AND outcome IN ('succeeded', 'deduplicated', 'failed') "
-                "AND recorded_at > now() - make_interval(secs => CAST(:w AS DOUBLE PRECISION))"),
-                {"p": ctx.project, "t": ctx.tool, "sid": ctx.server_id, "w": window},
-            ).scalar() or 0)
+                f"SELECT count(*) FROM tool_call_audit WHERE {where}"), params).scalar() or 0)
     except Exception:  # noqa: BLE001 — a count that cannot be read spends the window
         log.warning("tool policy: rate count unreadable for %s", rule.get("id"), exc_info=True)
         return True, cap, cap
     return used >= cap, used, cap
+
+
+def rate_refusal(connection: Any, rule: Mapping[str, Any], ctx: PolicyContext) -> dict:
+    """The structured refusal for a spent rate limit (BOSSAPP-868): which rule, the limit, the
+    bucket it counts, and when a slot frees — the moment the oldest call that keeps the window
+    full ages out. ``retry_after_seconds`` is the whole window when that cannot be read."""
+    limit = rule.get("rate_limit") or {}
+    try:
+        cap = int(limit.get("max_calls"))
+        window = int(limit.get("window_seconds"))
+    except (TypeError, ValueError):
+        cap, window = 0, 0
+    bucket = _bucket(rule)
+    retry = max(1, window)
+    if connection is not None and ctx.project and window > 0:
+        try:
+            where, params = _rate_where(rule, ctx)
+            with connection.begin_nested():
+                used = int(connection.execute(text(
+                    f"SELECT count(*) FROM tool_call_audit WHERE {where}"), params).scalar() or 0)
+                # The (used - cap + 1)-th oldest counted call is the one whose ageing out leaves
+                # room for one more; with a cap of 0 nothing ever frees, so the window stands.
+                if cap > 0 and used >= cap:
+                    left = connection.execute(text(
+                        f"SELECT EXTRACT(EPOCH FROM (recorded_at + make_interval(secs => "
+                        f"CAST(:w AS DOUBLE PRECISION)) - now())) FROM tool_call_audit "
+                        f"WHERE {where} ORDER BY recorded_at ASC OFFSET :k LIMIT 1"),
+                        {**params, "k": used - cap}).scalar()
+                    if left is not None:
+                        retry = max(1, min(window, int(float(left)) + 1))
+        except Exception:  # noqa: BLE001 — a refusal still refuses; the hint is the window
+            log.warning("tool policy: retry-after unreadable for %s", rule.get("id"),
+                        exc_info=True)
+    return {"code": "rate_limited", "rule_id": str(rule.get("id") or ""),
+            "server": ctx.server, "tool": ctx.tool, "max_calls": cap, "window_seconds": window,
+            "bucket": bucket, "retry_after_seconds": retry,
+            "bucket_key": (ctx.run if bucket == "run" else ctx.role if bucket == "agent"
+                           else ctx.project)}
 
 
 def _record(connection: Any, ctx: PolicyContext, chosen: Optional[Mapping[str, Any]],
@@ -651,6 +723,11 @@ def validate(fields: Mapping[str, Any], *, partial: bool = False,
             if cap < 0 or not 1 <= window <= 30 * 86400:
                 raise ToolPolicyError("max_calls >= 0 and window_seconds 1..2592000.")
             out["rate_limit"] = {"max_calls": cap, "window_seconds": window}
+            bucket = (limit or {}).get("bucket")
+            if bucket not in (None, ""):
+                if bucket not in RATE_BUCKETS:
+                    raise ToolPolicyError("a rate limit's bucket is project, run or agent.")
+                out["rate_limit"]["bucket"] = bucket
         elif "rate_limit" in fields or "effect" in fields:
             out["rate_limit"] = None
     for key in ("schema_sha256", "note"):
@@ -856,6 +933,62 @@ def grant_from_decision(connection: Any, row: Mapping[str, Any], request: Mappin
     }, actor=actor, source="decision", source_decision_id=str(row.get("id")))
 
 
+# ── suggested defaults per server and tool (BOSSAPP-868) ─────────────────────────────────────
+
+def _catalogue_key(server: Mapping[str, Any]) -> Optional[str]:
+    prov = server.get("provenance") or {}
+    if isinstance(prov, str):
+        prov = _loads(prov, {}) or {}
+    key = prov.get("catalogue") if isinstance(prov, Mapping) else None
+    return str(key) if key else None
+
+
+def suggested_rules(connection: Any, project_id: str) -> list[dict]:
+    """The DEFAULT rules the MCP catalogue suggests for the servers this project registered from
+    it (``suggested_rules`` on a catalogue entry, e.g. "at most 60 Composio executions an hour per
+    run"), minus the ones the project already has as a live rule (same effect, server and tool).
+
+    NOTHING IS APPLIED BY ITSELF: a suggestion is a ready-made rule body the Rules tab offers with
+    one press (POST /v1/tool-policies), so a project with no rules behaves exactly as before."""
+    from .kit_connections import catalogue
+    from .mcp_registry import list_mcp_servers
+
+    entries = {str(e.get("key")): e for e in catalogue()}
+    existing = list_rules(connection, project_id)
+    out: list[dict] = []
+    for server in list_mcp_servers(connection, project_id):
+        entry = entries.get(_catalogue_key(server) or "")
+        if not entry:
+            continue
+        names = {str(server.get("name") or ""), str(server.get("id") or "")}
+        for suggestion in entry.get("suggested_rules") or []:
+            if not isinstance(suggestion, Mapping):
+                continue
+            tool = str(suggestion.get("tool") or "*")
+            effect = str(suggestion.get("effect") or "rate_limit")
+            body = {"scope": str(suggestion.get("scope") or "project"),
+                    "priority": int(suggestion.get("priority") or 100), "effect": effect,
+                    "selector": {"server": str(server.get("name")), "tool": tool},
+                    "conditions": [],
+                    "note": str(suggestion.get("note") or
+                                f"Suggested by the MCP catalogue for {entry.get('label')}")[:2000]}
+            if effect == "rate_limit":
+                body["rate_limit"] = dict(suggestion.get("rate_limit") or {})
+            try:
+                validate(body)
+            except ToolPolicyError:
+                log.warning("tool policy: catalogue suggestion for %s is invalid", entry.get("key"))
+                continue
+            have = any(r.get("status") != "revoked" and r.get("effect") == effect
+                       and (r.get("selector") or {}).get("server") in names
+                       and (r.get("selector") or {}).get("tool") == tool for r in existing)
+            if not have:
+                out.append({"server": server.get("name"), "server_id": server.get("id"),
+                            "catalogue": entry.get("key"), "why": suggestion.get("why"),
+                            "rule": body})
+    return out
+
+
 def simulate(connection: Any, project_id: str, body: Mapping[str, Any]) -> dict:
     """The console's simulate box: a hypothetical call decided exactly as a real one would be,
     with nothing recorded. ``server`` names a registered server (id or name) or ``boss``."""
@@ -896,4 +1029,5 @@ __all__ = ["BOSS_SERVER", "EFFECTS", "EXPIRY_CHOICES", "PolicyContext", "SCHEMA_
            "ToolPolicyError", "ToolPolicyNotFound", "always_allow_offer", "condition_holds",
            "context_for", "create_rule", "decide", "drop_pinned_rules", "get_rule",
            "grant_from_decision", "list_rules", "load_rules", "order_rules", "parse_path",
-           "public", "revoke_rule", "rule_matches", "simulate", "update_rule", "validate"]
+           "public", "RATE_BUCKETS", "rate_refusal", "revoke_rule", "rule_matches", "simulate",
+           "suggested_rules", "update_rule", "validate"]

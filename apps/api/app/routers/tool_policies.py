@@ -97,6 +97,17 @@ def build_tool_policies_router(*, engine, require_reader: Callable[..., None],
         return {"policies": [tpe.public(r) for r in rules],
                 "expiry_choices": list(tpe.EXPIRY_CHOICES)}
 
+    @router.get("/v1/tool-policies/suggestions")
+    @permit(P.MCP_SERVER_READ, scope=Scope.project(query="project_id"))
+    def suggestions(project_id: str) -> dict:
+        """The catalogue's default rules (rate limits first) for this project's catalogue
+        servers that it does not have yet (BOSSAPP-868). Each is a body POST /v1/tool-policies
+        takes as it is; nothing is applied until a person adds it."""
+        with begin(engine) as c:
+            require_reader(c, project_id)
+            return {"suggestions": tpe.suggested_rules(c, project_id),
+                    "buckets": list(tpe.RATE_BUCKETS)}
+
     @router.post("/v1/tool-policies/simulate")
     @permit(P.MCP_SERVER_READ, scope=Scope.project(body="project_id"))
     def simulate(payload: SimulateBody) -> dict:

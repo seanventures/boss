@@ -1861,6 +1861,7 @@
 "GET /v1/tool-policies": ["permit mcp_server:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/tool-policies": ["permit mcp_server:review @ project(body=project_id)", "OA"]
 "POST /v1/tool-policies/simulate": ["permit mcp_server:read @ project(body=project_id)", "OAPVU"]
+"GET /v1/tool-policies/suggestions": ["permit mcp_server:read @ project(query=project_id)", "OAPVU"]
 "DELETE /v1/tool-policies/{policy_id}": ["permit mcp_server:review @ project(query=project_id)", "OA"]
 "PATCH /v1/tool-policies/{policy_id}": ["permit mcp_server:review @ project(body=project_id)", "OA"]
 "GET /v1/toolchain-images": ["permit host:read @ project(query=project_id) +writes_on_get", "OAPVU"]
