@@ -12238,6 +12238,7 @@ CREATE TABLE IF NOT EXISTS runner_sessions (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_runner_sessions_run ON runner_sessions (run_id, state, last_heartbeat DESC);
+
 -- BOSSAPP-838 ── scheduled self-backups ─────────────────────────────────────────────────────────
 -- services/backup_scheduler.py: one API thread (whichever holds backup_scheduler_lease) takes a
 -- pg_dump every BOSS_BACKUP_INTERVAL_MINUTES, verifies it with `pg_restore --list`, optionally
@@ -12284,27 +12285,14 @@ CREATE TABLE IF NOT EXISTS portability_imports (
   chunks_done INTEGER NOT NULL DEFAULT 0,
   plan JSONB NOT NULL DEFAULT '{}'::jsonb,
   report JSONB NOT NULL DEFAULT '{}'::jsonb,
--- ── BOSSAPP-833-835: decide from Slack and phone; realtime event push ─────────────────────────
--- services/chat_channels.py (834) and services/event_stream.py (835).
---
--- A CHAT ENDPOINT is one two-way channel BOSS posts decisions to and hears answers from: a Slack
--- app, a Telegram bot (Discord is a stub). Its credentials (Slack's signing secret and bot token,
--- Telegram's bot token and webhook secret) live in the secret store; `secret_refs` holds only
--- {"<name>": "<secret_refs.id>"}, never a value.
-CREATE TABLE IF NOT EXISTS chat_endpoints (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('slack', 'telegram', 'discord')),
-  name TEXT NOT NULL,
-  config JSONB NOT NULL DEFAULT '{}'::jsonb,      -- channel / chat id, team id, max_tier
-  secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb, -- {"signing_secret": "sref_..", ...}
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_portability_imports_target
   ON portability_imports (scope, target_id, created_at DESC);
+
+
 -- BOSSAPP-841-844
 -- ── Skills as a governed supply chain ─────────────────────────────────────────────────────────
 -- 842 VERSIONS. Every save of an authored skill appends a row here (skill_versions.record, called
@@ -12416,6 +12404,8 @@ CREATE TABLE IF NOT EXISTS skill_test_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_skill_test_runs_case
   ON skill_test_runs (case_id, skill_version_id, created_at DESC);
+
+
 -- ── BOSSAPP-829-832: one work-item graph with execution policy ───────────────────────────────
 -- BOSSAPP-830. work_items is THE canonical node for every piece of work: a workflow run, a code
 -- task, a PRD meeting and a planning ticket each carry the work_item_id of the node they
@@ -12548,6 +12538,27 @@ ALTER TABLE decisions ADD COLUMN IF NOT EXISTS form_schema JSONB;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answer JSONB;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_by TEXT;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ;
+
+
+-- ── BOSSAPP-833-835: decide from Slack and phone; realtime event push ─────────────────────────
+-- services/chat_channels.py (834) and services/event_stream.py (835).
+--
+-- A CHAT ENDPOINT is one two-way channel BOSS posts decisions to and hears answers from: a Slack
+-- app, a Telegram bot (Discord is a stub). Its credentials (Slack's signing secret and bot token,
+-- Telegram's bot token and webhook secret) live in the secret store; `secret_refs` holds only
+-- {"<name>": "<secret_refs.id>"}, never a value.
+CREATE TABLE IF NOT EXISTS chat_endpoints (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('slack', 'telegram', 'discord')),
+  name TEXT NOT NULL,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,      -- channel / chat id, team id, max_tier
+  secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb, -- {"signing_secret": "sref_..", ...}
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE INDEX IF NOT EXISTS idx_chat_endpoints_project ON chat_endpoints (project_id, status);
 
 -- WHO a chat user is in BOSS. A row is born unverified by a press from an unlinked user (with the
@@ -12652,6 +12663,42 @@ END $$;
 -- Last-Event-ID replay reads "the events after this one" in (created_at, id) order.
 CREATE INDEX IF NOT EXISTS idx_events_created_id ON events (created_at, id);
 
+-- ── BOSSAPP-885: AN ORG CHART THAT CARRIES AUTHORITY (services/org_chain.py) ──────────────────
+-- org_assignments.reports_to was display-only. A stall that would interrupt a person is first
+-- offered to the responsible agent's manager (an agent) — one row here, one rung at a time, each
+-- with a deadline; a pass or a deadline moves it up the chain, and a chain with no agent left
+-- falls through to the exact person path the caller would have taken (`fallback`), so work is
+-- never stranded. One row per run ever: a run the chain already had its chance on goes to the
+-- person. A takeover writes `authority_path` (who acted, under whose chain) here and on the run.
+-- No reports_to rows → no row here: the default path is unchanged.
+CREATE TABLE IF NOT EXISTS org_chain_escalations (
+  id TEXT PRIMARY KEY,                                  -- 'orgesc_…'
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  origin TEXT NOT NULL CHECK (origin IN ('person_wait', 'stuck_work')),
+  run_kind TEXT NOT NULL DEFAULT 'code_task',
+  run_id TEXT NOT NULL,
+  work_item_id TEXT,
+  subject TEXT NOT NULL,                                -- agent:<role> whose work stalled
+  chain JSONB NOT NULL DEFAULT '[]'::jsonb,             -- the chain of command when it stalled
+  rung INTEGER NOT NULL DEFAULT 1,
+  offered_to TEXT NOT NULL,                             -- agent:<role> holding the offer now
+  reason TEXT NOT NULL DEFAULT '',
+  question TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'taken', 'fell_through', 'superseded')),
+  deadline TIMESTAMPTZ NOT NULL,
+  asked_at TIMESTAMPTZ,                                 -- the offered manager's turn ran
+  fallback JSONB NOT NULL DEFAULT '{}'::jsonb,          -- what the person path needs
+  taken_by TEXT,
+  authority_path JSONB,
+  outcome TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_org_chain_escalations_run ON org_chain_escalations (run_id);
+CREATE INDEX IF NOT EXISTS idx_org_chain_escalations_open
+  ON org_chain_escalations (project_id, status, deadline);
 -- BOSSAPP-861 ── general-purpose extensions (boss.extension/v1) ─────────────────────────────────
 -- engine/boss_engine/extensions/: one row per installed extension (the APPROVED whole-tree
 -- checksum is the trust gate's reference; nonce derives the MCP bearer and webhook secrets, so a

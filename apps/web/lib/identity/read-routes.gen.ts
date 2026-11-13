@@ -180,6 +180,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["console/v2/decisions", "decision:read"],
   ["console/v2/infra", "project:read"],
   ["console/v2/org", "agent:read"],
+  ["console/v2/org/chain", "agent:read"],
   ["console/v2/overview", "project:read"],
   ["console/v2/panels", "meeting:read"],
   ["console/v2/receipts", "activity:read"],

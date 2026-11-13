@@ -535,6 +535,7 @@ from .sandbox import (
 from .agent_env import agent_environment
 from . import model_proxy as _model_proxy
 from .workspace_perms import tidies_workspace
+from .harness_delivery import delivers_kit
 from . import owned_process
 
 # --------------------------------------------------------------------------- #
@@ -995,6 +996,9 @@ class ClaudeCodeAgent:
                                       read_only_shell=True)
     #: `_invoke` appends the working rules and sandbox facts itself (engine_contract).
     adds_working_rules = True
+    #: How the agent's kit reaches `claude` (harness_delivery): its servers by --mcp-config
+    #: (appended in `_invoke`), its skills synced into the tree's .claude/skills for the session.
+    KIT_PROFILE = ("claude_flag", "{workspace}/.claude/skills")
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -1129,6 +1133,7 @@ class ClaudeCodeAgent:
         )
 
     @_model_proxy_scoped
+    @delivers_kit
     def _invoke(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
@@ -2758,6 +2763,11 @@ def _register_builtin_harnesses() -> None:
             spec = load_specs(settings).get(harness_name)
             if spec is None:  # pragma: no cover - only if an override deletes a built-in
                 raise RuntimeError(f"no CLI harness spec for {harness_name!r}")
+            if spec.protocol == "acp":
+                # Driven over the Agent Client Protocol (acp_code_agent, BOSSAPP-853).
+                from .acp_code_agent import AcpCodeAgent
+
+                return AcpCodeAgent(settings, spec)
             if harness_name == "codex":
                 # A purpose-written driver held to the engine contract: sessions, a transcript,
                 # usage and effort from Codex's own interfaces (codex_code_agent).
@@ -2775,7 +2785,8 @@ def _register_builtin_harnesses() -> None:
             # the real one rather than override it, which is the correct outcome either way.
             continue
         register_harness(
-            cli_name, _cli_builder(cli_name), kind="cli", verified=cli_spec.verified,
+            cli_name, _cli_builder(cli_name),
+            kind="acp" if cli_spec.protocol == "acp" else "cli", verified=cli_spec.verified,
             requires=(f"{cli_spec.binary} on PATH", "signed in to that CLI"),
             description=cli_spec.description, runtime=tuple(cli_spec.runtime),
             failure_patterns=tuple(cli_spec.failure_patterns or ()),
@@ -2799,6 +2810,12 @@ def _register_builtin_harnesses() -> None:
                          if local else
                          "Direct provider lane on its own dedicated credential pair."),
         )
+    # INSTALLABLE ADAPTERS (harness_plugins, BOSSAPP-853): manifests behind the trust gate,
+    # built on BOSS's own adapters. Nothing is scanned unless an operator configured a path
+    # or installed a `boss.harnesses` package; a broken plugin is reported, never raised.
+    from .harness_plugins import load_harness_plugins
+
+    load_harness_plugins()
 
 
 def _build_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:
