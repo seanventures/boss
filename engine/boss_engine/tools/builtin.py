@@ -3774,7 +3774,7 @@ def _register_work_item_tools(reg: ToolRegistry) -> None:
                          "description": "where it goes: the project, a deployment target's "
                                         "requirement, or an agent-only secret for you"},
               "target_id": {"type": "string",
-                            "description": "the deployment target's id or app name"},
+                            "description": "the deployment target's id"},
               "binding_name": {"type": "string",
                                "description": "the target's requirement name (default: name)"},
               "secret_kind": {"type": "string", "default": "api_token"}},

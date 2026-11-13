@@ -57,6 +57,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "read_run_turns": {"run_id": CODE_TASK},
     "read_spec": {"run_id": (CODE_TASK, "meeting")},
     "recheck_workflow_run": {"run_id": "workflow_run"},
+    "propose_secret": {"target_id": "deployment_target"},
     "redeploy": {"run_id": CODE_TASK},
     "register_repository": {"connection_id": "github_connection"},
     "request_meeting": {"task_id": "task"},

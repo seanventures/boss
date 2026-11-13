@@ -90,10 +90,11 @@ export function SecretProposalCard({ decisionId, proposal, actorId, onDone }: {
                      data-testid="secret-proposal-store" onClick={() => void store()}>
           {busy ? "Storing…" : "Store"}
         </GatedButton>
-        <button type="button" className="ag-btn" disabled={busy} data-testid="secret-proposal-decline"
-                onClick={() => (declining ? void decline() : setDeclining(true))}>
+        <GatedButton permission="decision:approve" type="button" className="ag-btn" disabled={busy}
+                     data-testid="secret-proposal-decline"
+                     onClick={() => (declining ? void decline() : setDeclining(true))}>
           {declining ? "Send decline" : "Decline"}
-        </button>
+        </GatedButton>
       </div>
       {said ? <p className="tq-error" role="alert" data-testid="secret-proposal-error">{said}</p> : null}
       <p className="decision-grant-effect">
