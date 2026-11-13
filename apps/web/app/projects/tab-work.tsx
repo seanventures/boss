@@ -15,8 +15,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowBendDownRight, ArrowDown, ArrowUp, Bug, CaretDown, Check, Code, Compass, Database, DotsSixVertical, EnvelopeSimple, FlowArrow, GitMerge,
   GithubLogo, Globe, HandWaving, Kanban, Lightning, ListBullets, PauseCircle, Play,
-  TerminalWindow, Ticket, XCircle,
+  TerminalWindow, Ticket, TreeStructure, XCircle,
 } from "@phosphor-icons/react";
+import { WorkTreeView } from "./work-tree";
 
 import { GatedButton, useGate } from "../../components/gated";
 import {
@@ -89,7 +90,7 @@ function useNeeds(ctx: PxCtx, items: WorkItem[]) {
 
 export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const [filter, setFilter] = useState<WorkState | "all">("all");
-  const [view, setView] = useState<"list" | "board">("list");
+  const [view, setView] = useState<"list" | "board" | "tree">("list");
   // The row a Start just made (the New work modal's): it slides in (150 ms) once the list has it.
   const fresh = ctx.freshWork ?? "";
   const raw = ctx.work?.items ?? [];
@@ -150,9 +151,13 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
         <div className="px-seg px-hide-phone" role="group" aria-label="View">
           <button type="button" aria-pressed={view === "list"} onClick={() => setView("list")} data-testid="px-work-list"><ListBullets size={13} /> List</button>
           <button type="button" aria-pressed={view === "board"} onClick={() => setView("board")} data-testid="px-work-board"><Kanban size={13} /> Board</button>
+          <button type="button" aria-pressed={view === "tree"} onClick={() => setView("tree")} data-testid="px-work-tree"
+                  title="Every work item as one tree, with what blocks what and its review stages"><TreeStructure size={13} /> Tree</button>
         </div>
       </div>
-      {!ctx.work ? (
+      {view === "tree" ? (
+        <WorkTreeView projectId={ctx.projectId} demo={ctx.demo} />
+      ) : !ctx.work ? (
         ctx.workState === "loading" ? <Loading rows={3} label="Loading work" />
           : ctx.workState === "error" ? <Failed what="Work" error={null} onRetry={ctx.refreshWork} />
           : <EngineNotReady what="The work list"><a className="px-btn" href={pxHref("?area=code_tasks")}>Open Code Tasks</a></EngineNotReady>

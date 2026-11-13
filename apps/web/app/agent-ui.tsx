@@ -26,6 +26,7 @@ import { nameOf } from "./agents/run-face";
 import { useIdentityVersion } from "../lib/use-agent-identities";
 import { leadingFlow } from "../lib/answer-flow";
 import { AnswerFlow, CitationChips, ProposalCard, citationsOf, proposalOf } from "./answer-cards";
+import { AskedQuestion } from "./typed-form-ui";
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
  *  that is sometimes absent reach the render. */
@@ -1392,7 +1393,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                         <CitedAnswer className="agent-md" projectId={projectId} actor={actor}
                                      text={lead.nodes.length ? lead.rest : stripAppFacts(withoutBrief(m.content))} />
                         {/* The records the answer named (PR, run, file, doc), each opening it. */}
-                        <CitationChips items={citationsOf(m.citations)} />
+                        <CitationChips items={citationsOf(m.citations).filter((c) => c.kind !== "ask")} />
+                        {/* A typed question the turn asked (ask_human, BOSSAPP-832): its form,
+                            answerable right here; answered, what was answered. */}
+                        {citationsOf(m.citations).filter((c) => c.kind === "ask").map((c) => (
+                          <AskedQuestion key={`${m.id ?? i}-ask-${c.ref}`} decisionId={c.ref}
+                                         projectId={projectId} actorId={actor} />
+                        ))}
                         {/* The turn's offer to start work, as the "New work" card (screen 09). */}
                         {proposalOf(m.proposal) ? (
                           <ProposalCard key={`${m.id ?? i}-proposal`} projectId={projectId} threadId={threadId}

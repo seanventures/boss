@@ -862,6 +862,17 @@ def start_meeting_run(connection, *, project_id, task_id, directive, url, constr
     )
     emit_event(connection, project_id, "meeting.started", "boss", "meeting_run", run_id,
                {"task_id": task_id, "participants": [p["title"] for p in personas]})
+    # THE PANEL'S WORK ITEM (BOSSAPP-830): the item it was convened for, the item of the
+    # workflow run that convened it, or its own (work_items.link_run; never fails the start).
+    from . import work_items
+
+    fctx = finalize_ctx or {}
+    work_items.link_run(
+        connection, kind="meeting", run_id=run_id, project_id=project_id, title=title,
+        explicit_id=str(fctx.get("work_item_id") or "") or None,
+        inherit=[("workflow_run", fctx.get("workflow_run_id")),
+                 ("workflow_run", (fctx.get("origin") or {}).get("workflow_run_id")
+                  if isinstance(fctx.get("origin"), dict) else None)])
     _sign_seats(connection, run_id)
     return run_id
 
@@ -1354,6 +1365,11 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     )
     emit_event(connection, project_id, "meeting.completed", "boss", "meeting", meeting_id,
                {"minutes_artifact_id": minutes_artifact_id, "decision_id": decision_id})
+    # THE PANEL'S OUTPUT (minutes + PRD) IS ITS WORK ITEM'S DONE, through the item's execution
+    # policy (work_items.on_run_completed). The PRD's own approval decision is unchanged.
+    from . import work_items
+
+    work_items.on_run_completed(connection, settings, kind="meeting", run_id=run_id)
     _sign_seats(connection, run_id)
     return {"meeting_id": meeting_id, "minutes_artifact_id": minutes_artifact_id, "decision_id": decision_id}
 

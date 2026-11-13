@@ -12401,3 +12401,135 @@ CREATE TABLE IF NOT EXISTS skill_test_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_skill_test_runs_case
   ON skill_test_runs (case_id, skill_version_id, created_at DESC);
+-- ── BOSSAPP-829-832: one work-item graph with execution policy ───────────────────────────────
+-- BOSSAPP-830. work_items is THE canonical node for every piece of work: a workflow run, a code
+-- task, a PRD meeting and a planning ticket each carry the work_item_id of the node they
+-- serve, and the node is made lazily where the run/ticket is made (services/work_items.py
+-- ensure_for) — history is not backfilled by migration. The node gains a tree (parent_id), a
+-- goal, a human key ("BOSS-12"), who works it (assignee: agent:<role> | person:<id>) and who
+-- answers for it (responsible_person). `status` already exists (portfolio 'active'/'done'); the
+-- canonical vocabulary adds backlog | todo | blocked | in_review | cancelled beside them.
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS parent_id TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS goal_id TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS human_key TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS assignee TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS responsible_person TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+-- BOSSAPP-831: the item's execution policy (ordered review/approval stages) and where it is in
+-- them ({stage, round, decision_id, origin, worker}); NULL = no stages, done is done.
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS execution_policy JSONB;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS execution_state JSONB;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_parent_fk'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_parent_fk FOREIGN KEY (parent_id)
+      REFERENCES work_items(id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_not_own_parent'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_not_own_parent
+      CHECK (parent_id IS NULL OR parent_id <> id);
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_items_human_key
+  ON work_items (project_id, human_key) WHERE human_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_work_items_parent ON work_items (parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_work_items_goal ON work_items (goal_id) WHERE goal_id IS NOT NULL;
+-- The next number of a project's human keys (one row per project; prefix is the project's).
+CREATE TABLE IF NOT EXISTS work_item_keys (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  prefix TEXT NOT NULL DEFAULT 'WI',
+  next_number INTEGER NOT NULL DEFAULT 1 CHECK (next_number >= 1)
+);
+-- Goals form their own tree; a work item points at the goal it serves.
+CREATE TABLE IF NOT EXISTS goals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  parent_id TEXT REFERENCES goals(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'achieved', 'dropped')),
+  owner TEXT,
+  target_date DATE,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (parent_id IS NULL OR parent_id <> id)
+);
+CREATE INDEX IF NOT EXISTS idx_goals_project ON goals (project_id, status, created_at);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_goal_fk'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_goal_fk FOREIGN KEY (goal_id)
+      REFERENCES goals(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+-- Relations between items. Only 'blocks' is stored for blocking (from blocks to); "blocked_by"
+-- is the same row read the other way, so the two can never disagree.
+CREATE TABLE IF NOT EXISTS work_item_relations (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  from_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  to_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('blocks', 'relates_to', 'duplicates')),
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (from_id, to_id, kind),
+  CHECK (from_id <> to_id)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_relations_to ON work_item_relations (to_id, kind);
+CREATE TABLE IF NOT EXISTS labels (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT 'gray',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE TABLE IF NOT EXISTS work_item_labels (
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  label_id TEXT NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (work_item_id, label_id)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_labels_label ON work_item_labels (label_id);
+-- Every run, PRD meeting and planning ticket names the node it serves (made lazily at creation).
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS work_item_id TEXT;
+ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS work_item_id TEXT;
+ALTER TABLE meeting_runs ADD COLUMN IF NOT EXISTS work_item_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_work_item ON workflow_runs (work_item_id) WHERE work_item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_code_task_runs_work_item ON code_task_runs (work_item_id) WHERE work_item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_meeting_runs_work_item ON meeting_runs (work_item_id) WHERE work_item_id IS NOT NULL;
+-- The planning store (services/work_plane.py) creates wp_roadmap_items lazily; its column is
+-- added there too, and here when the table already exists.
+DO $$ BEGIN
+  IF to_regclass('public.wp_roadmap_items') IS NOT NULL THEN
+    ALTER TABLE wp_roadmap_items ADD COLUMN IF NOT EXISTS work_item_id TEXT;
+  END IF;
+END $$;
+-- BOSSAPP-831: a run may carry its own policy (it wins over its work item's).
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS execution_policy JSONB;
+ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS execution_policy JSONB;
+-- The stage machine's log: every stage raised, answered, sent back or escalated.
+CREATE TABLE IF NOT EXISTS execution_decisions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  origin TEXT,                                 -- workflow_run:<id> | code_task:<id> | ...
+  stage_index INTEGER NOT NULL,
+  stage_kind TEXT NOT NULL CHECK (stage_kind IN ('review', 'approval')),
+  round INTEGER NOT NULL DEFAULT 1,
+  event TEXT NOT NULL CHECK (event IN ('raised', 'approved', 'rejected', 'escalated',
+                                       'completed', 'skipped')),
+  decision_id TEXT,
+  participants JSONB NOT NULL DEFAULT '[]'::jsonb,
+  actor TEXT NOT NULL DEFAULT 'boss',
+  comment TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_execution_decisions_item
+  ON execution_decisions (work_item_id, created_at);
+-- BOSSAPP-832: a decision can ask a typed form and keep the typed answer it got.
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS form_schema JSONB;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answer JSONB;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_by TEXT;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ;

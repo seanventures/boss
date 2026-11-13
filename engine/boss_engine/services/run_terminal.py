@@ -67,6 +67,13 @@ def on_status_written(connection: Any, run_id: str) -> None:
         except Exception:  # noqa: BLE001 — a scorecard never undoes what it records
             log.warning("run terminal: scorecard not recorded for %s", run_id, exc_info=True)
         emit_build_profile_in(connection, run_id)
+        if status == "completed":
+            # A BUILD THAT PASSED EVERY GATE IS ITS WORK ITEM'S DONE (BOSSAPP-831): the item's
+            # execution policy may still hold it in review. The build's own gates are untouched —
+            # this runs only after `completed` was written, once per run (the marker above).
+            from .work_items import on_run_completed
+
+            on_run_completed(connection, kind="code_task", run_id=run_id)
     except Exception:  # noqa: BLE001
         log.warning("run terminal: could not settle %s", run_id, exc_info=True)
 

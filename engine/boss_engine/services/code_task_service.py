@@ -911,6 +911,18 @@ def start_code_task(
                 "fc": json.dumps(run_finalize),
             },
         )
+        # THE BUILD'S WORK ITEM (BOSSAPP-830): started for an item it joins it; a workflow's
+        # build, a retry or a repair child joins the item of the work that spawned it; a direct
+        # build gets its own. Never fails the start (work_items.link_run).
+        from . import work_items
+
+        work_items.link_run(
+            connection, kind="code_task", run_id=run_id, project_id=project_id, title=title,
+            explicit_id=str(run_finalize.get("work_item_id") or "") or None,
+            inherit=[("workflow_run", run_finalize.get("workflow_run_id")),
+                     ("code_task", run_finalize.get("parent_run_id")),
+                     ("code_task", supersedes)],
+            actor="boss")
     _carry_parent = str(run_finalize.get("parent_run_id") or "").strip()
     if _carry_parent and not simulated:
         # STEERS FOLLOW THE WORK. A repair child / retry / follow-up is WHERE the parent's

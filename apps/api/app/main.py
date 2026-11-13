@@ -3360,7 +3360,25 @@ def decision_card_from_row(row, connection=None, project_id: Optional[str] = Non
         **decision_actions.describe(row),
         prd=prd,
         held=held,
+        **_decision_form(row, rec, connection),
     )
+
+
+def _decision_form(row, rec, connection) -> dict:
+    """A typed question's form and answer (BOSSAPP-832). Read only for a form decision, so the
+    inbox's own SELECT need not carry the columns."""
+    if not isinstance(rec, dict) or rec.get("action") != "answer_form":
+        return {}
+    form = {k: row.get(k) for k in ("form_schema", "answer", "answered_by", "answered_at")}
+    if "form_schema" not in row and connection is not None:
+        found = connection.execute(text(
+            "SELECT form_schema, answer, answered_by, answered_at FROM decisions WHERE id = :id"),
+            {"id": row["id"]}).mappings().first()
+        form = dict(found) if found else form
+    at = form.get("answered_at")
+    return {"form_schema": form.get("form_schema"), "answer": form.get("answer"),
+            "answered_by": form.get("answered_by"),
+            "answered_at": at.isoformat() if hasattr(at, "isoformat") else at}
 
 
 def self_improvement_summary_from_row(row) -> SelfImprovementProposalSummary:
@@ -24246,6 +24264,8 @@ def approve_decision_in(connection, decision_id: str, payload: DecisionActionReq
             # A person overriding the merge gate (CI failed or could not be read), with the
             # note transition() requires. Never a deploy: ci_gate refuses a forced deploy.
             force=payload.force,
+            # A typed question's answer (BOSSAPP-832), validated against its form.
+            answer=payload.answer,
         )
     except DecisionNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -31789,6 +31809,13 @@ def _ambient_org_actor(connection, claimed_actor: str | None) -> str:
 app.include_router(build_ambient_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor, org_actor=_ambient_org_actor))
+# ONE WORK-ITEM GRAPH (routers/work_items.py, services/work_items.py; BOSSAPP-830/831): the tree,
+# CRUD, relations, labels, goals, the policy-aware done and start.
+from .routers.work_items import build_work_items_router
+
+app.include_router(build_work_items_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 # The AI SRE incident squad (routers/incident_squad.py, services/incident_squad.py).
 from .routers.incident_squad import build_incident_squad_router
 
