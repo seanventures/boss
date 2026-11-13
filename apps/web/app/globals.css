@@ -3703,6 +3703,39 @@ select.input:focus {
   grid-template-columns: repeat(auto-fit, minmax(9.47368rem, 1fr));
 }
 
+/* THE ONE FORM KIT (components/form-kit.tsx, BOSSAPP-1039): a compact add/edit form inside a
+   row or drawer. Fields are the `.field`/`.input`/`.check-row` rules above; this is only the
+   kit's layout. `grid-column: 1 / -1` keeps the form with its row when an ancestor (Setup's
+   `.su-row`) is itself a grid, instead of falling into a stray cell. */
+.fk-form {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px 12px;
+  align-items: end;
+  width: 100%;
+  max-width: 640px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--panel-alt);
+}
+.fk-form .field { min-width: 0; }
+.fk-form .input { padding: 7px 10px; font-size: 0.8rem; }
+.fk-form select.input { padding-right: 34px; }
+.fk-wide { grid-column: 1 / -1; }
+fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
+.fk-checks { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+/* Checkbox words are reading text, not field labels: undo `.field span` inside the group. */
+.fk-checks .check-row span { font-size: 0.8rem; font-weight: 500; color: var(--ink); }
+.fk-err {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--red);
+  font-size: 0.75rem;
+}
+
 /* ============================================================
    Buttons
    ============================================================ */
