@@ -49,6 +49,10 @@ DEFAULT_MAX_CYCLES = 24
 #: is to stop and say so rather than to keep paying for the same failure.
 MAX_CONSECUTIVE_FAILURES = 3
 
+#: BOSSAPP-857: the most a no-progress back-off may stretch a loop (64 x a five-minute monitor
+#: is about five hours). 1 = off, the default: a wake runs on its own clock exactly as before.
+MAX_BACKOFF_FACTOR = 64
+
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
@@ -110,8 +114,12 @@ def arm_monitor(
     interval_seconds: int = 300,
     max_cycles: int = DEFAULT_MAX_CYCLES,
     deadline_seconds: Optional[int] = None,
+    backoff_max_factor: int = 1,
 ) -> dict[str, Any]:
-    """Keep one conversation checking something until a condition is met."""
+    """Keep one conversation checking something until a condition is met.
+
+    `backoff_max_factor` > 1 turns on the no-progress back-off (BOSSAPP-857): each wake that
+    reports nothing new doubles the wait, up to that many intervals; one that does resets it."""
     from . import projects_archive
 
     projects_archive.refuse_new_work(connection, project_id, "new watches")
@@ -156,6 +164,8 @@ def arm_monitor(
     )
     emit_event(connection, project_id, "wakeup.armed", actor, "agent_wakeup", wake_id,
                {"kind": "monitor", "interval_seconds": interval, "max_cycles": max_cycles})
+    if int(backoff_max_factor or 1) > 1:
+        set_backoff(connection, wakeup_id=wake_id, max_factor=backoff_max_factor)
     return describe(connection, wakeup_id=wake_id)
 
 
@@ -169,8 +179,12 @@ def schedule(
     days: Optional[list[str]] = None,
     tz_name: str = "UTC",
     max_cycles: int = 0,
+    backoff_max_factor: int = 1,
 ) -> dict[str, Any]:
-    """Run something on a clock, in a fresh conversation each time."""
+    """Run something on a clock, in a fresh conversation each time.
+
+    `backoff_max_factor` > 1: a run that reports nothing new skips occurrences (1, 3, 7 …, up
+    to that many) before the next one; one that does returns to every occurrence."""
     from . import projects_archive
 
     projects_archive.refuse_new_work(connection, project_id, "new schedules")
@@ -193,7 +207,26 @@ def schedule(
     )
     emit_event(connection, project_id, "wakeup.scheduled", actor, "agent_wakeup", wake_id,
                {"at_time": at_time, "days": days or [], "timezone": tz_name})
+    if int(backoff_max_factor or 1) > 1:
+        set_backoff(connection, wakeup_id=wake_id, max_factor=backoff_max_factor)
     return describe(connection, wakeup_id=wake_id)
+
+
+def set_backoff(connection: Connection, *, wakeup_id: str, max_factor: int) -> int:
+    """Turn the no-progress back-off on (max_factor > 1) or off (1) for one wakeup."""
+    factor = int(max_factor or 1)
+    if factor < 1 or factor > MAX_BACKOFF_FACTOR:
+        raise WakeupError(f"backoff_max_factor must be between 1 and {MAX_BACKOFF_FACTOR}")
+    connection.execute(
+        text("UPDATE agent_wakeups SET backoff_max_factor = :f, no_progress_streak = 0, "
+             "updated_at = now() WHERE id = :id"), {"f": factor, "id": wakeup_id})
+    return factor
+
+
+def _same_report(a: Optional[str], b: Optional[str]) -> bool:
+    """Did this wake report what the last one did? Whitespace and case aside."""
+    norm = lambda v: " ".join(str(v or "").lower().split())  # noqa: E731
+    return bool(norm(a)) and norm(a) == norm(b)
 
 
 def describe(connection: Connection, *, wakeup_id: str) -> dict[str, Any]:
@@ -316,8 +349,12 @@ def advance(
     ok: bool,
     result: str,
     finished: bool = False,
+    progress: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Record what one wake did, and decide whether there is a next one.
+
+    `progress`: did this wake find anything new? None = judged by whether its report differs
+    from the previous one. Only matters when the wakeup's back-off is on (BOSSAPP-857).
 
     Separated from actually running the turn so the scheduling rules are testable without a
     model call — which is the only way this gets tested at all.
@@ -355,12 +392,26 @@ def advance(
             {"c": cycle, "r": spent, "id": wakeup_id})
         return {"status": "exhausted", "cycle": cycle, "reason": spent}
 
+    # NO-PROGRESS BACK-OFF (BOSSAPP-857), only where it was turned on: a loop that keeps
+    # reporting the same thing waits longer each time instead of paying for the same answer.
+    knobs = connection.execute(
+        text("SELECT backoff_max_factor, no_progress_streak FROM agent_wakeups WHERE id=:id"),
+        {"id": wakeup_id}).mappings().first() or {}
+    max_factor = int(knobs.get("backoff_max_factor") or 1)
+    streak = int(knobs.get("no_progress_streak") or 0)
+    factor = 1
+    if max_factor > 1 and ok:
+        moved = (not _same_report(result, row.get("last_result"))) if progress is None \
+            else bool(progress)
+        streak = 0 if moved else streak + 1
+        factor = min(2 ** streak, max_factor)
+
     # DEADLINE-PRESERVING. The next wake is computed from the one that was DUE, not from now:
     # a turn that took four minutes must not push a five-minute loop to nine.
     if row["kind"] == "monitor":
         base = row["next_wake_at"] or _now()
         interval = timedelta(seconds=int(row["interval_seconds"] or MIN_INTERVAL_SECONDS))
-        nxt = base + interval
+        nxt = base + interval * factor
         while nxt <= _now():
             # If the sweeper was down for an hour, catch up to the next future slot rather
             # than firing every missed wake in a burst.
@@ -370,12 +421,19 @@ def advance(
         if isinstance(days, str):
             days = json.loads(days)
         nxt = next_scheduled_wake(row["at_time"], days, row["timezone"])
+        for _ in range(factor - 1):
+            nxt = next_scheduled_wake(row["at_time"], days, row["timezone"], after=nxt)
 
     connection.execute(
         text("UPDATE agent_wakeups SET cycle=:c, next_wake_at=:n, last_ran_at=now(), "
              "       last_result=:r, consecutive_failures=:f, updated_at=now() WHERE id=:id"),
         {"c": cycle, "n": nxt, "r": result[:2000], "f": failures, "id": wakeup_id})
-    return {"status": "active", "cycle": cycle, "next_wake_at": nxt}
+    out = {"status": "active", "cycle": cycle, "next_wake_at": nxt}
+    if max_factor > 1:
+        connection.execute(text("UPDATE agent_wakeups SET no_progress_streak=:s WHERE id=:id"),
+                           {"s": streak, "id": wakeup_id})
+        out.update(no_progress_streak=streak, backoff_factor=factor)
+    return out
 
 
 #: What a wake tells the agent. The exit condition is the part that makes a monitor finite, so

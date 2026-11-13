@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2005 operations.
+# 2015 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -151,6 +151,7 @@
 "GET /v1/agents/live-board": ["permit project:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/agents/org-board": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/agents/org-board/handoffs": ["permit agent:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/agents/{agent_id}/jwks": ["public:jwks", "OAPVU"]
 "DELETE /v1/agents/{role_key}": ["permit agent:lifecycle @ project(query=project_id)", "OA"]
 "GET /v1/agents/{role_key}": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "PATCH /v1/agents/{role_key}": ["permit agent:update @ project(body=project_id)", "OA"]
@@ -166,6 +167,10 @@
 "GET /v1/agents/{role_key}/passport": ["permit agent_passport:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/agents/{role_key}/persona/draft": ["permit agent:create @ project(body=project_id)", "OAP"]
 "GET /v1/agents/{role_key}/prompt": ["permit agent:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/agents/{role_key}/run-policy": ["permit agent:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/agents/{role_key}/signing-keys": ["permit agent:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/agents/{role_key}/signing-keys": ["permit agent:lifecycle @ project(body=project_id)", "OA"]
+"POST /v1/agents/{role_key}/signing-keys/{kid}/revoke": ["permit agent:lifecycle @ project(body=project_id)", "OA"]
 "POST /v1/agents/{role_key}/test": ["permit agent:test @ project(body=project_id)", "OAP"]
 "GET /v1/agents/{role_key}/versions/{version}/instructions": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/ai-sre/ask": ["permit reliability:read @ project(body=project_id)", "OAPVU"]
@@ -1620,6 +1625,11 @@
 "POST /v1/reliability/scan": ["permit reliability:respond @ project(body=project_id)", "OAP"]
 "GET /v1/reliability/sources": ["permit reliability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/reliability/sources": ["permit reliability:manage @ project(body=project_id)", "OA"]
+"GET /v1/remote-agents": ["permit integration:read @ project(query=project_id) +writes_on_get", "OAPVU"]
+"POST /v1/remote-agents": ["permit integration:manage @ project(body=project_id)", "OA"]
+"POST /v1/remote-agents/load": ["permit integration:read @ project(query=project_id) +writes_on_get", "OAPVU"]
+"PATCH /v1/remote-agents/{profile_id}": ["permit integration:manage @ project(body=project_id)", "OA"]
+"POST /v1/remote-agents/{profile_id}/acknowledge-retention": ["permit integration:manage @ project(body=project_id)", "OA"]
 "POST /v1/repair-policy": ["permit policy:read @ org", "OAPVU"]
 "GET /v1/reports/summary": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/repos/push-pending/execute": ["permit worker:lease @ org", "-"]

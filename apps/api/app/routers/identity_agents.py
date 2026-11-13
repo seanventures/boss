@@ -229,6 +229,21 @@ def build_identity_agents_router() -> APIRouter:
             doc = signing_keys.jwks_document(db=db)
         return JSONResponse(doc, headers={"Cache-Control": "public, max-age=300"})
 
+    @router.get("/v1/agents/{agent_id}/jwks")
+    @public(reason=PublicReason.JWKS)
+    def agent_jwks(agent_id: str):
+        """BOSSAPP-859: one agent's public signing keys (active + retired; never revoked), so a
+        third party can check what the agent signed without calling BOSS for anything else."""
+        from boss_engine.services import agent_identity, agent_keys
+
+        if not agent_identity.AGENT_ID.fullmatch(agent_id or ""):
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        with _engine().begin() as db:
+            doc = agent_keys.jwks_for_agent(db, agent_id)
+        if doc is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse(doc, headers={"Cache-Control": "public, max-age=300"})
+
     @router.post("/v1/identity/token")
     @public(reason=PublicReason.AUTH_ENDPOINT, verifier=tokens.exchange_token)
     async def token(request: Request):
