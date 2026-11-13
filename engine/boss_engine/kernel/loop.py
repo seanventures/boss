@@ -230,7 +230,8 @@ def resume(spec: RunSpec, *, decision: Optional[dict] = None) -> KernelResult:
     """Continue the suspended run `spec.run_id` from its checkpoint.
 
     Waiting on a person: `decision` must approve the held call ({"approved": True,
-    "decision_id": ...}, plus `args_sha256` when the approval bound the arguments). The held call
+    "decision_id": ...}, plus the approval's binding — `args_sha256`, and on a v2 decision
+    `binding_version`, `args_preview` and `args_sig` — when it bound the arguments). The held call
     then runs WITHOUT asking its gates again — the approval is the answer to them — its result
     replaces the deferral the model saw, and the loop goes on. Anything else is `denied` and the
     run stays suspended. Waiting on the budget: the loop simply goes on.
@@ -267,11 +268,12 @@ def _approval_refusal(state: RunState, decision: Optional[dict]) -> str:
         return "the held call was not approved"
     if str(decision.get("decision_id") or "") != str(pending.get("decision_id") or ""):
         return "that decision is not the one this run waits on"
-    from ..services.argument_binding import held_call_matches
+    from ..services.argument_binding import CHANGED, binding_holds
 
-    if not held_call_matches(str(pending.get("tool") or ""), pending.get("args"),
-                             decision.get("args_sha256")):
-        return "arguments do not match the approved call"
+    # The decision's binding (args_sha256, and for a v2 decision binding_version + args_preview
+    # + args_sig): a v2 one fails closed without a valid signature (BOSSAPP-816).
+    if not binding_holds(str(pending.get("tool") or ""), pending.get("args"), decision):
+        return CHANGED
     return ""
 
 

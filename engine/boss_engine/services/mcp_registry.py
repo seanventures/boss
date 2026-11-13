@@ -40,7 +40,7 @@ from urllib.parse import urlparse
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .argument_binding import held_call_matches
+from .argument_binding import binding_holds
 from .core import create_blocking_decision, emit_event, make_id, normalize_data_boundary
 from .tool_call_audit import record_tool_call
 from .tool_catalog import (
@@ -671,9 +671,11 @@ def approved_arguments_match(
 ) -> bool:
     """True when this call is the one the approval digested.
 
-    A missing decision, or a decision with no args_sha256, still matches. Older
-    approvals did not store a digest, and a caller that does not pass one is
-    unchanged. A present digest matches only the same canonical arguments.
+    A missing decision, or an unstamped (v1) decision with no args_sha256, still
+    matches: older approvals did not store a digest, and a caller that does not
+    pass one is unchanged. A present digest matches only the same canonical
+    arguments. A v2 decision (BOSSAPP-816, argument_binding.binding_holds) fails
+    closed: it needs the digest AND a valid server-key signature.
     """
     wanted = str(decision_id or "").strip()
     if not wanted:
@@ -687,7 +689,15 @@ def approved_arguments_match(
     recommendation = _loads(row["recommendation"], {}) or {}
     if not isinstance(recommendation, dict):
         return True
-    return held_call_matches(tool_name, arguments, recommendation.get("args_sha256"))
+    # The agent loop binds an MCP hold under the name it OFFERED the model (`tool`, e.g.
+    # mcp_github_create_issue) and records the server's own name beside it (`tool_name`); this
+    # door is called with the server's name. Check under the bound name when the two name the
+    # same tool, else under this call's own name (a different tool then never matches).
+    bound_name = tool_name
+    offered = recommendation.get("tool")
+    if offered and isinstance(offered, str) and recommendation.get("tool_name") == tool_name:
+        bound_name = offered
+    return binding_holds(bound_name, arguments, recommendation)
 
 
 def _name_taken(

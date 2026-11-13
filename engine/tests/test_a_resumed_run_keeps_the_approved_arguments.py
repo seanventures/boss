@@ -42,5 +42,5 @@ def test_resume_selects_the_recommendation_and_checks_the_held_call_once():
     source = code_only(resume_agent_run)
     columns = source[source.index("SELECT"):source.index("FROM decisions")]
     assert "recommendation" in columns
-    assert source.count("held_call_matches(") == 1
-    assert source.index("held_call_matches(") < source.index('pending.get("kind")')
+    assert source.count("binding_holds(") == 1
+    assert source.index("binding_holds(") < source.index('pending.get("kind")')

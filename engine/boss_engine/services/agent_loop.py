@@ -15,7 +15,7 @@ from ..agent.transient import _with_transient_retry
 from ..config import Settings
 from . import owned_process
 from . import decision_actions
-from .argument_binding import bind_held_call, held_call_matches
+from .argument_binding import CHANGED, bind_held_call, binding_holds
 from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .low_trust import Ledger, blocked, outside_origin, remember, sink_for_skill
@@ -2023,7 +2023,8 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
             "decision_status": None if decision is None else decision["status"],
         }
     # Pending args can be replaced after the person approved a different call.
-    # No digest means an older decision; that resume is unchanged.
+    # No digest on an unstamped decision means an older one; that resume is unchanged. A v2
+    # decision needs its digest and signature (argument_binding.binding_holds, BOSSAPP-816).
     recommendation = decision["recommendation"]
     if isinstance(recommendation, str):
         try:
@@ -2035,14 +2036,12 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
     tool_name = recommendation.get("tool") or pending.get("tool") or ""
     if not isinstance(tool_name, str):
         tool_name = str(tool_name)
-    if not held_call_matches(
-        tool_name, pending.get("args"), recommendation.get("args_sha256"),
-    ):
+    if not binding_holds(tool_name, pending.get("args"), recommendation):
         return {
             "status": "denied",
             "run_id": run_id,
             "decision_id": decision_id,
-            "reason": "arguments do not match the approved call",
+            "reason": CHANGED,
         }
     if pending.get("kind") == "mcp":
         server = next(
