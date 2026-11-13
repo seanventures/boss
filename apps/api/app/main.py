@@ -31953,6 +31953,13 @@ from .routers.llm_gateways import build_llm_gateways_router
 app.include_router(build_llm_gateways_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
+# MULTI-ACCOUNT POOLS (routers/subscription_pools.py, services/subscription_pools.py;
+# BOSSAPP-886): several Claude or Codex subscriptions used as one, chosen by headroom.
+from .routers.subscription_pools import build_subscription_pools_router
+
+app.include_router(build_subscription_pools_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 # The AI SRE incident squad (routers/incident_squad.py, services/incident_squad.py).
 from .routers.incident_squad import build_incident_squad_router
 

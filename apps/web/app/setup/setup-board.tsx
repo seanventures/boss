@@ -41,6 +41,7 @@ import { RoutingRow } from "./routing-row";
 import { PublicUrlRow } from "./public-url-row";
 import { ToolchainsRow } from "./toolchains-row";
 import { GatewaysRow } from "./gateways-row";
+import { PoolsRow } from "./pools-row";
 import { SharingAsk } from "../improve/sharing-ask";
 import { CiWorkflowsToggle } from "./ci-workflows-toggle";
 import { GitHubSigninRow, useSignin } from "./github-signin-row";
@@ -64,6 +65,8 @@ const ADVANCED: Record<string, { line: string; tip: string }> = {
   jobs: { line: "Which model does which job", tip: "Pin a model to a job, or let BOSS route." },
   budget: { line: "Monthly spend cap", tip: "Set in Govern › Limits, with what happens at the cap." },
   public_url: { line: "Address used in emailed links", tip: "Sign-in, passkeys and emailed links use it." },
+  pools: { line: "Several accounts per provider",
+           tip: "Each run takes the account with most room; waits only when all are spent." },
   gateways: { line: "Route the CLIs through a gateway",
               tip: "Claude Code and Codex use your gateway; sandboxes never hold its key." },
 };
@@ -374,6 +377,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           <div className="su-adv-item" ref={ref("public_url")}><Why id="public_url" /><PublicUrlRow /></div>
           {/* BOSSAPP-887: the coding CLIs through the org's own LLM gateway, via the model proxy. */}
           <div className="su-adv-item"><Why id="gateways" /><GatewaysRow projectId={projectId} /></div>
+          {/* BOSSAPP-886: several Claude or Codex subscriptions used as one pool. */}
+          <div className="su-adv-item"><Why id="pools" /><PoolsRow projectId={projectId} /></div>
     </>
   );
 

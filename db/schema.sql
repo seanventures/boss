@@ -13084,3 +13084,40 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_gateways_project_active
   ON llm_gateways (project_id, protocol) WHERE status = 'active' AND project_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_gateways_org_active
   ON llm_gateways (org_id, protocol) WHERE status = 'active' AND project_id IS NULL;
+-- 886 (services/subscription_pools.py): several subscription accounts for one provider in a
+-- project, used as one pool. Each member's login lives in the secret store under its own name
+-- (`secret_name`, the same subscription namespace the single login uses; never in a table) and
+-- its windows in subscription_accounts under `account_key` (<engine>:pool:<member id>). A run is
+-- given the member with the most headroom, pinned for the rest of its task; the pool is exhausted
+-- only when every member is.
+CREATE TABLE IF NOT EXISTS subscription_pools (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  engine TEXT NOT NULL CHECK (engine IN ('claude_code', 'codex')),
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, engine)
+);
+CREATE TABLE IF NOT EXISTS subscription_pool_members (
+  id TEXT PRIMARY KEY,
+  pool_id TEXT NOT NULL REFERENCES subscription_pools(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  secret_name TEXT NOT NULL,
+  account_key TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'needs_reauth')),
+  last_assigned_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (pool_id, label)
+);
+CREATE TABLE IF NOT EXISTS subscription_pool_pins (
+  pool_id TEXT NOT NULL REFERENCES subscription_pools(id) ON DELETE CASCADE,
+  task_ref TEXT NOT NULL,
+  member_id TEXT NOT NULL REFERENCES subscription_pool_members(id) ON DELETE CASCADE,
+  pinned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (pool_id, task_ref)
+);

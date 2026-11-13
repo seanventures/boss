@@ -130,6 +130,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/skill-policies.ts#updateSkillRule": "skill:manage",        // PATCH /v1/skill-policies/{id}
   "lib/skill-policies.ts#revokeSkillRule": "skill:manage",        // DELETE /v1/skill-policies/{id}
   "lib/skill-policies.ts#simulateSkillRule": "skill:read",        // POST …/simulate (records nothing)
+  // lib/subscription-pools.ts — Setup › Advanced › Several accounts per provider (BOSSAPP-886)
+  "lib/subscription-pools.ts#createPool": "entitlement:manage",        // POST /v1/subscription-pools
+  "lib/subscription-pools.ts#addPoolMember": "entitlement:manage",     // POST …/{id}/members
+  "lib/subscription-pools.ts#updatePoolMember": "entitlement:manage",  // PATCH …/members/{id}
+  "lib/subscription-pools.ts#removePoolMember": "entitlement:manage",  // DELETE …/members/{id}
   // lib/llm-gateways.ts — Setup › Advanced › Gateways (BOSSAPP-887)
   "lib/llm-gateways.ts#createGateway": "model_provider:manage",   // POST /v1/llm-gateways
   "lib/llm-gateways.ts#updateGateway": "model_provider:manage",   // PATCH /v1/llm-gateways/{id}
@@ -257,6 +262,8 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // Skills & MCP › Rules › Skill access (lib/skill-policies.ts, BOSSAPP-890): simulate reads.
     "/v1/skill-policies/simulate": "skill:read",
     "/v1/skill-policies": "skill:manage",
+    // Setup › Advanced › Several accounts per provider (lib/subscription-pools.ts, BOSSAPP-886).
+    "/v1/subscription-pools": "entitlement:manage",
     // Setup › Advanced › Gateways (lib/llm-gateways.ts, BOSSAPP-887).
     "/v1/llm-gateways": "model_provider:manage",
     // Activity › Feedback › Reflection (lib/reflection.ts, BOSSAPP-888).

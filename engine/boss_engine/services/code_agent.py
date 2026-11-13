@@ -1036,6 +1036,27 @@ class ClaudeCodeAgent:
             llm_gateway.apply(env, gateway, harness="claude_code", settings=self.settings)
             self._billing = BILLING_METERED
             return self._finish_child_env(env)
+        # A MULTI-ACCOUNT POOL (subscription_pools, BOSSAPP-886): the member with the most
+        # headroom, pinned for the task; its long-lived login read through the one resolver
+        # (stored_credential). No pool (the default) leaves the single login below untouched.
+        from . import subscription_pools
+
+        member = subscription_pools.assignment_for("claude_code", self.settings)
+        if member is not None:
+            from .claude_credential import STORED_KEY_NAME, TOKEN_NAME
+            from .cli_harness import CliHarnessUnavailable, stored_credential
+            from .included_spend import BILLING_SUBSCRIPTION
+
+            token = stored_credential(self.settings, member.secret_name, strict=True,
+                                      include_env=False)
+            if not token:
+                raise CliHarnessUnavailable(
+                    f"the pool account {member.label!r} has no stored login. Replace its login "
+                    "in Repo and models, or remove it from the pool.")
+            env.pop(STORED_KEY_NAME, None)
+            env[TOKEN_NAME] = token
+            self._billing = BILLING_SUBSCRIPTION
+            return self._finish_child_env(env)
         # The lane binder runs only where a connection and project are in scope and binds its
         # answer onto settings; a sandboxed agent process has neither, so the store is asked
         # directly — through the one resolution every `claude` child uses
