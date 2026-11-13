@@ -123,7 +123,7 @@ def test_the_activity_gate_skips_a_quiet_period_and_inputs_are_templated(schedul
         gated = sched.create(c, project_id=PROJECT, workflow_key=key, name=f"gate {key}",
                              cadence="daily", minute=0, hour=8, actor="test",
                              input_data={"title": "Digest for {{date}} ({{schedule_name}})"},
-                             activity_gate={"kinds": ["probe877."]})
+                             activity_gate={"kinds": [f"probe{key}."]})
         c.execute(text("UPDATE workflow_schedules SET last_run_at = now() - interval '1 hour' "
                        "WHERE id = :i"), {"i": gated["id"]})
         _due(c, gated["id"])
@@ -131,7 +131,7 @@ def test_the_activity_gate_skips_a_quiet_period_and_inputs_are_templated(schedul
         assert quiet[0]["reason"] == "no_activity"
         from boss_engine.services.core import emit_event as emit
 
-        emit(c, PROJECT, "probe877.changed", "someone", "probe", "x1", {})
+        emit(c, PROJECT, f"probe{key}.changed", "someone", "probe", "x1", {})
         _due(c, gated["id"])
         busy = [f for f in sched.run_due(c, project_id=PROJECT) if f["schedule_id"] == gated["id"]]
         assert busy[0].get("run_id")
@@ -142,7 +142,7 @@ def test_the_activity_gate_skips_a_quiet_period_and_inputs_are_templated(schedul
         routine = sched.set_routine(c, project_id=PROJECT, schedule_id=gated["id"], actor="test",
                                     cron_expr="15 6 * * 1", catch_up="all", catch_up_max=5)
         assert routine["cadence"] == "cron" and routine["catch_up"] == "all"
-        assert routine["activity_gate"] == {"kinds": ["probe877."], "min_events": 1}
+        assert routine["activity_gate"] == {"kinds": [f"probe{key}."], "min_events": 1}
         with pytest.raises(sched.ScheduleError):
             sched.set_routine(c, project_id=PROJECT, schedule_id=gated["id"], actor="test",
                               concurrency_policy="sometimes")
