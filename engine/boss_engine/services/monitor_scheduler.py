@@ -535,6 +535,15 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
             return person_wait.poll_due(c, settings, now=now)
     out["person_wait_resumed"] = guard("person_wait", person_wait_sweep) or 0
 
+    # THE ORG CHAIN (BOSSAPP-885): a stall offered to the responsible agent's manager is asked,
+    # moved up the chain at its deadline, or falls through to the person path it held back.
+    def org_chain_sweep():
+        from . import org_chain
+
+        with begin(engine) as c:
+            return org_chain.poll_due(c, settings, now=now)
+    out["org_chain"] = guard("org_chain", org_chain_sweep)
+
     # ALWAYS-ON DIAGNOSIS: every build that stopped moving, failed or waits on a person is
     # investigated by the Shepherd without anyone asking (stuck_work): cause with evidence, the
     # safe move taken, ONE card only when a person must act.

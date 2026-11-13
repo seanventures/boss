@@ -23,6 +23,7 @@ import type { PxCtx } from "./project-page";
 import { StartedCards } from "./started-cards";
 import { ChangeLink } from "../change-link";
 import { GitHubWait } from "../../components/github-wait";
+import { ExtensionSlots } from "../extension-frame";
 
 /** Each Needs-you card's icon, by what it asks. */
 const NEED_ICON: Record<string, Icon> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
@@ -168,6 +169,9 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
           ) : <span className="px-faint">No spend yet</span>)}
         </Tile>
       </div>
+
+      {/* Extensions' project panels (boss.extension/v1 ui.slot.register), each in a sandboxed frame. */}
+      <ExtensionSlots type="project_panel" projectId={ctx.projectId} cardClass="px-card" titleClass="px-card-h" />
 
       <div className="px-split">
         <div className="px-stack">

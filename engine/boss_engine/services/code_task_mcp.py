@@ -47,6 +47,9 @@ class HarnessMcp:
     disallowed: list[str] = field(default_factory=list)
     #: The MCP gateway's run token when the file points at the gateway (BOSSAPP-814), else "".
     gateway_token: str = field(default="", repr=False)
+    #: A directory of the agent's skills, one `<key>/SKILL.md` each (BOSSAPP-854), synced per
+    #: run to wherever the harness reads skills (harness_delivery). "" when it holds none.
+    skills_dir: str = ""
 
     def argv(self) -> list[str]:
         self.bind_session()
@@ -93,6 +96,8 @@ class HarnessMcp:
         self.path = target
 
     def cleanup(self) -> None:
+        if self.skills_dir:
+            shutil.rmtree(self.skills_dir, ignore_errors=True)
         if self.gateway_token:
             from . import mcp_gateway
 
@@ -212,7 +217,7 @@ def prepare(connection: Connection, settings: Any, project_id: str,
             return None
         planned = plan(connection, settings, project_id, role)
         if not planned["servers"]:
-            return HarnessMcp(path="", servers=[])
+            return _with_skills(HarnessMcp(path="", servers=[]), connection, project_id, role)
     from .sandbox_identity import current as _sandbox
 
     sandbox = _sandbox()
@@ -230,5 +235,57 @@ def prepare(connection: Connection, settings: Any, project_id: str,
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         json.dump({"mcpServers": planned["servers"]}, handle)
-    return HarnessMcp(path=path, servers=sorted(planned["servers"]),
-                      disallowed=planned["disallowed"], gateway_token=token)
+    return _with_skills(HarnessMcp(path=path, servers=sorted(planned["servers"]),
+                                   disallowed=planned["disallowed"], gateway_token=token),
+                        connection, project_id, role)
+
+
+def skill_markdown(skill: dict[str, Any]) -> str:
+    """One BOSS skill as a SKILL.md (the frontmatter every skills-reading harness expects)."""
+    key = str(skill.get("skill_key") or "skill")
+    summary = " ".join(str(skill.get("summary") or skill.get("label") or key).split())
+    label = str(skill.get("label") or key)
+    return (f"---\nname: {key}\ndescription: {json.dumps(summary[:900])}\n---\n\n"
+            f"# {label}\n\n{str(skill.get('knowledge') or '').strip()}\n")
+
+
+def write_skills_bundle(skills: list[dict[str, Any]]) -> str:
+    """A fresh directory holding `<skill_key>/SKILL.md` per skill; "" when there are none.
+    World-readable (a skill is instructions, not a secret) so a sandboxed run's uid reads it."""
+    usable = [s for s in skills if str(s.get("knowledge") or "").strip() and s.get("skill_key")]
+    if not usable:
+        return ""
+    directory = tempfile.mkdtemp(prefix="boss-skills-")
+    os.chmod(directory, 0o755)
+    for skill in usable:
+        name = _cli_name(str(skill["skill_key"]))
+        os.makedirs(os.path.join(directory, name), mode=0o755, exist_ok=True)
+        path = os.path.join(directory, name, "SKILL.md")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(skill_markdown(skill))
+        os.chmod(path, 0o644)
+    return directory
+
+
+def _with_skills(mcp: HarnessMcp, connection: Connection, project_id: str,
+                 role: str) -> HarnessMcp:
+    """Attach the agent's held, enabled skills as a bundle (best effort: a skill that cannot be
+    read never stops a run, and the run's MCP file is untouched either way)."""
+    if not role:
+        return mcp
+    try:
+        from sqlalchemy import text as _text
+
+        with connection.begin_nested():
+            rows = connection.execute(_text(
+                "SELECT d.skill_key, d.label, d.summary, d.knowledge FROM skill_definitions d "
+                "JOIN role_skills r ON r.project_id = d.project_id AND r.skill_id = d.skill_key "
+                "WHERE d.project_id = :p AND r.role_key = :r AND d.enabled "
+                "ORDER BY d.skill_key"),
+                {"p": project_id, "r": role}).mappings().all()
+        mcp.skills_dir = write_skills_bundle([dict(r) for r in rows])
+    except Exception:  # noqa: BLE001 — skills are additive; never fail the run on them
+        import logging
+
+        logging.getLogger(__name__).debug("skills bundle not written", exc_info=True)
+    return mcp

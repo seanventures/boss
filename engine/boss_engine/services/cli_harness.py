@@ -41,6 +41,7 @@ from typing import Callable, Optional
 
 from . import model_proxy as _model_proxy
 from . import owned_process
+from .harness_delivery import delivers_kit
 from .harness_registry import FailurePattern, RuntimeBinary
 from .workspace_perms import tidies_workspace
 
@@ -286,6 +287,17 @@ class CliHarnessSpec:
     #: How this CLI says it could not run (harness_registry.FailurePattern), registered with
     #: the harness; harness_failures reads its output against them.
     failure_patterns: tuple = ()
+    # --- how the harness is driven, and how the agent's kit reaches it (BOSSAPP-853/854) ----
+    #: "cli": one process per turn, prompt in, files edited in place (GenericCliCodeAgent).
+    #: "acp": the Agent Client Protocol over stdio (acp_code_agent.AcpCodeAgent) — a session,
+    #: structured tool-call events, and permission requests BOSS answers.
+    protocol: str = "cli"
+    #: How the agent's MCP servers reach this harness (harness_delivery.MCP_DELIVERY):
+    #: claude_flag | codex_home | cursor_workspace | acp | env_manifest | none. Empty: none.
+    mcp_delivery: str = ""
+    #: Where the agent's skills are synced per run: "{workspace}/<dir>", "{home}/<dir>" (the
+    #: CLI's own home, per run), "{env}" ($BOSS_SKILLS_DIR). Empty: this CLI reads no skills.
+    skills_dir: str = ""
 
     def supports_read_only(self) -> bool:
         return bool(self.read_only_args)
@@ -357,6 +369,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         entitlement_provider="anthropic",
         runtime=CLAUDE_CLI_RUNTIME,
         failure_patterns=CLAUDE_FAILURE_PATTERNS,
+        mcp_delivery="claude_flag",
+        skills_dir="{workspace}/.claude/skills",
     ),
     # VERIFIED AGAINST codex-cli 0.154.0, not taken from documentation. `codex exec` is the
     # non-interactive mode; `--sandbox` is a real flag with a real read-only value, which is
@@ -419,6 +433,10 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         entitlement_provider="openai",
         runtime=(RuntimeBinary("codex", "@openai/codex", "npm", "the Codex CLI"), NODE_RUNTIME),
         failure_patterns=CODEX_FAILURE_PATTERNS,
+        # `[mcp_servers.<name>]` in config.toml (url / http_headers / disabled_tools) and
+        # skills under $CODEX_HOME/skills — both in a per-run CODEX_HOME (harness_delivery).
+        mcp_delivery="codex_home",
+        skills_dir="{home}/skills",
     ),
     "grok": CliHarnessSpec(
         name="grok",
@@ -459,6 +477,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         entitlement_source_id="xai_grok_build",
         entitlement_provider="xai",
         runtime=(RuntimeBinary("grok", "@xai-official/grok", "npm", "the Grok Build CLI"),),
+        # No documented headless MCP or skills route: the run records the kit as withheld.
+        mcp_delivery="none",
     ),
     "cursor": CliHarnessSpec(
         name="cursor",
@@ -483,6 +503,9 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         entitlement_provider="cursor",
         runtime=(RuntimeBinary("cursor-agent", "curl https://cursor.com/install -fsS | bash",
                                "operator", "the Cursor CLI (bring your own)"),),
+        # Project-level `.cursor/mcp.json`, restored when the run ends. No per-tool refusal:
+        # without the MCP gateway a server with an Off/ungranted tool is withheld.
+        mcp_delivery="cursor_workspace",
     ),
     "aider": CliHarnessSpec(
         name="aider",
@@ -504,6 +527,54 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         docs_url="https://aider.chat/docs/install.html",
         runtime=(RuntimeBinary("aider", "python -m pip install aider-install && aider-install",
                                "operator", "Aider (bring your own)"),),
+        mcp_delivery="none",
+    ),
+    # ── ACP-backed harnesses (BOSSAPP-853): driven over the Agent Client Protocol ───────────
+    # UNVERIFIED, both: written from each CLI's ACP documentation. `verified` flips only after
+    # a governed code task completes end to end on it (harness_registry's honesty rule).
+    "gemini_cli": CliHarnessSpec(
+        name="gemini_cli",
+        binary="gemini",
+        # Gemini CLI's ACP server mode. Correct it with BOSS_CLI_HARNESSES_JSON if the flag has
+        # since been renamed (later releases also accept `--acp`).
+        args=("--experimental-acp",),
+        protocol="acp",
+        model_flag="--model",
+        verified=False,
+        description="Google Gemini CLI driven over the Agent Client Protocol (ACP). "
+                    "Authorised by the Gemini CLI's own login or GEMINI_API_KEY.",
+        env_passthrough=("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT",
+                         "GOOGLE_GENAI_USE_VERTEXAI", "GEMINI_CLI_HOME"),
+        version_args=("--version",),
+        # No login-status subcommand: ACP's `initialize` reports authMethods, and a session
+        # that needs one fails with the protocol's auth_required error, read as auth_refused.
+        auth_check_args=(),
+        signin_hint="gemini (sign in once interactively), or set GEMINI_API_KEY",
+        install_hint="npm install -g @google/gemini-cli",
+        docs_url="https://github.com/google-gemini/gemini-cli",
+        runtime=(RuntimeBinary("gemini", "npm install -g @google/gemini-cli", "operator",
+                               "the Gemini CLI (bring your own)"),),
+        mcp_delivery="acp",
+    ),
+    "opencode": CliHarnessSpec(
+        name="opencode",
+        binary="opencode",
+        args=("acp",),
+        protocol="acp",
+        verified=False,
+        description="OpenCode driven over the Agent Client Protocol (`opencode acp`). "
+                    "Authorised by OpenCode's own provider login.",
+        env_passthrough=("OPENCODE_CONFIG", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"),
+        version_args=("--version",),
+        auth_check_args=(),
+        signin_hint="opencode auth login",
+        install_hint="npm install -g opencode-ai",
+        docs_url="https://opencode.ai/docs/acp/",
+        runtime=(RuntimeBinary("opencode", "npm install -g opencode-ai", "operator",
+                               "OpenCode (bring your own)"),),
+        mcp_delivery="acp",
+        # OpenCode reads project skills from .opencode/skill/<name>/SKILL.md.
+        skills_dir="{workspace}/.opencode/skill",
     ),
 }
 
@@ -1464,6 +1535,9 @@ class GenericCliCodeAgent:
         self.settings = settings
         self.spec = spec
         self.engine = spec.name
+        #: The agent's MCP servers and skills (code_task_mcp.HarnessMcp), delivered per run the
+        #: way `spec.mcp_delivery` / `spec.skills_dir` declare (harness_delivery, BOSSAPP-854).
+        self.mcp_harness = None
 
     @property
     def capabilities(self):
@@ -1520,6 +1594,14 @@ class GenericCliCodeAgent:
         if self.spec.name == "codex" and getattr(self, "_pick", None):
             apply_codex_pick(env, self._pick, home=self.cli_home(),
                              resolve_secret=self._resolve_secret)
+        # THE AGENT'S KIT (harness_delivery): a per-run CODEX_HOME, $BOSS_MCP_CONFIG, ... —
+        # whatever this harness's delivery declares. Nothing when the agent holds nothing.
+        from . import harness_delivery
+
+        kit = harness_delivery.current()
+        if kit is not None:
+            env.update(kit.env_for(env, default_home=self.cli_home()
+                                   if self.spec.home_env or self.spec.default_home else ""))
         # A PROVIDER API KEY NEVER REACHES THE CLI (model_proxy): an Anthropic, OpenAI or
         # OpenRouter key passed through above becomes a run token for the loopback proxy, with
         # the base URL the CLI reads. A CLI's own login (a token, an auth file) is untouched.
@@ -1548,6 +1630,13 @@ class GenericCliCodeAgent:
             else:
                 _log.warning("%s cannot run model %s; using its own default", self.spec.name,
                              model)
+        from . import harness_delivery
+
+        kit = harness_delivery.current()
+        if kit is not None:
+            if kit.mode == "claude_flag" and self.mcp_harness is not None:
+                argv += self.mcp_harness.argv()
+            argv += list(kit.argv)
         if self.spec.prompt_via == "argv":
             argv.append(f"{self.spec.prompt_prefix}{prompt}" if self.spec.prompt_prefix
                         else prompt)
@@ -1816,6 +1905,7 @@ class GenericCliCodeAgent:
 
     @tidies_workspace
     @_proxy_scoped
+    @delivers_kit
     def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
                  model: Optional[str] = None, resume_session_id: Optional[str] = None,
                  **_ignored) -> dict:

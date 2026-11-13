@@ -146,6 +146,25 @@ export const enablePlugin = (pluginId: string) =>
 export const disablePlugin = (pluginId: string) =>
   send("POST", `/v1/infra/plugins/${enc(pluginId)}/disable`, {}, P(`infra-plugin-${pluginId}`, "Off"));
 
+// ── extensions (boss.extension/v1, BOSSAPP-861; install-wide, enabled per project) ──────────
+
+export const previewExtension = (source: string) =>
+  send<{ preview?: unknown }>("POST", "/v1/extensions/preview", { source }, P("infra-extension-install", "Check"));
+export const installExtension = (source: string, checksum: string, accept: string[]) =>
+  send<{ extension?: unknown }>("POST", "/v1/extensions/install", { source, checksum, accept },
+                                P("infra-extension-install", "Install"));
+export const enableExtension = (extensionId: string, projectId: string) =>
+  send("POST", `/v1/extensions/${enc(extensionId)}/enable`, { project_id: projectId },
+       P(`infra-extension-${extensionId}`, "On"));
+export const disableExtension = (extensionId: string, projectId: string) =>
+  send("POST", `/v1/extensions/${enc(extensionId)}/disable`, { project_id: projectId },
+       P(`infra-extension-${extensionId}`, "Off"));
+export const uninstallExtension = (extensionId: string) =>
+  send("DELETE", `/v1/extensions/${enc(extensionId)}`, null, P(`infra-extension-${extensionId}`, "Remove"));
+export type ExtensionWebhook = { name: string; url: string; secret: string; signatureHeader: string; scheme: string };
+export const extensionWebhooks = (extensionId: string) =>
+  read<{ webhooks?: ExtensionWebhook[] }>(`/v1/extensions/${enc(extensionId)}/webhooks`);
+
 // ── secrets (§4.3 `+ Add › Secret`, Deploys `⋯ › Secrets`, target SECRETS) ──────────────────
 
 export type SecretRow = {
@@ -204,6 +223,12 @@ declareAction(stopPreview, "preview:manage");
 declareAction(enablePlugin, "setup:manage");
 declareAction(disablePlugin, "infra:provision");
 declareAction(restartPreview, "preview:manage");
+declareAction(previewExtension, "setup:manage");
+declareAction(installExtension, "setup:manage");
+declareAction(enableExtension, "setup:manage");
+declareAction(disableExtension, "infra:provision");
+declareAction(uninstallExtension, "setup:manage");
+declareAction(extensionWebhooks, "setup:manage");
 declareAction(listSecrets, "secret:read_metadata");
 declareAction(putSecret, "secret:manage");
 declareAction(generateKeypair, "secret:manage");

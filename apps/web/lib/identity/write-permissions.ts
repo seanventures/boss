@@ -246,7 +246,7 @@ export const INLINE_WRITES: Readonly<Record<string, readonly WriteGate[]>> = {
   "app/workflows/editor/define-step-modal.tsx": ["workflow:create"], // custom-steps POST/PATCH
   "app/workflows/editor/inspector/workflow-settings.tsx": ["workflow:publish"], // apply
   "app/workflows/new-project-composer.tsx": ["work_item:manage"],  // POST /v1/projects/{id}/agents
-  "app/workforce-ui.tsx": ["agent:update"],                        // PUT/DELETE /v1/console/v2/org/{agent}
+  "app/workforce-ui.tsx": ["agent:update"],                        // PUT/DELETE /v1/console/v2/org/{agent}, POST …/org/takeover
   "components/v2/AgentChat.tsx": ["assistant:chat"],               // POST /v1/engine/agent/chat
   "components/v2/AutonomyControl.tsx": ["approval_rule:manage"],   // POST /v1/console/v2/autonomy
   "components/v2/DeployControls.tsx": ["deployment:create", "deployment_target:manage"],
