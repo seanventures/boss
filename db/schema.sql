@@ -12060,3 +12060,10 @@ CREATE INDEX IF NOT EXISTS idx_harness_bench_results_run
 -- class or caps it by calls/tokens per day, counted over this column.
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS call_class TEXT;
 CREATE INDEX IF NOT EXISTS idx_llm_calls_class ON llm_calls (project_id, call_class, created_at DESC);
+
+-- ── BOSSAPP-822: the prompt-injection screen's verdict on every delivered tool result ─────────
+-- services/tool_result_screen.py screens each result call_tool_with_receipt hands back
+-- (BOSS_TOOL_RESULT_SCREEN / project knob tool_result_screen: off | patterns | model). The
+-- verdict lands here: {"mode", "verdict": clean|suspicious|unscreened, "rules": [...]}. NULL on
+-- a refused call (no result) and on rows that predate the column.
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;
