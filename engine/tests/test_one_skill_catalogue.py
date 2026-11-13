@@ -112,6 +112,9 @@ _OWNER_READ_CALLERS = {
     "engine/boss_engine/services/skill_sources.py::sync_one": "the synced skill it versions",
     "engine/boss_engine/services/skill_tests.py::_skill": "the one skill whose cases run",
     "engine/boss_engine/services/skill_versions.py::restore": "the skill it re-saves",
+    # The reflection agent (BOSSAPP-888) proposes a change to ONE authored skill: the row it
+    # drafts the diff against (propose_change takes its base from the same row).
+    "engine/boss_engine/services/reflection.py::_authored": "the skill a skill_diff changes",
 }
 
 _SHIPPING = ("engine/boss_engine", "apps/api/app", "apps/worker")

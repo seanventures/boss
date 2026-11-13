@@ -18076,8 +18076,9 @@ def save_skill_definition(payload: open_bodies.SkillDefinitionSaveBody) -> dict:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except SkillDefinitionError as error:
             # 422, not 500: everything this raises is something the operator can fix, and the
-            # message is already written for them.
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            # message is already written for them. A skill-access rule's refusal is 403 (890).
+            raise HTTPException(status_code=getattr(error, "status", 422),
+                                detail=str(error)) from error
 
 
 @app.patch("/v1/skill-definitions/{skill_key}")
@@ -18414,7 +18415,8 @@ def assign_role_skill(payload: RoleSkillBody) -> dict:
                 skill_id=str(payload.get("skill_id") or ""),
             )
         except SkillDefinitionError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            raise HTTPException(status_code=getattr(error, "status", 422),
+                                detail=str(error)) from error
 
 
 @app.delete("/v1/role-skills")
@@ -18458,7 +18460,8 @@ def delete_skill_definition(
         except SkillInUseError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except SkillDefinitionError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            raise HTTPException(status_code=getattr(error, "status", 422),
+                                detail=str(error)) from error
 
 
 # --------------------------------------------------------------------------- #
@@ -31961,6 +31964,41 @@ from .routers.tool_policies import build_tool_policies_router
 
 app.include_router(build_tool_policies_router(
     engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# AGENT FEEDBACK (routers/agent_feedback.py, services/agent_feedback.py; BOSSAPP-889): what agents
+# complained about or suggested (report_friction), read and closed by a person.
+from .routers.agent_feedback import build_agent_feedback_router
+
+app.include_router(build_agent_feedback_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# THE DECLARATIVE SKILL-ACCESS POLICY (routers/skill_policies.py, services/skill_policy.py;
+# BOSSAPP-890): the org's ordered allow/deny rules over skills, CRUD and the simulator.
+from .routers.skill_policies import build_skill_policies_router
+
+app.include_router(build_skill_policies_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# THE REFLECTION AGENT (routers/reflection.py, services/reflection.py; BOSSAPP-888): proposes
+# skill and instruction changes from an agent's runs; paused by default; a person approves each.
+from .routers.reflection import build_reflection_router
+
+app.include_router(build_reflection_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# LLM GATEWAYS FOR THE CODING CLIS (routers/llm_gateways.py, services/llm_gateway.py;
+# BOSSAPP-887): an operator-named gateway the harnesses are routed through, via the model proxy.
+from .routers.llm_gateways import build_llm_gateways_router
+
+app.include_router(build_llm_gateways_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# MULTI-ACCOUNT POOLS (routers/subscription_pools.py, services/subscription_pools.py;
+# BOSSAPP-886): several Claude or Codex subscriptions used as one, chosen by headroom.
+from .routers.subscription_pools import build_subscription_pools_router
+
+app.include_router(build_subscription_pools_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
 # The AI SRE incident squad (routers/incident_squad.py, services/incident_squad.py).
 from .routers.incident_squad import build_incident_squad_router

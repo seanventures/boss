@@ -146,7 +146,7 @@ LIST_KINDS: tuple[Boundary, ...] = (
         words=("grant", "revoke", "permission"),
         actions=(),
         decision_actions=("grant_builder_authority", "role.autonomy_change",
-                          "activate_authored_skill"),
+                          "activate_authored_skill", "apply_agent_prompt_diff"),
         seat="cao", step_up="passkey", per_project=False,
         agents_may="Propose a grant with its evidence; never raise a level itself",
         delegate="never"),

@@ -652,14 +652,16 @@ def _run_binding() -> tuple[Optional[str], Optional[str]]:
 
 
 def shield(env: dict, provider: str, credential: str, *, settings: Any = None,
-           proxy: Optional[ModelProxy] = None) -> dict:
+           proxy: Optional[ModelProxy] = None, upstream: Optional[str] = None) -> dict:
     """`env` with `provider`'s real key replaced by a run token and the proxy's base URL.
-    Raises ProxyUnavailable rather than fall back to the key."""
+    Raises ProxyUnavailable rather than fall back to the key. `upstream` names where this run's
+    calls go instead of the provider's own API — an operator's LLM gateway (llm_gateway,
+    BOSSAPP-887), chosen in BOSS, never by the session."""
     adapter = ADAPTERS[provider]
     proxy = proxy or get()
     run_id, project_id = _run_binding()
     issued = proxy.issue(provider, credential, ttl=session_ttl(settings), run_id=run_id,
-                         project_id=project_id)
+                         project_id=project_id, upstream=upstream)
     for name in adapter.key_env:
         env.pop(name, None)
     env.update(issued.env)

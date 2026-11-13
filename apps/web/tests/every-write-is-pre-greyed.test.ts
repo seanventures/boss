@@ -64,6 +64,11 @@ const PASSTHROUGH: Record<string, string> = {
   "app/workflows/editor/save/use-save-flow.tsx": "applyWorkClass runs inside Save, which workflow-editor.tsx gates on workflow:publish",
   "lib/watch-app.ts": "its helpers (registered) send through obsWrite; app/projects/watch-app.tsx gates each press on observability:manage",
   "lib/work-items.ts": "its helpers (registered) send through obsWrite; app/projects/work-tree.tsx gates each press on work_item:manage",
+  "lib/skill-policies.ts": "its helpers (registered) send through obsWrite; app/skills/skill-access-rules.tsx gates each press on skill:manage / skill:read",
+  "lib/subscription-pools.ts": "its helpers (registered) send through obsWrite; app/setup/pools-row.tsx gates each press on entitlement:manage",
+  "lib/llm-gateways.ts": "its helpers (registered) send through obsWrite; app/setup/gateways-row.tsx gates each press on model_provider:manage",
+  "lib/reflection.ts": "its helpers (registered) send through obsWrite; app/activity/reflection-panel.tsx gates each press on agent:update",
+  "lib/agent-feedback.ts": "its helper (registered) sends through obsWrite; app/activity/agent-feedback.tsx gates each press on agent:update",
   "lib/tool-policies.ts": "its helpers (registered) send through obsWrite; app/skills/tool-rules.tsx gates each press on mcp_server:review / mcp_server:read",
   "app/always-allow-ui.tsx": "sends through obsWrite (/v1/decisions/ registered); its one press is a GatedButton on decision:approve",
 };

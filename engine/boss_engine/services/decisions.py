@@ -1383,11 +1383,25 @@ class DecisionService:
             # nothing is written: the draft is a diff-bound consent (change_consent, 843), and
             # a skill changed since the draft refuses rather than writing another diff.
             from .skill_definitions import ConsentStale, activate_authored_skill
+            from .skill_policy import SkillPolicyDenied
 
             try:
                 activate_authored_skill(connection, row, actor)
             except ConsentStale as stale:
                 raise InvalidDecisionTransitionError(str(stale)) from stale
+            except SkillPolicyDenied as refused:
+                # A skill-access rule (BOSSAPP-890) written after the draft refuses it now.
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "apply_agent_prompt_diff":
+            # THE REFLECTION AGENT PROPOSED AN INSTRUCTION DOCUMENT (BOSSAPP-888): the approving
+            # person adds exactly the document shown; instructions changed since refuse it.
+            from .agent_instructions import InstructionError
+            from .reflection import ReflectionError, apply_prompt_diff
+
+            try:
+                apply_prompt_diff(connection, row, actor)
+            except (ReflectionError, InstructionError) as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action == "apply_wiki_patch":
             # An agent's (or the maintainer's) wiki change (BOSSAPP-891): the page the card showed
             # is written onto the revision it was proposed against, or refused when it moved.
@@ -1494,8 +1508,10 @@ class DecisionService:
             from .tool_access_requests import on_refused as refuse_access
 
             refuse_access(connection, row, actor)
-        elif (row["recommendation"] or {}).get("action") == "activate_authored_skill":
-            # A refused draft's consent can never be spent (change_consent, BOSSAPP-843).
+        elif (row["recommendation"] or {}).get("action") in ("activate_authored_skill",
+                                                             "apply_agent_prompt_diff"):
+            # A refused draft's consent can never be spent (change_consent, BOSSAPP-843); the
+            # same for a reflection's instruction proposal (BOSSAPP-888).
             from .change_consent import reject_for_decision
 
             reject_for_decision(connection, str(row["id"]), actor)
@@ -2756,7 +2772,7 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
     if row is None or row["status"] != "pending":
         return False
     if row.get("action") in ("review_architecture", "self_fix.install", "self_fix.remove",
-                             "activate_authored_skill"):
+                             "activate_authored_skill", "apply_agent_prompt_diff"):
         # An architecture, a BOSS self-fix, and an agent-drafted skill are approved by a person,
         # never by a setting. Policy approval would mark the card approved and skip the
         # follow-on, so the skill would stay unusable and nobody could approve it again.

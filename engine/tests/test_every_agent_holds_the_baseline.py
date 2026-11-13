@@ -124,7 +124,8 @@ def test_every_agent_can_file_a_gap_in_boss_itself():
     BOSS for BOSS to fix itself. It is the fundamentals' only write, it is safe, and it only
     queues for a person (queues_for_review), so it runs in the turn that found it."""
     assert "file_platform_gap" in ab.FUNDAMENTALS_TOOLS
-    assert ab.BUNDLE_WRITES["boss.fundamentals"] == ("file_platform_gap",)
+    # ...and its friction reports (BOSSAPP-889), the same kind of write: a record a person reads.
+    assert ab.BUNDLE_WRITES["boss.fundamentals"] == ("file_platform_gap", "report_friction")
     spec = ab.bundle_tool_spec("boss.fundamentals", "file_platform_gap")
     assert spec is not None and spec.kind == "write" and spec.reversibility == "safe"
     assert spec.queues_for_review and not spec.operator_only

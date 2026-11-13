@@ -45,6 +45,8 @@ _EXPECTED_TOOLS: set[str] = {
     # ...and the doorway (BOSSAPP-571): a gap an agent diagnosed in BOSS, filed in the turn that
     # found it (it only queues for a person); and the self-fix a person presses to start.
     "list_platform_gaps", "file_platform_gap", "request_self_fix",
+    # AN AGENT'S FRICTION, RECORDED FOR A PERSON (BOSSAPP-889): Activity › Feedback.
+    "report_friction",
     # Setup, answered and repaired rather than described. `diagnose_setup` is the whole
     # picture in one call; the other two are the actions that used to be instructions.
     "diagnose_setup",
@@ -273,7 +275,7 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 185, (
+    assert len(reg.names()) == 186, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 103  # + wiki_read (BOSSAPP-891) + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
@@ -281,7 +283,7 @@ def test_default_registry_shape():
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 82  # + wiki_propose (BOSSAPP-891) + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
+    assert len(write) == 83  # + report_friction (BOSSAPP-889), + wiki_propose (BOSSAPP-891), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
     # + file_platform_gap, request_self_fix (BOSSAPP-571's doorway) + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
@@ -471,6 +473,9 @@ _SAFE_WRITES = [
     # A GAP IN BOSS ITSELF, FILED (BOSSAPP-571): one recommendation row a person reviews; it changes
     # nothing else, and filing it again counts the same cause again (queues_for_review).
     "file_platform_gap",
+    # AN AGENT'S FRICTION REPORT (BOSSAPP-889): one row a person reads; the same report from the
+    # same run is kept once (queues_for_review).
+    "report_friction",
     # THE CAPTAIN OBSERVES AND KEEPS GOALS (BOSSAPP-759): a watch tick records what it saw and
     # applies nothing; a goal is a row the captain scores. Running either again records again.
     "captain_watch", "captain_set_goal",

@@ -65,7 +65,19 @@ def _json(value: Any) -> dict:
 
 
 def account_key(connection: Any, settings: Any, project_id: Optional[str], engine: str) -> str:
-    """Which subscription account `engine` spends on for this project (cached 5 minutes)."""
+    """Which subscription account `engine` spends on for this project (cached 5 minutes).
+
+    A run given a member of a multi-account pool (subscription_pools, BOSSAPP-886) spends on
+    THAT member: its account key rides on the run's LLM context, so the windows its calls report
+    are the member's, never the pool's other seats'."""
+    try:
+        from ..llm_telemetry import get_llm_context
+
+        ctx = get_llm_context()
+        if ctx.get("pool_account") and ctx.get("pool_engine") == engine:
+            return str(ctx["pool_account"])
+    except Exception:  # noqa: BLE001 — no context: the project's account, as before
+        pass
     cache_key = (project_id or "", engine)
     with _LOCK:
         hit = _KEYS.get(cache_key)

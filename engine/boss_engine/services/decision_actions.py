@@ -115,6 +115,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "self_fix.install",
     # Approving an agent-drafted skill writes that draft enabled. Until then it is not usable.
     "activate_authored_skill",
+    # Approving a reflection's instruction proposal adds exactly that document to the agent, as
+    # the approving person (reflection.apply_prompt_diff, BOSSAPP-888).
+    "apply_agent_prompt_diff",
     # Approving an agent's (or the maintainer's) wiki change writes exactly that page onto the
     # revision it was proposed against (wiki.apply_for_decision, BOSSAPP-891).
     "apply_wiki_patch",

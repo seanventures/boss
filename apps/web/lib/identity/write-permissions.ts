@@ -125,6 +125,26 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/tool-policies.ts#updateRule": "mcp_server:review",         // PATCH /v1/tool-policies/{id}
   "lib/tool-policies.ts#revokeRule": "mcp_server:review",         // DELETE /v1/tool-policies/{id}
   "lib/tool-policies.ts#simulate": "mcp_server:read",             // POST …/simulate (records nothing)
+  // lib/skill-policies.ts — Skills & MCP › Rules › Skill access (BOSSAPP-890)
+  "lib/skill-policies.ts#createSkillRule": "skill:manage",        // POST /v1/skill-policies
+  "lib/skill-policies.ts#updateSkillRule": "skill:manage",        // PATCH /v1/skill-policies/{id}
+  "lib/skill-policies.ts#revokeSkillRule": "skill:manage",        // DELETE /v1/skill-policies/{id}
+  "lib/skill-policies.ts#simulateSkillRule": "skill:read",        // POST …/simulate (records nothing)
+  // lib/subscription-pools.ts — Setup › Advanced › Several accounts per provider (BOSSAPP-886)
+  "lib/subscription-pools.ts#createPool": "entitlement:manage",        // POST /v1/subscription-pools
+  "lib/subscription-pools.ts#addPoolMember": "entitlement:manage",     // POST …/{id}/members
+  "lib/subscription-pools.ts#updatePoolMember": "entitlement:manage",  // PATCH …/members/{id}
+  "lib/subscription-pools.ts#removePoolMember": "entitlement:manage",  // DELETE …/members/{id}
+  // lib/llm-gateways.ts — Setup › Advanced › Gateways (BOSSAPP-887)
+  "lib/llm-gateways.ts#createGateway": "model_provider:manage",   // POST /v1/llm-gateways
+  "lib/llm-gateways.ts#updateGateway": "model_provider:manage",   // PATCH /v1/llm-gateways/{id}
+  "lib/llm-gateways.ts#deleteGateway": "model_provider:manage",   // DELETE /v1/llm-gateways/{id}
+  "lib/llm-gateways.ts#testGateway": "model_provider:manage",     // POST …/{id}/test (one live call)
+  // lib/reflection.ts — Activity › Feedback › Reflection (BOSSAPP-888)
+  "lib/reflection.ts#setReflection": "agent:update",              // PUT /v1/reflection/settings
+  "lib/reflection.ts#runReflection": "agent:update",              // POST /v1/reflection/run
+  // lib/agent-feedback.ts — Activity › Feedback (BOSSAPP-889)
+  "lib/agent-feedback.ts#setFeedbackStatus": "agent:update",     // PATCH /v1/agent-feedback/{id}
   // lib/watch-app.ts — Project › Health › Watch this app
   "lib/watch-app.ts#startWatching": "observability:manage",       // POST /v1/projects/{id}/watch
   "lib/watch-app.ts#verifyChannel": "observability:manage",       // POST …/watch/{target}/verify
@@ -243,6 +263,17 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // Skills & MCP › Rules (lib/tool-policies.ts, BOSSAPP-815): the simulate box is a read.
     "/v1/tool-policies/simulate": "mcp_server:read",
     "/v1/tool-policies": "mcp_server:review",
+    // Skills & MCP › Rules › Skill access (lib/skill-policies.ts, BOSSAPP-890): simulate reads.
+    "/v1/skill-policies/simulate": "skill:read",
+    "/v1/skill-policies": "skill:manage",
+    // Setup › Advanced › Several accounts per provider (lib/subscription-pools.ts, BOSSAPP-886).
+    "/v1/subscription-pools": "entitlement:manage",
+    // Setup › Advanced › Gateways (lib/llm-gateways.ts, BOSSAPP-887).
+    "/v1/llm-gateways": "model_provider:manage",
+    // Activity › Feedback › Reflection (lib/reflection.ts, BOSSAPP-888).
+    "/v1/reflection/": "agent:update",
+    // Activity › Feedback (lib/agent-feedback.ts, BOSSAPP-889): a person closes a record.
+    "/v1/agent-feedback/": "agent:update",
   },
 };
 
