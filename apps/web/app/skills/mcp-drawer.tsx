@@ -22,6 +22,7 @@ import { plural, POLICY_LABEL, PROVENANCE, shortError, TIP, agentName } from "./
 import { serverProvenance } from "./library";
 import { PolicySeg, ReviewRow, RiskDot } from "./tools-section";
 import { TrySection } from "./try-section";
+import { AccessGrantsList, SignInSection } from "./mcp-signin";
 
 /** The Kit abilities a server backs (Library docs for context7; Web research and Web search for
  *  web-intel). Their recommendations star the drawer's agents and their Try it runs here too. */
@@ -38,6 +39,10 @@ export function withAgent(server: McpServer, role: string, on: boolean): McpServ
 }
 
 export function serverStatus(s: McpServer, holders: number): AbilityStatus {
+  // AN OAUTH SERVER WHOSE SHARED SIGN-IN IS MISSING OR EXPIRED (BOSSAPP-846) needs a person to
+  // sign in before anything else about it matters (its probe answers 401 until then).
+  if (s.auth?.type === "oauth" && s.auth_status !== "connected"
+      && (s.credential_policy ?? "shared") !== "per_user" && s.credential_policy !== "per_agent") return "setup";
   if (s.reachable === false) return "failing";
   if (s.enabled && !s.trusted) return "review";
   if (!s.enabled) return "off";
@@ -90,6 +95,15 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
 
   const saveTest = async () => {
     setBusy(true); setError(null);
+    if (authType === "oauth") {
+      // OAUTH (BOSSAPP-846): nothing to test until someone signs in; save, then Sign in below.
+      const r = await mcpApi.update(projectId, actor, server.id, { url, auth: { type: "oauth" } });
+      setBusy(false);
+      if (!r.ok) { setError({ field: r.field ?? null, message: r.error }); showToast("error", shortError(r.error)); return; }
+      showToast("success", "Saved, sign in below");
+      onChanged();
+      return;
+    }
     const auth: McpAuthInput = { type: authType, ...(authType === "header" ? { header_name: header } : {}),
                                  ...(secret ? { secret } : {}) };
     if (secret || url !== server.url || authType === "none") {
@@ -200,9 +214,10 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
           <div className="kit-field">
             <span className="kit-field-label">Auth</span>
             <span className="kit-seg kit-seg-sm" role="radiogroup" aria-label="Auth">
-              {(["none", "bearer", "header"] as const).map((t) => (
+              {(["none", "bearer", "header", "oauth"] as const).map((t) => (
                 <button key={t} type="button" role="radio" aria-checked={authType === t} data-testid={`kit-mcp-auth-${t}`}
-                        onClick={() => setAuthType(t)}>{t === "none" ? "None" : t === "bearer" ? "Bearer token" : "Header"}</button>
+                        data-tip={t === "oauth" ? "Sign in with the provider's account (OAuth); tokens stay in BOSS's vault" : undefined}
+                        onClick={() => setAuthType(t)}>{t === "none" ? "None" : t === "bearer" ? "Bearer token" : t === "header" ? "Header" : "OAuth"}</button>
               ))}
             </span>
           </div>
@@ -212,7 +227,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
               <input type="text" value={header} spellCheck={false} placeholder="X-API-Key" onChange={(e) => setHeader(e.target.value)} />
             </label>
           ) : null}
-          {authType !== "none" ? (
+          {authType !== "none" && authType !== "oauth" ? (
             server.auth?.set && !replacing ? (
               <div className="kit-field" data-testid="kit-mcp-secret-set">
                 <span className="kit-field-label">Token</span>
@@ -231,8 +246,9 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
           {error && error.field !== "url" && error.field !== "secret" ? <div className="kit-err" role="alert" data-tip={error.message}>{shortError(error.message)}</div> : null}
           <div className="kit-actions">
             <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-primary" disabled={busy || !url.trim()} data-testid="kit-mcp-save"
-                    onClick={() => void saveTest()}>{busy ? "Testing…" : "Save & test"}</GatedButton>
+                    onClick={() => void saveTest()}>{busy ? "Testing…" : authType === "oauth" ? "Save" : "Save & test"}</GatedButton>
           </div>
+          <SignInSection projectId={projectId} actor={actor} server={server} crew={crew} onChanged={() => onChanged()} />
         </Section>
         <Section id="tools" label="Tools" tip="What agents may call, and when they ask">
           {!server.trusted && server.enabled ? (
@@ -249,6 +265,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
           ))}
         </Section>
         <Section id="agents" label="Agents" tip="Who may use this server's tools">
+          <AccessGrantsList projectId={projectId} actor={actor} serverId={server.id} onChanged={() => onChanged()} />
           <ul className="kit-agent-grid">
             {ordered.map((c) => {
               const on = holders.includes(c.role_key);

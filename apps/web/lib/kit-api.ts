@@ -91,11 +91,49 @@ export const mcpApi = {
       `/api/mcp?view=grants&project_id=${enc(projectId)}&role=${enc(role)}`),
   roleTools: (projectId: string, actor: string, serverId: string, role: string, tools: string[]) =>
     write<Record<string, unknown>>("/api/mcp", { action: "role_tools", project_id: projectId, actor, server_id: serverId, role_key: role, tools }, "Tools"),
+  credentials: (projectId: string, serverId: string) =>
+    read<McpCredentials>(`/api/mcp?view=credentials&project_id=${enc(projectId)}&server_id=${enc(serverId)}`),
+  signIn: (projectId: string, actor: string, serverId: string, subject: "org" | "agent" = "org", roleKey?: string) =>
+    write<{ redirect: string }>("/api/mcp", { action: "oauth_start", project_id: projectId, actor, server_id: serverId, subject, role_key: roleKey ?? null }, "Sign in"),
+  signInMine: (projectId: string, actor: string, serverId: string) =>
+    write<{ redirect: string }>("/api/mcp", { action: "oauth_mine", project_id: projectId, actor, server_id: serverId }, "Use my own account"),
+  credentialPolicy: (projectId: string, actor: string, serverId: string, policy: CredentialPolicy) =>
+    write<{ credential_policy: CredentialPolicy }>("/api/mcp", { action: "credential_policy", project_id: projectId, actor, server_id: serverId, policy }, "Whose account"),
+  removeCredential: (projectId: string, actor: string, serverId: string, credentialId: string, mine: boolean) =>
+    write<{ removed: string }>("/api/mcp", { action: "credential_remove", project_id: projectId, actor, server_id: serverId, credential_id: credentialId, mine }, "Disconnect"),
+  accessGrants: (projectId: string, serverId: string) =>
+    read<{ grants: AccessGrant[] }>(`/api/mcp?view=access_grants&project_id=${enc(projectId)}&server_id=${enc(serverId)}`),
+  revokeGrant: (projectId: string, actor: string, grantId: string) =>
+    write<AccessGrant>("/api/mcp", { action: "grant_revoke", project_id: projectId, actor, grant_id: grantId }, "Revoke"),
   addFromCatalogue: (projectId: string, actor: string, key: string, token: string | null) =>
     write<{ server: McpServer; test: McpTestResult }>("/api/mcp", { action: "catalogue_add", project_id: projectId, actor, key, token }, "Add"),
 };
 
-export type McpAuthInput = { type: "none" | "bearer" | "header"; header_name?: string; secret?: string };
+export type McpAuthInput = { type: "none" | "bearer" | "header" | "oauth"; header_name?: string; secret?: string;
+                             oauth?: { client_id?: string; scope?: string } };
+
+/** Whose credential a call carries (BOSSAPP-847). */
+export type CredentialPolicy = "shared" | "per_user" | "per_user_fallback" | "per_agent";
+
+export type McpAuthStatus = "connected" | "needs_reauth" | "not_connected";
+
+export type McpCredential = {
+  id: string; subject_kind: "org" | "user" | "agent"; subject_id: string; kind: "oauth" | "token";
+  connected_as: string | null; status: "active" | "needs_reauth" | "revoked"; updated_at: string | null; mine?: boolean;
+};
+
+export type McpCredentials = {
+  server_id: string; credential_policy: CredentialPolicy; auth_status: McpAuthStatus | null;
+  credentials: McpCredential[];
+  you: { ok: boolean; subject_kind?: string; reason?: string; needs_reauth?: boolean } | null;
+};
+
+/** A tool an agent was granted from a Grant card (BOSSAPP-848). */
+export type AccessGrant = {
+  id: string; server_id: string; role_key: string; tool: string; tier: number; policy: "allow" | "ask";
+  status: "active" | "revoked" | "dropped" | "refused"; decision_id: string | null; reason: string | null;
+  granted_by: string; created_at: string | null;
+};
 
 export type McpServer = {
   id: string; name: string; url: string; enabled: boolean; risk_tier: number; data_boundary: string;
@@ -103,7 +141,9 @@ export type McpServer = {
   last_checked_at?: string | null; tools: { name: string; description?: string }[];
   tool_policy: Record<string, string>; tool_risk_overrides: Record<string, number>;
   provenance: Record<string, unknown>; publisher: Record<string, unknown>;
-  auth: { type: string; header_name: string | null; set: boolean; last4: string | null };
+  auth: { type: string; header_name: string | null; set: boolean; last4: string | null;
+          oauth?: { authorization_server?: string; client_id?: string; client_source?: string; scope?: string } };
+  credential_policy?: CredentialPolicy; auth_status?: McpAuthStatus | null;
   references?: { custom_steps: { step_key: string; label?: string }[]; skills: { skill_key: string; label?: string }[];
                  agents: { role_key: string; tools: string[] }[] };
 };
