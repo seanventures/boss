@@ -11,7 +11,9 @@ from boss_engine.tools import build_default_registry
 from boss_engine.tools.builtin import build_discuss_read_registry
 
 QUARANTINED_WRITES = ("file_platform_gap", "kg_propose_fact", "kg_propose_rule",
-                      "record_learning")
+                      "record_learning",
+                      # an agent's friction report (BOSSAPP-889): a record a person reads
+                      "report_friction")
 
 
 def test_every_quarantined_write_is_a_queued_safe_write():

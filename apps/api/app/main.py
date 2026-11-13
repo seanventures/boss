@@ -31922,6 +31922,13 @@ from .routers.tool_policies import build_tool_policies_router
 app.include_router(build_tool_policies_router(
     engine=engine, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
+# AGENT FEEDBACK (routers/agent_feedback.py, services/agent_feedback.py; BOSSAPP-889): what agents
+# complained about or suggested (report_friction), read and closed by a person.
+from .routers.agent_feedback import build_agent_feedback_router
+
+app.include_router(build_agent_feedback_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 # The AI SRE incident squad (routers/incident_squad.py, services/incident_squad.py).
 from .routers.incident_squad import build_incident_squad_router
 

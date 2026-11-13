@@ -12974,3 +12974,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_access_grants_live
   ON mcp_access_grants (project_id, server_id, role_key, tool) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_mcp_access_grants_role ON mcp_access_grants (project_id, role_key, status);
 -- ================================ end BOSSAPP-846-848 ==
+-- BOSSAPP-w4-ops1 ── multi-account pools (886), CLI gateways (887), reflection (888), agent
+-- feedback (889), skill-access policy (890). One block, appended after every other block.
+-- 889 (services/agent_feedback.py): an agent's complaint or suggestion about something it worked
+-- with — a tool, a skill, a grant it lacked, a brief, a model. Filed with `report_friction` (every
+-- agent's baseline); idempotent per run (dedupe_key = run + role + kind + target), so a looping
+-- agent files once. The body is redacted of credentials before it is stored.
+CREATE TABLE IF NOT EXISTS agent_feedback (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT,
+  run_ref TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK (kind IN ('complaint', 'suggestion')),
+  target_kind TEXT NOT NULL CHECK (target_kind IN
+    ('tool', 'skill', 'grant', 'brief', 'workflow', 'model', 'platform', 'other')),
+  target TEXT NOT NULL,
+  body TEXT NOT NULL,
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'acknowledged', 'resolved', 'dismissed')),
+  dedupe_key TEXT NOT NULL,
+  filed_by TEXT NOT NULL,
+  resolved_by TEXT,
+  resolution TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_feedback_once_per_run ON agent_feedback (project_id, dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_target ON agent_feedback (project_id, target_kind, target, status);
