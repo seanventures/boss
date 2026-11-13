@@ -2891,6 +2891,12 @@ def _register_builtin_harnesses() -> None:
     from .harness_plugins import load_harness_plugins
 
     load_harness_plugins()
+    # HOSTED REMOTE AGENTS (remote_agents, BOSSAPP-855): org-level profiles in the database,
+    # registered (verified=False) the first time a build names `remote:<profile>`.
+    from .harness_registry import register_resolver
+    from .remote_agents import PREFIX as _REMOTE_PREFIX, resolve as _resolve_remote
+
+    register_resolver(_REMOTE_PREFIX, _resolve_remote)
 
 
 def _build_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:

@@ -314,6 +314,11 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # BOSSAPP-855 — hosted remote agents as harnesses (org-level profiles)
+    from .remote_agents import router as remote_agents_router
+
+    app.include_router(remote_agents_router)
+
     # BOSSAPP-825 — per-project toolchain images (setup session, capture)
     try:
         from .toolchain_images import router as toolchain_images_router

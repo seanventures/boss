@@ -113,6 +113,24 @@ service shares BOSS's filesystem (a sidecar on the same host or volume); it edit
 place exactly as a process would. The conformance fake is `_FakeHttpAgent` in
 `engine/tests/test_harness_breadth_853_854.py`.
 
+## `remote_agent` contract: `boss.harness.remote/v1` (BOSSAPP-855)
+
+Use this contract for a hosted agent that cannot see BOSS's filesystem. It works on the repository in its own sandbox and returns a patch.
+
+| Call | Body / answer |
+|------|---------------|
+| `POST {base}/v1/runs` | `{contract, prompt, mode, model, session_id?, repository: {url, branch, base_sha}, spend_ceiling_usd_micros, deliver: "diff"}` → `201/202 {run_id, poll_after_ms?}` |
+| `GET {base}/v1/runs/{run_id}` | `{status, summary?, usage?: {cost_usd_micros}, events?, session_id?, error?, result?: {kind: "diff", patch} \| {kind: "pr", url, patch? \| patch_url?}}` |
+| `DELETE {base}/v1/runs/{run_id}` | BOSS cancels a run that is past the stage's deadline or past the spend ceiling |
+
+- **Profiles.** Profiles are org-level, in the table `remote_agent_profiles`, and managed at `/v1/remote-agents`. Each profile becomes the harness `remote:<name>` on first use and is always `verified=False`, so Auto never picks it.
+- **Before a profile runs.** It needs a positive spend ceiling per BOSS run, and a person's retention acknowledgement (`POST /v1/remote-agents/{id}/acknowledge-retention`).
+- **Spend.** BOSS sends whatever remains of the ceiling with each submission. It adds up `usage.cost_usd_micros` on every poll and cancels the remote run when the total reaches the ceiling.
+- **The change.** BOSS applies the patch to its own workspace with `git apply`, only for paths inside the tree and never under `.git/`. The diff, tests, review and PR then follow the same gates as every other engine.
+- **Repository URL.** Any credential embedded in the clone URL is removed before the URL is sent.
+- **Providers.** Only the provider-neutral contract ships. A provider with its own API is reached through an adapter service that speaks this contract.
+- **Tests.** The conformance fake is `FakeAgent` in `engine/tests/test_remote_agents_855.py`.
+
 ## Installable adapters — `boss-harness.yaml` (`harness_plugins.py`)
 
 ```yaml

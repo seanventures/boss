@@ -13032,4 +13032,28 @@ CREATE INDEX IF NOT EXISTS idx_agent_keys_role ON agent_keys (project_id, role_k
 -- (tailnet port or Caddy subdomain), set only after BOSS verified it from outside. NULL: the
 -- preview is served under BOSS's preview origin as before (BOSS_PREVIEW_EXPOSE off, the default).
 ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS exposed_url TEXT;
+-- 855 (services/remote_agents.py): hosted remote agents as harnesses (kind remote_agent,
+-- boss.harness.remote/v1). Org-level profiles; a profile runs only with a positive spend ceiling
+-- per BOSS run AND a person's retention acknowledgement. The bearer token is NAMED (token_env),
+-- never stored here. Registered verified=False as harness 'remote:<name>'.
+CREATE TABLE IF NOT EXISTS remote_agent_profiles (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'generic' CHECK (provider IN ('generic')),
+  base_url TEXT NOT NULL,
+  token_env TEXT,
+  spend_ceiling_usd_micros BIGINT NOT NULL CHECK (spend_ceiling_usd_micros > 0),
+  retention_ack_by TEXT,
+  retention_ack_at TIMESTAMPTZ,
+  retention_terms TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  poll_seconds DOUBLE PRECISION NOT NULL DEFAULT 3.0,
+  timeout_seconds INTEGER NOT NULL DEFAULT 3600,
+  description TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, name)
+);
 -- ================================ end BOSSAPP-855-860 ==

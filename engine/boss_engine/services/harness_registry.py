@@ -188,10 +188,24 @@ def resolve_name(name: Optional[str], default: str = "claude_code") -> str:
     return _ALIASES.get(key, key)
 
 
+#: prefix -> resolver(key) -> Optional[HarnessSpec]: harnesses registered on first use, from a
+#: store this leaf module cannot read itself (BOSSAPP-855: `remote:<profile>` from the database).
+_RESOLVERS: dict[str, Callable[[str], Optional[HarnessSpec]]] = {}
+
+
+def register_resolver(prefix: str, resolver: Callable[[str], Optional[HarnessSpec]]) -> None:
+    _RESOLVERS[prefix] = resolver
+
+
 def get_harness(name: Optional[str]) -> HarnessSpec:
     _ensure_builtins()
     key = resolve_name(name)
     spec = _REGISTRY.get(key)
+    if spec is None:
+        for prefix, resolver in list(_RESOLVERS.items()):
+            if key.startswith(prefix):
+                spec = resolver(key)
+                break
     if spec is None:
         known = ", ".join(sorted(_REGISTRY)) or "(none registered)"
         raise UnknownHarness(

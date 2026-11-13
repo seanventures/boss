@@ -614,6 +614,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["reliability/learning", "reliability:read"],
   ["reliability/policy", "reliability:read"],
   ["reliability/sources", "reliability:read"],
+  ["remote-agents", "integration:read"],
   ["reports/summary", "observability:read"],
   ["resource-receipts", "activity:read"],
   ["resource-topology", "infra:read"],
