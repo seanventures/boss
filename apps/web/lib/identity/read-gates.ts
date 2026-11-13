@@ -84,6 +84,7 @@ export const API_READ_OPS: Readonly<Record<string, ApiRead>> = {
   "/api/mcp": byView({ "": "mcp/servers", catalogue: "mcp/catalogue", grants: "role-mcp-servers",
                        connectors: "mcp/connectors", stdio_templates: "mcp/stdio-templates",
                        gateways: "mcp/gateways" }),
+                       credentials: "mcp/servers/{}/credentials", access_grants: "mcp/access-grants" }),
   "/api/memory": one("memory"),
   "/api/model-routes": one("model-routes"),
   "/api/org": one("console/v2/org"),

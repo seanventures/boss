@@ -127,6 +127,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Answering a typed question records the typed answer, makes the accepted task suggestions
     # work items and resumes the agent that asked (typed_forms.on_answered, BOSSAPP-832).
     "answer_form",
+    # Approving an agent's tool request gives its role exactly the tools on the Grant card,
+    # tier-capped and pinned to their schema hash (tool_access_requests.on_approved, BOSSAPP-848).
+    "grant_tool_access",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on

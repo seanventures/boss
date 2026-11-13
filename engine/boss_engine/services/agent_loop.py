@@ -1904,10 +1904,15 @@ def run_agent_loop(
 
     # Run by the worker for a leased job, the loop acts for that JOB's principal and grant (its
     # identity columns), never for the worker that called in.
+    # WHOSE MCP CREDENTIAL (BOSSAPP-847): a per_agent server carries this agent's own sign-in;
+    # named here for the runs that carry no run token (connection_credentials.acting_agent).
+    from .connection_credentials import acting_agent as _acting_agent
+
     with _identity_runs.delegated(connection.engine, kind="ag", entity_id=run_id, project_id=project_id,
                                   role_key=(finalize_ctx or {}).get("role_key") or "atlas",
                                   scope=_identity_catalogue.delegable(),
-                                  job_id=(finalize_ctx or {}).get("created_by_job_id")):
+                                  job_id=(finalize_ctx or {}).get("created_by_job_id")), \
+            _acting_agent((finalize_ctx or {}).get("role_key")):
         return _drive_run(connection, settings, run_id, max_steps)
 
 

@@ -61,7 +61,7 @@ from .tool_result_screen import screen_result
 _MCP_COLUMNS = (
     "id, name, url, transport, risk_tier, data_boundary, enabled, description, "
     "publisher, provenance, tool_risk_overrides, created_at, updated_at, reachable, "
-    "last_checked_at, last_error, tools, auth, tool_policy"
+    "last_checked_at, last_error, tools, auth, tool_policy, auth_status, credential_policy"
 )
 
 #: How long a recorded probe is good for before a screen asks the server again. Short, because
@@ -193,7 +193,14 @@ def _row(r) -> dict[str, Any]:
         "auth": public_auth(_loads(col("auth"), {}) or {}),
         # {tool: allow|ask|off} as the operator set it; :func:`tool_policy` applies defaults.
         "tool_policy": _loads(col("tool_policy"), {}) or {},
+        # WHOSE CREDENTIAL a call carries (BOSSAPP-847, connection_credentials) and, for an OAuth
+        # server, whether its shared sign-in works (BOSSAPP-846): connected | needs_reauth |
+        # not_connected. None for a server that does not sign in with OAuth.
+        "credential_policy": col("credential_policy", "shared") or "shared",
+        "auth_status": None,
     }
+    if item["auth"]["type"] == "oauth":
+        item["auth_status"] = col("auth_status") or "not_connected"
     # The same answer the agent loop, the catalogue and resolve_risk get (reviewed), so a badge
     # cannot say "unreviewed" about a server the runtime treats as reviewed.
     item["trusted"] = reviewed(item)
@@ -240,8 +247,12 @@ def tool_tier(server: dict[str, Any], tool_name: str, declared: Any = None) -> i
 # Auth: how BOSS signs in to a server (skills-mcp spec E2)                       #
 # --------------------------------------------------------------------------- #
 
-#: The kinds of sign-in a server may need. OAuth is later (spec §7): BOSS's agents run headless.
-AUTH_TYPES = ("none", "bearer", "header")
+#: The kinds of sign-in a server may need. `oauth` is the MCP authorization spec (BOSSAPP-846,
+#: services/mcp_oauth.py): a person signs in once in a browser, and the tokens live in the vault.
+AUTH_TYPES = ("none", "bearer", "header", "oauth")
+
+#: What an OAuth server's `auth.oauth` may say that a screen may see (never a token or a secret).
+_PUBLIC_OAUTH_KEYS = ("authorization_server", "client_id", "client_source", "scope", "resource")
 
 #: Header names a server may NOT be given through `auth`: BOSS sets these itself.
 _RESERVED_HEADERS = {"accept", "content-type", "mcp-session-id", "mcp-protocol-version",
@@ -251,13 +262,19 @@ _RESERVED_HEADERS = {"accept", "content-type", "mcp-session-id", "mcp-protocol-v
 def public_auth(auth: dict[str, Any]) -> dict[str, Any]:
     """The auth a screen may see: kind, header, whether a secret is set and its last four."""
     kind = str(auth.get("type") or "none")
-    return {
+    out = {
         "type": kind if kind in AUTH_TYPES else "none",
         "header_name": auth.get("header_name") or None,
         "set": bool(auth.get("secret_ref_id")),
         "last4": auth.get("last4") if auth.get("secret_ref_id") else None,
         "headers": {str(k): str(v) for k, v in (auth.get("headers") or {}).items()},
     }
+    if kind == "oauth":
+        # For OAuth, `set` says a CLIENT SECRET is stored (a confidential client); the sign-in
+        # itself is the server's `auth_status` and its credentials (connection_credentials).
+        oauth = auth.get("oauth") if isinstance(auth.get("oauth"), dict) else {}
+        out["oauth"] = {k: oauth.get(k) for k in _PUBLIC_OAUTH_KEYS if oauth.get(k)}
+    return out
 
 
 def _validated_auth(auth: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -266,11 +283,31 @@ def _validated_auth(auth: Optional[dict[str, Any]]) -> dict[str, Any]:
     if auth is None:
         return {"type": "none"}
     if not isinstance(auth, dict):
-        raise McpServerError("auth must be {type: none | bearer | header, ...}.")
+        raise McpServerError("auth must be {type: none | bearer | header | oauth, ...}.")
     kind = str(auth.get("type") or "none").strip().lower()
     if kind not in AUTH_TYPES:
-        raise McpServerError("auth type must be none, bearer or header.")
+        raise McpServerError("auth type must be none, bearer, header or oauth.")
     out: dict[str, Any] = {"type": kind}
+    if kind == "oauth":
+        # A client typed in the console, for an authorization server that does not register
+        # clients itself (no RFC 7591 endpoint). Its secret, if any, is `secret` below and goes
+        # to the secret store like a bearer token. Everything else is discovered at sign-in.
+        given = auth.get("oauth") if isinstance(auth.get("oauth"), dict) else {}
+        oauth: dict[str, Any] = {}
+        client_id = str(given.get("client_id") or auth.get("client_id") or "").strip()
+        if client_id:
+            if len(client_id) > 255 or any(ch.isspace() for ch in client_id):
+                raise McpServerError("the OAuth client id must be one word, at most 255 characters.")
+            oauth["client_id"] = client_id
+            oauth["client_source"] = "manual"
+        scope = str(given.get("scope") or auth.get("scope") or "").strip()
+        if scope:
+            if len(scope) > 1000:
+                raise McpServerError("the OAuth scope is too long.")
+            oauth["scope"] = scope
+        out["oauth"] = oauth
+        if auth.get("client_secret") is not None and auth.get("secret") is None:
+            auth = {**auth, "secret": auth.get("client_secret")}
     if kind == "header":
         name = str(auth.get("header_name") or "").strip()
         if not name or not re.fullmatch(r"[A-Za-z0-9-]{1,64}", name) \
@@ -307,6 +344,19 @@ def _stored_auth(connection: Connection, settings: Any, project_id: str, name: s
     the token keeps the one already stored (the same courtesy the email form gives)."""
     stored = {k: v for k, v in auth.items() if k != "secret"}
     secret = auth.get("secret")
+    if stored.get("type") == "oauth":
+        # WHAT SIGN-IN DISCOVERED IS KEPT across an edit (mcp_oauth writes it): the authorization
+        # server, its endpoints and the client it registered. A client typed now replaces a
+        # registered one; a URL change re-discovers at the next sign-in (mcp_oauth.prepare).
+        kept = (keep or {}).get("oauth") if (keep or {}).get("type") == "oauth" else None
+        typed = stored.get("oauth") or {}
+        merged = dict(kept or {})
+        if typed.get("client_id") and typed.get("client_id") != merged.get("client_id"):
+            for key in ("client_id", "client_source", "client_redirect_uri",
+                        "token_endpoint_auth_method"):
+                merged.pop(key, None)
+        merged.update(typed)
+        stored["oauth"] = merged
     if secret:
         from .secret_backends import default_secret_backend
         from .secrets_service import put_secret
@@ -345,7 +395,9 @@ def headers_for_auth(connection: Connection, settings: Any, auth: dict[str, Any]
     headers = {str(k): str(v) for k, v in (auth.get("headers") or {}).items()}
     kind = str(auth.get("type") or "none")
     ref = str(auth.get("secret_ref_id") or "")
-    if kind == "none" or not ref:
+    if kind in ("none", "oauth") or not ref:
+        # An OAuth server's stored secret is its CLIENT secret, sent only to its token endpoint;
+        # the call's bearer token is a vault credential (connection_credentials.headers_for).
         return headers
     from .secret_backends import resolve_secret_ref
 
@@ -358,14 +410,62 @@ def headers_for_auth(connection: Connection, settings: Any, auth: dict[str, Any]
     return headers
 
 
+#: What `auth_status` an OAuth server may have (BOSSAPP-846). None: not an OAuth server.
+AUTH_STATUSES = ("connected", "needs_reauth", "not_connected")
+
+
+def set_auth_status(connection: Connection, server_id: Optional[str],
+                    status: Optional[str]) -> None:
+    """Whether an OAuth server's SHARED sign-in works (connection_credentials keeps it true)."""
+    if not server_id:
+        return
+    if status is not None and status not in AUTH_STATUSES:
+        raise McpServerError(f"auth status must be one of {', '.join(AUTH_STATUSES)}.")
+    connection.execute(text("UPDATE mcp_servers SET auth_status = :s, updated_at = now() "
+                            "WHERE id = :id"), {"s": status, "id": server_id})
+
+
+def set_credential_policy(connection: Connection, project_id: str, server_id: str,
+                          policy: str) -> bool:
+    """Write a server's credential policy (checked by connection_credentials.set_policy)."""
+    return bool(connection.execute(text(
+        "UPDATE mcp_servers SET credential_policy = :c, updated_at = now() "
+        "WHERE id = :id AND project_id = :p RETURNING id"),
+        {"c": policy, "id": server_id, "p": project_id}).scalar())
+
+
+def save_oauth_config(connection: Connection, project_id: str, server_id: str,
+                      oauth: dict[str, Any], *,
+                      secret_ref: Optional[dict[str, Any]] = None) -> None:
+    """Keep what an OAuth sign-in discovered and registered (mcp_oauth.prepare) on the server's
+    auth: endpoints, the client id, and — through the secret store — a client secret's ref.
+    Never a token: those are vault items."""
+    patch: dict[str, Any] = {"oauth": oauth}
+    if secret_ref is not None:
+        patch.update(secret_ref)
+    connection.execute(text(
+        "UPDATE mcp_servers SET auth = COALESCE(auth, '{}'::jsonb) || CAST(:patch AS JSONB), "
+        "auth_status = COALESCE(auth_status, 'not_connected'), updated_at = now() "
+        "WHERE id = :id AND project_id = :p AND auth->>'type' = 'oauth'"),
+        {"patch": json.dumps(patch), "id": server_id, "p": project_id})
+
+
 def auth_headers(connection: Connection, settings: Any, project_id: str,
-                 server: dict[str, Any]) -> dict[str, str]:
+                 server: dict[str, Any], *, principal: Any = None) -> dict[str, str]:
     """The headers a call to `server` carries. Empty for a server that needs no sign-in.
+
+    WHOSE CREDENTIAL (BOSSAPP-847): the server's `credential_policy` decides between its shared
+    sign-in, the acting person's own and the calling agent's own, resolved against the RUN'S
+    principal (`principal`, else the identity context this code runs under) by
+    connection_credentials.headers_for. A shared, non-OAuth server is exactly what it was.
 
     A token that cannot be resolved raises: calling a server that needs one without it gets a
     401 that reads like the server's fault."""
-    return headers_for_auth(connection, settings,
-                            _raw_auth(connection, project_id, str(server.get("id") or "")))
+    from .connection_credentials import headers_for
+
+    return headers_for(connection, settings, project_id, server,
+                       _raw_auth(connection, project_id, str(server.get("id") or "")),
+                       principal=principal)
 
 
 # --------------------------------------------------------------------------- #
@@ -1018,6 +1118,13 @@ MCP_REFERRERS: tuple[tuple[str, str, str], ...] = (
     ("workflow_custom_steps", "mcp_server_id", "custom_steps"),
     ("skill_definitions", "config->>'mcp_server_id'", "skills"),
     ("role_mcp_servers", "mcp_server_id", "agents"),
+    # WHO HAS SIGNED IN TO IT (BOSSAPP-847): released with the server — each credential's vault
+    # item is revoked first (connection_credentials.forget_server), never left usable.
+    ("connection_credentials", "server_id", "credentials"),
+    # Tools agents were granted on request (BOSSAPP-848) and sign-ins in flight (BOSSAPP-846):
+    # they mean nothing without the server and go with it.
+    ("mcp_access_grants", "server_id", "access_grants"),
+    ("mcp_oauth_pending", "server_id", "pending_sign_ins"),
 )
 
 
@@ -1051,9 +1158,29 @@ def mcp_server_references(
              "WHERE project_id = :p AND mcp_server_id = :s ORDER BY role_key"),
         {"p": project_id, "s": server_id},
     ).mappings().all()
+    credentials = [] if not _table_ready(connection, "connection_credentials") else \
+        connection.execute(
+            text("SELECT id, subject_kind, subject_id, status FROM connection_credentials "
+                 "WHERE project_id = :p AND server_id = :s ORDER BY subject_kind, subject_id"),
+            {"p": project_id, "s": server_id}).mappings().all()
+    access_grants = [] if not _table_ready(connection, "mcp_access_grants") else \
+        connection.execute(
+            text("SELECT id, role_key, tool FROM mcp_access_grants WHERE project_id = :p "
+                 "AND server_id = :s AND status = 'active' ORDER BY role_key, tool"),
+            {"p": project_id, "s": server_id}).mappings().all()
+    pending = [] if not _table_ready(connection, "mcp_oauth_pending") else connection.execute(
+        text("SELECT subject_kind, created_at FROM mcp_oauth_pending "
+             "WHERE project_id = :p AND server_id = :s AND expires_at > now()"),
+        {"p": project_id, "s": server_id}).mappings().all()
     return {
         "custom_steps": [{"step_key": r["step_key"], "label": r["label"],
                           "tool": r["mcp_tool_name"]} for r in steps],
+        "credentials": [{"id": r["id"], "subject_kind": r["subject_kind"],
+                         "subject_id": r["subject_id"], "status": r["status"]}
+                        for r in credentials],
+        "access_grants": [{"id": r["id"], "role_key": r["role_key"], "tool": r["tool"]}
+                          for r in access_grants],
+        "pending_sign_ins": [{"subject_kind": r["subject_kind"]} for r in pending],
         "skills": [{"skill_key": r["skill_key"], "label": r["label"], "tool": r["tool_name"]}
                    for r in skills],
         "agents": [{"role_key": str(r["role_key"]), "tools": _loads(r["tools"], []) or []}
@@ -1103,6 +1230,9 @@ def delete_mcp_server(
             text("DELETE FROM role_mcp_servers WHERE project_id = :p AND mcp_server_id = :s"),
             {"p": project_id, "s": server_id},
         )
+    from .connection_credentials import forget_server
+
+    forget_server(connection, project_id, server_id, actor=actor)   # vault items revoked first
     connection.execute(
         text("DELETE FROM mcp_servers WHERE id = :id AND project_id = :p"),
         {"id": server_id, "p": project_id},
@@ -1626,6 +1756,9 @@ def call_tool_with_receipt(
     agent: Optional[str] = None,
     principal: Optional[str] = None,
     policy_context: Optional[dict[str, Any]] = None,
+    # BOSSAPP-847: whose CREDENTIAL the call carries (an identity object for
+    # auth_headers) — distinct from `principal`, the audit row's acting-identity string.
+    credential_principal: Any = None,
 ) -> dict[str, Any]:
     """The one EFFECT of calling an MCP tool: a receipt, the call, and the receipt settled.
 
@@ -1745,7 +1878,9 @@ def call_tool_with_receipt(
         raise McpArgumentsChanged(
             f"Did not call {tool_name}: arguments do not match the approved call."
         )
-    headers = auth_headers(connection, settings, project_id, server)
+    # Whose credential: the caller's principal when it names one, else the run's (BOSSAPP-847).
+    headers = (auth_headers(connection, settings, project_id, server) if credential_principal is None
+               else auth_headers(connection, settings, project_id, server, principal=credential_principal))
     org_id, workspace_id = tenant_scope
     receipts = ReceiptService()
     receipt, created = receipts.create_or_reuse(

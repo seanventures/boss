@@ -70,6 +70,10 @@ CALLERS = {
         "operator: a person loads the AML sample (respect_operator)",
     "tools/agent_tools.py::* -> assign_skill_to_role": "operator: assign_skill_to_agent",
     "tools/agent_tools.py::* -> grant_mcp": "operator: assign_mcp_to_agent",
+    # BOSSAPP-848: a person approves an agent's Grant card (or revokes the grant / a changed tool
+    # drops it); exactly the tools on the card, never a seed.
+    "services/tool_access_requests.py::_set_role_tools -> grant_mcp":
+        "operator: a person's approval of a Grant card, or its revocation",
     "main.py::* -> register_mcp_server": "operator: POST /v1/mcp/servers",
     # Integration of the agents and skills-mcp streams: skills-mcp's chat tool connects a server
     # on an operator's request. It lands switched off and unreviewed, and register_mcp_server

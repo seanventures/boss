@@ -325,3 +325,13 @@
 .aa-body { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; }
 .aa-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .aa-pin { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 0.75rem; }
+/* MCP sign-in and whose account (BOSSAPP-846/847); tools granted on request (BOSSAPP-848). */
+.kit-signin { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.kit-signin .kit-chip[data-status="needs_reauth"] { color: var(--warn-text, var(--ink)); }
+.kit-granted { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.decision-grant-card { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.decision-grant-tools { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.decision-grant-tools li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.decision-grant-reason { margin: 0; padding-left: 8px; border-left: 2px solid var(--border); color: var(--muted); }
+.decision-grant-head, .decision-grant-effect { margin: 0; }
+.decision-grant-effect { color: var(--muted); }

@@ -45,6 +45,7 @@ import type { RoleFeedItem } from "../lib/roles";
 import type { TaskFeedItem } from "../lib/tasks";
 import { ChangeSetApproval, isChangeSetDecision } from "./multirepo/change-set-approval";
 import { SelfFixCard, cardOf, isSelfFixDecision } from "./self-fix/approval-card";
+import { GrantAccessCard, grantOf } from "./skills/grant-card";
 import { MonitoringPackCard, monitoringPackOf } from "./workflows/monitoring-pack";
 
 /**
@@ -380,6 +381,7 @@ function decisionImpact(decision: DecisionFeedItem): { label: string; tone: stri
   if (action === "review_deployment" || action === "deploy_host") return { label: "deploy", tone: "teal" };
   if (action === "review_infra_provisioning") return { label: "infra", tone: "amber" };
   if (action === "role.autonomy_change") return { label: "access", tone: "red" };
+  if (action === "grant_tool_access") return { label: "tool access", tone: "amber" };
   if (action.startsWith("self_improvement")) return { label: "rollout", tone: "teal" };
   if (action === "execute_agent_tool") return { label: "publish", tone: "teal" };
   if (action === "resume_agent_run") return { label: "agent tool", tone: "teal" };
@@ -1033,6 +1035,8 @@ function DecisionInboxRow({
           ) : null}
           {preview && !refusal ? <ActionPreview preview={preview} /> : null}
           <HeldArguments recommendation={rec} />
+          {/* AN AGENT'S TOOL REQUEST (BOSSAPP-848): exactly the tools, their tiers and why. */}
+          {grantOf(rec) ? <GrantAccessCard card={grantOf(rec)!} /> : null}
           {/* THE RELEASE'S MONITORING PACK (engine monitoring_pack): approved with it. */}
           {monitoringPackOf(rec.monitoring_pack) ? <MonitoringPackCard pack={monitoringPackOf(rec.monitoring_pack)!} onCard /> : null}
           {decision.prd ? (

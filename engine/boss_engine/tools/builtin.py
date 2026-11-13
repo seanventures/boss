@@ -3725,6 +3725,41 @@ def _register_work_item_tools(reg: ToolRegistry) -> None:
         return {"ok": True, "status": "asked", "decision_id": asked["decision_id"],
                 "fields": [f["key"] for f in asked["form"]["fields"]]}
 
+    @reg.tool(
+        "request_tool_access",
+        "Ask a person for MCP tools you do not hold yet: name the server, EXACTLY the tools you "
+        "need (as the server lists them) and why, in a sentence. A Grant card opens in Needs "
+        "you listing those tools with their risk tier; if approved you hold exactly them (tools "
+        "that change things still ask a person each call). Grants nothing by itself. A No is "
+        "final for a day — then do the work another way.",
+        _obj({"server": {"type": "string", "description": "the MCP server's name or id"},
+              "tools": {"type": "array", "items": {"type": "string"},
+                        "description": "the tool names you need, nothing more"},
+              "reason": {"type": "string", "description": "why you need them, for the person"}},
+             required=["server", "tools", "reason"]),
+        kind="write", reversibility="safe", permission="skill:invoke",
+        exposure=Exposure(tags=("mcp", "decisions")))
+    def request_tool_access(ctx, *, project_id, actor, args):
+        from ..services.tool_access_requests import (
+            ToolAccessError,
+            request_access,
+            requesting_role,
+        )
+
+        try:
+            with ctx.begin() as c:
+                role = requesting_role(c, project_id, str(actor or ""))
+                if role is None:
+                    return {"ok": False, "error": "Only an agent can ask for tools; a person "
+                                                  "grants them in Skills & MCP."}
+                asked = request_access(c, project_id, role_key=role,
+                                       server_ref=str(args.get("server") or ""),
+                                       tools=[str(t) for t in args.get("tools") or []],
+                                       reason=str(args.get("reason") or ""), actor=str(actor))
+        except ToolAccessError as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": asked["status"] in ("asked", "already_held"), **_json_safe(asked)}
+
 
 def _register_governance_tools(reg: ToolRegistry) -> None:
     @reg.tool(

@@ -85,6 +85,14 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kit-api.ts#mcpApi.mintGatewayToken": "mcp_server:review",  // POST /v1/mcp/gateways/{id}/tokens
   "lib/kit-api.ts#mcpApi.revokeGatewayToken": "mcp_server:review", // POST /v1/mcp/gateways/{id}/tokens/{t}/revoke
   "lib/kit-api.ts#mcpApi.revokeGateway": "mcp_server:review",     // POST /v1/mcp/gateways/{id}/revoke
+  // BOSSAPP-846..848: sign-in, whose credential, tools granted on request.
+  "lib/kit-api.ts#mcpApi.signIn": "mcp_server:review",            // POST /v1/mcp/servers/{id}/oauth/start
+  "lib/kit-api.ts#mcpApi.signInMine": "connection:use_own",       // POST /v1/mcp/servers/{id}/oauth/mine
+  "lib/kit-api.ts#mcpApi.credentialPolicy": "mcp_server:review",  // POST /v1/mcp/servers/{id}/credential-policy
+  // DELETE …/credentials/mine/{id} (your own: connection:use_own) or …/credentials/{id}
+  // (anyone's: mcp_server:review); each button gates its own.
+  "lib/kit-api.ts#mcpApi.removeCredential": ["connection:use_own", "mcp_server:review"],
+  "lib/kit-api.ts#mcpApi.revokeGrant": "agent_ability:assign",    // POST /v1/mcp/access-grants/{id}/revoke
 
   // lib/workflow-webhooks.ts — a workflow's webhook triggers (#512, through /api/delivery-workflows)
   "lib/workflow-webhooks.ts#createWebhook": "workflow_schedule:manage",      // POST /v1/delivery-workflows/webhooks

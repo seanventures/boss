@@ -41,6 +41,7 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
     setTab("custom");
   };
   const oauthOnly = picked?.prefill.auth.type === "oauth";
+                                     clientId: "" });
 
   useEffect(() => {
     void mcpApi.catalogue(projectId).then((r) => setItems(r.ok ? r.data.items : []));
@@ -59,6 +60,25 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
 
   const custom = async () => {
     setBusy(true); setError(null);
+    if (form.auth === "oauth") {
+      // OAUTH (BOSSAPP-846): nothing to test before someone signs in. Register, then open the
+      // provider's sign-in in a new tab; the drawer shows when it is connected.
+      const oauth: McpAuthInput = { type: "oauth", ...(form.clientId.trim() ? { oauth: { client_id: form.clientId.trim() } } : {}),
+                                    ...(form.secret ? { secret: form.secret } : {}) };
+      const r = await mcpApi.register(projectId, actor, { name: form.name.trim(), url: form.url.trim(), risk_tier: form.risk,
+                                                          auth: oauth, provenance: { source: "custom" } });
+      if (!r.ok) { setBusy(false); setError({ field: r.field ?? "name", message: r.error }); showToast("error", shortError(r.error)); return; }
+      const s = await mcpApi.signIn(projectId, actor, r.data.id, "org");
+      setBusy(false);
+      if (s.ok && typeof window !== "undefined") {
+        window.open(s.data.redirect, "_blank", "noopener,noreferrer");
+        showToast("success", `Added ${form.name.trim()}, finish signing in in the new tab`);
+      } else {
+        showToast("error", `Added ${form.name.trim()}, sign in from its drawer: ${shortError(s.ok ? "" : s.error)}`);
+      }
+      onAdded(r.data.id);
+      return;
+    }
     const auth: McpAuthInput = { type: form.auth, ...(form.auth === "header" ? { header_name: form.header } : {}),
                                  ...(form.secret ? { secret: form.secret } : {}) };
     const t = await mcpApi.test(projectId, actor, form.url, auth);
@@ -155,9 +175,10 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
             <div className="kit-field">
               <span className="kit-field-label">Auth</span>
               <span className="kit-seg kit-seg-sm" role="radiogroup" aria-label="Auth">
-                {(["none", "bearer", "header"] as const).map((t) => (
+                {(["none", "bearer", "header", "oauth"] as const).map((t) => (
                   <button key={t} type="button" role="radio" aria-checked={form.auth === t} data-testid={`kit-custom-auth-${t}`}
-                          onClick={() => setForm((f) => ({ ...f, auth: t }))}>{t === "none" ? "None" : t === "bearer" ? "Bearer token" : "Header"}</button>
+                          data-tip={t === "oauth" ? "Sign in with the provider's account (OAuth)" : undefined}
+                          onClick={() => setForm((f) => ({ ...f, auth: t }))}>{t === "none" ? "None" : t === "bearer" ? "Bearer token" : t === "header" ? "Header" : "OAuth"}</button>
                 ))}
               </span>
             </div>
@@ -167,7 +188,22 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
                 <input type="text" value={form.header} placeholder="X-API-Key" onChange={(e) => setForm((f) => ({ ...f, header: e.target.value }))} />
               </label>
             ) : null}
-            {form.auth !== "none" ? (
+            {form.auth === "oauth" ? (
+              <details className="kit-more" data-testid="kit-custom-oauth-client">
+                <summary data-tip="Only when the provider does not register apps itself">Your own OAuth app</summary>
+                <label className="kit-field">
+                  <span className="kit-field-label">Client ID</span>
+                  <input type="text" value={form.clientId} spellCheck={false} data-testid="kit-custom-client-id"
+                         onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))} />
+                </label>
+                <label className="kit-field">
+                  <span className="kit-field-label">Client secret</span>
+                  <input type="password" value={form.secret} autoComplete="new-password" data-testid="kit-custom-client-secret"
+                         onChange={(e) => setForm((f) => ({ ...f, secret: e.target.value }))} />
+                </label>
+              </details>
+            ) : null}
+            {form.auth !== "none" && form.auth !== "oauth" ? (
               <label className="kit-field">
                 <span className="kit-field-label">Token</span>
                 <input type="password" value={form.secret} autoComplete="new-password" data-testid="kit-custom-secret"
@@ -188,6 +224,8 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
               <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-primary" data-testid="kit-custom-save"
                       disabled={busy || oauthOnly || !form.name.trim() || !form.url.trim()} onClick={() => void custom()}>
                 {busy ? "Testing…" : "Save & test"}
+                      disabled={busy || !form.name.trim() || !form.url.trim()} onClick={() => void custom()}>
+                {busy ? "Testing…" : form.auth === "oauth" ? "Save & sign in" : "Save & test"}
               </GatedButton>
             </div>
           </div>

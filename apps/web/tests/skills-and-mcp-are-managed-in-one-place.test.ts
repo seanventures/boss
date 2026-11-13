@@ -35,7 +35,7 @@ describe("one home for MCP servers", () => {
       .filter((f) => /\/v1\/mcp\/servers/.test(codeOnly(f)) || /mcpApi\.(register|update|remove|review|policy)/.test(codeOnly(f)))
       .map((f) => path.relative(APP, f)).sort();
     expect(writers).toEqual(["api/mcp/route.ts", "skills/add-mcp-sheet.tsx", "skills/import-sheet.tsx",
-                             "skills/mcp-drawer.tsx", "skills/tools-section.tsx"]);
+                             "skills/mcp-drawer.tsx", "skills/mcp-signin.tsx", "skills/tools-section.tsx"]);
   });
 
   it("Capabilities shows a link to it, and no screen carries an MCP panel", () => {

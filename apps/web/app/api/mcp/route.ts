@@ -59,6 +59,17 @@ export async function GET(req: Request) {
   }
   if (url.searchParams.get("view") === "gateways") {
     return forward(`/v1/mcp/gateways?project_id=${q(projectId)}`, { method: "GET" });
+  if (url.searchParams.get("view") === "credentials") {
+    // Who has signed in to one server (never a token) and what a call by the viewer would carry.
+    const serverId = String(url.searchParams.get("server_id") ?? "");
+    if (!ID.test(serverId)) return NextResponse.json({ error: "server_id is required" }, { status: 400 });
+    return forward(`/v1/mcp/servers/${q(serverId)}/credentials?project_id=${q(projectId)}`, { method: "GET" });
+  }
+  if (url.searchParams.get("view") === "access_grants") {
+    // Tools agents were granted from a Grant card (BOSSAPP-848).
+    const serverId = String(url.searchParams.get("server_id") ?? "");
+    const server = ID.test(serverId) ? `&server_id=${q(serverId)}` : "";
+    return forward(`/v1/mcp/access-grants?project_id=${q(projectId)}${server}`, { method: "GET" });
   }
   if (url.searchParams.get("view") === "grants") {
     const role = (url.searchParams.get("role") ?? "").trim();
@@ -73,6 +84,8 @@ export async function GET(req: Request) {
 const ACTIONS = ["test", "register", "update", "review", "delete", "catalogue_add", "role_tools",
                  "policy", "grant", "revoke", "stdio_template_create", "gateway_create",
                  "gateway_token", "gateway_token_revoke", "gateway_revoke"] as const;
+                 "policy", "grant", "revoke", "oauth_start", "oauth_mine", "credential_policy",
+                 "credential_remove", "token_mine", "grant_revoke"] as const;
 
 export async function POST(req: Request) {
   let body: Record<string, unknown>;
@@ -130,9 +143,40 @@ export async function POST(req: Request) {
     const tokenId = String(body.token_id ?? "");
     if (!ID.test(tokenId)) return NextResponse.json({ error: "token_id is required" }, { status: 400 });
     return forward(`${base}/tokens/${q(tokenId)}/revoke`, { method: "POST", body: { project_id: projectId, actor } });
+  if (action === "grant_revoke") {
+    const grantId = String(body.grant_id ?? "");
+    if (!ID.test(grantId)) return NextResponse.json({ error: "grant_id is required" }, { status: 400 });
+    return forward(`/v1/mcp/access-grants/${q(grantId)}/revoke`, { method: "POST", body: {
+      project_id: projectId, actor } });
   }
   const serverId = String(body.server_id ?? "");
   if (!ID.test(serverId)) return NextResponse.json({ error: "server_id is required" }, { status: 400 });
+  if (action === "oauth_start") {
+    // Sign in (BOSSAPP-846): the server's shared sign-in, or one agent's own.
+    const subject = body.subject === "agent" ? "agent" : "org";
+    return forward(`/v1/mcp/servers/${q(serverId)}/oauth/start`, { method: "POST", body: {
+      project_id: projectId, actor, subject, role_key: body.role_key ? String(body.role_key) : null } });
+  }
+  if (action === "oauth_mine") {
+    // Use my own account (BOSSAPP-847): the signed-in person's own sign-in.
+    return forward(`/v1/mcp/servers/${q(serverId)}/oauth/mine`, { method: "POST", body: {
+      project_id: projectId, actor } });
+  }
+  if (action === "token_mine") {
+    return forward(`/v1/mcp/servers/${q(serverId)}/credentials/mine`, { method: "POST", body: {
+      project_id: projectId, actor, token: String(body.token ?? "") } });
+  }
+  if (action === "credential_policy") {
+    return forward(`/v1/mcp/servers/${q(serverId)}/credential-policy`, { method: "POST", body: {
+      project_id: projectId, actor, policy: String(body.policy ?? "") } });
+  }
+  if (action === "credential_remove") {
+    const credentialId = String(body.credential_id ?? "");
+    if (!ID.test(credentialId)) return NextResponse.json({ error: "credential_id is required" }, { status: 400 });
+    const mine = body.mine === true ? "mine/" : "";
+    return forward(`/v1/mcp/servers/${q(serverId)}/credentials/${mine}${q(credentialId)}`
+      + `?project_id=${q(projectId)}&actor=${q(actor)}`, { method: "DELETE" });
+  }
   if (action === "role_tools") {
     // One agent's tools on one server it holds (the drawer's `Tools ▾`, rarely used).
     return forward("/v1/role-mcp-servers", { method: "POST", body: {

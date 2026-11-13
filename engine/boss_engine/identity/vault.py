@@ -591,11 +591,14 @@ def _mark_needs_reauth(db: Any, row: Mapping[str, Any], reason: str) -> None:
                                          target_id=row["id"], details={"reason": reason}), db=own)
 
 
-def _refresh_locked(db: Any, item_id: str) -> dict[str, Any]:
+def _refresh_locked(db: Any, item_id: str,
+                    refresher: Optional[Callable[[str], tuple[str, Optional[str], int]]] = None
+                    ) -> dict[str, Any]:
     """Single flight, in the vault's OWN transaction: lock the row, re-read, refresh only if
     another caller has not already, and COMMIT the rotated refresh token before returning — so the
     caller's transaction rolling back afterwards cannot lose it (#12). A refusal marks the row
-    `needs_reauth`, also in its own transaction (#11)."""
+    `needs_reauth`, also in its own transaction (#11). `refresher` is the caller's own for a
+    provider with no registered hook (an MCP server's token endpoint, BOSSAPP-846)."""
     from sqlalchemy import text
 
     from . import audit
@@ -607,7 +610,7 @@ def _refresh_locked(db: Any, item_id: str) -> dict[str, Any]:
         exp = row.get("access_expires_at")
         if exp is None or exp - _now() > REFRESH_LEEWAY:
             return row                               # someone else refreshed while we waited
-        refresher = refresher_for(row.get("provider"))
+        refresher = refresher or refresher_for(row.get("provider"))
         if row.get("refresh_enc") is None or refresher is None:
             return row
         refresh_token = _open(own, row, "refresh")
@@ -798,6 +801,61 @@ def token_for_access_check(owner_principal_id: str, *, provider: str, db: Any) -
             row = _refresh_locked(db, found)
         except VaultNeedsReauth:
             return None
+    return _open(db, row)
+
+
+# ---- connection credentials: MCP servers and Kit connections (BOSSAPP-846/847) ---------------------
+#: The providers of the credentials an MCP server or a Kit connection carries: `mcp:<server id>`
+#: (a server's access token), `mcp_client:<server id>` (the OAuth client secret BOSS was issued or
+#: an operator typed), `kit:<ability>` (a Kit connection's token). Their AAD binds each to it.
+CONNECTION_PROVIDER_PREFIXES = ("mcp:", "mcp_client:", "kit:")
+_CONNECTION_KINDS = (VaultItemKind.OAUTH_USER.value, VaultItemKind.PROVIDER_CREDENTIAL.value)
+
+
+def _connection_row(db: Any, item_id: str, provider: str) -> dict[str, Any]:
+    row = _load(db, item_id)
+    if (not str(provider or "").startswith(CONNECTION_PROVIDER_PREFIXES)
+            or row.get("provider") != provider or row.get("kind") not in _CONNECTION_KINDS):
+        # Named by item id, but stored for another server, another connection, or not a
+        # connection at all (a person's GitHub token, a TOTP seed): refused, never decrypted.
+        raise VaultForbidden("wrong_kind")
+    return row
+
+
+def connection_token(item_id: str, *, provider: str, db: Any,
+                     refresher: Optional[Callable[[str], tuple[str, Optional[str], int]]] = None
+                     ) -> str:
+    """The token of one MCP server / Kit connection credential, refreshed first when it has less
+    than REFRESH_LEEWAY left (single flight: `_refresh_locked`, in the vault's own transaction).
+
+    WHO may use it is decided BEFORE this is called (services/connection_credentials resolves the
+    run's principal against the server's credential policy and the delegation grant); this checks
+    only that the item is that connection's. An expired token with no way to refresh it, or a
+    refresh the provider refused, leaves the item `needs_reauth` and raises VaultNeedsReauth."""
+    from sqlalchemy import text
+
+    row = _connection_row(db, item_id, provider)
+    if row["status"] != "active":
+        raise VaultNeedsReauth(row["status"])
+    exp = row.get("access_expires_at")
+    if exp is not None and exp - _now() <= REFRESH_LEEWAY:
+        if row.get("refresh_enc") is None or refresher is None:
+            if exp <= _now():
+                _mark_needs_reauth(db, row, "expired_without_refresh")
+                raise VaultNeedsReauth("expired")
+        else:
+            row = _refresh_locked(db, item_id, refresher=refresher)
+    token = _open(db, row)
+    db.execute(text("UPDATE identity_vault_items SET last_used_at = now() WHERE id = :id"),
+               {"id": row["id"]})
+    return token
+
+
+def connection_secret(item_id: str, *, provider: str, db: Any) -> str:
+    """A connection's static secret (an OAuth client secret, a typed token): no refresh."""
+    row = _connection_row(db, item_id, provider)
+    if row["status"] != "active":
+        raise VaultNeedsReauth(row["status"])
     return _open(db, row)
 
 

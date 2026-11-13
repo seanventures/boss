@@ -31801,6 +31801,16 @@ app.include_router(build_mcp_connect_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# MCP SIGN-IN, WHOSE CREDENTIAL AND TOOLS GRANTED ON REQUEST (BOSSAPP-846..848):
+# routers/mcp_credentials.py.
+from .routers.mcp_credentials import build_mcp_credentials_router
+
+app.include_router(build_mcp_credentials_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
 # SKILLS AS A GOVERNED SUPPLY CHAIN (BOSSAPP-841..844): history, sources, consents, test cases
 # (routers/skill_supply.py).
 from .routers.skill_supply import build_skill_supply_router
