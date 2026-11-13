@@ -934,12 +934,23 @@ def _act(connection: Any, settings: Any, run_id: str, move: str,
 CARD_ACTION = "stuck_work_needs_person"
 
 
+#: BOSSAPP-885: the causes a manager AGENT can act on — the build itself stopped moving (BOSS's
+#: bounded fixes did not get it going). Platform causes (a crash loop, no worker, a budget cap, a
+#: grant, a review) need a person and keep going straight to one.
+CHAIN_CAUSES = ("capped", "quiet")
+
+
 def _raise_card(connection: Any, run_id: str, ev: Mapping[str, Any], tri: Mapping[str, Any],
-                nxt: str, headline: str) -> Optional[str]:
+                nxt: str, headline: str, *, chain: bool = True) -> Optional[str]:
     """ONE card per cause per project: a second build stuck the same way joins the first card.
-    A person-wait build already has its card (person_wait) and gets no second one."""
+    A person-wait build already has its card (person_wait) and gets no second one.
+
+    BOSSAPP-885: a build the org chart's chain holds (an open takeover offer) gets no card; a
+    live build stalled for a CHAIN_CAUSES reason is offered to its agent's manager first, and the
+    card is raised only when that chain falls through (raise_card_after_chain)."""
     from .core import create_blocking_decision
     from .decision_actions import OPEN_STATUSES
+    from . import org_chain
 
     pw = ev.get("person_wait") or {}
     if pw.get("decision_id"):
@@ -947,6 +958,18 @@ def _raise_card(connection: Any, run_id: str, ev: Mapping[str, Any], tri: Mappin
     run = ev.get("run") or {}
     project = run.get("project_id")
     cause_code = str(tri.get("cause_code") or "")
+    if chain:
+        if org_chain.open_for_run(connection, run_id) is not None:
+            return None
+        if cause_code in CHAIN_CAUSES and run.get("status") in LIVE_STATUSES and project:
+            offer = org_chain.escalate_first(
+                connection, None, project_id=project, origin="stuck_work", run_id=run_id,
+                reason=cause_code, question=card_question(run.get("title"), tri.get("cause"), nxt),
+                fallback={"tri": {k: tri.get(k) for k in ("cause_code", "cause", "why_not")},
+                          "next": nxt, "headline": headline, "title": run.get("title"),
+                          "project_id": project})
+            if offer is not None:
+                return None
     row = connection.execute(text(
         "SELECT id FROM decisions WHERE project_id = :p AND status = ANY(:open_statuses) "
         "AND recommendation->>'action' = :a AND recommendation->>'cause_code' = :c "
@@ -969,6 +992,24 @@ def _raise_card(connection: Any, run_id: str, ev: Mapping[str, Any], tri: Mappin
          "why_not": tri.get("why_not"), "why_a_person": tri.get("why_not"),
          "title": run.get("title")},
         {}, cause_code, default_action="hold")
+
+
+def raise_card_after_chain(connection: Any, run_id: str, fallback: Mapping[str, Any]) -> Optional[str]:
+    """The org chain fell through (BOSSAPP-885): raise the card the diagnosis would have raised,
+    and put its id on the run's diagnosis."""
+    run = _load(connection, run_id) or {}
+    ev = {"run": {"project_id": run.get("project_id") or fallback.get("project_id"),
+                  "title": run.get("title") or fallback.get("title"), "status": run.get("status")},
+          "person_wait": {}}
+    card = _raise_card(connection, run_id, ev, dict(fallback.get("tri") or {}),
+                       str(fallback.get("next") or ""), str(fallback.get("headline") or ""),
+                       chain=False)
+    if card:
+        connection.execute(text(
+            "UPDATE code_task_runs SET finalize_ctx = jsonb_set(COALESCE(finalize_ctx, '{}'::jsonb), "
+            "'{diagnosis,card_id}', to_jsonb(CAST(:c AS text))) WHERE id = :id "
+            "AND finalize_ctx->'diagnosis' IS NOT NULL"), {"c": card, "id": run_id})
+    return card
 
 
 def card_question(title: Any, cause: Any, nxt: Any) -> str:
@@ -1059,6 +1100,15 @@ def diagnose(connection: Any, settings: Any, run_id: str, *, adapter: Any = None
         "steps": _steps(ev, tri, chosen=str(chosen), tried=tried, nxt=nxt, who=who),
         "cost_usd_micros": int(turn.get("cost_usd_micros") or 0),
     }
+    if halted and card is None:
+        # BOSSAPP-885: no card because the org chart's chain holds it — say who has it.
+        from . import org_chain
+
+        offer = org_chain.open_for_run(connection, run_id)
+        if offer is not None:
+            diag["chain_offer"] = {"id": offer["id"], "offered_to": offer["offered_to"],
+                                   "deadline": str(offer.get("deadline") or "")}
+            diag["who"] = offer["offered_to"]
     connection.execute(text(
         "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) || "
         "jsonb_build_object('diagnosis', CAST(:d AS jsonb)) WHERE id = :id"),
