@@ -223,6 +223,68 @@ def probe_over_ssh(connection, settings: Any, environment: dict,
     return probe
 
 
+def _member_name(name: str) -> str:
+    """A tar member's path relative to the archive root. Only a leading "./"
+    is dropped: `lstrip("./")` (the earlier spelling) strips CHARACTERS, so
+    ".github/ci.yml" became "github/ci.yml" and ".venv/x" became "venv/x" —
+    dotfiles vanished from diff() and sync_out (BOSSAPP-826 found it)."""
+    while name.startswith("./"):
+        name = name[2:]
+    return "" if name == "." else name
+
+
+def _inside(root: Path, candidate: Path) -> bool:
+    """True when candidate, with every symlink already on disk resolved, is
+    root itself or below it."""
+    try:
+        candidate.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _extract_preserving_links(archive: tarfile.TarFile, destination: Path) -> None:
+    """sync_out(preserve_links=True): files (mode kept), dirs, symlinks (their
+    target stored as-is — a venv's bin/python points at an absolute
+    interpreter) and hard links to members already extracted. Nothing is ever
+    WRITTEN through a path that resolves outside the destination."""
+    import os
+    import shutil
+
+    for member in archive:
+        name = _member_name(member.name)
+        if not name or name.startswith("/") or ".." in PurePosixPath(name).parts:
+            continue
+        target = destination / name
+        if not _inside(destination, target.parent):
+            continue  # a parent is a symlink leading out — never write through it
+        if member.isdir():
+            if not target.is_symlink():
+                target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink() or target.exists():
+            if target.is_dir() and not target.is_symlink():
+                continue
+            target.unlink()
+        if member.issym():
+            os.symlink(member.linkname, target)
+            continue
+        if member.islnk():
+            source = destination / _member_name(member.linkname)
+            if source.is_file() and not source.is_symlink() and _inside(destination, source):
+                shutil.copy2(source, target)
+            continue
+        if not member.isfile():
+            continue
+        handle = archive.extractfile(member)
+        if handle is None:
+            continue
+        with open(target, "wb") as out:
+            shutil.copyfileobj(handle, out)
+        os.chmod(target, (member.mode or 0o644) & 0o755)
+
+
 def _workroot(environment: dict) -> str:
     config = environment.get("config") or {}
     return str(config.get("workdir_root") or DEFAULT_WORKROOT).rstrip("/") or DEFAULT_WORKROOT
@@ -497,7 +559,7 @@ echo BOSS_PROVISIONED
                 for member in archive:
                     if not member.isfile():
                         continue
-                    name = member.name.lstrip("./")
+                    name = _member_name(member.name)
                     handle = archive.extractfile(member)
                     if handle is None:
                         continue
@@ -539,9 +601,16 @@ echo BOSS_PROVISIONED
         if result.returncode != 0:
             raise SandboxError(f"sync_in failed: {(result.stderr or '')[-400:]}")
 
-    def sync_out(self, remote_rel: str, local_path: Any) -> None:
+    def sync_out(self, remote_rel: str, local_path: Any, *,
+                 preserve_links: bool = False) -> None:
         """Bring a remote directory back: tar on the host, base64 over stdout,
-        safe-extracted locally (no absolute members, no path escapes)."""
+        safe-extracted locally (no absolute members, no path escapes).
+
+        preserve_links (BOSSAPP-826, workspace snapshots): also recreate
+        symlinks and in-archive hard links, and keep the executable bit — a
+        dependency dir (node_modules/.bin, a venv's bin/) is useless without
+        them. Every write is checked to land inside the destination even
+        after earlier symlinks exist. The default (False) is unchanged."""
         self._require_provisioned()
         q = shlex.quote
         source = self.workdir if not remote_rel else f"{self.workdir}/{remote_rel}"
@@ -556,8 +625,11 @@ echo BOSS_PROVISIONED
         destination = Path(local_path)
         destination.mkdir(parents=True, exist_ok=True)
         with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as archive:
+            if preserve_links:
+                _extract_preserving_links(archive, destination)
+                return
             for member in archive:
-                name = member.name.lstrip("./")
+                name = _member_name(member.name)
                 if not name or name.startswith("/") or ".." in PurePosixPath(name).parts:
                     continue  # never extract outside the destination
                 if member.issym() or member.islnk():

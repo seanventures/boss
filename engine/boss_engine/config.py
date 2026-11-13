@@ -70,6 +70,22 @@ class Settings(BaseSettings):
     s3_secret_access_key: Optional[str] = Field(default=None, alias="S3_SECRET_ACCESS_KEY")
     s3_bucket: Optional[str] = Field(default=None, alias="S3_BUCKET")
     s3_region: Optional[str] = Field(default=None, alias="S3_REGION")
+    # Workspace snapshots across ephemeral sandboxes (BOSSAPP-826): at each stage
+    # checkpoint a REMOTE sandbox's uncommitted tree + dependency dirs go to the S3_*
+    # store above, and a repair round (or a fresh run with the same lockfiles)
+    # restores them instead of re-installing. off = nothing runs (the default);
+    # remote = only when the sandbox is not on this box (local sandboxes already
+    # keep a warm checkout via lineage_sandbox).
+    workspace_snapshots: str = Field(default="off", alias="BOSS_WORKSPACE_SNAPSHOTS")
+    # A run lineage's full snapshots, and the lockfile-keyed dependency seeds, are
+    # reaped after these TTLs (resource_reaper.tick). Hard ceilings, like the warm
+    # lineage TTL: a snapshot can carry a build's .env-shaped leftovers.
+    workspace_snapshot_ttl_hours: int = Field(
+        default=72, alias="BOSS_WORKSPACE_SNAPSHOT_TTL_HOURS", ge=1, le=24 * 14
+    )
+    workspace_seed_ttl_hours: int = Field(
+        default=24 * 7, alias="BOSS_WORKSPACE_SEED_TTL_HOURS", ge=1, le=24 * 30
+    )
     temporal_address: Optional[str] = Field(default=None, alias="TEMPORAL_ADDRESS")
     temporal_namespace: Optional[str] = Field(default=None, alias="TEMPORAL_NAMESPACE")
     nextcloud_url: Optional[str] = Field(default=None, alias="NEXTCLOUD_URL")

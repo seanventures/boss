@@ -12131,3 +12131,45 @@ CREATE INDEX IF NOT EXISTS idx_environment_leases_env
 CREATE INDEX IF NOT EXISTS idx_environment_leases_run
   ON environment_leases (run_id, state);
 -- ================================ end EXECUTION ENVIRONMENTS (BOSSAPP-824) ==
+
+-- ===========================================================================
+-- BOSSAPP-826
+-- WORKSPACE SNAPSHOTS (BOSSAPP-826): a build's working tree survives an ephemeral
+-- REMOTE sandbox. At each stage checkpoint the uncommitted tree (and, when no
+-- lockfile keys a seed, the dependency dirs) is tarred through the 824 sandbox
+-- sync_out seam into BOSS's object store (S3_*, services/object_store.py); a
+-- repair round of the same root run restores the latest one (sync_in) before its
+-- stage runs. kind='seed' rows hold dependency dirs only (node_modules, venv),
+-- keyed by a hash of the repository's lockfiles (seed_key), so a FRESH run of the
+-- same repo with the same lockfiles warm-starts its dependencies.
+-- Off by default (BOSS_WORKSPACE_SNAPSHOTS=off|remote). Rows past expires_at are
+-- reaped with their object by services/workspace_snapshots.reap_expired,
+-- registered on resource_reaper.tick (the 824 lease-reaper pattern).
+-- Objects live in the store; the row is the index (digest = sha256 of the object).
+CREATE TABLE IF NOT EXISTS workspace_snapshots (
+  id           TEXT PRIMARY KEY,
+  run_id       TEXT NOT NULL,                 -- the run whose sandbox was captured
+  root_run_id  TEXT,                          -- the lineage a repair restores from
+  project_id   TEXT,
+  repo         TEXT NOT NULL DEFAULT '',      -- owner/repo
+  kind         TEXT NOT NULL DEFAULT 'full' CHECK (kind IN ('full', 'seed')),
+  generation   INTEGER NOT NULL DEFAULT 0,    -- full: 1, 2, ... per root run; seed: 0
+  label        TEXT,                          -- the checkpoint label (write_tests, implement…)
+  seed_key     TEXT,                          -- seed: the lockfile hash; full: the seed it leans on
+  object_key   TEXT NOT NULL,
+  digest       TEXT NOT NULL,                 -- sha256 of the stored object
+  bytes        BIGINT NOT NULL DEFAULT 0,
+  manifest     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  expires_at   TIMESTAMPTZ,
+  last_used_at TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_snapshots_generation
+  ON workspace_snapshots (root_run_id, generation) WHERE kind = 'full';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_snapshots_seed
+  ON workspace_snapshots (project_id, repo, seed_key) WHERE kind = 'seed';
+CREATE INDEX IF NOT EXISTS idx_workspace_snapshots_root
+  ON workspace_snapshots (root_run_id, kind, generation DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_snapshots_expiry
+  ON workspace_snapshots (expires_at);
+-- ================================ end WORKSPACE SNAPSHOTS (BOSSAPP-826) ==
