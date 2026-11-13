@@ -32239,6 +32239,9 @@ app.include_router(build_multirepo_router())
 from .routes_infra_platform import build_infra_platform_router  # noqa: E402  (infra plugins)
 
 app.include_router(build_infra_platform_router())
+from .routes_extensions import build_extensions_router  # noqa: E402  (BOSSAPP-861 extensions)
+
+app.include_router(build_extensions_router())
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

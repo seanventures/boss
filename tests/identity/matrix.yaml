@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1945 operations.
+# 1957 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -720,6 +720,18 @@
 "POST /v1/experiments": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "POST /v1/experiments/{experiment_id}/promote": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "POST /v1/experiments/{experiment_id}/stop": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"POST /v1/ext/{extension_id}/projects/{project_id}/mcp": ["public:hmac_signed_webhook", "OAPVU"]
+"GET /v1/ext/{extension_id}/ui/{slot}": ["permit infra:read @ org", "OAPVU"]
+"GET /v1/ext/{extension_id}/ui/{slot}/context": ["permit infra:read @ org", "OAPVU"]
+"POST /v1/ext/{extension_id}/webhook/{hook}": ["public:hmac_signed_webhook", "OAPVU"]
+"GET /v1/extensions": ["permit infra:read @ org", "OAPVU"]
+"POST /v1/extensions/install": ["permit setup:manage @ org", "OA"]
+"POST /v1/extensions/preview": ["permit setup:manage @ org", "OA"]
+"GET /v1/extensions/slots": ["permit infra:read @ org", "OAPVU"]
+"DELETE /v1/extensions/{extension_id}": ["permit setup:manage @ org", "OA"]
+"POST /v1/extensions/{extension_id}/disable": ["permit infra:provision @ org", "OA"]
+"POST /v1/extensions/{extension_id}/enable": ["permit setup:manage @ org", "OA"]
+"GET /v1/extensions/{extension_id}/webhooks": ["permit setup:manage @ org", "OA"]
 "GET /v1/external-agents": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/external-agents": ["permit agent:create @ project(body=project_id)", "OAP"]
 "GET /v1/external-agents/{agent_id}": ["permit agent:read @ project(query=project_id)", "OAPVU"]

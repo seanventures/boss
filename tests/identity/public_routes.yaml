@@ -168,6 +168,12 @@ POST /v1/auth/webauthn/options:
 POST /v1/auth/webauthn/verify:
   reason: auth_endpoint
   verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/ext/{extension_id}/projects/{project_id}/mcp:
+  reason: hmac_signed_webhook
+  verifier: apps.api.app.routes_extensions:verify_extension_mcp_bearer
+POST /v1/ext/{extension_id}/webhook/{hook}:
+  reason: hmac_signed_webhook
+  verifier: apps.api.app.routes_extensions:verify_extension_webhook
 POST /v1/hardware/agents/enroll:
   reason: auth_endpoint
   verifier: apps.api.app.hardware_api:enroll_agent
