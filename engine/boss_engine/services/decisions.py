@@ -478,6 +478,7 @@ class DecisionService:
         content_hash: Optional[str] = None,
         settle_at: Optional[str] = None,
         answer: Optional[dict] = None,
+        always_allow: Optional[dict] = None,
     ) -> dict:
         if action not in {"approve", "reject", "revise", "delegate", "execute", "settle"}:
             raise ValueError(f"Unsupported action: {action}")
@@ -799,7 +800,7 @@ class DecisionService:
                                                  action="approve", note=note)
             refreshed = self.get_row(connection, decision_id)
             self._handle_approved_follow_on(
-                connection, refreshed, actor, note=note, force=force
+                connection, refreshed, actor, note=note, force=force, always_allow=always_allow
             )
             # The person's approval is signed now, under the step it releases — not a tick later.
             from . import agent_acts
@@ -1041,14 +1042,23 @@ class DecisionService:
         *,
         note: Optional[str] = None,
         force: bool = False,
+        always_allow: Optional[dict] = None,
     ) -> None:
         """Approval context must be explicitly threaded into the follow-on.
 
         A forced merge is valid only with its operator rationale recorded in the
         audit event. Defaulting to a non-forced, empty-note context keeps the
-        safe behaviour for callers that do not supply either value."""
+        safe behaviour for callers that do not supply either value.
+
+        ``always_allow`` is the "Always allow this" a person chose on an Ask card about a tool
+        call (BOSSAPP-817); only that card takes it, and refusing it refuses the approval."""
         recommendation = row["recommendation"] or {}
         action = recommendation.get("action")
+        if always_allow is not None:
+            # "ALWAYS ALLOW THIS" (BOSSAPP-817) — the NEW ARM for a parked tool call's card. It
+            # records the person's standing choice as a policy row; the call itself is still
+            # carried out by the parked gateway call (the card stays RECORDED_ON_APPROVAL).
+            self._grant_always_allow(connection, row, always_allow, actor)
         if action == "approve_change_set":
             # ONE APPROVAL FOR A MULTI-REPO CHANGE (multirepo/change_sets.py): pins the exact head
             # SHAs it covered and queues the merge of the whole set. Refused (and the approval not
@@ -1364,6 +1374,29 @@ class DecisionService:
                 on_reconciliation_approved(connection, self.settings, row, actor)
             except ReconciliationRefused as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
+
+    def _grant_always_allow(self, connection: Connection, row: dict[str, Any],
+                            always_allow: dict, actor: str) -> None:
+        """The approved Ask card's "Always allow this" (BOSSAPP-817): the person's choice becomes
+        a source=decision allow rule in tool_policies_v2 — the asking agent, this project, this
+        server and tool, the argument values they ticked, pinned to the tool's schema hash, with
+        the expiry they chose. Only a parked tool call's card takes it; refused (and the approval
+        with it) anywhere else or where the card did not offer it."""
+        from .mcp_gateway import ACTION_TOOL_CALL
+        from .tool_policy_engine import ToolPolicyError, grant_from_decision
+
+        if (row.get("recommendation") or {}).get("action") != ACTION_TOOL_CALL:
+            raise InvalidDecisionTransitionError(
+                "Always allow is offered only on an approval about a tool call.")
+        try:
+            rule = grant_from_decision(connection, row, always_allow, actor=actor)
+        except ToolPolicyError as refused:
+            raise InvalidDecisionTransitionError(str(refused)) from refused
+        connection.execute(
+            text("UPDATE decisions SET recommendation = COALESCE(recommendation, '{}'::jsonb)"
+                 " || jsonb_build_object('always_allow_rule_id', CAST(:rid AS TEXT)) "
+                 "WHERE id = :id"),
+            {"rid": rule["id"], "id": row["id"]})
 
     def _answer_execution_stage(self, connection: Connection, row: dict[str, Any], *,
                                 verdict: str, actor: str, note: Optional[str]) -> None:
