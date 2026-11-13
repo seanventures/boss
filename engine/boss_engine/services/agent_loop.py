@@ -2200,6 +2200,19 @@ def _sink_for_call(name: str, mcp_map: dict, skill_map: dict) -> Optional[str]:
     return sink_for_skill(skill) if isinstance(skill, dict) else None
 
 
+def _through_receipt_door(result: dict) -> bool:
+    """True when this result came back through mcp_registry.call_tool_with_receipt, which has
+    already screened it (BOSSAPP-822): it, or the invocation wrapped around it, has a receipt."""
+    if "receipt_id" in result or isinstance(result.get("screen"), dict):
+        return True
+    for key in ("result", "output"):
+        inner = result.get(key)
+        if isinstance(inner, dict) and ("receipt_id" in inner
+                                        or isinstance(inner.get("screen"), dict)):
+            return True
+    return False
+
+
 def _origin_for_call(name: str, mcp_map: dict, skill_map: dict) -> Optional[str]:
     """How this call's result arrived from outside, or None for the operator's own data."""
     if name in mcp_map:
@@ -2417,7 +2430,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     # rebuilds from that plus any tool message that still carries the mark.
     _untrusted = Ledger.load(finalize_ctx.get("untrusted_spans"))
     _untrusted.absorb_messages(messages)
-    from .tool_result_screen import carried_untrusted, next_write_must_ask
+    from .tool_result_screen import carried_untrusted, next_write_must_ask, screen_result
 
     # A phrase-screen hit on a tool result holds the next write. A read keeps its policy.
     screen_hold = bool(finalize_ctx.get("tool_screen_untrusted"))
@@ -2821,6 +2834,13 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         connection, settings, project_id, skill) == "ask":
                     # SET TO ASK IN SKILLS & MCP (and tier >= 2 always is): a person decides.
                     person_reason = "It is set to ask a person each time in Skills & MCP."
+                # A WRITE-CLASS SKILL after an untrusted tool result waits too (BOSSAPP-822): the
+                # same hold the MCP and built-in write branches apply.
+                screen_asks = next_write_must_ask(
+                    {"untrusted": screen_hold}, write=risk >= 2, policy="allow") == "ask"
+                if screen_asks and not person_reason:
+                    person_reason = ("An earlier tool result in this run was screened as "
+                                     "untrusted, so this write waits for a person.")
                 if risk > threshold or person_reason:
                     decision_id = create_blocking_decision(
                         connection,
@@ -2837,6 +2857,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                             "caller": caller,
                             "args": args,
                             "task_id": task_id,
+                            **({"tool_screen": "untrusted"} if screen_asks else {}),
                             **bind_held_call(name, args),
                         },
                         {},
@@ -2853,6 +2874,9 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         ),
                     }
                     is_deferred = True
+                    if screen_asks:
+                        screen_hold = False
+                        finalize_ctx["tool_screen_untrusted"] = False
                     deferred = {
                         "kind": "skill",
                         "tool": name,
@@ -2921,10 +2945,24 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             else:
                 result = _dispatch(connection, project_id, settings, name, args)
                 emit_event(connection, project_id, "agent.tool_invoked", "agent_loop", "task", task_id or project_id, {"tool": name, "step": step})
+            arrived = _origin_for_call(name, mcp_map, skill_map)
+            if (
+                arrived
+                and name not in mcp_map
+                and isinstance(result, dict)
+                and not _through_receipt_door(result)
+                and result.get("status") not in (
+                    "deferred_for_approval", "skipped", "denied", "refused",
+                    "awaiting_approval",
+                )
+            ):
+                # A FETCHED PAGE OR DOCUMENT that did not come through call_tool_with_receipt
+                # (which screens its own results) is screened here (BOSSAPP-822).
+                result, _verdict = screen_result(connection, settings, project_id, result,
+                                                 ref=f"{run_id}:{name}")
             if carried_untrusted(result):
                 screen_hold = True
                 finalize_ctx["tool_screen_untrusted"] = True
-            arrived = _origin_for_call(name, mcp_map, skill_map)
             if (
                 arrived
                 and isinstance(result, dict)
