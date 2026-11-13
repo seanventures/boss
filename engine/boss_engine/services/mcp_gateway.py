@@ -238,6 +238,16 @@ RUN_TOOLS: list[dict] = [
          "title": {"type": "string"}, "body": {"type": "string"}}}},
 ]
 _RUN_TOOL_NAMES = frozenset(t["name"] for t in RUN_TOOLS)
+#: BOSSAPP-856: listed only on a build that declared runtime services (boss.verify.yaml runtime:).
+RUNTIME_TOOL: dict = {
+    "name": "runtime_service",
+    "description": ("See and manage the app's runtime services this build runs beside your "
+                    "workspace (its database, API, worker): status, start, stop, restart, or "
+                    "read a service's recent logs."),
+    "inputSchema": {"type": "object", "required": ["action"], "properties": {
+        "action": {"type": "string", "enum": ["status", "start", "stop", "restart", "logs"]},
+        "service": {"type": "string", "description": "The service's name (all, for status)."},
+        "lines": {"type": "integer", "description": "How many log lines (logs only)."}}}}
 #: BOSSAPP-859: listed only to an agent that holds a signing key (agent_keys). The private key
 #: never leaves BOSS: the agent sends what to sign and gets a detached signature back.
 SIGN_TOOL: dict = {
@@ -618,7 +628,14 @@ class McpGateway:
 
     # ---- the run's own tools -----------------------------------------------------------------
     def _keyed_tools(self, grant: GatewayGrant) -> list[dict]:
-        """[SIGN_TOOL] when the run's agent holds a signing key (BOSSAPP-859), else []."""
+        """Tools only some runs have: `runtime_service` when the build declared runtime services
+        (BOSSAPP-856), `sign` when its agent holds a signing key (BOSSAPP-859)."""
+        from . import runtime_services
+
+        extra = [RUNTIME_TOOL] if runtime_services.for_run(grant.run_id) is not None else []
+        return extra + self._signing_tools(grant)
+
+    def _signing_tools(self, grant: GatewayGrant) -> list[dict]:
         if not grant.role_key:
             return []
         try:
@@ -651,8 +668,25 @@ class McpGateway:
                         line=f"Signed {len(payload)} characters with key {signed['kid'][:8]}")
         return tool_text(signed)
 
+    def _runtime_service(self, grant: GatewayGrant, arguments: dict) -> dict:
+        from . import runtime_services
+
+        sup = runtime_services.for_run(grant.run_id)
+        if sup is None:
+            return tool_error("no_runtime_services", "this build declares no runtime services")
+        try:
+            out = sup.act(str(arguments.get("action") or "status"),
+                          str(arguments.get("service") or ""),
+                          int(arguments.get("lines") or 80))
+        except (runtime_services.RuntimeServicesError, ValueError) as error:
+            return tool_error("runtime_service_failed", str(error))
+        return tool_text(out)
+
     def call_run_tool(self, grant: GatewayGrant, name: str, arguments: dict,
                       sink: Optional[Sink] = None) -> dict:
+        if name == RUNTIME_TOOL["name"]:
+            grant.calls["run"] += 1
+            return self._runtime_service(grant, arguments)
         if name == SIGN_TOOL["name"]:
             grant.calls["run"] += 1
             return self._sign(grant, arguments)
