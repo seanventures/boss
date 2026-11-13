@@ -96,6 +96,9 @@ class AcpSection(_Strict):
     timeoutSeconds: int = Field(default=2400, ge=10, le=86400)
     signinHint: str = ""
     installHint: str = ""
+    #: BOSSAPP-858: the release window BOSS drives this agent within (pre-checked; empty: none).
+    minVersion: str = ""
+    maxVersion: str = ""
 
 
 class TestEnvironment(_Strict):
@@ -339,7 +342,8 @@ def builder_for(manifest: HarnessManifest):
                          model_flag=a.modelFlag, timeout=a.timeoutSeconds,
                          env_passthrough=tuple(a.envPassthrough), description=description,
                          signin_hint=a.signinHint, install_hint=a.installHint,
-                         mcp_delivery="acp", registers_harness=False)
+                         mcp_delivery="acp", registers_harness=False,
+                         min_version=a.minVersion, max_version=a.maxVersion)
 
     def build_acp(settings: Any) -> Any:
         from .acp_code_agent import AcpCodeAgent
@@ -366,7 +370,18 @@ def register(plugin: HarnessPlugin) -> Optional[Any]:
         description=f"{m.metadata.description} [plugin {m.metadata.id}@{m.metadata.version}, "
                     f"{plugin.source}]",
         requires=tuple(m.spec.requires) or (f"the {m.spec.kind} agent the plugin describes",),
-        source=f"plugin:{m.metadata.id}")
+        source=f"plugin:{m.metadata.id}", version=_version_window(m))
+
+
+def _version_window(manifest: HarnessManifest) -> Optional[Any]:
+    """An ACP plugin's declared release window (BOSSAPP-858), or None."""
+    a = manifest.spec.acp
+    if a is None or not (a.minVersion or a.maxVersion):
+        return None
+    from .runtime_versions import VersionWindow
+
+    return VersionWindow(binary=a.binary, min_version=a.minVersion, max_version=a.maxVersion,
+                         install_hint=a.installHint)
 
 
 def load_harness_plugins() -> list[HarnessPlugin]:

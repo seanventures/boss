@@ -12974,3 +12974,86 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_access_grants_live
   ON mcp_access_grants (project_id, server_id, role_key, tool) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_mcp_access_grants_role ON mcp_access_grants (project_id, role_key, status);
 -- ================================ end BOSSAPP-846-848 ==
+-- BOSSAPP-855-860
+-- ── Runtime extras: hosted remote agents, workspace runtime services, per-agent run policy,
+-- runtime version windows, per-agent signing keys, tailnet previews ─────────────────────────────
+-- 858 (services/runtime_versions.py) needs no table: a version window is declared on the
+-- engine's spec, never stored.
+-- 857 (services/role_run_policy.py): a role's own run policy, enforced at job claim.
+-- {max_concurrent, max_daily_runs, max_daily_cost_usd}; '{}' (the default) = no policy, and the
+-- claim path asks nothing.
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS run_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- The role a job runs as (enqueue_job(role_key=…) or payload.role_key). NULL: no role's policy.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS role_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_jobs_role_live
+  ON jobs (project_id, role_key, status) WHERE role_key IS NOT NULL;
+-- One row per job claimed for a role WITH a policy: what max_daily_runs counts. A reclaim of
+-- the same job does not count twice.
+CREATE TABLE IF NOT EXISTS role_job_claims (
+  job_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_role_job_claims_day
+  ON role_job_claims (project_id, role_key, claimed_at);
+-- 857: no-progress back-off for monitors and schedules. backoff_max_factor 1 = off (default);
+-- above 1, each wake that reports nothing new doubles the wait, up to that many intervals.
+ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS backoff_max_factor INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS no_progress_streak INTEGER NOT NULL DEFAULT 0;
+DO $wake_backoff$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_wakeups_backoff_max_factor_check') THEN
+    ALTER TABLE agent_wakeups ADD CONSTRAINT agent_wakeups_backoff_max_factor_check
+      CHECK (backoff_max_factor BETWEEN 1 AND 64);
+  END IF;
+END $wake_backoff$;
+-- 859 (services/agent_keys.py): an agent's own persistent Ed25519 signing key. The private half
+-- is a vault item (kind signing_key) and never leaves BOSS; the public JWK is published at
+-- GET /v1/agents/{agent_id}/jwks. kid = RFC 7638 thumbprint. One active key per agent; a rotated
+-- key is 'retired' (still published, verifies what it signed); a compromised one 'revoked'.
+CREATE TABLE IF NOT EXISTS agent_keys (
+  kid TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  alg TEXT NOT NULL DEFAULT 'EdDSA' CHECK (alg = 'EdDSA'),
+  public_jwk JSONB NOT NULL,
+  public_pem TEXT NOT NULL,
+  private_vault_item_id TEXT NOT NULL REFERENCES identity_vault_items(id),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'retired', 'revoked')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  retired_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_keys_active ON agent_keys (agent_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_agent_keys_role ON agent_keys (project_id, role_key, status);
+-- 860 (services/preview_expose.py, scripts/expose/boss-expose): a preview's own HTTPS origin
+-- (tailnet port or Caddy subdomain), set only after BOSS verified it from outside. NULL: the
+-- preview is served under BOSS's preview origin as before (BOSS_PREVIEW_EXPOSE off, the default).
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS exposed_url TEXT;
+-- 855 (services/remote_agents.py): hosted remote agents as harnesses (kind remote_agent,
+-- boss.harness.remote/v1). Org-level profiles; a profile runs only with a positive spend ceiling
+-- per BOSS run AND a person's retention acknowledgement. The bearer token is NAMED (token_env),
+-- never stored here. Registered verified=False as harness 'remote:<name>'.
+CREATE TABLE IF NOT EXISTS remote_agent_profiles (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'generic' CHECK (provider IN ('generic')),
+  base_url TEXT NOT NULL,
+  token_env TEXT,
+  spend_ceiling_usd_micros BIGINT NOT NULL CHECK (spend_ceiling_usd_micros > 0),
+  retention_ack_by TEXT,
+  retention_ack_at TIMESTAMPTZ,
+  retention_terms TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  poll_seconds DOUBLE PRECISION NOT NULL DEFAULT 3.0,
+  timeout_seconds INTEGER NOT NULL DEFAULT 3600,
+  description TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, name)
+);
+-- ================================ end BOSSAPP-855-860 ==
