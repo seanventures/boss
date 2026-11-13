@@ -3736,6 +3736,10 @@ fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
   font-size: 0.75rem;
 }
 
+/* <Who> (app/who.tsx, BOSSAPP-1040): a principal rendered as a name, inline in any sentence. */
+.who { display: inline-flex; align-items: center; gap: 5px; vertical-align: bottom; min-width: 0; }
+.who .idn-face { flex: none; }
+
 /* ============================================================
    Buttons
    ============================================================ */
