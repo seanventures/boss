@@ -60,7 +60,8 @@ class _Run:
         self.rec = Recorder(state, sink=spec.sink, on_event=spec.on_event,
                             policy=self.policies.versions(),
                             meta=SinkMeta(engine=str(getattr(spec.engine, "name", "") or ""),
-                                          stage=spec.stage, scaffold_level=spec.scaffold_level))
+                                          stage=spec.stage, scaffold_level=spec.scaffold_level,
+                                          actor=spec.actor))
         self.steps: list = []
 
     def cancelled(self) -> bool:

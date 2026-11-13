@@ -12651,3 +12651,13 @@ DO $$ BEGIN
 END $$;
 -- Last-Event-ID replay reads "the events after this one" in (created_at, id) order.
 CREATE INDEX IF NOT EXISTS idx_events_created_id ON events (created_at, id);
+
+-- BOSSAPP-816-819
+-- THE TOOL-CALL AUDIT SURFACE (BOSSAPP-819): GET /v1/tool-calls + /export and Activity › Tool
+-- calls read tool_call_audit. `explanation` is the policy's own words for the decision, filled
+-- by a writer that has them (NULL otherwise, and on every older row). The index is the one the
+-- audit's keyset pages read (project, newest first).
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS explanation TEXT;
+CREATE INDEX IF NOT EXISTS idx_tool_call_audit_project_time
+  ON tool_call_audit (project_id, recorded_at DESC, id DESC);
+-- ================================ end BOSSAPP-816-819 ==

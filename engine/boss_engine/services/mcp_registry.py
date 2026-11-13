@@ -42,7 +42,7 @@ from sqlalchemy.engine import Connection
 
 from .argument_binding import binding_holds
 from .core import create_blocking_decision, emit_event, make_id, normalize_data_boundary
-from .tool_call_audit import record_tool_call
+from .tool_call_audit import acting_principal, record_tool_call
 from .tool_catalog import (
     HASH_VERSION,
     QUARANTINE_KEYS,
@@ -1566,6 +1566,8 @@ def call_tool_with_receipt(
     created_by_job_id: Optional[str] = None,
     approved_by: Optional[str] = None,
     approval_about: Optional[dict[str, Any]] = None,
+    agent: Optional[str] = None,
+    principal: Optional[str] = None,
 ) -> dict[str, Any]:
     """The one EFFECT of calling an MCP tool: a receipt, the call, and the receipt settled.
 
@@ -1589,9 +1591,15 @@ def call_tool_with_receipt(
     Each road also appends one tool_call_audit row. A missing table is not swallowed. A
     delivered result is screened for prompt injection first (BOSSAPP-822,
     :func:`tool_result_screen.screen_result`) and its verdict is on that row (``screen``).
+    The row names WHO (BOSSAPP-819): ``agent`` is the caller's actor (the agent's role, the
+    skill's caller), ``principal`` the identity it acts as — the caller's, else the one in
+    effect (identity.lineage.current: the run's person or agent principal).
     """
     from .mcp_client import MCPClient
     from .receipts import ReceiptService
+
+    audit_agent = str(agent or "").strip() or "mcp_registry"
+    audit_principal = str(principal or "").strip() or acting_principal()
 
     def _audit_tool_call(outcome: str, decision: str, *, latency_ms: int = 0,
                          screen: Optional[dict[str, Any]] = None) -> None:
@@ -1600,8 +1608,8 @@ def call_tool_with_receipt(
             connection,
             project_id=project_id,
             run_id=about.get("run_id") if isinstance(about.get("run_id"), str) else None,
-            agent="mcp_registry",
-            principal=None,
+            agent=audit_agent,
+            principal=audit_principal,
             server_id=server.get("id") if isinstance(server.get("id"), str) else None,
             tool=tool_name,
             arguments=inputs if isinstance(inputs, dict) else {},

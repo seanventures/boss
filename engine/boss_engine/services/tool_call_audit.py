@@ -2,12 +2,19 @@
 
 A row names the tool, the argument digest, the redacted arguments, the
 decision, and the outcome. Update and delete are rejected by the database.
-The export route and the Activity tab are a later slice.
+
+READING IT (BOSSAPP-819): query_tool_calls is one keyset page with the
+audit's filters (GET /v1/tool-calls, the console's Activity › Tool calls);
+export_tool_calls streams the same filter (GET /v1/tool-calls/export).
+`explanation` is the policy's own words for the decision when the writer has
+them; nothing here invents one.
 """
 from __future__ import annotations
 
+import base64
 import json
-from typing import Any, Optional
+from datetime import datetime
+from typing import Any, Iterator, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -66,6 +73,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_call_idem ON tool_call_audit (idempote
 
 -- BOSSAPP-822: the prompt-injection screen's verdict on the result (db/schema.sql, at the end).
 ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;
+
+-- BOSSAPP-816-819: the policy's words for the decision (nullable; db/schema.sql, at the end),
+-- and the index the audit's keyset pages read.
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS explanation TEXT;
+CREATE INDEX IF NOT EXISTS idx_tool_call_audit_project_time
+  ON tool_call_audit (project_id, recorded_at DESC, id DESC);
 """
 
 
@@ -88,6 +101,7 @@ def record_tool_call(
     seq: Optional[int] = None,
     idempotency_key: Optional[str] = None,
     screen: Optional[dict] = None,
+    explanation: Optional[str] = None,
 ) -> str:
     """Insert one audit row and return its id. The table rejects update and delete.
 
@@ -97,7 +111,10 @@ def record_tool_call(
     `idempotency_key` (run:step:call) is unique: the same held call never runs twice.
 
     `screen` is the injection screen's verdict on a delivered result (BOSSAPP-822:
-    {"mode", "verdict": clean|suspicious|unscreened, "rules"}); a refused call has none."""
+    {"mode", "verdict": clean|suspicious|unscreened, "rules"}); a refused call has none.
+
+    `explanation` is the policy's sentence for this decision (BOSSAPP-819) when the writer has
+    one; it is clipped, and never required."""
     if isinstance(arguments, dict):
         digest = args_sha256(tool, arguments)
         preview = redacted_preview(arguments)
@@ -114,6 +131,8 @@ def record_tool_call(
         extra_cols, extra_vals = extra_cols + ", idempotency_key", extra_vals + ", :idem"
     if screen is not None:
         extra_cols, extra_vals = extra_cols + ", screen", extra_vals + ", CAST(:screen AS jsonb)"
+    if explanation:
+        extra_cols, extra_vals = extra_cols + ", explanation", extra_vals + ", :explanation"
     connection.execute(
         text(
             f"""
@@ -132,6 +151,7 @@ def record_tool_call(
             **{k: v for k, v in ledger.items() if k != "ledger_run_id"},
             "idem": idempotency_key,
             "screen": json.dumps(screen) if screen is not None else None,
+            "explanation": str(explanation)[:2000] if explanation else None,
             "id": row_id,
             "project_id": project_id,
             "run_id": run_id,
@@ -149,6 +169,20 @@ def record_tool_call(
         },
     )
     return row_id
+
+
+def acting_principal() -> Optional[str]:
+    """The identity principal this code acts as (identity.lineage.current: a request's person, a
+    delegated run's person or agent), or None outside one. Never raises: the audit row is written
+    whatever identity can say."""
+    try:
+        from ..identity import lineage
+
+        acting = lineage.current()
+    except Exception:  # noqa: BLE001
+        return None
+    principal_id = getattr(acting, "principal_id", None) if acting is not None else None
+    return str(principal_id) if principal_id else None
 
 
 def _ledger_columns(connection: Connection, *, run_id: Optional[str], act_id: Optional[str],
@@ -209,3 +243,154 @@ def list_tool_calls(
             }
         )
     return listed
+
+
+# --------------------------------------------------------------------------- #
+# The audit surface (BOSSAPP-819): filters, keyset pages, the export          #
+# --------------------------------------------------------------------------- #
+
+#: The injection screen's verdicts, plus `none` (no result was screened: the row's screen is NULL).
+SCREEN_VERDICTS = ("clean", "suspicious", "unscreened", "none")
+EXPORT_MAX_ROWS = 50_000
+_EXPORT_PAGE = 500
+_COLUMNS = ("id, project_id, run_id, agent, principal, server_id, tool, args_sha256, "
+            "args_redacted, decision, matched_policy_ids, decision_id, outcome, latency_ms, "
+            "recorded_at, screen, explanation, act_id, seq")
+
+
+def _when(value: Optional[str], name: str) -> Optional[datetime]:
+    if value is None or not str(value).strip():
+        return None
+    raw = str(value).strip()
+    try:
+        return datetime.fromisoformat(raw[:-1] + "+00:00" if raw.endswith("Z") else raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an ISO time, like 2026-11-12T09:30:00Z") from exc
+
+
+def tool_call_filters(*, run_id: Optional[str] = None, server_id: Optional[str] = None,
+                      tool: Optional[str] = None, decision: Optional[str] = None,
+                      outcome: Optional[str] = None, screen: Optional[str] = None,
+                      since: Optional[str] = None, until: Optional[str] = None) -> dict:
+    """The filters, cleaned and checked; ValueError says which one is wrong, in words."""
+    clean = {k: (str(v).strip() or None) if v is not None else None
+             for k, v in (("run_id", run_id), ("server_id", server_id), ("tool", tool),
+                          ("decision", decision), ("outcome", outcome), ("screen", screen))}
+    if clean["screen"] is not None and clean["screen"] not in SCREEN_VERDICTS:
+        raise ValueError(f"screen must be one of {', '.join(SCREEN_VERDICTS)}")
+    clean["since"] = _when(since, "since")
+    clean["until"] = _when(until, "until")
+    if clean["since"] and clean["until"] and clean["since"] > clean["until"]:
+        raise ValueError("since must be before until")
+    return clean
+
+
+def _where(project_id: str, filters: dict) -> tuple[str, dict]:
+    parts = ["project_id = :project_id"]
+    params: dict[str, Any] = {"project_id": project_id}
+    for column in ("run_id", "server_id", "tool", "decision", "outcome"):
+        if filters.get(column):
+            parts.append(f"{column} = :{column}")
+            params[column] = filters[column]
+    screen = filters.get("screen")
+    if screen == "none":
+        parts.append("screen IS NULL")
+    elif screen:
+        parts.append("screen->>'verdict' = :screen")
+        params["screen"] = screen
+    if filters.get("since"):
+        parts.append("recorded_at >= :since")
+        params["since"] = filters["since"]
+    if filters.get("until"):
+        parts.append("recorded_at <= :until")
+        params["until"] = filters["until"]
+    return " AND ".join(parts), params
+
+
+def _cursor_out(row: dict) -> str:
+    raw = json.dumps([row["recorded_at"].isoformat(), row["id"]], separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _cursor_in(cursor: str) -> tuple[datetime, str]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        stamp, row_id = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+        return datetime.fromisoformat(stamp), str(row_id)
+    except Exception as exc:  # noqa: BLE001 — any malformed cursor is the same refusal
+        raise ValueError("cursor is not one this list handed out") from exc
+
+
+def _row(row: Any) -> dict:
+    def loads(value: Any, default: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except ValueError:
+                return default
+        return default if value is None else value
+
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "run_id": row["run_id"],
+        "agent": row["agent"],
+        "principal": row["principal"],
+        "server_id": row["server_id"],
+        "tool": row["tool"],
+        "args_sha256": row["args_sha256"],
+        "args_redacted": loads(row["args_redacted"], {}),
+        "decision": row["decision"],
+        "matched_policy_ids": list(loads(row["matched_policy_ids"], [])),
+        "decision_id": row["decision_id"],
+        "outcome": row["outcome"],
+        "latency_ms": row["latency_ms"],
+        "recorded_at": row["recorded_at"].isoformat() if row["recorded_at"] else None,
+        "screen": loads(row["screen"], None),
+        "explanation": row["explanation"],
+        "act_id": row["act_id"],
+        "seq": row["seq"],
+    }
+
+
+def _page(connection: Connection, project_id: str, filters: dict, *,
+          after: Optional[tuple[datetime, str]], limit: int) -> list:
+    where, params = _where(project_id, filters)
+    if after is not None:
+        where += " AND (recorded_at, id) < (:after_t, :after_id)"
+        params.update({"after_t": after[0], "after_id": after[1]})
+    params["limit"] = int(limit)
+    return list(connection.execute(
+        text(f"SELECT {_COLUMNS} FROM tool_call_audit WHERE {where} "
+             "ORDER BY recorded_at DESC, id DESC LIMIT :limit"),
+        params,
+    ).mappings().all())
+
+
+def query_tool_calls(connection: Connection, *, project_id: str, cursor: Optional[str] = None,
+                     limit: int = 50, **filters: Any) -> dict:
+    """One page, newest first: {"items": [...], "next": cursor | None}. Keyset on
+    (recorded_at, id), so a row recorded while someone pages never shifts a page."""
+    limit = max(1, min(int(limit), 200))
+    after = _cursor_in(cursor) if cursor else None
+    rows = _page(connection, project_id, filters, after=after, limit=limit + 1)
+    more = len(rows) > limit
+    rows = rows[:limit]
+    return {"items": [_row(r) for r in rows],
+            "next": _cursor_out(rows[-1]) if more and rows else None}
+
+
+def export_tool_calls(connection: Connection, *, project_id: str,
+                      max_rows: int = EXPORT_MAX_ROWS, **filters: Any) -> Iterator[dict]:
+    """Every matching row, newest first, page by page (never held in memory), at most max_rows."""
+    after: Optional[tuple[datetime, str]] = None
+    sent = 0
+    while sent < max_rows:
+        rows = _page(connection, project_id, filters, after=after,
+                     limit=min(_EXPORT_PAGE, max_rows - sent))
+        if not rows:
+            return
+        for row in rows:
+            yield _row(row)
+        sent += len(rows)
+        after = (rows[-1]["recorded_at"], rows[-1]["id"])

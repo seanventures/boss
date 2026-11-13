@@ -881,6 +881,8 @@ def execute_mcp_tool(
         # An unreviewed server's tool needs the approval this run was given (needs_person).
         approved_by=context.approved_by,
         approval_about=context.approval_about,
+        # The audit row names the agent that called the skill (BOSSAPP-819).
+        agent=caller or context.actor,
     )
     output = called.get("output")
     return {

@@ -450,6 +450,17 @@ def _granted_mcp_servers(
     return servers
 
 
+def _run_agent(run: Any) -> Optional[str]:
+    """The agent a run acts as, for the tool-call audit (BOSSAPP-819): the agent step's role, else
+    the run's own role key, else None (the loop's actor is recorded instead)."""
+    ctx = (run or {}).get("finalize_ctx") if isinstance(run, dict) else None
+    if not isinstance(ctx, dict):
+        return None
+    step = ctx.get("agent_step")
+    role = (step.get("role_key") if isinstance(step, dict) else None) or ctx.get("role_key")
+    return str(role) if role else None
+
+
 def _invoke_mcp_skill(
     connection: Connection,
     settings: Settings,
@@ -465,6 +476,7 @@ def _invoke_mcp_skill(
     approved_by: Optional[str] = None,
     approval_about: Optional[dict[str, Any]] = None,
     mcp_reach: Optional[str] = None,
+    agent: Optional[str] = None,
 ) -> dict[str, Any]:
     tool_name = str(tool.get("name") or "tool")
     skill_spec = _mcp_skill_spec(server, tool)
@@ -505,6 +517,8 @@ def _invoke_mcp_skill(
             tenant_scope=context.tenant_scope(),
             approved_by=approved_by,
             approval_about=approval_about,
+            # The audit row names the run's agent, not the loop (BOSSAPP-819).
+            agent=agent or actor,
         )
 
     return SkillRuntimeService(settings).invoke(
@@ -2087,6 +2101,7 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 run_id=run_id,
                 step=int(pending.get("step") or run.get("step") or 0),
                 actor="decision_approval",
+                agent=_run_agent(run),
                 # Checked approved above; the MCP effect reads it again (needs_person),
                 # and checks it is THIS run's decision (approval_stands).
                 approved_by=decision_id,
@@ -2752,6 +2767,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         run_id=run_id,
                         step=step,
                         actor="agent_loop",
+                        agent=_run_agent(run),
                     ))
                     if exhausted is not None and bounded:
                         budget_wait = exhausted
