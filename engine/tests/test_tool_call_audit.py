@@ -195,3 +195,35 @@ def test_call_tool_with_receipt_records_every_outcome():
     body = source[start:end]
     assert "record_tool_call(" in body
     assert body.count("\n        _audit_tool_call(") >= 4
+
+
+def test_the_injection_screen_verdict_is_kept_on_the_row(engine):
+    """BOSSAPP-822: a delivered result's screen verdict lands on its audit row; a refused call
+    (no result to screen) leaves the column empty."""
+    verdict = {"mode": "patterns", "verdict": "suspicious", "rules": ["ignore_previous"]}
+    with engine.begin() as connection:
+        screened_id = record_tool_call(
+            connection, project_id="p-screen", run_id="run-822", agent="mcp_registry",
+            principal=None, server_id="srv-1", tool="fetch_page", arguments={"url": "u"},
+            decision="allow", matched_policy_ids=["allow"], decision_id=None,
+            outcome="succeeded", latency_ms=3, screen=verdict,
+        )
+        refused_id = record_tool_call(
+            connection, project_id="p-screen", run_id="run-822", agent="mcp_registry",
+            principal=None, server_id="srv-1", tool="fetch_page", arguments={"url": "u"},
+            decision="off", matched_policy_ids=["off"], decision_id=None,
+            outcome="refused", latency_ms=0,
+        )
+        rows = dict(connection.execute(
+            text("SELECT id, screen FROM tool_call_audit WHERE id IN (:a, :b)"),
+            {"a": screened_id, "b": refused_id},
+        ).all())
+    assert rows[screened_id] == verdict
+    assert rows[refused_id] is None
+
+
+def test_the_schema_appends_the_screen_column_at_its_end():
+    schema = (Path(__file__).resolve().parents[2] / "db" / "schema.sql").read_text()
+    tail = schema[schema.rindex("-- ── BOSSAPP-822"):]
+    assert "ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;" in tail
+    assert "ADD COLUMN IF NOT EXISTS screen JSONB" in SCHEMA_SQL

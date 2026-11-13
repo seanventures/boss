@@ -63,6 +63,9 @@ ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS lineage_id TEXT;
 ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_call_idem ON tool_call_audit (idempotency_key)
   WHERE idempotency_key IS NOT NULL;
+
+-- BOSSAPP-822: the prompt-injection screen's verdict on the result (db/schema.sql, at the end).
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;
 """
 
 
@@ -84,13 +87,17 @@ def record_tool_call(
     act_id: Optional[str] = None,
     seq: Optional[int] = None,
     idempotency_key: Optional[str] = None,
+    screen: Optional[dict] = None,
 ) -> str:
     """Insert one audit row and return its id. The table rejects update and delete.
 
     THE RUN LEDGER (BOSS_LEDGER_EVENTS, kernel/ledger.py): while it is on, or when a kernel run
     hands in its `seq`, the row also carries the run, its sequence, the act and the retry
     lineage, so it reads back in `run_ledger` beside the run's model calls. A write call's
-    `idempotency_key` (run:step:call) is unique: the same held call never runs twice."""
+    `idempotency_key` (run:step:call) is unique: the same held call never runs twice.
+
+    `screen` is the injection screen's verdict on a delivered result (BOSSAPP-822:
+    {"mode", "verdict": clean|suspicious|unscreened, "rules"}); a refused call has none."""
     if isinstance(arguments, dict):
         digest = args_sha256(tool, arguments)
         preview = redacted_preview(arguments)
@@ -105,6 +112,8 @@ def record_tool_call(
     extra_vals = "".join(f", :{c}" for c in ("act_id", "seq", "lineage_id") if c in ledger)
     if idempotency_key:
         extra_cols, extra_vals = extra_cols + ", idempotency_key", extra_vals + ", :idem"
+    if screen is not None:
+        extra_cols, extra_vals = extra_cols + ", screen", extra_vals + ", CAST(:screen AS jsonb)"
     connection.execute(
         text(
             f"""
@@ -122,6 +131,7 @@ def record_tool_call(
         {
             **{k: v for k, v in ledger.items() if k != "ledger_run_id"},
             "idem": idempotency_key,
+            "screen": json.dumps(screen) if screen is not None else None,
             "id": row_id,
             "project_id": project_id,
             "run_id": run_id,

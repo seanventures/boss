@@ -26,6 +26,7 @@ SINKS = ("external_provider", "write")
 _SKIP_KEYS = frozenset(
     {
         "untrusted",
+        "screen_warning",
         "trust_origin",
         "status",
         "receipt_id",

@@ -1190,6 +1190,11 @@ class Settings(BaseSettings):
     # BOSSAPP-622: what agents are given from the knowledge graph (project_settings `knowledge_graph`):
     # on | keyword | off (knowledge/runtime.MODES).
     knowledge_graph: str = Field(default="on", alias="BOSS_KNOWLEDGE_GRAPH")
+    # BOSSAPP-822: the prompt-injection screen on tool results (services/tool_result_screen.py,
+    # project_settings `tool_result_screen`): off (byte-identical passthrough) | patterns (the
+    # default: the deterministic rule table, no spend) | model (rules, then a small governed
+    # model check when the rules find nothing).
+    tool_result_screen: str = Field(default="patterns", alias="BOSS_TOOL_RESULT_SCREEN")
     # BOSSAPP-1031: procedural priors — the scorekeeper that hands a model the ranked first
     # moves earlier runs took in the same situation (services/knowledge/procedural_priors.py).
     # off (the default: today's prompts, byte-identical) | advisory (a quoted RANKED MOVES

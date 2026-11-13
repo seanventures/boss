@@ -50,7 +50,7 @@ from .tool_catalog import (
     description_sha256,
     schema_sha256,
 )
-from .tool_result_screen import apply_screen
+from .tool_result_screen import screen_result
 
 
 _MCP_COLUMNS = (
@@ -1371,12 +1371,15 @@ def call_tool_with_receipt(
     A transport failure also records the server as unreachable, so the screens learn about a
     dead server from the run that hit it rather than from the next person who opens them.
 
-    Each road also appends one tool_call_audit row. A missing table is not swallowed.
+    Each road also appends one tool_call_audit row. A missing table is not swallowed. A
+    delivered result is screened for prompt injection first (BOSSAPP-822,
+    :func:`tool_result_screen.screen_result`) and its verdict is on that row (``screen``).
     """
     from .mcp_client import MCPClient
     from .receipts import ReceiptService
 
-    def _audit_tool_call(outcome: str, decision: str, *, latency_ms: int = 0) -> None:
+    def _audit_tool_call(outcome: str, decision: str, *, latency_ms: int = 0,
+                         screen: Optional[dict[str, Any]] = None) -> None:
         about = approval_about if isinstance(approval_about, dict) else {}
         record_tool_call(
             connection,
@@ -1392,7 +1395,15 @@ def call_tool_with_receipt(
             decision_id=approved_by,
             outcome=outcome,
             latency_ms=latency_ms,
+            screen=screen,
         )
+
+    def _screened(delivered: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        # THE INJECTION SCREEN (BOSSAPP-822, tool_result_screen): every result this door hands
+        # back is screened before anyone reads it. A hit is still delivered, marked untrusted
+        # (a loud first key the model reads), and the verdict lands on the audit row.
+        return screen_result(connection, settings, project_id, delivered,
+                             ref=str(delivered.get("receipt_id") or tool_name))
 
     if needs_person(server) and not approval_stands(connection, project_id, approved_by,
                                                     approval_about):
@@ -1440,13 +1451,14 @@ def call_tool_with_receipt(
     )
     if not created:
         if receipt.get("status") == "succeeded":
-            _audit_tool_call("deduplicated", policy)
-            return apply_screen({
+            delivered, verdict = _screened({
                 "output": receipt.get("result") or {},
                 "receipt_id": receipt["id"],
                 "actual_cost_usd_micros": 0,
                 "deduplicated": True,
             })
+            _audit_tool_call("deduplicated", policy, screen=verdict)
+            return delivered
         raise RuntimeError(
             f"MCP effect receipt already exists with status {receipt.get('status')}"
         )
@@ -1474,12 +1486,13 @@ def call_tool_with_receipt(
         f"{server['id']}:{tool_name}",
         output if isinstance(output, dict) else {"value": output},
     )
-    _audit_tool_call("succeeded", policy, latency_ms=elapsed_ms)
-    return apply_screen({
+    delivered, verdict = _screened({
         "output": output,
         "receipt_id": receipt["id"],
         "actual_cost_usd_micros": 0,
     })
+    _audit_tool_call("succeeded", policy, latency_ms=elapsed_ms, screen=verdict)
+    return delivered
 
 
 def _refusal(tool_name: str, server: dict[str, Any], approved_by: Optional[str]) -> str:

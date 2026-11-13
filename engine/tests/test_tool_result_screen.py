@@ -152,7 +152,9 @@ def test_call_tool_with_receipt_screens_both_successful_returns():
     start = source.index("def call_tool_with_receipt")
     end = source.index("\ndef _refusal", start)
     body = source[start:end]
-    assert body.count("return apply_screen(") == 2
+    assert body.count("= _screened(") == 2
+    assert body.count("screen=verdict)") == 2
+    assert body.count("return delivered") == 2
 
 
 def test_an_untrusted_result_turns_the_next_write_into_ask():

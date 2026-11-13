@@ -37,6 +37,17 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "without it. The graph keeps indexing either way.",
         "kind": "choice", "choices": ["on", "keyword", "off"],
     },
+    # THE PROMPT-INJECTION SCREEN ON TOOL RESULTS (BOSSAPP-822, services/tool_result_screen.py).
+    # Read at call_tool_with_receipt and the agent loop's outside-origin results.
+    "tool_result_screen": {
+        "attr": "tool_result_screen",
+        "label": "Screen tool results",
+        "help": "Patterns: BOSS checks every tool result for prompt injection with fixed rules; a "
+                "hit is marked untrusted for the agent and the run's next write waits for you. "
+                "Model: the same, plus a small model check when the rules find nothing (spends a "
+                "little budget). Off: results reach agents unscreened.",
+        "kind": "choice", "choices": ["patterns", "model", "off"],
+    },
     "run_supervisor_stall_minutes": {
         "attr": "run_supervisor_stall_minutes",
         "label": "Run supervisor stall minutes",
