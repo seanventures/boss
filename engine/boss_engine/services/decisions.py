@@ -1342,6 +1342,17 @@ class DecisionService:
                         decision_id=str(row["id"]))
             except McpServerError as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "grant_tool_access":
+            # AN AGENT ASKED FOR MCP TOOLS (BOSSAPP-848, tool_access_requests): the role gets a
+            # holder grant for exactly the tools on the card, Allow only for tier <= 1, pinned to
+            # the schema hash the card showed. Refused (approval not recorded) when the server or
+            # a tool changed since the agent asked.
+            from .tool_access_requests import ToolAccessError, on_approved as grant_access
+
+            try:
+                grant_access(connection, self.settings, row, actor)
+            except ToolAccessError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action == "activate_authored_skill":
             # The draft the card showed becomes the skill other agents can run. Until this,
             # nothing is written: the draft is a diff-bound consent (change_consent, 843), and
@@ -1420,6 +1431,12 @@ class DecisionService:
                 refuse_tool_change(connection, str(row["project_id"]), server_id,
                                    str(rec.get("tool") or ""), actor=actor,
                                    decision_id=str(row["id"]))
+        elif rec.get("action") == "grant_tool_access":
+            # A person said No to an agent's tool request (BOSSAPP-848): kept per tool, so the
+            # agent is told and does not ask for the same tools again for a day.
+            from .tool_access_requests import on_refused as refuse_access
+
+            refuse_access(connection, row, actor)
         elif (row["recommendation"] or {}).get("action") == "activate_authored_skill":
             # A refused draft's consent can never be spent (change_consent, BOSSAPP-843).
             from .change_consent import reject_for_decision

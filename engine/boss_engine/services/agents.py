@@ -337,7 +337,11 @@ def held_mcp_servers(connection: Connection, project_id: str, role_key: str, *,
     project-wide off switch, and a grant does not get to override it.
     """
     from .mcp_registry import list_mcp_servers
+    from .tool_access_requests import enforce_pins
 
+    # A tool granted on request is held only while its schema matches the one the person
+    # approved (BOSSAPP-848): a changed one is dropped here, before it is offered.
+    enforce_pins(connection, project_id, str(role_key or "").strip().lower() or None)
     grants = {
         str(r["mcp_server_id"]): list(r["tools"] or [])
         for r in connection.execute(
@@ -358,6 +362,9 @@ def held_mcp_servers(connection: Connection, project_id: str, role_key: str, *,
 def holds_mcp_tool(connection: Connection, project_id: str, role_key: str, server_id: str,
                    tool: str) -> bool:
     """Does this agent hold this server for this tool? (An empty tool list means all of them.)"""
+    from .tool_access_requests import enforce_pins
+
+    enforce_pins(connection, project_id, str(role_key or "").strip().lower() or None)
     row = connection.execute(
         text("SELECT tools FROM role_mcp_servers WHERE project_id = :p AND role_key = :r "
              "AND mcp_server_id = :s"),
