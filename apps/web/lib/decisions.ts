@@ -53,6 +53,11 @@ export type DecisionFeedItem = {
   /** A merge or deploy CI still holds (engine ci_gate.approval_hold, BOSSAPP-946): Approve reads
    *  `label` ("Checks running…"), disabled, with `reason`. Absent when CI does not hold it. */
   held?: CiHold | null;
+  /** A typed question's form (engine typed_forms, BOSSAPP-832): drawn instead of Approve, and
+   *  once answered the typed answer and who gave it. Absent for every other decision. */
+  formSchema?: unknown;
+  answer?: Record<string, unknown> | null;
+  answeredBy?: string | null;
 };
 
 export type DecisionAttention = "needs_action" | "expired" | "resolved";
@@ -69,7 +74,7 @@ export type DecisionActionOffer = {
   tone: "approve" | "reject" | "neutral";
   effect: string;
   /** A field the action cannot go without. */
-  needs?: "note" | "delegate_to" | null;
+  needs?: "note" | "delegate_to" | "form" | null;
 };
 
 export type DecisionGuidance = {
@@ -230,7 +235,18 @@ function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
     ...contractOf(payload),
     prd: parsePrdRecord((payload as { prd?: unknown }).prd),
     held: parseCiHold((payload as { held?: unknown }).held),
+    ...formOf(payload),
   };
+}
+
+/** The typed question's form and answer, read defensively (the generated type predates them). */
+function formOf(payload: ApiDecisionCard): Pick<DecisionFeedItem, "formSchema" | "answer" | "answeredBy"> {
+  const extra = payload as ApiDecisionCard & {
+    form_schema?: unknown; answer?: Record<string, unknown> | null; answered_by?: string | null;
+  };
+  return extra.form_schema
+    ? { formSchema: extra.form_schema, answer: extra.answer ?? null, answeredBy: extra.answered_by ?? null }
+    : {};
 }
 
 /** The engine's action contract, read defensively: the generated client type predates it. */

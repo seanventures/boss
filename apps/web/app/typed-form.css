@@ -1,0 +1,18 @@
+/* A typed question's form (typed-form-ui, BOSSAPP-832), wherever the card is drawn. */
+.tq-form, .tq-asked { display: flex; flex-direction: column; gap: 10px; }
+.tq-question { margin: 0; font-weight: 600; }
+.tq-field { display: flex; flex-direction: column; gap: 6px; }
+.tq-label { font-size: var(--fs-meta); color: var(--ink); font-weight: 600; }
+.tq-help { font-size: var(--fs-meta); color: var(--muted); }
+.tq-options { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.tq-chip { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border-radius: 999px;
+  border: 1px solid var(--border); font-size: var(--fs-meta); cursor: pointer; }
+.tq-chip[data-on] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.tq-chip input { margin: 0; }
+.tq-check { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); }
+.tq-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tq-items li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
+.tq-item { font-size: var(--fs-meta); }
+.tq-actions { align-items: center; }
+.tq-gap, .tq-said { font-size: var(--fs-meta); color: var(--muted); margin: 0; }
+.tq-answer { margin: 0; padding-left: 16px; font-size: var(--fs-meta); color: var(--muted); }

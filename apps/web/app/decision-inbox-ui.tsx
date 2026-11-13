@@ -22,6 +22,8 @@ import { useAttention } from "../lib/agents-live";
 import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
 import { PrdRecordView } from "./prd-record";
+import { TypedAnswer, TypedDecisionForm } from "./typed-form-ui";
+import { parseForm } from "../lib/typed-form";
 import { SubmitButton } from "./submit-button";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
 import { sentenceCut } from "../lib/decision-excerpt";
@@ -1229,8 +1231,12 @@ export function DecisionActions({ decision, projectId, actorId }: {
       ?.needs_reason);
   // …or a workflow gate whose answer is a person's stated determination (the AML analyst
   // decision): the step says what to write.
+  // …or a work item's review stage that asks for a comment (execution_policy, BOSSAPP-831): the
+  // note is the reviewer's record, not an override, so it is not sent forced.
+  const stageComment = decision.recommendation.action === "execution_stage";
   const reasonPrompt = typeof decision.recommendation.reason_prompt === "string"
-    ? decision.recommendation.reason_prompt : "";
+    ? decision.recommendation.reason_prompt
+    : stageComment ? "What did you check? Your comment is recorded on the stage." : "";
   const revise = offers.find((a) => a.action === "revise");
   const delegate = offers.find((a) => a.action === "delegate");
   const runId = typeof decision.recommendation.workflow_run_id === "string"
@@ -1254,6 +1260,17 @@ export function DecisionActions({ decision, projectId, actorId }: {
     void sendReasons(projectId, actorId, "reject", decision.id, why,
                      rejectKind(null, null, null, decision.recommendation));
   };
+  // A TYPED QUESTION (BOSSAPP-832): the answer is its form, not Approve; once answered, the
+  // typed answer is what the card shows.
+  const typedForm = parseForm(decision.formSchema);
+  const [answered, setAnswered] = useState<string | null>(null);
+  if (typedForm) {
+    if (answered) return <p className="tq-said" data-testid="typed-sent">{answered === "approved" ? "Answer sent — the agent carries on with it." : "Declined — the agent was told why."}</p>;
+    return decision.status === "pending" || decision.status === "delegated"
+      ? <TypedDecisionForm decisionId={decision.id} form={typedForm} projectId={projectId} actorId={actorId}
+                           onAnswered={setAnswered} />
+      : <TypedAnswer form={typedForm} answer={decision.answer} by={decision.answeredBy} />;
+  }
   return (
     // A layout-free wrapper: it only hears which button was pressed.
     <div className="im-contents" onClickCapture={onPress}>
@@ -1282,7 +1299,7 @@ export function DecisionActions({ decision, projectId, actorId }: {
       ))}
       {reasoned ? (
         <div className="dq-reasoned" data-testid="decision-reasoned-approve">
-          <input type="hidden" name="force" value="true" />
+          {stageComment ? null : <input type="hidden" name="force" value="true" />}
           <textarea
             aria-label={reasonPrompt ? `Your reason for ${decision.id}` : shipsUnreviewed
               ? `Why ship ${decision.id} with commits from rejected or unreviewed runs`
