@@ -7,7 +7,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SearchResults } from "../app/projects/search-results";
-import { OutputsSection, WatchSection } from "../app/projects/work-item-extras";
+import { ItemCards, OutputsSection, StatusCards, WatchSection } from "../app/projects/work-item-extras";
 import { parseSearch, parseWatchdogs } from "../lib/work-ux";
 import { $, mount, settle, unmount } from "./_helpers/live-render";
 
@@ -78,6 +78,38 @@ describe("outputs and references on a work item", () => {
     ($('[data-testid="wt-output-refresh"]') as HTMLButtonElement).click();
     await settle();
     expect(calls.some((c) => c.method === "POST" && c.url === "/v1/work-items/w2/outputs/refresh")).toBe(true);
+  });
+});
+
+describe("status cards", () => {
+  const CARDS = { cards: [
+    { id: "scard_1", title: "Release", kind: "card", scope: {}, document: "### Release\n\n2 of 5 done; 3 open.",
+      revision: 4, trigger: "schedule", refreshed_at: "2026-11-13T10:00:00Z", refresh_minutes: 60, pinned: true },
+  ] };
+
+  it("shows the pinned cards' stored document; Add card and Refresh press the API", async () => {
+    const calls: Call[] = [];
+    serve(calls, (url, method) => (method === "GET" ? CARDS : { revised: false, card: CARDS.cards[0] }));
+    await mount(<StatusCards projectId="p1" demo={false} />);
+    await settle();
+    expect(calls[0].url).toBe("/v1/status-cards?project_id=p1&pinned=true");
+    const card = $('[data-testid="wt-card-scard_1"]');
+    expect(card?.textContent).toContain("2 of 5 done; 3 open.");
+    expect(card?.textContent).toContain("Revision 4");
+    ($('[data-testid="wt-card-refresh"]') as HTMLButtonElement).click();
+    await settle();
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/status-cards/scard_1/refresh")).toBe(true);
+    expect(card?.textContent).toContain("Nothing changed.");
+  });
+
+  it("an item offers to keep a card until it has one", async () => {
+    const calls: Call[] = [];
+    serve(calls, (url, method) => (method === "GET" ? { cards: [] } : { card: {} }));
+    await mount(<ItemCards projectId="p1" id="w2" demo={false} />);
+    await settle();
+    ($('[data-testid="wt-item-card-add"]') as HTMLButtonElement).click();
+    await settle();
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ project_id: "p1", title: "Status", work_item_id: "w2" });
   });
 });
 

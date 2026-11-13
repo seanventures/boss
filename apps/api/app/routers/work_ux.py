@@ -9,6 +9,8 @@
   may read.
 * 882 outputs and cross-references on a work item (services/work_outputs): read, record by
   hand, refresh from its runs; add a reference.
+* 883 status cards and stored summaries (services/status_cards): list, create, refresh, the
+  revision history, delete.
 
 WHO MAY DO WHAT: reading follows the thing read (decision:read, work_item:read ...); every change
 is attributed to the signed-in member (require_write_actor), never to a claimed actor.
@@ -57,6 +59,15 @@ class RefBody(Body):
     to_ref: str = Field(min_length=1, max_length=500)
 
 
+class CardBody(Body):
+    title: str = Field(min_length=1, max_length=200)
+    work_item_id: Optional[str] = None
+    prompt: str = Field(default="", max_length=2000)
+    refresh_minutes: int = Field(default=60, ge=0, le=10080)
+    pinned: bool = True
+    mode: str = "deterministic"
+
+
 def _party(actor: str) -> str:
     return actor if ":" in actor else f"person:{actor}"
 
@@ -64,7 +75,7 @@ def _party(actor: str) -> str:
 def build_work_ux_router(*, engine, settings: Callable[[], Any],
                          require_reader: Callable[..., None],
                          require_write_actor: Callable[..., str]) -> APIRouter:
-    from boss_engine.services import decision_options, work_outputs, work_watchdogs
+    from boss_engine.services import decision_options, status_cards, work_outputs, work_watchdogs
 
     router = APIRouter(tags=["work-ux"])
 
@@ -214,5 +225,53 @@ def build_work_ux_router(*, engine, settings: Callable[[], Any],
         return {"refs": _write(payload, lambda c, actor: work_outputs.add_ref(
             c, project_id=payload.project_id, item_id=work_item_id, to_kind=payload.to_kind,
             to_ref=payload.to_ref, actor=actor))}
+
+    # ── 883: status cards and stored summaries ─────────────────────────────────────────────
+    @router.get("/v1/status-cards")
+    @permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
+    def list_status_cards(project_id: str, work_item_id: Optional[str] = None,
+                          pinned: bool = False) -> dict:
+        """The project's cards (pinned first) with their latest revision; `work_item_id` for one
+        item's cards (its closing summary among them)."""
+        with begin(engine) as c:
+            require_reader(c, project_id)
+            return {"cards": status_cards.list_cards(c, project_id, work_item_id=work_item_id,
+                                                     pinned_only=pinned)}
+
+    @router.post("/v1/status-cards", status_code=201)
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
+    def create_status_card(payload: CardBody) -> dict:
+        return {"card": _write(payload, lambda c, actor: status_cards.create(
+            c, project_id=payload.project_id, title=payload.title, actor=actor,
+            work_item_id=payload.work_item_id, prompt=payload.prompt,
+            refresh_minutes=payload.refresh_minutes, pinned=payload.pinned,
+            mode=payload.mode))}
+
+    @router.post("/v1/status-cards/{card_id}/refresh")
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
+    def refresh_status_card(card_id: str, payload: Body) -> dict:
+        def run(c, actor):
+            revision = status_cards.refresh(c, project_id=payload.project_id, card_id=card_id,
+                                            trigger="manual", actor=actor)
+            return {"revised": revision is not None,
+                    "card": status_cards.get(c, payload.project_id, card_id)}
+
+        return _write(payload, run)
+
+    @router.get("/v1/status-cards/{card_id}/revisions")
+    @permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
+    def status_card_revisions(card_id: str, project_id: str) -> dict:
+        with begin(engine) as c:
+            require_reader(c, project_id)
+            return {"revisions": _errors(lambda: status_cards.revisions(c, project_id, card_id))}
+
+    @router.delete("/v1/status-cards/{card_id}")
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(query="project_id"))
+    def delete_status_card(card_id: str, project_id: str, actor: Optional[str] = None) -> dict:
+        with begin(engine) as c:
+            who = require_write_actor(c, project_id, actor, "task_create")
+            _errors(lambda: status_cards.delete(c, project_id=project_id, card_id=card_id,
+                                                actor=who))
+        return {"deleted": card_id}
 
     return router

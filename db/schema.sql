@@ -13053,4 +13053,37 @@ CREATE TABLE IF NOT EXISTS work_item_refs (
   PRIMARY KEY (from_item_id, to_kind, to_ref)
 );
 CREATE INDEX IF NOT EXISTS idx_work_item_refs_to ON work_item_refs (to_kind, to_ref);
+-- 883 (services/status_cards.py): a standing question with a stored answer. A card (the whole
+-- project, or one work item and its subtree) is recomposed on its schedule, when an item in its
+-- scope closes, or on demand, into a numbered document revision; an unchanged document writes
+-- none. kind 'closing' is the summary an item keeps when it closes. Deterministic only: `mode`
+-- is 'deterministic' (a model-written mode is not built).
+CREATE TABLE IF NOT EXISTS status_cards (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'card' CHECK (kind IN ('card', 'closing')),
+  scope JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {} = the project; {work_item_id} = that subtree
+  prompt TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'deterministic' CHECK (mode IN ('deterministic')),
+  refresh_minutes INTEGER NOT NULL DEFAULT 60,
+  next_refresh_at TIMESTAMPTZ,
+  pinned BOOLEAN NOT NULL DEFAULT true,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_status_cards_due ON status_cards (next_refresh_at) WHERE refresh_minutes > 0;
+CREATE INDEX IF NOT EXISTS idx_status_cards_scope ON status_cards (project_id, (scope->>'work_item_id'));
+CREATE TABLE IF NOT EXISTS status_card_revisions (
+  card_id TEXT NOT NULL REFERENCES status_cards(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  project_id TEXT NOT NULL,
+  document TEXT NOT NULL,
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  trigger TEXT NOT NULL,                     -- created | schedule | close | manual
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (card_id, revision)
+);
 -- ================================ end BOSSAPP-w4-work-ux2 ==

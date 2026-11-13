@@ -84,6 +84,26 @@ export const refreshOutputs = (projectId: string, id: string): Promise<WriteResu
 export const recordOutput = (projectId: string, id: string, body: { kind: string; ref: string; title?: string }): Promise<WriteResult> =>
   obsWrite(`${item(id)}/outputs`, { project_id: projectId, ...body }, press(`out:${id}`, "Add"));
 
+// ── 883: status cards and stored summaries ───────────────────────────────────────────────────
+export type StatusCard = {
+  id: string; title: string; kind: "card" | "closing"; work_item_id: string | null; document: string;
+  revision: number; trigger: string; refreshed_at: string | null; refresh_minutes: number; pinned: boolean;
+};
+export function parseCards(w: unknown): StatusCard[] {
+  return arr(obj(w).cards).map(obj).map((c) => ({
+    id: str(c.id), title: str(c.title), kind: (c.kind === "closing" ? "closing" : "card") as "card" | "closing",
+    work_item_id: str(obj(c.scope).work_item_id) || null, document: str(c.document),
+    revision: Number(c.revision) || 0, trigger: str(c.trigger), refreshed_at: str(c.refreshed_at) || null,
+    refresh_minutes: Number(c.refresh_minutes) || 0, pinned: c.pinned === true,
+  })).filter((c) => c.id);
+}
+export const readCards = (projectId: string, opts: { workItemId?: string; pinned?: boolean } = {}): Promise<ReadResult<StatusCard[]>> =>
+  aaRead(`/v1/status-cards?${q(projectId)}${opts.workItemId ? `&work_item_id=${encodeURIComponent(opts.workItemId)}` : ""}${opts.pinned ? "&pinned=true" : ""}`, parseCards);
+export const createCard = (projectId: string, body: { title: string; work_item_id?: string | null; refresh_minutes?: number }): Promise<WriteResult> =>
+  obsWrite("/v1/status-cards", { project_id: projectId, ...body }, press("card:new", "Add card"));
+export const refreshCard = (projectId: string, cardId: string): Promise<WriteResult> =>
+  obsWrite(`/v1/status-cards/${encodeURIComponent(cardId)}/refresh`, { project_id: projectId }, press(`card:${cardId}`, "Refresh"));
+
 export const searchWork = (projectId: string, query: string, signal?: AbortSignal) =>
   aaRead(`/v1/search?${q(projectId)}&q=${encodeURIComponent(query)}&limit=12`, parseSearch, null, signal);
 

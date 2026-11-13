@@ -525,6 +525,14 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
 
         return work_watchdogs.sweep(engine, settings, now=now)
     out["watchdogs"] = guard("watchdogs", watchdogs)
+
+    # STATUS CARDS (BOSSAPP-883, status_cards): each card whose refresh time passed is
+    # recomposed; a changed document is stored as its next revision.
+    def cards():
+        from . import status_cards
+
+        return status_cards.sweep(engine, settings, now=now)
+    out["status_cards"] = guard("status_cards", cards)
     out["delivery"] = guard("deliver", lambda: notify.deliver_due(engine, settings, now=now))
     # Two-way chat (BOSSAPP-834): decision cards and answers, retried with backoff, dead-lettered.
     out["chat"] = guard("chat", lambda: notify.deliver_chat_due(engine, settings, now=now))

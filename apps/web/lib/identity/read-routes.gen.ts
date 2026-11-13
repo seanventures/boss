@@ -688,6 +688,8 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["software-factory/rollouts", "deployment:read"],
   ["stacks", "project:read"],
   ["status", "system:read"],
+  ["status-cards", "work_item:read"],
+  ["status-cards/{}/revisions", "work_item:read"],
   ["system-doctor/actions", "system:read"],
   ["system-doctor/findings", "system:read"],
   ["system/deploy-readiness", "system:read"],

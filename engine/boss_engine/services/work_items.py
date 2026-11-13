@@ -385,6 +385,7 @@ def set_status(connection: Connection, settings: Any = None, *, project_id: str,
     emit_event(connection, project_id, "work_item.status_changed", actor, "work_item", item_id,
                {"from": row["status"], "to": status})
     if status == "cancelled":
+        _closed(connection, project_id, item_id, actor)
         # A cancelled blocker no longer blocks: what it held may go.
         wake_unblocked(connection, settings, project_id=project_id, item_id=item_id, actor=actor)
     return get_item(connection, project_id, item_id)
@@ -403,6 +404,15 @@ def delete_item(connection: Connection, *, project_id: str, item_id: str, actor:
 
 
 # ── completion and the blocker wake ──────────────────────────────────────────────────────────
+
+def _closed(connection: Connection, project_id: str, item_id: str, actor: str) -> None:
+    """An item closed: its status cards (and its ancestors') are refreshed and it keeps a
+    closing summary (BOSSAPP-883, status_cards). Never fails the close."""
+    from . import status_cards, work_outputs
+
+    work_outputs.quietly(status_cards.on_item_closed, connection, project_id=project_id,
+                         item_id=item_id, actor=actor)
+
 
 def complete_item(connection: Connection, settings: Any = None, *, project_id: str,
                   item_id: str, actor: str, origin: Optional[str] = None) -> dict[str, Any]:
@@ -425,6 +435,7 @@ def mark_done(connection: Connection, settings: Any = None, *, project_id: str, 
         "UPDATE work_items SET status = 'done', resolved_at = now(), resolved_by = :a, "
         "updated_at = now() WHERE id = :id"), {"a": actor, "id": item_id})
     emit_event(connection, project_id, "work_item.completed", actor, "work_item", item_id, {})
+    _closed(connection, project_id, item_id, actor)
     return wake_unblocked(connection, settings, project_id=project_id, item_id=item_id,
                           actor=actor)
 

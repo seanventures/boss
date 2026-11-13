@@ -50,3 +50,5 @@
 }
 
 .wt-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.wt-card { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; flex: 1 1 100%; }
+.wt-card h3 { margin: 0; font-size: var(--fs-body, 14px); }

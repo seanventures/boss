@@ -103,3 +103,26 @@ def test_outputs_and_references_on_a_work_item(client):
     added = client.post(f"/v1/work-items/{api['id']}/refs", json={
         "project_id": HOME, "actor": "ceo", "to_kind": "work_item", "to_ref": form["id"]})
     assert added.status_code == 201 and added.json()["refs"][0]["source"] == "manual"
+
+
+def test_status_cards_are_created_refreshed_and_kept(client):
+    epic = _create(client, "Onboarding epic")
+    r = client.post("/v1/status-cards", json={"project_id": HOME, "actor": "ceo",
+                                              "title": "Onboarding", "work_item_id": epic["id"],
+                                              "refresh_minutes": 0})
+    assert r.status_code == 201, r.text
+    card = r.json()["card"]
+    assert card["revision"] == 1 and "Onboarding epic" in card["document"]
+    again = client.post(f"/v1/status-cards/{card['id']}/refresh",
+                        json={"project_id": HOME, "actor": "ceo"})
+    assert again.status_code == 200 and again.json()["revised"] is False
+    listed = client.get("/v1/status-cards", params={"project_id": HOME,
+                                                    "work_item_id": epic["id"]}).json()["cards"]
+    assert [x["id"] for x in listed] == [card["id"]]
+    revs = client.get(f"/v1/status-cards/{card['id']}/revisions",
+                      params={"project_id": HOME}).json()["revisions"]
+    assert [x["revision"] for x in revs] == [1]
+    assert client.post("/v1/status-cards", json={"project_id": HOME, "actor": "ceo",
+                                                 "title": "x", "mode": "model"}).status_code == 422
+    assert client.delete(f"/v1/status-cards/{card['id']}",
+                         params={"project_id": HOME, "actor": "ceo"}).status_code == 200

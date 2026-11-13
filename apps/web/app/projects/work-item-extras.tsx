@@ -8,16 +8,21 @@
  *               who already watches it (engine work_watchdogs).
  *   Outputs   — its PRs, previews, deploys, artifacts and documents with their status now, what
  *               its text mentions and which items mention it (engine work_outputs).
+ *   Cards     — status cards: a stored, always-current answer to "where is this?" (engine
+ *               status_cards). The project's pinned cards sit above the tree (StatusCards); an
+ *               item's own cards, its closing summary among them, sit in its row (ItemCards).
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { ArrowClockwise, Bell, BellSlash, LinkSimple, Package } from "@phosphor-icons/react";
+import { ArrowClockwise, Bell, BellSlash, Cards, LinkSimple, Package } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { partyName } from "../../lib/work-items";
 import {
-  OUTPUT_WORDS, WATCH_WORDS, attachWatchdog, detachWatchdog, openable, readOutputs, readWatchdogs,
-  recordOutput, refreshOutputs, type Outputs, type WatchCondition, type Watchdog,
+  OUTPUT_WORDS, WATCH_WORDS, attachWatchdog, createCard, detachWatchdog, openable, readCards,
+  readOutputs, readWatchdogs, recordOutput, refreshCard, refreshOutputs, type Outputs,
+  type StatusCard, type WatchCondition, type Watchdog,
 } from "../../lib/work-ux";
+import { Markdown } from "../markdown";
 
 const ALL: WatchCondition[] = ["stopped_unfinished", "blocked", "closed", "stalled"];
 
@@ -138,5 +143,83 @@ export function OutputsSection({ projectId, id, demo }: { projectId: string; id:
       </div>
       {said ? <p className="wt-said" role="status" data-testid="wt-outputs-said">{said}</p> : null}
     </details>
+  );
+}
+
+function CardView({ projectId, card, demo, onChanged }: { projectId: string; card: StatusCard; demo: boolean; onChanged: () => void }) {
+  const [said, setSaid] = useState<string | null>(null);
+  return (
+    <article className="px-card wt-card" data-testid={`wt-card-${card.id}`}>
+      <Markdown text={card.document} />
+      <div className="wt-line">
+        <span className="wt-faint">
+          Revision {card.revision}{card.refreshed_at ? ` · ${new Date(card.refreshed_at).toLocaleString()}` : ""}
+          {card.refresh_minutes ? ` · every ${card.refresh_minutes} min` : " · on close and on demand"}
+        </span>
+        <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo}
+                     onClick={() => void refreshCard(projectId, card.id).then((r) => {
+                       const revised = (r.body as { revised?: boolean } | null)?.revised;
+                       setSaid(r.ok ? (revised ? null : "Nothing changed.") : r.error);
+                       if (r.ok) onChanged();
+                     })}
+                     data-testid="wt-card-refresh">
+          <ArrowClockwise size={12} aria-hidden /> Refresh
+        </GatedButton>
+        {said ? <span className="wt-said" role="status">{said}</span> : null}
+      </div>
+    </article>
+  );
+}
+
+/** The project's pinned status cards, above the tree, with "Add a status card". */
+export function StatusCards({ projectId, demo }: { projectId: string; demo: boolean }) {
+  const [cards, setCards] = useState<StatusCard[] | null>(null);
+  const [title, setTitle] = useState("");
+  const [said, setSaid] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const r = await readCards(projectId, { pinned: true });
+    setCards(r.ok && r.data ? r.data : []);
+  }, [projectId]);
+  useEffect(() => { void load(); }, [load]);
+  return (
+    <details className="wt-policy" data-testid="wt-cards" open={Boolean(cards?.length)}>
+      <summary><Cards size={12} aria-hidden /> Status cards {cards?.length ? `· ${cards.length}` : ""}</summary>
+      {cards?.map((c) => <CardView key={c.id} projectId={projectId} card={c} demo={demo} onChanged={() => void load()} />)}
+      <div className="wt-line">
+        <input className="input wt-new" value={title} onChange={(e) => setTitle(e.target.value)} disabled={demo}
+               placeholder="A standing question, e.g. “Where is the release?”" aria-label="Status card title" data-testid="wt-card-title" />
+        <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo || !title.trim()}
+                     onClick={() => void createCard(projectId, { title: title.trim() }).then((r) => {
+                       setSaid(r.ok ? null : r.error);
+                       if (r.ok) { setTitle(""); void load(); }
+                     })}
+                     data-testid="wt-card-add">
+          Add card
+        </GatedButton>
+      </div>
+      {said ? <p className="wt-said" role="alert">{said}</p> : null}
+    </details>
+  );
+}
+
+/** An item's own cards: its closing summary once it closed, and any card scoped to it. */
+export function ItemCards({ projectId, id, demo }: { projectId: string; id: string; demo: boolean }) {
+  const [cards, setCards] = useState<StatusCard[]>([]);
+  const load = useCallback(async () => {
+    const r = await readCards(projectId, { workItemId: id });
+    setCards(r.ok && r.data ? r.data : []);
+  }, [projectId, id]);
+  useEffect(() => { void load(); }, [load]);
+  return (
+    <div className="wt-line" data-testid="wt-item-cards">
+      {cards.map((c) => <CardView key={c.id} projectId={projectId} card={c} demo={demo} onChanged={() => void load()} />)}
+      {cards.some((c) => c.kind === "card") ? null : (
+        <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo}
+                     onClick={() => void createCard(projectId, { title: "Status", work_item_id: id }).then(() => load())}
+                     data-testid="wt-item-card-add">
+          <Cards size={12} aria-hidden /> Keep a status card
+        </GatedButton>
+      )}
+    </div>
   );
 }
