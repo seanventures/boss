@@ -232,3 +232,136 @@ export function requestConsoleRefresh(router: { refresh(): void }, kind: Refresh
   if (active) active.request(kind);
   else router.refresh();
 }
+
+// --------------------------------------------------------------------------- //
+// EVENT-DRIVEN REFRESH (BOSSAPP-835). The API pushes every event the viewer may see on
+// GET /v1/events/stream (authorized per event, server side). A matching event invalidates the
+// keys the console polls — here, the areas whose server render shows that kind — and asks the
+// coordinator for ONE refresh (coalesced like any other; a burst of events is one refresh).
+// POLLING STAYS: this only makes a change show sooner. A stream that drops or never connects
+// leaves the console exactly as it was before this existed.
+
+/** One pushed event, as the stream sends it (the fields this module reads). */
+export type ConsoleEvent = {
+  id: string;
+  event_type: string;
+  project_id?: string;
+  entity_type?: string;
+  entity_id?: string;
+};
+
+/** Event kind prefix -> the polled keys (console areas) whose render shows it. "*" = any area. */
+export const EVENT_INVALIDATES: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ["decision.", ["decisions", "overview", "dashboard", "project", "projects"]],
+  ["chat.decision_answered", ["decisions", "overview", "dashboard", "project"]],
+  ["code_task.", ["code_tasks", "project", "projects", "overview", "dashboard", "activity"]],
+  ["workflow.", ["delivery_workflows", "project", "overview", "activity"]],
+  ["meeting.", ["meetings", "project"]],
+  ["discovery.", ["discovery"]],
+  ["deploy", ["delivery", "project", "infra"]],
+  ["preview.", ["code_tasks", "project", "delivery"]],
+  ["incident.", ["ai-sre", "monitoring", "observability", "reliability"]],
+  ["alert.", ["monitoring", "observability", "ai-sre"]],
+  ["self_fix.", ["self_fixes"]],
+  ["work_item.", ["work", "agent_ops"]],
+  ["budget.", ["budget"]],
+];
+
+/** The polled keys an event invalidates. Every event invalidates the Activity log. */
+export function invalidatedKeys(eventType: string): string[] {
+  const keys = new Set<string>(["activity"]);
+  for (const [prefix, areas] of EVENT_INVALIDATES) {
+    if (eventType === prefix || eventType.startsWith(prefix)) for (const a of areas) keys.add(a);
+  }
+  return [...keys];
+}
+
+/** What the subscription needs from EventSource (the browser's, or a test's fake). */
+export type EventSourceLike = {
+  onmessage: ((ev: { data: string; lastEventId?: string }) => void) | null;
+  onerror: ((ev: unknown) => void) | null;
+  addEventListener(type: string, listener: (ev: { data: string }) => void): void;
+  close(): void;
+};
+
+export type EventSubscriptionOptions = {
+  /** Open the stream (the shell: `new EventSource(url)`). */
+  open: () => EventSourceLike;
+  /** The polled keys on screen now (the shell: the active area). */
+  watching: () => readonly string[];
+  /** Invalidate: ask for one refresh (the shell: coordinator.request("poll")). */
+  invalidate: (reason: { kind: "event" | "resync"; event?: ConsoleEvent; keys: string[] }) => void;
+  /** Coalesce a burst into one invalidation. Default 400 ms. */
+  debounceMs?: number;
+  setTimer?: (fn: () => void, ms: number) => Timer;
+  clearTimer?: (t: Timer) => void;
+};
+
+export type EventSubscription = {
+  close(): void;
+  /** Events seen / invalidations asked for (the Syncing chip and tests read these). */
+  stats(): { events: number; invalidations: number; resyncs: number };
+};
+
+export function createEventSubscription(options: EventSubscriptionOptions): EventSubscription {
+  const setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearTimer = options.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
+  const debounceMs = options.debounceMs ?? 400;
+  const counts = { events: 0, invalidations: 0, resyncs: 0 };
+  let pending: { kind: "event" | "resync"; event?: ConsoleEvent; keys: Set<string> } | null = null;
+  let timer: Timer | null = null;
+  let closed = false;
+
+  const flush = () => {
+    timer = null;
+    if (closed || !pending) return;
+    const reason = { kind: pending.kind, event: pending.event, keys: [...pending.keys] };
+    pending = null;
+    counts.invalidations += 1;
+    options.invalidate(reason);
+  };
+  const owe = (kind: "event" | "resync", keys: string[], event?: ConsoleEvent) => {
+    if (!pending) pending = { kind, event, keys: new Set() };
+    if (kind === "resync") pending.kind = "resync";
+    for (const k of keys) pending.keys.add(k);
+    if (timer === null) timer = setTimer(flush, debounceMs);
+  };
+
+  const source = options.open();
+  source.onmessage = (msg) => {
+    if (closed) return;
+    let event: ConsoleEvent;
+    try { event = JSON.parse(msg.data) as ConsoleEvent; } catch { return; }
+    if (!event || typeof event.event_type !== "string") return;
+    counts.events += 1;
+    const keys = invalidatedKeys(event.event_type);
+    const watching = options.watching();
+    if (keys.some((k) => watching.includes(k))) owe("event", keys, event);
+  };
+  // The server lost track (a slow reader overflowed, or its listener reconnected): whatever is
+  // on screen may be stale, so it is refetched once.
+  source.addEventListener("resync", () => {
+    if (closed) return;
+    counts.resyncs += 1;
+    owe("resync", [...options.watching()]);
+  });
+  // EventSource reconnects by itself, sending Last-Event-ID; nothing to do but keep polling.
+  source.onerror = () => {};
+
+  return {
+    close() {
+      closed = true;
+      if (timer !== null) { clearTimer(timer); timer = null; }
+      source.close();
+    },
+    stats: () => ({ ...counts }),
+  };
+}
+
+/** The console's stream URL (same origin: app/api/events/stream proxies it with the session). */
+export function consoleEventsUrl(projectId?: string | null): string {
+  const q = new URLSearchParams();
+  if (projectId) q.set("project_id", projectId);
+  const s = q.toString();
+  return `/api/events/stream${s ? `?${s}` : ""}`;
+}
