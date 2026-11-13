@@ -1327,6 +1327,23 @@ def _install_shipped_cast() -> dict:
         return {}
 
 
+def _sync_connector_catalog() -> dict:
+    """THE CONNECTOR CATALOG INTO EVERY PROJECT (BOSSAPP-849): each definition upserted into
+    integration_definitions as `connector:<key>`. Idempotent by content hash: an unchanged
+    catalog writes nothing; a changed definition publishes its next version. Never blocks boot."""
+    from boss_engine.services import connector_catalog
+
+    try:
+        result = connector_catalog.sync_all(engine, settings, actor="boss")
+        if result["published"]:
+            print(f"[lifespan] connector catalog: {result['published']} definition(s) published "
+                  f"across {result['projects']} project(s)")
+        return result
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] connector catalog sync skipped: {exc}")
+        return {}
+
+
 def _sync_builtin_templates() -> None:
     """THE SHIPPED TEMPLATES, REFRESHED AT BOOT for every org — not by whoever lists them.
 
@@ -1465,6 +1482,7 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
     _install_shipped_cast()
+    _sync_connector_catalog()
     _sync_builtin_templates()
     _seed_work_tracker_defaults()
     _backfill_agent_identities()
@@ -15767,7 +15785,61 @@ def console_v2_org_endpoint(project_id: str, hours: int = 168) -> dict:
         chart = org_chart(connection, project_id, hours=max(1, min(int(hours), 24 * 90)))
         # The declared chart laid over the observed one. Both are kept: where they disagree is
         # the most interesting thing on the page, and averaging them would hide it.
-        return oa.apply_to(chart, oa.get_all(connection, project_id))
+        out = oa.apply_to(chart, oa.get_all(connection, project_id))
+        if out.get("has_declared"):
+            # BOSSAPP-885: the plan carries authority — each placed role's chain (and the retired
+            # manager that blocks it), and the stalled work waiting on a manager to take it over.
+            from boss_engine.services import org_chain
+
+            out["chains"] = {a: org_chain.chain_view(connection, project_id, a)
+                             for a in (out.get("declared") or {})}
+            out["takeover_offers"] = org_chain.open_offers(connection, project_id)
+        return out
+
+
+@app.get("/v1/console/v2/org/chain")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
+def console_v2_org_chain_endpoint(project_id: str, agent_id: str) -> dict:
+    """One agent's chain of command (BOSSAPP-885): owner → manager → … with the acting manager,
+    the retired manager that blocks new work (if any), and its work waiting on a manager."""
+    from boss_engine.services import org_chain
+
+    with begin(engine) as connection:
+        view = org_chain.chain_view(connection, project_id, agent_id)
+        me = org_chain.party(agent_id)
+        view["takeover_offers"] = [o for o in org_chain.open_offers(connection, project_id)
+                                   if me in (o.get("subject"), o.get("offered_to"))]
+        return view
+
+
+@app.post("/v1/console/v2/org/takeover")
+@permit(P.AGENT_UPDATE, scope=Scope.project(body="project_id"))
+def post_org_takeover(payload: open_bodies.OrgTakeoverBody) -> dict:
+    """A manager takes a report's work over (BOSSAPP-885): the work item and its running runs
+    move to the taker, a run the chain was holding resumes, and the authority path — who acted,
+    under whose chain — is recorded on the run. Refused (409, in words) without that authority."""
+    payload = payload.payload()
+    from boss_engine.services import org_chain
+
+    project_id = str(payload.get("project_id") or "").strip()
+    taker = str(payload.get("taker") or "").strip()
+    if not project_id or not taker:
+        raise HTTPException(status_code=400, detail="project_id and taker are required")
+    if not (payload.get("run_id") or payload.get("work_item_id")):
+        raise HTTPException(status_code=400, detail="run_id or work_item_id is required")
+    with begin(engine) as connection:
+        actor = require_project_write_actor(
+            connection, project_id, payload.get("actor") or "ceo", "role_review"
+        )
+        try:
+            return org_chain.take_over(
+                connection, settings, project_id=project_id, taker=taker,
+                actor=actor if ":" in str(actor) else f"person:{actor}",
+                run_id=payload.get("run_id") or None,
+                work_item_id=payload.get("work_item_id") or None,
+                note=str(payload.get("note") or ""))
+        except org_chain.TakeoverRefused as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.put("/v1/console/v2/org/{agent_id}")
@@ -31717,6 +31789,16 @@ app.include_router(build_kit_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# CONNECTORS, STDIO SERVERS AND GATEWAYS (BOSSAPP-849..851): the connector catalog, stdio launch
+# templates, and curated gateways for outside MCP clients at /mcp/gw/{id} (routers/mcp_connect.py).
+from .routers.mcp_connect import build_mcp_connect_router
+
+app.include_router(build_mcp_connect_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
 # SKILLS AS A GOVERNED SUPPLY CHAIN (BOSSAPP-841..844): history, sources, consents, test cases
 # (routers/skill_supply.py).
 from .routers.skill_supply import build_skill_supply_router
@@ -32190,6 +32272,9 @@ app.include_router(build_multirepo_router())
 from .routes_infra_platform import build_infra_platform_router  # noqa: E402  (infra plugins)
 
 app.include_router(build_infra_platform_router())
+from .routes_extensions import build_extensions_router  # noqa: E402  (BOSSAPP-861 extensions)
+
+app.include_router(build_extensions_router())
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

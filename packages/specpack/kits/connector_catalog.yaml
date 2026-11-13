@@ -1,0 +1,731 @@
+# THE CONNECTOR CATALOG (BOSSAPP-849): every MCP connector BOSS knows how to set up, declared once.
+#
+# Read by engine/boss_engine/services/connector_catalog.py, which validates each definition
+# against CONNECTOR_SCHEMA (schema_version below) and, at boot, upserts it into every project's
+# `integration_definitions` as `connector:<key>` (idempotent by content hash; a changed definition
+# publishes the next version and supersedes the old one). The console's Add MCP sheet lists it
+# (search + category chips); picking one pre-fills the add-server form.
+#
+# One definition:
+#   key            slug, unique in the catalog
+#   name           what the console shows
+#   category       one of connector_catalog.CATEGORIES
+#   transport      http | stdio
+#   http           {url, url_patterns}            (transport http)
+#   stdio          {image, argv, network, env_allowlist, env_defaults, env_from_auth,
+#                   idle_ttl_seconds, reuse_key}  (transport stdio: becomes an mcp_stdio_template)
+#   auth           {kind: none|bearer|header|oauth, header_name, token_url, scopes_tip,
+#                   oauth: {discovery_url, scopes, token_fallback}}
+#                  `oauth` carries hints for the OAuth flow (BOSSAPP-846): a discovery URL override
+#                  where the server's own metadata is wrong or missing, and the scopes to ask for.
+#                  `token_fallback` (bearer|header) is how the form asks until that flow lands.
+#   risk           {default_tier 0-3, data_boundary, tool_tiers: {glob: tier},
+#                   tool_policies: {glob: allow|ask|off}}
+#   setup          one or two sentences: what the operator does to connect it
+#   risk_notes     what this connector can reach, in plain words
+#   docs_url       the vendor's page for the server
+#
+# Vendor endpoints move. Each URL is the one the vendor published when this catalog was cut; the
+# probe on Save & test is what proves it, and a failing probe never stores anything.
+schema_version: 1
+catalog_version: "2026.11.1"
+connectors:
+  # ── code ──────────────────────────────────────────────────────────────────────────────────────
+  - key: github
+    name: GitHub
+    category: code
+    transport: http
+    description: Issues, pull requests, code search and repository contents.
+    http: {url: "https://api.githubcopilot.com/mcp/", url_patterns: ["https://api.githubcopilot.com/mcp/*"]}
+    auth:
+      kind: oauth
+      token_url: "https://github.com/settings/personal-access-tokens"
+      scopes_tip: "repo, read:org"
+      oauth: {discovery_url: null, scopes: [repo, "read:org"], token_fallback: bearer}
+    risk:
+      default_tier: 2
+      data_boundary: internal
+      tool_tiers: {"get_*": 0, "list_*": 0, "search_*": 0, "create_*": 2, "update_*": 2, "merge_*": 3, "delete_*": 3, "push_*": 3}
+      tool_policies: {"merge_*": ask, "delete_*": ask, "push_*": ask}
+    setup: Sign in with GitHub, or paste a fine-grained token scoped to the repositories BOSS may touch.
+    risk_notes: Can read and write every repository the token reaches, including merging pull requests.
+    docs_url: "https://github.com/github/github-mcp-server"
+  - key: gitlab
+    name: GitLab
+    category: code
+    transport: http
+    description: Merge requests, issues and pipelines on GitLab.com or a self-managed instance.
+    http: {url: "https://gitlab.com/api/v4/mcp", url_patterns: ["https://gitlab.com/api/v4/mcp", "https://*/api/v4/mcp"]}
+    auth:
+      kind: oauth
+      token_url: "https://gitlab.com/-/user_settings/personal_access_tokens"
+      scopes_tip: "api"
+      oauth: {discovery_url: null, scopes: [mcp], token_fallback: bearer}
+    risk: {default_tier: 2, data_boundary: internal, tool_tiers: {"get_*": 0, "list_*": 0, "search_*": 0, "create_*": 2}}
+    setup: For self-managed GitLab, change the host in the URL. Sign in, or paste a personal access token.
+    risk_notes: Can open and update merge requests and issues in every project the account reaches.
+    docs_url: "https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/"
+  - key: git
+    name: Git (local)
+    category: code
+    transport: stdio
+    description: Read history, diffs and branches of a repository inside the server's sandbox.
+    stdio:
+      image: "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+      argv: [uvx, mcp-server-git, --repository, /work]
+      network: bridge
+      env_allowlist: []
+      idle_ttl_seconds: 600
+      reuse_key: template
+    auth: {kind: none}
+    risk: {default_tier: 1, data_boundary: internal, tool_tiers: {"git_status": 0, "git_log": 0, "git_diff*": 0, "git_show": 0, "git_commit": 2, "git_add": 2, "git_reset": 2, "git_create_branch": 2, "git_checkout": 2}}
+    setup: An Owner or Admin creates the stdio template once; the server then runs in its own container.
+    risk_notes: Sees only what is inside its container. Network is used to download the server at start.
+    docs_url: "https://github.com/modelcontextprotocol/servers/tree/main/src/git"
+  - key: semgrep
+    name: Semgrep
+    category: code
+    transport: http
+    description: Static analysis and security scanning of code snippets.
+    http: {url: "https://mcp.semgrep.ai/mcp", url_patterns: ["https://mcp.semgrep.ai/*"]}
+    auth: {kind: none}
+    risk: {default_tier: 0, data_boundary: internal}
+    setup: Nothing to configure. Code you scan is sent to Semgrep.
+    risk_notes: Code sent for scanning leaves BOSS.
+    docs_url: "https://github.com/semgrep/mcp"
+  - key: deepwiki
+    name: DeepWiki
+    category: docs
+    transport: http
+    description: Ask questions about public GitHub repositories.
+    http: {url: "https://mcp.deepwiki.com/mcp", url_patterns: ["https://mcp.deepwiki.com/*"]}
+    auth: {kind: none}
+    risk: {default_tier: 0, data_boundary: public}
+    setup: Nothing to configure.
+    risk_notes: Read-only, public repositories only.
+    docs_url: "https://docs.devin.ai/work-with-devin/deepwiki-mcp"
+  # ── project tracking ──────────────────────────────────────────────────────────────────────────
+  - key: linear
+    name: Linear
+    category: project
+    transport: http
+    description: Issues, projects and cycles in Linear.
+    http: {url: "https://mcp.linear.app/mcp", url_patterns: ["https://mcp.linear.app/*"]}
+    auth:
+      kind: oauth
+      token_url: "https://linear.app/settings/api"
+      oauth: {discovery_url: null, scopes: [read, write], token_fallback: bearer}
+    risk: {default_tier: 2, data_boundary: internal, tool_tiers: {"get_*": 0, "list_*": 0, "search_*": 0, "create_*": 2, "update_*": 2}}
+    setup: Sign in with Linear, or paste a personal API key.
+    risk_notes: Can create and change issues in every team the account belongs to.
+    docs_url: "https://linear.app/docs/mcp"
+  - key: atlassian
+    name: Jira & Confluence (Atlassian)
+    category: project
+    transport: http
+    description: Jira issues and Confluence pages through Atlassian's remote MCP server.
+    http: {url: "https://mcp.atlassian.com/v1/mcp", url_patterns: ["https://mcp.atlassian.com/*"]}
+    auth:
+      kind: oauth
+      oauth: {discovery_url: null, scopes: ["read:jira-work", "write:jira-work", "read:confluence-content.all"], token_fallback: null}
+    risk: {default_tier: 2, data_boundary: internal, tool_tiers: {"get*": 0, "search*": 0, "lookup*": 0, "create*": 2, "edit*": 2, "transition*": 2, "add*": 2}}
+    setup: Sign in with Atlassian; the site you pick on the consent screen is the one BOSS reaches.
+    risk_notes: Can create and edit Jira issues and Confluence pages on the chosen site.
+    docs_url: "https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/"
+  - key: asana
+    name: Asana
+    category: project
+    transport: http
+    description: Tasks, projects and goals in Asana.
+    http: {url: "https://mcp.asana.com/sse", url_patterns: ["https://mcp.asana.com/*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: [default], token_fallback: null}}
+    risk: {default_tier: 2, data_boundary: internal, tool_tiers: {"asana_get_*": 0, "asana_list_*": 0, "asana_search_*": 0, "asana_create_*": 2, "asana_update_*": 2}}
+    setup: Sign in with Asana.
+    risk_notes: Can create and update tasks in the workspaces the account reaches.
+    docs_url: "https://developers.asana.com/docs/using-asanas-mcp-server"
+  - key: monday
+    name: monday.com
+    category: project
+    transport: http
+    description: Boards, items and updates on monday.com.
+    http: {url: "https://mcp.monday.com/mcp", url_patterns: ["https://mcp.monday.com/*"]}
+    auth: {kind: oauth, token_url: "https://developer.monday.com/api-reference/docs/authentication", oauth: {discovery_url: null, scopes: [], token_fallback: bearer}}
+    risk: {default_tier: 2, data_boundary: internal, tool_tiers: {"get_*": 0, "list_*": 0, "create_*": 2, "change_*": 2, "delete_*": 3}}
+    setup: Sign in with monday.com, or paste an API token.
+    risk_notes: Can change boards and items the account can edit.
+    docs_url: "https://developer.monday.com/apps/docs/mondaycom-mcp-integration"
+  # ── knowledge and docs ────────────────────────────────────────────────────────────────────────
+  - key: notion
+    name: Notion
+    category: knowledge
+    transport: http
+    description: Search, read and write Notion pages and databases.
+    http: {url: "https://mcp.notion.com/mcp", url_patterns: ["https://mcp.notion.com/*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: [], token_fallback: null}}
+    risk: {default_tier: 2, data_boundary: internal, tool_tiers: {"notion-search": 0, "notion-fetch": 0, "notion-create-*": 2, "notion-update-*": 2, "notion-move-*": 2}}
+    setup: Sign in with Notion and pick the pages BOSS may see.
+    risk_notes: Can create and edit pages in the workspace you connect.
+    docs_url: "https://developers.notion.com/docs/mcp"
+  - key: context7
+    name: Context7
+    category: docs
+    transport: http
+    description: Up-to-date docs for the libraries you use.
+    http: {url: "https://mcp.context7.com/mcp", url_patterns: ["https://mcp.context7.com/*"]}
+    auth: {kind: none}
+    risk: {default_tier: 0, data_boundary: public}
+    setup: Nothing to configure. An API key raises the rate limit (header CONTEXT7_API_KEY).
+    risk_notes: Read-only, public documentation.
+    docs_url: "https://github.com/upstash/context7"
+  - key: microsoft-learn
+    name: Microsoft Learn
+    category: docs
+    transport: http
+    description: Search official Microsoft and Azure documentation.
+    http: {url: "https://learn.microsoft.com/api/mcp", url_patterns: ["https://learn.microsoft.com/api/mcp"]}
+    auth: {kind: none}
+    risk: {default_tier: 0, data_boundary: public}
+    setup: Nothing to configure.
+    risk_notes: Read-only, public documentation.
+    docs_url: "https://learn.microsoft.com/en-us/training/support/mcp"
+  - key: cloudflare-docs
+    name: Cloudflare Docs
+    category: docs
+    transport: http
+    description: Search Cloudflare's developer documentation.
+    http: {url: "https://docs.mcp.cloudflare.com/mcp", url_patterns: ["https://docs.mcp.cloudflare.com/*"]}
+    auth: {kind: none}
+    risk: {default_tier: 0, data_boundary: public}
+    setup: Nothing to configure.
+    risk_notes: Read-only, public documentation.
+    docs_url: "https://github.com/cloudflare/mcp-server-cloudflare"
+  - key: aws-docs
+    name: AWS Documentation
+    category: docs
+    transport: stdio
+    description: Search and read AWS documentation.
+    stdio:
+      image: "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+      argv: [uvx, "awslabs.aws-documentation-mcp-server@latest"]
+      network: bridge
+      env_allowlist: [FASTMCP_LOG_LEVEL]
+      env_defaults: {FASTMCP_LOG_LEVEL: ERROR}
+      idle_ttl_seconds: 900
+      reuse_key: template
+    auth: {kind: none}
+    risk: {default_tier: 0, data_boundary: public}
+    setup: An Owner or Admin creates the stdio template once.
+    risk_notes: Read-only; reaches docs.aws.amazon.com.
+    docs_url: "https://awslabs.github.io/mcp/servers/aws-documentation-mcp-server/"
+  - key: huggingface
+    name: Hugging Face
+    category: docs
+    transport: http
+    description: Models, datasets, Spaces and papers on the Hugging Face Hub.
+    http: {url: "https://huggingface.co/mcp", url_patterns: ["https://huggingface.co/mcp*"]}
+    auth: {kind: bearer, token_url: "https://huggingface.co/settings/tokens", scopes_tip: "read"}
+    risk: {default_tier: 0, data_boundary: public}
+    setup: Paste a read token (optional for public data).
+    risk_notes: Read-only with a read token.
+    docs_url: "https://huggingface.co/settings/mcp"
+  # ── search and web ────────────────────────────────────────────────────────────────────────────
+  - key: exa
+    name: Exa
+    category: search
+    transport: http
+    description: Web search built for agents.
+    http: {url: "https://mcp.exa.ai/mcp", url_patterns: ["https://mcp.exa.ai/*"]}
+    auth: {kind: none, token_url: "https://dashboard.exa.ai/api-keys"}
+    risk: {default_tier: 0, data_boundary: public}
+    setup: Nothing to configure for the free tier.
+    risk_notes: Queries are sent to Exa.
+    docs_url: "https://docs.exa.ai/reference/exa-mcp"
+  - key: brave-search
+    name: Brave Search
+    category: search
+    transport: stdio
+    description: Web, news and local search through the Brave Search API.
+    stdio:
+      image: "node:22-slim"
+      argv: [npx, -y, "@brave/brave-search-mcp-server", --transport, stdio]
+      network: bridge
+      env_allowlist: [BRAVE_API_KEY]
+      env_from_auth: BRAVE_API_KEY
+      idle_ttl_seconds: 600
+      reuse_key: credential
+    auth: {kind: bearer, token_url: "https://api-dashboard.search.brave.com/app/keys"}
+    risk: {default_tier: 0, data_boundary: public}
+    setup: Create the stdio template, then paste a Brave Search API key when adding the server.
+    risk_notes: Queries are sent to Brave. The key reaches the container as BRAVE_API_KEY only.
+    docs_url: "https://github.com/brave/brave-search-mcp-server"
+  - key: tavily
+    name: Tavily
+    category: search
+    transport: stdio
+    description: Search and extract web content through Tavily.
+    stdio:
+      image: "node:22-slim"
+      argv: [npx, -y, "tavily-mcp@latest"]
+      network: bridge
+      env_allowlist: [TAVILY_API_KEY]
+      env_from_auth: TAVILY_API_KEY
+      idle_ttl_seconds: 600
+      reuse_key: credential
+    auth: {kind: bearer, token_url: "https://app.tavily.com/home"}
+    risk: {default_tier: 0, data_boundary: public}
+    setup: Create the stdio template, then paste a Tavily API key when adding the server.
+    risk_notes: Queries and fetched pages pass through Tavily.
+    docs_url: "https://github.com/tavily-ai/tavily-mcp"
+  - key: firecrawl
+    name: Firecrawl
+    category: search
+    transport: stdio
+    description: Scrape, crawl and extract structured data from websites.
+    stdio:
+      image: "node:22-slim"
+      argv: [npx, -y, firecrawl-mcp]
+      network: bridge
+      env_allowlist: [FIRECRAWL_API_KEY]
+      env_from_auth: FIRECRAWL_API_KEY
+      idle_ttl_seconds: 600
+      reuse_key: credential
+    auth: {kind: bearer, token_url: "https://www.firecrawl.dev/app/api-keys"}
+    risk: {default_tier: 1, data_boundary: public}
+    setup: Create the stdio template, then paste a Firecrawl API key when adding the server.
+    risk_notes: Fetches any URL it is given; crawls count against your Firecrawl plan.
+    docs_url: "https://github.com/firecrawl/firecrawl-mcp-server"
+  - key: fetch
+    name: Fetch
+    category: search
+    transport: stdio
+    description: Fetch a URL and return it as markdown.
+    stdio:
+      image: "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+      argv: [uvx, mcp-server-fetch]
+      network: bridge
+      env_allowlist: []
+      idle_ttl_seconds: 600
+      reuse_key: template
+    auth: {kind: none}
+    risk: {default_tier: 1, data_boundary: public}
+    setup: An Owner or Admin creates the stdio template once.
+    risk_notes: Reaches any URL from its container's network. Keep it off for agents that see secrets.
+    docs_url: "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
+  # ── browser ───────────────────────────────────────────────────────────────────────────────────
+  - key: playwright
+    name: Playwright
+    category: browser
+    transport: stdio
+    description: Drive a headless browser - navigate, click, fill and read pages.
+    stdio:
+      image: "mcr.microsoft.com/playwright:v1.49.1-noble"
+      argv: [npx, -y, "@playwright/mcp@latest", --headless, --isolated, --no-sandbox]
+      network: bridge
+      env_allowlist: []
+      idle_ttl_seconds: 300
+      reuse_key: template
+    auth: {kind: none}
+    risk: {default_tier: 1, data_boundary: public, tool_tiers: {"browser_snapshot": 0, "browser_take_screenshot": 0, "browser_navigate*": 1, "browser_click": 1, "browser_type": 1, "browser_fill_form": 1, "browser_file_upload": 2}}
+    setup: An Owner or Admin creates the stdio template once; each instance is a fresh browser.
+    risk_notes: Can open any site and submit forms from its container's network.
+    docs_url: "https://github.com/microsoft/playwright-mcp"
+  # ── observability ─────────────────────────────────────────────────────────────────────────────
+  - key: sentry
+    name: Sentry
+    category: observability
+    transport: http
+    description: Errors, issues and releases from Sentry.
+    http: {url: "https://mcp.sentry.dev/mcp", url_patterns: ["https://mcp.sentry.dev/*"]}
+    auth:
+      kind: oauth
+      token_url: "https://sentry.io/settings/account/api/auth-tokens/"
+      oauth: {discovery_url: null, scopes: ["org:read", "project:read", "event:read"], token_fallback: bearer}
+    risk: {default_tier: 1, data_boundary: internal, tool_tiers: {"find_*": 0, "get_*": 0, "search_*": 0, "update_issue": 2}}
+    setup: Sign in with Sentry, or paste a user auth token.
+    risk_notes: Reads error data, which can include user data your app sent to Sentry.
+    docs_url: "https://docs.sentry.io/product/sentry-mcp/"
+  - key: pagerduty
+    name: PagerDuty
+    category: observability
+    transport: http
+    description: Incidents, on-call schedules and services in PagerDuty.
+    http: {url: "https://mcp.pagerduty.com/mcp", url_patterns: ["https://mcp.pagerduty.com/*"]}
+    auth: {kind: header, header_name: Authorization, token_url: "https://support.pagerduty.com/main/docs/api-access-keys", scopes_tip: "Token token=<user API key>"}
+    risk: {default_tier: 2, data_boundary: internal, tool_tiers: {"get_*": 0, "list_*": 0, "create_*": 2, "manage_*": 2}}
+    setup: Paste a user API token as "Token token=<key>".
+    risk_notes: Can acknowledge and resolve incidents when the key allows writes.
+    docs_url: "https://github.com/PagerDuty/pagerduty-mcp-server"
+  # ── communication ─────────────────────────────────────────────────────────────────────────────
+  - key: slack
+    name: Slack
+    category: communication
+    transport: http
+    description: Search messages, read channels and post in Slack.
+    http: {url: "https://mcp.slack.com/mcp", url_patterns: ["https://mcp.slack.com/*"]}
+    auth:
+      kind: oauth
+      oauth: {discovery_url: null, scopes: ["search:read", "channels:history", "chat:write"], token_fallback: null}
+    risk: {default_tier: 2, data_boundary: confidential, tool_tiers: {"search_*": 0, "read_*": 0, "list_*": 0, "send_*": 2, "post_*": 2}, tool_policies: {"send_*": ask, "post_*": ask}}
+    setup: Sign in with Slack; a workspace admin may have to approve the app.
+    risk_notes: Can read every channel the account is in and post as that account.
+    docs_url: "https://api.slack.com/"
+  - key: intercom
+    name: Intercom
+    category: communication
+    transport: http
+    description: Conversations, contacts and help-center articles in Intercom.
+    http: {url: "https://mcp.intercom.com/mcp", url_patterns: ["https://mcp.intercom.com/*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: [], token_fallback: bearer}}
+    risk: {default_tier: 1, data_boundary: confidential}
+    setup: Sign in with Intercom, or paste an access token.
+    risk_notes: Reads customer conversations, which hold personal data.
+    docs_url: "https://developers.intercom.com/docs/guides/mcp"
+  # ── productivity (Google Workspace) ───────────────────────────────────────────────────────────
+  - key: google-drive
+    name: Google Drive
+    category: productivity
+    transport: stdio
+    description: Search, read and create Drive files, Docs and Sheets.
+    stdio:
+      image: "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+      argv: [uvx, workspace-mcp, --tools, drive, docs, sheets, --single-user]
+      network: bridge
+      env_allowlist: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_ACCESS_TOKEN]
+      env_from_auth: GOOGLE_ACCESS_TOKEN
+      idle_ttl_seconds: 600
+      reuse_key: credential
+    auth:
+      kind: oauth
+      oauth: {discovery_url: "https://accounts.google.com/.well-known/openid-configuration", scopes: ["https://www.googleapis.com/auth/drive"], token_fallback: bearer}
+    risk: {default_tier: 2, data_boundary: confidential, tool_tiers: {"search_*": 0, "get_*": 0, "list_*": 0, "create_*": 2, "update_*": 2, "share_*": 3}, tool_policies: {"share_*": ask}}
+    setup: Create the stdio template, then sign in with Google (or paste an access token).
+    risk_notes: Reaches every file the Google account can open, including shared drives.
+    docs_url: "https://github.com/taylorwilsdon/google_workspace_mcp"
+  - key: google-calendar
+    name: Google Calendar
+    category: productivity
+    transport: stdio
+    description: Read and create Google Calendar events.
+    stdio:
+      image: "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+      argv: [uvx, workspace-mcp, --tools, calendar, --single-user]
+      network: bridge
+      env_allowlist: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_ACCESS_TOKEN]
+      env_from_auth: GOOGLE_ACCESS_TOKEN
+      idle_ttl_seconds: 600
+      reuse_key: credential
+    auth:
+      kind: oauth
+      oauth: {discovery_url: "https://accounts.google.com/.well-known/openid-configuration", scopes: ["https://www.googleapis.com/auth/calendar"], token_fallback: bearer}
+    risk: {default_tier: 2, data_boundary: confidential, tool_tiers: {"list_*": 0, "get_*": 0, "create_*": 2, "modify_*": 2, "delete_*": 3}}
+    setup: Create the stdio template, then sign in with Google (or paste an access token).
+    risk_notes: Can see and change every calendar the account can.
+    docs_url: "https://github.com/taylorwilsdon/google_workspace_mcp"
+  - key: gmail
+    name: Gmail
+    category: productivity
+    transport: stdio
+    description: Search, read and draft Gmail messages (Google Workspace).
+    stdio:
+      image: "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+      argv: [uvx, workspace-mcp, --tools, gmail, --single-user]
+      network: bridge
+      env_allowlist: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_ACCESS_TOKEN]
+      env_from_auth: GOOGLE_ACCESS_TOKEN
+      idle_ttl_seconds: 600
+      reuse_key: credential
+    auth:
+      kind: oauth
+      oauth: {discovery_url: "https://accounts.google.com/.well-known/openid-configuration", scopes: ["https://www.googleapis.com/auth/gmail.modify"], token_fallback: bearer}
+    risk: {default_tier: 2, data_boundary: confidential, tool_tiers: {"search_*": 0, "get_*": 0, "draft_*": 2, "send_*": 3}, tool_policies: {"send_*": ask}}
+    setup: Create the stdio template, then sign in with Google (or paste an access token).
+    risk_notes: Reads the whole mailbox and can send mail as the account.
+    docs_url: "https://github.com/taylorwilsdon/google_workspace_mcp"
+  - key: box
+    name: Box
+    category: productivity
+    transport: http
+    description: Search and read files stored in Box.
+    http: {url: "https://mcp.box.com", url_patterns: ["https://mcp.box.com*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: [], token_fallback: null}}
+    risk: {default_tier: 1, data_boundary: confidential}
+    setup: Sign in with Box; an enterprise admin may have to enable the MCP server first.
+    risk_notes: Reaches every file the account can open.
+    docs_url: "https://developer.box.com/guides/box-mcp/"
+  - key: airtable
+    name: Airtable
+    category: data
+    transport: stdio
+    description: Read and write records in Airtable bases.
+    stdio:
+      image: "node:22-slim"
+      argv: [npx, -y, airtable-mcp-server]
+      network: bridge
+      env_allowlist: [AIRTABLE_API_KEY]
+      env_from_auth: AIRTABLE_API_KEY
+      idle_ttl_seconds: 600
+      reuse_key: credential
+    auth: {kind: bearer, token_url: "https://airtable.com/create/tokens", scopes_tip: "data.records:read, schema.bases:read"}
+    risk: {default_tier: 2, data_boundary: internal, tool_tiers: {"list_*": 0, "describe_*": 0, "search_*": 0, "get_*": 0, "create_*": 2, "update_*": 2, "delete_*": 3}}
+    setup: Create the stdio template, then paste a personal access token.
+    risk_notes: Can change records in every base the token reaches.
+    docs_url: "https://github.com/domdomegg/airtable-mcp-server"
+  # ── data ──────────────────────────────────────────────────────────────────────────────────────
+  - key: postgres
+    name: Postgres
+    category: data
+    transport: stdio
+    description: Inspect schemas and run queries against a Postgres database.
+    stdio:
+      image: "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+      argv: [uvx, postgres-mcp, --access-mode=restricted]
+      network: bridge
+      env_allowlist: [DATABASE_URI]
+      env_from_auth: DATABASE_URI
+      idle_ttl_seconds: 600
+      reuse_key: credential
+    auth: {kind: bearer, scopes_tip: "the connection string, postgresql://user:password@host:5432/db"}
+    risk: {default_tier: 1, data_boundary: confidential, tool_tiers: {"list_*": 0, "get_*": 0, "explain_query": 0, "analyze_*": 0, "execute_sql": 2}}
+    setup: Create the stdio template, then paste the connection string as the token. Restricted mode is read-only.
+    risk_notes: Sees every table the database user can. Use a read-only role.
+    docs_url: "https://github.com/crystaldba/postgres-mcp"
+  - key: sqlite
+    name: SQLite
+    category: data
+    transport: stdio
+    description: A scratch SQLite database for analysis.
+    stdio:
+      image: "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+      argv: [uvx, mcp-server-sqlite, --db-path, /tmp/scratch.db]
+      network: bridge
+      env_allowlist: []
+      idle_ttl_seconds: 600
+      reuse_key: template
+    auth: {kind: none}
+    risk: {default_tier: 1, data_boundary: internal}
+    setup: An Owner or Admin creates the stdio template once. The database lives only as long as the instance.
+    risk_notes: Data is lost when the instance is reaped.
+    docs_url: "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sqlite"
+  - key: mongodb
+    name: MongoDB
+    category: data
+    transport: stdio
+    description: Query collections and inspect a MongoDB or Atlas cluster.
+    stdio:
+      image: "node:22-slim"
+      argv: [npx, -y, mongodb-mcp-server, --readOnly]
+      network: bridge
+      env_allowlist: [MDB_MCP_CONNECTION_STRING]
+      env_from_auth: MDB_MCP_CONNECTION_STRING
+      idle_ttl_seconds: 600
+      reuse_key: credential
+    auth: {kind: bearer, scopes_tip: "the connection string, mongodb+srv://..."}
+    risk: {default_tier: 1, data_boundary: confidential}
+    setup: Create the stdio template, then paste the connection string as the token. Read-only by default.
+    risk_notes: Sees every collection the database user can.
+    docs_url: "https://github.com/mongodb-js/mongodb-mcp-server"
+  - key: supabase
+    name: Supabase
+    category: data
+    transport: http
+    description: Projects, tables, migrations and logs on Supabase.
+    http: {url: "https://mcp.supabase.com/mcp", url_patterns: ["https://mcp.supabase.com/*"]}
+    auth:
+      kind: oauth
+      token_url: "https://supabase.com/dashboard/account/tokens"
+      oauth: {discovery_url: null, scopes: [], token_fallback: bearer}
+    risk: {default_tier: 2, data_boundary: confidential, tool_tiers: {"list_*": 0, "get_*": 0, "search_docs": 0, "execute_sql": 2, "apply_migration": 3, "deploy_*": 3}, tool_policies: {"apply_migration": ask, "deploy_*": ask}}
+    setup: Sign in, or paste a personal access token. Add ?read_only=true to the URL for a read-only server.
+    risk_notes: Can run SQL and apply migrations on every project the account reaches.
+    docs_url: "https://supabase.com/docs/guides/getting-started/mcp"
+  - key: neon
+    name: Neon
+    category: data
+    transport: http
+    description: Neon Postgres projects, branches and queries.
+    http: {url: "https://mcp.neon.tech/mcp", url_patterns: ["https://mcp.neon.tech/*"]}
+    auth:
+      kind: oauth
+      token_url: "https://console.neon.tech/app/settings/api-keys"
+      oauth: {discovery_url: null, scopes: [], token_fallback: bearer}
+    risk: {default_tier: 2, data_boundary: confidential, tool_tiers: {"list_*": 0, "describe_*": 0, "get_*": 0, "run_sql*": 2, "create_*": 2, "delete_*": 3}}
+    setup: Sign in with Neon, or paste an API key.
+    risk_notes: Can create and delete branches and run SQL.
+    docs_url: "https://neon.com/docs/ai/neon-mcp-server"
+  - key: memory
+    name: Memory (knowledge graph)
+    category: data
+    transport: stdio
+    description: A small knowledge graph the agent can write facts into and recall.
+    stdio:
+      image: "node:22-slim"
+      argv: [npx, -y, "@modelcontextprotocol/server-memory"]
+      network: bridge
+      env_allowlist: [MEMORY_FILE_PATH]
+      env_defaults: {MEMORY_FILE_PATH: /tmp/memory.jsonl}
+      idle_ttl_seconds: 900
+      reuse_key: template
+    auth: {kind: none}
+    risk: {default_tier: 1, data_boundary: internal}
+    setup: An Owner or Admin creates the stdio template once. Memory lasts as long as the instance.
+    risk_notes: Lost when the instance is reaped; BOSS's own memory is the durable one.
+    docs_url: "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
+  # ── system ────────────────────────────────────────────────────────────────────────────────────
+  - key: filesystem
+    name: Filesystem
+    category: system
+    transport: stdio
+    description: Read and write files under /tmp inside the server's own sandbox.
+    stdio:
+      image: "node:22-slim"
+      argv: [npx, -y, "@modelcontextprotocol/server-filesystem", /tmp]
+      network: bridge
+      env_allowlist: []
+      idle_ttl_seconds: 600
+      reuse_key: template
+    auth: {kind: none}
+    risk: {default_tier: 1, data_boundary: internal, tool_tiers: {"read_*": 0, "list_*": 0, "search_*": 0, "get_*": 0, "directory_tree": 0, "write_file": 2, "edit_file": 2, "move_file": 2, "create_directory": 1}}
+    setup: An Owner or Admin creates the stdio template once. It sees only its own container; no host folder is mounted.
+    risk_notes: Nothing outside the container is reachable; files go when the instance is reaped.
+    docs_url: "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
+  - key: time
+    name: Time
+    category: system
+    transport: stdio
+    description: Current time and time-zone conversion.
+    stdio:
+      image: "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+      argv: [uvx, mcp-server-time]
+      network: bridge
+      env_allowlist: []
+      idle_ttl_seconds: 300
+      reuse_key: template
+    auth: {kind: none}
+    risk: {default_tier: 0, data_boundary: public}
+    setup: An Owner or Admin creates the stdio template once.
+    risk_notes: None beyond downloading the server at start.
+    docs_url: "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
+  - key: sequential-thinking
+    name: Sequential Thinking
+    category: system
+    transport: stdio
+    description: A scratchpad tool for step-by-step reasoning.
+    stdio:
+      image: "node:22-slim"
+      argv: [npx, -y, "@modelcontextprotocol/server-sequential-thinking"]
+      network: bridge
+      env_allowlist: []
+      idle_ttl_seconds: 300
+      reuse_key: template
+    auth: {kind: none}
+    risk: {default_tier: 0, data_boundary: internal}
+    setup: An Owner or Admin creates the stdio template once.
+    risk_notes: None; it only echoes structured thoughts.
+    docs_url: "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking"
+  # ── cloud and deploy ──────────────────────────────────────────────────────────────────────────
+  - key: cloudflare
+    name: Cloudflare (Workers bindings)
+    category: cloud
+    transport: http
+    description: Workers, KV, R2 and D1 in your Cloudflare account.
+    http: {url: "https://bindings.mcp.cloudflare.com/mcp", url_patterns: ["https://*.mcp.cloudflare.com/*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: [], token_fallback: null}}
+    risk: {default_tier: 2, data_boundary: internal, tool_tiers: {"*_list": 0, "*_get": 0, "*_create": 2, "*_delete": 3}}
+    setup: Sign in with Cloudflare and pick the account.
+    risk_notes: Can create and delete Workers resources in the chosen account.
+    docs_url: "https://github.com/cloudflare/mcp-server-cloudflare"
+  - key: vercel
+    name: Vercel
+    category: cloud
+    transport: http
+    description: Projects, deployments and logs on Vercel.
+    http: {url: "https://mcp.vercel.com", url_patterns: ["https://mcp.vercel.com*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: [], token_fallback: null}}
+    risk: {default_tier: 1, data_boundary: internal}
+    setup: Sign in with Vercel.
+    risk_notes: Reads deployments and build logs of every team the account belongs to.
+    docs_url: "https://vercel.com/docs/mcp/vercel-mcp"
+  # ── payments and commerce ─────────────────────────────────────────────────────────────────────
+  - key: stripe
+    name: Stripe
+    category: payments
+    transport: http
+    description: Customers, payments, invoices and products in Stripe.
+    http: {url: "https://mcp.stripe.com", url_patterns: ["https://mcp.stripe.com*"]}
+    auth:
+      kind: oauth
+      token_url: "https://dashboard.stripe.com/apikeys"
+      scopes_tip: "a restricted key"
+      oauth: {discovery_url: null, scopes: [], token_fallback: bearer}
+    risk: {default_tier: 3, data_boundary: confidential, tool_tiers: {"list_*": 0, "retrieve_*": 0, "search_*": 0, "create_*": 3, "update_*": 3, "cancel_*": 3, "create_refund": 3}, tool_policies: {"create_*": ask, "update_*": ask, "cancel_*": ask}}
+    setup: Sign in with Stripe, or paste a restricted key. Use a test-mode key until you trust the agent.
+    risk_notes: Moves money with a live key. Every write asks a person by default.
+    docs_url: "https://docs.stripe.com/mcp"
+  - key: paypal
+    name: PayPal
+    category: payments
+    transport: http
+    description: Invoices, orders and disputes in PayPal.
+    http: {url: "https://mcp.paypal.com/mcp", url_patterns: ["https://mcp.paypal.com/*", "https://mcp.sandbox.paypal.com/*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: [], token_fallback: null}}
+    risk: {default_tier: 3, data_boundary: confidential, tool_policies: {"create_*": ask, "send_*": ask}}
+    setup: Sign in with PayPal. Use mcp.sandbox.paypal.com while testing.
+    risk_notes: Can create invoices and orders on a live account.
+    docs_url: "https://developer.paypal.com/tools/mcp-server/"
+  - key: square
+    name: Square
+    category: payments
+    transport: http
+    description: Payments, catalog, orders and customers on Square.
+    http: {url: "https://mcp.squareup.com/sse", url_patterns: ["https://mcp.squareup.com/*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: [], token_fallback: null}}
+    risk: {default_tier: 3, data_boundary: confidential}
+    setup: Sign in with Square.
+    risk_notes: Reaches payments and customer records of the seller account.
+    docs_url: "https://developer.squareup.com/docs/mcp"
+  # ── design ────────────────────────────────────────────────────────────────────────────────────
+  - key: figma
+    name: Figma
+    category: design
+    transport: http
+    description: Read Figma frames, components and variables for implementation.
+    http: {url: "https://mcp.figma.com/mcp", url_patterns: ["https://mcp.figma.com/*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: [], token_fallback: null}}
+    risk: {default_tier: 0, data_boundary: internal}
+    setup: Sign in with Figma.
+    risk_notes: Reads every file the account can open.
+    docs_url: "https://help.figma.com/hc/en-us/articles/32132100833559"
+  - key: canva
+    name: Canva
+    category: design
+    transport: http
+    description: Search, create and export Canva designs.
+    http: {url: "https://mcp.canva.com/mcp", url_patterns: ["https://mcp.canva.com/*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: [], token_fallback: null}}
+    risk: {default_tier: 1, data_boundary: internal}
+    setup: Sign in with Canva.
+    risk_notes: Can create designs in the account.
+    docs_url: "https://www.canva.dev/docs/connect/canva-mcp-server-setup/"
+  # ── CRM and automation ────────────────────────────────────────────────────────────────────────
+  - key: hubspot
+    name: HubSpot
+    category: crm
+    transport: http
+    description: Contacts, companies, deals and tickets in HubSpot.
+    http: {url: "https://mcp.hubspot.com", url_patterns: ["https://mcp.hubspot.com*"]}
+    auth: {kind: oauth, oauth: {discovery_url: null, scopes: ["crm.objects.contacts.read"], token_fallback: null}}
+    risk: {default_tier: 1, data_boundary: confidential}
+    setup: Sign in with HubSpot; the scopes you grant decide what BOSS can read.
+    risk_notes: Reads customer records, which hold personal data.
+    docs_url: "https://developers.hubspot.com/mcp"
+  - key: zapier
+    name: Zapier
+    category: automation
+    transport: http
+    description: Run the Zapier actions you enable, across thousands of apps.
+    http: {url: "https://mcp.zapier.com/api/mcp/mcp", url_patterns: ["https://mcp.zapier.com/*"]}
+    auth: {kind: bearer, token_url: "https://mcp.zapier.com/mcp/servers"}
+    risk: {default_tier: 2, data_boundary: internal}
+    setup: Create a Zapier MCP server, enable the actions, then paste its token.
+    risk_notes: Each enabled action acts in another app as you. Enable only what agents need.
+    docs_url: "https://help.zapier.com/hc/en-us/articles/36265392843917"

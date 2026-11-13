@@ -378,3 +378,13 @@ button.inf-slot:hover { border-color: var(--accent-line); color: var(--accent-te
   .inf-so-proj { flex-wrap: wrap; }
   .inf-so-proj > .inf-so-chip { margin-left: 40px; }
 }
+
+/* Infra › Extensions (boss.extension/v1, BOSSAPP-861): the install box and its consent. */
+.inf-ext-install { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; }
+.inf-ext-fields { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.inf-ext-field { flex: 2 1 260px; }
+.inf-ext-consent { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 10px; }
+.inf-ext-consent ul { margin: 0; padding-left: 18px; }
+.inf-ext-asks-head { margin-top: 6px; }
+.inf-ext-accept { display: flex; gap: 6px; align-items: center; margin-top: 6px; }

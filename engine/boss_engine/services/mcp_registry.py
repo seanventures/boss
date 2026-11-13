@@ -111,10 +111,35 @@ def _validated_server_identity(name: str, url: str, transport: str) -> None:
         raise McpServerError("MCP server name must be a non-empty string")
     if not isinstance(transport, str) or not transport.strip():
         raise McpServerError("MCP transport must be a non-empty string")
+    if transport.strip() == "stdio" or (isinstance(url, str) and url.startswith("stdio://")):
+        # A STDIO SERVER (BOSSAPP-850): its address names an operator's launch template; the
+        # supervisor bridges it to HTTP at call time (mcp_stdio_supervisor). That the template
+        # exists in the server's own project is checked by _validated_stdio_target.
+        from .mcp_stdio_templates import parse_stdio_url
+
+        if transport.strip() != "stdio":
+            raise McpServerError("a stdio:// URL needs transport 'stdio'")
+        if parse_stdio_url(url) is None:
+            raise McpServerError(
+                "a stdio server's URL is stdio://<project_id>/<template name>")
+        return
     parsed = urlparse(url) if isinstance(url, str) else None
     if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise McpServerError(
             "MCP server url must be an absolute HTTP(S) URL, e.g. http://web-intel:8770/mcp")
+
+
+def _validated_stdio_target(connection: Connection, project_id: str, url: str,
+                            transport: str) -> None:
+    """A stdio server's address must name a template of its OWN project (BOSSAPP-850)."""
+    if str(transport or "").strip() != "stdio":
+        return
+    from .mcp_stdio_templates import StdioTemplateError, require_template_for_url
+
+    try:
+        require_template_for_url(connection, project_id, url)
+    except StdioTemplateError as error:
+        raise McpServerError(str(error)) from error
 
 
 def _loads(value: Any, fallback: Any) -> Any:
@@ -780,6 +805,7 @@ def register_mcp_server(
     settings: Any = None,
 ) -> dict:
     _validated_server_identity(name, url, transport)
+    _validated_stdio_target(connection, project_id, url, transport)
     risk_tier = _validated_risk(risk_tier)
     data_boundary = normalize_data_boundary(data_boundary)
     tool_risk_overrides = _validated_overrides(tool_risk_overrides)
@@ -878,6 +904,7 @@ def update_mcp_server(
     url = str(given.get("url", current["url"])).strip()
     transport = str(given.get("transport", current["transport"])).strip()
     _validated_server_identity(name, url, transport)
+    _validated_stdio_target(connection, project_id, url, transport)
     if name.lower() != current["name"].lower() and _name_taken(
             connection, project_id, name, except_id=server_id):
         raise McpServerConflict(_name_taken_sentence(name))
@@ -1236,7 +1263,15 @@ def test_entered(settings: Any, connection: Optional[Connection], project_id: st
     """Probe the URL and sign-in an operator TYPED, before anything is stored (Save & test).
 
     The token is used for this one call and dropped; nothing is written."""
-    _validated_server_identity("test", url, "http")
+    transport = "stdio" if str(url or "").startswith("stdio://") else "http"
+    _validated_server_identity("test", url, transport)
+    if transport == "stdio":
+        from .mcp_stdio_templates import parse_stdio_url
+
+        if (parse_stdio_url(url) or ("", ""))[0] != project_id:
+            raise McpServerError("a stdio server can only use a template of its own project")
+        if connection is not None:
+            _validated_stdio_target(connection, project_id, url, transport)
     checked = _validated_auth(auth)
     headers = {str(k): str(v) for k, v in (checked.get("headers") or {}).items()}
     secret = checked.get("secret")

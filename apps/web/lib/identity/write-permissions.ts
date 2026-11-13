@@ -80,6 +80,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kit-api.ts#mcpApi.revoke": "agent_ability:assign",         // DELETE /v1/role-mcp-servers
   "lib/kit-api.ts#mcpApi.roleTools": "agent_ability:assign",      // POST /v1/role-mcp-servers
   "lib/kit-api.ts#mcpApi.addFromCatalogue": "mcp_server:review",  // POST /v1/mcp/catalogue/{key}
+  "lib/kit-api.ts#mcpApi.createStdioTemplate": "host:exec",       // POST /v1/mcp/stdio-templates
+  "lib/kit-api.ts#mcpApi.createGateway": "mcp_server:review",     // POST /v1/mcp/gateways
+  "lib/kit-api.ts#mcpApi.mintGatewayToken": "mcp_server:review",  // POST /v1/mcp/gateways/{id}/tokens
+  "lib/kit-api.ts#mcpApi.revokeGatewayToken": "mcp_server:review", // POST /v1/mcp/gateways/{id}/tokens/{t}/revoke
+  "lib/kit-api.ts#mcpApi.revokeGateway": "mcp_server:review",     // POST /v1/mcp/gateways/{id}/revoke
 
   // lib/workflow-webhooks.ts — a workflow's webhook triggers (#512, through /api/delivery-workflows)
   "lib/workflow-webhooks.ts#createWebhook": "workflow_schedule:manage",      // POST /v1/delivery-workflows/webhooks
@@ -241,7 +246,7 @@ export const INLINE_WRITES: Readonly<Record<string, readonly WriteGate[]>> = {
   "app/workflows/editor/define-step-modal.tsx": ["workflow:create"], // custom-steps POST/PATCH
   "app/workflows/editor/inspector/workflow-settings.tsx": ["workflow:publish"], // apply
   "app/workflows/new-project-composer.tsx": ["work_item:manage"],  // POST /v1/projects/{id}/agents
-  "app/workforce-ui.tsx": ["agent:update"],                        // PUT/DELETE /v1/console/v2/org/{agent}
+  "app/workforce-ui.tsx": ["agent:update"],                        // PUT/DELETE /v1/console/v2/org/{agent}, POST …/org/takeover
   "components/v2/AgentChat.tsx": ["assistant:chat"],               // POST /v1/engine/agent/chat
   "components/v2/AutonomyControl.tsx": ["approval_rule:manage"],   // POST /v1/console/v2/autonomy
   "components/v2/DeployControls.tsx": ["deployment:create", "deployment_target:manage"],

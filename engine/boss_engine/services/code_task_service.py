@@ -658,6 +658,16 @@ def start_code_task(
         if not known:
             raise ValueError(f"no agent {role!r} on this project to run this task as.")
         spec["role_key"] = role
+    # RETIRED MANAGERS BLOCK DELEGATION (BOSSAPP-885): an agent whose chain of command passes
+    # through a retired manager starts no NEW work until it is reassigned. A retry, a repair round
+    # or a continuation is the running work finishing, so it is never refused here.
+    if not (automatic_retry or continuation or supersedes
+            or str((finalize_ctx or {}).get("parent_run_id") or "").strip()):
+        from boss_engine.identity import runs as _chain_runs
+        from . import org_chain
+
+        org_chain.refuse_if_under_retired(
+            connection, project_id, _chain_runs.resolved_builder({"role_key": role}, finalize_ctx))
     # JUST-IN-TIME CONSENT (IDENTITY.md §7.3): a person starting a build whose grants do not cover
     # the builder answers 409 consent_required BEFORE anything is written; the covering grant is
     # stamped on the build's job so the run executes as "<agent> for <person>" under it.
