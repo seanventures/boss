@@ -12067,3 +12067,24 @@ CREATE INDEX IF NOT EXISTS idx_llm_calls_class ON llm_calls (project_id, call_cl
 -- verdict lands here: {"mode", "verdict": clean|suspicious|unscreened, "rules": [...]}. NULL on
 -- a refused call (no result) and on rows that predate the column.
 ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;
+
+-- BOSSAPP-828
+-- boss-runner sessions: a coding-agent turn owned by the runner sidecar instead of the API
+-- (apps/runner, services/runner_dispatch.py, services/runner_registry.py). `seq` is the API's
+-- cumulative ACK of the runner's outbox, `last_heartbeat` is the runner's last push. The reclaim
+-- path (run_liveness.progressing, jobs.reap_lost_leases) asks this registry before it declares a
+-- run dead: a turn whose runner still reports its process alive is re-attached, not re-run.
+CREATE TABLE IF NOT EXISTS runner_sessions (
+    session_id      TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL,                 -- the code-task run (crun_...)
+    identity_run_id TEXT NOT NULL,                 -- the run token's boss_task.run
+    runner_id       TEXT NOT NULL,
+    session_key     TEXT NOT NULL DEFAULT '',
+    seq             BIGINT NOT NULL DEFAULT 0,
+    state           TEXT NOT NULL DEFAULT 'running',
+    alive           BOOLEAN NOT NULL DEFAULT true,
+    last_heartbeat  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_runner_sessions_run ON runner_sessions (run_id, state, last_heartbeat DESC);
