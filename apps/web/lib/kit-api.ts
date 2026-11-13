@@ -170,7 +170,6 @@ export function toolOverrides(prefill: ConnectorPrefill, tools: string[]) {
   return { tiers: pick(prefill.tool_tiers), policies: pick(prefill.tool_policies) };
 }
 
-export type McpAuthInput = { type: "none" | "bearer" | "header"; header_name?: string; secret?: string };
 export type McpAuthInput = { type: "none" | "bearer" | "header" | "oauth"; header_name?: string; secret?: string;
                              oauth?: { client_id?: string; scope?: string } };
 

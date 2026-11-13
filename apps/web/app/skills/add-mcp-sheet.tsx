@@ -28,7 +28,7 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ field: string | null; message: string } | null>(null);
   const [form, setForm] = useState({ name: "", url: "", auth: "none" as McpAuthInput["type"], header: "", secret: "", risk: 0,
-                                     transport: "http" as "http" | "stdio" });
+                                     transport: "http" as "http" | "stdio", clientId: "" });
 
   // A connector picked from the catalog fills the form (BOSSAPP-849); the operator still tests
   // and saves it here, and its tool tiers/policies are applied to the tools the test found.
@@ -37,11 +37,11 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
     setPicked(c);
     setError(null);
     setForm({ name: p.name, url: p.url, auth: p.auth.type === "oauth" ? "none" : p.auth.type,
-              header: p.auth.header_name ?? "", secret: "", risk: p.risk_tier, transport: p.transport });
+              header: p.auth.header_name ?? "", secret: "", risk: p.risk_tier, transport: p.transport,
+              clientId: "" });
     setTab("custom");
   };
   const oauthOnly = picked?.prefill.auth.type === "oauth";
-                                     clientId: "" });
 
   useEffect(() => {
     void mcpApi.catalogue(projectId).then((r) => setItems(r.ok ? r.data.items : []));
@@ -222,8 +222,6 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
             </div>
             <div className="kit-actions">
               <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-primary" data-testid="kit-custom-save"
-                      disabled={busy || oauthOnly || !form.name.trim() || !form.url.trim()} onClick={() => void custom()}>
-                {busy ? "Testing…" : "Save & test"}
                       disabled={busy || !form.name.trim() || !form.url.trim()} onClick={() => void custom()}>
                 {busy ? "Testing…" : form.auth === "oauth" ? "Save & sign in" : "Save & test"}
               </GatedButton>
