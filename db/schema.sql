@@ -13345,3 +13345,11 @@ CREATE TABLE IF NOT EXISTS subscription_pool_pins (
   pinned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (pool_id, task_ref)
 );
+-- BOSSAPP-w4-observability ──────────────────────────────────────────────────────────────────────
+-- 873: what an MCP call may carry upstream besides the server's own sign-in
+-- (services/mcp_headers_policy.py). {} = exactly what was sent before. Keys:
+--   allow           [header names]  only these extra headers go upstream; any other is stripped
+--   secret_headers  {name: {secret_ref_id, last4}}  static headers whose values live in the store
+--   forward         [run_id | agent | traceparent]  X-BOSS-Run-Id, X-BOSS-Agent, W3C traceparent
+ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS headers_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- ================================ end BOSSAPP-w4-observability ==

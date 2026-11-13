@@ -317,3 +317,50 @@ The matrix's `request_body_type_enforcement` field makes this distinction explic
 The servers you register on **Skills and MCP** (or ask BOSS to register from the chat) are the other direction: BOSS is the client. A tool on a server nobody has marked **Reviewed** never runs unattended, whatever risk tier it declares. That holds on every road to the tool: an agent calling it directly, an agent holding an authored `mcp_tool` skill that names it, and a workflow custom step bound to the tool or to such a skill. Each call becomes an approval, a custom step on an unreviewed server is always a manual step, and BOSS refuses a call that arrives without an approved decision.
 
 **After upgrading:** servers registered before this rule were never marked, so calls that used to run now ask first. The Skills and MCP page lists every turned-on server that needs review. Open each with **Edit**, check its address, and choose *A person has checked this server*. Changing a server's URL clears its review, including a server BOSS seeded.
+
+### Rate limits on tool calls
+
+A rule on **Skills and MCP › Rules** with the effect **Rate limit** caps how often a tool runs: at most `max_calls` calls in `window_seconds`. The calls counted are the ones that actually ran (succeeded, deduplicated or failed) to that server and tool, read from the tool-call audit. Choose what the count is kept for:
+
+- **per project** (the default): every call in the project. A rule written before buckets existed counts this way.
+- **per run**: each run has its own count, so one looping run is stopped while other runs go on.
+- **per agent**: each agent role has its own count across runs.
+
+When the window is spent the call is refused. The refusal is structured: it names the rule, the limit, the bucket and `retry_after_seconds`, which is when the oldest counted call ages out of the window. The audit row records the refusal under `screen.policy`. An agent on BOSS's own tools receives the same fields. A caller reaching the tool through the receipt door gets `McpToolRateLimited`, which is a kind of `McpToolDenied`, so code that already handles a denial needs no change. The gateway reports the reason `rate_limited`.
+
+**Suggested limits.** Some catalogue servers come with default limits. GitHub, for example, suggests 30 `create_*` calls an hour per run. These defaults appear under **Suggested limits** on the Rules tab once you have added the server. Nothing is applied until you press **Add**. The API lists them at `GET /v1/tool-policies/suggestions?project_id=…`, and each one is a body you can send unchanged to `POST /v1/tool-policies`.
+
+### MCP aggregators: Composio, Arcade, Zapier, Pipedream
+
+An aggregator puts many SaaS apps behind one MCP server. All four are in **Add MCP › Connectors** under *Automation*. Each URL belongs to your account, so replace the placeholder in the form with your own URL before **Save & test**. The test proves the URL. If the test fails, nothing is stored.
+
+| Aggregator | Sign-in | Extra setup |
+|---|---|---|
+| Composio | Your Composio API key in the `x-api-key` header | The server URL names the Composio user whose connected apps the server uses. |
+| Arcade | An Arcade API key as a bearer token | After saving, add the `Arcade-User-ID` header. It names the user the tools act as. |
+| Zapier | The token of your Zapier MCP server | Turn on only the actions agents need. |
+| Pipedream | An access token from Pipedream's OAuth client credentials | After saving, add the `x-pd-project-id`, `x-pd-environment` and `x-pd-external-user-id` headers. Add `x-pd-app-slug` to limit the server to one app. The token expires, so renew it when calls start failing with 401. |
+
+**Risk defaults.** Every app's tools start at tier 2, so each call asks a person. Composio's meta-tools are tiered by name:
+
+- Searching tools and reading tool schemas run without asking (tier 0).
+- Running a tool and managing connections ask a person (tier 2).
+- The remote workbench and shell tools are tier 3 and Off.
+
+**Target one app with a rule.** Each aggregator puts the app's name into its tool names in its own way. Composio uses `GMAIL_*`, Arcade `Gmail_*`, Zapier `gmail_*` and Pipedream `gmail-*`. A **Tools** glob such as `GMAIL_*` on the Composio server therefore covers every Gmail tool behind it. The catalogue records each pattern as `aggregator.toolkit_pattern`. `connector_catalog.toolkit_selector` builds the selector for you.
+
+A meta-tool that runs another tool by name, such as `COMPOSIO_MULTI_EXECUTE_TOOL`, is not covered by an app glob. Target it by its own name instead, and add a condition on the argument that names the tool.
+
+**Suggested limits.** Each aggregator suggests a per-run rate limit. On Composio the limit is on the execute meta-tool; on the others it covers all tools. You can add these limits from **Rules › Suggested limits**.
+
+These entries were written from each vendor's published documentation. BOSS's tests have not run them against a live account.
+
+### Headers BOSS sends upstream
+
+By default a call to an MCP server carries the server's sign-in, any plain headers set on its auth, and BOSS's protocol headers. You can change this per server under **Upstream headers** in the server's drawer, or with `POST /v1/mcp/servers/{id}/headers-policy`. There are three settings:
+
+- **Send** (`forward`) turns on per-call metadata: `X-BOSS-Run-Id`, `X-BOSS-Agent`, and the W3C `traceparent` of the current span. `traceparent` is sent only when BOSS's own tracing is on. These headers go on each `tools/call` request only, never on the session's `initialize`.
+- **Only send** (`allow`) is an allowlist. When it is set, BOSS strips every extra header that is not on the list. The sign-in header and BOSS's protocol headers are always sent.
+- **Secret headers** (`secret_headers`) are static headers whose values are secrets, such as a tenant key. Each value is written to the secret store and read only when a call is made. The console shows only the last four characters. To keep a value that is already stored, send it as `{"keep": true}`.
+
+A policy cannot set `Authorization`, BOSS's protocol headers or the `X-BOSS-*` names. Every header still passes BOSS's passthrough check, so no policy can send a BOSS session, key or run token to a server. An empty policy (`{}`) sends exactly what BOSS sent before this setting existed.

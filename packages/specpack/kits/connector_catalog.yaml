@@ -28,7 +28,7 @@
 # Vendor endpoints move. Each URL is the one the vendor published when this catalog was cut; the
 # probe on Save & test is what proves it, and a failing probe never stores anything.
 schema_version: 1
-catalog_version: "2026.11.1"
+catalog_version: "2026.11.2"
 connectors:
   # ── code ──────────────────────────────────────────────────────────────────────────────────────
   - key: github
@@ -729,3 +729,77 @@ connectors:
     setup: Create a Zapier MCP server, enable the actions, then paste its token.
     risk_notes: Each enabled action acts in another app as you. Enable only what agents need.
     docs_url: "https://help.zapier.com/hc/en-us/articles/36265392843917"
+    aggregator: {toolkit_pattern: "{toolkit}_*", example_toolkits: [gmail, slack, google_sheets]}
+    suggested_rules:
+      - {tool: "*", effect: rate_limit, rate_limit: {max_calls: 60, window_seconds: 3600, bucket: run},
+         why: One looping run cannot fire hundreds of Zapier actions or burn the task quota.}
+  # ── MCP aggregators (BOSSAPP-870): one connection, many apps ─────────────────────────────────
+  # Each fronts hundreds of SaaS apps behind one server. Every app's tools start at tier 2 (Ask);
+  # read-only meta-tools are lowered by name; meta-tools that run arbitrary code are tier 3 (Off).
+  # `aggregator.toolkit_pattern` is how a tool name carries its app, so a rule can target one app
+  # (connector_catalog.toolkit_selector). URLs below are per account: paste yours on Save & test.
+  - key: composio
+    name: Composio
+    category: automation
+    transport: http
+    description: One MCP server for the apps you connect in Composio (Gmail, Slack, Jira, ...).
+    http: {url: "https://backend.composio.dev/v3/mcp/SERVER_ID?user_id=USER_ID",
+           url_patterns: ["https://backend.composio.dev/*", "https://*.composio.dev/*"]}
+    auth: {kind: header, header_name: x-api-key, token_url: "https://platform.composio.dev/"}
+    risk:
+      default_tier: 2
+      data_boundary: confidential
+      tool_tiers: {"COMPOSIO_SEARCH_TOOLS": 0, "COMPOSIO_GET_TOOL_SCHEMAS": 0,
+                   "COMPOSIO_MANAGE_CONNECTIONS": 2, "COMPOSIO_MULTI_EXECUTE_TOOL": 2,
+                   "COMPOSIO_REMOTE_*": 3}
+      tool_policies: {"COMPOSIO_REMOTE_*": "off"}
+    aggregator:
+      toolkit_pattern: "{TOOLKIT}_*"
+      execute_tools: [COMPOSIO_MULTI_EXECUTE_TOOL]
+      example_toolkits: [gmail, slack, github, jira]
+    suggested_rules:
+      - {tool: "COMPOSIO_MULTI_EXECUTE_TOOL", effect: rate_limit,
+         rate_limit: {max_calls: 60, window_seconds: 3600, bucket: run},
+         why: The execute meta-tool can reach every connected app; cap it per run.}
+    setup: >-
+      Create an MCP server in Composio, copy its URL (it names the server and the user whose
+      connections it uses) and paste your Composio API key as the x-api-key header.
+    risk_notes: >-
+      Acts in every app connected to that Composio user. The execute meta-tool runs any of their
+      tools by name, so it asks a person each time; the remote workbench and shell tools are Off.
+    docs_url: "https://docs.composio.dev/docs/mcp-overview"
+  - key: arcade
+    name: Arcade
+    category: automation
+    transport: http
+    description: "An Arcade MCP gateway: the toolkits you pick, signed in per user by Arcade."
+    http: {url: "https://api.arcade.dev/mcp/GATEWAY_SLUG", url_patterns: ["https://api.arcade.dev/mcp/*"]}
+    auth: {kind: bearer, token_url: "https://api.arcade.dev/dashboard/api-keys"}
+    risk: {default_tier: 2, data_boundary: confidential}
+    aggregator: {toolkit_pattern: "{Toolkit}_*", example_toolkits: [Gmail, Slack, GitHub]}
+    suggested_rules:
+      - {tool: "*", effect: rate_limit, rate_limit: {max_calls: 60, window_seconds: 3600, bucket: run},
+         why: One looping run cannot exhaust the gateway's quota.}
+    setup: >-
+      Create a gateway in Arcade, paste its URL and an Arcade API key. Arcade also needs the user
+      the tools act as: add the header Arcade-User-ID under the server's headers after saving.
+    risk_notes: Acts as that Arcade user in every toolkit the gateway exposes.
+    docs_url: "https://docs.arcade.dev/en/home/mcp-gateways"
+  - key: pipedream
+    name: Pipedream
+    category: automation
+    transport: http
+    description: "Pipedream's hosted MCP: thousands of app actions with Pipedream-managed accounts."
+    http: {url: "https://remote.mcp.pipedream.net", url_patterns: ["https://remote.mcp.pipedream.net*"]}
+    auth: {kind: bearer, token_url: "https://pipedream.com/settings/api"}
+    risk: {default_tier: 2, data_boundary: confidential}
+    aggregator: {toolkit_pattern: "{toolkit}-*", example_toolkits: [gmail, slack, notion]}
+    suggested_rules:
+      - {tool: "*", effect: rate_limit, rate_limit: {max_calls: 60, window_seconds: 3600, bucket: run},
+         why: One looping run cannot fire hundreds of actions.}
+    setup: >-
+      Paste a Pipedream access token, then add the headers x-pd-project-id, x-pd-environment and
+      x-pd-external-user-id (and x-pd-app-slug for one app) under the server's headers. The token
+      comes from Pipedream's OAuth client credentials and expires; renew it when calls fail with 401.
+    risk_notes: Acts in every app that Pipedream user has connected.
+    docs_url: "https://pipedream.com/docs/connect/mcp/developers"

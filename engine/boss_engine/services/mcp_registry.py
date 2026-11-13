@@ -463,9 +463,21 @@ def auth_headers(connection: Connection, settings: Any, project_id: str,
     401 that reads like the server's fault."""
     from .connection_credentials import headers_for
 
-    return headers_for(connection, settings, project_id, server,
-                       _raw_auth(connection, project_id, str(server.get("id") or "")),
-                       principal=principal)
+    raw = _raw_auth(connection, project_id, str(server.get("id") or ""))
+    headers = headers_for(connection, settings, project_id, server, raw, principal=principal)
+    # THE HEADER POLICY (BOSSAPP-873): secret static headers, and an allowlist that strips any
+    # other extra header. Every road's headers come from here, so every road obeys it. A server
+    # with no policy ({}) sends exactly what it sent before.
+    from . import mcp_headers_policy as hp
+
+    policy = hp.read(connection, project_id, str(server.get("id") or ""))
+    if not policy:
+        return headers
+    sign_in = {"authorization"}
+    if raw.get("header_name"):
+        sign_in.add(str(raw["header_name"]).lower())
+    return hp.apply(connection, settings if settings is not None else _settings_now(), policy,
+                    headers, sign_in=sign_in)
 
 
 # --------------------------------------------------------------------------- #
@@ -621,6 +633,18 @@ class McpToolOff(McpServerError):
 class McpToolDenied(McpToolOff):
     """A tool-policy rule (BOSSAPP-815) denied this call: a deny rule, or a rate limit whose
     window is spent. An McpToolOff, so every road that answers Off answers this the same way."""
+
+
+class McpToolRateLimited(McpToolDenied):
+    """A rate-limit rule's window is spent (BOSSAPP-868). An McpToolDenied, so every road that
+    answers a denial answers this the same way; ``refusal`` is the structured part a caller backs
+    off by: {code: rate_limited, rule_id, server, tool, max_calls, window_seconds, bucket,
+    bucket_key, retry_after_seconds}."""
+
+    def __init__(self, message: str, refusal: Optional[dict[str, Any]] = None):
+        super().__init__(message)
+        self.refusal = dict(refusal or {})
+        self.retry_after_seconds = self.refusal.get("retry_after_seconds")
 
 
 class McpArgumentsChanged(McpServerError):
@@ -1815,6 +1839,13 @@ def call_tool_with_receipt(
             screen = {**(screen or {}), "policy": {
                 "decision": decided.get("decision"), "rule_id": decided.get("rule_id"),
                 "explanation": decided.get("explanation")}}
+            if decided.get("refusal"):
+                # A spent rate limit (BOSSAPP-868): the audit row keeps the structured refusal.
+                screen["policy"]["reason"] = decided.get("reason")
+                screen["policy"]["refusal"] = decided.get("refusal")
+        from .self_telemetry import metrics_count_tool_call
+
+        metrics_count_tool_call(outcome)  # BOSSAPP-867: a no-op unless /metrics is on
         record_tool_call(
             connection,
             project_id=project_id,
@@ -1863,6 +1894,11 @@ def call_tool_with_receipt(
                          f"'{server.get('name')}' in Skills & MCP.")
     if decided["decision"] == "deny":
         _audit_tool_call("refused", "deny")
+        if decided.get("reason") == "rate_limited":
+            refusal = decided.get("refusal") or {}
+            raise McpToolRateLimited(
+                f"Did not call {tool_name} on '{server.get('name')}': {decided['explanation']} "
+                f"Try again in {refusal.get('retry_after_seconds') or 'a while'}s.", refusal)
         raise McpToolDenied(f"Did not call {tool_name} on '{server.get('name')}': "
                             f"{decided['explanation']}")
     if policy == "ask" and not approval_stands(connection, project_id, approved_by,
@@ -1915,8 +1951,23 @@ def call_tool_with_receipt(
         )
     started = time.monotonic()
     try:
-        output = MCPClient(settings).call_tool(server["url"], tool_name, inputs,
-                                               headers=headers)
+        # OPT-IN CALL METADATA (BOSSAPP-873): X-BOSS-Run-Id / X-BOSS-Agent / traceparent, only
+        # when the server's headers policy forwards them; empty (nothing sent) otherwise.
+        from . import mcp_headers_policy as hp
+        from .self_telemetry import tool_span
+
+        run_ref = str(who.get("run_id") or about.get("run_id") or "") or None
+        agent_ref = audit_agent if audit_agent != "mcp_registry" else None
+        # BOSS'S OWN TRACE (BOSSAPP-867): an execute_tool span around the call (a no-op when
+        # tracing is off); a forwarded traceparent names this span.
+        with tool_span(str(server.get("name") or ""), tool_name, run_id=run_ref,
+                       agent=agent_ref):
+            forwarded = hp.call_headers(hp.read(connection, project_id,
+                                                str(server.get("id") or "")),
+                                        run_id=run_ref, agent=agent_ref)
+            output = MCPClient(settings).call_tool(
+                server["url"], tool_name, inputs, headers=headers,
+                **({"call_headers": forwarded} if forwarded else {}))
     except Exception as exc:
         receipts.mark_failed(
             connection,

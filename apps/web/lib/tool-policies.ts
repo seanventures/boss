@@ -14,10 +14,15 @@ export type Effect = "allow" | "ask" | "deny" | "rate_limit";
 export const EFFECTS: Effect[] = ["deny", "ask", "allow", "rate_limit"];
 export const EFFECT_WORDS: Record<Effect, string> = { allow: "Allow", ask: "Ask", deny: "Deny", rate_limit: "Rate limit" };
 export type Condition = { path: string; op: "equals" | "prefix" | "regex"; value: unknown };
+/** What a rate limit counts over (BOSSAPP-868): every call in the project, one run's, one agent's. */
+export type Bucket = "project" | "run" | "agent";
+export const BUCKETS: Bucket[] = ["project", "run", "agent"];
+export const BUCKET_WORDS: Record<Bucket, string> = { project: "per project", run: "per run", agent: "per agent" };
+export type RateLimit = { max_calls: number; window_seconds: number; bucket: Bucket };
 export type Rule = {
   id: string; scope: string; priority: number; effect: Effect;
   selector: { server: string; tool: string }; conditions: Condition[];
-  rate_limit: { max_calls: number; window_seconds: number } | null;
+  rate_limit: RateLimit | null;
   source: "operator" | "decision"; source_decision_id: string | null;
   status: "active" | "disabled" | "revoked"; hit_count: number; last_hit_at: string | null;
   expires_at: string | null; note: string | null; schema_sha256: string | null;
@@ -41,7 +46,8 @@ export function parseRule(w: unknown): Rule {
     conditions: arr(o.conditions).map(obj).map((c) => ({
       path: str(c.path), op: (["equals", "prefix", "regex"].includes(str(c.op)) ? str(c.op) : "equals") as Condition["op"],
       value: c.value })),
-    rate_limit: o.rate_limit ? { max_calls: Number(rl.max_calls) || 0, window_seconds: Number(rl.window_seconds) || 0 } : null,
+    rate_limit: o.rate_limit ? { max_calls: Number(rl.max_calls) || 0, window_seconds: Number(rl.window_seconds) || 0,
+                                 bucket: BUCKETS.includes(rl.bucket as Bucket) ? rl.bucket as Bucket : "project" } : null,
     source: o.source === "decision" ? "decision" : "operator", source_decision_id: str(o.source_decision_id) || null,
     status: o.status === "disabled" || o.status === "revoked" ? o.status : "active",
     hit_count: Number(o.hit_count) || 0, last_hit_at: str(o.last_hit_at) || null,
@@ -50,6 +56,19 @@ export function parseRule(w: unknown): Rule {
 }
 
 export const parseRules = (w: unknown): Rule[] => arr(obj(w).policies).map(parseRule);
+
+/** A default rule the MCP catalogue suggests for one of this project's servers (BOSSAPP-868). */
+export type Suggestion = { server: string; catalogue: string; why: string | null; rule: Record<string, unknown>;
+  summary: Rule };
+export const parseSuggestions = (w: unknown): Suggestion[] => arr(obj(w).suggestions).map(obj).map((o) => ({
+  server: str(o.server), catalogue: str(o.catalogue), why: str(o.why) || null, rule: obj(o.rule),
+  summary: parseRule({ id: `suggested:${str(o.server)}`, ...obj(o.rule) }),
+}));
+
+/** "20/3600s per run" — a rate limit in words (no suffix for the project-wide default). */
+export function rateWords(rl: RateLimit): string {
+  return `${rl.max_calls}/${rl.window_seconds}s${rl.bucket === "project" ? "" : ` ${BUCKET_WORDS[rl.bucket]}`}`;
+}
 
 export function parseSimulation(w: unknown): Simulation {
   const o = obj(w);
@@ -98,6 +117,8 @@ const press = (scope: string, label: string) => ({ scope: `tp:${scope}`, label }
 
 export const readRules = (projectId: string, source?: "operator" | "decision"): Promise<ReadResult<Rule[]>> =>
   aaRead(`/v1/tool-policies?${q(projectId)}${source ? `&source=${source}` : ""}`, parseRules);
+export const readSuggestions = (projectId: string): Promise<ReadResult<Suggestion[]>> =>
+  aaRead(`/v1/tool-policies/suggestions?${q(projectId)}`, parseSuggestions);
 export const createRule = (projectId: string, body: Record<string, unknown>): Promise<WriteResult> =>
   obsWrite("/v1/tool-policies", { project_id: projectId, ...body }, press("new", "Add rule"));
 export const updateRule = (projectId: string, id: string, fields: Record<string, unknown>, label = "Save"): Promise<WriteResult> =>

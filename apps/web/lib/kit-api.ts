@@ -101,6 +101,10 @@ export const mcpApi = {
     write<{ credential_policy: CredentialPolicy }>("/api/mcp", { action: "credential_policy", project_id: projectId, actor, server_id: serverId, policy }, "Whose account"),
   removeCredential: (projectId: string, actor: string, serverId: string, credentialId: string, mine: boolean) =>
     write<{ removed: string }>("/api/mcp", { action: "credential_remove", project_id: projectId, actor, server_id: serverId, credential_id: credentialId, mine }, "Disconnect"),
+  headersPolicy: (projectId: string, serverId: string) =>
+    read<HeadersPolicyView>(`/api/mcp?view=headers_policy&project_id=${enc(projectId)}&server_id=${enc(serverId)}`),
+  setHeadersPolicy: (projectId: string, actor: string, serverId: string, policy: HeadersPolicyInput) =>
+    write<{ headers_policy: HeadersPolicy }>("/api/mcp", { action: "headers_policy", project_id: projectId, actor, server_id: serverId, headers_policy: policy }, "Save headers"),
   accessGrants: (projectId: string, serverId: string) =>
     read<{ grants: AccessGrant[] }>(`/api/mcp?view=access_grants&project_id=${enc(projectId)}&server_id=${enc(serverId)}`),
   revokeGrant: (projectId: string, actor: string, grantId: string) =>
@@ -172,6 +176,26 @@ export function toolOverrides(prefill: ConnectorPrefill, tools: string[]) {
 
 export type McpAuthInput = { type: "none" | "bearer" | "header" | "oauth"; header_name?: string; secret?: string;
                              oauth?: { client_id?: string; scope?: string } };
+
+/** What a call may carry upstream besides its sign-in (BOSSAPP-873). */
+export type ForwardKey = "run_id" | "agent" | "traceparent";
+export type HeadersPolicy = { allow: string[] | null; forward: ForwardKey[];
+                              secret_headers: Record<string, { set: boolean; last4: string | null }> };
+export type HeadersPolicyView = { server_id: string; headers_policy: HeadersPolicy;
+                                  forward_choices: { key: ForwardKey; header: string }[] };
+export type HeadersPolicyInput = { allow?: string[] | null; forward?: ForwardKey[];
+                                   secret_headers?: Record<string, string | { keep: true }> };
+
+/** The policy to send back: kept secrets as {keep: true}, new ones as their typed value. */
+export function headersPolicyInput(current: HeadersPolicy, edit: { allow: string; forward: ForwardKey[];
+  remove: string[]; add: { name: string; value: string } | null }): HeadersPolicyInput {
+  const secrets: Record<string, string | { keep: true }> = {};
+  for (const name of Object.keys(current.secret_headers)) if (!edit.remove.includes(name)) secrets[name] = { keep: true };
+  if (edit.add && edit.add.name.trim() && edit.add.value) secrets[edit.add.name.trim()] = edit.add.value;
+  const allow = edit.allow.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+  return { forward: edit.forward, ...(allow.length ? { allow } : {}),
+           ...(Object.keys(secrets).length ? { secret_headers: secrets } : {}) };
+}
 
 /** Whose credential a call carries (BOSSAPP-847). */
 export type CredentialPolicy = "shared" | "per_user" | "per_user_fallback" | "per_agent";
