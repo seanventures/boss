@@ -518,6 +518,11 @@ class McpToolOff(McpServerError):
     retryable = False
 
 
+class McpToolDenied(McpToolOff):
+    """A tool-policy rule (BOSSAPP-815) denied this call: a deny rule, or a rate limit whose
+    window is spent. An McpToolOff, so every road that answers Off answers this the same way."""
+
+
 class McpArgumentsChanged(McpServerError):
     """The arguments are not the call a person approved. Not retryable."""
 
@@ -1334,6 +1339,23 @@ def record_reachability(
                  if isinstance(entry, dict) and str(entry.get("name")) in fresh]
         for decision in changed_tool_decisions(server_name, items, server_id=server_id):
             _open_tool_change_decision(connection, project_id, server_id, decision)
+        # AN "ALWAYS ALLOW" NEVER OUTLIVES THE DEFINITION IT WAS GIVEN FOR (BOSSAPP-817): every
+        # decision rule pinned to this tool's old schema is revoked now, audited. decide() also
+        # refuses a stale pin at call time, so a failure here can only delay the bookkeeping.
+        from .tool_policy_engine import drop_pinned_rules
+
+        for item in quarantined:
+            name = str(item.get("name") or "")
+            now_hash = next((e.get("schema_sha256") for e in stored
+                             if isinstance(e, dict) and e.get("name") == name), None)
+            try:
+                with connection.begin_nested():
+                    drop_pinned_rules(connection, project_id, server_id, name, now_hash)
+            except Exception:  # noqa: BLE001 — see above: the call-time check still holds
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "always-allow rules for %s not dropped", name, exc_info=True)
     connection.execute(
         text(
             "UPDATE mcp_servers SET reachable = :r, last_checked_at = now(), last_error = :e"
@@ -1603,6 +1625,7 @@ def call_tool_with_receipt(
     approval_about: Optional[dict[str, Any]] = None,
     agent: Optional[str] = None,
     principal: Optional[str] = None,
+    policy_context: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """The one EFFECT of calling an MCP tool: a receipt, the call, and the receipt settled.
 
@@ -1629,16 +1652,36 @@ def call_tool_with_receipt(
     The row names WHO (BOSSAPP-819): ``agent`` is the caller's actor (the agent's role, the
     skill's caller), ``principal`` the identity it acts as — the caller's, else the one in
     effect (identity.lineage.current: the run's person or agent principal).
+
+    THE ORDERED TOOL POLICY (BOSSAPP-815, :func:`tool_policy_engine.decide`) is asked here, in
+    place of the bare Allow / Ask / Off read: a rule may deny, ask or rate-limit, an "Always
+    allow" may let a tier 0-1 Ask tool run, and no rule lifts Off, the tier floor or a
+    quarantine. ``policy_context`` names who is calling ({role_key, workflow_id, run_id}) so an
+    agent- or workflow-scoped rule applies. The audit row carries the REAL matched ids; when a
+    rule or a ceiling decided, the explanation rides on the row's ``screen`` as ``policy``.
     """
     from .mcp_client import MCPClient
     from .receipts import ReceiptService
+    from .tool_policy_engine import context_for, decide
 
-    audit_agent = str(agent or "").strip() or "mcp_registry"
+    about = approval_about if isinstance(approval_about, dict) else {}
+    who = policy_context if isinstance(policy_context, dict) else {}
+    decided: dict[str, Any] = {}
+
+    audit_agent = (str(agent or "").strip()
+                   or str((policy_context or {}).get("role_key") or "").strip()
+                   or "mcp_registry")
     audit_principal = str(principal or "").strip() or acting_principal()
 
     def _audit_tool_call(outcome: str, decision: str, *, latency_ms: int = 0,
                          screen: Optional[dict[str, Any]] = None) -> None:
-        about = approval_about if isinstance(approval_about, dict) else {}
+        ids = list(decided.get("matched_policy_ids") or [])
+        if not ids and decision in ("allow", "ask", "off"):
+            ids = [decision]
+        if decided and (decided.get("rule_id") or any(i.startswith("guard:") for i in ids)):
+            screen = {**(screen or {}), "policy": {
+                "decision": decided.get("decision"), "rule_id": decided.get("rule_id"),
+                "explanation": decided.get("explanation")}}
         record_tool_call(
             connection,
             project_id=project_id,
@@ -1649,7 +1692,7 @@ def call_tool_with_receipt(
             tool=tool_name,
             arguments=inputs if isinstance(inputs, dict) else {},
             decision=decision,
-            matched_policy_ids=[decision] if decision in ("allow", "ask", "off") else [],
+            matched_policy_ids=ids,
             decision_id=approved_by,
             outcome=outcome,
             latency_ms=latency_ms,
@@ -1667,18 +1710,28 @@ def call_tool_with_receipt(
                                                     approval_about):
         _audit_tool_call("refused", "unreviewed")
         raise McpServerUnreviewed(_refusal(tool_name, server, approved_by))
-    # THE OPERATOR'S ALLOW / ASK / OFF (spec E7), the backstop for every road like the review:
-    # an Off tool never runs, an Ask tool runs only with a person's approval about this call.
-    # A QUARANTINED tool is Ask whatever it was set to (BOSSAPP-818); its mark is read from the
-    # row as it stands now, not from a server dict a caller loaded before a probe changed it.
-    policy = tool_policy(server, tool_name, _declared_tier(server, tool_name))
-    if policy == "allow" and tool_quarantined(_with_stored_tools(connection, project_id, server),
-                                              tool_name):
-        policy = "ask"
-    if policy == "off":
+    # THE OPERATOR'S POLICY (spec E7 + BOSSAPP-815), the backstop for every road like the review:
+    # an Off tool never runs, a denied call never runs, an Ask call runs only with a person's
+    # approval about this call. A QUARANTINED tool is Ask whatever it was set to (BOSSAPP-818);
+    # its mark is read from the row as it stands now, not from a server dict a caller loaded
+    # before a probe changed it — so the decision reads the STORED tool list.
+    decided.update(decide(
+        context_for(_with_stored_tools(connection, project_id, server), tool_name, inputs,
+                    project_id=project_id,
+                    run_id=str(who.get("run_id") or about.get("run_id") or "") or None,
+                    role_key=str(who.get("role_key") or about.get("role_key") or "") or None,
+                    workflow_id=str(who.get("workflow_id") or about.get("workflow_id") or "")
+                    or None),
+        connection=connection, record=True))
+    policy = {"allow": "allow", "ask": "ask"}.get(decided["decision"], "off")
+    if decided["decision"] == "deny" and decided.get("reason") == "off":
         _audit_tool_call("refused", "off")
         raise McpToolOff(f"Did not call {tool_name}: it is turned off for "
                          f"'{server.get('name')}' in Skills & MCP.")
+    if decided["decision"] == "deny":
+        _audit_tool_call("refused", "deny")
+        raise McpToolDenied(f"Did not call {tool_name} on '{server.get('name')}': "
+                            f"{decided['explanation']}")
     if policy == "ask" and not approval_stands(connection, project_id, approved_by,
                                                approval_about):
         _audit_tool_call("refused", "ask")

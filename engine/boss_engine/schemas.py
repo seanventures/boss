@@ -2870,6 +2870,11 @@ class DecisionActionRequest(BaseModel):
     # The typed answer to a decision that asks a form (BOSSAPP-832): keyed by the form's field
     # keys, validated against it on approve (services/typed_forms.validate_answer).
     answer: Optional[dict[str, Any]] = None
+    # "Always allow this" on an approved Ask card about a tool call (BOSSAPP-817):
+    # {expiry: 1h|1d|7d|30d|never, match_args: [top-level argument keys]} — becomes a
+    # source=decision allow rule (tool_policy_engine.grant_from_decision). Refused, with the
+    # approval, on any other card or a tool the card did not offer it for.
+    always_allow: Optional[dict[str, Any]] = None
 
 
 class DecisionDigestRequest(BaseModel):

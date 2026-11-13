@@ -30,6 +30,7 @@ import { Library } from "./library";
 import { TestCrewModal } from "./test-crew-modal";
 import { WhoCan } from "./who-can";
 import { KitTemplates } from "../../components/v2/templates/kit-templates";
+import { ToolRules } from "./tool-rules";
 
 export function KitHome({ projectId, actor }: { projectId: string; actor: string }) {
   useTips();
@@ -142,11 +143,12 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
     <div className="kit-home" data-testid="kit-home" data-drawer={opened && tab === "kit" ? "open" : undefined}>
       <div className="kit-head">
         <div className="kit-tabs" role="tablist" aria-label="Skills & MCP">
-          {(["kit", "who", "library", "templates"] as const).map((t) => (
+          {(["kit", "who", "library", "templates", "rules"] as const).map((t) => (
             <button key={t} type="button" role="tab" aria-selected={tab === t} className="kit-tab"
                     data-testid={`kit-tab-${t}`} onClick={() => switchTab(t)}
-                    title={t === "templates" ? "App templates: import, review, approve, trial, hide" : undefined}>
-              {t === "kit" ? "Kit" : t === "who" ? "Who can" : t === "library" ? "Library" : "Templates"}
+                    title={t === "templates" ? "App templates: import, review, approve, trial, hide"
+                      : t === "rules" ? "Tool rules: deny, ask, allow or rate-limit tool calls, in order; Always allow" : undefined}>
+              {t === "kit" ? "Kit" : t === "who" ? "Who can" : t === "library" ? "Library" : t === "templates" ? "Templates" : "Rules"}
             </button>
           ))}
         </div>
@@ -177,7 +179,7 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
         ) : null}
       </div>
 
-      {error && !kit && tab !== "templates" ? (
+      {error && !kit && tab !== "templates" && tab !== "rules" ? (
         <ReadFailure problem={{ text: error, status: errorStatus }} onRetry={() => void load()} testId="kit-api-error" />
       ) : null}
 
@@ -243,6 +245,9 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
       ) : null}
 
       {tab === "templates" ? <KitTemplates projectId={projectId} /> : null}
+
+      {/* BOSSAPP-815/817: the ordered tool-policy rules and the revocable Always allow rows. */}
+      {tab === "rules" ? <ToolRules projectId={projectId} actor={actor} /> : null}
 
       {crewOpen && kit ? (
         <TestCrewModal projectId={projectId} actor={actor} abilities={kit.abilities}

@@ -708,6 +708,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["token-efficiency/scorecard", "model_provider:read"],
   ["tool-calls", "activity:read"],
   ["tool-calls/export", "activity:export"],
+  ["tool-policies", "mcp_server:read"],
   ["toolchain-images", "host:read"],
   ["toolchain-images/", "host:read"],
   ["toolchain/imports", "skill:read"],

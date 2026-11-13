@@ -292,3 +292,36 @@
 .kit-gw-server { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }
 .kit-gw-tokens { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; }
 .kit-gw-tokens li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* Rules (BOSSAPP-815/817): the ordered tool-policy table, the add form and the simulate box. */
+.tp-rules { display: flex; flex-direction: column; gap: 12px; padding: 4px 0 16px; }
+.tp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tp-chips { display: flex; gap: 4px; }
+.tp-said { margin: 0; font-size: 0.8125rem; color: var(--ink); }
+.tp-muted { margin: 0; color: var(--muted); font-size: 0.8125rem; }
+.tp-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r); }
+.tp-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.tp-table th, .tp-table td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+.tp-table th { font-weight: 600; color: var(--muted); white-space: nowrap; }
+.tp-table tr[data-status="disabled"] td { opacity: 0.55; }
+.tp-mono { font-family: var(--mono); font-size: 0.75rem; word-break: break-word; }
+.tp-actions { white-space: nowrap; display: flex; gap: 8px; }
+.tp-tag { margin-left: 6px; padding: 1px 6px; border-radius: 999px; font-size: 0.6875rem; background: var(--bg); border: 1px solid var(--border); }
+.tp-eff { font-weight: 600; }
+.tp-eff-deny { color: var(--danger, #b42318); }
+.tp-eff-ask, .tp-eff-rate_limit { color: var(--warn, #b54708); }
+.tp-eff-allow { color: var(--ok, #067647); }
+.tp-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; align-items: end; }
+.tp-form label { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: var(--muted); }
+.tp-form input, .tp-form select, .tp-form textarea { font: inherit; font-size: 0.8125rem; padding: 4px 6px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); color: var(--ink); }
+.tp-form .tp-wide { grid-column: 1 / -1; }
+.tp-pair { display: flex; gap: 4px; }
+.tp-pair input { width: 50%; }
+.tp-sim { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.tp-sim h4 { margin: 0; font-size: 0.875rem; }
+.tp-sim-out { margin: 0; font-size: 0.8125rem; }
+/* "Always allow this" on an Ask card (app/always-allow-ui.tsx). */
+.aa-option { margin: 4px 0; font-size: 0.8125rem; }
+.aa-body { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; }
+.aa-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.aa-pin { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 0.75rem; }
