@@ -108,6 +108,10 @@ def build_submit_request(spec: dict[str, Any], tenant_id: Optional[str], *,
         "engine": engine,
         "engine_env": env,
         "run_mutation": bool(spec.get("run_mutation", False)),
+        # Diagnostic/offline flag the Go side already types (SubmitRequest.test_mode):
+        # test_mode guests init a throwaway repo instead of cloning, so the
+        # contract is drivable end-to-end with no network and no credentials.
+        "test_mode": bool(spec.get("test_mode", False)),
         # Requested guest agent turn cap. The sandbox-service forwards it (top-level or via
         # resources.max_turns) to `claude --max-turns`; absent -> the guest defaults to ~40.
         "max_turns": spec.get("max_turns"),
