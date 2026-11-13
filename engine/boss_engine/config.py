@@ -1250,6 +1250,13 @@ class Settings(BaseSettings):
     # project_settings `budget_at_limit` (services/spend_limits.py): pause (ask a person, today's
     # behaviour), cheaper (keep going on low-cost models) or stop (nothing runs until it resets).
     budget_at_limit: str = Field(default="pause", alias="BOSS_BUDGET_AT_LIMIT")
+    # BOSSAPP-869: spend BOSS cannot price (services/unpriced_policy.py; project_settings
+    # `budget_unpriced_policy`). estimate (today's behaviour: charged at the dearest known rate and
+    # labelled) or block (past the day's allowance below, reserve() refuses and opens the
+    # increase-or-defer decision).
+    budget_unpriced_policy: str = Field(default="estimate", alias="BOSS_BUDGET_UNPRICED_POLICY")
+    budget_unpriced_allowance_usd_micros: int = Field(
+        default=0, alias="BOSS_BUDGET_UNPRICED_ALLOWANCE_USD_MICROS", ge=0)
     # THE CODE GRAPH OF A REGISTERED REPOSITORY (services/knowledge/repo_index.py): every repository
     # registered in a project is cloned (BOSS's own clone path) and parsed into the graph, and its
     # base branch is re-checked; parsing only, no model is called. 0 turns it off install-wide.

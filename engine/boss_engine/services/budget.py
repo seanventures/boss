@@ -1341,6 +1341,18 @@ class BudgetGovernor:
                            amount_usd_micros=amount_usd_micros, snapshot=snapshot)
             return refused
 
+        # BOSSAPP-869: a project that allows no spend BOSS cannot price. Off by default
+        # (budget_unpriced_policy = estimate): nothing is read and reserve() is unchanged.
+        from .unpriced_policy import refusal as unpriced_refusal
+
+        refused = unpriced_refusal(connection, self.settings, project_id, category=category,
+                                   reason=reason, amount_usd_micros=amount_usd_micros,
+                                   budget_state=snapshot.get("budget_state"))
+        if refused is not None:
+            record_refusal(connection, project_id, refused, category=category, reason=reason,
+                           amount_usd_micros=amount_usd_micros, snapshot=snapshot)
+            return refused
+
         # BOSS-280: freeze_tier2_pct, actually enforced. Past the threshold, HIGH-RISK work
         # (tier >= 2) is refused even while cheaper/lower-risk work still fits under the cap —
         # the last budget headroom is preserved for finishing safe work, not starting risky work.
