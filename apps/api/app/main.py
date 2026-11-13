@@ -24266,6 +24266,8 @@ def approve_decision_in(connection, decision_id: str, payload: DecisionActionReq
             force=payload.force,
             # A typed question's answer (BOSSAPP-832), validated against its form.
             answer=payload.answer,
+            # "Always allow this" on a tool-call Ask card (BOSSAPP-817).
+            always_allow=payload.always_allow,
         )
     except DecisionNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -31815,6 +31817,13 @@ from .routers.work_items import build_work_items_router
 
 app.include_router(build_work_items_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# THE ORDERED TOOL-POLICY ENGINE (routers/tool_policies.py, services/tool_policy_engine.py;
+# BOSSAPP-815/817): the rule table, CRUD, simulate, and the revocable "Always allow" rows.
+from .routers.tool_policies import build_tool_policies_router
+
+app.include_router(build_tool_policies_router(
+    engine=engine, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
 # The AI SRE incident squad (routers/incident_squad.py, services/incident_squad.py).
 from .routers.incident_squad import build_incident_squad_router

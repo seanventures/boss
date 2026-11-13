@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1943 operations.
+# 1948 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -1818,6 +1818,11 @@
 "POST /v1/token-efficiency/recommendations": ["permit model_provider:read @ project(body=project_id)", "OAPVU"]
 "GET /v1/token-efficiency/routing": ["permit model_provider:read @ org", "OAPVU"]
 "GET /v1/token-efficiency/scorecard": ["permit model_provider:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/tool-policies": ["permit mcp_server:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/tool-policies": ["permit mcp_server:review @ project(body=project_id)", "OA"]
+"POST /v1/tool-policies/simulate": ["permit mcp_server:read @ project(body=project_id)", "OAPVU"]
+"DELETE /v1/tool-policies/{policy_id}": ["permit mcp_server:review @ project(query=project_id)", "OA"]
+"PATCH /v1/tool-policies/{policy_id}": ["permit mcp_server:review @ project(body=project_id)", "OA"]
 "GET /v1/toolchain-images": ["permit host:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "POST /v1/toolchain-images": ["permit host:manage @ project(body=project_id)", "OA"]
 "GET /v1/toolchain-images/": ["permit host:read @ project(query=project_id) +writes_on_get", "OAPVU"]
