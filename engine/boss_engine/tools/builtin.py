@@ -2064,6 +2064,23 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 row["inputs"] = mine.get("inputs")
                 row["produces"] = mine.get("produces")
             out.append(row)
+        # A DRAFT WAITING FOR A PERSON is listed too (BOSSAPP-843): it is no row until approved,
+        # and a model that cannot see it would draft it again.
+        listed = {r["skill_key"] for r in out}
+        with ctx.begin() as c:
+            waiting = services_module("change_consent").pending(c, pid, "skill")
+        for consent in waiting:
+            if consent["subject_key"] in listed:
+                continue
+            listed.add(consent["subject_key"])
+            proposed = consent["proposed"]
+            out.append({"skill_key": consent["subject_key"], "label": proposed.get("label"),
+                        "summary": proposed.get("summary") or "", "source": "authored",
+                        "behaviour_kind": proposed.get("behaviour_kind"),
+                        "risk_tier": proposed.get("risk_tier"), "trusted": False,
+                        "enabled": False, "usable": False, "ships_with_boss": False,
+                        "status": "awaiting_approval", "decision_id": consent["decision_id"],
+                        "reason": "a person has not approved this draft yet"})
         return {"skills": out,
                 "authored": sum(1 for r in out if not r["ships_with_boss"]),
                 "ships_with_boss": sum(1 for r in out if r["ships_with_boss"])}

@@ -234,6 +234,8 @@ export const INLINE_WRITES: Readonly<Record<string, readonly WriteGate[]>> = {
   "app/sandboxes-ui.tsx": ["sandbox:exec"],                        // POST /v1/sandboxes/{id}/exec
   "app/setup/capacity-row.tsx": ["entitlement:manage"],            // /v1/entitlements/…
   "app/skills/skill-drawer.tsx": ["skill:manage", "agent_ability:assign"], // /api/skills enable/disable/delete, assign
+  "app/skills/skill-history.tsx": ["skill:manage", "skill:invoke"], // /api/skill-supply restore/publish/cases/grade, run_tests
+  "app/skills/skill-source-import.tsx": ["skill:manage"],         // /api/skill-supply preview_source/import_source
   "app/skills/youtube-connection.tsx": ["integration:manage"],     // /v1/channels/youtube/*
   "app/workflows/captain-can-run-it.tsx": ["agent_ability:assign"], // /api/skills assign → POST /v1/role-skills
   "app/workflows/editor/define-step-modal.tsx": ["workflow:create"], // custom-steps POST/PATCH

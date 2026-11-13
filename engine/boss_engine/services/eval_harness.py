@@ -129,27 +129,99 @@ def run_eval_suite(engine, settings, project_id: str, actor: str = "eval_harness
             results.append({"eval": name, "status": "fail",
                             "detail": f"error: {exc}", "metrics": {}})
 
+    with begin(engine) as c:
+        return record_eval_run(c, project_id, suite, results, actor)
+
+
+def record_eval_run(connection, project_id: str, suite: str, results: list[dict],
+                    actor: str) -> dict:
+    """One eval_runs row + its event, for the suite above and for a skill's saved test cases
+    (run_skill_cases) alike — one record of "what was evaluated, and how it went"."""
     passed = sum(1 for r in results if r["status"] == "pass")
     failed = sum(1 for r in results if r["status"] == "fail")
     skipped = sum(1 for r in results if r["status"] == "skipped")
     overall = "fail" if failed else "pass"
     run_id = make_id("eval")
-    with begin(engine) as c:
-        c.execute(
-            text(
-                """
-                INSERT INTO eval_runs (id, project_id, suite, status, results, passed, failed, skipped)
-                VALUES (:id, :p, :su, :st, CAST(:r AS JSONB), :pa, :fa, :sk)
-                """
-            ),
-            {"id": run_id, "p": project_id, "su": suite, "st": overall,
-             "r": json.dumps(results), "pa": passed, "fa": failed, "sk": skipped},
-        )
-        emit_event(c, project_id, "eval.suite_run", actor, "eval_run", run_id,
-                   {"suite": suite, "status": overall, "passed": passed,
-                    "failed": failed, "skipped": skipped})
+    connection.execute(
+        text(
+            """
+            INSERT INTO eval_runs (id, project_id, suite, status, results, passed, failed, skipped)
+            VALUES (:id, :p, :su, :st, CAST(:r AS JSONB), :pa, :fa, :sk)
+            """
+        ),
+        {"id": run_id, "p": project_id, "su": suite, "st": overall,
+         "r": json.dumps(results, default=str), "pa": passed, "fa": failed, "sk": skipped},
+    )
+    emit_event(connection, project_id, "eval.suite_run", actor, "eval_run", run_id,
+               {"suite": suite, "status": overall, "passed": passed,
+                "failed": failed, "skipped": skipped})
     return {"id": run_id, "suite": suite, "status": overall, "passed": passed,
             "failed": failed, "skipped": skipped, "results": results}
+
+
+# ── A skill's saved test cases (BOSSAPP-844) ──────────────────────────────────────────────────
+#
+# A case is run against ONE version's content through the executor that version's behaviour runs
+# through (the same road a workflow step takes, skill_executors), with the version's content put
+# in front of the live row for the duration. Only what is safe to run on a person's "Run tests"
+# press is executed: a guide (returns its text), a knowledge-only builtin (its knowledge), an
+# agent program and a sandboxed command (their own isolation, which refuses where there is none).
+# A skill that reaches outside — another builtin executor, an MCP tool — is `skipped` with the
+# reason: a test press must never publish, pay or post.
+
+RUNNABLE_IN_TESTS = ("guide", "agent_program", "sandboxed_command")
+
+
+def execute_skill_case(connection, settings, project_id: str, skill: dict, content: dict,
+                       case_input: dict, actor: str) -> dict:
+    """{status: ran|error|skipped, output}. Never raises: a failing case is a result."""
+    from .skill_executors import SkillExecutorContext, behaviour_executor
+    from .skill_versions import VERSION_OVERRIDE
+
+    behaviour = str(content.get("behaviour_kind") or "")
+    config = content.get("config") or {}
+    if behaviour == "builtin" and str(config.get("executor_id") or "") == "knowledge.only":
+        return {"status": "ran", "output": {"text": str(content.get("knowledge") or "")}}
+    if behaviour not in RUNNABLE_IN_TESTS:
+        return {"status": "skipped", "output": {
+            "reason": f"a {behaviour} skill reaches outside BOSS, so a test press does not run "
+                      "it — try it in a workflow run instead."}}
+    handler = behaviour_executor(behaviour)
+    if handler is None:
+        return {"status": "error", "output": {"error": f"no executor for {behaviour}"}}
+    info = connection.info
+    info[VERSION_OVERRIDE] = {"skill_key": skill["skill_key"], "content": content}
+    try:
+        with connection.begin_nested():
+            ctx = SkillExecutorContext(settings=settings, connection=connection,
+                                       project_id=project_id, actor=actor)
+            output = handler(ctx, {**(case_input or {}), "_skill_key": skill["skill_key"]})
+        return {"status": "ran", "output": output if isinstance(output, dict)
+                else {"result": output}}
+    except Exception as exc:  # noqa: BLE001 — an error is the case's outcome
+        return {"status": "error", "output": {"error": f"{type(exc).__name__}: {exc}"[:500]}}
+    finally:
+        info.pop(VERSION_OVERRIDE, None)
+
+
+def run_skill_cases(connection, settings, project_id: str, skill: dict, version: dict,
+                    cases: list[dict], actor: str) -> dict:
+    """Run every case against `version`; recorded as one eval run (suite skill:<key>@v<n>).
+    Returns {eval_run, outcomes: [{case_id, status, output}]}."""
+    outcomes = []
+    results = []
+    for case in cases:
+        done = execute_skill_case(connection, settings, project_id, skill, version["content"],
+                                  case.get("input") or {}, actor)
+        outcomes.append({"case_id": case["id"], **done})
+        # Ungraded until a person (or a typed decision) grades it: an eval row says ran/skipped.
+        results.append({"eval": case["name"],
+                        "status": "skipped" if done["status"] == "skipped" else
+                                  ("fail" if done["status"] == "error" else "pass"),
+                        "detail": done["status"], "metrics": {}})
+    run = record_eval_run(connection, project_id,
+                          f"skill:{skill['skill_key']}@v{version['version_no']}", results, actor)
+    return {"eval_run": run, "outcomes": outcomes}
 
 
 def list_eval_runs(engine, project_id: str, limit: int = 20) -> list[dict]:

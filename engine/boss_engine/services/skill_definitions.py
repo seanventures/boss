@@ -43,7 +43,7 @@ from typing import Any, Iterable, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .core import create_blocking_decision, emit_event, make_id
+from .core import emit_event, make_id
 
 #: At or above this tier a step must be approved by a person. The same floor every capability
 #: obeys — imported rather than restated so the two cannot drift.
@@ -396,11 +396,10 @@ def _resolve_mcp_binding(
     return {**config, "mcp_server_id": str(server["id"]), "tool_name": tool_name}
 
 
-def save_skill(
+def prepare_skill(
     connection: Connection,
     *,
     project_id: str,
-    actor: str,
     skill_key: str,
     label: str,
     behaviour_kind: str,
@@ -410,21 +409,14 @@ def save_skill(
     produces: Any = (),
     config: Optional[dict[str, Any]] = None,
     risk_tier: int = 1,
-    trusted: bool = False,
-    enabled: bool = True,
     mode: str = "upsert",
 ) -> dict[str, Any]:
-    """Create or replace one skill.
+    """Every check save_skill makes, and the content it would write — writing nothing.
 
-    `mode` says which the caller MEANT, because the two look identical on the wire and are not:
-    ``create`` refuses a key that already exists, ``update`` refuses one that does not, and
-    ``upsert`` (the original behaviour, kept for scripts that rely on it) does either.
-
-    WHY THE DISTINCTION. The Skills page's form header switched to "Edit <key> by hand" as soon
-    as a key was typed, and saving silently replaced whatever skill already had that key — an
-    operator writing a new skill whose key happened to match an old one overwrote the old one,
-    knowledge body and all, with no warning. Creating and editing are different intentions and
-    the store now asks which one it is being given.
+    Split out of save_skill so an agent's draft can be validated and shown as a diff WITHOUT a
+    row being written (BOSSAPP-843: the draft used to be stored, disabled, before anyone agreed).
+    Returns {skill_key, label, summary, behaviour_kind, knowledge, inputs, produces, config,
+    risk_tier, exists}.
     """
     key = str(skill_key or "").strip().lower()
     if not _KEY.match(key):
@@ -496,6 +488,121 @@ def save_skill(
     # the same names twice is a way to have them disagree.
     if behaviour == "sandboxed_command" and not parsed_produces:
         parsed_produces = parsed_config.get("outputs") or []
+    return {
+        "skill_key": key, "label": _clean(label, "label", limit=120),
+        "summary": str(summary or "").strip()[:400], "behaviour_kind": behaviour,
+        "knowledge": str(knowledge or "")[:20000], "inputs": parsed_inputs,
+        "produces": parsed_produces, "config": parsed_config, "risk_tier": tier,
+        "exists": exists,
+    }
+
+
+#: Who a write came from (skill_versions.author_kind). `agent` writes need a consent (843).
+ORIGINS = ("person", "agent", "system", "sync")
+
+
+def is_agent_actor(connection: Connection, project_id: str, actor: Optional[str]) -> bool:
+    """Is `actor` an agent rather than a person or the platform?
+
+    `agent:…` principals, and any key that names an agent (a role) on this project and is not a
+    person by agent_identity.is_person — so an agent acting under its role name ("video_editor",
+    "cto") counts, while the console operator, a user principal and the system seeds do not.
+    """
+    from .agent_identity import _SYSTEM_ACTORS, CONSOLE_OPERATOR, is_person
+
+    value = str(actor or "").strip()
+    if not value or value in _SYSTEM_ACTORS or value == CONSOLE_OPERATOR:
+        return False
+    if value.startswith("agent:"):
+        return True
+    if value.startswith("usr_"):
+        return False
+    is_role = connection.execute(
+        text("SELECT 1 FROM roles WHERE project_id = :p AND role_key = :r LIMIT 1"),
+        {"p": project_id, "r": value}).first() is not None
+    return is_role and not is_person(value, connection, project_id)
+
+
+def _origin_of(connection: Connection, project_id: str, actor: Optional[str]) -> str:
+    from .agent_identity import _SYSTEM_ACTORS
+
+    if is_agent_actor(connection, project_id, actor):
+        return "agent"
+    return "system" if str(actor or "").strip() in _SYSTEM_ACTORS else "person"
+
+
+def save_skill(
+    connection: Connection,
+    *,
+    project_id: str,
+    actor: str,
+    skill_key: str,
+    label: str,
+    behaviour_kind: str,
+    summary: str = "",
+    knowledge: str = "",
+    inputs: Any = (),
+    produces: Any = (),
+    config: Optional[dict[str, Any]] = None,
+    risk_tier: int = 1,
+    trusted: bool = False,
+    enabled: bool = True,
+    mode: str = "upsert",
+    origin: Optional[str] = None,
+    version_note: str = "",
+    restored_from: Optional[str] = None,
+    files: Optional[dict[str, Any]] = None,
+    require_consent: bool = False,
+) -> dict[str, Any]:
+    """Create or replace one skill — THE ONE WRITER of a skill's content.
+
+    `mode` says which the caller MEANT, because the two look identical on the wire and are not:
+    ``create`` refuses a key that already exists, ``update`` refuses one that does not, and
+    ``upsert`` (the original behaviour, kept for scripts that rely on it) does either.
+
+    WHY THE DISTINCTION. The Skills page's form header switched to "Edit <key> by hand" as soon
+    as a key was typed, and saving silently replaced whatever skill already had that key — an
+    operator writing a new skill whose key happened to match an old one overwrote the old one,
+    knowledge body and all, with no warning. Creating and editing are different intentions and
+    the store now asks which one it is being given.
+
+    EVERY SAVE IS A VERSION (BOSSAPP-842): skill_versions.record runs after the write, in the
+    same transaction. EVERY AGENT SAVE IS CONSENTED (BOSSAPP-843): when `origin` is ``agent``
+    (given, or inferred from the actor by is_agent_actor) the write happens only by consuming an
+    approved change_consent whose diff hash equals the hash of THIS write; otherwise
+    change_consent.ConsentRequired is raised and nothing is written.
+    """
+    prepared = prepare_skill(
+        connection, project_id=project_id, skill_key=skill_key, label=label,
+        behaviour_kind=behaviour_kind, summary=summary, knowledge=knowledge, inputs=inputs,
+        produces=produces, config=config, risk_tier=risk_tier, mode=mode)
+    key = prepared["skill_key"]
+    behaviour = prepared["behaviour_kind"]
+    tier = prepared["risk_tier"]
+    who = origin if origin in ORIGINS else _origin_of(connection, project_id, actor)
+    from . import change_consent, skill_versions
+
+    consent_id = None
+    if who == "agent" or require_consent:
+        before = get_skill(connection, project_id, key)
+        base = skill_versions.content_hash(before) if before else ""
+        digest = change_consent.diff_hash("skill", key, base, skill_versions.snapshot(prepared))
+        consent_id = change_consent.consume(connection, project_id=project_id,
+                                            subject_kind="skill", subject_key=key,
+                                            digest=digest)
+        if consent_id is None:
+            raise change_consent.ConsentRequired(
+                f"{actor} cannot change skill {key!r} by itself: an agent's change to a skill is "
+                "written only after a person approves exactly that change. Propose it with "
+                "draft_skill — the person sees the diff and approves it.")
+    if prepared["exists"]:
+        # A SKILL FROM BEFORE HISTORY gets its old content as v1 first, so the first edit after
+        # an upgrade can still be undone.
+        existing = get_skill(connection, project_id, key)
+        if existing is not None and skill_versions.current(connection, project_id, key) is None:
+            skill_versions.record(connection, project_id=project_id, skill=existing,
+                                  author_kind="system", author_id=existing["created_by"],
+                                  source_note="as it was before version history")
 
     row = connection.execute(
         text(
@@ -518,18 +625,26 @@ def save_skill(
             RETURNING *
             """
         ),
-        {"id": make_id("skd"), "p": project_id, "k": key, "label": _clean(label, "label", limit=120),
-         "summary": str(summary or "").strip()[:400], "behaviour": behaviour,
-         "knowledge": str(knowledge or "")[:20000],
-         "inputs": json.dumps(parsed_inputs), "produces": json.dumps(parsed_produces),
-         "config": json.dumps(parsed_config), "tier": tier, "trusted": bool(trusted),
+        {"id": make_id("skd"), "p": project_id, "k": key, "label": prepared["label"],
+         "summary": prepared["summary"], "behaviour": behaviour,
+         "knowledge": prepared["knowledge"],
+         "inputs": json.dumps(prepared["inputs"]), "produces": json.dumps(prepared["produces"]),
+         "config": json.dumps(prepared["config"]), "tier": tier, "trusted": bool(trusted),
          "enabled": bool(enabled), "actor": actor},
     ).mappings().one()
     item = _row(row)
+    note = version_note or ("approved agent change" if consent_id else "")
+    version = skill_versions.record(
+        connection, project_id=project_id, skill=item, author_kind=who, author_id=actor,
+        source_note=note + (f" (consent {consent_id})" if consent_id else ""),
+        files=files, restored_from=restored_from)
+    current = version or skill_versions.current(connection, project_id, key)
+    item["version_id"] = current["id"] if current else None
+    item["version_no"] = current["version_no"] if current else None
     # WHAT WAS AUTHORED, never the knowledge body — it can hold a customer's internal doc.
     emit_event(connection, project_id, "skill.authored", actor, "skill_definition", item["id"],
                {"skill_key": key, "behaviour": behaviour, "risk_tier": tier,
-                "trusted": bool(trusted)})
+                "trusted": bool(trusted), "version_no": item["version_no"], "origin": who})
     return item
 
 
@@ -560,20 +675,63 @@ def _skill_diff(before: Optional[dict[str, Any]], after: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _proposed(item: dict[str, Any]) -> dict[str, Any]:
-    return {field: item.get(field) for field in ("skill_key", *_DIFF_FIELDS, "trusted")}
+def propose_change(
+    connection: Connection,
+    *,
+    project_id: str,
+    actor: str,
+    prepared: dict[str, Any],
+    mode: str,
+    reason: str = "skill_draft",
+    files: Optional[dict[str, Any]] = None,
+    meta: Optional[dict[str, Any]] = None,
+    note: str = "",
+) -> dict[str, Any]:
+    """Park a change to a skill as a diff-bound consent + the decision a person answers.
 
+    Writes NO skill row. The decision's question carries the field diff; the consent carries the
+    hash of (base content, proposed content) that save_skill will check at the write."""
+    from . import change_consent, skill_versions
 
-def _save_then_undo(connection: Connection, **kwargs: Any) -> dict[str, Any]:
-    """Run save_skill so its checks fire, then put the row back. The returned dict is the draft."""
-    nested = connection.begin_nested()
-    try:
-        saved = save_skill(connection, **kwargs)
-    except Exception:
-        nested.rollback()
-        raise
-    nested.rollback()
-    return saved
+    key = prepared["skill_key"]
+    before = get_skill(connection, project_id, key)
+    if mode == "create" and before is None:
+        waiting = change_consent.pending(connection, project_id, "skill", key)
+        if waiting:
+            raise SkillExistsError(
+                f"a draft of {key!r} already exists and is waiting for a person to approve it "
+                f"(decision {waiting[0]['decision_id']}). Wait for that answer, or draft an "
+                "update once it is approved.")
+    proposed = skill_versions.snapshot(prepared)
+    base = skill_versions.content_hash(before) if before else ""
+    diff = _skill_diff(before, {**proposed, "skill_key": key})
+    full = skill_versions.diff_text(skill_versions.snapshot(before) if before else None,
+                                    proposed, before_name="current", after_name="proposed")
+    question = (f"{'Change' if before else 'Create'} skill "
+                f"{proposed.get('label') or _key_words(key)}?\n\n{diff}")
+    trusted = bool(before["trusted"]) if before else False
+    opened = change_consent.request(
+        connection, project_id=project_id, subject_kind="skill", subject_key=key,
+        base_hash=base, proposed=proposed, diff=full or diff, requested_by=actor,
+        question=question, action="activate_authored_skill",
+        recommendation={"skill_key": key, "mode": mode,
+                        "diff": diff, "unified_diff": full,
+                        "proposed": {**proposed, "skill_key": key, "trusted": trusted},
+                        **({"note": note} if note else {})},
+        reason=reason, risk_tier=int(proposed["risk_tier"]),
+        meta={**(meta or {}), "files": files or {}, "trusted": trusted,
+              **({"note": note} if note else {})})
+    return {
+        "status": "pending",
+        "skill_key": key,
+        "behaviour_kind": proposed["behaviour_kind"],
+        "risk_tier": proposed["risk_tier"],
+        "decision_id": opened["decision_id"],
+        "consent_id": opened["consent_id"],
+        "diff_hash": opened["diff_hash"],
+        "diff": diff,
+        "next": "Nothing is written until a person approves this exact change.",
+    }
 
 
 def draft_for_approval(
@@ -592,63 +750,78 @@ def draft_for_approval(
     risk_tier: int = 1,
     mode: str = "create",
 ) -> dict[str, Any]:
-    """An agent draft is not a usable skill. A create is stored disabled; an update is checked
-    and then undone, so a skill other agents already run does not change. The decision carries
-    the diff. Approving it is what writes the skill enabled."""
+    """An agent draft is not a usable skill, and it is not a row either (BOSSAPP-843).
+
+    The draft is validated by every rule save_skill applies (prepare_skill) and parked as a
+    diff-bound change_consent with its decision. Approving that decision is what writes the skill
+    — the exact content shown, onto the exact content it was drafted against."""
     intent = str(mode or "create").strip().lower()
-    fields = dict(
-        project_id=project_id, actor=actor, skill_key=skill_key, label=label,
-        behaviour_kind=behaviour_kind, summary=summary, knowledge=knowledge,
-        inputs=inputs, produces=produces, config=config or {}, risk_tier=risk_tier,
-    )
-    if intent == "update":
-        before = get_skill(connection, project_id, str(skill_key or "").strip().lower())
-        trusted = bool(before["trusted"]) if before else False
-        preview = _save_then_undo(connection, **fields, trusted=trusted, enabled=True,
-                                  mode="update")
-    else:
-        before = None
-        preview = save_skill(connection, **fields, trusted=False, enabled=False, mode=intent)
-    diff = _skill_diff(before, preview)
-    question = (f"{'Change' if before else 'Create'} skill "
-                f"{preview.get('label') or _key_words(preview['skill_key'])}?\n\n{diff}")
-    decision_id = create_blocking_decision(
-        connection,
-        project_id,
-        None,
-        question,
-        {
-            "action": "activate_authored_skill",
-            "skill_key": preview["skill_key"],
-            "mode": intent,
-            "diff": diff,
-            "proposed": _proposed(preview),
-        },
-        {},
-        "skill_draft",
-        risk_tier=int(preview["risk_tier"]),
-    )
-    return {
-        "status": "pending",
-        "skill_key": preview["skill_key"],
-        "behaviour_kind": preview["behaviour_kind"],
-        "risk_tier": preview["risk_tier"],
-        "decision_id": decision_id,
-        "diff": diff,
-        "next": "The skill is not usable until a person approves this decision.",
-    }
+    if intent == "upsert":
+        intent = "update" if get_skill(connection, project_id,
+                                       str(skill_key or "").strip().lower()) else "create"
+    if intent not in ("create", "update"):
+        raise SkillDefinitionError("mode must be create or update.")
+    prepared = prepare_skill(
+        connection, project_id=project_id, skill_key=skill_key, label=label,
+        behaviour_kind=behaviour_kind, summary=summary, knowledge=knowledge, inputs=inputs,
+        produces=produces, config=config or {}, risk_tier=risk_tier, mode=intent)
+    return propose_change(connection, project_id=project_id, actor=actor, prepared=prepared,
+                          mode=intent)
+
+
+class ConsentStale(SkillDefinitionError):
+    """An approved draft whose base moved (or whose proposal changed) since it was shown."""
 
 
 def activate_authored_skill(
     connection: Connection, decision: dict[str, Any], actor: str,
 ) -> dict[str, Any]:
-    """Write the draft the decision showed, enabled. Called only when that decision is approved."""
+    """Write the draft the decision showed, enabled. Called only when that decision is approved.
+
+    With a change_consent (every draft since 843): the consent is approved, then save_skill
+    writes as the drafting agent and consumes it by hash — a skill changed since the draft makes
+    the hash differ and the write refuses (ConsentStale), so a person never approves one diff
+    and gets another. A decision that predates 843 has no consent; the approving person's answer
+    to the content it shows is written as theirs."""
+    from . import change_consent
+
     rec = decision.get("recommendation") or {}
     if isinstance(rec, str):
         rec = json.loads(rec)
     proposed = rec.get("proposed") if isinstance(rec, dict) else None
     if not isinstance(proposed, dict):
         raise SkillDefinitionError("this decision has no skill draft to activate.")
+    consent = change_consent.approve_for_decision(connection, str(decision["id"]), actor)
+    if consent is not None:
+        meta = (consent["proposed"] or {}).get("_meta") or {}
+        content = {k: v for k, v in consent["proposed"].items() if k != "_meta"}
+        try:
+            saved = save_skill(
+                connection, project_id=str(decision["project_id"]),
+                actor=consent["requested_by"] or actor,
+                skill_key=consent["subject_key"],
+                label=str(content.get("label") or ""),
+                behaviour_kind=str(content.get("behaviour_kind") or ""),
+                summary=str(content.get("summary") or ""),
+                knowledge=str(content.get("knowledge") or ""),
+                inputs=content.get("inputs") or [], produces=content.get("produces") or [],
+                config=content.get("config") or {}, risk_tier=content.get("risk_tier", 1),
+                trusted=bool(meta.get("trusted", False)), enabled=True, mode="upsert",
+                origin="sync" if meta.get("source_id") else "agent",
+                version_note=(f"{meta.get('note') or 'drafted by ' + consent['requested_by']}"
+                              f", approved by {actor}"),
+                files=meta.get("files") or None,
+                require_consent=True)
+        except change_consent.ConsentRequired as error:
+            raise ConsentStale(
+                f"skill {consent['subject_key']!r} changed after this draft was made, so this "
+                "is no longer the change you are looking at. Reject it and ask for a new draft."
+            ) from error
+        if meta.get("source_id"):
+            from .skill_sources import mark_applied
+
+            mark_applied(connection, str(meta["source_id"]), str(meta.get("upstream_sha") or ""))
+        return saved
     return save_skill(
         connection,
         project_id=str(decision["project_id"]),
@@ -664,7 +837,7 @@ def activate_authored_skill(
         risk_tier=proposed.get("risk_tier", 1),
         trusted=bool(proposed.get("trusted", False)),
         enabled=True,
-        mode="upsert",
+        mode="upsert", origin="person",
     )
 
 

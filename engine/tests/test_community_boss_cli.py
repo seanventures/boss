@@ -28,7 +28,7 @@ HELPERS = (
 # What `docker compose config --format json` would say about the build services (install.sh
 # builds them one image at a time from this answer). Kept equal to the real compose file below.
 COMPOSE_BUILDS = {"db": None, "build-services": None, "api": None, "worker": None, "mcp-tools": None,
-                  "egress": None, "web": ["web"]}
+                  "egress": None, "web": ["web"], "runner": ["runner"]}
 COMPOSE_CONFIG_JSON = json.dumps({"services": {
     name: {"build": {"context": "."}, **({"profiles": profiles} if profiles else {})}
     for name, profiles in COMPOSE_BUILDS.items()}})

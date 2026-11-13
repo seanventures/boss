@@ -1,0 +1,21 @@
+{
+  "contract_version": "1.0",
+  "task_id": "crun_s1_contract",
+  "tenant_id": "default",
+  "repo": {
+    "owner": "example-user",
+    "name": "boss-sandbox",
+    "base_branch": "main",
+    "work_branch": "boss/code/crun_s1_contract"
+  },
+  "git_token": "",
+  "instructions": "do X",
+  "acceptance_criteria": ["a"],
+  "test_commands": ["pytest -q"],
+  "engine": "claude_code",
+  "engine_env": {
+    "CLAUDE_CODE_OAUTH_TOKEN": "tok"
+  },
+  "run_mutation": false,
+  "resources": {}
+}

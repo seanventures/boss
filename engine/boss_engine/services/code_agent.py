@@ -187,11 +187,17 @@ def _stage_deadline() -> Optional[float]:
     """The wall-clock deadline (epoch seconds) of the stage this thread runs, if it has one."""
     from .llm_telemetry import get_llm_context
 
-    raw = get_llm_context().get("stage_deadline")
+    ctx = get_llm_context()
+    raw = ctx.get("stage_deadline")
     try:
-        return float(raw) if raw else None
+        deadline = float(raw) if raw else None
     except (TypeError, ValueError):
         return None
+    # THE CLOCK STOPS WHILE THE RUN WAITS FOR A PERSON (stage_clock, BOSSAPP-814): a call parked
+    # at the MCP gateway moves the stage's deadline out by the time it waited.
+    from . import stage_clock
+
+    return stage_clock.extended(ctx.get("run_id"), deadline)
 
 
 def _cap_to_deadline(timeout: int, *, read_only: bool) -> int:
@@ -437,8 +443,16 @@ def _drain(child, *, timeout: Optional[float], on_line=None,
     # killed and surfaced as a timeout, which the pipeline already knows how to retry —
     # minutes, not the better part of an hour.
     idle_limit = _idle_timeout_seconds()
+    # A SESSION PARKED AT THE MCP GATEWAY IS WAITING ON A PERSON, NOT STALLED (stage_clock,
+    # BOSSAPP-814): while one of its calls is parked it is never killed as silent, and the time
+    # it spent parked is added to its timeout.
+    from . import mcp_gateway, stage_clock
+    from .llm_telemetry import get_llm_context
+
+    parked_run = get_llm_context().get("run_id") if mcp_gateway.enabled() else None
+    launched_at = time.time()
     try:
-        if not idle_limit:
+        if not idle_limit and not parked_run:
             try:
                 child.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -448,15 +462,19 @@ def _drain(child, *, timeout: Optional[float], on_line=None,
             deadline = (time.monotonic() + timeout) if timeout else None
             while True:
                 try:
-                    child.wait(timeout=min(15.0, idle_limit))
+                    child.wait(timeout=min(15.0, idle_limit or 15.0))
                     break
                 except subprocess.TimeoutExpired:
                     now = time.monotonic()
-                    if deadline and now > deadline:
+                    if parked_run and stage_clock.is_parked(parked_run):
+                        last_output_at[0] = now
+                    paused = stage_clock.paused_between(parked_run, launched_at) \
+                        if parked_run else 0.0
+                    if deadline and now > deadline + paused:
                         _end_child(child)
                         raise
                     silent_for = now - last_output_at[0]
-                    if silent_for > idle_limit:
+                    if idle_limit and silent_for > idle_limit:
                         _log.error(
                             "code agent produced no output for %ds (limit %ds) — killing it as "
                             "stalled rather than waiting out the run timeout",
@@ -1020,6 +1038,9 @@ class ClaudeCodeAgent:
             model_proxy.shield(env, "anthropic", cred.value, settings=self.settings)
         #: Who pays for this run's calls (included_spend.py), stamped on its usage.
         self._billing = cred.billing
+        if self.mcp_harness is not None and hasattr(self.mcp_harness, "env"):
+            # The MCP gateway's parked calls outlast the CLI's default tool wait (code_task_mcp).
+            env.update(self.mcp_harness.env())
         # A BOUND ON SILENT THINKING. Left to decide for itself, the model thought for 7 and 12
         # minutes before its first action in a HelpDesk AI build (19 of the build's first 52
         # minutes were silence, with no tool call, no output and no error), and nobody watching

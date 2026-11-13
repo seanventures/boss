@@ -14,6 +14,7 @@ import { importSkillAction } from "../actions";
 import { showToast } from "../client-forms";
 import { shortError } from "./kit-copy";
 import { ModalShell } from "./overlay";
+import { SourceImport } from "./skill-source-import";
 
 export function ImportSheet({ projectId, actor, onClose, onImported }: {
   projectId: string; actor: string; onClose: () => void; onImported: () => void;
@@ -21,6 +22,7 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<"paste" | "source">("paste");
   // Pre-greyed (P1-18): an mcpServers JSON registers servers; anything else imports a skill.
   const skillGate = useGate("skill:manage");
   // Adding an MCP server is POST /v1/mcp/servers: mcp_server:review (apps/api main.py register_mcp).
@@ -62,6 +64,16 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
           <h3 data-tip="A skill YAML bundle, or MCP servers as JSON">Import</h3>
           <button type="button" className="kit-icon-btn" aria-label="Close" onClick={onClose}>×</button>
         </header>
+        <div className="kit-tabs" role="tablist" aria-label="Import from" data-testid="kit-import-mode">
+          <button type="button" role="tab" className="kit-tab" aria-selected={mode === "paste"}
+                  data-testid="kit-import-mode-paste" onClick={() => setMode("paste")}>Paste</button>
+          <button type="button" role="tab" className="kit-tab" aria-selected={mode === "source"}
+                  data-tip="GitHub, skills.sh or a URL, pinned and kept in sync"
+                  data-testid="kit-import-mode-source" onClick={() => setMode("source")}>From a source</button>
+        </div>
+        {mode === "source" ? (
+          <SourceImport projectId={projectId} actor={actor} onImported={onImported} />
+        ) : (<>
         <textarea rows={10} value={text} spellCheck={false} aria-label="YAML or JSON" data-testid="kit-import-text"
                   placeholder={'format: boss.capability-bundle/v1\n…  or  {"mcpServers": {…}}'}
                   onChange={(e) => setText(e.target.value)} />
@@ -70,6 +82,7 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
           <button type="button" className="kit-btn kit-btn-primary" disabled={busy || !text.trim()} {...gate.props}
                   data-testid="kit-import-run" onClick={gate.guard(() => void run())}>Import{gate.sr}</button>
         </footer>
+        </>)}
     </ModalShell>
   );
 }

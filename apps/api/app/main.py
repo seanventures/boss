@@ -17965,6 +17965,7 @@ def save_skill_definition(payload: open_bodies.SkillDefinitionSaveBody) -> dict:
     rules is three chances for them to disagree.
     """
     payload = payload.payload()
+    from .services.change_consent import ConsentRequired
     from .services.skill_definitions import SkillDefinitionError, SkillExistsError, save_skill
 
     project_id = str(payload.get("project_id") or "").strip()
@@ -17990,10 +17991,17 @@ def save_skill_definition(payload: open_bodies.SkillDefinitionSaveBody) -> dict:
                 trusted=bool(payload.get("trusted", False)),
                 enabled=bool(payload.get("enabled", True)),
                 mode=str(payload.get("mode") or "upsert"),
+                # THE CONSOLE ROUTE IS A PERSON'S EDIT (BOSSAPP-843 exempts it) — unless the
+                # bound principal is itself an agent, whose change must go through draft_skill.
+                origin="agent" if actor.startswith("agent:") else "person",
             )}
         except SkillExistsError as error:
             # 409: a create named a key that is taken. Saving used to silently replace it.
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except ConsentRequired as error:
+            # 403: an agent's key saving a skill directly. Its change needs a person's consent
+            # to that exact diff (BOSSAPP-843) — draft_skill proposes it.
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except SkillDefinitionError as error:
             # 422, not 500: everything this raises is something the operator can fix, and the
             # message is already written for them.
@@ -31704,6 +31712,16 @@ app.include_router(build_external_agents_router())
 from .routers.kit import build_kit_router
 
 app.include_router(build_kit_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
+# SKILLS AS A GOVERNED SUPPLY CHAIN (BOSSAPP-841..844): history, sources, consents, test cases
+# (routers/skill_supply.py).
+from .routers.skill_supply import build_skill_supply_router
+
+app.include_router(build_skill_supply_router(
     engine=engine,
     settings=get_settings,
     require_write_actor=require_project_write_actor,

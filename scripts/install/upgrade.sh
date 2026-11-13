@@ -98,6 +98,8 @@ created before that setting was recorded, pass --no-web once to keep it off.
 Use --web or --no-web to change the existing choice deliberately.
 If the new release fails to start, the previous release is put back and
 started again (data volumes are kept). --no-rollback leaves it as it is.
+The images running before the upgrade are kept as prev-<tag>: `boss rollback`
+(rollback.sh) puts that release back later, without a build.
 
 LOCAL BOSS SELF-FIXES (docs/product/BOSS_FIXES_ITSELF.md §6.4) live on a separate stack ref
 over the release, never on the checkout's HEAD, so the fast-forward rule still applies to the
@@ -197,10 +199,54 @@ for f in json.load(sys.stdin)["fixes"]:
   fi
 fi
 
+# INSTANT ROLLBACK (BOSSAPP-839): before anything is rebuilt, the images that run now are kept
+# under prev-<tag>, and .boss-rollback records what they need (commit, ref, schema checksum), so
+# `boss rollback` can put this release back in seconds, without a build. Best effort: an install
+# whose images cannot be tagged still upgrades; it just has no instant way back.
+ROLLBACK_SERVICES=(api worker mcp-tools egress web)
+image_tag() {
+  local tag
+  tag="$(grep -m 1 '^BOSS_COMMUNITY_IMAGE_TAG=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+  [[ -n "$tag" ]] || tag="$(grep -m 1 '^COMPOSE_PROJECT_NAME=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+  printf '%s\n' "${tag:-boss-community}"
+}
+sha256_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi
+}
+keep_previous_images() {
+  local tag="$1" kept=() d=(docker) svc
+  if ! docker info >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then d=(sudo -n docker)
+    else echo 'Docker is unavailable to this user; no instant rollback point kept.' >&2; return 0; fi
+  fi
+  for svc in "${ROLLBACK_SERVICES[@]}"; do
+    if "${d[@]}" image inspect "boss-community-$svc:$tag" >/dev/null 2>&1; then
+      "${d[@]}" tag "boss-community-$svc:$tag" "boss-community-$svc:prev-$tag" </dev/null &&
+        kept+=("boss-community-$svc")
+    fi
+  done
+  [[ ${#kept[@]} -gt 0 ]] || { echo 'No current BOSS images found; no instant rollback point kept.' >&2; return 0; }
+  local schema tmp="$INSTALL_DIR/.boss-rollback.writing.$$"
+  schema="$(git -C "$INSTALL_DIR" show "$OLD_COMMIT:db/schema.sql" 2>/dev/null | sha256_stdin)" || schema=""
+  printf '%s\n' \
+    "# BOSS rollback point, written by upgrade.sh. Not secret. boss rollback reads it." \
+    "BOSS_PREV_COMMIT=$OLD_COMMIT" \
+    "BOSS_PREV_REF=$CURRENT_REF" \
+    "BOSS_IMAGE_TAG=$tag" \
+    "BOSS_PREV_IMAGE_TAG=prev-$tag" \
+    "BOSS_PREV_IMAGES=${kept[*]}" \
+    "BOSS_PREV_SCHEMA_SHA256=$schema" \
+    "BOSS_PREV_SAVED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
+  mv -f "$tmp" "$INSTALL_DIR/.boss-rollback"
+  echo "Kept the running images as prev-$tag; boss rollback puts $CURRENT_REF back without a build." >&2
+}
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
+  printf 'Would keep the running images as prev-%s (for boss rollback).\n' "$(image_tag)"
   printf 'Would back up %s, then rerun the installer from %s (%s → %s).\n' "$INSTALL_DIR" "$REF" "$OLD_COMMIT" "$NEW_COMMIT"
   exit 0
 fi
+keep_previous_images "$(image_tag)"
 
 FETCHED_INSTALLER="$(mktemp)"
 # The new release's post-start check, kept aside: a rollback is verified with it (below).

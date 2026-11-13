@@ -115,3 +115,25 @@ exec java -Dserver.port="$PORT" -jar target/<app>.jar [server config.yml]
 - **Memory.** BOSS sets no JVM heap flags: a JVM sizes its heap at 25% of the memory it sees by
   default. If Spring Boot tests run out of memory in the build, set `JAVA_TOOL_OPTIONS` for the
   install after measuring, rather than guessing.
+
+## A project's own image (built by hand)
+
+When a project needs something no toolchain stage carries (a different JDK, Go, browsers, a
+private CLI), build its image once instead of reinstalling it every run. This needs the docker
+build runtime (`BOSS_SANDBOX_COMMAND_RUNTIME=docker`); the console says so when it is off.
+
+1. **Project › Settings › Toolchain › Build image** starts a throwaway setup container from
+   `BOSS_TOOLCHAIN_DEFAULT_BASE` (default: `BOSS_SANDBOX_CONTAINER_IMAGE`), as root, with network
+   (`BOSS_TOOLCHAIN_SETUP_NETWORK`, default `bridge`).
+2. **Open terminal** runs commands in it. Every command is audited and kept; the ones that
+   succeed become the image's Dockerfile. Install system-wide — builds run as a non-root user.
+   Anything typed here, logins included, is saved in the image.
+3. **Capture** runs `docker commit`. With a registry the image is pushed and builds pin it by
+   digest; without one it stays in the local daemon (`docker images boss-toolchain/*`).
+4. The chip turns **Project image ready**. From then on every build of that project runs its
+   commands in that image. An execution environment's `config.image` still wins; with neither,
+   builds use the default image exactly as before.
+
+The local registry is optional: `docker compose --profile toolchains up -d registry`, then set
+`BOSS_TOOLCHAIN_REGISTRY=127.0.0.1:5000` in `.env` and recreate the api and worker. It listens on
+the host loopback only.
