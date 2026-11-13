@@ -295,9 +295,17 @@ def test_a_quarantined_allow_tool_answers_ask_and_cannot_be_set_back_to_allow():
 
 def test_every_call_road_reads_the_one_tool_policy():
     """feat/814's gateway decides through mcp_registry.tool_policy too (tool_policy_verdict), so
-    it inherits the quarantine; asserted here on the roads on this branch."""
-    for caller in (reg.call_tool_with_receipt, reg.call_tool_unattended):
-        assert "tool_policy(" in inspect.getsource(caller)
+    it inherits the quarantine; asserted here on the roads on this branch. Since BOSSAPP-815 the
+    receipt door and the gateway ask tool_policy_engine.decide, whose context reads
+    mcp_registry.tool_policy (tool_policy_engine.context_for) — the same one statement."""
+    from boss_engine.services import mcp_gateway
+    from boss_engine.services import tool_policy_engine as tpe
+
+    assert "tool_policy(" in inspect.getsource(tpe.context_for)
+    assert "tool_policy(" in inspect.getsource(reg.call_tool_unattended)
+    for caller in (reg.call_tool_with_receipt, mcp_gateway.tool_policy_verdict):
+        src = inspect.getsource(caller)
+        assert "decide(" in src and "context_for(" in src
 
 
 TEST_DB = os.environ.get(

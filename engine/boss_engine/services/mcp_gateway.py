@@ -51,7 +51,7 @@ BOSS_MCP_GATEWAY=on|off, OFF by default: off, code_task_mcp writes exactly the f
 WHAT IS NOT COVERED
 -------------------
 A micro-VM guest or a remote sandbox has no loopback shared with BOSS (as with the model proxy).
-The full ordered policy engine is BOSSAPP-815: it replaces `tool_policy_verdict`, nothing else.
+`tool_policy_verdict` asks the ordered policy engine (BOSSAPP-815, tool_policy_engine.decide).
 """
 from __future__ import annotations
 
@@ -127,7 +127,13 @@ def keepalive_seconds() -> float:
 @dataclass(frozen=True)
 class Verdict:
     decision: str            # allow | ask | deny
-    reason: str              # why, as a code: allow, ask, unreviewed, off, not_granted
+    reason: str              # why, as a code: allow, ask, unreviewed, off, not_granted,
+    #                          policy (a rule asked or denied), rate_limited
+    #: What tool_policy_engine.decide matched and why (BOSSAPP-815). Not part of equality, so a
+    #: verdict still reads as its decision and reason.
+    matched_policy_ids: tuple = field(default=(), compare=False)
+    explanation: str = field(default="", compare=False)
+    rule_id: Optional[str] = field(default=None, compare=False)
 
 
 def tool_policy_verdict(server: Mapping[str, Any], tool_name: str, *,
@@ -135,29 +141,35 @@ def tool_policy_verdict(server: Mapping[str, Any], tool_name: str, *,
                         arguments: Optional[Mapping[str, Any]] = None,
                         project_id: Optional[str] = None,
                         run_id: Optional[str] = None,
-                        role_key: Optional[str] = None) -> Verdict:
-    """THE ONE PLACE a proxied call's fate is decided — a minimal ladder over the tier/trust
-    data the registry already holds. BOSSAPP-815 replaces this function with the full ordered
-    policy engine; the gateway calls nothing else, so the swap touches nothing else.
+                        role_key: Optional[str] = None,
+                        connection: Any = None,
+                        record: bool = False) -> Verdict:
+    """THE ONE PLACE a proxied call's fate is decided: the agent's grant, then the ordered
+    tool-policy engine (BOSSAPP-815, :func:`tool_policy_engine.decide`) — the same decision the
+    receipt door and the kernel make, so the three cannot disagree.
 
-    deny  — the agent's grant does not name the tool, or the operator turned it Off;
-    ask   — the server is unreviewed (mcp_registry.needs_person), or the tool is set to Ask
-            (every tier >= 2 tool's floor);
-    allow — everything else.
+    deny  — the agent's grant does not name the tool, the operator turned it Off, a deny rule
+            matched, or a rate limit is spent;
+    ask   — the server is unreviewed, the tool is set to Ask (every tier >= 2 tool's floor), it
+            is quarantined, or an ask rule matched;
+    allow — everything else (including a tier 0-1 Ask tool an "Always allow" lets run).
+
+    ``connection`` reads the project's rules; without one only the registry's own Allow / Ask /
+    Off and the ceilings apply. ``record`` counts the deciding rule's hit.
     """
-    from .mcp_registry import _declared_tier, needs_person, tool_policy
+    from .tool_policy_engine import context_for, decide
 
     granted = {str(t) for t in (granted_tools or [])}
     if granted and tool_name not in granted:
-        return Verdict("deny", "not_granted")
-    policy = tool_policy(dict(server), tool_name, _declared_tier(dict(server), tool_name))
-    if policy == "off":
-        return Verdict("deny", "off")
-    if needs_person(dict(server)):
-        return Verdict("ask", "unreviewed")
-    if policy == "ask":
-        return Verdict("ask", "ask")
-    return Verdict("allow", "allow")
+        return Verdict("deny", "not_granted", ("guard:not_granted",),
+                       f"DENY: {tool_name} is not in this agent's grant.")
+    found = decide(context_for(dict(server), tool_name, arguments,
+                               project_id=project_id or server.get("project_id"),
+                               run_id=run_id, role_key=role_key),
+                   connection=connection, record=record)
+    return Verdict(found["decision"], str(found["reason"]),
+                   tuple(found["matched_policy_ids"]), str(found["explanation"]),
+                   found.get("rule_id"))
 
 
 # ── Results ──────────────────────────────────────────────────────────────────────────────────
@@ -506,18 +518,32 @@ class McpGateway:
             if server is None:
                 return tool_error("unknown_tool", f"the server '{server_key}' is no longer "
                                   "registered in this project")
+            # A deny ends the call here, so the rule's hit is counted here; an allowed or
+            # asked call is counted once, at the receipt door it then goes through.
             verdict = tool_policy_verdict(server, tool, granted_tools=meta.get("granted_tools"),
                                           arguments=arguments, project_id=grant.project_id,
-                                          run_id=grant.run_key, role_key=grant.role_key)
+                                          run_id=grant.run_key, role_key=grant.role_key,
+                                          connection=c)
             if verdict.decision == "deny":
+                if verdict.rule_id:
+                    tool_policy_verdict(server, tool, arguments=arguments,
+                                        project_id=grant.project_id, run_id=grant.run_key,
+                                        role_key=grant.role_key, connection=c, record=True)
                 grant.calls["deny"] += 1
                 record_tool_call(c, project_id=grant.project_id, run_id=grant.run_key,
                                  agent="mcp_gateway", principal=grant.role_key,
                                  server_id=server.get("id"), tool=tool, arguments=arguments,
-                                 decision="deny", matched_policy_ids=[verdict.reason],
-                                 decision_id=None, outcome="refused", latency_ms=0)
+                                 decision="deny",
+                                 matched_policy_ids=list(verdict.matched_policy_ids)
+                                 or [verdict.reason],
+                                 decision_id=None, outcome="refused", latency_ms=0,
+                                 screen=({"policy": {"decision": "deny",
+                                                     "rule_id": verdict.rule_id,
+                                                     "explanation": verdict.explanation}}
+                                         if verdict.rule_id else None))
                 why = ("it is turned off in Skills & MCP" if verdict.reason == "off"
-                       else "it is not in this agent's grant")
+                       else "it is not in this agent's grant" if verdict.reason == "not_granted"
+                       else verdict.explanation.rstrip("."))
                 return tool_error(
                     "denied_by_policy",
                     (f"{tool} on '{server.get('name')}' is not allowed for this run: {why}. "
@@ -534,7 +560,9 @@ class McpGateway:
                     record_tool_call(c, project_id=grant.project_id, run_id=grant.run_key,
                                      agent="mcp_gateway", principal=grant.role_key,
                                      server_id=server.get("id"), tool=tool, arguments=arguments,
-                                     decision="ask", matched_policy_ids=[verdict.reason],
+                                     decision="ask",
+                                     matched_policy_ids=list(verdict.matched_policy_ids)
+                                     or [verdict.reason],
                                      decision_id=decision_id, outcome="refused", latency_ms=0)
                 return _not_released(answer, decision_id, what=f"{tool} on "
                                      f"'{server.get('name')}'")
@@ -558,7 +586,9 @@ class McpGateway:
                     dedupe_key=f"mcpgw:{grant.run_key}:{server['id']}:{tool}:{call_ref}",
                     tenant_scope=_tenant_scope(c, grant.project_id),
                     approved_by=decision_id,
-                    approval_about={"run_id": grant.run_key})
+                    approval_about={"run_id": grant.run_key},
+                    # Who is calling, so an agent-scoped rule decides here as it did above.
+                    policy_context={"role_key": grant.role_key, "run_id": grant.run_key})
             except McpServerError as refused:
                 # The registry's own backstop (review, Off, Ask, changed arguments) said no.
                 return tool_error("denied_by_policy", str(refused), tool=tool,
@@ -663,8 +693,13 @@ class McpGateway:
 
             server = dict(server or {})
             risk = tool_tier(server, tool, _declared_tier(server, tool))
+            from .tool_policy_engine import always_allow_offer
+
             rec.update({"server_id": server.get("id"), "server": server.get("name"),
                         "tool": tool, "policy_reason": reason,
+                        # "Always allow this" (BOSSAPP-817): offered on a tier 0-1 tool of a
+                        # reviewed, unquarantined server; the pin is the tool's schema hash now.
+                        "always_allow_offer": always_allow_offer(server, tool, reason=reason),
                         **bind_held_call(tool, arguments or {})})
             ask = (f"{who} wants to call {tool} on {server.get('name')}"
                    f"{' (an unreviewed server)' if reason == 'unreviewed' else ''}. "
