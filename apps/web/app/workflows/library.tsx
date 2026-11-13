@@ -62,7 +62,36 @@ export type Schedule = {
   last_missing?: { key: string; label: string; fix?: string; area?: string | null }[];
   /** Readiness keys this schedule may start without (the unattended Start anyway). */
   start_anyway?: string[];
+  /** BOSSAPP-877 routine rules. */
+  cron_expr?: string | null;
+  concurrency_policy?: Concurrency;
+  catch_up?: CatchUp;
+  catch_up_max?: number;
+  activity_gate?: { kinds: string[]; min_events: number } | null;
 };
+
+export type Concurrency = "always_enqueue" | "skip_if_active" | "coalesce";
+export type CatchUp = "none" | "one" | "all";
+export const CONCURRENCY_WORDS: Record<Concurrency, string> = {
+  always_enqueue: "Start anyway", skip_if_active: "Skip it", coalesce: "Run once after",
+};
+export const CATCH_UP_WORDS: Record<CatchUp, string> = { none: "Skip missed", one: "Run once", all: "Run each (capped)" };
+export type Firing = { id: string; scheduled_for: string; outcome: string; reason: string | null; run_id: string | null };
+export const FIRING_REASON_WORDS: Record<string, string> = {
+  run_active: "last run still going", no_activity: "nothing happened", missed: "missed",
+  caught_up_once: "caught up once", catch_up_cap: "over the catch-up cap", not_ready: "not ready",
+  authority_ended: "authority ended",
+};
+
+/** A five-field cron, said wrong before it is sent ("" is fine: not cron). */
+export function cronProblem(expr: string): string | null {
+  const t = expr.trim();
+  if (!t) return null;
+  const parts = t.split(/\s+/);
+  if (parts.length !== 5) return `Cron has five fields (minute hour day month weekday); this has ${parts.length}.`;
+  if (!parts.every((p) => /^[\w*,\-/]+$/.test(p))) return "Use numbers, names, *, -, / and commas.";
+  return null;
+}
 
 export type ScheduleDraft = {
   workflowKey: string;
@@ -72,6 +101,12 @@ export type ScheduleDraft = {
   values: Record<string, string>;
   /** Missing things the operator accepted this schedule may start without. */
   startAnyway: string[];
+  /** BOSSAPP-877: "" = the weekly default; otherwise a five-field cron. */
+  cron: string;
+  concurrency: Concurrency;
+  catchUp: CatchUp;
+  /** Skip a firing when nothing happened in the project since the last run. */
+  gate: boolean;
 };
 
 function browserTimeZone(): string {
@@ -96,6 +131,10 @@ export function scheduleDraftFor(item: { workflow_key: string; name: string },
     timezone: existing?.timezone || browserTimeZone(),
     values: scheduleFormValues(existing?.input),
     startAnyway: existing?.start_anyway ?? [],
+    cron: existing?.cron_expr ?? "",
+    concurrency: existing?.concurrency_policy ?? "always_enqueue",
+    catchUp: existing?.catch_up ?? "one",
+    gate: Boolean(existing?.activity_gate),
   };
 }
 
@@ -767,6 +806,17 @@ function SchedulePopover({ workflow, schedules, projectId, busy, inputSchema, on
   onDelete: (id: string) => void;
 }) {
   const [draft, setDraft] = useState<ScheduleDraft>(() => scheduleDraftFor(workflow, schedules[0]));
+  const [shown, setShown] = useState<{ id: string; firings: Firing[] } | null>(null);
+  const showFirings = async (id: string) => {
+    if (shown?.id === id) { setShown(null); return; }
+    try {
+      const r = await fetch(`/api/delivery-workflows?view=schedule_firings&project_id=${encodeURIComponent(projectId)}`
+        + `&schedule_id=${encodeURIComponent(id)}`, { cache: "no-store" });
+      const body = r.ok ? await r.json() as { firings?: Firing[] } : {};
+      setShown({ id, firings: Array.isArray(body.firings) ? body.firings : [] });
+    } catch { setShown({ id, firings: [] }); }
+  };
+  const cronSaid = cronProblem(draft.cron);
   // WHAT ITS FIRING WILL REFUSE, ASKED WHILE SAVING. A schedule runs with nobody at the
   // keyboard, so the readiness checklist is drawn here and what is ticked is stored with it.
   const readiness = useWorkflowReadiness(projectId, draft.workflowKey, draft.values);
@@ -795,6 +845,8 @@ function SchedulePopover({ workflow, schedules, projectId, busy, inputSchema, on
                       onClick={() => onToggle(s.id, !s.enabled)}>{s.enabled ? "Pause" : "Resume"}</GatedButton>
               <button type="button" className="wf-link" disabled={!!busy}
                       onClick={() => setDraft(scheduleDraftFor(workflow, s))}>Edit</button>
+              <button type="button" className="wf-link" data-testid={`wf-schedule-firings-${s.id}`}
+                      onClick={() => void showFirings(s.id)}>Firings</button>
               <GatedButton permission="workflow_schedule:manage" type="button" className="wf-link wf-link-danger" disabled={!!busy}
                       aria-label="Remove schedule" onClick={() => onDelete(s.id)}>
                 <Trash size={12} aria-hidden />
@@ -803,6 +855,44 @@ function SchedulePopover({ workflow, schedules, projectId, busy, inputSchema, on
           ))}
         </ul>
       ) : null}
+      {shown ? (
+        <ol className="wf-schedule-list" aria-label="Firings" data-testid="wf-schedule-firing-list">
+          {shown.firings.length ? shown.firings.slice(0, 12).map((f) => (
+            <li key={f.id} data-outcome={f.outcome}>
+              <span>{formatDateTime(f.scheduled_for)} · {f.outcome === "started" ? "started" : f.outcome}
+                {f.reason ? ` — ${FIRING_REASON_WORDS[f.reason] ?? f.reason}` : ""}</span>
+            </li>
+          )) : <li>No firings yet.</li>}
+        </ol>
+      ) : null}
+      <details className="wf-field" data-testid="wf-schedule-rules">
+        <summary title="Cron, what happens while the last run is going, catching up after downtime, and skipping quiet periods">Rules</summary>
+        <label className="wf-field">
+          <span title="Five fields: minute hour day month weekday. Empty: every Monday 08:00.">Cron</span>
+          <input value={draft.cron} placeholder="0 9 * * 1-5" data-testid="wf-schedule-cron"
+                 onChange={(e) => setDraft({ ...draft, cron: e.target.value })} />
+        </label>
+        {cronSaid ? <p className="wf-lib-muted" role="alert" data-testid="wf-schedule-cron-said">{cronSaid}</p> : null}
+        <label className="wf-field">
+          <span title="When it is due while its last run is still going">If still running</span>
+          <select value={draft.concurrency} data-testid="wf-schedule-concurrency"
+                  onChange={(e) => setDraft({ ...draft, concurrency: e.target.value as Concurrency })}>
+            {(Object.keys(CONCURRENCY_WORDS) as Concurrency[]).map((k) => <option key={k} value={k}>{CONCURRENCY_WORDS[k]}</option>)}
+          </select>
+        </label>
+        <label className="wf-field">
+          <span title="Firings missed while BOSS was off">Missed</span>
+          <select value={draft.catchUp} data-testid="wf-schedule-catch-up"
+                  onChange={(e) => setDraft({ ...draft, catchUp: e.target.value as CatchUp })}>
+            {(Object.keys(CATCH_UP_WORDS) as CatchUp[]).map((k) => <option key={k} value={k}>{CATCH_UP_WORDS[k]}</option>)}
+          </select>
+        </label>
+        <label className="wf-field">
+          <input type="checkbox" checked={draft.gate} data-testid="wf-schedule-gate"
+                 onChange={(e) => setDraft({ ...draft, gate: e.target.checked })} />
+          <span title="Work items, git, builds or documents changed since the last run">Skip when nothing happened</span>
+        </label>
+      </details>
       <label className="wf-field">
         <span title="Runs every Monday at 08:00 in this zone">Time zone</span>
         <input value={draft.timezone} data-testid="wf-schedule-zone"
@@ -823,9 +913,9 @@ function SchedulePopover({ workflow, schedules, projectId, busy, inputSchema, on
         </p>
       ) : null}
       <button type="submit" className="wf-btn wf-btn-primary wf-btn-sm" data-testid="wf-schedule-save"
-              disabled={!!busy || !draft.timezone.trim() || missing.length > 0}
+              disabled={!!busy || !draft.timezone.trim() || missing.length > 0 || Boolean(cronSaid)}
               title={missing.length ? `Needs ${missing.join(", ")}` : undefined}>
-        {draft.scheduleId ? "Save schedule" : "Schedule weekly"}
+        {draft.scheduleId ? "Save schedule" : draft.cron.trim() ? "Schedule" : "Schedule weekly"}
       </button>
     </form>
   );

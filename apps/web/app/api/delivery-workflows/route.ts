@@ -118,6 +118,23 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
     }
   }
+  // A schedule's firings (BOSSAPP-877): each one started, or why not.
+  if (view === "schedule_firings") {
+    const scheduleId = params.get("schedule_id")?.trim() ?? "";
+    if (!project || !scheduleId) {
+      return NextResponse.json({ error: "schedule_firings needs project_id and schedule_id" }, { status: 400 });
+    }
+    try {
+      const r = await fetch(`${API_URL}/v1/delivery-workflows/schedules/${encodeURIComponent(scheduleId)}/firings`
+        + `?project_id=${encodeURIComponent(project)}`, { headers: authHeaders({}), cache: "no-store" });
+      const raw = await r.text();
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
+      return r.ok ? NextResponse.json(parsed) : NextResponse.json(refusal(r.status, parsed), { status: r.status });
+    } catch (e) {
+      return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+    }
+  }
   if (view === "run_detail" || view === "context_trace") {
     const runId = params.get("run_id")?.trim() ?? "";
     if (!project || !runId) {

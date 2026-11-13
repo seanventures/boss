@@ -33,6 +33,7 @@ class CreateBody(Body):
     status: str = "todo"
     labels: list[str] = Field(default_factory=list, max_length=20)
     execution_policy: Optional[dict[str, Any]] = None
+    visibility: str = Field(default="project", pattern="^(project|private)$")
 
 
 class UpdateBody(Body):
@@ -45,6 +46,16 @@ class UpdateBody(Body):
     status: Optional[str] = None
     execution_policy: Optional[dict[str, Any]] = None
     due_at: Optional[str] = None
+    visibility: Optional[str] = Field(default=None, pattern="^(project|private)$")
+
+
+class AccessBody(Body):
+    party: str = Field(min_length=3, max_length=200)
+    revoke: bool = False
+
+
+class BreakGlassBody(Body):
+    reason: str = Field(min_length=10, max_length=1000)
 
 
 class RelationBody(Body):
@@ -75,7 +86,8 @@ class StartBody(Body):
 
 def build_work_items_router(*, engine, settings: Callable[[], Any],
                             require_reader: Callable[..., None],
-                            require_write_actor: Callable[..., str]) -> APIRouter:
+                            require_write_actor: Callable[..., str],
+                            viewer: Optional[Callable[[], str]] = None) -> APIRouter:
     from boss_engine.services import work_items as wi
     from boss_engine.services.execution_policy import PolicyError
 
@@ -89,9 +101,16 @@ def build_work_items_router(*, engine, settings: Callable[[], Any],
         except (wi.WorkItemError, PolicyError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    def _write(payload: Body, fn: Callable[[Any, str], Any]) -> Any:
+    def _see(c: Any) -> None:
+        """PRIVATE ITEMS (BOSSAPP-876): every read and write here is as the signed-in viewer."""
+        if viewer is not None:
+            wi.view_as(c, viewer())
+
+    def _write(payload: Body, fn: Callable[[Any, str], Any],
+               permission: str = "task_create") -> Any:
         with begin(engine) as c:
-            actor = require_write_actor(c, payload.project_id, payload.actor, "task_create")
+            actor = require_write_actor(c, payload.project_id, payload.actor, permission)
+            _see(c)
             return _errors(lambda: fn(c, actor))
 
     # ── reading ──────────────────────────────────────────────────────────────────────────────
@@ -101,6 +120,7 @@ def build_work_items_router(*, engine, settings: Callable[[], Any],
              label: Optional[str] = None, limit: int = Query(500, ge=1, le=2000)) -> dict:
         with begin(engine) as c:
             require_reader(c, project_id)
+            _see(c)
             return _errors(lambda: wi.tree(c, project_id, include_closed=include_closed,
                                            include_ambient=include_ambient, label=label,
                                            limit=limit))
@@ -132,6 +152,7 @@ def build_work_items_router(*, engine, settings: Callable[[], Any],
     def get_item(work_item_id: str, project_id: str) -> dict:
         with begin(engine) as c:
             require_reader(c, project_id)
+            _see(c)
             return {"item": _errors(lambda: wi.get_item(c, project_id, work_item_id))}
 
     # ── changing ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +164,8 @@ def build_work_items_router(*, engine, settings: Callable[[], Any],
             description=payload.description, parent_id=payload.parent_id,
             goal_id=payload.goal_id, assignee=payload.assignee,
             responsible_person=payload.responsible_person, status=payload.status,
-            labels=payload.labels, execution_policy=payload.execution_policy, actor=actor))}
+            labels=payload.labels, execution_policy=payload.execution_policy, actor=actor,
+            visibility=payload.visibility))}
 
     @router.patch("/v1/work-items/{work_item_id}")
     @permit(P.WORK_ITEM_MANAGE, scope=Scope.of("work_item", path="work_item_id"))
@@ -158,6 +180,7 @@ def build_work_items_router(*, engine, settings: Callable[[], Any],
     def delete_item(work_item_id: str, project_id: str, actor: Optional[str] = None) -> dict:
         with begin(engine) as c:
             who = require_write_actor(c, project_id, actor, "task_create")
+            _see(c)
             _errors(lambda: wi.delete_item(c, project_id=project_id, item_id=work_item_id,
                                            actor=who))
         return {"deleted": work_item_id}
@@ -206,5 +229,24 @@ def build_work_items_router(*, engine, settings: Callable[[], Any],
     def remove_label(work_item_id: str, payload: LabelBody) -> dict:
         return {"labels": _write(payload, lambda c, actor: wi.remove_label(
             c, payload.project_id, work_item_id, payload.name, actor=actor))}
+
+    # ── private items (BOSSAPP-876) ──────────────────────────────────────────────────────────
+    @router.post("/v1/work-items/{work_item_id}/access")
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.of("work_item", path="work_item_id"))
+    def access(work_item_id: str, payload: AccessBody) -> dict:
+        fn = wi.revoke_access if payload.revoke else wi.grant_access
+        return {"access": _write(payload, lambda c, actor: fn(
+            c, project_id=payload.project_id, item_id=work_item_id, party=payload.party,
+            actor=actor))}
+
+    @router.post("/v1/work-items/{work_item_id}/break-glass")
+    @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.of("work_item", path="work_item_id"))
+    def break_glass(work_item_id: str, payload: BreakGlassBody) -> dict:
+        """One audited read past an item's privacy, for whoever may grant access here (the same
+        permission as a break-glass grant, role_binding:assign). The
+        reason, who and when are recorded and shown on the item to everyone who can see it."""
+        return {"item": _write(payload, lambda c, actor: wi.break_glass_read(
+            c, project_id=payload.project_id, item_id=work_item_id, actor=actor,
+            reason=payload.reason), permission="member_manage")}
 
     return router

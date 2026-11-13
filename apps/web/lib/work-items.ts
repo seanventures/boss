@@ -14,7 +14,7 @@ export const STATUS_WORDS: Record<WorkStatus, string> = {
   in_review: "In review", done: "Done", cancelled: "Cancelled",
 };
 
-export type ItemRef = { id: string; human_key: string | null; title: string; status: WorkStatus };
+export type ItemRef = { id: string; human_key: string | null; title: string; status: WorkStatus; private?: boolean };
 export type Stage = { kind: "review" | "approval"; participants: string[]; comment_required: boolean; max_rounds: number };
 export type Policy = { stages: Stage[] };
 export type StageEvent = { stage_index: number; stage_kind: string; round: number; event: string;
@@ -26,11 +26,42 @@ export type WorkNode = {
   labels: { name: string; color: string }[]; blocked_by: ItemRef[];
   execution_policy: Policy | null; execution_state: Record<string, unknown> | null;
   children: WorkNode[];
+  /** BOSSAPP-876: private to its people (and everything under it). */
+  visibility: "project" | "private";
+  /** BOSSAPP-878: under an active hold of its work tree (tree rows). */
+  on_hold?: boolean;
   // detail only
   relations?: { kind: string; item: ItemRef }[];
   runs?: { kind: string; id: string; status: string }[];
   stages?: StageEvent[];
+  restricted?: boolean;
+  access?: { party: string; granted_by: string }[];
+  break_glass_reads?: { actor: string; reason: string; at: string | null }[];
+  /** BOSSAPP-878: the active hold this item is under (detail). */
+  hold?: Hold | null;
 };
+export type Hold = { id: string; root_kind: string; root_id: string; mode: "pause" | "drain";
+  status: string; reason: string; created_by: string; created_at: string | null };
+export type HoldPlanMember = { member_kind: string; member_id: string; action?: string; restored_action?: string };
+
+export function parseHold(w: unknown): Hold | null {
+  const o = obj(w);
+  if (!str(o.id)) return null;
+  return { id: str(o.id), root_kind: str(o.root_kind), root_id: str(o.root_id), mode: o.mode === "drain" ? "drain" : "pause",
+    status: str(o.status), reason: str(o.reason), created_by: str(o.created_by), created_at: str(o.created_at) || null };
+}
+
+/** "Pauses 2 runs · holds 3 items": a hold plan (or a restore plan) in few words. */
+export function planWords(members: HoldPlanMember[], restore = false): string {
+  const count = (kind: string, act: string) => members.filter((m) => m.member_kind === kind
+    && (restore ? m.restored_action : m.action) === act).length;
+  const parts = restore
+    ? [[count("workflow_run", "resumed"), "resumes", "run"], [count("workflow_run", "left_paused"), "leaves paused", "run"]]
+    : [[count("workflow_run", "paused"), "pauses", "run"], [count("workflow_run", "left_running"), "lets finish", "run"],
+       [count("work_item", "held"), "holds", "item"]];
+  const said = parts.filter(([n]) => Number(n) > 0).map(([n, verb, noun]) => `${verb} ${n} ${noun}${Number(n) > 1 ? "s" : ""}`);
+  return said.length ? said.join(" · ") : "nothing to change";
+}
 export type WorkTree = { items: WorkNode[]; count: number; by_status: Record<string, number>;
   goals: { id: string; title: string; status: string; items: number }[];
   labels: { name: string; color: string; items: number }[] };
@@ -43,7 +74,8 @@ const status = (v: unknown): WorkStatus => (WORK_STATUSES.includes(v as WorkStat
 
 const ref = (w: unknown): ItemRef => {
   const o = obj(w);
-  return { id: str(o.id), human_key: str(o.human_key) || null, title: str(o.title), status: status(o.status) };
+  return { id: str(o.id), human_key: str(o.human_key) || null, title: str(o.title), status: status(o.status),
+    ...(o.private === true ? { private: true } : {}) };
 };
 
 export function parseNode(w: unknown): WorkNode {
@@ -60,6 +92,13 @@ export function parseNode(w: unknown): WorkNode {
     execution_policy: Array.isArray(policy.stages) ? policy as unknown as Policy : null,
     execution_state: Object.keys(obj(o.execution_state)).length ? obj(o.execution_state) : null,
     children: arr(o.children).map(parseNode),
+    visibility: o.visibility === "private" ? "private" : "project",
+    ...(typeof o.on_hold === "boolean" ? { on_hold: o.on_hold } : {}),
+    ...(o.hold !== undefined ? { hold: parseHold(o.hold) } : {}),
+    ...(typeof o.restricted === "boolean" ? { restricted: o.restricted } : {}),
+    ...(Array.isArray(o.access) ? { access: arr(o.access).map(obj).map((g) => ({ party: str(g.party), granted_by: str(g.granted_by) })) } : {}),
+    ...(Array.isArray(o.break_glass_reads) ? { break_glass_reads: arr(o.break_glass_reads).map(obj).map((b) => ({
+      actor: str(b.actor), reason: str(b.reason), at: str(b.at) || null })) } : {}),
     ...(Array.isArray(o.relations) ? { relations: arr(o.relations).map(obj).map((r) => ({ kind: str(r.kind), item: ref(r.item) })) } : {}),
     ...(Array.isArray(o.runs) ? { runs: arr(o.runs).map(obj).map((r) => ({ kind: str(r.kind), id: str(r.id), status: str(r.status) })) } : {}),
     ...(Array.isArray(o.stages) ? { stages: arr(o.stages).map(obj).map((s) => ({
@@ -125,3 +164,17 @@ export const completeItem = (projectId: string, id: string): Promise<WriteResult
   obsWrite(`${item(id)}/complete`, { project_id: projectId }, press(id, "Mark done"));
 export const relateItem = (projectId: string, id: string, kind: string, otherId: string): Promise<WriteResult> =>
   obsWrite(`${item(id)}/relations`, { project_id: projectId, kind, other_id: otherId }, press(id, "Link"));
+
+/** BOSSAPP-876: who may read a private item, and the one audited read past its privacy. */
+export const grantAccess = (projectId: string, id: string, party: string, revoke = false): Promise<WriteResult> =>
+  obsWrite(`${item(id)}/access`, { project_id: projectId, party, revoke }, press(id, revoke ? "Remove access" : "Grant"));
+export const breakGlass = (projectId: string, id: string, reason: string): Promise<WriteResult> =>
+  obsWrite(`${item(id)}/break-glass`, { project_id: projectId, reason }, press(id, "Read (audited)"));
+
+/** BOSSAPP-878: hold a work item's whole tree (dry run first), and restore it exactly. */
+export const holdTree = (projectId: string, id: string, dryRun: boolean, mode: "pause" | "drain" = "pause", reason = ""): Promise<WriteResult> =>
+  obsWrite("/v1/work-holds", { project_id: projectId, root_kind: "work_item", root_id: id, mode, reason, dry_run: dryRun },
+    press(id, dryRun ? "Preview pause" : "Pause all"));
+export const restoreHold = (projectId: string, holdId: string, dryRun: boolean): Promise<WriteResult> =>
+  obsWrite(`/v1/work-holds/${encodeURIComponent(holdId)}/restore`, { project_id: projectId, dry_run: dryRun },
+    press(holdId, dryRun ? "Preview restore" : "Restore"));

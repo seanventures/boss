@@ -24293,6 +24293,13 @@ def decision_inbox(
             ),
             params,
         ).mappings().all()
+        # A decision about a private work item is shown only to those who may read the item.
+        hidden = _hidden_work_items(connection, project_id, [
+            (row["recommendation"] or {}).get("work_item_id")
+            for row in rows if isinstance(row["recommendation"], dict)])
+        if hidden:
+            rows = [row for row in rows if not (isinstance(row["recommendation"], dict)
+                    and row["recommendation"].get("work_item_id") in hidden)]
         return DecisionInboxResponse(
             project_id=project_id,
             items=[decision_card_from_row(row, connection, project_id) for row in rows],
@@ -24329,6 +24336,10 @@ def get_decision(decision_id: str, project_id: Optional[str] = None) -> Decision
         if not row:
             raise HTTPException(status_code=404, detail="Decision not found")
         require_project_reader(connection, row["project_id"])
+        rec = row["recommendation"] if isinstance(row["recommendation"], dict) else {}
+        if rec.get("work_item_id") and _hidden_work_items(
+                connection, row["project_id"], [rec.get("work_item_id")]):
+            raise HTTPException(status_code=404, detail="Decision not found")
         return decision_card_from_row(row, connection)
 
 
@@ -25750,6 +25761,12 @@ def create_workflow_schedule(payload: WorkflowScheduleBody) -> dict:
                              if "timezone" in payload else None),
                     start_anyway=payload.get("start_anyway"),
                 )
+                # THE ROUTINE'S RULES (BOSSAPP-877), when the edit names any of them.
+                routine = {k: payload[k] for k in _ROUTINE_FIELDS if k in payload}
+                if routine:
+                    updated = {**updated, **schedules.set_routine(
+                        connection, project_id=project_id, schedule_id=schedule_id,
+                        actor=actor, **routine)}
                 return JSONResponse(status_code=200, content=jsonable_encoder(updated))
             enabled = bool(payload.get("enabled", True))
             if enabled:
@@ -25768,9 +25785,30 @@ def create_workflow_schedule(payload: WorkflowScheduleBody) -> dict:
                 enabled=enabled,
                 actor=actor,
                 start_anyway=payload.get("start_anyway"),
+                cron_expr=payload.get("cron_expr"),
+                concurrency_policy=payload.get("concurrency_policy") or "always_enqueue",
+                catch_up=payload.get("catch_up") or "one",
+                catch_up_max=payload.get("catch_up_max") or 3,
+                activity_gate=payload.get("activity_gate"),
             )
     except schedules.ScheduleError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+_ROUTINE_FIELDS = ("cron_expr", "concurrency_policy", "catch_up", "catch_up_max", "activity_gate")
+
+
+@app.get("/v1/delivery-workflows/schedules/{schedule_id}/firings")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
+def list_workflow_schedule_firings(schedule_id: str, project_id: str, limit: int = 50) -> dict:
+    """Every firing of a schedule, newest first: the run it started, or why it did not start
+    (suppressed with its reason, coalesced, refused, failed) — BOSSAPP-877."""
+    from boss_engine.services import workflow_schedules as schedules
+
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        return {"firings": schedules.firings(connection, project_id, schedule_id,
+                                             limit=max(1, min(limit, 500)))}
 
 
 @app.post("/v1/delivery-workflows/schedules/{schedule_id}/enabled")
@@ -28359,12 +28397,16 @@ def list_workflow_runs(
 ) -> WorkflowRunListResponse:
     with begin(engine) as connection:
         try:
-            return WorkflowRunListResponse(
-                project_id=project_id,
-                items=workflow_runtime.list_runs(
-                    connection, project_id, status=status, limit=limit
-                ),
-            )
+            items = workflow_runtime.list_runs(connection, project_id, status=status, limit=limit)
+            # A run of a private work item is listed only to those who may read the item.
+            linked = dict(connection.execute(text(
+                "SELECT id, work_item_id FROM workflow_runs WHERE id = ANY(:ids) "
+                "AND work_item_id IS NOT NULL"),
+                {"ids": [str(i.get("id")) for i in items]}).all()) if items else {}
+            hidden = _hidden_work_items(connection, project_id, linked.values())
+            if hidden:
+                items = [i for i in items if linked.get(str(i.get("id"))) not in hidden]
+            return WorkflowRunListResponse(project_id=project_id, items=items)
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
 
@@ -28433,6 +28475,10 @@ def get_workflow_run(run_id: str, project_id: str) -> WorkflowRunDetail:
             raise HTTPException(status_code=404, detail="workflow run not found")
         require_project_reader(connection, stored_project)
         if project_id != stored_project:
+            raise HTTPException(status_code=404, detail="workflow run not found")
+        item_of_run = connection.execute(
+            text("SELECT work_item_id FROM workflow_runs WHERE id = :r"), {"r": run_id}).scalar()
+        if item_of_run and _hidden_work_items(connection, project_id, [item_of_run]):
             raise HTTPException(status_code=404, detail="workflow run not found")
         try:
             return WorkflowRunDetail(
@@ -32037,13 +32083,44 @@ def _ambient_org_actor(connection, claimed_actor: str | None) -> str:
 app.include_router(build_ambient_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor, org_actor=_ambient_org_actor))
+# DOCUMENTS (routers/documents.py, services/documents.py; BOSSAPP-874): PRDs, plans, minutes and
+# architectures with append-only revisions, base-revision conflict checks and anchored comments.
+from .routers.documents import build_documents_router
+
+def _view_work_as_reader(connection) -> None:
+    """PRIVATE WORK ITEMS (BOSSAPP-876): this request reads the work graph as its signed-in
+    viewer; identity/authz.work_item_visible_sql hides what they may not read."""
+    from boss_engine.services import work_items as _wi
+
+    _wi.view_as(connection, read_actor(""))
+
+
+def _hidden_work_items(connection, project_id: str, ids) -> set:
+    """The work items among `ids` this request's viewer may not read (BOSSAPP-876): a run or a
+    decision on one of them is not shown to them, exactly as if it did not exist."""
+    from boss_engine.services import work_items as _wi
+
+    _view_work_as_reader(connection)
+    return _wi.hidden_ids(connection, project_id, ids)
+
+
+app.include_router(build_documents_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor, viewing=_view_work_as_reader))
+# THE PERSONAL INBOX (routers/inbox.py, services/inbox.py; BOSSAPP-875): the signed-in person's
+# decisions, work and failed runs, ranked by deadline, risk and how much work each blocks.
+from .routers.inbox import build_inbox_router
+
+app.include_router(build_inbox_router(
+    engine=engine, require_reader=require_project_reader, viewer=lambda: read_actor(""),
+    viewing=_view_work_as_reader))
 # ONE WORK-ITEM GRAPH (routers/work_items.py, services/work_items.py; BOSSAPP-830/831): the tree,
 # CRUD, relations, labels, goals, the policy-aware done and start.
 from .routers.work_items import build_work_items_router
 
 app.include_router(build_work_items_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
-    require_write_actor=require_project_write_actor))
+    require_write_actor=require_project_write_actor, viewer=lambda: read_actor("")))
 # WORK UX, SET 2 (routers/work_ux.py; BOSSAPP-879..884): decision options with signed effects,
 # watchdogs on a work tree, one search over work, outputs and references, status cards, and
 # agent-proposed hires and budget overrides.
@@ -32052,6 +32129,13 @@ from .routers.work_ux import build_work_ux_router
 app.include_router(build_work_ux_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
+# HOLDING A WHOLE WORK TREE (routers/work_holds.py, services/work_holds.py; BOSSAPP-878): pause a
+# work item's subtree or a run's tree, and restore it exactly; both with a dry run.
+from .routers.work_holds import build_work_holds_router
+
+app.include_router(build_work_holds_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor, viewing=_view_work_as_reader))
 # THE TOOL-CALL AUDIT (routers/tool_calls.py, services/tool_call_audit.py; BOSSAPP-819): every
 # tool call BOSS decided, filtered and keyset-paged, and the same filter as NDJSON.
 from .routers.tool_calls import build_tool_calls_router

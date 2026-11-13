@@ -198,6 +198,14 @@ class WorkflowScheduleBody(ProjectBody):
     #: Readiness keys this schedule may start without — the unattended form of Start anyway.
     #: Omitted on an edit, the stored choice stays.
     start_anyway: list[str] | None = None
+    #: BOSSAPP-877 routines: a five-field cron (cadence "cron"), what a firing does while the
+    #: last run is still going, how missed firings are caught up, and the activity gate.
+    #: Omitted on an edit, each stays as stored.
+    cron_expr: str | None = None
+    concurrency_policy: str | None = None
+    catch_up: str | None = None
+    catch_up_max: int | None = None
+    activity_gate: dict[str, Any] | None = None
 
 
 class WorkflowScheduleEnabledBody(ProjectBody):

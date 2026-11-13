@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import weakref
 from typing import Any, Iterable, Mapping, Optional
 
 from sqlalchemy import text
@@ -51,7 +52,7 @@ RUN_TABLES = {
 }
 _PARTY = re.compile(r"^(agent|person):[A-Za-z0-9_.@:+-]{1,200}$")
 EDITABLE = ("title", "description", "parent_id", "goal_id", "assignee", "responsible_person",
-            "status", "execution_policy", "due_at")
+            "status", "execution_policy", "due_at", "visibility")
 
 
 class WorkItemError(ValueError):
@@ -73,17 +74,69 @@ def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
+# ── who is reading (BOSSAPP-876: private items) ──────────────────────────────────────────────
+# A route says who reads on its connection (view_as); BOSS's own reads say nothing and see
+# everything. Every read below applies identity/authz.work_item_visible_sql with these params.
+# Kept per Connection OBJECT (weakly), never in `connection.info`: that dict follows the pooled
+# DBAPI connection into the next request, which would read as this viewer.
+_VIEWERS: "weakref.WeakKeyDictionary[Any, list[str]]" = weakref.WeakKeyDictionary()
+PRIVATE_TITLE = "Private item"
+
+
+def view_as(connection: Connection, actor: Optional[str]) -> list[str]:
+    """Read the work graph on this connection as `actor` (no actor: only unrestricted items)."""
+    from boss_engine.identity.authz import viewer_parties
+
+    parties = viewer_parties(connection, actor)
+    _VIEWERS[connection] = parties
+    return parties
+
+
+def viewing(connection: Connection) -> Optional[list[str]]:
+    """The viewer's parties, or None when BOSS itself is reading (everything is visible)."""
+    return _VIEWERS.get(connection)
+
+
+def visible_params(connection: Connection) -> dict[str, Any]:
+    parties = viewing(connection)
+    return {"wv_all": parties is None, "wv_parties": list(parties or [])}
+
+
+def visible_sql(connection: Connection, item_col: str) -> str:  # noqa: ARG001 — one call shape
+    from boss_engine.identity.authz import work_item_visible_sql
+
+    return work_item_visible_sql(item_col)
+
+
+def hidden_ids(connection: Connection, project_id: str, ids: Iterable[Optional[str]]) -> set[str]:
+    """Which of these work items the viewer may NOT read."""
+    wanted = sorted({str(i) for i in ids if i})
+    if not wanted or viewing(connection) is None:
+        return set()
+    from boss_engine.identity.authz import work_item_visible_sql
+
+    return set(connection.execute(text(
+        "SELECT w.id FROM work_items w WHERE w.id = ANY(:ids) AND NOT "
+        + work_item_visible_sql("w.id")), {"ids": wanted, **visible_params(connection)}).scalars())
+
+
 def _row(connection: Connection, project_id: str, item_id: str, *,
          for_update: bool = False) -> dict[str, Any]:
     row = connection.execute(text(
         "SELECT * FROM work_items WHERE id = :id AND project_id = :p"
         + (" FOR UPDATE" if for_update else "")), {"id": item_id, "p": project_id}).mappings().first()
-    if row is None:
+    # A private item the viewer may not read answers exactly like one that does not exist.
+    if row is None or (viewing(connection) is not None
+                       and hidden_ids(connection, project_id, [item_id])):
         raise LookupError(f"no work item {item_id} in this project")
     return dict(row)
 
 
-def _brief(row: Mapping[str, Any]) -> dict[str, Any]:
+def _brief(row: Mapping[str, Any], hidden: Iterable[str] = ()) -> dict[str, Any]:
+    if row["id"] in hidden:
+        # The edge stays (something private blocks this), never what it is.
+        return {"id": row["id"], "human_key": None, "title": PRIVATE_TITLE, "status": row["status"],
+                "private": True}
     return {"id": row["id"], "human_key": row.get("human_key"), "title": row["title"],
             "status": row["status"]}
 
@@ -91,11 +144,12 @@ def _brief(row: Mapping[str, Any]) -> dict[str, Any]:
 def open_blockers(connection: Connection, item_id: str) -> list[dict[str, Any]]:
     """The items that block this one and are not closed yet."""
     rows = connection.execute(text(
-        "SELECT w.id, w.human_key, w.title, w.status FROM work_item_relations r "
+        "SELECT w.id, w.project_id, w.human_key, w.title, w.status FROM work_item_relations r "
         "JOIN work_items w ON w.id = r.from_id "
         "WHERE r.to_id = :id AND r.kind = 'blocks' AND w.status <> ALL(:closed) "
-        "ORDER BY w.created_at"), {"id": item_id, "closed": list(CLOSED)}).mappings()
-    return [_brief(r) for r in rows]
+        "ORDER BY w.created_at"), {"id": item_id, "closed": list(CLOSED)}).mappings().all()
+    hidden = hidden_ids(connection, "", [r["id"] for r in rows])
+    return [_brief(r, hidden) for r in rows]
 
 
 def serialize(connection: Connection, row: Mapping[str, Any], *,
@@ -113,6 +167,7 @@ def serialize(connection: Connection, row: Mapping[str, Any], *,
         "due_at": _iso(row.get("due_at")), "created_by": row.get("created_by"),
         "created_at": _iso(row.get("created_at")), "updated_at": _iso(row.get("updated_at")),
         "resolved_at": _iso(row.get("resolved_at")),
+        "visibility": row.get("visibility") or "project",
     }
     item["labels"] = [dict(r) for r in connection.execute(text(
         "SELECT l.name, l.color FROM work_item_labels wl JOIN labels l ON l.id = wl.label_id "
@@ -121,10 +176,24 @@ def serialize(connection: Connection, row: Mapping[str, Any], *,
     if detail:
         item["relations"] = relations(connection, row["id"])
         item["runs"] = runs_of(connection, row["project_id"], row["id"])
-        item["children"] = [_brief(r) for r in connection.execute(text(
+        kids = connection.execute(text(
             "SELECT id, human_key, title, status FROM work_items WHERE parent_id = :id "
-            "ORDER BY created_at"), {"id": row["id"]}).mappings()]
+            "ORDER BY created_at"), {"id": row["id"]}).mappings().all()
+        hidden = hidden_ids(connection, row["project_id"], [k["id"] for k in kids])
+        item["children"] = [_brief(r) for r in kids if r["id"] not in hidden]
         item["stages"] = stage_log(connection, row["id"])
+        item["restricted"] = restricted(connection, row["id"])
+        from . import work_holds
+
+        item["hold"] = work_holds.item_hold(connection, row["id"])   # BOSSAPP-878
+        item["access"] = access_list(connection, row["id"])
+        # THE BREAK-GLASS NOTICE: whoever can read the item sees who read it past its privacy.
+        item["break_glass_reads"] = [
+            {"actor": r["actor"], "reason": r["reason"], "at": _iso(r["created_at"])}
+            for r in connection.execute(text(
+                "SELECT actor, reason, created_at FROM work_item_break_glass_reads "
+                "WHERE work_item_id = :id ORDER BY created_at DESC LIMIT 20"),
+                {"id": row["id"]}).mappings()]
     return item
 
 
@@ -135,17 +204,20 @@ def get_item(connection: Connection, project_id: str, item_id: str) -> dict[str,
 def relations(connection: Connection, item_id: str) -> list[dict[str, Any]]:
     """Every relation touching the item, read from its side (`blocks` / `blocked_by` ...)."""
     out = []
-    for r in connection.execute(text(
-            "SELECT r.from_id, r.to_id, r.kind, w.id AS other_id, w.human_key, w.title, w.status "
-            "FROM work_item_relations r JOIN work_items w "
-            "  ON w.id = CASE WHEN r.from_id = :id THEN r.to_id ELSE r.from_id END "
-            "WHERE r.from_id = :id OR r.to_id = :id ORDER BY r.created_at"),
-            {"id": item_id}).mappings():
+    rows = connection.execute(text(
+        "SELECT r.from_id, r.to_id, r.kind, w.id AS other_id, w.human_key, w.title, w.status "
+        "FROM work_item_relations r JOIN work_items w "
+        "  ON w.id = CASE WHEN r.from_id = :id THEN r.to_id ELSE r.from_id END "
+        "WHERE r.from_id = :id OR r.to_id = :id ORDER BY r.created_at"),
+        {"id": item_id}).mappings().all()
+    hidden = hidden_ids(connection, "", [r["other_id"] for r in rows])
+    for r in rows:
         kind = r["kind"]
         if kind == "blocks" and r["to_id"] == item_id:
             kind = "blocked_by"
-        out.append({"kind": kind, "item": {"id": r["other_id"], "human_key": r["human_key"],
-                                           "title": r["title"], "status": r["status"]}})
+        out.append({"kind": kind, "item": _brief({"id": r["other_id"], "human_key": r["human_key"],
+                                                  "title": r["title"], "status": r["status"]},
+                                                 hidden)})
     return out
 
 
@@ -191,11 +263,16 @@ def tree(connection: Connection, project_id: str, *, include_closed: bool = True
         "AND (:closed OR w.status <> ALL(:closed_set)) "
         "AND (CAST(:label AS TEXT) IS NULL OR EXISTS (SELECT 1 FROM work_item_labels wl "
         "     JOIN labels l ON l.id = wl.label_id WHERE wl.work_item_id = w.id AND l.name = :label)) "
+        "AND " + visible_sql(connection, "w.id") + " "
         "ORDER BY w.created_at, w.id LIMIT :n"),
         {"p": project_id, "amb": include_ambient, "closed": include_closed,
          "closed_set": list(CLOSED), "label": label,
-         "n": max(1, min(int(limit), 2000))}).mappings().all()
-    nodes = {r["id"]: {**serialize(connection, r), "children": []} for r in rows}
+         "n": max(1, min(int(limit), 2000)), **visible_params(connection)}).mappings().all()
+    from . import work_holds
+
+    held = work_holds.held_items(connection, [r["id"] for r in rows])   # BOSSAPP-878
+    nodes = {r["id"]: {**serialize(connection, r), "children": [], "on_hold": r["id"] in held}
+             for r in rows}
     roots = []
     for node in nodes.values():
         parent = nodes.get(node["parent_id"] or "")
@@ -205,6 +282,102 @@ def tree(connection: Connection, project_id: str, *, include_closed: bool = True
         counts[node["status"]] = counts.get(node["status"], 0) + 1
     return {"items": roots, "count": len(nodes), "by_status": counts,
             "goals": list_goals(connection, project_id), "labels": list_labels(connection, project_id)}
+
+
+# ── private items, grants and the break-glass read (BOSSAPP-876) ─────────────────────────────
+
+def restricted(connection: Connection, item_id: str) -> bool:
+    """Private itself, or under a private item."""
+    return bool(connection.execute(text(
+        "WITH RECURSIVE up(id, parent_id, depth) AS (SELECT id, parent_id, 0 FROM work_items "
+        "WHERE id = :id UNION ALL SELECT p.id, p.parent_id, up.depth + 1 FROM work_items p "
+        "JOIN up ON p.id = up.parent_id WHERE up.depth < 64) "
+        "SELECT 1 FROM up JOIN work_items w ON w.id = up.id WHERE w.visibility = 'private' LIMIT 1"),
+        {"id": item_id}).first())
+
+
+def access_list(connection: Connection, item_id: str) -> list[dict[str, Any]]:
+    return [{"party": r["party"], "granted_by": r["granted_by"], "at": _iso(r["created_at"])}
+            for r in connection.execute(text(
+                "SELECT party, granted_by, created_at FROM work_item_access_grants "
+                "WHERE work_item_id = :id AND revoked_at IS NULL ORDER BY created_at"),
+                {"id": item_id}).mappings()]
+
+
+def _grant(connection: Connection, project_id: str, item_id: str, party: str, actor: str) -> bool:
+    return bool(connection.execute(text(
+        "INSERT INTO work_item_access_grants (id, project_id, work_item_id, party, granted_by) "
+        "VALUES (:id, :p, :w, :party, :a) ON CONFLICT DO NOTHING"),
+        {"id": make_id("wig"), "p": project_id, "w": item_id, "party": party, "a": actor}).rowcount)
+
+
+def set_visibility(connection: Connection, *, project_id: str, item_id: str, visibility: str,
+                   actor: str) -> dict[str, Any]:
+    """Make an item private (it and everything under it) or open it to the project again. The
+    person making it private is granted on it, so nobody locks themselves out."""
+    if visibility not in ("project", "private"):
+        raise WorkItemError("visibility is project or private")
+    row = _row(connection, project_id, item_id, for_update=True)
+    if visibility == "private":
+        me = actor if ":" in actor else f"person:{actor}"
+        _grant(connection, project_id, item_id, me, actor)
+    if (row.get("visibility") or "project") != visibility:
+        connection.execute(text(
+            "UPDATE work_items SET visibility = :v, updated_at = now() WHERE id = :id"),
+            {"v": visibility, "id": item_id})
+        emit_event(connection, project_id, "work_item.visibility_changed", actor, "work_item",
+                   item_id, {"visibility": visibility})
+    return get_item(connection, project_id, item_id)
+
+
+def grant_access(connection: Connection, *, project_id: str, item_id: str, party: str,
+                 actor: str) -> list[dict[str, Any]]:
+    """Let `party` (person:<id> | agent:<role>) read this item and everything under it."""
+    party = _party(party, "party")
+    if not party:
+        raise WorkItemError("name who gets access (person:<id> or agent:<role>)")
+    _row(connection, project_id, item_id, for_update=True)
+    if _grant(connection, project_id, item_id, party, actor):
+        emit_event(connection, project_id, "work_item.access_granted", actor, "work_item", item_id,
+                   {"party": party})
+    return access_list(connection, item_id)
+
+
+def revoke_access(connection: Connection, *, project_id: str, item_id: str, party: str,
+                  actor: str) -> list[dict[str, Any]]:
+    _row(connection, project_id, item_id, for_update=True)
+    gone = connection.execute(text(
+        "UPDATE work_item_access_grants SET revoked_at = now(), revoked_by = :a "
+        "WHERE work_item_id = :w AND party = :party AND revoked_at IS NULL"),
+        {"a": actor, "w": item_id, "party": str(party or "")}).rowcount
+    if not gone:
+        raise LookupError("no such grant on this item")
+    emit_event(connection, project_id, "work_item.access_revoked", actor, "work_item", item_id,
+               {"party": party})
+    return access_list(connection, item_id)
+
+
+def break_glass_read(connection: Connection, *, project_id: str, item_id: str, actor: str,
+                     reason: str) -> dict[str, Any]:
+    """THE ONE WAY PAST AN ITEM'S PRIVACY: a single read of it, with a reason, recorded (a row,
+    an event the activity log keeps) and shown on the item to everyone who may read it. The
+    caller's own visibility is untouched afterwards — the next read is ordinary again."""
+    reason = re.sub(r"\s+", " ", str(reason or "")).strip()
+    if len(reason) < 10:
+        raise WorkItemError("say why you need to read it (at least 10 characters)")
+    saved = _VIEWERS.pop(connection, None)
+    try:
+        _row(connection, project_id, item_id)
+        connection.execute(text(
+            "INSERT INTO work_item_break_glass_reads (id, project_id, work_item_id, actor, reason) "
+            "VALUES (:id, :p, :w, :a, :r)"),
+            {"id": make_id("wbg"), "p": project_id, "w": item_id, "a": actor, "r": reason[:1000]})
+        emit_event(connection, project_id, "work_item.break_glass_read", actor, "work_item",
+                   item_id, {"reason": reason[:1000], "restricted": restricted(connection, item_id)})
+        return {**get_item(connection, project_id, item_id), "break_glass": True}
+    finally:
+        if saved is not None:
+            _VIEWERS[connection] = saved
 
 
 # ── creating ─────────────────────────────────────────────────────────────────────────────────
@@ -267,9 +440,11 @@ def create_item(connection: Connection, settings: Any = None, *, project_id: str
                 responsible_person: Optional[str] = None, status: str = "todo",
                 labels: Iterable[str] = (), execution_policy: Optional[Mapping[str, Any]] = None,
                 subject_type: str = "item", subject_id: Optional[str] = None,
-                actor: str = "system") -> dict[str, Any]:
+                actor: str = "system", visibility: str = "project") -> dict[str, Any]:
     """Make a canonical item. It joins the scored portfolio through upsert_work_item (the same
     score, the same `work.priority_scored` event), then gains its key, place and owners."""
+    if visibility not in ("project", "private"):
+        raise WorkItemError("visibility is project or private")
     from ..config import get_settings
     from .execution_policy import normalize_policy
     from .work_orchestration import WorkOrchestrationService
@@ -299,10 +474,16 @@ def create_item(connection: Connection, settings: Any = None, *, project_id: str
         {"own": subject_id is None, "key": next_human_key(connection, project_id),
          "parent": parent_id, "goal": goal_id, "assignee": assignee, "resp": responsible_person,
          "policy": json.dumps(policy) if policy else None, "id": item_id})
+    if visibility == "private":
+        # Born private: never readable by the project for a moment, and its maker holds a grant.
+        connection.execute(text("UPDATE work_items SET visibility = 'private' WHERE id = :id"),
+                           {"id": item_id})
+        _grant(connection, project_id, item_id, actor if ":" in actor else f"person:{actor}", actor)
     if labels:
         add_labels(connection, project_id, item_id, labels, actor=actor)
     emit_event(connection, project_id, "work_item.created", actor, "work_item", item_id,
-               {"subject_type": subject_type, "parent_id": parent_id, "status": status})
+               {"subject_type": subject_type, "parent_id": parent_id, "status": status,
+                **({"visibility": "private"} if visibility == "private" else {})})
     # What the item MENTIONS (BOSSAPP-882, work_outputs): another item's key, a PR, a link.
     from . import work_outputs
 
@@ -359,6 +540,9 @@ def update_item(connection: Connection, settings: Any = None, *, project_id: str
 
             work_outputs.quietly(work_outputs.refresh_mentions, connection,
                                  project_id=project_id, item_id=item_id, actor=actor)
+    if "visibility" in fields and fields["visibility"]:
+        set_visibility(connection, project_id=project_id, item_id=item_id,
+                       visibility=str(fields["visibility"]), actor=actor)
     if "status" in fields and fields["status"] != row["status"]:
         target = _status(fields["status"])
         if target == "done":
@@ -465,17 +649,21 @@ def wake_unblocked(connection: Connection, settings: Any = None, *, project_id: 
 
 
 def start_or_resume(connection: Connection, settings: Any = None, *, project_id: str,
-                    item_id: str, actor: str) -> list[dict[str, Any]]:
+                    item_id: str, actor: str, resume_paused: bool = True) -> list[dict[str, Any]]:
     """Resume the item's paused workflow runs, and launch the start that waited on its
     blockers (execution_state.deferred_start). Each in its own savepoint: one run that cannot
     move never stops the others."""
+    from . import work_holds
     from . import workflows as wf
 
     out: list[dict[str, Any]] = []
-    for run_id in connection.execute(text(
+    # A WORK TREE ON HOLD (BOSSAPP-878) wakes nothing: restoring the tree does.
+    if work_holds.held_items(connection, [item_id]):
+        return [{"kind": "hold", "action": "held"}]
+    for run_id in (connection.execute(text(
             "SELECT id FROM workflow_runs WHERE project_id = :p AND work_item_id = :w "
             "AND status = 'paused' ORDER BY created_at"),
-            {"p": project_id, "w": item_id}).scalars().all():
+            {"p": project_id, "w": item_id}).scalars().all() if resume_paused else []):
         try:
             with connection.begin_nested():
                 wf.resume_run(connection, project_id, run_id, actor)
@@ -486,6 +674,8 @@ def start_or_resume(connection: Connection, settings: Any = None, *, project_id:
     state = _json(connection.execute(text(
         "SELECT execution_state FROM work_items WHERE id = :id"), {"id": item_id}).scalar(), {}) or {}
     deferred = state.get("deferred_start")
+    if open_blockers(connection, item_id):
+        deferred = None                          # still waits on a blocker: its wake starts it
     if isinstance(deferred, dict) and deferred.get("workflow_version_id"):
         try:
             with connection.begin_nested():
@@ -506,10 +696,22 @@ def start_or_resume(connection: Connection, settings: Any = None, *, project_id:
 def defer_start(connection: Connection, *, project_id: str, item_id: str,
                 workflow_version_id: str, input_data: Optional[Mapping[str, Any]] = None,
                 actor: str) -> dict[str, Any]:
-    """Start a workflow for this item now, or — while it has open blockers — once they close."""
+    """Start a workflow for this item now, or — while it has open blockers, or its work tree is
+    on hold (BOSSAPP-878) — once they close / the tree is restored."""
+    from . import work_holds
     from . import workflows as wf
 
     _row(connection, project_id, item_id, for_update=True)
+    if work_holds.held_items(connection, [item_id]):
+        connection.execute(text(
+            "UPDATE work_items SET execution_state = COALESCE(execution_state, '{}'::jsonb) || "
+            "jsonb_build_object('deferred_start', CAST(:d AS JSONB)), updated_at = now() "
+            "WHERE id = :id"),
+            {"d": json.dumps({"workflow_version_id": workflow_version_id,
+                              "input": dict(input_data or {}), "by": actor}), "id": item_id})
+        emit_event(connection, project_id, "work_item.start_deferred", actor, "work_item",
+                   item_id, {"workflow_version_id": workflow_version_id, "held": True})
+        return {"status": "deferred", "held": True, "blocked_by": open_blockers(connection, item_id)}
     if open_blockers(connection, item_id):
         connection.execute(text(
             "UPDATE work_items SET status = 'blocked', execution_state = "
@@ -780,5 +982,7 @@ __all__ = [
     "update_item", "set_status", "delete_item", "complete_item", "mark_done", "wake_unblocked",
     "start_or_resume", "defer_start", "link_run", "on_run_completed", "add_relation",
     "remove_relation", "add_labels", "remove_label", "list_labels", "ensure_label",
-    "create_goal", "list_goals", "open_blockers", "relations", "runs_of",
+    "create_goal", "list_goals", "open_blockers", "relations", "runs_of", "view_as", "viewing",
+    "visible_sql", "visible_params", "hidden_ids", "restricted", "access_list", "set_visibility",
+    "grant_access", "revoke_access", "break_glass_read",
 ]

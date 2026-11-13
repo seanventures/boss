@@ -670,7 +670,16 @@ class JobLeaseService:
         )
 
         admission_cap = None
+        # A WORK TREE ON HOLD (BOSSAPP-878, mode pause): its jobs stay queued, untouched, and
+        # are claimable again the moment the tree is restored.
+        from . import work_holds
+
+        held = work_holds.held_items(
+            connection, [c["work_item_id"] for c in candidates if c.get("work_item_id")],
+            mode="pause")
         for candidate in candidates:
+            if candidate.get("work_item_id") in held:
+                continue
             payload = candidate["payload"] or {}
             # AN IRREVERSIBLE EFFECT WHOSE HOLDER DIED IS NEVER RE-RUN BLIND (BOSSAPP-986).
             # A reclaim means the previous worker stopped answering MID-FLIGHT — after it may

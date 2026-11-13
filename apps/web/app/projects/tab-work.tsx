@@ -15,9 +15,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowBendDownRight, ArrowDown, ArrowUp, Bug, CaretDown, Check, Code, Compass, Database, DotsSixVertical, EnvelopeSimple, FlowArrow, GitMerge,
   GithubLogo, Globe, HandWaving, Kanban, Lightning, ListBullets, PauseCircle, Play,
-  TerminalWindow, Ticket, TreeStructure, XCircle,
+  TerminalWindow, Ticket, Tray, TreeStructure, XCircle,
 } from "@phosphor-icons/react";
 import { WorkTreeView } from "./work-tree";
+import { InboxView } from "./work-inbox";
 
 import { GatedButton, useGate } from "../../components/gated";
 import {
@@ -90,7 +91,7 @@ function useNeeds(ctx: PxCtx, items: WorkItem[]) {
 
 export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const [filter, setFilter] = useState<WorkState | "all">("all");
-  const [view, setView] = useState<"list" | "board" | "tree">("list");
+  const [view, setView] = useState<"list" | "board" | "tree" | "mine">("list");
   // The row a Start just made (the New work modal's): it slides in (150 ms) once the list has it.
   const fresh = ctx.freshWork ?? "";
   const raw = ctx.work?.items ?? [];
@@ -153,10 +154,14 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
           <button type="button" aria-pressed={view === "board"} onClick={() => setView("board")} data-testid="px-work-board"><Kanban size={13} /> Board</button>
           <button type="button" aria-pressed={view === "tree"} onClick={() => setView("tree")} data-testid="px-work-tree"
                   title="Every work item as one tree, with what blocks what and its review stages"><TreeStructure size={13} /> Tree</button>
+          <button type="button" aria-pressed={view === "mine"} onClick={() => setView("mine")} data-testid="px-work-mine"
+                  title="What waits on you, first what blocks the most"><Tray size={13} /> Mine</button>
         </div>
       </div>
       {view === "tree" ? (
         <WorkTreeView projectId={ctx.projectId} demo={ctx.demo} />
+      ) : view === "mine" ? (
+        <InboxView projectId={ctx.projectId} demo={ctx.demo} />
       ) : !ctx.work ? (
         ctx.workState === "loading" ? <Loading rows={3} label="Loading work" />
           : ctx.workState === "error" ? <Failed what="Work" error={null} onRetry={ctx.refreshWork} />

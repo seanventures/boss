@@ -13699,3 +13699,276 @@ CREATE TABLE IF NOT EXISTS budget_overrides (
 );
 CREATE INDEX IF NOT EXISTS idx_budget_overrides_lineage ON budget_overrides (project_id, root_run_id, status);
 -- ================================ end BOSSAPP-w4-work-ux2 ==
+-- BOSSAPP-w4-work-ux1
+-- ── Work UX set 1 (BOSSAPP-874..878): documents, the personal inbox, private items, routines,
+-- and holding a whole work tree. Every table here hangs off the canonical work_items graph
+-- (BOSSAPP-830) or extends a table that already exists; nothing above is rewritten.
+--
+-- 874 DOCUMENTS (services/documents.py). A PRD, a plan, minutes or an architecture document is
+-- a `documents` row with an APPEND-ONLY history of `document_revisions` (the skill_versions
+-- pattern: a save that changes nothing adds nothing; a restore is a new revision). Every save
+-- names the revision it was made from (base_revision_id); a save from a stale base is refused
+-- (409) instead of silently overwriting the other writer. A person may hold a short edit lock.
+-- `source_ref` ties a document to what it was opened from (artifact:<id>,
+-- architecture_review:<id>), so opening the same PRD twice is one document.
+CREATE TABLE IF NOT EXISTS documents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL DEFAULT 'note'
+    CHECK (kind IN ('prd', 'plan', 'minutes', 'architecture', 'note')),
+  title TEXT NOT NULL,
+  source_ref TEXT,
+  current_revision_id TEXT,
+  current_revision_no INTEGER NOT NULL DEFAULT 0,
+  locked_by TEXT,
+  locked_until TIMESTAMPTZ,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_source
+  ON documents (project_id, source_ref) WHERE source_ref IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_documents_work_item
+  ON documents (work_item_id, updated_at DESC) WHERE work_item_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS document_revisions (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  revision_no INTEGER NOT NULL CHECK (revision_no >= 1),
+  base_revision_id TEXT,
+  body TEXT NOT NULL,
+  body_hash TEXT NOT NULL,
+  author_kind TEXT NOT NULL DEFAULT 'person'
+    CHECK (author_kind IN ('person', 'agent', 'system')),
+  author_id TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  restored_from TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (document_id, revision_no)
+);
+-- A revision is never changed. It goes only with its whole document (the cascade from
+-- documents, whose row is already gone when this fires).
+CREATE OR REPLACE FUNCTION document_revisions_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' AND NOT EXISTS (SELECT 1 FROM documents WHERE id = OLD.document_id) THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'document_revisions is append-only (%)', TG_OP USING ERRCODE = 'P0001';
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'document_revisions_append_only'
+                 AND tgrelid = 'document_revisions'::regclass) THEN
+    CREATE TRIGGER document_revisions_append_only BEFORE UPDATE OR DELETE
+      ON document_revisions FOR EACH ROW EXECUTE FUNCTION document_revisions_append_only();
+  END IF;
+END $$;
+-- A comment thread anchored to a passage: the quote plus a little text either side, and where
+-- it sat in the revision it was last anchored to. Every new revision re-anchors the open
+-- threads (exact | moved | fuzzy | orphaned); the open ones are handed to the agent that
+-- writes the next revision.
+CREATE TABLE IF NOT EXISTS doc_comment_threads (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  revision_id TEXT NOT NULL,
+  quote TEXT NOT NULL,
+  prefix TEXT NOT NULL DEFAULT '',
+  suffix TEXT NOT NULL DEFAULT '',
+  start_offset INTEGER,
+  end_offset INTEGER,
+  anchor_state TEXT NOT NULL DEFAULT 'exact'
+    CHECK (anchor_state IN ('exact', 'moved', 'fuzzy', 'orphaned')),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+  created_by TEXT NOT NULL,
+  resolved_by TEXT,
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_comment_threads_doc
+  ON doc_comment_threads (document_id, status, created_at);
+CREATE TABLE IF NOT EXISTS doc_comments (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES doc_comment_threads(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  author TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_comments_thread ON doc_comments (thread_id, created_at);
+-- 875 THE PERSONAL ATTENTION INBOX (services/inbox.py). `inbox_items` is every open thing a person
+-- may need to act on, in one shape: a decision waiting for an answer, a work item someone answers
+-- for that is blocked / in review / to do, and a run of such an item that failed lately. Its
+-- `targets` are the parties it is for (person:<id> / agent:<role>; [] = whoever may answer); the
+-- service ranks it for one person by deadline, risk and how much open work it blocks
+-- (work_item_relations). Read state, snoozes and archives are per person and keyed by item_key.
+CREATE OR REPLACE VIEW inbox_items AS
+  SELECT d.project_id, 'decision:' || d.id AS item_key, 'decision'::text AS kind, d.id AS ref_id,
+         d.question AS title,
+         (CASE WHEN d.delegated_to IS NOT NULL THEN jsonb_build_array(d.delegated_to)
+               ELSE '[]'::jsonb END)
+           || (CASE WHEN jsonb_typeof(d.recommendation -> 'participants') = 'array'
+                    THEN d.recommendation -> 'participants' ELSE '[]'::jsonb END) AS targets,
+         NULLIF(d.recommendation ->> 'work_item_id', '') AS work_item_id,
+         d.risk_tier AS risk_tier, d.deadline_at AS deadline_at, d.created_at AS created_at
+  FROM decisions d WHERE d.status IN ('pending', 'delegated')
+  UNION ALL
+  SELECT w.project_id, 'work_item:' || w.id, 'work_item', w.id,
+         COALESCE(w.human_key || ' ', '') || w.title,
+         to_jsonb(array_remove(ARRAY[w.responsible_person,
+           CASE WHEN w.assignee LIKE 'person:%' THEN w.assignee END], NULL)),
+         w.id,
+         CASE w.priority_band WHEN 'p0' THEN 3 WHEN 'p1' THEN 2 WHEN 'p2' THEN 1 ELSE 0 END,
+         w.due_at, w.updated_at
+  FROM work_items w
+  WHERE w.status IN ('todo', 'active', 'blocked', 'in_review') AND NOT w.ambient
+    AND (w.responsible_person IS NOT NULL OR w.assignee LIKE 'person:%')
+  UNION ALL
+  SELECT r.project_id, 'failed_run:' || r.id, 'failed_run', r.id,
+         'Failed: ' || COALESCE(w.human_key || ' ', '') || w.title,
+         to_jsonb(array_remove(ARRAY[w.responsible_person,
+           CASE WHEN w.assignee LIKE 'person:%' THEN w.assignee END], NULL)),
+         w.id, 2, NULL::timestamptz, r.updated_at
+  FROM workflow_runs r JOIN work_items w ON w.id = r.work_item_id
+  WHERE r.status IN ('failed', 'deadlettered') AND r.updated_at > now() - interval '14 days'
+    AND w.status NOT IN ('done', 'cancelled');
+CREATE TABLE IF NOT EXISTS inbox_read_state (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  person TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, person, item_key)
+);
+CREATE TABLE IF NOT EXISTS inbox_snoozes (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  person TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'snooze' CHECK (kind IN ('snooze', 'archive')),
+  until TIMESTAMPTZ,                       -- NULL for an archive: hidden until unarchived
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, person, item_key)
+);
+-- 876 PRIVATE WORK ITEMS (services/work_items.py; the predicate is identity/authz.py
+-- work_item_visible_sql). A private item — and everything under it in the tree — is readable
+-- only by its parties (creator, assignee, responsible person) and the holders of a live grant on
+-- it or on a private item above it. Every work, run, decision, inbox and document read applies
+-- that one predicate. The only way past it is an audited break-glass read: a row here, an event,
+-- and a notice the item's parties see on it.
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'project';
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_visibility_check'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_visibility_check
+      CHECK (visibility IN ('project', 'private'));
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_work_items_private
+  ON work_items (project_id) WHERE visibility = 'private';
+CREATE TABLE IF NOT EXISTS work_item_access_grants (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  party TEXT NOT NULL,                       -- person:<id> | agent:<role>
+  granted_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_by TEXT,
+  revoked_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_item_access_grants_live
+  ON work_item_access_grants (work_item_id, party) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_work_item_access_grants_party
+  ON work_item_access_grants (party) WHERE revoked_at IS NULL;
+CREATE TABLE IF NOT EXISTS work_item_break_glass_reads (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  actor TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (length(reason) >= 10),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_break_glass_reads_item
+  ON work_item_break_glass_reads (work_item_id, created_at DESC);
+-- 877 ROUTINES (services/workflow_schedules.py). A schedule may also be a five-field cron
+-- expression read in its time zone (cadence 'cron'); say what happens when a firing comes while
+-- its last run is still going (concurrency_policy: always_enqueue | skip_if_active | coalesce —
+-- one run when the active one ends); how missed firings are caught up after downtime (catch_up:
+-- none | one | all, at most catch_up_max); and skip a firing when nothing happened in the project
+-- since the last run (activity_gate {"kinds": ["work_item.", ...], "min_events": 1}). Its input
+-- may use {{fired_at}} {{date}} {{since}} {{last_run_at}} {{schedule_name}}. Every firing —
+-- started, suppressed (with the reason), refused or failed — is a workflow_schedule_runs row.
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS cron_expr TEXT;
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS concurrency_policy TEXT NOT NULL DEFAULT 'always_enqueue';
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS catch_up TEXT NOT NULL DEFAULT 'one';
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS catch_up_max INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS activity_gate JSONB;
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS coalesced_pending BOOLEAN NOT NULL DEFAULT false;
+DO $$ BEGIN
+  -- The cadence check gains 'cron' (extended, not rewritten: the three cadences stay).
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workflow_schedules_cadence_check'
+             AND conrelid = 'workflow_schedules'::regclass
+             AND pg_get_constraintdef(oid) NOT LIKE '%cron%') THEN
+    ALTER TABLE workflow_schedules DROP CONSTRAINT workflow_schedules_cadence_check;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workflow_schedules_cadence_check'
+                 AND conrelid = 'workflow_schedules'::regclass) THEN
+    ALTER TABLE workflow_schedules ADD CONSTRAINT workflow_schedules_cadence_check
+      CHECK (cadence IN ('hourly', 'daily', 'weekly', 'cron'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workflow_schedules_routine_check'
+                 AND conrelid = 'workflow_schedules'::regclass) THEN
+    ALTER TABLE workflow_schedules ADD CONSTRAINT workflow_schedules_routine_check CHECK (
+      concurrency_policy IN ('always_enqueue', 'skip_if_active', 'coalesce')
+      AND catch_up IN ('none', 'one', 'all') AND catch_up_max BETWEEN 1 AND 50
+      AND (cadence <> 'cron' OR cron_expr IS NOT NULL));
+  END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS workflow_schedule_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  schedule_id TEXT NOT NULL REFERENCES workflow_schedules(id) ON DELETE CASCADE,
+  scheduled_for TIMESTAMPTZ NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('started', 'suppressed', 'coalesced', 'refused', 'failed')),
+  reason TEXT,
+  run_id TEXT,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_schedule_runs_schedule
+  ON workflow_schedule_runs (schedule_id, created_at DESC);
+-- 878 HOLDING A WHOLE WORK TREE (services/work_holds.py). One hold on a root — a work item (its
+-- whole subtree and every run of it) or a workflow run (it and its child runs) — snapshots each
+-- member's status as it was, pauses what was running (mode 'pause'; 'drain' lets running work
+-- finish and starts nothing new), and is restored EXACTLY: only what the hold paused is resumed.
+-- While a hold is active nothing under it is claimed by a worker (jobs, workflow steps), woken by
+-- a finished blocker, started by a deferred start, or resumed by hand.
+CREATE TABLE IF NOT EXISTS run_holds (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  root_kind TEXT NOT NULL CHECK (root_kind IN ('work_item', 'workflow_run')),
+  root_id TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'pause' CHECK (mode IN ('pause', 'drain')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'restored')),
+  reason TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  restored_by TEXT,
+  restored_at TIMESTAMPTZ,
+  restore_summary JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_run_holds_active_root
+  ON run_holds (root_kind, root_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_run_holds_project ON run_holds (project_id, status, created_at DESC);
+CREATE TABLE IF NOT EXISTS run_hold_members (
+  hold_id TEXT NOT NULL REFERENCES run_holds(id) ON DELETE CASCADE,
+  member_kind TEXT NOT NULL CHECK (member_kind IN ('work_item', 'workflow_run')),
+  member_id TEXT NOT NULL,
+  prior_status TEXT NOT NULL,
+  action TEXT NOT NULL,                      -- paused | already_paused | left_running | held
+  restored_action TEXT,                      -- resumed | left_paused | gone | still_held | kept
+  PRIMARY KEY (hold_id, member_kind, member_id)
+);
+CREATE INDEX IF NOT EXISTS idx_run_hold_members_member
+  ON run_hold_members (member_kind, member_id);
+-- ================================ end BOSSAPP-w4-work-ux1 ==
