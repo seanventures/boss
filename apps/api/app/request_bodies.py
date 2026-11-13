@@ -835,6 +835,17 @@ class OrgAssignmentBody(OpenRequestBody):
     sort: SkipValidation[int | None] = None
     actor: SkipValidation[str | None] = None
 
+class OrgTakeoverBody(OpenRequestBody):
+    """BOSSAPP-885: a manager (agent:<role> or person:<id>) takes a report's work over."""
+    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'taker']})
+
+    project_id: SkipValidation[str | None] = None
+    taker: SkipValidation[str | None] = None
+    run_id: SkipValidation[str | None] = None
+    work_item_id: SkipValidation[str | None] = None
+    note: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
 class AutonomySetBody(OpenRequestBody):
     model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'actor']})
 

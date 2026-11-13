@@ -51,6 +51,33 @@ export async function PUT(req: Request) {
   }
 }
 
+/** BOSSAPP-885: `op: "takeover"` — a manager takes a report's stalled work over. */
+export async function POST(req: Request) {
+  let body: Record<string, unknown>;
+  try { body = await req.json(); }
+  catch { return NextResponse.json({ error: "invalid JSON body" }, { status: 400 }); }
+  if (body.op !== "takeover") {
+    return NextResponse.json({ error: "op must be takeover" }, { status: 400 });
+  }
+  const { op: _op, ...rest } = body;
+  try {
+    const r = await apiWrite(`${API_URL}/v1/console/v2/org/takeover`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(rest),
+      cache: "no-store",
+    });
+    const parsed = await r.json().catch(() => ({}));
+    // The API's sentence ("X cannot take this work over: it is not above Y …") is the answer.
+    if (!r.ok) {
+      return NextResponse.json({ error: apiErrorText(parsed, r.status) }, { status: r.status });
+    }
+    return NextResponse.json(parsed);
+  } catch (e) {
+    return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+  }
+}
+
 export async function DELETE(req: Request) {
   const params = rawRequestUrl(req).searchParams;
   const projectId = params.get("project_id")?.trim();

@@ -15767,7 +15767,61 @@ def console_v2_org_endpoint(project_id: str, hours: int = 168) -> dict:
         chart = org_chart(connection, project_id, hours=max(1, min(int(hours), 24 * 90)))
         # The declared chart laid over the observed one. Both are kept: where they disagree is
         # the most interesting thing on the page, and averaging them would hide it.
-        return oa.apply_to(chart, oa.get_all(connection, project_id))
+        out = oa.apply_to(chart, oa.get_all(connection, project_id))
+        if out.get("has_declared"):
+            # BOSSAPP-885: the plan carries authority — each placed role's chain (and the retired
+            # manager that blocks it), and the stalled work waiting on a manager to take it over.
+            from boss_engine.services import org_chain
+
+            out["chains"] = {a: org_chain.chain_view(connection, project_id, a)
+                             for a in (out.get("declared") or {})}
+            out["takeover_offers"] = org_chain.open_offers(connection, project_id)
+        return out
+
+
+@app.get("/v1/console/v2/org/chain")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
+def console_v2_org_chain_endpoint(project_id: str, agent_id: str) -> dict:
+    """One agent's chain of command (BOSSAPP-885): owner → manager → … with the acting manager,
+    the retired manager that blocks new work (if any), and its work waiting on a manager."""
+    from boss_engine.services import org_chain
+
+    with begin(engine) as connection:
+        view = org_chain.chain_view(connection, project_id, agent_id)
+        me = org_chain.party(agent_id)
+        view["takeover_offers"] = [o for o in org_chain.open_offers(connection, project_id)
+                                   if me in (o.get("subject"), o.get("offered_to"))]
+        return view
+
+
+@app.post("/v1/console/v2/org/takeover")
+@permit(P.AGENT_UPDATE, scope=Scope.project(body="project_id"))
+def post_org_takeover(payload: open_bodies.OrgTakeoverBody) -> dict:
+    """A manager takes a report's work over (BOSSAPP-885): the work item and its running runs
+    move to the taker, a run the chain was holding resumes, and the authority path — who acted,
+    under whose chain — is recorded on the run. Refused (409, in words) without that authority."""
+    payload = payload.payload()
+    from boss_engine.services import org_chain
+
+    project_id = str(payload.get("project_id") or "").strip()
+    taker = str(payload.get("taker") or "").strip()
+    if not project_id or not taker:
+        raise HTTPException(status_code=400, detail="project_id and taker are required")
+    if not (payload.get("run_id") or payload.get("work_item_id")):
+        raise HTTPException(status_code=400, detail="run_id or work_item_id is required")
+    with begin(engine) as connection:
+        actor = require_project_write_actor(
+            connection, project_id, payload.get("actor") or "ceo", "role_review"
+        )
+        try:
+            return org_chain.take_over(
+                connection, settings, project_id=project_id, taker=taker,
+                actor=actor if ":" in str(actor) else f"person:{actor}",
+                run_id=payload.get("run_id") or None,
+                work_item_id=payload.get("work_item_id") or None,
+                note=str(payload.get("note") or ""))
+        except org_chain.TakeoverRefused as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.put("/v1/console/v2/org/{agent_id}")
