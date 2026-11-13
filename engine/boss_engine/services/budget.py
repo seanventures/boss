@@ -1352,6 +1352,28 @@ class BudgetGovernor:
             record_refusal(connection, project_id, refused, category=category, reason=reason,
                            amount_usd_micros=amount_usd_micros, snapshot=snapshot)
             return refused
+        # BOSSAPP-863: every matching org / project / agent / workflow budget (scoped_budgets),
+        # not only this project's policy. A no-op while none is set.
+        from .scoped_budgets import reserve_refusal
+
+        scoped = reserve_refusal(connection, project_id, amount_usd_micros) \
+            if amount_usd_micros > 0 else None
+        if scoped is not None:
+            scoped["budget_state"] = snapshot["budget_state"]
+            emit_event(connection, project_id, "budget.reservation_denied", "budget_governor",
+                       "project", project_id,
+                       {"requested_usd_micros": amount_usd_micros, "reason": reason,
+                        "scoped_policy_id": scoped["policy_id"]})
+            record_policy_eval(
+                connection, project_id, "budget.reserve", "deny", action=category,
+                reason=f"{scoped['scope_type']} budget reached",
+                detail={"requested_usd_micros": amount_usd_micros,
+                        "policy_id": scoped["policy_id"],
+                        "cap_usd_micros": scoped["cap_usd_micros"],
+                        "spent_usd_micros": scoped["spent_usd_micros"]})
+            record_refusal(connection, project_id, scoped, category=category, reason=reason,
+                           amount_usd_micros=amount_usd_micros, snapshot=snapshot)
+            return scoped
 
         # BOSS-280: freeze_tier2_pct, actually enforced. Past the threshold, HIGH-RISK work
         # (tier >= 2) is refused even while cheaper/lower-risk work still fits under the cap —

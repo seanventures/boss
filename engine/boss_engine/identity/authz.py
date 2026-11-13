@@ -265,6 +265,11 @@ def _held(conn: Any, org_id: str, principal_id: str, scope: ResolvedScope, epoch
         why.setdefault(meta.key, []).append(Why(
             role_key=r["role_key"], binding_id=r["binding_id"], binding_scope=label,
             via_group=r["group_name"], group_source=r["group_source"]))
+    # BOSSAPP-872: instance admins hold instance:* apart from any org role; once one exists, an
+    # org role no longer confers it (identity/instance_admin.py).
+    from . import instance_admin
+
+    instance_admin.apply(why, conn, principal_id, Why)
     held = _Held(frozenset(why), {k: tuple(v) for k, v in why.items()}, valid_until)
     HELD_CACHE.put(key, held)
     return held

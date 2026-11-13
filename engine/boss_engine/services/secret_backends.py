@@ -1158,14 +1158,41 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
             "provider, metadata FROM secret_refs WHERE id = :i"), {"i": secret_ref_id}).mappings().first()
     if not row:
         raise SecretUnavailable(f"secret ref {secret_ref_id} does not exist")
+    # BOSSAPP-865: every resolution — refused or resolved — is one append-only access row
+    # (services/secret_access_log.py), and a person- or agent-scoped reference resolves only for
+    # that person or agent. The log never fails the resolution.
+    from . import secret_access_log as _access
+
+    who = _access.who_is_accessing(connection, project_id or row.get("project_id"))
+
+    def _refuse(reason: str, message: str) -> SecretUnavailable:
+        _access.record_access(connection, secret_ref_id=secret_ref_id,
+                              project_id=project_id or row.get("project_id"), outcome="refused",
+                              who=who, reason=reason)
+        return SecretUnavailable(message)
+
     if project_id and row["project_id"] != project_id and not _shared_with(connection, row, project_id):
-        raise SecretUnavailable(f"secret ref {secret_ref_id} does not exist")
+        raise _refuse("another project", f"secret ref {secret_ref_id} does not exist")
     if row["status"] not in ("active", "rotating", "rotation_due"):
-        raise SecretUnavailable(
-            f"secret ref {secret_ref_id} is {row['status']} and must not be used")
+        raise _refuse(f"status {row['status']}",
+                      f"secret ref {secret_ref_id} is {row['status']} and must not be used")
+    subject = _access.scope_admits(row, who)
+    if subject is not None:
+        raise _refuse(subject, f"secret ref {secret_ref_id} is {subject}")
     backend = backend_for(row["storage_backend"] or row["ref_kind"], settings)
-    value = backend.get(row["ref_key"])
+    try:
+        value = backend.get(row["ref_key"])
+    except SecretUnavailable as exc:
+        _refuse(type(exc).__name__, str(exc))
+        raise                       # the store's own exception: readers tell absent from down
+    _access.record_access(connection, secret_ref_id=secret_ref_id,
+                          project_id=project_id or row.get("project_id"), outcome="resolved", who=who)
     _hold_to_provider(secret_ref_id, row, value)
+    # BOSSAPP-866: the value is known exactly from here on, so every output of the run it was
+    # handed to (turns, tool logs, PR text) is scrubbed of it, in any encoding.
+    from .run_secret_redaction import register as _register_known
+
+    _register_known(value)
     return value
 
 

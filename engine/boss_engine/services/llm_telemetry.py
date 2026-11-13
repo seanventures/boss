@@ -410,6 +410,16 @@ def record_llm_call(
                     "call_class": call_class,
                 },
             )
+            # BOSSAPP-863: a PAID call is where a scoped budget (org / project / agent /
+            # workflow) is checked mid-stage; one past a hard-stop cap tells the run to stop at
+            # its next turn (scoped_budgets.after_call; never raises, a no-op with no policy).
+            if not included and int(cost_usd_micros or 0) > 0:
+                from .run_secret_redaction import current_run_id
+                from .scoped_budgets import after_call
+
+                after_call(c, project_id=ctx.get("project_id"), role=role,
+                           workflow_run_id=ctx.get("workflow_run_id"),
+                           run_id=ctx.get("run_id") or current_run_id())
             # A PROVIDER'S CAPACITY IS A GOVERNED FACT, AND THIS IS WHERE IT IS OBSERVED.
             #
             # Every engine already reports here, which makes it the one place that can know

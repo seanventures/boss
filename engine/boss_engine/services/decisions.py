@@ -1378,6 +1378,16 @@ class DecisionService:
                 grant_access(connection, self.settings, row, actor)
             except ToolAccessError as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "store_proposed_secret":
+            # AN AGENT PROPOSED A SECRET (BOSSAPP-871, secret_proposals): the value the person
+            # typed on the card is written through put_secret and bound to the named target.
+            # Refused (approval not recorded) without a typed value: never from an agent.
+            from .secret_proposals import SecretProposalError, on_approved as store_proposed
+
+            try:
+                store_proposed(connection, self.settings, row, actor)
+            except SecretProposalError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action == "activate_authored_skill":
             # The draft the card showed becomes the skill other agents can run. Until this,
             # nothing is written: the draft is a diff-bound consent (change_consent, 843), and
@@ -1508,6 +1518,12 @@ class DecisionService:
             from .tool_access_requests import on_refused as refuse_access
 
             refuse_access(connection, row, actor)
+        elif rec.get("action") == "store_proposed_secret":
+            # A person said No to an agent's proposed secret (BOSSAPP-871): kept, so the same
+            # name is not asked again for a day.
+            from .secret_proposals import on_refused as refuse_proposal
+
+            refuse_proposal(connection, row, actor)
         elif (row["recommendation"] or {}).get("action") in ("activate_authored_skill",
                                                              "apply_agent_prompt_diff"):
             # A refused draft's consent can never be spent (change_consent, BOSSAPP-843); the

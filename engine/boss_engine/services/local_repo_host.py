@@ -221,6 +221,10 @@ class LocalGitAdapter:
                             run_id: Optional[str] = None) -> PullRequestResult:
         """Open (or refresh) the change set for this branch: one open change set per branch,
         as GitHub keeps one open PR per head."""
+        # BOSSAPP-866: a secret value handed to the run never reaches the PR text.
+        from .run_secret_redaction import scrub as _scrub_known
+
+        title, body = _scrub_known(title), _scrub_known(body)
         from .core import make_id
 
         git_dir = self._require()

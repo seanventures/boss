@@ -109,14 +109,20 @@ def put_secret(connection, settings: Settings, *, project_id: str, name: str,
          "rk": backend, "key": key, "prov": secret_kind, "sk": stored_kind,
          "sb": backend, "m": json.dumps(meta), "by": actor}).mappings().first()
 
+    # BOSSAPP-865: each write is the reference's next version (what BOSS may remember of it).
+    from .secret_access_log import record_version
+
+    version = record_version(connection, secret_ref_id=row["id"], fingerprint=meta["fingerprint"],
+                             last4=meta["last4"], actor=actor)
+
     # The event records THAT a secret was set, never what it was.
     emit_event(connection, project_id, "secret.written", actor, "secret_ref", row["id"],
                {"name": name, "backend": backend, "kind": secret_kind,
-                "fingerprint": meta["fingerprint"]})
+                "fingerprint": meta["fingerprint"], **({"version": version} if version else {})})
     return {"secret_ref_id": row["id"], "name": name, "ref_key": key,
             "backend": backend, "secret_kind": secret_kind,
             "fingerprint": meta["fingerprint"], "last4": meta["last4"],
-            "raw_secret_stored": False}
+            "raw_secret_stored": False, **({"version": version} if version else {})}
 
 
 def generate_keypair(connection, settings: Settings, *, project_id: str, name: str,
@@ -207,6 +213,7 @@ def list_secrets(connection, project_id: str) -> list[dict[str, Any]]:
                  if isinstance(b, dict) and b.get("secret_ref_id") == r["id"]]
         out.append({
             "secret_ref_id": r["id"], "name": r["ref_key"], "backend": r["storage_backend"],
+            "scope_type": r["scope_type"], "scope_id": r["scope_id"],
             "secret_kind": meta.get("secret_kind_detail") or r["secret_kind"],
             "status": r["status"], "fingerprint": meta.get("fingerprint"),
             "last4": meta.get("last4"), "bound_to": bound,

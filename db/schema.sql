@@ -13353,3 +13353,219 @@ CREATE TABLE IF NOT EXISTS subscription_pool_pins (
 --   forward         [run_id | agent | traceparent]  X-BOSS-Run-Id, X-BOSS-Agent, W3C traceparent
 ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS headers_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
 -- ================================ end BOSSAPP-w4-observability ==
+
+-- BOSSAPP-w4-governance ── governance set (862-866, 871, 872) ───────────────────────────────────
+-- 865 (services/secret_access_log.py): which run, person or agent resolved which secret, at which
+-- version. secret_access_events is append-only (update/delete raise), one row per resolution
+-- through secret_backends.resolve_secret_ref (resolved or refused; never the value). A secret's
+-- versions are counted per write (put_secret): secret_versions keeps what BOSS may remember of
+-- each (fingerprint, last4, who, when), never the material. secret_refs.scope_type gains 'user'
+-- (scope_id = usr_ principal) and 'agent' (scope_id = role key): such a reference resolves only
+-- for that person or that agent.
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE IF NOT EXISTS secret_versions (
+  id TEXT PRIMARY KEY,
+  secret_ref_id TEXT NOT NULL REFERENCES secret_refs(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  fingerprint TEXT,
+  last4 TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (secret_ref_id, version)
+);
+CREATE TABLE IF NOT EXISTS secret_access_events (
+  id TEXT PRIMARY KEY,
+  secret_ref_id TEXT NOT NULL,
+  project_id TEXT,
+  version INTEGER,
+  outcome TEXT NOT NULL CHECK (outcome IN ('resolved', 'refused')),
+  reason TEXT,
+  run_id TEXT,
+  person_id TEXT,
+  agent_role TEXT,
+  principal TEXT,
+  accessed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_secret_access_events_ref
+  ON secret_access_events (secret_ref_id, accessed_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_secret_access_events_run
+  ON secret_access_events (run_id) WHERE run_id IS NOT NULL;
+CREATE OR REPLACE FUNCTION secret_access_events_append_only()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'secret_access_events is append-only';
+END;
+$$;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'secret_access_events_no_update') THEN
+    CREATE TRIGGER secret_access_events_no_update
+      BEFORE UPDATE OR DELETE ON secret_access_events
+      FOR EACH ROW EXECUTE FUNCTION secret_access_events_append_only();
+  END IF;
+END;
+$$;
+-- 871 (services/secret_proposals.py): an agent asks for a secret to be stored. The agent names
+-- it, where it goes and why; it NEVER supplies the value. A decision (recommendation.action
+-- 'store_proposed_secret') opens; the person types the value on the card in the console and
+-- approval writes it through put_secret (and binds it to the named target). This table has no
+-- value column, by design: the value passes from the person's form to the secret store.
+CREATE TABLE IF NOT EXISTS secret_proposals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  decision_id TEXT,
+  name TEXT NOT NULL,
+  secret_kind TEXT NOT NULL DEFAULT 'api_token',
+  target_kind TEXT NOT NULL DEFAULT 'project'
+    CHECK (target_kind IN ('project', 'deployment_target', 'agent')),
+  target_id TEXT,
+  binding_name TEXT,
+  reason TEXT NOT NULL,
+  requested_by TEXT NOT NULL,
+  run_id TEXT,
+  status TEXT NOT NULL DEFAULT 'asked' CHECK (status IN ('asked', 'stored', 'refused')),
+  secret_ref_id TEXT,
+  resolved_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_secret_proposals_project ON secret_proposals (project_id, status, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_secret_proposals_decision ON secret_proposals (decision_id)
+  WHERE decision_id IS NOT NULL;
+-- 872 (identity/instance_admin.py): instance admins, separate from org roles. A row names a
+-- principal who runs the INSTALL (plugins, extensions, backups, the instance admins) with the
+-- instance:* permissions, whatever org role it holds (none needed: no org data access comes with
+-- it). While no active row exists, org Owner/Admin hold instance:* as before; once one does,
+-- ONLY instance admins do. Removal is a soft end (ended_at), kept for the record.
+CREATE TABLE IF NOT EXISTS identity_instance_admins (
+  principal_id TEXT PRIMARY KEY,
+  granted_by TEXT NOT NULL,
+  granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_by TEXT,
+  ended_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_identity_instance_admins_live
+  ON identity_instance_admins (principal_id) WHERE ended_at IS NULL;
+-- 863 (services/scoped_budgets.py): budgets at org, project, agent (role) and workflow scope. One
+-- active row per (org, scope, period[, project for a role]); a replaced or removed policy is kept
+-- with status 'removed'. Spend is money on llm_calls in the period; BudgetGovernor.reserve refuses
+-- past a hard-stop cap and a paid call past one signals its run to stop at the next turn.
+CREATE TABLE IF NOT EXISTS scoped_budget_policies (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('org', 'project', 'role', 'workflow')),
+  scope_id TEXT NOT NULL,
+  project_id TEXT,
+  period TEXT NOT NULL DEFAULT 'month' CHECK (period IN ('day', 'month')),
+  cap_usd_micros BIGINT NOT NULL CHECK (cap_usd_micros > 0),
+  warn_pct NUMERIC NOT NULL DEFAULT 0.8,
+  hard_stop BOOLEAN NOT NULL DEFAULT true,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'removed')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_scoped_budget_policies_live
+  ON scoped_budget_policies (org_id, scope_type, scope_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_llm_calls_role_time ON llm_calls (role, created_at) WHERE role IS NOT NULL;
+-- 864 (services/subscription_fees.py): seat fees and invoice reconciliation. A subscription price is
+-- revisioned (a new one closes the open one; history kept) and amortised into one fee row per day.
+-- An imported invoice line is one cost_adjustments row: the invoice amount, BOSS's estimate for
+-- that provider and period (money on llm_calls), the difference and why. Re-importing is a no-op.
+CREATE TABLE IF NOT EXISTS subscription_prices (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  plan TEXT NOT NULL,
+  seats INTEGER NOT NULL DEFAULT 1 CHECK (seats > 0),
+  monthly_usd_micros BIGINT NOT NULL CHECK (monthly_usd_micros >= 0),
+  effective_from DATE NOT NULL,
+  effective_to DATE,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_subscription_prices_project
+  ON subscription_prices (project_id, provider, plan, effective_from DESC);
+CREATE TABLE IF NOT EXISTS subscription_fee_days (
+  id TEXT PRIMARY KEY,
+  price_id TEXT NOT NULL REFERENCES subscription_prices(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  day DATE NOT NULL,
+  amount_usd_micros BIGINT NOT NULL,
+  UNIQUE (price_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_subscription_fee_days_project ON subscription_fee_days (project_id, day);
+CREATE TABLE IF NOT EXISTS cost_adjustments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL,
+  invoice_ref TEXT NOT NULL,
+  line_ref TEXT NOT NULL,
+  description TEXT,
+  invoice_usd_micros BIGINT NOT NULL,
+  estimated_usd_micros BIGINT NOT NULL,
+  adjustment_usd_micros BIGINT NOT NULL,
+  reason TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, provider, invoice_ref, line_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_cost_adjustments_period ON cost_adjustments (project_id, provider, period_start);
+-- 862 (services/mcp_oauth_server.py): OAuth 2.1 + device login for BOSS's own MCP server. Public
+-- clients registered dynamically (RFC 7591); single-use, 5-minute authorization codes bound to a
+-- PKCE S256 challenge; device codes (RFC 8628); a grant per connected app whose access token is a
+-- scoped, short-lived personal API key (identity_api_credentials) and whose refresh token is
+-- stored only as a hash and rotated on every use (a spent one presented again revokes the grant).
+CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  client_name TEXT NOT NULL,
+  redirect_uris JSONB NOT NULL DEFAULT '[]'::jsonb,
+  grant_types JSONB NOT NULL DEFAULT '["authorization_code", "refresh_token"]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+  code_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  principal_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  scopes TEXT[] NOT NULL DEFAULT '{}',
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_device_codes (
+  device_code_hash TEXT PRIMARY KEY,
+  user_code TEXT NOT NULL UNIQUE,
+  client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  scopes TEXT[] NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied', 'used')),
+  principal_id TEXT,
+  org_id TEXT,
+  interval_seconds INTEGER NOT NULL DEFAULT 5,
+  last_polled_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_grants (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  principal_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  scopes TEXT[] NOT NULL DEFAULT '{}',
+  api_key_id TEXT,
+  refresh_hash TEXT,
+  spent_refresh_hashes TEXT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  refreshed_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  revoked_reason TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_oauth_grants_refresh ON mcp_oauth_grants (refresh_hash)
+  WHERE refresh_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mcp_oauth_grants_principal ON mcp_oauth_grants (principal_id)
+  WHERE revoked_at IS NULL;

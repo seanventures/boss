@@ -111,14 +111,14 @@ def build_infra_platform_router() -> APIRouter:
         return {"plugin": view}
 
     @router.post("/v1/infra/plugins/{plugin_id}/enable")
-    @permit(P.SETUP_MANAGE, scope=Scope.org())
+    @permit(P.INSTANCE_MANAGE, scope=Scope.org())
     def enable_plugin(plugin_id: str, request: Request, payload: Optional[dict] = Body(None)) -> Any:
-        return _set(request, plugin_id, payload, enabled=True, permission=P.SETUP_MANAGE.value)
+        return _set(request, plugin_id, payload, enabled=True, permission=P.INSTANCE_MANAGE.value)
 
     @router.post("/v1/infra/plugins/{plugin_id}/disable")
-    @permit(P.INFRA_PROVISION, scope=Scope.org())
+    @permit(P.INSTANCE_MANAGE, scope=Scope.org())
     def disable_plugin(plugin_id: str, request: Request, payload: Optional[dict] = Body(None)) -> Any:
-        return _set(request, plugin_id, payload, enabled=False, permission=P.INFRA_PROVISION.value)
+        return _set(request, plugin_id, payload, enabled=False, permission=P.INSTANCE_MANAGE.value)
 
     @router.get("/v1/infra/platform/resources")
     @permit(P.INFRA_READ, scope=Scope.project(query="project_id"))

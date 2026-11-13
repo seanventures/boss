@@ -125,9 +125,11 @@ describe("Screen A — Govern › Spend is the landing", () => {
     expect($("[data-testid=gv-hero-fill]")!.getAttribute("style")).toContain("41.20%");
     expect($("[data-testid=gv-hero-forecast]")).not.toBeNull();
     expect(t("[data-testid=gv-hero-sub]")).toBe("$38.00 today of $100" + "1,240 subscription calls, included, $0" + "Resets Dec 1");
-    // Two reads open it — the limits view and this month's spend — and nothing is written.
+    // Three reads open it — the limits view, this month's spend and (BOSSAPP-864) the month
+    // reconciled against invoices and seat fees — and nothing is written.
     expect(g.calls.map((c) => `${c.method} ${c.url}`)).toEqual([
-      "GET /api/govern?project_id=p1&view=limits", "GET /api/govern?project_id=p1&view=spend&window=month"]);
+      "GET /api/govern?project_id=p1&view=limits", "GET /api/govern?project_id=p1&view=spend&window=month",
+      "GET /v1/spend/reconciliation?project_id=p1"]);
   });
 
   it("draws each day of the month with today marked and the daily cap named", async () => {

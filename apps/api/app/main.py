@@ -692,6 +692,7 @@ from .request_bodies import (
     RoleSkillBody,
     SecretKeypairBody,
     SecretPutBody,
+    SecretProposalStoreBody,
     TargetSecretBindBody,
     WebAppBuildBody,
     WorkflowApplyBody,
@@ -9448,6 +9449,22 @@ def _owned_secret_scope(connection, project_id: str, payload: dict) -> tuple[str
     """Only let the generic upload address this project's own backend keys."""
     scope_id = str(payload.get("scope_id") or project_id)
     requested_type = str(payload.get("scope_type") or "")
+    if requested_type in ("user", "agent") and scope_id != project_id:
+        # BOSSAPP-865: a secret only one person (a usr_ principal) or one agent (a role key of
+        # this project) may resolve. The subject must exist where the secret lives.
+        if requested_type == "user":
+            found = scope_id.startswith("usr_") and connection.execute(
+                text("SELECT 1 FROM identity_principals ip JOIN workspaces w ON w.org_id = ip.org_id "
+                     "JOIN projects p ON p.workspace_id = w.id "
+                     "WHERE ip.id = :s AND ip.kind = 'user' AND p.id = :project_id"),
+                {"s": scope_id, "project_id": project_id}).first()
+        else:
+            found = connection.execute(
+                text("SELECT 1 FROM roles WHERE role_key = :s AND project_id = :project_id"),
+                {"s": scope_id, "project_id": project_id}).first()
+        if not found:
+            raise HTTPException(status_code=403, detail="Secret scope is not in this project.")
+        return requested_type, scope_id
     if scope_id == project_id:
         scope_type = "project"
     else:
@@ -9573,6 +9590,27 @@ def verify_secret_endpoint(secret_ref_id: str, payload: Optional[dict] = None):
                              actor=actor)
 
 
+@app.get("/v1/secrets/{secret_ref_id}/access-log")
+@permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
+def secret_access_log_endpoint(secret_ref_id: str, project_id: str, limit: int = 100,
+                               before: Optional[str] = None):
+    """BOSSAPP-865: who resolved this secret — which run, person or agent, at which version,
+    resolved or refused — newest first, and its versions. Metadata only: no value, ever."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secret_access_log import access_log
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, project_id, read_actor(_secret_actor()), "integration_manage",
+        )
+        owned = connection.execute(
+            text("SELECT 1 FROM secret_refs WHERE id = :id AND project_id = :project_id"),
+            {"id": secret_ref_id, "project_id": project_id}).first()
+        if not owned:
+            raise HTTPException(status_code=404, detail="Secret ref not found in project.")
+        return access_log(connection, secret_ref_id, limit=limit, before=before)
+
+
 @app.get("/v1/secrets/{secret_ref_id}")
 @permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
 def get_secret_metadata_endpoint(secret_ref_id: str, project_id: str):
@@ -9611,6 +9649,50 @@ def bind_secret_endpoint(target_id: str, payload: TargetSecretBindBody):
                 actor=actor)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/v1/secret-proposals/{decision_id}/store")
+@permit(P.SECRET_MANAGE, scope=Scope.of("decision", path="decision_id"))
+def store_proposed_secret_endpoint(decision_id: str, payload: SecretProposalStoreBody):
+    """BOSSAPP-871: a person types the value of a secret an agent proposed, and approves.
+
+    The value goes from this request through the one approval door (the decision's own approval
+    checks, its approver binding, two-person rules) to put_secret, held only in a context
+    variable for this call: it is never written to the decision, its note or an event, and no
+    response carries it. A plain Approve of the same card is refused."""
+    body = payload.payload()
+    value = body.get("value")
+    if not isinstance(value, str) or not value:
+        raise HTTPException(status_code=422, detail="value is required")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.identity.approvals import ApprovalPending
+    from boss_engine.services.secret_proposals import ACTION, typed_value
+
+    with begin(engine) as connection:
+        rec = connection.execute(
+            text("SELECT recommendation FROM decisions WHERE id = :id"), {"id": decision_id},
+        ).scalar()
+        if not isinstance(rec, dict) or rec.get("action") != ACTION:
+            raise HTTPException(status_code=404, detail="No proposed-secret card with that id.")
+        request = DecisionActionRequest(
+            actor=str(body.get("actor") or current_api_principal.get() or "executive_console"),
+            note=body.get("note"))
+        try:
+            with typed_value(decision_id, value):
+                row = approve_decision_in(connection, decision_id, request)
+        except ApprovalPending as pending:
+            # A tier-3 card's first approval cannot hold the value until the second: refuse it.
+            raise HTTPException(status_code=409, detail=(
+                "This card needs a second approver first; store the value on the last "
+                "approval.")) from pending
+        stored = connection.execute(
+            text("SELECT name, secret_ref_id, status FROM secret_proposals WHERE decision_id = :d"),
+            {"d": decision_id}).mappings().first()
+        return {"decision_id": decision_id, "status": row.get("status"),
+                "name": (stored or {}).get("name"),
+                "secret_ref_id": (stored or {}).get("secret_ref_id"),
+                "raw_secret_stored": False}
 
 
 # --------------------------------------------------------------------------- #
@@ -32379,6 +32461,18 @@ app.include_router(build_infra_platform_router())
 from .routes_extensions import build_extensions_router  # noqa: E402  (BOSSAPP-861 extensions)
 
 app.include_router(build_extensions_router())
+from .routes_instance import build_instance_router  # noqa: E402  (BOSSAPP-872 instance admins)
+
+app.include_router(build_instance_router())
+from .routes_scoped_budgets import build_scoped_budgets_router  # noqa: E402  (BOSSAPP-863)
+
+app.include_router(build_scoped_budgets_router())
+from .routes_subscription_fees import build_subscription_fees_router  # noqa: E402  (BOSSAPP-864)
+
+app.include_router(build_subscription_fees_router())
+from .routes_mcp_oauth import build_mcp_oauth_router  # noqa: E402  (BOSSAPP-862)
+
+app.include_router(build_mcp_oauth_router())
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

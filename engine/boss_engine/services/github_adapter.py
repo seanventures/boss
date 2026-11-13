@@ -699,6 +699,10 @@ class GitHubAdapter:
         """Open (or refresh) the PR for this head. ``draft`` None follows BOSS_OPEN_PR_AS_DRAFT;
         True opens a draft (a build whose checks still fail, checks_failing.py). An already-open
         PR keeps its own draft state: only its body is refreshed."""
+        # BOSSAPP-866: a secret value handed to the run never reaches the PR text.
+        from .run_secret_redaction import scrub as _scrub_known
+
+        title, body = _scrub_known(title), _scrub_known(body)
         default_branch, _ = self.default_branch_sha()
         # Idempotent for feedback-iterations that reuse a branch: if a PR is already open
         # for this head, refresh its body and return it — GitHub would otherwise 422 on a

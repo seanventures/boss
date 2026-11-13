@@ -134,6 +134,8 @@ EVENT_TYPES: frozenset[str] = frozenset({
     # a build an always-on squad decided, started on the project's Captain authority: the agent,
     # the sponsor it is OBO, the decision and who decided it (identity/captain_authority.py)
     "agent.captain_authority",
+    # instance admins (BOSSAPP-872, identity/instance_admin.py): who named or removed one
+    "instance_admin.granted", "instance_admin.revoked",
 })
 
 #: hash of "no previous event" for the first row of an org's chain.

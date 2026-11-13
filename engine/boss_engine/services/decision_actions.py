@@ -136,6 +136,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving an agent's tool request gives its role exactly the tools on the Grant card,
     # tier-capped and pinned to their schema hash (tool_access_requests.on_approved, BOSSAPP-848).
     "grant_tool_access",
+    # Approving an agent's proposed secret writes the value the person typed on the card
+    # through put_secret and binds it (secret_proposals.on_approved, BOSSAPP-871).
+    "store_proposed_secret",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on

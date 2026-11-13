@@ -3813,6 +3813,48 @@ def _register_work_item_tools(reg: ToolRegistry) -> None:
             return {"ok": False, "error": str(refused)}
         return {"ok": asked["status"] in ("asked", "already_held"), **_json_safe(asked)}
 
+    @reg.tool(
+        "propose_secret",
+        "Ask a person to store a secret you need (an API key, a webhook signing secret): name it, "
+        "say where it goes (the project, a deployment target, or you alone) and why. You never "
+        "see or send the value: a card opens in Needs you and the PERSON types it there; it is "
+        "written to the secret store and bound for you. Never ask anyone to paste a secret into "
+        "chat. A No is final for a day.",
+        _obj({"name": {"type": "string", "description": "e.g. stripe_api_key"},
+              "reason": {"type": "string", "description": "why it is needed, for the person"},
+              "target": {"type": "string", "enum": ["project", "deployment_target", "agent"],
+                         "default": "project",
+                         "description": "where it goes: the project, a deployment target's "
+                                        "requirement, or an agent-only secret for you"},
+              "target_id": {"type": "string",
+                            "description": "the deployment target's id"},
+              "binding_name": {"type": "string",
+                               "description": "the target's requirement name (default: name)"},
+              "secret_kind": {"type": "string", "default": "api_token"}},
+             required=["name", "reason"]),
+        kind="write", reversibility="safe", permission="skill:invoke",
+        exposure=Exposure(tags=("secrets", "decisions")))
+    def propose_secret(ctx, *, project_id, actor, args):
+        from ..services.secret_proposals import SecretProposalError, propose
+        from ..services.tool_access_requests import requesting_role
+
+        try:
+            with ctx.begin() as c:
+                role = requesting_role(c, project_id, str(actor or ""))
+                if role is None:
+                    return {"ok": False, "error": "Only an agent proposes secrets; a person "
+                                                  "stores them in Infra › Secrets."}
+                asked = propose(c, project_id, role_key=role, name=str(args.get("name") or ""),
+                                reason=str(args.get("reason") or ""),
+                                target_kind=str(args.get("target") or "project"),
+                                target_id=args.get("target_id"),
+                                binding_name=args.get("binding_name"),
+                                secret_kind=str(args.get("secret_kind") or "api_token"),
+                                actor=str(actor))
+        except SecretProposalError as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": asked["status"] in ("asked", "already_asked"), **_json_safe(asked)}
+
 
 def _register_governance_tools(reg: ToolRegistry) -> None:
     @reg.tool(

@@ -11,7 +11,8 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import { showToast } from "../client-forms";
 import {
-  afterWrite, generateKeypair, listSecrets, putSecret, verifySecret, type SecretRow,
+  afterWrite, generateKeypair, listSecrets, putSecret, secretAccessLog, verifySecret,
+  type SecretAccessLog, type SecretRow,
 } from "./infra-actions";
 import { CopyButton, ErrorLine } from "./infra-util";
 import { Sheet } from "./kit";
@@ -47,6 +48,16 @@ export function SecretsSheet({ projectId, actor, onClose, canWrite = true }: {
   const [error, setError] = useState<string | null>(null);
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [verdict, setVerdict] = useState<Record<string, string>>({});
+  // BOSSAPP-865: one secret's access log, open beneath its row.
+  const [logFor, setLogFor] = useState<string | null>(null);
+  const [log, setLog] = useState<SecretAccessLog | null>(null);
+  const [logError, setLogError] = useState<string | null>(null);
+  const toggleLog = async (s: SecretRow) => {
+    if (logFor === s.secret_ref_id) { setLogFor(null); return; }
+    setLogFor(s.secret_ref_id); setLog(null); setLogError(null);
+    const r = await secretAccessLog(projectId, s.secret_ref_id);
+    if (r.ok) setLog(r.data); else setLogError(r.error);
+  };
 
   const upload = async () => {
     if (!name.trim() || !value) { setError("Name and value"); return; }
@@ -120,11 +131,12 @@ export function SecretsSheet({ projectId, actor, onClose, canWrite = true }: {
       <div className="inf-table-wrap">
         <table className="inf-table" data-testid="inf-secrets-table">
           <thead><tr><th scope="col">Name</th><th scope="col">Kind</th><th scope="col">Backend</th>
-            <th scope="col">Fingerprint</th><th scope="col">Bound to</th><th scope="col">Status</th><th scope="col"><span className="ag-sr">Verify</span></th></tr></thead>
+            <th scope="col">Fingerprint</th><th scope="col">Bound to</th><th scope="col">Status</th><th scope="col"><span className="ag-sr">Verify</span></th><th scope="col"><span className="ag-sr">Access log</span></th></tr></thead>
           <tbody>
-            {secrets.length === 0 ? <tr><td colSpan={7} className="inf-muted">No secrets yet</td></tr> : null}
+            {secrets.length === 0 ? <tr><td colSpan={8} className="inf-muted">No secrets yet</td></tr> : null}
             {secrets.map((s) => (
-              <tr key={s.secret_ref_id}>
+              <React.Fragment key={s.secret_ref_id}>
+              <tr>
                 <td className="inf-mono" data-copy="data">{s.name.split("/").pop()}</td>
                 <td>{s.secret_kind}</td>
                 <td className="inf-muted">{s.backend}</td>
@@ -137,7 +149,47 @@ export function SecretsSheet({ projectId, actor, onClose, canWrite = true }: {
                   <button type="button" className="ag-btn" disabled={busy !== null} data-testid={`inf-secret-verify-${s.secret_ref_id}`}
                           onClick={() => void verify(s)}>Verify</button>
                 </td>
+                <td>
+                  <button type="button" className="ag-btn" aria-expanded={logFor === s.secret_ref_id}
+                          data-testid={`inf-secret-log-${s.secret_ref_id}`} title="Who read it, and when"
+                          onClick={() => void toggleLog(s)}>Access log</button>
+                </td>
               </tr>
+              {logFor === s.secret_ref_id ? (
+                <tr data-testid="inf-secret-access-log">
+                  <td colSpan={8}>
+                    <ErrorLine error={logError} />
+                    {!log && !logError ? <span className="inf-muted">Loading…</span> : null}
+                    {log ? (
+                      <>
+                        <div className="inf-muted" data-testid="inf-secret-versions">
+                          {log.version ? `Version ${log.version}` : "Version —"}
+                          {log.versions.length > 1 ? ` · ${log.versions.length} versions` : ""}
+                        </div>
+                        {log.events.length === 0 ? <div className="inf-muted">Not read yet</div> : (
+                          <table className="inf-table">
+                            <thead><tr><th scope="col">When</th><th scope="col">Result</th><th scope="col">Run</th>
+                              <th scope="col">Person</th><th scope="col">Agent</th><th scope="col">Version</th></tr></thead>
+                            <tbody>
+                              {log.events.map((e) => (
+                                <tr key={e.id} data-testid="inf-secret-access-row">
+                                  <td className="inf-muted">{e.accessed_at ? new Date(e.accessed_at).toLocaleString() : "—"}</td>
+                                  <td title={e.reason ?? undefined}>{e.outcome === "resolved" ? "Read" : "Refused"}</td>
+                                  <td className="inf-mono" data-copy="data">{e.run_id ?? "—"}</td>
+                                  <td className="inf-mono">{e.person_id ?? "—"}</td>
+                                  <td>{e.agent_role ?? "—"}</td>
+                                  <td>{e.version ?? "—"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </>
+                    ) : null}
+                  </td>
+                </tr>
+              ) : null}
+              </React.Fragment>
             ))}
           </tbody>
         </table>
