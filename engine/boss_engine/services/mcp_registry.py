@@ -44,10 +44,15 @@ from .argument_binding import held_call_matches
 from .core import create_blocking_decision, emit_event, make_id, normalize_data_boundary
 from .tool_call_audit import record_tool_call
 from .tool_catalog import (
+    HASH_VERSION,
+    QUARANTINE_KEYS,
     apply_quarantine,
+    carry_quarantine,
     changed_tool_decisions,
     compare_catalog,
     description_sha256,
+    is_quarantined,
+    review_item,
     schema_sha256,
 )
 from .tool_result_screen import screen_result
@@ -368,20 +373,48 @@ def effective_policy(tier: int, chosen: Optional[str]) -> str:
     return policy
 
 
-def checked_policy(tier: int, policy: str) -> str:
-    """A policy an operator may set on a tool of this tier, or PolicyBelowFloor."""
+class ToolQuarantined(PolicyBelowFloor):
+    """Allow was chosen for a tool whose definition changed and waits for review (BOSSAPP-818).
+    A PolicyBelowFloor, so every surface that answers that one 409 answers this one too."""
+
+
+def checked_policy(tier: int, policy: str, *, quarantined: bool = False) -> str:
+    """A policy an operator may set on a tool of this tier, or PolicyBelowFloor.
+
+    A QUARANTINED tool (its schema or description changed since a person last accepted it) may
+    not be set to Allow either: the quarantine is lifted only by approving the "Tool changed"
+    decision, never by flipping the policy back."""
     if policy not in POLICIES:
         raise McpServerError("policy must be allow, ask or off.")
     if policy == "allow" and policy_floor(tier) == "ask":
         raise PolicyBelowFloor(
             "this tool changes the world, so it always asks a person; choose Ask or Off.")
+    if policy == "allow" and quarantined:
+        raise ToolQuarantined(
+            "this tool's definition changed and waits for review, so it asks a person until the "
+            "\"Tool changed\" decision is approved; choose Ask or Off, or answer that decision.")
     return policy
 
 
+def tool_quarantined(server: dict[str, Any], tool_name: str) -> bool:
+    """Whether the server's stored entry for this tool carries an open quarantine."""
+    return any(isinstance(t, dict) and t.get("name") == tool_name and is_quarantined(t)
+               for t in server.get("tools") or [])
+
+
 def tool_policy(server: dict[str, Any], tool_name: str, declared: Any = None) -> str:
-    """The effective policy of one MCP tool on one server."""
+    """The effective policy of one MCP tool on one server.
+
+    THE ONE STATEMENT every road reads (call_tool_with_receipt, call_tool_unattended, the agent
+    loop's offer, code_task_mcp, the Kit, the MCP gateway's tool_policy_verdict), so a
+    QUARANTINED tool answers Ask here whatever its stored policy says (BOSSAPP-818): a tool set
+    to Allow whose definition changed under it must not keep running unattended. Off stays Off.
+    """
     chosen = (server.get("tool_policy") or {}).get(tool_name)
-    return effective_policy(tool_tier(server, tool_name, declared), chosen)
+    policy = effective_policy(tool_tier(server, tool_name, declared), chosen)
+    if policy == "allow" and tool_quarantined(server, tool_name):
+        return "ask"
+    return policy
 
 
 def set_tool_policy(connection: Connection, project_id: str, server_id: str, tool_name: str,
@@ -395,7 +428,8 @@ def set_tool_policy(connection: Connection, project_id: str, server_id: str, too
         raise McpServerError("tool is required.")
     declared = next((t.get("annotations", {}).get("risk_tier") for t in server["tools"]
                      if t.get("name") == tool and isinstance(t.get("annotations"), dict)), None)
-    checked_policy(tool_tier(server, tool, declared), policy)
+    checked_policy(tool_tier(server, tool, declared), policy,
+                   quarantined=tool_quarantined(server, tool))
     current = dict(server.get("tool_policy") or {})
     current[tool] = policy
     connection.execute(
@@ -1118,19 +1152,34 @@ def ensure_mcp_server(
 # Reachability                                                                  #
 # --------------------------------------------------------------------------- #
 
+#: How much of a tool's description the registry STORES (for screens and the "Tool changed"
+#: diff). Large on purpose: :func:`probe` hands its summary to :func:`record_reachability`, which
+#: summarises it again, so a cut a real description reaches would hash differently on the two
+#: roads. Past it that can only quarantine MORE (a spurious change), never let a change through.
+DESCRIPTION_STORED_CHARS = 20000
+
+
 def _tool_summary(tools: Any) -> list[dict[str, Any]]:
+    """What the registry stores of a server's tool list.
+
+    WHAT IS HASHED IS WHAT THE MODEL IS SHOWN (BOSSAPP-818). agent_loop offers the model the
+    LIVE description and inputSchema untruncated, so both hashes cover the whole of each; the
+    stored ``description`` is cut at DESCRIPTION_STORED_CHARS for screens and diffs only. The
+    hash used to be taken over a 500-character cut, so a poisoned sentence appended past
+    character 500 changed what the model read without changing the hash."""
     out = []
     for tool in tools or []:
         if not isinstance(tool, dict) or not tool.get("name"):
             continue
-        description = str(tool.get("description") or "")[:500]
+        full = str(tool.get("description") or "")
         schema = (tool.get("inputSchema")
                   if isinstance(tool.get("inputSchema"), dict) else None)
         out.append({"name": str(tool["name"]),
-                    "description": description,
+                    "description": full[:DESCRIPTION_STORED_CHARS],
                     "inputSchema": schema,
                     "schema_sha256": schema_sha256(schema),
-                    "description_sha256": description_sha256(description)})
+                    "description_sha256": description_sha256(full),
+                    "hash_version": HASH_VERSION})
     return out
 
 
@@ -1209,29 +1258,37 @@ def record_reachability(
     such tool before the update. An unreachable probe does not compare and does not open a
     decision. A decision that cannot be opened is not swallowed, so the new list is not stored
     without it.
+
+    THE MARK OUTLIVES THE PROBE (BOSSAPP-818): an open quarantine on the stored entry is carried
+    forward (tool_catalog.carry_quarantine) until a person answers the decision
+    (:func:`accept_tool_change` / :func:`refuse_tool_change`). A tool that changes AGAIN while
+    quarantined does not open a second card: its one open card is rewritten to baseline -> now.
+
+    Returns the list it stored (None for an unreachable probe, which stores none).
     """
     summaries = _tool_summary(tools or [])
     stored = summaries
     if reachable:
+        # FOR UPDATE: a run's probe and a screen's probe of one server must not both read the
+        # old list — the second write would drop the first one's quarantine.
         row = connection.execute(
-            text("SELECT name, tools FROM mcp_servers WHERE id = :id AND project_id = :p"),
+            text("SELECT name, tools FROM mcp_servers WHERE id = :id AND project_id = :p "
+                 "FOR UPDATE"),
             {"id": server_id, "p": project_id},
         ).mappings().first()
         previous = _loads(row["tools"], []) if row is not None else None
         quarantined = compare_catalog(previous, summaries)["quarantined"]
-        stored = apply_quarantine(summaries, quarantined)
+        marked = apply_quarantine(summaries, quarantined)
+        from datetime import datetime, timezone
+
+        stored = carry_quarantine(previous, marked, quarantined,
+                                  now=datetime.now(timezone.utc).isoformat())
         server_name = str(row["name"]) if row is not None and row["name"] else ""
-        for decision in changed_tool_decisions(server_name, quarantined):
-            create_blocking_decision(
-                connection,
-                project_id,
-                None,
-                decision["question"],
-                decision["recommendation"],
-                {},
-                "tool_schema_changed",
-                risk_tier=2,
-            )
+        fresh = {str(item["name"]) for item in quarantined}
+        items = [review_item(entry) for entry in stored
+                 if isinstance(entry, dict) and str(entry.get("name")) in fresh]
+        for decision in changed_tool_decisions(server_name, items, server_id=server_id):
+            _open_tool_change_decision(connection, project_id, server_id, decision)
     connection.execute(
         text(
             "UPDATE mcp_servers SET reachable = :r, last_checked_at = now(), last_error = :e"
@@ -1241,6 +1298,148 @@ def record_reachability(
         {"r": bool(reachable), "e": None if reachable else (error or "no answer")[:500],
          "t": json.dumps(stored), "id": server_id, "p": project_id},
     )
+    return stored if reachable else None
+
+
+TOOL_CHANGE_ACTION = "review_tool_change"
+
+
+def _pending_tool_change(connection: Connection, project_id: str, server_id: str,
+                         tool: str) -> Optional[str]:
+    row = connection.execute(
+        text("SELECT id FROM decisions WHERE project_id = :p AND status = 'pending' "
+             "AND recommendation->>'action' = :a AND recommendation->>'server_id' = :sid "
+             "AND recommendation->>'tool' = :tool ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "a": TOOL_CHANGE_ACTION, "sid": server_id, "tool": tool},
+    ).first()
+    return str(row[0]) if row is not None else None
+
+
+def _open_tool_change_decision(connection: Connection, project_id: str, server_id: str,
+                               decision: dict[str, Any]) -> str:
+    """ONE OPEN CARD PER QUARANTINED TOOL. A tool that changed again while its card waits gets
+    that card rewritten (question and hashes are baseline -> now), so the person never approves
+    a definition older than the one the server now sends."""
+    rec = {**decision["recommendation"], "action": "review_tool_change"}
+    existing = _pending_tool_change(connection, project_id, server_id, str(rec["tool"]))
+    if existing is None:
+        return create_blocking_decision(connection, project_id, None, decision["question"], rec,
+                                        {}, "tool_schema_changed", risk_tier=2)
+    prior = connection.execute(
+        text("SELECT recommendation FROM decisions WHERE id = :id"), {"id": existing},
+    ).scalar()
+    prior = _loads(prior, {}) or {}
+    merged = {**prior, **rec, "occurrences": int(prior.get("occurrences") or 1) + 1}
+    connection.execute(
+        text("UPDATE decisions SET question = :q, recommendation = CAST(:r AS JSONB), "
+             "updated_at = now() WHERE id = :id"),
+        {"q": decision["question"], "r": json.dumps(merged), "id": existing})
+    return existing
+
+
+def _tool_entry_update(connection: Connection, project_id: str, server_id: str, tool: str,
+                       change: Callable[[dict[str, Any]], Optional[dict[str, Any]]]
+                       ) -> Optional[dict[str, Any]]:
+    """Rewrite one stored tool entry under a row lock. ``change`` returns the new entry, or
+    None to leave the list as it is. Returns the entry as it was before."""
+    row = connection.execute(
+        text("SELECT tools FROM mcp_servers WHERE id = :id AND project_id = :p FOR UPDATE"),
+        {"id": server_id, "p": project_id},
+    ).first()
+    if row is None:
+        raise McpServerError("MCP server not found.")
+    tools = _loads(row[0], []) or []
+    before = None
+    out = []
+    for entry in tools:
+        if isinstance(entry, dict) and entry.get("name") == tool and before is None:
+            before = dict(entry)
+            replaced = change(dict(entry))
+            out.append(replaced if replaced is not None else entry)
+        else:
+            out.append(entry)
+    if before is not None:
+        connection.execute(
+            text("UPDATE mcp_servers SET tools = CAST(:t AS JSONB), updated_at = now() "
+                 "WHERE id = :id AND project_id = :p"),
+            {"t": json.dumps(out), "id": server_id, "p": project_id})
+    return before
+
+
+def tool_change_server_id(connection: Connection, project_id: str,
+                          recommendation: dict[str, Any]) -> str:
+    """The server a "Tool changed" card is about. Cards raised before BOSSAPP-818 carry only the
+    server's name, so that is looked up; '' when the server is gone."""
+    sid = str(recommendation.get("server_id") or "")
+    if sid:
+        return sid
+    found = find_mcp_server(connection, project_id, str(recommendation.get("server") or ""))
+    return str(found["id"]) if found else ""
+
+
+class ToolChangedAgain(McpServerError):
+    """The tool's definition is no longer the one the decision showed. Not retryable."""
+
+    retryable = False
+
+
+def accept_tool_change(connection: Connection, project_id: str, server_id: str, tool: str, *,
+                       actor: str, schema_sha256: Optional[str] = None,
+                       description_sha256: Optional[str] = None,
+                       decision_id: Optional[str] = None) -> bool:
+    """A person approved a "Tool changed" decision: the quarantine is cleared, the definition
+    the card showed becomes the accepted one, and the entry records who reviewed it and when.
+
+    Refused (ToolChangedAgain) when the stored hashes are not the ones the card showed — the
+    server changed the tool again after the person looked. False when there is nothing to clear
+    (the tool is gone, or the quarantine was already cleared)."""
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).isoformat()
+    cleared: dict[str, bool] = {"done": False}
+
+    def _clear(entry: dict[str, Any]) -> Optional[dict[str, Any]]:
+        if not is_quarantined(entry):
+            return None
+        if ((schema_sha256 and entry.get("schema_sha256") != schema_sha256)
+                or (description_sha256 and entry.get("description_sha256") != description_sha256)):
+            raise ToolChangedAgain(
+                f"{tool} changed again after this card was raised; the card now open for it "
+                "shows the current definition.")
+        for key in QUARANTINE_KEYS:
+            entry.pop(key, None)
+        entry["reviewed_by"] = actor
+        entry["reviewed_at"] = stamp
+        cleared["done"] = True
+        return entry
+
+    _tool_entry_update(connection, project_id, server_id, tool, _clear)
+    if cleared["done"]:
+        emit_event(connection, project_id, "mcp.tool_change_accepted", actor, "mcp_server",
+                   server_id, {"tool": tool, "decision_id": decision_id,
+                               "schema_sha256": schema_sha256,
+                               "description_sha256": description_sha256})
+    return cleared["done"]
+
+
+def refuse_tool_change(connection: Connection, project_id: str, server_id: str, tool: str, *,
+                       actor: str, decision_id: Optional[str] = None) -> None:
+    """A person rejected a "Tool changed" decision: the quarantine STAYS (a later probe cannot
+    lift it) and the tool is turned Off, so no agent is offered it or may call it."""
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).isoformat()
+
+    def _refuse(entry: dict[str, Any]) -> dict[str, Any]:
+        entry["quarantine"] = entry.get("quarantine") or "ask"
+        entry["quarantine_refused_by"] = actor
+        entry["quarantine_refused_at"] = stamp
+        return entry
+
+    _tool_entry_update(connection, project_id, server_id, tool, _refuse)
+    set_tool_policy(connection, project_id, server_id, tool, "off", actor=actor)
+    emit_event(connection, project_id, "mcp.tool_change_refused", actor, "mcp_server",
+               server_id, {"tool": tool, "decision_id": decision_id})
 
 
 def record_reachability_quietly(
@@ -1256,13 +1455,19 @@ def record_reachability_quietly(
 
     A run that happened to discover a server is down must not itself fail because writing that
     down failed; the run's own work is what matters there.
+
+    The caller's ``server`` dict is given the list that was stored, so a quarantine this very
+    probe opened applies to what the run offers and calls next (BOSSAPP-818) — the run read
+    the server before the probe.
     """
     try:
         with connection.begin_nested():
-            record_reachability(connection, project_id, str(server.get("id") or ""),
-                                reachable=reachable, tools=tools, error=error)
+            stored = record_reachability(connection, project_id, str(server.get("id") or ""),
+                                         reachable=reachable, tools=tools, error=error)
     except Exception:  # noqa: BLE001
-        pass
+        return
+    if stored is not None:
+        server["tools"] = stored
 
 
 def known_unreachable(server: dict[str, Any],
@@ -1411,7 +1616,12 @@ def call_tool_with_receipt(
         raise McpServerUnreviewed(_refusal(tool_name, server, approved_by))
     # THE OPERATOR'S ALLOW / ASK / OFF (spec E7), the backstop for every road like the review:
     # an Off tool never runs, an Ask tool runs only with a person's approval about this call.
+    # A QUARANTINED tool is Ask whatever it was set to (BOSSAPP-818); its mark is read from the
+    # row as it stands now, not from a server dict a caller loaded before a probe changed it.
     policy = tool_policy(server, tool_name, _declared_tier(server, tool_name))
+    if policy == "allow" and tool_quarantined(_with_stored_tools(connection, project_id, server),
+                                              tool_name):
+        policy = "ask"
     if policy == "off":
         _audit_tool_call("refused", "off")
         raise McpToolOff(f"Did not call {tool_name}: it is turned off for "
@@ -1549,6 +1759,29 @@ def call_tool_unattended(
         raise McpToolOff(f"Did not call {tool_name}: it is not set to run without asking.")
     client = MCPClient(settings) if timeout is None else MCPClient(settings, timeout=timeout)
     return client.call_tool(server["url"], tool_name, inputs, headers=headers or {})
+
+
+def _with_stored_tools(connection: Connection, project_id: str,
+                       server: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``server`` whose tool list (where the quarantine marks live) is the stored one
+    right now. A server with no row (a caller's own dict) is returned as it is, and so is one
+    whose row cannot be read: the read is inside a savepoint, and its failure falls back to the
+    caller's own list (never to less than that list says)."""
+    sid = server.get("id")
+    if not isinstance(sid, str) or not sid:
+        return server
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                text("SELECT tools FROM mcp_servers WHERE id = :id AND project_id = :p"),
+                {"id": sid, "p": project_id},
+            ).first()
+    except Exception:  # noqa: BLE001 — the caller's own list still applies
+        return server
+    if row is None:
+        return server
+    tools = _loads(row[0], [])
+    return {**server, "tools": tools if isinstance(tools, list) else []}
 
 
 def _declared_tier(server: dict[str, Any], tool_name: str) -> Any:

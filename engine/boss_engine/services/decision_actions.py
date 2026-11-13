@@ -115,6 +115,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "self_fix.install",
     # Approving an agent-drafted skill writes that draft enabled. Until then it is not usable.
     "activate_authored_skill",
+    # Approving a "Tool changed" card clears the MCP tool's quarantine and accepts the new
+    # definition (mcp_registry.accept_tool_change); rejecting turns it Off (BOSSAPP-818).
+    "review_tool_change",
     # Approving the removal of installed self-fixes issues the signed `remove` / `remove_all`
     # ticket (services/self_fix_install.on_remove_approved).
     "self_fix.remove",
