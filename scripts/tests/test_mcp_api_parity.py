@@ -174,5 +174,12 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     # their own chat link). main was already at 81 when this landed (an unrecorded +1).
     assert rows[("POST", "/v1/chat/links/{link_id}/revoke")]["mcp_status"] == (
         "operator_only_unavailable")
+    # +5 operator-only: main's p1 merges (#61-#66) left the matrix stale; regenerated with
+    # BOSSAPP-819 it holds their DELETE/remove tails: DELETE /v1/environments/{id}, DELETE
+    # /v1/skill-definitions/{key}/tests/cases/{id}, DELETE /v1/work-items/{id} and the work
+    # item's labels/remove and relations/remove. (/v1/tool-calls* are reads: api_policy_gated.)
+    for key in (("DELETE", "/v1/environments/{environment_id}"),
+                ("DELETE", "/v1/work-items/{work_item_id}")):
+        assert rows[key]["mcp_status"] == "operator_only_unavailable"
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 82
+               for row in community["operations"]) == 87

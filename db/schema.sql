@@ -12829,3 +12829,12 @@ CREATE TABLE IF NOT EXISTS mcp_gateway_tokens (
 CREATE INDEX IF NOT EXISTS idx_mcp_gateway_tokens_gateway
   ON mcp_gateway_tokens (gateway_id, created_at DESC);
 -- ================================ end CONNECTORS / STDIO / GATEWAYS (BOSSAPP-849-851) ==
+-- BOSSAPP-816-819
+-- THE TOOL-CALL AUDIT SURFACE (BOSSAPP-819): GET /v1/tool-calls + /export and Activity › Tool
+-- calls read tool_call_audit. `explanation` is the policy's own words for the decision, filled
+-- by a writer that has them (NULL otherwise, and on every older row). The index is the one the
+-- audit's keyset pages read (project, newest first).
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS explanation TEXT;
+CREATE INDEX IF NOT EXISTS idx_tool_call_audit_project_time
+  ON tool_call_audit (project_id, recorded_at DESC, id DESC);
+-- ================================ end BOSSAPP-816-819 ==
