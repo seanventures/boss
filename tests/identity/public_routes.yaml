@@ -72,6 +72,9 @@ GET /v1/identity/github/app/created:
 GET /v1/identity/github/app/installed:
   reason: oauth_state_bound_callback
   verifier: boss_engine.identity.github_setup:complete_install
+GET /v1/mcp/oauth/callback:
+  reason: oauth_state_bound_callback
+  verifier: boss_engine.services.mcp_oauth:complete
 GET /v1/previews/{preview_id}/web:
   reason: preview_capability_url
   verifier: boss_engine.services.preview_service:proxy_preview

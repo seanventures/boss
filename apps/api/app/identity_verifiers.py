@@ -17,6 +17,7 @@ from boss_engine.services import (
     debug_session,
     feedback_agent,
     improve_collector,
+    mcp_oauth,
     preview_service,
 )
 from boss_engine.services.plane_webhooks import PlaneWebhookService
@@ -34,6 +35,8 @@ reliability_alert_hmac = ReliabilityService.verify_alert_signature
 saml_assertion = SamlAuthenticator.verify_response
 #: Channel OAuth callbacks: a single-use state nonce BOSS minted on a pending connection.
 channel_oauth_state = channel_oauth.complete
+#: MCP server sign-in callbacks (BOSSAPP-846): a single-use state BOSS minted, kept only as its hash.
+mcp_oauth_state = mcp_oauth.complete
 #: Investigation callbacks (db / host / do): the per-investigation bearer token.
 investigation_callback_token = debug_session.authorise
 #: The preview reverse proxy: an unguessable preview id, live only while the preview runs (TTL).
