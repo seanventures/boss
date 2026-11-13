@@ -315,6 +315,14 @@ def _seed_project_defaults(
             # tier, and one they removed stays removed. See ensure_mcp_server.
             respect_operator=True,
         )
+    # THE CONNECTOR CATALOG (BOSSAPP-849): a project made after boot gets the definitions now,
+    # not at the next restart. Idempotent; its own savepoints.
+    try:
+        from .services.connector_catalog import sync_project as sync_connectors
+
+        sync_connectors(connection, settings, project_id, actor=actor)
+    except Exception:  # noqa: BLE001 — a fresh project must still come up
+        _log.warning("connector_catalog_sync_failed", exc_info=True)
     # AND THE MCP SERVERS THEIR ROLES NAME (permissions.mcp_servers), now that the built-in
     # servers exist. The seed's half of the MCP grant: additive, and a server an operator took
     # off an agent stays off (agents.sync_role_mcp asks seed_exclusions).

@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1957 operations.
+# 1969 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -14,6 +14,7 @@
 "POST /git/{project_id}/{repo}.git/git-upload-pack": ["permit repository:read @ project(path=project_id)", "OAPVU"]
 "GET /git/{project_id}/{repo}.git/info/refs": ["permit repository:read @ project(path=project_id)", "OAPVU"]
 "GET /health": ["public:liveness", "OAPVU"]
+"POST /mcp/gw/{gateway_id}": ["public:mcp_gateway_token", "OAPVU"]
 "GET /monitoring/watchdog": ["public:liveness", "OAPVU"]
 "GET /oidc/{org_slug}/.well-known/openid-configuration": ["public:jwks", "OAPVU"]
 "GET /oidc/{org_slug}/account": ["public:oidc_provider_endpoint", "OAPVU"]
@@ -1193,6 +1194,12 @@
 "POST /v1/mcp-confirmations/{confirmation_id}/approve": ["permit decision:approve @ project(body=project_id)", "OAP"]
 "GET /v1/mcp/catalogue": ["permit mcp_server:read @ project(query=project_id)|org", "OAPVU"]
 "POST /v1/mcp/catalogue/{key}": ["permit mcp_server:review @ project(body=project_id)", "OA"]
+"GET /v1/mcp/connectors": ["permit mcp_server:read @ project(query=project_id)|org", "OAPVU"]
+"GET /v1/mcp/gateways": ["permit mcp_server:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/mcp/gateways": ["permit mcp_server:review @ project(body=project_id)", "OA"]
+"POST /v1/mcp/gateways/{gateway_id}/revoke": ["permit mcp_server:review @ project(body=project_id)", "OA"]
+"POST /v1/mcp/gateways/{gateway_id}/tokens": ["permit mcp_server:review @ project(body=project_id)", "OA"]
+"POST /v1/mcp/gateways/{gateway_id}/tokens/{token_id}/revoke": ["permit mcp_server:review @ project(body=project_id)", "OA"]
 "GET /v1/mcp/servers": ["permit mcp_server:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "POST /v1/mcp/servers": ["permit mcp_server:review @ project(body=project_id)", "OA"]
 "POST /v1/mcp/servers/import": ["permit mcp_server:review @ project(body=project_id)", "OA"]
@@ -1203,6 +1210,11 @@
 "GET /v1/mcp/servers/{server_id}/export": ["permit mcp_server:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/mcp/servers/{server_id}/policy": ["permit mcp_server:review @ project(body=project_id)", "OA"]
 "POST /v1/mcp/servers/{server_id}/review": ["permit mcp_server:review @ project(body=project_id)", "OA"]
+"GET /v1/mcp/stdio-instances": ["permit mcp_server:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/mcp/stdio-templates": ["permit mcp_server:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/mcp/stdio-templates": ["permit host:exec @ project(body=project_id)", "OA"]
+"DELETE /v1/mcp/stdio-templates/{template_id}": ["permit host:exec @ project(query=project_id)", "OA"]
+"PATCH /v1/mcp/stdio-templates/{template_id}": ["permit host:exec @ project(query=project_id)", "OA"]
 "GET /v1/meeting-roles": ["permit meeting:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "POST /v1/meeting-roles": ["permit meeting:configure @ project(body=project_id)", "OA"]
 "POST /v1/meeting-roles/load": ["permit meeting:read @ project(query=project_id) +writes_on_get", "OAPVU"]

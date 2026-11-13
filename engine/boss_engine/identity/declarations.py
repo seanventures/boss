@@ -57,6 +57,8 @@ class PublicReason(StrEnum):
     EGRESS_SERVICE_CREDENTIAL = "egress_service_credential"  # /v1/identity/introspect: sys_egress's key only (A40)
     OIDC_PROVIDER_ENDPOINT = "oidc_provider_endpoint"       # /oidc/<org>/*: BOSS as an OP for its apps (AP-2):
                                                             # client auth, PKCE, the app session or an app token
+    MCP_GATEWAY_TOKEN = "mcp_gateway_token"                 # /mcp/gw/{id}: that gateway's own hashed, expiring,
+                                                            # revocable token (BOSSAPP-851 amendment)
 
 
 #: Reasons whose route has nothing to verify, so `verifier` may be None.
