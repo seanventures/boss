@@ -12095,3 +12095,28 @@ CREATE TABLE IF NOT EXISTS backup_scheduler_lease (
   expires_at TIMESTAMPTZ NOT NULL,
   first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- BOSSAPP-837 ── org/project export and import ─────────────────────────────────────────────────
+-- services/portability.py: an import is planned (a dry-run diff, validated by replaying it
+-- through the create services and rolling back), then applied chunk by chunk, each chunk its own
+-- transaction. chunks_done is the resume point: applying the same import again carries on from
+-- there. The bundle is kept so a resume needs only the id, and it never holds a secret value.
+CREATE TABLE IF NOT EXISTS portability_imports (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL CHECK (scope IN ('project', 'org')),
+  target_id TEXT NOT NULL,
+  bundle_checksum TEXT NOT NULL,
+  bundle JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'planned'
+    CHECK (status IN ('planned', 'applying', 'applied', 'failed')),
+  chunk_size INTEGER NOT NULL DEFAULT 25,
+  chunks_total INTEGER NOT NULL DEFAULT 0,
+  chunks_done INTEGER NOT NULL DEFAULT 0,
+  plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+  report JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_portability_imports_target
+  ON portability_imports (scope, target_id, created_at DESC);
