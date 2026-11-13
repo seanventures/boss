@@ -14,6 +14,7 @@ import { mcpApi, type CrewMember, type KitWithCrew, type McpServer } from "../..
 import { openDockAbout } from "../../lib/dock-subject";
 import { HolderStack, StatusPill } from "./ability-card";
 import { AddMcpSheet } from "./add-mcp-sheet";
+import { GatewaysSheet } from "./gateways-sheet";
 import { ImportSheet } from "./import-sheet";
 import { plural, riskOf, TIP, PROVENANCE } from "./kit-copy";
 import { writeKitParams, type KitParams } from "./kit-url";
@@ -93,6 +94,7 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
   const [openServer, setOpenServer] = useState<string | null>(initial.mcp);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [gateways, setGateways] = useState(false);
   const [menu, setMenu] = useState(false);
   const [filters, setFilters] = useState({ yours: false, builtIn: false, internal: false });
 
@@ -226,6 +228,11 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
             <span className="kit-pop kit-menu" role="menu" data-testid="kit-lib-menu">
               <button type="button" role="menuitem" data-testid="kit-lib-import" onClick={() => { setMenu(false); setImporting(true); }}>Import</button>
               <button type="button" role="menuitem" data-testid="kit-lib-export" onClick={() => { setMenu(false); exportAll(segment, skills ?? [], servers ?? []); }}>Export all</button>
+              {segment === "mcp" ? (
+                <button type="button" role="menuitem" data-testid="kit-lib-gateways"
+                        data-tip="Serve chosen servers to Claude Code, Cursor and other MCP clients"
+                        onClick={() => { setMenu(false); setGateways(true); }}>Gateways</button>
+              ) : null}
             </span>
           ) : null}
         </span>
@@ -319,6 +326,9 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
       {adding ? (
         <AddMcpSheet projectId={projectId} actor={actor} onClose={() => setAdding(false)}
                      onAdded={(id) => { setAdding(false); void loadServers("none").then(() => showServer(id)); onKitChanged(); }} />
+      ) : null}
+      {gateways ? (
+        <GatewaysSheet projectId={projectId} actor={actor} servers={servers ?? []} onClose={() => setGateways(false)} />
       ) : null}
       {importing ? (
         <ImportSheet projectId={projectId} actor={actor} onClose={() => setImporting(false)}

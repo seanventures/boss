@@ -47,6 +47,19 @@ export async function GET(req: Request) {
   if (url.searchParams.get("view") === "catalogue") {
     return forward(`/v1/mcp/catalogue?project_id=${q(projectId)}`, { method: "GET" });
   }
+  // BOSSAPP-849..851: the connector catalog, stdio templates and gateways.
+  if (url.searchParams.get("view") === "connectors") {
+    const search = (url.searchParams.get("q") ?? "").slice(0, 120);
+    const category = (url.searchParams.get("category") ?? "").replace(/[^a-z]/g, "").slice(0, 30);
+    return forward(`/v1/mcp/connectors?project_id=${q(projectId)}&q=${q(search)}&category=${q(category)}`,
+      { method: "GET" });
+  }
+  if (url.searchParams.get("view") === "stdio_templates") {
+    return forward(`/v1/mcp/stdio-templates?project_id=${q(projectId)}`, { method: "GET" });
+  }
+  if (url.searchParams.get("view") === "gateways") {
+    return forward(`/v1/mcp/gateways?project_id=${q(projectId)}`, { method: "GET" });
+  }
   if (url.searchParams.get("view") === "grants") {
     const role = (url.searchParams.get("role") ?? "").trim();
     return forward(`/v1/role-mcp-servers?project_id=${q(projectId)}&role_key=${q(role)}`, { method: "GET" });
@@ -58,7 +71,8 @@ export async function GET(req: Request) {
 }
 
 const ACTIONS = ["test", "register", "update", "review", "delete", "catalogue_add", "role_tools",
-                 "policy", "grant", "revoke"] as const;
+                 "policy", "grant", "revoke", "stdio_template_create", "gateway_create",
+                 "gateway_token", "gateway_token_revoke", "gateway_revoke"] as const;
 
 export async function POST(req: Request) {
   let body: Record<string, unknown>;
@@ -89,6 +103,33 @@ export async function POST(req: Request) {
     if (!/^[a-z0-9_-]{1,40}$/.test(key)) return NextResponse.json({ error: "bad key" }, { status: 400 });
     return forward(`/v1/mcp/catalogue/${q(key)}`, { method: "POST", body: {
       project_id: projectId, actor, token: body.token ? String(body.token) : null } });
+  }
+  if (action === "stdio_template_create") {
+    // Running a command on BOSS's host: the API holds it to host:exec (Owner/Admin, step-up).
+    return forward("/v1/mcp/stdio-templates", { method: "POST", body: {
+      ...(body.template as object ?? {}), project_id: projectId, actor } });
+  }
+  if (action === "gateway_create") {
+    return forward("/v1/mcp/gateways", { method: "POST", body: {
+      project_id: projectId, actor, name: String(body.name ?? ""), profile: body.profile ?? {},
+      allowed_actions: Array.isArray(body.allowed_actions) ? body.allowed_actions.map(String) : null,
+      expires_in_days: typeof body.expires_in_days === "number" ? body.expires_in_days : null } });
+  }
+  if (action === "gateway_token" || action === "gateway_token_revoke" || action === "gateway_revoke") {
+    const gatewayId = String(body.gateway_id ?? "");
+    if (!ID.test(gatewayId)) return NextResponse.json({ error: "gateway_id is required" }, { status: 400 });
+    const base = `/v1/mcp/gateways/${q(gatewayId)}`;
+    if (action === "gateway_revoke") {
+      return forward(`${base}/revoke`, { method: "POST", body: { project_id: projectId, actor } });
+    }
+    if (action === "gateway_token") {
+      return forward(`${base}/tokens`, { method: "POST", body: {
+        project_id: projectId, actor, expires_in_days: typeof body.expires_in_days === "number" ? body.expires_in_days : null,
+        label: body.label ? String(body.label) : null } });
+    }
+    const tokenId = String(body.token_id ?? "");
+    if (!ID.test(tokenId)) return NextResponse.json({ error: "token_id is required" }, { status: 400 });
+    return forward(`${base}/tokens/${q(tokenId)}/revoke`, { method: "POST", body: { project_id: projectId, actor } });
   }
   const serverId = String(body.server_id ?? "");
   if (!ID.test(serverId)) return NextResponse.json({ error: "server_id is required" }, { status: 400 });
