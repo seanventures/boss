@@ -936,11 +936,33 @@ def grant_from_decision(connection: Any, row: Mapping[str, Any], request: Mappin
 # ── suggested defaults per server and tool (BOSSAPP-868) ─────────────────────────────────────
 
 def _catalogue_key(server: Mapping[str, Any]) -> Optional[str]:
+    """Which catalogue entry a server came from: ``mcp:<key>`` (the curated MCP catalogue) or
+    ``connector:<key>`` (the connector catalog, BOSSAPP-849/870); None for a hand-added one."""
     prov = server.get("provenance") or {}
     if isinstance(prov, str):
         prov = _loads(prov, {}) or {}
-    key = prov.get("catalogue") if isinstance(prov, Mapping) else None
-    return str(key) if key else None
+    if not isinstance(prov, Mapping):
+        return None
+    if prov.get("catalogue"):
+        return f"mcp:{prov['catalogue']}"
+    if prov.get("connector_key"):
+        return f"connector:{prov['connector_key']}"
+    return None
+
+
+def _suggesting_entries() -> dict[str, Mapping[str, Any]]:
+    """Every catalogue entry that can suggest rules, keyed as :func:`_catalogue_key` names it."""
+    from .kit_connections import catalogue
+
+    entries: dict[str, Mapping[str, Any]] = {f"mcp:{e.get('key')}": e for e in catalogue()}
+    try:
+        from .connector_catalog import definitions
+
+        for d in definitions():
+            entries[f"connector:{d.get('key')}"] = {**d, "label": d.get("name")}
+    except Exception:  # noqa: BLE001 — an unreadable connector catalog suggests nothing
+        log.warning("tool policy: connector catalog unreadable for suggestions", exc_info=True)
+    return entries
 
 
 def suggested_rules(connection: Any, project_id: str) -> list[dict]:
@@ -950,10 +972,9 @@ def suggested_rules(connection: Any, project_id: str) -> list[dict]:
 
     NOTHING IS APPLIED BY ITSELF: a suggestion is a ready-made rule body the Rules tab offers with
     one press (POST /v1/tool-policies), so a project with no rules behaves exactly as before."""
-    from .kit_connections import catalogue
     from .mcp_registry import list_mcp_servers
 
-    entries = {str(e.get("key")): e for e in catalogue()}
+    entries = _suggesting_entries()
     existing = list_rules(connection, project_id)
     out: list[dict] = []
     for server in list_mcp_servers(connection, project_id):

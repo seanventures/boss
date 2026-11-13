@@ -329,3 +329,28 @@ A rule on **Skills and MCP › Rules** with the effect **Rate limit** caps how o
 When the window is spent the call is refused. The refusal is structured: it names the rule, the limit, the bucket and `retry_after_seconds`, which is when the oldest counted call ages out of the window. The audit row records the refusal under `screen.policy`. An agent on BOSS's own tools receives the same fields. A caller reaching the tool through the receipt door gets `McpToolRateLimited`, which is a kind of `McpToolDenied`, so code that already handles a denial needs no change. The gateway reports the reason `rate_limited`.
 
 **Suggested limits.** Some catalogue servers come with default limits. GitHub, for example, suggests 30 `create_*` calls an hour per run. These defaults appear under **Suggested limits** on the Rules tab once you have added the server. Nothing is applied until you press **Add**. The API lists them at `GET /v1/tool-policies/suggestions?project_id=…`, and each one is a body you can send unchanged to `POST /v1/tool-policies`.
+
+### MCP aggregators: Composio, Arcade, Zapier, Pipedream
+
+An aggregator puts many SaaS apps behind one MCP server. All four are in **Add MCP › Connectors** under *Automation*. Each URL belongs to your account, so replace the placeholder in the form with your own URL before **Save & test**. The test proves the URL. If the test fails, nothing is stored.
+
+| Aggregator | Sign-in | Extra setup |
+|---|---|---|
+| Composio | Your Composio API key in the `x-api-key` header | The server URL names the Composio user whose connected apps the server uses. |
+| Arcade | An Arcade API key as a bearer token | After saving, add the `Arcade-User-ID` header. It names the user the tools act as. |
+| Zapier | The token of your Zapier MCP server | Turn on only the actions agents need. |
+| Pipedream | An access token from Pipedream's OAuth client credentials | After saving, add the `x-pd-project-id`, `x-pd-environment` and `x-pd-external-user-id` headers. Add `x-pd-app-slug` to limit the server to one app. The token expires, so renew it when calls start failing with 401. |
+
+**Risk defaults.** Every app's tools start at tier 2, so each call asks a person. Composio's meta-tools are tiered by name:
+
+- Searching tools and reading tool schemas run without asking (tier 0).
+- Running a tool and managing connections ask a person (tier 2).
+- The remote workbench and shell tools are tier 3 and Off.
+
+**Target one app with a rule.** Each aggregator puts the app's name into its tool names in its own way. Composio uses `GMAIL_*`, Arcade `Gmail_*`, Zapier `gmail_*` and Pipedream `gmail-*`. A **Tools** glob such as `GMAIL_*` on the Composio server therefore covers every Gmail tool behind it. The catalogue records each pattern as `aggregator.toolkit_pattern`. `connector_catalog.toolkit_selector` builds the selector for you.
+
+A meta-tool that runs another tool by name, such as `COMPOSIO_MULTI_EXECUTE_TOOL`, is not covered by an app glob. Target it by its own name instead, and add a condition on the argument that names the tool.
+
+**Suggested limits.** Each aggregator suggests a per-run rate limit. On Composio the limit is on the execute meta-tool; on the others it covers all tools. You can add these limits from **Rules › Suggested limits**.
+
+These entries were written from each vendor's published documentation. BOSS's tests have not run them against a live account.
