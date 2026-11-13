@@ -13027,3 +13027,46 @@ BEGIN
       CHECK (subject_kind IN ('skill', 'prompt', 'wiki'));
   END IF;
 END $$;
+-- ── 892 EXTERNAL MEMORY BACKENDS ───────────────────────────────────────────────────────────────
+-- services/memory_backends.py: a project's outside memory store (mem0 today), a MIRROR of
+-- agent_memory, never its source. The credential is NAMED (an env variable allowlisted by
+-- env_refs), never stored. Every memory that may leave is queued in memory_exports as a snapshot
+-- `pending_review`; only a person's approval lets that exact text be sent. Actor-scoped memories
+-- and unreviewed lessons are never queued. A forgotten memory's copy is deleted (op 'delete').
+CREATE TABLE IF NOT EXISTS memory_backends (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('mem0')),
+  base_url TEXT NOT NULL,
+  credential_env TEXT NOT NULL DEFAULT '',
+  read_enabled BOOLEAN NOT NULL DEFAULT false,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE TABLE IF NOT EXISTS memory_exports (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  backend_id TEXT NOT NULL REFERENCES memory_backends(id) ON DELETE CASCADE,
+  memory_id TEXT NOT NULL,
+  op TEXT NOT NULL CHECK (op IN ('write', 'delete')),
+  -- The exact text a person approved; what is sent, whatever the memory says later.
+  body TEXT NOT NULL DEFAULT '',
+  snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending_review'
+    CHECK (status IN ('pending_review', 'approved', 'rejected', 'written', 'skipped')),
+  external_id TEXT,
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_exports_open
+  ON memory_exports (backend_id, memory_id, op) WHERE status IN ('pending_review', 'approved');
+CREATE INDEX IF NOT EXISTS idx_memory_exports_queue
+  ON memory_exports (project_id, status, created_at);

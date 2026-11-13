@@ -448,6 +448,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["members", "user:read"],
   ["members/{}", "user:read"],
   ["memory", "memory:read"],
+  ["memory-backends", "memory:read"],
   ["meta/api-catalog", "system:read"],
   ["meta/api-catalog/{}", "system:read"],
   ["meta/openapi-coverage", "system:read"],

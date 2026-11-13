@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1995 operations.
+# 1999 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -1251,6 +1251,10 @@
 "POST /v1/members": ["permit role_binding:assign @ project(body=project_id)", "OA"]
 "GET /v1/members/{member_id}": ["permit user:read @ org", "OAU"]
 "GET /v1/memory": ["permit memory:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/memory-backends": ["permit memory:read @ project(query=project_id)", "OAPVU"]
+"PUT /v1/memory-backends": ["permit memory:manage @ project(body=project_id)", "OAP"]
+"POST /v1/memory-backends/{backend_id}/review": ["permit memory:manage @ project(body=project_id)", "OAP"]
+"POST /v1/memory-backends/{backend_id}/sync": ["permit memory:manage @ project(body=project_id)", "OAP"]
 "POST /v1/memory/{memory_id}/forget": ["permit memory:manage @ project(body=project_id)", "OAP"]
 "POST /v1/memory/{memory_id}/review": ["permit memory:manage @ project(body=project_id)", "OAP"]
 "GET /v1/meta/api-catalog": ["permit system:read @ org", "OAPVU"]
