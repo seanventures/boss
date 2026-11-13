@@ -182,4 +182,4 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
                 ("DELETE", "/v1/work-items/{work_item_id}")):
         assert rows[key]["mcp_status"] == "operator_only_unavailable"
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 95  # +8: the P0-P2 Paperclip wave (PRs #68-#74) — tool-policy writes, MCP credential/template/gateway writes, extensions install, org-chain takeover
+               for row in community["operations"]) == 97  # +1: DELETE /v1/decision-examples/{id} (BOSSAPP-893, a person drops an example); +1: POST .../signing-keys/{kid}/revoke (BOSSAPP-859, a person revokes an agent key); +8: the P0-P2 Paperclip wave (PRs #68-#74) — tool-policy writes, MCP credential/template/gateway writes, extensions install, org-chain takeover

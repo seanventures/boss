@@ -13057,3 +13057,144 @@ CREATE TABLE IF NOT EXISTS remote_agent_profiles (
   UNIQUE (org_id, name)
 );
 -- ================================ end BOSSAPP-855-860 ==
+
+-- BOSSAPP-w4-ops2
+-- ── 891 THE PROJECT WIKI ───────────────────────────────────────────────────────────────────────
+-- services/wiki.py: pages per project, every save a revision (append-only; a restore is a new
+-- revision). save_page is the one writer; an agent's write consumes a diff-bound change_consent
+-- (subject_kind 'wiki', BOSSAPP-843) and a person's edit is its own consent. `maintained_by`
+-- 'kg' marks a page the maintainer renders from the knowledge graph (kg_nodes stay canonical).
+CREATE TABLE IF NOT EXISTS wiki_pages (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  current_revision_id TEXT,
+  maintained_by TEXT,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, slug)
+);
+CREATE TABLE IF NOT EXISTS wiki_revisions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  revision_no INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  content_hash TEXT NOT NULL,
+  author_kind TEXT NOT NULL DEFAULT 'person'
+    CHECK (author_kind IN ('person', 'agent', 'system')),
+  author_id TEXT NOT NULL DEFAULT '',
+  source_note TEXT NOT NULL DEFAULT '',
+  consent_id TEXT,
+  -- kg_nodes ids a maintained revision was rendered from (provenance, not a foreign key: a
+  -- closed fact keeps the revision that cited it readable).
+  sources JSONB NOT NULL DEFAULT '[]'::jsonb,
+  restored_from TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (page_id, revision_no)
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_revisions_page ON wiki_revisions (page_id, revision_no DESC);
+-- A wiki change is a third kind of consented subject. Widened only when the live constraint
+-- does not already allow it, so a restart takes no lock on change_consents.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'change_consents'::regclass
+       AND conname = 'change_consents_subject_kind_check'
+       AND pg_get_constraintdef(oid) LIKE '%wiki%') THEN
+    ALTER TABLE change_consents DROP CONSTRAINT IF EXISTS change_consents_subject_kind_check;
+    ALTER TABLE change_consents ADD CONSTRAINT change_consents_subject_kind_check
+      CHECK (subject_kind IN ('skill', 'prompt', 'wiki'));
+  END IF;
+END $$;
+-- ── 892 EXTERNAL MEMORY BACKENDS ───────────────────────────────────────────────────────────────
+-- services/memory_backends.py: a project's outside memory store (mem0 today), a MIRROR of
+-- agent_memory, never its source. The credential is NAMED (an env variable allowlisted by
+-- env_refs), never stored. Every memory that may leave is queued in memory_exports as a snapshot
+-- `pending_review`; only a person's approval lets that exact text be sent. Actor-scoped memories
+-- and unreviewed lessons are never queued. A forgotten memory's copy is deleted (op 'delete').
+CREATE TABLE IF NOT EXISTS memory_backends (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('mem0')),
+  base_url TEXT NOT NULL,
+  credential_env TEXT NOT NULL DEFAULT '',
+  read_enabled BOOLEAN NOT NULL DEFAULT false,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE TABLE IF NOT EXISTS memory_exports (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  backend_id TEXT NOT NULL REFERENCES memory_backends(id) ON DELETE CASCADE,
+  memory_id TEXT NOT NULL,
+  op TEXT NOT NULL CHECK (op IN ('write', 'delete')),
+  -- The exact text a person approved; what is sent, whatever the memory says later.
+  body TEXT NOT NULL DEFAULT '',
+  snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending_review'
+    CHECK (status IN ('pending_review', 'approved', 'rejected', 'written', 'skipped')),
+  external_id TEXT,
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_exports_open
+  ON memory_exports (backend_id, memory_id, op) WHERE status IN ('pending_review', 'approved');
+CREATE INDEX IF NOT EXISTS idx_memory_exports_queue
+  ON memory_exports (project_id, status, created_at);
+-- ── 893 DECISION EXAMPLES ──────────────────────────────────────────────────────────────────────
+-- services/decision_examples.py: what a person decided, kept as a labelled example for evaluating
+-- and tuning the decision model. `override` rows are captured automatically when a person rejects
+-- or sends back a recommendation, or forces an approval; `saved` rows are a person's "Save as
+-- example". `snapshot` is the decision as it was shown; the export anonymizes it (placeholders
+-- for secret-shaped keys, redaction patterns, pseudonyms for people). One row per (decision,
+-- source): answering again updates it.
+CREATE TABLE IF NOT EXISTS decision_examples (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  decision_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('override', 'saved')),
+  action TEXT,
+  outcome TEXT NOT NULL
+    CHECK (outcome IN ('approve', 'approve_forced', 'reject', 'revise', 'execute')),
+  recommended TEXT NOT NULL DEFAULT 'approve',
+  snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  note TEXT NOT NULL DEFAULT '',
+  label TEXT NOT NULL DEFAULT '',
+  decided_by TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (decision_id, source)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_examples_project
+  ON decision_examples (project_id, created_at DESC);
+-- ── 894 TEAM TEMPLATES ─────────────────────────────────────────────────────────────────────────
+-- services/team_templates.py: a pack's `org` (reporting lines, org_assignments) and
+-- `starter_tasks` (work items) are applied in one transaction after a dry run, replayed through
+-- the same services the console uses. One row per applied item: its digest as installed and what
+-- it became, so drift (in_sync / modified / missing) is a comparison, not a guess.
+CREATE TABLE IF NOT EXISTS pack_provenance (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  pack_id TEXT NOT NULL,
+  pack_version TEXT NOT NULL DEFAULT '0.0.0',
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('role', 'org', 'task')),
+  item_key TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  target_ref TEXT,
+  installed_by TEXT NOT NULL DEFAULT '',
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, pack_id, item_kind, item_key)
+);
