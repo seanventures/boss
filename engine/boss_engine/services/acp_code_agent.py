@@ -232,6 +232,7 @@ class AcpCodeAgent(GenericCliCodeAgent):
 
         self._preflight(read_only=read_only,
                         read_only_by_copy=bool(_ignored.get("_contract_read_only_copy")))
+        model = self._versioned_model(model)   # BOSSAPP-858: release window / model fallback
         timeout = _cap_to_deadline(
             int(self.spec.review_timeout if read_only else self.spec.timeout), read_only=read_only)
         cwd = Path(cwd)
