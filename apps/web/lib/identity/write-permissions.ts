@@ -120,6 +120,13 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/work-items.ts#updateItem": "work_item:manage",             // PATCH /v1/work-items/{id}
   "lib/work-items.ts#completeItem": "work_item:manage",           // POST …/{id}/complete
   "lib/work-items.ts#relateItem": "work_item:manage",             // POST …/{id}/relations
+  // lib/work-ux.ts — the work tree's opened row and its status cards (BOSSAPP-880..883)
+  "lib/work-ux.ts#attachWatchdog": "work_item:manage",            // POST …/{id}/watchdogs
+  "lib/work-ux.ts#detachWatchdog": "work_item:manage",            // DELETE …/{id}/watchdogs/{wid}
+  "lib/work-ux.ts#recordOutput": "work_item:manage",              // POST …/{id}/outputs
+  "lib/work-ux.ts#refreshOutputs": "work_item:manage",            // POST …/{id}/outputs/refresh
+  "lib/work-ux.ts#createCard": "work_item:manage",                // POST /v1/status-cards
+  "lib/work-ux.ts#refreshCard": "work_item:manage",               // POST /v1/status-cards/{id}/refresh
   // lib/tool-policies.ts — Skills & MCP › Rules (BOSSAPP-815/817)
   "lib/tool-policies.ts#createRule": "mcp_server:review",         // POST /v1/tool-policies
   "lib/tool-policies.ts#updateRule": "mcp_server:review",         // PATCH /v1/tool-policies/{id}
@@ -233,6 +240,9 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     "/v1/reliability/incidents/": "reliability:respond",
     // The work tree (lib/work-items.ts, BOSSAPP-830): every change to the graph.
     "/v1/work-items": "work_item:manage",
+    // Status cards (lib/work-ux.ts, BOSSAPP-883): add a card, refresh one.
+    "/v1/status-cards": "work_item:manage",
+    "/v1/status-cards/": "work_item:manage",
     // A typed question's Send answer / Decline (app/typed-form-ui.tsx, BOSSAPP-832); "Approve +
     // always allow" on a tool-call Ask card (app/always-allow-ui.tsx, BOSSAPP-817).
     "/v1/decisions/": "decision:approve",
