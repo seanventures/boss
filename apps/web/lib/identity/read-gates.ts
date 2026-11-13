@@ -110,6 +110,8 @@ export const API_READ_OPS: Readonly<Record<string, ApiRead>> = {
                                 tests: "skill-definitions/{}/tests", sources: "skill-sources",
                                 consents: "skill-consents" }, "versions"),
   "/api/skills": byView({ "": "skill-definitions", builtin: "skills", assignments: "role-skills" }),
+  "/api/tool-calls": one("tool-calls"),
+  "/api/tool-calls/export": one("tool-calls/export"),
   "/api/workflow-report": one("workflow-runs/{}/report"),
 };
 
