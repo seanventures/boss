@@ -83,7 +83,7 @@ export const API_READ_OPS: Readonly<Record<string, ApiRead>> = {
   "/api/kit": { op: (u) => (u.searchParams.get("ability") ? "ability" : ""), ops: { "": "kit", ability: "kit/{}" } },
   "/api/mcp": byView({ "": "mcp/servers", catalogue: "mcp/catalogue", grants: "role-mcp-servers",
                        connectors: "mcp/connectors", stdio_templates: "mcp/stdio-templates",
-                       gateways: "mcp/gateways" }),
+                       gateways: "mcp/gateways",
                        credentials: "mcp/servers/{}/credentials", access_grants: "mcp/access-grants" }),
   "/api/memory": one("memory"),
   "/api/model-routes": one("model-routes"),

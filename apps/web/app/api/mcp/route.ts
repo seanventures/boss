@@ -59,6 +59,7 @@ export async function GET(req: Request) {
   }
   if (url.searchParams.get("view") === "gateways") {
     return forward(`/v1/mcp/gateways?project_id=${q(projectId)}`, { method: "GET" });
+  }
   if (url.searchParams.get("view") === "credentials") {
     // Who has signed in to one server (never a token) and what a call by the viewer would carry.
     const serverId = String(url.searchParams.get("server_id") ?? "");
@@ -83,8 +84,8 @@ export async function GET(req: Request) {
 
 const ACTIONS = ["test", "register", "update", "review", "delete", "catalogue_add", "role_tools",
                  "policy", "grant", "revoke", "stdio_template_create", "gateway_create",
-                 "gateway_token", "gateway_token_revoke", "gateway_revoke"] as const;
-                 "policy", "grant", "revoke", "oauth_start", "oauth_mine", "credential_policy",
+                 "gateway_token", "gateway_token_revoke", "gateway_revoke",
+                 "oauth_start", "oauth_mine", "credential_policy",
                  "credential_remove", "token_mine", "grant_revoke"] as const;
 
 export async function POST(req: Request) {
@@ -143,6 +144,7 @@ export async function POST(req: Request) {
     const tokenId = String(body.token_id ?? "");
     if (!ID.test(tokenId)) return NextResponse.json({ error: "token_id is required" }, { status: 400 });
     return forward(`${base}/tokens/${q(tokenId)}/revoke`, { method: "POST", body: { project_id: projectId, actor } });
+  }
   if (action === "grant_revoke") {
     const grantId = String(body.grant_id ?? "");
     if (!ID.test(grantId)) return NextResponse.json({ error: "grant_id is required" }, { status: 400 });
