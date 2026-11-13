@@ -12651,3 +12651,94 @@ DO $$ BEGIN
 END $$;
 -- Last-Event-ID replay reads "the events after this one" in (created_at, id) order.
 CREATE INDEX IF NOT EXISTS idx_events_created_id ON events (created_at, id);
+
+-- BOSSAPP-846-848
+-- ── Connect the MCP ecosystem, part 1: OAuth for remote servers, whose credential a call uses,
+-- and agent-initiated access requests ─────────────────────────────────────────────────────────
+-- 846 (services/mcp_oauth.py). An MCP server whose auth is {type: "oauth"} signs in through the
+-- MCP authorization spec: RFC 9728 protected-resource metadata, RFC 8414 authorization-server
+-- metadata, dynamic client registration (or a client typed in the console) and a PKCE S256 code
+-- flow. The tokens are identity vault items (identity_vault_items, provider 'mcp:<server id>'),
+-- never in mcp_servers.auth. auth_status is what the console shows: connected | needs_reauth |
+-- not_connected (NULL for a server that does not sign in with OAuth).
+ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS auth_status TEXT;
+-- 847 (services/connection_credentials.py): whose credential a call carries. shared = the
+-- server's one sign-in; per_user = the acting person's own; per_user_fallback = theirs when they
+-- have one (and an agent acting for them may use it), else the shared one; per_agent = the
+-- calling agent's own.
+ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS credential_policy TEXT NOT NULL DEFAULT 'shared';
+DO $mcp_cred_policy$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'mcp_servers_credential_policy_check') THEN
+    ALTER TABLE mcp_servers ADD CONSTRAINT mcp_servers_credential_policy_check
+      CHECK (credential_policy IN ('shared', 'per_user', 'per_user_fallback', 'per_agent'));
+  END IF;
+END $mcp_cred_policy$;
+-- One sign-in in flight: the browser goes to the provider with `state`; BOSS keeps the HASH of the
+-- state and the PKCE verifier here, single use, for ten minutes. The callback spends the row.
+CREATE TABLE IF NOT EXISTS mcp_oauth_pending (
+  state_hash TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id TEXT REFERENCES mcp_servers(id) ON DELETE CASCADE,
+  connection_id TEXT,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('org', 'user', 'agent')),
+  subject_id TEXT NOT NULL,
+  code_verifier TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_oauth_pending_expiry ON mcp_oauth_pending (expires_at);
+-- 847: one credential per (server or Kit connection, subject). The secret is a vault item
+-- (vault_item_id); this row says whose it is and whether it still works. A replaced credential's
+-- row is updated in place and its old vault item revoked (crypto-shredded).
+CREATE TABLE IF NOT EXISTS connection_credentials (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id TEXT REFERENCES mcp_servers(id) ON DELETE CASCADE,
+  connection_id TEXT,                 -- a Kit connection ('kit:<ability>') when server_id is NULL
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('org', 'user', 'agent')),
+  subject_id TEXT NOT NULL,           -- org id | usr_ principal id | agent role key
+  vault_item_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'oauth' CHECK (kind IN ('oauth', 'token')),
+  connected_as TEXT,                  -- who the provider says signed in, for the console
+  scopes TEXT[],
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'needs_reauth', 'revoked')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (server_id IS NOT NULL OR connection_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_connection_credentials_subject
+  ON connection_credentials (project_id, (COALESCE(server_id, connection_id)), subject_kind, subject_id);
+CREATE INDEX IF NOT EXISTS idx_connection_credentials_server
+  ON connection_credentials (server_id, status);
+-- 848 (services/tool_access_requests.py): tools an agent asked for and a person granted (a
+-- decision with recommendation.action 'grant_tool_access'). One row per tool per agent, pinned to
+-- the schema hash the person saw; a schema that changed since DROPS the grant (status 'dropped'),
+-- as BOSSAPP-818 quarantines a changed tool. `previously_held` keeps a tool the agent held before
+-- the grant when the grant ends. The role_mcp_servers row is the holder grant itself.
+CREATE TABLE IF NOT EXISTS mcp_access_grants (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  tier INTEGER NOT NULL,
+  policy TEXT NOT NULL CHECK (policy IN ('allow', 'ask')),
+  schema_sha256 TEXT NOT NULL,
+  previously_held BOOLEAN NOT NULL DEFAULT false,
+  decision_id TEXT,
+  reason TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'dropped', 'refused')),
+  granted_by TEXT NOT NULL,
+  ended_by TEXT,
+  ended_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_access_grants_live
+  ON mcp_access_grants (project_id, server_id, role_key, tool) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_mcp_access_grants_role ON mcp_access_grants (project_id, role_key, status);
+-- ================================ end BOSSAPP-846-848 ==

@@ -41,6 +41,10 @@ TEST_TIMEOUT_SECONDS = 15.0
 TEAM_CHAT_KEY = "kit_team_chat"
 WEB_SEARCH_KEY = "kit_web_search"
 
+#: The Kit connections whose token may be a person's or an agent's own (BOSSAPP-847): ability key
+#: -> the stored config that carries its `credential_policy` (connection_credentials.kit_secret).
+CREDENTIAL_POLICY_KEYS = {"team_chat": TEAM_CHAT_KEY, "web_search": WEB_SEARCH_KEY}
+
 
 class KitFieldError(ValueError):
     """A test of entered values failed. `field` names the input the provider objected to."""
@@ -161,23 +165,39 @@ def _resolve(connection: Connection, settings: Any, ref: Optional[str], project_
     return resolve_secret_ref(connection, str(ref), settings, project_id=project_id) or ""
 
 
-def chat_settings(connection: Connection, settings: Any, project_id: str
-                  ) -> Optional[dict[str, Any]]:
+def _kit_token(connection: Connection, settings: Any, project_id: str, ability: str,
+               body: dict[str, Any], shared_only: bool) -> str:
+    """The token one call carries: the shared one stored with the connection, or — under the
+    connection's credential_policy (BOSSAPP-847) — the acting person's or agent's own."""
+    shared = _resolve(connection, settings, body.get("secret_ref_id"), project_id)
+    policy = body.get("credential_policy") or "shared"
+    if shared_only or policy == "shared":
+        return shared
+    from .connection_credentials import kit_secret
+
+    return kit_secret(connection, settings, project_id, ability, policy=policy, shared=shared)
+
+
+def chat_settings(connection: Connection, settings: Any, project_id: str, *,
+                  shared_only: bool = False) -> Optional[dict[str, Any]]:
     """The project's team-chat connection with its token resolved, for the executors. None
-    when the console has not connected one (the executors then fall back to the environment)."""
+    when the console has not connected one (the executors then fall back to the environment).
+    `shared_only`: the connection's own token whatever its credential policy (its tests)."""
     body = _config(connection, project_id, TEAM_CHAT_KEY)
     if not body or not body.get("provider"):
         return None
     out = {k: v for k, v in body.items() if k not in ("secret_ref_id", "last4")}
-    out["token"] = _resolve(connection, settings, body.get("secret_ref_id"), project_id)
+    out["token"] = _kit_token(connection, settings, project_id, "team_chat", body, shared_only)
     return out
 
 
-def search_settings(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:
+def search_settings(connection: Connection, settings: Any, project_id: str, *,
+                    shared_only: bool = False) -> dict[str, Any]:
     """{provider, key}: the project's web search provider, Exa without a key by default."""
     body = _config(connection, project_id, WEB_SEARCH_KEY) or {}
     return {"provider": body.get("provider") or "exa",
-            "key": _resolve(connection, settings, body.get("secret_ref_id"), project_id)}
+            "key": _kit_token(connection, settings, project_id, "web_search", body,
+                              shared_only)}
 
 
 # --------------------------------------------------------------------------- #
@@ -640,7 +660,7 @@ def _search_test(begin: Begin, settings: Any, project_id: str, *, provider: Opti
     started = time.monotonic()
     with begin() as connection:
         server = find_mcp_server(connection, project_id, "web-intel")
-        stored = search_settings(connection, settings, project_id)
+        stored = search_settings(connection, settings, project_id, shared_only=True)
     if server is None:
         return result(False, error="web-intel is not registered", started=started)
     chosen = provider or stored["provider"]
@@ -851,7 +871,7 @@ def run_test(begin: Begin, settings: Any, project_id: str, ability: dict[str, An
             return _smtp_send(settings, values, actor_email or str(scoped.email_from_address))
         if test == "chat_post":
             with begin() as connection:
-                stored = chat_settings(connection, settings, project_id)
+                stored = chat_settings(connection, settings, project_id, shared_only=True)
             if not stored:
                 return result(False, error="No chat connected", started=started)
             return _chat_post(settings, str(stored["provider"]), stored)
@@ -1025,7 +1045,7 @@ def _connect_chat(begin: Begin, settings: Any, project_id: str, provider_key: st
     values = dict(fields)
     secret_field = "bot_token" if provider_key == "slack" else "token"
     with begin() as connection:
-        stored = chat_settings(connection, settings, project_id) or {}
+        stored = chat_settings(connection, settings, project_id, shared_only=True) or {}
         if not values.get(secret_field) and stored.get("provider") == provider_key:
             values[secret_field] = stored.get("token")
     values["token"] = values.get(secret_field)
@@ -1046,6 +1066,8 @@ def _connect_chat(begin: Begin, settings: Any, project_id: str, provider_key: st
         elif current.get("provider") == provider_key:
             body["secret_ref_id"] = current.get("secret_ref_id")
             body["last4"] = current.get("last4")
+        if current.get("credential_policy"):
+            body["credential_policy"] = current["credential_policy"]   # BOSSAPP-847: kept
         _put_config(connection, project_id, TEAM_CHAT_KEY, body, actor)
         emit_event(connection, project_id, "kit.connected", actor, "kit_ability", "team_chat",
                    {"provider": provider_key})
@@ -1074,6 +1096,8 @@ def _connect_search(begin: Begin, settings: Any, project_id: str, provider: dict
         elif kept:
             body["secret_ref_id"] = current.get("secret_ref_id")
             body["last4"] = current.get("last4")
+        if current.get("credential_policy"):
+            body["credential_policy"] = current["credential_policy"]   # BOSSAPP-847: kept
         _put_config(connection, project_id, WEB_SEARCH_KEY, body, actor)
         _point_web_intel(connection, settings, project_id, key, body.get("secret_ref_id"),
                          actor)
