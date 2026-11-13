@@ -333,6 +333,8 @@ class SinkMeta:
     engine: str = ""
     stage: Optional[str] = None
     scaffold_level: Optional[str] = None
+    #: Who the run acts as (RunSpec.actor): the tool-call audit row's `agent` (BOSSAPP-819).
+    actor: Optional[str] = None
 
 
 class DbSink:
@@ -369,7 +371,7 @@ class DbSink:
             if event.kind in ("model.response", "model.error"):
                 self._model_call(event, state, meta)
             elif event.kind in ("tool.result", "tool.refused", "tool.deferred"):
-                self._tool_call(event, state)
+                self._tool_call(event, state, meta)
             else:
                 with self.engine.begin() as c:
                     append(c, project_id=state.project_id, run_id=state.run_id,
@@ -404,16 +406,19 @@ class DbSink:
         # A copy of the caller's context: the ledger keys must not leak into its later calls.
         contextvars.copy_context().run(write)
 
-    def _tool_call(self, event: Event, state: Any) -> None:
-        from ..services.tool_call_audit import record_tool_call
+    def _tool_call(self, event: Event, state: Any, meta: Optional[SinkMeta] = None) -> None:
+        from ..services.tool_call_audit import acting_principal, record_tool_call
 
         data = event.data
         decision = {"tool.result": "allow", "tool.refused": "refused",
                     "tool.deferred": "deferred"}[event.kind]
+        # WHO (BOSSAPP-819): the run's actor (RunSpec.actor), and the identity principal it acts
+        # as (identity.lineage.current), instead of "kernel" and nobody.
+        agent = str(getattr(meta, "actor", None) or "").strip() or "kernel"
         with self.engine.begin() as c:
             record_tool_call(
-                c, project_id=state.project_id, run_id=state.run_id, agent="kernel",
-                principal=None, server_id=None, tool=str(data.get("tool") or ""),
+                c, project_id=state.project_id, run_id=state.run_id, agent=agent,
+                principal=acting_principal(), server_id=None, tool=str(data.get("tool") or ""),
                 arguments=data.get("args") if isinstance(data.get("args"), dict) else {},
                 decision=decision, matched_policy_ids=[], decision_id=data.get("decision_id"),
                 outcome=str(data.get("status") or ""), latency_ms=event.latency_ms,

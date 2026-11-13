@@ -112,8 +112,16 @@ class MCPClient:
         # never a BOSS session, key, run token, DPoP proof or egress credential.
         from boss_engine.identity.tokens import refuse_passthrough
 
+        upstream = refuse_passthrough(headers or {})
+        if url.startswith("stdio://"):
+            # A STDIO SERVER (BOSSAPP-850): the supervisor runs it in a sandboxed container and
+            # bridges it to a loopback streamable-HTTP listener. Its own auth becomes the env
+            # var its template names, at spawn; the bridge takes only its per-instance token.
+            from .mcp_stdio_supervisor import resolve as resolve_stdio
+
+            url, upstream = resolve_stdio(self.settings, url, upstream)
         sent = {"Accept": "application/json, text/event-stream",
-                "Content-Type": "application/json", **refuse_passthrough(headers or {})}
+                "Content-Type": "application/json", **upstream}
         if session is not None:
             if session.session_id:
                 sent["Mcp-Session-Id"] = session.session_id

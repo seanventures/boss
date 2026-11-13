@@ -102,6 +102,15 @@ class Settings(BaseSettings):
     backup_s3_prefix: str = Field(default="boss-backups", alias="BOSS_BACKUP_S3_PREFIX")
     backup_pg_dump: str = Field(default="pg_dump", alias="BOSS_BACKUP_PG_DUMP")
     backup_pg_restore: str = Field(default="pg_restore", alias="BOSS_BACKUP_PG_RESTORE")
+    # EXTENSIONS (BOSSAPP-861, boss_engine/extensions). Installed bundles are copied here
+    # (default: <artifacts>/extensions); the scheduler thread fires jobs and pumps event feeds,
+    # one process per firing by DB lease; the API URL is where an extension's MCP server row
+    # points (default BOSS_CONTROL_PLANE_URL, else http://127.0.0.1:8000).
+    extensions_dir: str = Field(default="", alias="BOSS_EXTENSIONS_DIR")
+    extensions_scheduler_enabled: bool = Field(default=True, alias="BOSS_EXTENSIONS_SCHEDULER")
+    extensions_tick_seconds: float = Field(default=15.0, alias="BOSS_EXTENSIONS_TICK_SECONDS",
+                                           ge=1.0, le=3600.0)
+    extensions_api_url: str = Field(default="", alias="BOSS_EXTENSIONS_API_URL")
     temporal_address: Optional[str] = Field(default=None, alias="TEMPORAL_ADDRESS")
     temporal_namespace: Optional[str] = Field(default=None, alias="TEMPORAL_NAMESPACE")
     nextcloud_url: Optional[str] = Field(default=None, alias="NEXTCLOUD_URL")

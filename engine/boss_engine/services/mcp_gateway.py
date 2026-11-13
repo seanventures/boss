@@ -588,7 +588,8 @@ class McpGateway:
                     approved_by=decision_id,
                     approval_about={"run_id": grant.run_key},
                     # Who is calling, so an agent-scoped rule decides here as it did above.
-                    policy_context={"role_key": grant.role_key, "run_id": grant.run_key})
+                    policy_context={"role_key": grant.role_key, "run_id": grant.run_key},
+                    agent=grant.role_key or "mcp_gateway")
             except McpServerError as refused:
                 # The registry's own backstop (review, Off, Ask, changed arguments) said no.
                 return tool_error("denied_by_policy", str(refused), tool=tool,

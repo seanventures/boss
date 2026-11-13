@@ -450,13 +450,14 @@ export function permissionWords(p: PluginRow): string[] {
 
 // ── URL state (§4.1) ────────────────────────────────────────────────────────────────────────
 
-export type InfraTab = "fleet" | "deploys" | "previews" | "cloud" | "plugins";
+export type InfraTab = "fleet" | "deploys" | "previews" | "cloud" | "plugins" | "extensions";
 export const INFRA_TABS: { key: InfraTab; label: string; tip: string }[] = [
   { key: "fleet", label: "Fleet", tip: "Machines and what runs on them" },
   { key: "deploys", label: "Deploys", tip: "Every deploy, newest first" },
   { key: "previews", label: "Previews", tip: "Running previews and when they end" },
   { key: "cloud", label: "Cloud", tip: "Cloud accounts, resources, capacity and spend" },
   { key: "plugins", label: "Plugins", tip: "Infrastructure plugins: what each provides and whether it is on" },
+  { key: "extensions", label: "Extensions", tip: "Integrations, tools, jobs, webhooks and panels added to BOSS" },
 ];
 export type InfraUrl = {
   view: InfraTab;

@@ -18,6 +18,9 @@ GET /docs/oauth2-redirect:
 GET /health:
   reason: liveness
   verifier: null
+GET /monitoring/watchdog:
+  reason: liveness
+  verifier: null
 GET /oidc/{org_slug}/.well-known/openid-configuration:
   reason: jwks
   verifier: null
@@ -51,6 +54,9 @@ GET /saml/v2/metadata:
 GET /saml/v2/{project_id}/metadata:
   reason: saml_signed_assertion
   verifier: boss_engine.services.saml:SamlAuthenticator.verify_response
+GET /v1/alert-actions/{token}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.monitoring:use_action_token
 GET /v1/auth/options:
   reason: auth_endpoint
   verifier: apps.api.app.routers.identity_auth:verify_auth_request
@@ -84,6 +90,9 @@ PATCH /v1/previews/{preview_id}/web:
 PATCH /v1/previews/{preview_id}/web/{path:path}:
   reason: preview_capability_url
   verifier: boss_engine.services.preview_service:proxy_preview
+POST /mcp/gw/{gateway_id}:
+  reason: mcp_gateway_token
+  verifier: boss_engine.services.mcp_curated_gateways:verify_request
 POST /oidc/{org_slug}/authorize:
   reason: oidc_provider_endpoint
   verifier: apps.api.app.oidc_routes:verify_oidc_request
@@ -111,6 +120,9 @@ POST /saml/v2/acs:
 POST /saml/v2/{project_id}/acs:
   reason: saml_signed_assertion
   verifier: boss_engine.services.saml:SamlAuthenticator.verify_response
+POST /v1/alert-actions/{token}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.monitoring:use_action_token
 POST /v1/apps/{target_id}/signals:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.incident_signals:receive
@@ -168,6 +180,12 @@ POST /v1/auth/webauthn/options:
 POST /v1/auth/webauthn/verify:
   reason: auth_endpoint
   verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/ext/{extension_id}/projects/{project_id}/mcp:
+  reason: hmac_signed_webhook
+  verifier: apps.api.app.routes_extensions:verify_extension_mcp_bearer
+POST /v1/ext/{extension_id}/webhook/{hook}:
+  reason: hmac_signed_webhook
+  verifier: apps.api.app.routes_extensions:verify_extension_webhook
 POST /v1/hardware/agents/enroll:
   reason: auth_endpoint
   verifier: apps.api.app.hardware_api:enroll_agent
@@ -177,6 +195,18 @@ POST /v1/identity/introspect:
 POST /v1/identity/token:
   reason: auth_endpoint
   verifier: boss_engine.identity.tokens:exchange_token
+POST /v1/ingest/otlp/v1/metrics:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.monitoring:authenticate
+POST /v1/ingest/otlp/v1/{signal}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.monitoring:authenticate
+POST /v1/ingest/prom/remote_write:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.monitoring:authenticate
+POST /v1/ingest/{source_id}/{kind}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.monitoring:authenticate
 POST /v1/investigations/{investigation_id}/db:
   reason: per_investigation_callback_token
   verifier: boss_engine.services.debug_session:authorise
@@ -213,15 +243,15 @@ POST /v1/webhooks/bitbucket:
 POST /v1/webhooks/github:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.webhooks:InboundWebhookService.ingest
-POST /v1/webhooks/inbound/{source}:
-  reason: hmac_signed_webhook
-  verifier: boss_engine.services.webhooks:InboundWebhookService.ingest
 POST /v1/webhooks/inbound/chat/{endpoint_id}:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.chat_channels:verify_request
 POST /v1/webhooks/inbound/workflow/{path_token}:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.workflow_webhooks:receive
+POST /v1/webhooks/inbound/{source}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.webhooks:InboundWebhookService.ingest
 POST /v1/webhooks/plane:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.plane_webhooks:PlaneWebhookService.verify_signature

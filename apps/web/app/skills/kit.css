@@ -279,6 +279,19 @@
 .kit-side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 @media (max-width: 640px) { .kit-side-by-side { grid-template-columns: 1fr; } }
 
+/* BOSSAPP-849..851: Connectors tab and Gateways sheet. */
+.kit-connectors { display: flex; flex-direction: column; gap: 10px; }
+.kit-connectors .kit-search { flex: 0 1 auto; }
+.kit-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.kit-chips .kit-chip[role="radio"] { cursor: pointer; }
+.kit-chip[aria-checked="true"] { color: var(--ink); border-color: var(--accent); background: var(--accent-soft); }
+.kit-note { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); font-size: 0.8125rem; }
+.kit-code { font: 0.75rem/1.4 var(--mono); word-break: break-all; padding: 2px 6px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); color: var(--ink); }
+.kit-gw-server { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }
+.kit-gw-tokens { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; }
+.kit-gw-tokens li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 /* Rules (BOSSAPP-815/817): the ordered tool-policy table, the add form and the simulate box. */
 .tp-rules { display: flex; flex-direction: column; gap: 12px; padding: 4px 0 16px; }
 .tp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

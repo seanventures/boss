@@ -118,8 +118,45 @@ export type OrgChart = {
   derived_from: string;
   note: string;
   isolated: string[];
+  /** BOSSAPP-885: each placed role's chain of command (present when the plan has roles). */
+  chains?: Record<string, OrgChainView>;
+  /** BOSSAPP-885: stalled work offered to a manager before a person is asked. */
+  takeover_offers?: TakeoverOffer[];
   apiReachable: boolean;
   blockedReason?: string;
+};
+
+/** One rung of a chain of command: an agent (maybe retired) or the person at the top. */
+export type OrgChainRung = {
+  party: string;
+  kind: "agent" | "person";
+  id: string;
+  name: string;
+  retired: boolean;
+  cycle?: boolean;
+};
+
+export type OrgChainView = {
+  agent: string;
+  chain: OrgChainRung[];
+  acting_manager: OrgChainRung | null;
+  /** The retired manager that blocks this agent from starting new work. */
+  retired_gap: OrgChainRung | null;
+  blocked: string | null;
+};
+
+export type TakeoverOffer = {
+  id: string;
+  run_id: string;
+  work_item_id: string | null;
+  subject: string;
+  offered_to: string;
+  reason: string;
+  question: string;
+  deadline: string | null;
+  chain: string[];
+  origin: string;
+  title: string | null;
 };
 
 const EMPTY_COUNTS = { WORKING: 0, STUCK: 0, IDLE: 0, "AT GATE": 0, total: 0 };

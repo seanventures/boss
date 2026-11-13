@@ -40,9 +40,9 @@ from urllib.parse import urlparse
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .argument_binding import held_call_matches
+from .argument_binding import binding_holds
 from .core import create_blocking_decision, emit_event, make_id, normalize_data_boundary
-from .tool_call_audit import record_tool_call
+from .tool_call_audit import acting_principal, record_tool_call
 from .tool_catalog import (
     HASH_VERSION,
     QUARANTINE_KEYS,
@@ -111,10 +111,35 @@ def _validated_server_identity(name: str, url: str, transport: str) -> None:
         raise McpServerError("MCP server name must be a non-empty string")
     if not isinstance(transport, str) or not transport.strip():
         raise McpServerError("MCP transport must be a non-empty string")
+    if transport.strip() == "stdio" or (isinstance(url, str) and url.startswith("stdio://")):
+        # A STDIO SERVER (BOSSAPP-850): its address names an operator's launch template; the
+        # supervisor bridges it to HTTP at call time (mcp_stdio_supervisor). That the template
+        # exists in the server's own project is checked by _validated_stdio_target.
+        from .mcp_stdio_templates import parse_stdio_url
+
+        if transport.strip() != "stdio":
+            raise McpServerError("a stdio:// URL needs transport 'stdio'")
+        if parse_stdio_url(url) is None:
+            raise McpServerError(
+                "a stdio server's URL is stdio://<project_id>/<template name>")
+        return
     parsed = urlparse(url) if isinstance(url, str) else None
     if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise McpServerError(
             "MCP server url must be an absolute HTTP(S) URL, e.g. http://web-intel:8770/mcp")
+
+
+def _validated_stdio_target(connection: Connection, project_id: str, url: str,
+                            transport: str) -> None:
+    """A stdio server's address must name a template of its OWN project (BOSSAPP-850)."""
+    if str(transport or "").strip() != "stdio":
+        return
+    from .mcp_stdio_templates import StdioTemplateError, require_template_for_url
+
+    try:
+        require_template_for_url(connection, project_id, url)
+    except StdioTemplateError as error:
+        raise McpServerError(str(error)) from error
 
 
 def _loads(value: Any, fallback: Any) -> Any:
@@ -676,9 +701,11 @@ def approved_arguments_match(
 ) -> bool:
     """True when this call is the one the approval digested.
 
-    A missing decision, or a decision with no args_sha256, still matches. Older
-    approvals did not store a digest, and a caller that does not pass one is
-    unchanged. A present digest matches only the same canonical arguments.
+    A missing decision, or an unstamped (v1) decision with no args_sha256, still
+    matches: older approvals did not store a digest, and a caller that does not
+    pass one is unchanged. A present digest matches only the same canonical
+    arguments. A v2 decision (BOSSAPP-816, argument_binding.binding_holds) fails
+    closed: it needs the digest AND a valid server-key signature.
     """
     wanted = str(decision_id or "").strip()
     if not wanted:
@@ -692,7 +719,15 @@ def approved_arguments_match(
     recommendation = _loads(row["recommendation"], {}) or {}
     if not isinstance(recommendation, dict):
         return True
-    return held_call_matches(tool_name, arguments, recommendation.get("args_sha256"))
+    # The agent loop binds an MCP hold under the name it OFFERED the model (`tool`, e.g.
+    # mcp_github_create_issue) and records the server's own name beside it (`tool_name`); this
+    # door is called with the server's name. Check under the bound name when the two name the
+    # same tool, else under this call's own name (a different tool then never matches).
+    bound_name = tool_name
+    offered = recommendation.get("tool")
+    if offered and isinstance(offered, str) and recommendation.get("tool_name") == tool_name:
+        bound_name = offered
+    return binding_holds(bound_name, arguments, recommendation)
 
 
 def _name_taken(
@@ -775,6 +810,7 @@ def register_mcp_server(
     settings: Any = None,
 ) -> dict:
     _validated_server_identity(name, url, transport)
+    _validated_stdio_target(connection, project_id, url, transport)
     risk_tier = _validated_risk(risk_tier)
     data_boundary = normalize_data_boundary(data_boundary)
     tool_risk_overrides = _validated_overrides(tool_risk_overrides)
@@ -873,6 +909,7 @@ def update_mcp_server(
     url = str(given.get("url", current["url"])).strip()
     transport = str(given.get("transport", current["transport"])).strip()
     _validated_server_identity(name, url, transport)
+    _validated_stdio_target(connection, project_id, url, transport)
     if name.lower() != current["name"].lower() and _name_taken(
             connection, project_id, name, except_id=server_id):
         raise McpServerConflict(_name_taken_sentence(name))
@@ -1231,7 +1268,15 @@ def test_entered(settings: Any, connection: Optional[Connection], project_id: st
     """Probe the URL and sign-in an operator TYPED, before anything is stored (Save & test).
 
     The token is used for this one call and dropped; nothing is written."""
-    _validated_server_identity("test", url, "http")
+    transport = "stdio" if str(url or "").startswith("stdio://") else "http"
+    _validated_server_identity("test", url, transport)
+    if transport == "stdio":
+        from .mcp_stdio_templates import parse_stdio_url
+
+        if (parse_stdio_url(url) or ("", ""))[0] != project_id:
+            raise McpServerError("a stdio server can only use a template of its own project")
+        if connection is not None:
+            _validated_stdio_target(connection, project_id, url, transport)
     checked = _validated_auth(auth)
     headers = {str(k): str(v) for k, v in (checked.get("headers") or {}).items()}
     secret = checked.get("secret")
@@ -1578,6 +1623,8 @@ def call_tool_with_receipt(
     created_by_job_id: Optional[str] = None,
     approved_by: Optional[str] = None,
     approval_about: Optional[dict[str, Any]] = None,
+    agent: Optional[str] = None,
+    principal: Optional[str] = None,
     policy_context: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """The one EFFECT of calling an MCP tool: a receipt, the call, and the receipt settled.
@@ -1602,6 +1649,9 @@ def call_tool_with_receipt(
     Each road also appends one tool_call_audit row. A missing table is not swallowed. A
     delivered result is screened for prompt injection first (BOSSAPP-822,
     :func:`tool_result_screen.screen_result`) and its verdict is on that row (``screen``).
+    The row names WHO (BOSSAPP-819): ``agent`` is the caller's actor (the agent's role, the
+    skill's caller), ``principal`` the identity it acts as — the caller's, else the one in
+    effect (identity.lineage.current: the run's person or agent principal).
 
     THE ORDERED TOOL POLICY (BOSSAPP-815, :func:`tool_policy_engine.decide`) is asked here, in
     place of the bare Allow / Ask / Off read: a rule may deny, ask or rate-limit, an "Always
@@ -1618,6 +1668,9 @@ def call_tool_with_receipt(
     who = policy_context if isinstance(policy_context, dict) else {}
     decided: dict[str, Any] = {}
 
+    audit_agent = str(agent or "").strip() or "mcp_registry"
+    audit_principal = str(principal or "").strip() or acting_principal()
+
     def _audit_tool_call(outcome: str, decision: str, *, latency_ms: int = 0,
                          screen: Optional[dict[str, Any]] = None) -> None:
         ids = list(decided.get("matched_policy_ids") or [])
@@ -1631,8 +1684,8 @@ def call_tool_with_receipt(
             connection,
             project_id=project_id,
             run_id=about.get("run_id") if isinstance(about.get("run_id"), str) else None,
-            agent="mcp_registry",
-            principal=who.get("role_key") if isinstance(who.get("role_key"), str) else None,
+            agent=audit_agent,
+            principal=audit_principal,
             server_id=server.get("id") if isinstance(server.get("id"), str) else None,
             tool=tool_name,
             arguments=inputs if isinstance(inputs, dict) else {},
