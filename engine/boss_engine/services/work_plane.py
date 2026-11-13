@@ -142,6 +142,8 @@ CREATE INDEX IF NOT EXISTS idx_wp_roadmap_items_initiative
   ON wp_roadmap_items(initiative_id);
 CREATE INDEX IF NOT EXISTS idx_wp_roadmap_items_cycle
   ON wp_roadmap_items(cycle_id);
+-- BOSSAPP-830: the ticket names its canonical work item (made lazily, work_items.link_run).
+ALTER TABLE wp_roadmap_items ADD COLUMN IF NOT EXISTS work_item_id TEXT;
 
 CREATE TABLE IF NOT EXISTS wp_dependencies (
   id TEXT PRIMARY KEY,
@@ -241,6 +243,7 @@ def _serialize_row(row: Any, entity_type: str) -> dict[str, Any]:
         "module_id",
         "cycle_id",
         "sort_order",
+        "work_item_id",
     ):
         if optional in data:
             val = data[optional]
@@ -694,6 +697,17 @@ class WorkPlaneService:
                 "created_by": actor,
             },
         ).mappings().one()
+        if not row.get("work_item_id"):
+            # THE TICKET'S WORK ITEM (BOSSAPP-830): the planned deliverable is a node in the one
+            # work graph (an upsert of an existing key keeps the item it already has).
+            from . import work_items
+
+            item_id = work_items.link_run(
+                connection, kind="roadmap_item", run_id=row["id"], project_id=project_id,
+                title=title, explicit_id=(metadata or {}).get("work_item_id"), actor=actor,
+                settings=self.settings)
+            if item_id:
+                row = {**row, "work_item_id": item_id}
         plan = _serialize_row(row, "roadmap_item")
         emit_event(
             connection,

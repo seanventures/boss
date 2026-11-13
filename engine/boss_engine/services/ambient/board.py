@@ -585,6 +585,17 @@ def finish(connection: Connection, item_id: str, *, actor: str, lifecycle: str,
         {"r": f"work item {lifecycle}", "w": item_id})
     if lifecycle == "failed":
         guards.check_breaker(connection, item["project_id"])
+    else:
+        # An always-on item that ends is closed in the work graph too (status 'done'), so what it
+        # blocked wakes (BOSSAPP-830, work_items.wake_unblocked). Never fails the finish.
+        from ..work_items import wake_unblocked
+
+        try:
+            with connection.begin_nested():
+                wake_unblocked(connection, project_id=item["project_id"], item_id=item_id,
+                               actor=who)
+        except Exception:  # noqa: BLE001
+            pass
     return moved
 
 
