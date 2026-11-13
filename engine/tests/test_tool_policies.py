@@ -2,6 +2,9 @@
 
 Grant inserts an active row. A second grant inserts another row. Revoke
 hides it from later active lists. Another project's row stays out of the list.
+
+Since BOSSAPP-815/817 these rows live in tool_policies_v2 (source='decision', read by
+tool_policy_engine.decide), so the test runs on the full schema: a grant is audited (events).
 """
 from __future__ import annotations
 
@@ -9,16 +12,16 @@ import os
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from boss_engine.services.tool_policies import (
-    SCHEMA_SQL,
     grant_always_allow,
     list_always_allow,
     revoke_always_allow,
 )
 
-URL = os.environ.get("BOSS_POLICY_TEST_DATABASE_URL", "")
+URL = (os.environ.get("BOSS_POLICY_TEST_DATABASE_URL")
+       or os.environ.get("BOSS_TEST_DATABASE_URL") or "")
 pytestmark = pytest.mark.skipif(
     not URL or "test" not in URL.lower(),
     reason="requires BOSS_POLICY_TEST_DATABASE_URL naming a disposable database",
@@ -27,22 +30,31 @@ pytestmark = pytest.mark.skipif(
 RUN = uuid4().hex[:8]
 
 
+@pytest.fixture(scope="module")
+def engine():
+    from boss_engine.db import ensure_schema
+
+    eng = create_engine(URL, future=True)
+    ensure_schema(eng)
+    yield eng
+    eng.dispose()
+
+
 def _project(name: str) -> str:
     return f"{name}-{RUN}"
 
 
-@pytest.fixture(scope="module")
-def engine():
-    eng = create_engine(URL, future=True)
-    raw = eng.raw_connection()
-    try:
-        cursor = raw.cursor()
-        cursor.execute(SCHEMA_SQL)
-        raw.commit()
-    finally:
-        raw.close()
-    yield eng
-    eng.dispose()
+@pytest.fixture(autouse=True)
+def _projects(engine):
+    """Every project id a test names exists (an always-allow is audited against it)."""
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO orgs (id, name) VALUES ('org_tpl', 'o') ON CONFLICT DO NOTHING"))
+        c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES ('ws_tpl', 'org_tpl', "
+                       "'w') ON CONFLICT DO NOTHING"))
+        for name in ("p-grant", "p-second", "p-revoke", "p-missing", "p-mine", "p-other"):
+            c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES "
+                           "(:p, 'ws_tpl', :p, :p) ON CONFLICT DO NOTHING"),
+                      {"p": _project(name)})
 
 
 def test_grant_then_list_shows_tool_hash_and_decision_id(engine):

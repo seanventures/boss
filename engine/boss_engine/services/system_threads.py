@@ -14,7 +14,9 @@ a job and is blind while one runs, which is exactly when the host needs watching
 * the system doctor: signals → findings → safe automatic fixes, choices on a card, the
   degradation rung admission and Metatron obey (system_doctor);
 * the backup scheduler: hourly verified pg_dumps with tiered retention, one holder by DB lease
-  (backup_scheduler, BOSSAPP-838).
+  (backup_scheduler, BOSSAPP-838);
+* the extension scheduler: extensions' scheduled jobs and event feeds, one firing per DB lease
+  (extensions/jobs.py, BOSSAPP-861).
 """
 from __future__ import annotations
 
@@ -105,4 +107,17 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("skill source sync not started", exc_info=True)
         started["skill_sources"] = False
+    try:
+        # Extensions (BOSSAPP-861): scheduled jobs and event feeds; every API process ticks, the
+        # DB lease lets exactly one of them fire each.
+        from ..extensions import jobs as extension_jobs
+
+        if getattr(settings, "extensions_scheduler_enabled", True):
+            extension_jobs.start(engine, settings)
+            started["extension_scheduler"] = True
+        else:
+            started["extension_scheduler"] = False
+    except Exception:  # noqa: BLE001
+        _log.warning("extension scheduler not started", exc_info=True)
+        started["extension_scheduler"] = False
     return started

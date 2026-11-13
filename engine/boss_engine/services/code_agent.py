@@ -535,6 +535,7 @@ from .sandbox import (
 from .agent_env import agent_environment
 from . import model_proxy as _model_proxy
 from .workspace_perms import tidies_workspace
+from .harness_delivery import delivers_kit
 from . import owned_process
 
 # --------------------------------------------------------------------------- #
@@ -995,6 +996,9 @@ class ClaudeCodeAgent:
                                       read_only_shell=True)
     #: `_invoke` appends the working rules and sandbox facts itself (engine_contract).
     adds_working_rules = True
+    #: How the agent's kit reaches `claude` (harness_delivery): its servers by --mcp-config
+    #: (appended in `_invoke`), its skills synced into the tree's .claude/skills for the session.
+    KIT_PROFILE = ("claude_flag", "{workspace}/.claude/skills")
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -1129,6 +1133,7 @@ class ClaudeCodeAgent:
         )
 
     @_model_proxy_scoped
+    @delivers_kit
     def _invoke(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
@@ -1737,6 +1742,52 @@ def _looks_like_tools_unsupported(exc: Exception) -> bool:
             and any(m in text for m in _TOOLS_UNSUPPORTED_MARKERS))
 
 
+_BINDING_KEYS = ("args_sha256", "args_preview", "binding_version", "args_sig")
+
+
+def approved_call_from(source: Any) -> Optional[dict]:
+    """The approved call a resumed native session may run once (BOSSAPP-816), or None.
+
+    `source` is what the hold left behind, in either shape: a decision's recommendation
+    ({"tool", "args_sha256", ...}) or the stopped session's own result ({"pending_tool",
+    "pending_binding" | "pending_args_sha256", ...}), plus "decision_id". The session checks the
+    re-issued call against it with argument_binding.binding_holds, exactly as agent_loop's
+    resume does: a v2 binding needs its signature, a changed argument is refused."""
+    if not isinstance(source, dict):
+        return None
+    tool = source.get("tool") or source.get("pending_tool")
+    if not tool or not isinstance(tool, str):
+        return None
+    binding = source.get("pending_binding")
+    if isinstance(binding, dict):
+        found = {k: binding[k] for k in _BINDING_KEYS if k in binding}
+    else:
+        found = {k: source[k] for k in _BINDING_KEYS if k in source}
+        if "args_sha256" not in found and source.get("pending_args_sha256"):
+            found["args_sha256"] = source["pending_args_sha256"]
+    return {"tool": tool, "decision_id": source.get("decision_id"), **found}
+
+
+def approved_call_for_decision(connection: Any, project_id: str,
+                               decision_id: str) -> Optional[dict]:
+    """approved_call_from an APPROVED decision of this project; None when it is not approved."""
+    row = connection.execute(
+        text("SELECT status, recommendation FROM decisions WHERE id = :id AND project_id = :p"),
+        {"id": decision_id, "p": project_id},
+    ).mappings().first()
+    if row is None or row["status"] != "approved":
+        return None
+    recommendation = row["recommendation"]
+    if isinstance(recommendation, str):
+        try:
+            recommendation = json.loads(recommendation)
+        except ValueError:
+            return None
+    if not isinstance(recommendation, dict):
+        return None
+    return approved_call_from({**recommendation, "decision_id": decision_id})
+
+
 class NativeCodeAgent:
     """Model-agnostic code agent on the raw chat API (OpenAI or Azure, via OpenAIAdapter).
 
@@ -1948,6 +1999,13 @@ class NativeCodeAgent:
         stop_reason = "turn_cap"
         pending_tool: Optional[str] = None
         pending_args: Optional[dict] = None
+        # A RESUMED code task carries the approval of the call it stopped on (BOSSAPP-816):
+        # {"tool", "decision_id", "args_sha256", and on a v2 binding "binding_version",
+        # "args_preview", "args_sig"} — approved_call_from(), set by the caller like tool_policy.
+        from .argument_binding import CHANGED, binding_holds
+
+        approved_call = approved_call_from(getattr(self, "approved_call", None))
+        refusal: Optional[dict] = None
         # THE STAGE'S WALL-TIME DEADLINE bounds this session as it bounds a CLI session
         # (_cap_to_deadline): checked before every model turn.
         deadline = None if read_only else _stage_deadline()
@@ -2044,8 +2102,23 @@ class NativeCodeAgent:
                     messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                      "content": note})
                     continue
+                if decision == WAIT and approved_call is not None and \
+                        name == approved_call.get("tool"):
+                    # THE RESUMED APPROVAL (BOSSAPP-816): the person approved one exact call.
+                    # The same arguments run once; anything else is refused in
+                    # McpArgumentsChanged's words and waits for its own approval.
+                    if binding_holds(name, args, approved_call):
+                        approved_call = None
+                        decision = None
+                    else:
+                        refusal = {"error": "McpArgumentsChanged", "reason": CHANGED,
+                                   "tool": name,
+                                   "decision_id": approved_call.get("decision_id")}
+                        approved_call = None
                 if decision == WAIT:
                     note = f"waiting for approval: '{name}' has not run."
+                    if refusal is not None and refusal.get("tool") == name:
+                        note = f"Did not call {name}: {CHANGED}. " + note
                     _turn({"direction": "tool_result", "tool_name": name, "content": note,
                            "ok": False, "latency_ms": 0})
                     messages.append({"role": "tool", "tool_call_id": call.get("id"),
@@ -2112,10 +2185,16 @@ class NativeCodeAgent:
             "pending_tool": pending_tool,
         }
         if stop_reason == "awaiting_approval":
-            from .argument_binding import args_sha256, redacted_preview
+            from .argument_binding import bind_held_call
 
-            result["pending_args_sha256"] = args_sha256(pending_tool, pending_args)
-            result["pending_args_preview"] = redacted_preview(pending_args)
+            # The binding a decision about this call stores, and approved_call_from reads
+            # back on resume: digest, preview, v2 stamp and the server-key signature.
+            binding = bind_held_call(pending_tool, pending_args or {})
+            result["pending_args_sha256"] = binding.get("args_sha256")
+            result["pending_args_preview"] = binding.get("args_preview")
+            result["pending_binding"] = binding
+        if refusal is not None:
+            result["refused"] = refusal
         return result
 
     def run_plain(self, prompt: str, *, model: Optional[str] = None) -> dict:
@@ -2758,6 +2837,11 @@ def _register_builtin_harnesses() -> None:
             spec = load_specs(settings).get(harness_name)
             if spec is None:  # pragma: no cover - only if an override deletes a built-in
                 raise RuntimeError(f"no CLI harness spec for {harness_name!r}")
+            if spec.protocol == "acp":
+                # Driven over the Agent Client Protocol (acp_code_agent, BOSSAPP-853).
+                from .acp_code_agent import AcpCodeAgent
+
+                return AcpCodeAgent(settings, spec)
             if harness_name == "codex":
                 # A purpose-written driver held to the engine contract: sessions, a transcript,
                 # usage and effort from Codex's own interfaces (codex_code_agent).
@@ -2775,7 +2859,8 @@ def _register_builtin_harnesses() -> None:
             # the real one rather than override it, which is the correct outcome either way.
             continue
         register_harness(
-            cli_name, _cli_builder(cli_name), kind="cli", verified=cli_spec.verified,
+            cli_name, _cli_builder(cli_name),
+            kind="acp" if cli_spec.protocol == "acp" else "cli", verified=cli_spec.verified,
             requires=(f"{cli_spec.binary} on PATH", "signed in to that CLI"),
             description=cli_spec.description, runtime=tuple(cli_spec.runtime),
             failure_patterns=tuple(cli_spec.failure_patterns or ()),
@@ -2799,6 +2884,12 @@ def _register_builtin_harnesses() -> None:
                          if local else
                          "Direct provider lane on its own dedicated credential pair."),
         )
+    # INSTALLABLE ADAPTERS (harness_plugins, BOSSAPP-853): manifests behind the trust gate,
+    # built on BOSS's own adapters. Nothing is scanned unless an operator configured a path
+    # or installed a `boss.harnesses` package; a broken plugin is reported, never raised.
+    from .harness_plugins import load_harness_plugins
+
+    load_harness_plugins()
 
 
 def _build_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:

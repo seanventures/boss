@@ -349,6 +349,8 @@ def _door(monkeypatch, output, mode):
     audited = []
     monkeypatch.setattr(mcp_registry, "needs_person", lambda server: False)
     monkeypatch.setattr(mcp_registry, "tool_policy", lambda *a: "allow")
+    # The door asks the ordered tool policy (BOSSAPP-815); this fake connection holds no rules.
+    monkeypatch.setattr("boss_engine.services.tool_policy_engine.load_rules", lambda *a, **k: [])
     monkeypatch.setattr(mcp_registry, "auth_headers", lambda *a: {})
     monkeypatch.setattr(mcp_registry, "record_tool_call", lambda c, **k: audited.append(k))
     monkeypatch.setattr(receipts, "ReceiptService", _Receipts)

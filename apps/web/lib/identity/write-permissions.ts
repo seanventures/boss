@@ -80,6 +80,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kit-api.ts#mcpApi.revoke": "agent_ability:assign",         // DELETE /v1/role-mcp-servers
   "lib/kit-api.ts#mcpApi.roleTools": "agent_ability:assign",      // POST /v1/role-mcp-servers
   "lib/kit-api.ts#mcpApi.addFromCatalogue": "mcp_server:review",  // POST /v1/mcp/catalogue/{key}
+  "lib/kit-api.ts#mcpApi.createStdioTemplate": "host:exec",       // POST /v1/mcp/stdio-templates
+  "lib/kit-api.ts#mcpApi.createGateway": "mcp_server:review",     // POST /v1/mcp/gateways
+  "lib/kit-api.ts#mcpApi.mintGatewayToken": "mcp_server:review",  // POST /v1/mcp/gateways/{id}/tokens
+  "lib/kit-api.ts#mcpApi.revokeGatewayToken": "mcp_server:review", // POST /v1/mcp/gateways/{id}/tokens/{t}/revoke
+  "lib/kit-api.ts#mcpApi.revokeGateway": "mcp_server:review",     // POST /v1/mcp/gateways/{id}/revoke
   // BOSSAPP-846..848: sign-in, whose credential, tools granted on request.
   "lib/kit-api.ts#mcpApi.signIn": "mcp_server:review",            // POST /v1/mcp/servers/{id}/oauth/start
   "lib/kit-api.ts#mcpApi.signInMine": "connection:use_own",       // POST /v1/mcp/servers/{id}/oauth/mine
@@ -115,6 +120,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/work-items.ts#updateItem": "work_item:manage",             // PATCH /v1/work-items/{id}
   "lib/work-items.ts#completeItem": "work_item:manage",           // POST …/{id}/complete
   "lib/work-items.ts#relateItem": "work_item:manage",             // POST …/{id}/relations
+  // lib/tool-policies.ts — Skills & MCP › Rules (BOSSAPP-815/817)
+  "lib/tool-policies.ts#createRule": "mcp_server:review",         // POST /v1/tool-policies
+  "lib/tool-policies.ts#updateRule": "mcp_server:review",         // PATCH /v1/tool-policies/{id}
+  "lib/tool-policies.ts#revokeRule": "mcp_server:review",         // DELETE /v1/tool-policies/{id}
+  "lib/tool-policies.ts#simulate": "mcp_server:read",             // POST …/simulate (records nothing)
   // lib/watch-app.ts — Project › Health › Watch this app
   "lib/watch-app.ts#startWatching": "observability:manage",       // POST /v1/projects/{id}/watch
   "lib/watch-app.ts#verifyChannel": "observability:manage",       // POST …/watch/{target}/verify
@@ -223,8 +233,12 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     "/v1/reliability/incidents/": "reliability:respond",
     // The work tree (lib/work-items.ts, BOSSAPP-830): every change to the graph.
     "/v1/work-items": "work_item:manage",
-    // A typed question's Send answer / Decline (app/typed-form-ui.tsx, BOSSAPP-832).
+    // A typed question's Send answer / Decline (app/typed-form-ui.tsx, BOSSAPP-832); "Approve +
+    // always allow" on a tool-call Ask card (app/always-allow-ui.tsx, BOSSAPP-817).
     "/v1/decisions/": "decision:approve",
+    // Skills & MCP › Rules (lib/tool-policies.ts, BOSSAPP-815): the simulate box is a read.
+    "/v1/tool-policies/simulate": "mcp_server:read",
+    "/v1/tool-policies": "mcp_server:review",
   },
 };
 
@@ -249,7 +263,7 @@ export const INLINE_WRITES: Readonly<Record<string, readonly WriteGate[]>> = {
   "app/workflows/editor/define-step-modal.tsx": ["workflow:create"], // custom-steps POST/PATCH
   "app/workflows/editor/inspector/workflow-settings.tsx": ["workflow:publish"], // apply
   "app/workflows/new-project-composer.tsx": ["work_item:manage"],  // POST /v1/projects/{id}/agents
-  "app/workforce-ui.tsx": ["agent:update"],                        // PUT/DELETE /v1/console/v2/org/{agent}
+  "app/workforce-ui.tsx": ["agent:update"],                        // PUT/DELETE /v1/console/v2/org/{agent}, POST …/org/takeover
   "components/v2/AgentChat.tsx": ["assistant:chat"],               // POST /v1/engine/agent/chat
   "components/v2/AutonomyControl.tsx": ["approval_rule:manage"],   // POST /v1/console/v2/autonomy
   "components/v2/DeployControls.tsx": ["deployment:create", "deployment_target:manage"],

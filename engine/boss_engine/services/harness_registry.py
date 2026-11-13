@@ -116,6 +116,9 @@ class HarnessSpec:
     #: How this engine's harness says it could not run (FailurePattern), beyond the generic
     #: words harness_failures knows for every engine.
     failure_patterns: tuple[FailurePattern, ...] = ()
+    #: Where the harness came from: "builtin", or "plugin:<id>" for an installable adapter
+    #: loaded from a manifest behind the trust gate (harness_plugins).
+    source: str = "builtin"
 
 
 _REGISTRY: dict[str, HarnessSpec] = {}
@@ -142,6 +145,7 @@ def register_harness(
     replace: bool = False,
     runtime: tuple[RuntimeBinary, ...] = (),
     failure_patterns: tuple[FailurePattern, ...] = (),
+    source: str = "builtin",
 ) -> HarnessSpec:
     key = (name or "").strip().lower()
     if not key:
@@ -154,7 +158,7 @@ def register_harness(
     spec = HarnessSpec(name=key, build=build, kind=kind, description=description,
                        requires=tuple(requires), verified=verified,
                        aliases=tuple(a.lower() for a in aliases), runtime=tuple(runtime),
-                       failure_patterns=tuple(failure_patterns))
+                       failure_patterns=tuple(failure_patterns), source=source)
     _REGISTRY[key] = spec
     for alias in spec.aliases:
         _ALIASES[alias] = key
@@ -214,6 +218,7 @@ def available_harnesses() -> list[dict]:
             "verified": s.verified,
             "aliases": list(s.aliases),
             "runtime": [r.binary for r in s.runtime],
+            "source": s.source,
         }
         for s in sorted(shown, key=lambda x: x.name)
     ]

@@ -131,11 +131,17 @@ class RegistryToolSet:
     def __init__(self, registry: Any, ctx: Any, *, project_id: str, actor: str,
                  allow_writes: bool = False, exclude: Sequence[str] = (),
                  run_tool: Optional[Callable[[str, dict, RunState], Any]] = None,
-                 surface: str = "chat"):
+                 surface: str = "chat", role_key: Optional[str] = None,
+                 workflow_id: Optional[str] = None):
         self.registry = registry
         self.ctx = ctx
         self.project_id = project_id
         self.actor = actor
+        #: Who is calling, for agent- and workflow-scoped tool-policy rules (BOSSAPP-815). An
+        #: actor written `agent:<role>` names its role when none is given.
+        self.role_key = role_key or (actor.split(":", 1)[1] if str(actor or "").startswith(
+            "agent:") else None)
+        self.workflow_id = workflow_id
         self.allow_writes = allow_writes
         self.exclude = frozenset(exclude)
         self.run_tool = run_tool
@@ -173,12 +179,60 @@ class RegistryToolSet:
                                   deferred=standing == "deferred"))
         return out
 
+    def policy(self, call: ToolCall, args: dict, state: RunState) -> Optional[dict]:
+        """THE ORDERED TOOL POLICY for BOSS's own tools (BOSSAPP-815, server ``boss``): the same
+        tool_policy_engine.decide the MCP gateway and the receipt door ask. Only a MATCHED rule
+        changes anything here — no rule, and the call goes on exactly as before (this tool set's
+        own write hold and identity gate still apply after an allow). None when there is no
+        database to read rules from or no rule decided."""
+        from sqlalchemy.engine import Engine
+        from sqlalchemy.exc import ProgrammingError
+
+        engine = getattr(self.ctx, "engine", None)
+        if not isinstance(engine, Engine) or engine.dialect.name != "postgresql":
+            return None  # rules live in Postgres; a test double or SQLite store holds none
+        from ..services.tool_policy_engine import BOSS_SERVER, PolicyContext, decide
+
+        kind = "read"
+        try:
+            kind = getattr(self.registry.get(call.name), "kind", "read")
+        except Exception:  # noqa: BLE001 — an unknown tool is refused further on
+            pass
+        ctx = PolicyContext(server=BOSS_SERVER, tool=call.name, arguments=args,
+                            tier=2 if kind == "write" else 0, project=self.project_id,
+                            run=getattr(state, "run_id", None) or None, role=self.role_key,
+                            workflow=self.workflow_id, base="allow")
+        try:
+            with engine.begin() as connection:
+                found = decide(ctx, connection=connection, record=True)
+        except ProgrammingError as error:
+            # A database whose schema predates the table holds no rule to skip; any other
+            # failure is raised (and the call fails) rather than read as "no rule".
+            if "tool_policies_v2" in str(error):
+                return None
+            raise
+        return found if found.get("rule_id") else None
+
     def invoke(self, call: ToolCall, *, state: RunState,
                approved: Optional[dict] = None) -> ToolResult:
         args = dict(call.arguments or {})
         if call.name in self.exclude:
             return unknown(call)
         try:
+            verdict = self.policy(call, args, state)
+            if verdict is not None and verdict["decision"] == "deny":
+                return ToolResult(call.id, call.name, "refused", {
+                    "ok": False, "status": "refused", "error": "denied_by_policy",
+                    "matched_policy_ids": verdict["matched_policy_ids"],
+                    "message": f"'{call.name}' NOT run: {verdict['explanation']}"})
+            if verdict is not None and verdict["decision"] == "ask" and approved is None:
+                self.pending.append({"tool": call.name, "args": args,
+                                     "policy": verdict["matched_policy_ids"]})
+                return ToolResult(call.id, call.name, "ok", {
+                    "ok": False, "status": "confirmation_required",
+                    "note": f"'{call.name}' NOT run: a tool policy asks a person first. "
+                            f"{verdict['explanation']}",
+                    "proposed": {"tool": call.name, "args": args}})
             if self.run_tool is not None:
                 return result_from(call, self.run_tool(call.name, args, state))
             try:

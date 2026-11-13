@@ -15,7 +15,7 @@ from ..agent.transient import _with_transient_retry
 from ..config import Settings
 from . import owned_process
 from . import decision_actions
-from .argument_binding import bind_held_call, held_call_matches
+from .argument_binding import CHANGED, bind_held_call, binding_holds
 from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .low_trust import Ledger, blocked, outside_origin, remember, sink_for_skill
@@ -450,6 +450,17 @@ def _granted_mcp_servers(
     return servers
 
 
+def _run_agent(run: Any) -> Optional[str]:
+    """The agent a run acts as, for the tool-call audit (BOSSAPP-819): the agent step's role, else
+    the run's own role key, else None (the loop's actor is recorded instead)."""
+    ctx = (run or {}).get("finalize_ctx") if isinstance(run, dict) else None
+    if not isinstance(ctx, dict):
+        return None
+    step = ctx.get("agent_step")
+    role = (step.get("role_key") if isinstance(step, dict) else None) or ctx.get("role_key")
+    return str(role) if role else None
+
+
 def _invoke_mcp_skill(
     connection: Connection,
     settings: Settings,
@@ -465,6 +476,7 @@ def _invoke_mcp_skill(
     approved_by: Optional[str] = None,
     approval_about: Optional[dict[str, Any]] = None,
     mcp_reach: Optional[str] = None,
+    agent: Optional[str] = None,
 ) -> dict[str, Any]:
     tool_name = str(tool.get("name") or "tool")
     skill_spec = _mcp_skill_spec(server, tool)
@@ -505,6 +517,8 @@ def _invoke_mcp_skill(
             tenant_scope=context.tenant_scope(),
             approved_by=approved_by,
             approval_about=approval_about,
+            # The audit row names the run's agent, not the loop (BOSSAPP-819).
+            agent=agent or actor,
         )
 
     return SkillRuntimeService(settings).invoke(
@@ -2028,7 +2042,8 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
             "decision_status": None if decision is None else decision["status"],
         }
     # Pending args can be replaced after the person approved a different call.
-    # No digest means an older decision; that resume is unchanged.
+    # No digest on an unstamped decision means an older one; that resume is unchanged. A v2
+    # decision needs its digest and signature (argument_binding.binding_holds, BOSSAPP-816).
     recommendation = decision["recommendation"]
     if isinstance(recommendation, str):
         try:
@@ -2040,14 +2055,12 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
     tool_name = recommendation.get("tool") or pending.get("tool") or ""
     if not isinstance(tool_name, str):
         tool_name = str(tool_name)
-    if not held_call_matches(
-        tool_name, pending.get("args"), recommendation.get("args_sha256"),
-    ):
+    if not binding_holds(tool_name, pending.get("args"), recommendation):
         return {
             "status": "denied",
             "run_id": run_id,
             "decision_id": decision_id,
-            "reason": "arguments do not match the approved call",
+            "reason": CHANGED,
         }
     if pending.get("kind") == "mcp":
         server = next(
@@ -2093,6 +2106,7 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 run_id=run_id,
                 step=int(pending.get("step") or run.get("step") or 0),
                 actor="decision_approval",
+                agent=_run_agent(run),
                 # Checked approved above; the MCP effect reads it again (needs_person),
                 # and checks it is THIS run's decision (approval_stands).
                 approved_by=decision_id,
@@ -2758,6 +2772,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         run_id=run_id,
                         step=step,
                         actor="agent_loop",
+                        agent=_run_agent(run),
                     ))
                     if exhausted is not None and bounded:
                         budget_wait = exhausted

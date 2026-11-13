@@ -247,6 +247,10 @@ def reap_docker(engine: Any, *, install_id: Optional[str], binary: str = "docker
     for cid, name, preview_id, owner, task_id, _inst, created in rows:
         if _age_seconds(created) < min_age:
             continue
+        if owner == "mcp_stdio":
+            # A stdio MCP server's container is its supervisor's (BOSSAPP-850): the supervisor's
+            # own step below stops idle ones and removes those whose creating process is gone.
+            continue
         if owner == "sandbox":
             if sandboxes is None:
                 sandboxes = _live_sandbox_tasks(engine)
@@ -451,6 +455,11 @@ def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
 
         report["workspace_snapshots"] = _safe(
             lambda: workspace_snapshots.reap_expired(engine, settings))
+    # Stdio MCP servers idle past their template's TTL, dead ones, and containers whose
+    # creating process is gone (BOSSAPP-850).
+    from . import mcp_stdio_supervisor
+
+    report["mcp_stdio"] = _safe(mcp_stdio_supervisor.reap_tick)
     report["dirs"] = _safe(lambda: reap_dirs())
     # A run that died never dropped its build-services database (build_services).
     from . import build_services

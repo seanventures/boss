@@ -40,9 +40,9 @@ from urllib.parse import urlparse
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .argument_binding import held_call_matches
+from .argument_binding import binding_holds
 from .core import create_blocking_decision, emit_event, make_id, normalize_data_boundary
-from .tool_call_audit import record_tool_call
+from .tool_call_audit import acting_principal, record_tool_call
 from .tool_catalog import (
     HASH_VERSION,
     QUARANTINE_KEYS,
@@ -111,10 +111,35 @@ def _validated_server_identity(name: str, url: str, transport: str) -> None:
         raise McpServerError("MCP server name must be a non-empty string")
     if not isinstance(transport, str) or not transport.strip():
         raise McpServerError("MCP transport must be a non-empty string")
+    if transport.strip() == "stdio" or (isinstance(url, str) and url.startswith("stdio://")):
+        # A STDIO SERVER (BOSSAPP-850): its address names an operator's launch template; the
+        # supervisor bridges it to HTTP at call time (mcp_stdio_supervisor). That the template
+        # exists in the server's own project is checked by _validated_stdio_target.
+        from .mcp_stdio_templates import parse_stdio_url
+
+        if transport.strip() != "stdio":
+            raise McpServerError("a stdio:// URL needs transport 'stdio'")
+        if parse_stdio_url(url) is None:
+            raise McpServerError(
+                "a stdio server's URL is stdio://<project_id>/<template name>")
+        return
     parsed = urlparse(url) if isinstance(url, str) else None
     if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise McpServerError(
             "MCP server url must be an absolute HTTP(S) URL, e.g. http://web-intel:8770/mcp")
+
+
+def _validated_stdio_target(connection: Connection, project_id: str, url: str,
+                            transport: str) -> None:
+    """A stdio server's address must name a template of its OWN project (BOSSAPP-850)."""
+    if str(transport or "").strip() != "stdio":
+        return
+    from .mcp_stdio_templates import StdioTemplateError, require_template_for_url
+
+    try:
+        require_template_for_url(connection, project_id, url)
+    except StdioTemplateError as error:
+        raise McpServerError(str(error)) from error
 
 
 def _loads(value: Any, fallback: Any) -> Any:
@@ -593,6 +618,11 @@ class McpToolOff(McpServerError):
     retryable = False
 
 
+class McpToolDenied(McpToolOff):
+    """A tool-policy rule (BOSSAPP-815) denied this call: a deny rule, or a rate limit whose
+    window is spent. An McpToolOff, so every road that answers Off answers this the same way."""
+
+
 class McpArgumentsChanged(McpServerError):
     """The arguments are not the call a person approved. Not retryable."""
 
@@ -771,9 +801,11 @@ def approved_arguments_match(
 ) -> bool:
     """True when this call is the one the approval digested.
 
-    A missing decision, or a decision with no args_sha256, still matches. Older
-    approvals did not store a digest, and a caller that does not pass one is
-    unchanged. A present digest matches only the same canonical arguments.
+    A missing decision, or an unstamped (v1) decision with no args_sha256, still
+    matches: older approvals did not store a digest, and a caller that does not
+    pass one is unchanged. A present digest matches only the same canonical
+    arguments. A v2 decision (BOSSAPP-816, argument_binding.binding_holds) fails
+    closed: it needs the digest AND a valid server-key signature.
     """
     wanted = str(decision_id or "").strip()
     if not wanted:
@@ -787,7 +819,15 @@ def approved_arguments_match(
     recommendation = _loads(row["recommendation"], {}) or {}
     if not isinstance(recommendation, dict):
         return True
-    return held_call_matches(tool_name, arguments, recommendation.get("args_sha256"))
+    # The agent loop binds an MCP hold under the name it OFFERED the model (`tool`, e.g.
+    # mcp_github_create_issue) and records the server's own name beside it (`tool_name`); this
+    # door is called with the server's name. Check under the bound name when the two name the
+    # same tool, else under this call's own name (a different tool then never matches).
+    bound_name = tool_name
+    offered = recommendation.get("tool")
+    if offered and isinstance(offered, str) and recommendation.get("tool_name") == tool_name:
+        bound_name = offered
+    return binding_holds(bound_name, arguments, recommendation)
 
 
 def _name_taken(
@@ -870,6 +910,7 @@ def register_mcp_server(
     settings: Any = None,
 ) -> dict:
     _validated_server_identity(name, url, transport)
+    _validated_stdio_target(connection, project_id, url, transport)
     risk_tier = _validated_risk(risk_tier)
     data_boundary = normalize_data_boundary(data_boundary)
     tool_risk_overrides = _validated_overrides(tool_risk_overrides)
@@ -968,6 +1009,7 @@ def update_mcp_server(
     url = str(given.get("url", current["url"])).strip()
     transport = str(given.get("transport", current["transport"])).strip()
     _validated_server_identity(name, url, transport)
+    _validated_stdio_target(connection, project_id, url, transport)
     if name.lower() != current["name"].lower() and _name_taken(
             connection, project_id, name, except_id=server_id):
         raise McpServerConflict(_name_taken_sentence(name))
@@ -1356,7 +1398,15 @@ def test_entered(settings: Any, connection: Optional[Connection], project_id: st
     """Probe the URL and sign-in an operator TYPED, before anything is stored (Save & test).
 
     The token is used for this one call and dropped; nothing is written."""
-    _validated_server_identity("test", url, "http")
+    transport = "stdio" if str(url or "").startswith("stdio://") else "http"
+    _validated_server_identity("test", url, transport)
+    if transport == "stdio":
+        from .mcp_stdio_templates import parse_stdio_url
+
+        if (parse_stdio_url(url) or ("", ""))[0] != project_id:
+            raise McpServerError("a stdio server can only use a template of its own project")
+        if connection is not None:
+            _validated_stdio_target(connection, project_id, url, transport)
     checked = _validated_auth(auth)
     headers = {str(k): str(v) for k, v in (checked.get("headers") or {}).items()}
     secret = checked.get("secret")
@@ -1419,6 +1469,23 @@ def record_reachability(
                  if isinstance(entry, dict) and str(entry.get("name")) in fresh]
         for decision in changed_tool_decisions(server_name, items, server_id=server_id):
             _open_tool_change_decision(connection, project_id, server_id, decision)
+        # AN "ALWAYS ALLOW" NEVER OUTLIVES THE DEFINITION IT WAS GIVEN FOR (BOSSAPP-817): every
+        # decision rule pinned to this tool's old schema is revoked now, audited. decide() also
+        # refuses a stale pin at call time, so a failure here can only delay the bookkeeping.
+        from .tool_policy_engine import drop_pinned_rules
+
+        for item in quarantined:
+            name = str(item.get("name") or "")
+            now_hash = next((e.get("schema_sha256") for e in stored
+                             if isinstance(e, dict) and e.get("name") == name), None)
+            try:
+                with connection.begin_nested():
+                    drop_pinned_rules(connection, project_id, server_id, name, now_hash)
+            except Exception:  # noqa: BLE001 — see above: the call-time check still holds
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "always-allow rules for %s not dropped", name, exc_info=True)
     connection.execute(
         text(
             "UPDATE mcp_servers SET reachable = :r, last_checked_at = now(), last_error = :e"
@@ -1686,7 +1753,12 @@ def call_tool_with_receipt(
     created_by_job_id: Optional[str] = None,
     approved_by: Optional[str] = None,
     approval_about: Optional[dict[str, Any]] = None,
-    principal: Any = None,
+    agent: Optional[str] = None,
+    principal: Optional[str] = None,
+    policy_context: Optional[dict[str, Any]] = None,
+    # BOSSAPP-847: whose CREDENTIAL the call carries (an identity object for
+    # auth_headers) — distinct from `principal`, the audit row's acting-identity string.
+    acting_principal: Any = None,
 ) -> dict[str, Any]:
     """The one EFFECT of calling an MCP tool: a receipt, the call, and the receipt settled.
 
@@ -1710,24 +1782,50 @@ def call_tool_with_receipt(
     Each road also appends one tool_call_audit row. A missing table is not swallowed. A
     delivered result is screened for prompt injection first (BOSSAPP-822,
     :func:`tool_result_screen.screen_result`) and its verdict is on that row (``screen``).
+    The row names WHO (BOSSAPP-819): ``agent`` is the caller's actor (the agent's role, the
+    skill's caller), ``principal`` the identity it acts as — the caller's, else the one in
+    effect (identity.lineage.current: the run's person or agent principal).
+
+    THE ORDERED TOOL POLICY (BOSSAPP-815, :func:`tool_policy_engine.decide`) is asked here, in
+    place of the bare Allow / Ask / Off read: a rule may deny, ask or rate-limit, an "Always
+    allow" may let a tier 0-1 Ask tool run, and no rule lifts Off, the tier floor or a
+    quarantine. ``policy_context`` names who is calling ({role_key, workflow_id, run_id}) so an
+    agent- or workflow-scoped rule applies. The audit row carries the REAL matched ids; when a
+    rule or a ceiling decided, the explanation rides on the row's ``screen`` as ``policy``.
     """
     from .mcp_client import MCPClient
     from .receipts import ReceiptService
+    from .tool_policy_engine import context_for, decide
+
+    about = approval_about if isinstance(approval_about, dict) else {}
+    who = policy_context if isinstance(policy_context, dict) else {}
+    decided: dict[str, Any] = {}
+
+    audit_agent = (str(agent or "").strip()
+                   or str((policy_context or {}).get("role_key") or "").strip()
+                   or "mcp_registry")
+    audit_principal = str(principal or "").strip() or acting_principal()
 
     def _audit_tool_call(outcome: str, decision: str, *, latency_ms: int = 0,
                          screen: Optional[dict[str, Any]] = None) -> None:
-        about = approval_about if isinstance(approval_about, dict) else {}
+        ids = list(decided.get("matched_policy_ids") or [])
+        if not ids and decision in ("allow", "ask", "off"):
+            ids = [decision]
+        if decided and (decided.get("rule_id") or any(i.startswith("guard:") for i in ids)):
+            screen = {**(screen or {}), "policy": {
+                "decision": decided.get("decision"), "rule_id": decided.get("rule_id"),
+                "explanation": decided.get("explanation")}}
         record_tool_call(
             connection,
             project_id=project_id,
             run_id=about.get("run_id") if isinstance(about.get("run_id"), str) else None,
-            agent="mcp_registry",
-            principal=None,
+            agent=audit_agent,
+            principal=audit_principal,
             server_id=server.get("id") if isinstance(server.get("id"), str) else None,
             tool=tool_name,
             arguments=inputs if isinstance(inputs, dict) else {},
             decision=decision,
-            matched_policy_ids=[decision] if decision in ("allow", "ask", "off") else [],
+            matched_policy_ids=ids,
             decision_id=approved_by,
             outcome=outcome,
             latency_ms=latency_ms,
@@ -1745,18 +1843,28 @@ def call_tool_with_receipt(
                                                     approval_about):
         _audit_tool_call("refused", "unreviewed")
         raise McpServerUnreviewed(_refusal(tool_name, server, approved_by))
-    # THE OPERATOR'S ALLOW / ASK / OFF (spec E7), the backstop for every road like the review:
-    # an Off tool never runs, an Ask tool runs only with a person's approval about this call.
-    # A QUARANTINED tool is Ask whatever it was set to (BOSSAPP-818); its mark is read from the
-    # row as it stands now, not from a server dict a caller loaded before a probe changed it.
-    policy = tool_policy(server, tool_name, _declared_tier(server, tool_name))
-    if policy == "allow" and tool_quarantined(_with_stored_tools(connection, project_id, server),
-                                              tool_name):
-        policy = "ask"
-    if policy == "off":
+    # THE OPERATOR'S POLICY (spec E7 + BOSSAPP-815), the backstop for every road like the review:
+    # an Off tool never runs, a denied call never runs, an Ask call runs only with a person's
+    # approval about this call. A QUARANTINED tool is Ask whatever it was set to (BOSSAPP-818);
+    # its mark is read from the row as it stands now, not from a server dict a caller loaded
+    # before a probe changed it — so the decision reads the STORED tool list.
+    decided.update(decide(
+        context_for(_with_stored_tools(connection, project_id, server), tool_name, inputs,
+                    project_id=project_id,
+                    run_id=str(who.get("run_id") or about.get("run_id") or "") or None,
+                    role_key=str(who.get("role_key") or about.get("role_key") or "") or None,
+                    workflow_id=str(who.get("workflow_id") or about.get("workflow_id") or "")
+                    or None),
+        connection=connection, record=True))
+    policy = {"allow": "allow", "ask": "ask"}.get(decided["decision"], "off")
+    if decided["decision"] == "deny" and decided.get("reason") == "off":
         _audit_tool_call("refused", "off")
         raise McpToolOff(f"Did not call {tool_name}: it is turned off for "
                          f"'{server.get('name')}' in Skills & MCP.")
+    if decided["decision"] == "deny":
+        _audit_tool_call("refused", "deny")
+        raise McpToolDenied(f"Did not call {tool_name} on '{server.get('name')}': "
+                            f"{decided['explanation']}")
     if policy == "ask" and not approval_stands(connection, project_id, approved_by,
                                                approval_about):
         _audit_tool_call("refused", "ask")
@@ -1771,8 +1879,8 @@ def call_tool_with_receipt(
             f"Did not call {tool_name}: arguments do not match the approved call."
         )
     # Whose credential: the caller's principal when it names one, else the run's (BOSSAPP-847).
-    headers = (auth_headers(connection, settings, project_id, server) if principal is None
-               else auth_headers(connection, settings, project_id, server, principal=principal))
+    headers = (auth_headers(connection, settings, project_id, server) if acting_principal is None
+               else auth_headers(connection, settings, project_id, server, principal=acting_principal))
     org_id, workspace_id = tenant_scope
     receipts = ReceiptService()
     receipt, created = receipts.create_or_reuse(

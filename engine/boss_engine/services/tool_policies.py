@@ -1,31 +1,22 @@
-"""A revocable always-allow row for one tool.
+"""A revocable always-allow for one tool (BOSSAPP-817).
 
-Grant inserts an active row. Revoke marks that row and later lists omit it.
-This slice does not change the tool-call path.
+Since BOSSAPP-815 an always-allow is a row in ``tool_policies_v2`` with ``source='decision'``
+(tool_policy_engine), so the call path reads it: every MCP road decides through
+tool_policy_engine.decide. These three helpers are the narrow API older callers used; they write
+and read those rows. The legacy ``tool_policies`` table is left in place and no longer written.
+
+The usual way such a row is made is the "Always allow this" option on an approved Ask card
+(decisions._handle_approved_follow_on -> tool_policy_engine.grant_from_decision).
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .core import make_id
+from .tool_policy_engine import SCHEMA_SQL, create_rule, list_rules, revoke_rule
 
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS tool_policies (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  server_id TEXT,
-  tool TEXT NOT NULL,
-  schema_sha256 TEXT,
-  source_decision_id TEXT,
-  status TEXT NOT NULL DEFAULT 'active',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  revoked_at TIMESTAMPTZ,
-  CHECK (status IN ('active', 'revoked'))
-);
-"""
+__all__ = ["SCHEMA_SQL", "grant_always_allow", "list_always_allow", "revoke_always_allow"]
 
 
 def grant_always_allow(
@@ -36,62 +27,34 @@ def grant_always_allow(
     tool: str,
     schema_sha256: Optional[str],
     source_decision_id: Optional[str],
+    role_key: Optional[str] = None,
+    actor: str = "boss",
 ) -> str:
-    """Insert one active always-allow row and return its id.
-
-    A second grant inserts another row. It does not update the first.
-    """
-    row_id = make_id("tpl")
-    connection.execute(
-        text(
-            """
-            INSERT INTO tool_policies (
-              id, project_id, server_id, tool, schema_sha256, source_decision_id, status
-            ) VALUES (
-              :id, :project_id, :server_id, :tool, :schema_sha256, :source_decision_id,
-              'active'
-            )
-            """
-        ),
-        {
-            "id": row_id,
-            "project_id": project_id,
-            "server_id": server_id,
-            "tool": tool,
-            "schema_sha256": schema_sha256,
-            "source_decision_id": source_decision_id,
-        },
-    )
-    return row_id
+    """Insert one active always-allow rule and return its id. A second grant inserts another
+    rule; it does not update the first. Scoped to ``role_key``'s agent when given, else the
+    project; the tier floor still holds at decide time (a tier >= 2 tool keeps asking)."""
+    rule = create_rule(connection, project_id, {
+        "scope": f"agent:{role_key}" if role_key else "project",
+        "priority": 50,
+        "effect": "allow",
+        "selector": {"server": server_id or "*", "tool": tool},
+        "schema_sha256": schema_sha256,
+    }, actor=actor, source="decision", source_decision_id=source_decision_id)
+    return str(rule["id"])
 
 
-def revoke_always_allow(connection: Connection, *, project_id: str, policy_id: str) -> None:
-    """Mark one project's always-allow row revoked. Missing rows raise LookupError."""
-    result = connection.execute(
-        text(
-            """
-            UPDATE tool_policies
-            SET status = 'revoked', revoked_at = now()
-            WHERE id = :policy_id AND project_id = :project_id
-            """
-        ),
-        {"policy_id": policy_id, "project_id": project_id},
-    )
-    if result.rowcount != 1:
-        raise LookupError(policy_id)
+def revoke_always_allow(connection: Connection, *, project_id: str, policy_id: str,
+                        actor: str = "boss") -> None:
+    """Mark one project's always-allow rule revoked. Missing rows raise LookupError."""
+    revoke_rule(connection, project_id, policy_id, actor=actor)
 
 
 def list_always_allow(connection: Connection, *, project_id: str) -> list[dict]:
-    """Active always-allow rows for this project, newest created_at first."""
-    rows = connection.execute(
-        text(
-            """
-            SELECT id, tool, schema_sha256, source_decision_id, server_id
-            FROM tool_policies
-            WHERE project_id = :project_id AND status = 'active'
-            ORDER BY created_at DESC
-            """
-        ),
-        {"project_id": project_id},
-    ).mappings().all()
-    return [dict(row) for row in rows]
+    """Active always-allow rules for this project, newest first."""
+    rows = [r for r in list_rules(connection, project_id, source="decision")
+            if r["status"] == "active" and r.get("project_id") == project_id]
+    rows.sort(key=lambda r: (str(r.get("created_at") or ""), str(r["id"])), reverse=True)
+    return [{"id": r["id"], "tool": (r.get("selector") or {}).get("tool"),
+             "schema_sha256": r.get("schema_sha256"),
+             "source_decision_id": r.get("source_decision_id"),
+             "server_id": (r.get("selector") or {}).get("server")} for r in rows]

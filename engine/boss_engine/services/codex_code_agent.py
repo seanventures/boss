@@ -41,6 +41,7 @@ from . import owned_process
 from .cli_harness import CliHarnessUnavailable, GenericCliCodeAgent, _proxy_scoped
 from .engine_contract import EngineCapabilities
 from .workspace_perms import tidies_workspace
+from .harness_delivery import delivers_kit
 
 _log = logging.getLogger(__name__)
 
@@ -201,6 +202,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
 
     @tidies_workspace
     @_proxy_scoped
+    @delivers_kit
     def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
                  model: Optional[str] = None, resume_session_id: Optional[str] = None,
                  max_turns: Optional[int] = None, parallel_agents: int = 0,

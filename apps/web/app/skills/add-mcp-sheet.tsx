@@ -9,8 +9,9 @@ import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import type { McpCatalogueEntry } from "../../lib/kit-types";
-import { mcpApi, type McpAuthInput } from "../../lib/kit-api";
+import { mcpApi, toolOverrides, type Connector, type McpAuthInput } from "../../lib/kit-api";
 import { showToast } from "../client-forms";
+import { ConnectorsTab } from "./connectors-tab";
 import { PROVENANCE, plural, shortError } from "./kit-copy";
 import { ModalShell } from "./overlay";
 
@@ -19,13 +20,27 @@ const RISKS = [{ tier: 0, label: "Reads" }, { tier: 2, label: "Writes" }, { tier
 export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
   projectId: string; actor: string; onClose: () => void; onAdded: (serverId: string) => void;
 }) {
-  const [tab, setTab] = useState<"catalogue" | "custom">("catalogue");
+  const [tab, setTab] = useState<"catalogue" | "connectors" | "custom">("catalogue");
+  const [picked, setPicked] = useState<Connector | null>(null);
   const [items, setItems] = useState<McpCatalogueEntry[] | null>(null);
   const [tokenFor, setTokenFor] = useState<string | null>(null);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ field: string | null; message: string } | null>(null);
   const [form, setForm] = useState({ name: "", url: "", auth: "none" as McpAuthInput["type"], header: "", secret: "", risk: 0,
+                                     transport: "http" as "http" | "stdio" });
+
+  // A connector picked from the catalog fills the form (BOSSAPP-849); the operator still tests
+  // and saves it here, and its tool tiers/policies are applied to the tools the test found.
+  const pick = (c: Connector) => {
+    const p = c.prefill;
+    setPicked(c);
+    setError(null);
+    setForm({ name: p.name, url: p.url, auth: p.auth.type === "oauth" ? "none" : p.auth.type,
+              header: p.auth.header_name ?? "", secret: "", risk: p.risk_tier, transport: p.transport });
+    setTab("custom");
+  };
+  const oauthOnly = picked?.prefill.auth.type === "oauth";
                                      clientId: "" });
 
   useEffect(() => {
@@ -74,8 +89,19 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
       showToast("error", `Test failed, ${shortError(message)}`);
       return;
     }
+    const hints = picked ? toolOverrides(picked.prefill, t.data.tools.map((x) => x.name)) : { tiers: {}, policies: {} };
     const r = await mcpApi.register(projectId, actor, { name: form.name.trim(), url: form.url.trim(), risk_tier: form.risk,
-                                                        auth, provenance: { source: "custom" } });
+                                                        transport: form.transport, auth,
+                                                        ...(picked ? { description: picked.prefill.description,
+                                                                       data_boundary: picked.prefill.data_boundary,
+                                                                       tool_risk_overrides: hints.tiers } : {}),
+                                                        provenance: picked ? picked.prefill.provenance : { source: "custom" } });
+    if (r.ok) {
+      // The connector's default policies, best effort: a tool the floor holds at Ask stays Ask.
+      for (const [tool, policy] of Object.entries(hints.policies)) {
+        await mcpApi.policy(projectId, actor, r.data.id, tool, String(policy));
+      }
+    }
     setBusy(false);
     if (!r.ok) { setError({ field: r.field ?? "name", message: r.error }); showToast("error", shortError(r.error)); return; }
     showToast("success", `Added ${form.name.trim()}, ${plural(t.data.tools.length, "tool")}`);
@@ -87,11 +113,14 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
         <header className="kit-modal-head">
           <span className="kit-seg" role="radiogroup" aria-label="Add MCP">
             <button type="button" role="radio" aria-checked={tab === "catalogue"} data-testid="kit-add-catalogue" onClick={() => setTab("catalogue")}>Catalogue</button>
+            <button type="button" role="radio" aria-checked={tab === "connectors"} data-testid="kit-add-connectors" onClick={() => setTab("connectors")}>Connectors</button>
             <button type="button" role="radio" aria-checked={tab === "custom"} data-testid="kit-add-custom" onClick={() => setTab("custom")}>Custom</button>
           </span>
           <button type="button" className="kit-icon-btn" aria-label="Close" onClick={onClose}>×</button>
         </header>
-        {tab === "catalogue" ? (
+        {tab === "connectors" ? (
+          <ConnectorsTab projectId={projectId} actor={actor} onPick={pick} />
+        ) : tab === "catalogue" ? (
           <div className="kit-catalogue" data-testid="kit-catalogue">
             {(items ?? []).map((e) => (
               <article key={e.key} className="kit-cat-card" data-testid={`kit-cat-${e.key}`}>
@@ -123,6 +152,15 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
           </div>
         ) : (
           <div className="kit-conn" data-testid="kit-custom-mcp">
+            {picked ? (
+              <div className="kit-note" data-testid="kit-custom-picked">
+                <strong>{picked.name}</strong> <span className="kit-faint">{picked.setup}</span>
+                <span className="kit-faint" data-tip={picked.risk_notes}> · Risk: {shortError(picked.risk_notes)}</span>
+                {picked.token_url ? <> · <a className="kit-link" href={picked.token_url} target="_blank" rel="noreferrer noopener"
+                                            data-tip={picked.scopes_tip ? `Needs: ${picked.scopes_tip}` : undefined}>Get a token ↗</a></> : null}
+                {oauthOnly ? <span className="kit-field-err" role="note"> · Needs OAuth sign-in, which is not available here yet.</span> : null}
+              </div>
+            ) : null}
             <label className="kit-field">
               <span className="kit-field-label">Name</span>
               <input type="text" value={form.name} data-testid="kit-custom-name" onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
@@ -184,6 +222,8 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
             </div>
             <div className="kit-actions">
               <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-primary" data-testid="kit-custom-save"
+                      disabled={busy || oauthOnly || !form.name.trim() || !form.url.trim()} onClick={() => void custom()}>
+                {busy ? "Testing…" : "Save & test"}
                       disabled={busy || !form.name.trim() || !form.url.trim()} onClick={() => void custom()}>
                 {busy ? "Testing…" : form.auth === "oauth" ? "Save & sign in" : "Save & test"}
               </GatedButton>

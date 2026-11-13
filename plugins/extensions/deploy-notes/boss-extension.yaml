@@ -1,0 +1,65 @@
+# The worked example of boss.extension/v1 (BOSSAPP-861). Install it from Infra > Extensions with
+# the path plugins/extensions/deploy-notes and the checksum below.
+apiVersion: boss.extension/v1
+kind: Extension
+metadata:
+  id: example.deploy-notes
+  name: Deploy notes
+  version: 1.0.0
+  description: Keeps short notes about deploys - from agents, from deploy events and from CI - and shows them on the project page.
+  publisher: BOSS examples
+  license: Apache-2.0
+spec:
+  entrypoint: extension:DeployNotes
+  # sha256 of every bundle file except this manifest (boss_engine.extensions.contract.bundle_checksum)
+  checksum: sha256:c4c8af53f2935d86d4f4e08387b63de131dbbdddf0ee7de1455a56f5dbf684d7
+  capabilities:
+    - tools.register
+    - events.subscribe
+    - jobs.schedule
+    - webhooks.receive
+    - state.read
+    - state.write
+    - ui.slot.register
+  runtime:
+    timeoutSeconds: 20
+  tools:
+    - name: add_note
+      description: Add a short note about a deploy to this project's deploy notes.
+      riskTier: 1
+      inputSchema:
+        type: object
+        properties:
+          text: {type: string, description: The note, at most 500 characters}
+        required: [text]
+    - name: list_notes
+      description: List this project's deploy notes, oldest first.
+      riskTier: 0
+      inputSchema: {type: object, properties: {}}
+    - name: clear_notes
+      description: Delete every deploy note in this project.
+      riskTier: 2
+      inputSchema: {type: object, properties: {}}
+  events:
+    kinds: ["deploy.*"]
+    projects: enabled
+    batchSize: 50
+  jobs:
+    - name: digest
+      schedule: "0 * * * *"
+  webhooks:
+    - name: deploy
+      description: 'CI posts {"note": "..."} after a deploy'
+  ui:
+    slots:
+      - type: project_panel
+        name: notes
+        title: Deploy notes
+        entry: ui/panel.html
+      - type: settings_panel
+        name: settings
+        title: Deploy notes settings
+        entry: ui/settings.html
+  state:
+    maxValueBytes: 32768
+    maxKeys: 200

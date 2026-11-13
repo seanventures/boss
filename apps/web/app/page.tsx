@@ -62,6 +62,7 @@ import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentProcesses } from "./agent-process-ui";
 import { ProcessManager } from "./process-manager-ui";
 import { LogExplorer } from "./activity/log-explorer";
+import { ActivityTabs } from "./activity/tool-calls";
 import { GovernHome } from "./govern/govern-home";
 import { SelfFixesHome } from "./self-fix/self-fixes-home";
 import { AgentOpsHome } from "./agent-ops/agent-ops-home";
@@ -3234,7 +3235,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               component, and the Factory links across with pushState, a client-side navigation
               that never re-runs it. Threading it through props would have worked on a reload
               and silently done nothing on the click that matters. */}
-          <LogExplorer projectId={activeProjectId} actor={activeActorId} />
+          <ActivityTabs projectId={activeProjectId}
+                        log={<LogExplorer projectId={activeProjectId} actor={activeActorId} />} />
         </section>
         ) : null}
 

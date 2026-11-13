@@ -82,6 +82,8 @@ export const API_READ_OPS: Readonly<Record<string, ApiRead>> = {
   "/api/host-advice": one("projects/{}/host-advice"),
   "/api/kit": { op: (u) => (u.searchParams.get("ability") ? "ability" : ""), ops: { "": "kit", ability: "kit/{}" } },
   "/api/mcp": byView({ "": "mcp/servers", catalogue: "mcp/catalogue", grants: "role-mcp-servers",
+                       connectors: "mcp/connectors", stdio_templates: "mcp/stdio-templates",
+                       gateways: "mcp/gateways" }),
                        credentials: "mcp/servers/{}/credentials", access_grants: "mcp/access-grants" }),
   "/api/memory": one("memory"),
   "/api/model-routes": one("model-routes"),
@@ -111,6 +113,8 @@ export const API_READ_OPS: Readonly<Record<string, ApiRead>> = {
                                 tests: "skill-definitions/{}/tests", sources: "skill-sources",
                                 consents: "skill-consents" }, "versions"),
   "/api/skills": byView({ "": "skill-definitions", builtin: "skills", assignments: "role-skills" }),
+  "/api/tool-calls": one("tool-calls"),
+  "/api/tool-calls/export": one("tool-calls/export"),
   "/api/workflow-report": one("workflow-runs/{}/report"),
 };
 

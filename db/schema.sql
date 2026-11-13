@@ -12238,6 +12238,7 @@ CREATE TABLE IF NOT EXISTS runner_sessions (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_runner_sessions_run ON runner_sessions (run_id, state, last_heartbeat DESC);
+
 -- BOSSAPP-838 ── scheduled self-backups ─────────────────────────────────────────────────────────
 -- services/backup_scheduler.py: one API thread (whichever holds backup_scheduler_lease) takes a
 -- pg_dump every BOSS_BACKUP_INTERVAL_MINUTES, verifies it with `pg_restore --list`, optionally
@@ -12284,27 +12285,14 @@ CREATE TABLE IF NOT EXISTS portability_imports (
   chunks_done INTEGER NOT NULL DEFAULT 0,
   plan JSONB NOT NULL DEFAULT '{}'::jsonb,
   report JSONB NOT NULL DEFAULT '{}'::jsonb,
--- ── BOSSAPP-833-835: decide from Slack and phone; realtime event push ─────────────────────────
--- services/chat_channels.py (834) and services/event_stream.py (835).
---
--- A CHAT ENDPOINT is one two-way channel BOSS posts decisions to and hears answers from: a Slack
--- app, a Telegram bot (Discord is a stub). Its credentials (Slack's signing secret and bot token,
--- Telegram's bot token and webhook secret) live in the secret store; `secret_refs` holds only
--- {"<name>": "<secret_refs.id>"}, never a value.
-CREATE TABLE IF NOT EXISTS chat_endpoints (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('slack', 'telegram', 'discord')),
-  name TEXT NOT NULL,
-  config JSONB NOT NULL DEFAULT '{}'::jsonb,      -- channel / chat id, team id, max_tier
-  secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb, -- {"signing_secret": "sref_..", ...}
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_portability_imports_target
   ON portability_imports (scope, target_id, created_at DESC);
+
+
 -- BOSSAPP-841-844
 -- ── Skills as a governed supply chain ─────────────────────────────────────────────────────────
 -- 842 VERSIONS. Every save of an authored skill appends a row here (skill_versions.record, called
@@ -12416,6 +12404,8 @@ CREATE TABLE IF NOT EXISTS skill_test_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_skill_test_runs_case
   ON skill_test_runs (case_id, skill_version_id, created_at DESC);
+
+
 -- ── BOSSAPP-829-832: one work-item graph with execution policy ───────────────────────────────
 -- BOSSAPP-830. work_items is THE canonical node for every piece of work: a workflow run, a code
 -- task, a PRD meeting and a planning ticket each carry the work_item_id of the node they
@@ -12548,6 +12538,27 @@ ALTER TABLE decisions ADD COLUMN IF NOT EXISTS form_schema JSONB;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answer JSONB;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_by TEXT;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ;
+
+
+-- ── BOSSAPP-833-835: decide from Slack and phone; realtime event push ─────────────────────────
+-- services/chat_channels.py (834) and services/event_stream.py (835).
+--
+-- A CHAT ENDPOINT is one two-way channel BOSS posts decisions to and hears answers from: a Slack
+-- app, a Telegram bot (Discord is a stub). Its credentials (Slack's signing secret and bot token,
+-- Telegram's bot token and webhook secret) live in the secret store; `secret_refs` holds only
+-- {"<name>": "<secret_refs.id>"}, never a value.
+CREATE TABLE IF NOT EXISTS chat_endpoints (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('slack', 'telegram', 'discord')),
+  name TEXT NOT NULL,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,      -- channel / chat id, team id, max_tier
+  secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb, -- {"signing_secret": "sref_..", ...}
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE INDEX IF NOT EXISTS idx_chat_endpoints_project ON chat_endpoints (project_id, status);
 
 -- WHO a chat user is in BOSS. A row is born unverified by a press from an unlinked user (with the
@@ -12652,6 +12663,224 @@ END $$;
 -- Last-Event-ID replay reads "the events after this one" in (created_at, id) order.
 CREATE INDEX IF NOT EXISTS idx_events_created_id ON events (created_at, id);
 
+-- ── BOSSAPP-885: AN ORG CHART THAT CARRIES AUTHORITY (services/org_chain.py) ──────────────────
+-- org_assignments.reports_to was display-only. A stall that would interrupt a person is first
+-- offered to the responsible agent's manager (an agent) — one row here, one rung at a time, each
+-- with a deadline; a pass or a deadline moves it up the chain, and a chain with no agent left
+-- falls through to the exact person path the caller would have taken (`fallback`), so work is
+-- never stranded. One row per run ever: a run the chain already had its chance on goes to the
+-- person. A takeover writes `authority_path` (who acted, under whose chain) here and on the run.
+-- No reports_to rows → no row here: the default path is unchanged.
+CREATE TABLE IF NOT EXISTS org_chain_escalations (
+  id TEXT PRIMARY KEY,                                  -- 'orgesc_…'
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  origin TEXT NOT NULL CHECK (origin IN ('person_wait', 'stuck_work')),
+  run_kind TEXT NOT NULL DEFAULT 'code_task',
+  run_id TEXT NOT NULL,
+  work_item_id TEXT,
+  subject TEXT NOT NULL,                                -- agent:<role> whose work stalled
+  chain JSONB NOT NULL DEFAULT '[]'::jsonb,             -- the chain of command when it stalled
+  rung INTEGER NOT NULL DEFAULT 1,
+  offered_to TEXT NOT NULL,                             -- agent:<role> holding the offer now
+  reason TEXT NOT NULL DEFAULT '',
+  question TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'taken', 'fell_through', 'superseded')),
+  deadline TIMESTAMPTZ NOT NULL,
+  asked_at TIMESTAMPTZ,                                 -- the offered manager's turn ran
+  fallback JSONB NOT NULL DEFAULT '{}'::jsonb,          -- what the person path needs
+  taken_by TEXT,
+  authority_path JSONB,
+  outcome TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_org_chain_escalations_run ON org_chain_escalations (run_id);
+CREATE INDEX IF NOT EXISTS idx_org_chain_escalations_open
+  ON org_chain_escalations (project_id, status, deadline);
+-- BOSSAPP-861 ── general-purpose extensions (boss.extension/v1) ─────────────────────────────────
+-- engine/boss_engine/extensions/: one row per installed extension (the APPROVED whole-tree
+-- checksum is the trust gate's reference; nonce derives the MCP bearer and webhook secrets, so a
+-- reinstall rotates them), its per-project enablement (and the MCP server row its tools ride),
+-- its namespaced key-value state (size-capped), its event-feed ack cursor, and the job leases
+-- that let exactly one API process fire a scheduled callback (backup_scheduler's lease pattern).
+CREATE TABLE IF NOT EXISTS extension_installs (
+  extension_id TEXT PRIMARY KEY,
+  version TEXT NOT NULL,
+  name TEXT NOT NULL,
+  directory TEXT NOT NULL,
+  approved_checksum TEXT NOT NULL,
+  bundle_checksum TEXT NOT NULL,
+  manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+  nonce TEXT NOT NULL,
+  installed_by TEXT,
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS extension_projects (
+  extension_id TEXT NOT NULL REFERENCES extension_installs(extension_id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  mcp_server_id TEXT,
+  updated_by TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (extension_id, project_id)
+);
+CREATE TABLE IF NOT EXISTS extension_state (
+  extension_id TEXT NOT NULL,
+  project_id TEXT NOT NULL DEFAULT '',
+  key TEXT NOT NULL,
+  value JSONB NOT NULL,
+  bytes INTEGER NOT NULL CHECK (bytes >= 0 AND bytes <= 65536),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (extension_id, project_id, key)
+);
+CREATE TABLE IF NOT EXISTS extension_event_cursors (
+  extension_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  last_created_at TIMESTAMPTZ,
+  last_event_id TEXT,
+  delivered BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (extension_id, project_id)
+);
+CREATE TABLE IF NOT EXISTS extension_job_leases (
+  extension_id TEXT NOT NULL,
+  job TEXT NOT NULL,
+  holder TEXT NOT NULL DEFAULT '',
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  next_run_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_run_at TIMESTAMPTZ,
+  last_status TEXT,
+  last_error TEXT,
+  runs BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (extension_id, job)
+);
+-- BOSSAPP-849-851
+-- ── Connector catalog, stdio MCP servers and curated gateways ────────────────────────────────────
+-- 850 STDIO TEMPLATES. How BOSS launches a stdio MCP server: the argv, the image it runs in, the
+-- environment names it may receive (never secret values: a server's token is resolved by the
+-- registry at call time and handed to the container as the env var named in `env_from_auth`), the
+-- network it may use ('host' is refused), how long an idle instance lives and how instances are
+-- shared. A server row points at one as `stdio://<project_id>/<name>`; the supervisor
+-- (services/mcp_stdio_supervisor.py) spawns it in a sandboxed container and bridges it to the
+-- streamable-HTTP surface mcp_client already speaks. Writing a template is `host:exec`.
+CREATE TABLE IF NOT EXISTS mcp_stdio_templates (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL CHECK (name ~ '^[a-z0-9][a-z0-9_-]{0,62}$'),
+  description TEXT,
+  argv JSONB NOT NULL,
+  image TEXT NOT NULL,
+  env_allowlist JSONB NOT NULL DEFAULT '[]'::jsonb,
+  env_defaults JSONB NOT NULL DEFAULT '{}'::jsonb,
+  env_from_auth TEXT,
+  network TEXT NOT NULL DEFAULT 'none' CHECK (network <> 'host'),
+  idle_ttl_seconds INTEGER NOT NULL DEFAULT 600 CHECK (idle_ttl_seconds BETWEEN 30 AND 86400),
+  reuse_key TEXT NOT NULL DEFAULT 'credential' CHECK (reuse_key IN ('credential', 'template')),
+  connector_key TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_by TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+
+-- 851 GATEWAYS. A curated slice of a project's MCP servers served to OUTSIDE MCP clients (Claude
+-- Code, Cursor) at /mcp/gw/{id}. `profile` = {"servers": [{"server_id", "tools": [..] | null,
+-- "caps": {tool: "allow" | "off"}}]}; a cap may only make a tool stricter than the registry's own
+-- policy. Every call is proxied through mcp_registry.call_tool_with_receipt, so review, policy,
+-- receipts and the tool_call_audit row are exactly what an inside call gets.
+CREATE TABLE IF NOT EXISTS mcp_gateways (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  profile JSONB NOT NULL DEFAULT '{"servers": []}'::jsonb,
+  allowed_actions JSONB NOT NULL
+    DEFAULT '["tools/list", "tools/call", "search_tools", "run_tool"]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_gateways_active_name
+  ON mcp_gateways (project_id, lower(name)) WHERE status = 'active';
+
+-- A gateway's tokens: only the SHA-256 of each is kept (the token is shown once, at mint), with
+-- its last four for telling two apart, an expiry, and a revocation.
+CREATE TABLE IF NOT EXISTS mcp_gateway_tokens (
+  id TEXT PRIMARY KEY,
+  gateway_id TEXT NOT NULL REFERENCES mcp_gateways(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  last4 TEXT NOT NULL,
+  label TEXT,
+  expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  last_used_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_gateway_tokens_gateway
+  ON mcp_gateway_tokens (gateway_id, created_at DESC);
+-- ================================ end CONNECTORS / STDIO / GATEWAYS (BOSSAPP-849-851) ==
+-- BOSSAPP-816-819
+-- THE TOOL-CALL AUDIT SURFACE (BOSSAPP-819): GET /v1/tool-calls + /export and Activity › Tool
+-- calls read tool_call_audit. `explanation` is the policy's own words for the decision, filled
+-- by a writer that has them (NULL otherwise, and on every older row). The index is the one the
+-- audit's keyset pages read (project, newest first).
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS explanation TEXT;
+CREATE INDEX IF NOT EXISTS idx_tool_call_audit_project_time
+  ON tool_call_audit (project_id, recorded_at DESC, id DESC);
+-- ================================ end BOSSAPP-816-819 ==
+-- ============================ TOOL POLICIES v2 (BOSSAPP-815/817) ============================
+-- The ordered tool-policy engine (engine/boss_engine/services/tool_policy_engine.py): rules as
+-- data, read by decide() at the MCP gateway, the receipt door and the kernel's tool set. A rule
+-- with source='decision' is an "Always allow" a person chose on an approval (BOSSAPP-817).
+-- BOSSAPP-815-817
+CREATE TABLE IF NOT EXISTS tool_policies_v2 (
+  id TEXT PRIMARY KEY,
+  org_id TEXT,
+  project_id TEXT,
+  scope TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 100,
+  effect TEXT NOT NULL,
+  selector JSONB NOT NULL DEFAULT '{}'::jsonb,
+  conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rate_limit JSONB,
+  source TEXT NOT NULL DEFAULT 'operator',
+  source_decision_id TEXT,
+  schema_sha256 TEXT,
+  note TEXT,
+  expires_at TIMESTAMPTZ,
+  hit_count BIGINT NOT NULL DEFAULT 0,
+  last_hit_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  revoked_reason TEXT,
+  CONSTRAINT tool_policies_v2_effect CHECK (effect IN ('allow', 'ask', 'deny', 'rate_limit')),
+  CONSTRAINT tool_policies_v2_source CHECK (source IN ('operator', 'decision')),
+  CONSTRAINT tool_policies_v2_status CHECK (status IN ('active', 'disabled', 'revoked')),
+  CONSTRAINT tool_policies_v2_scope CHECK (
+    scope IN ('org', 'project') OR scope LIKE 'agent:_%' OR scope LIKE 'workflow:_%'),
+  CONSTRAINT tool_policies_v2_owner CHECK (scope = 'org' OR project_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_tool_policies_v2_project
+  ON tool_policies_v2 (project_id, status, priority);
+CREATE INDEX IF NOT EXISTS idx_tool_policies_v2_org
+  ON tool_policies_v2 (org_id, status) WHERE project_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tool_policies_v2_decision
+  ON tool_policies_v2 (source_decision_id) WHERE source_decision_id IS NOT NULL;
+-- ============================ end TOOL POLICIES v2 (BOSSAPP-815/817) ========================
 -- BOSSAPP-846-848
 -- ── Connect the MCP ecosystem, part 1: OAuth for remote servers, whose credential a call uses,
 -- and agent-initiated access requests ─────────────────────────────────────────────────────────

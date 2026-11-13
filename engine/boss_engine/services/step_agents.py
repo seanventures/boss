@@ -855,6 +855,14 @@ def resolve(
             from .agent_identity import paused_message
 
             raise StepAgentError(paused_message(off[1], off[0]))
+        # RETIRED MANAGERS BLOCK DELEGATION (BOSSAPP-885): an agent under a retired manager on
+        # the org chart starts no new step until it is reassigned. Nothing declared: no change.
+        from .org_chain import is_under_retired_manager, retired_gap_words
+
+        gap = (is_under_retired_manager(connection, project_id, named)
+               if connection is not None else None)
+        if gap is not None:
+            raise StepAgentError(retired_gap_words(named, gap))
         return _record(named, "named",
                        "named on the start card you pressed" if step.get(NAMED_ON_START_CARD)
                        else "named on the step", [named])

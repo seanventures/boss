@@ -1,0 +1,62 @@
+/* ── Activity › Tool calls (BOSSAPP-819) ──
+   tc- classes plus the Log's drawer (lx-drawer, lx-facts); design-system tokens only. The table
+   scrolls inside its own box; the page never scrolls sideways. */
+
+.tc-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.tc-tab {
+  min-height: 30px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); color: var(--muted); font: inherit; font-size: 0.82rem; cursor: pointer;
+}
+.tc-tab[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--ink); font-weight: 650; }
+.tc-tab:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+
+.tc { position: relative; display: flex; flex-direction: column; gap: 10px; width: 100%; min-width: 0; min-height: 420px; }
+.tc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
+.tc-title { margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--ink); }
+.tc-count { font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tc-spacer { flex: 1 1 auto; }
+.tc-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.tc-chip {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  color: var(--muted); font: inherit; font-size: 0.8rem; cursor: pointer;
+}
+.tc-chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--ink); font-weight: 650; }
+.tc-chip:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.tc-empty { margin: 0; padding: 24px 12px; text-align: center; color: var(--muted); border: 1px dashed var(--border-strong); border-radius: var(--r-xl); }
+
+.tc-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
+.tc-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.tc-table th { position: sticky; top: 0; padding: 8px 10px; text-align: left; font-size: 0.72rem; font-weight: 600; color: var(--faint); background: var(--surface); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.tc-table td { padding: 7px 10px; color: var(--ink); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.tc-table tbody tr { cursor: pointer; }
+.tc-table tbody tr:hover { background: var(--surface-2); }
+.tc-table tbody tr[aria-selected="true"] { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
+.tc-table tbody tr:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.tc-num { text-align: right; font-variant-numeric: tabular-nums; }
+.tc-tool { font-family: var(--font-outlier); }
+.tc-plus {
+  margin-left: 6px; width: 18px; height: 18px; display: inline-grid; place-items: center; vertical-align: middle;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--muted);
+  cursor: pointer; opacity: 0;
+}
+.tc-table tr:hover .tc-plus, .tc-plus:focus-visible { opacity: 1; }
+.tc-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 0.74rem; background: var(--surface-2); color: var(--ink); }
+.tc-pill[data-tone="ok"] { background: var(--green-soft); }
+.tc-pill[data-tone="warn"] { background: var(--amber-soft); }
+.tc-pill[data-tone="bad"] { background: var(--red-soft); }
+.tc-more { align-self: center; }
+
+.tc-sec h3 { margin: 0 0 4px; font-size: 0.78rem; font-weight: 650; color: var(--muted); }
+.tc-sec p { margin: 0; font-size: 0.82rem; color: var(--ink); overflow-wrap: anywhere; }
+.tc-muted { color: var(--faint); font-weight: 400; }
+.tc-why { margin-top: 4px !important; color: var(--muted) !important; }
+.tc-sha { margin-top: 4px !important; font-family: var(--font-outlier); font-size: 0.72rem !important; color: var(--faint) !important; overflow-wrap: anywhere; }
+
+@media (max-width: 719px) {
+  .tc-drawer { position: static; width: 100%; animation: none; }
+  .tc-table th:nth-child(3), .tc-table td:nth-child(3), .tc-table th:nth-child(7), .tc-table td:nth-child(7) { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tc-drawer { animation: none; }
+}

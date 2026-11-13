@@ -107,8 +107,70 @@ export const mcpApi = {
     write<AccessGrant>("/api/mcp", { action: "grant_revoke", project_id: projectId, actor, grant_id: grantId }, "Revoke"),
   addFromCatalogue: (projectId: string, actor: string, key: string, token: string | null) =>
     write<{ server: McpServer; test: McpTestResult }>("/api/mcp", { action: "catalogue_add", project_id: projectId, actor, key, token }, "Add"),
+  // BOSSAPP-849..851 — the connector catalog, stdio templates and gateways.
+  connectors: (projectId: string, query: string, category: string) =>
+    read<ConnectorCatalog>(`/api/mcp?view=connectors&project_id=${enc(projectId)}&q=${enc(query)}&category=${enc(category)}`),
+  createStdioTemplate: (projectId: string, actor: string, template: StdioTemplateInput) =>
+    write<{ id: string; name: string; url: string }>("/api/mcp", { action: "stdio_template_create", project_id: projectId, actor, template }, "Create template"),
+  gateways: (projectId: string) => read<{ items: McpGateway[] }>(`/api/mcp?view=gateways&project_id=${enc(projectId)}`),
+  createGateway: (projectId: string, actor: string, name: string, profile: GatewayProfile, expiresInDays: number) =>
+    write<{ gateway: McpGateway; token: string }>("/api/mcp", { action: "gateway_create", project_id: projectId, actor, name, profile, expires_in_days: expiresInDays }, "Create gateway"),
+  mintGatewayToken: (projectId: string, actor: string, gatewayId: string, expiresInDays: number) =>
+    write<{ token: string; record: GatewayToken }>("/api/mcp", { action: "gateway_token", project_id: projectId, actor, gateway_id: gatewayId, expires_in_days: expiresInDays }, "New token"),
+  revokeGatewayToken: (projectId: string, actor: string, gatewayId: string, tokenId: string) =>
+    write<McpGateway>("/api/mcp", { action: "gateway_token_revoke", project_id: projectId, actor, gateway_id: gatewayId, token_id: tokenId }, "Revoke"),
+  revokeGateway: (projectId: string, actor: string, gatewayId: string) =>
+    write<McpGateway>("/api/mcp", { action: "gateway_revoke", project_id: projectId, actor, gateway_id: gatewayId }, "Revoke gateway"),
 };
 
+export type StdioTemplateInput = {
+  name: string; image: string; argv: string[]; network: string; env_allowlist: string[];
+  env_defaults: Record<string, string>; env_from_auth: string | null; idle_ttl_seconds: number;
+  reuse_key: string; connector_key: string; description: string;
+};
+
+export type ConnectorPrefill = {
+  name: string; transport: "http" | "stdio"; url: string;
+  auth: { type: "none" | "bearer" | "header" | "oauth"; header_name: string | null };
+  risk_tier: number; data_boundary: string; description: string;
+  tool_tiers: Record<string, number>; tool_policies: Record<string, string>;
+  oauth: { discovery_url: string | null; scopes: string[]; token_fallback: string | null } | null;
+  provenance: Record<string, string>; stdio_template: StdioTemplateInput | null;
+};
+
+export type Connector = {
+  key: string; name: string; category: string; transport: "http" | "stdio"; description: string;
+  auth_kind: string; token_url: string | null; scopes_tip: string | null; setup: string;
+  risk_notes: string; docs_url: string | null; default_tier: number; added: boolean;
+  template_ready: boolean; definition_version: number | null; prefill: ConnectorPrefill;
+};
+
+export type ConnectorCatalog = {
+  catalog_version: string; total: number; categories: { key: string; count: number }[]; items: Connector[];
+};
+
+export type GatewayProfile = { servers: { server_id: string; tools: string[] | null; caps: Record<string, "allow" | "off"> }[] };
+export type GatewayToken = { id: string; label: string | null; last4: string; expires_at: string | null;
+                             revoked_at: string | null; last_used_at: string | null; status: string; created_at: string };
+export type McpGateway = { id: string; name: string; status: string; path: string; profile: GatewayProfile;
+                           allowed_actions: string[]; tokens: GatewayToken[]; created_at: string };
+
+/** Glob match for a connector's tool tier/policy patterns (`*` and `?`), most specific first. */
+export function toolOverrides(prefill: ConnectorPrefill, tools: string[]) {
+  const rank = (p: string) => [(p.match(/[*?]/g) ?? []).length, -p.length] as const;
+  const sorted = (m: Record<string, unknown>) => Object.keys(m).sort((a, b) => {
+    const [x1, y1] = rank(a); const [x2, y2] = rank(b); return x1 - x2 || y1 - y2; });
+  const re = (g: string) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
+  const pick = <T,>(m: Record<string, T>) => {
+    const out: Record<string, T> = {};
+    const keys = sorted(m);
+    for (const t of tools) { const hit = keys.find((g) => re(g).test(t)); if (hit !== undefined) out[t] = m[hit]; }
+    return out;
+  };
+  return { tiers: pick(prefill.tool_tiers), policies: pick(prefill.tool_policies) };
+}
+
+export type McpAuthInput = { type: "none" | "bearer" | "header"; header_name?: string; secret?: string };
 export type McpAuthInput = { type: "none" | "bearer" | "header" | "oauth"; header_name?: string; secret?: string;
                              oauth?: { client_id?: string; scope?: string } };
 
