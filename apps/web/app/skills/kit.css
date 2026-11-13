@@ -271,3 +271,10 @@
   .kit-matrix { width: 100%; }
   .kit-matrix thead th { width: auto; max-width: none; }
 }
+
+/* Skill History / Tests (BOSSAPP-842, 844): a diff and two outputs side by side. */
+.kit-diff { margin: 6px 0 0; padding: 8px; max-height: 260px; overflow: auto; white-space: pre-wrap;
+  word-break: break-word; font: 0.75rem/1.4 var(--mono); color: var(--ink);
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--r); }
+.kit-side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+@media (max-width: 640px) { .kit-side-by-side { grid-template-columns: 1fr; } }

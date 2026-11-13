@@ -156,12 +156,12 @@ def test_an_agent_cannot_save_a_program_below_the_approval_floor(monkeypatch):
 
     captured: dict = {}
 
-    def fake_save(_connection, **kwargs):
+    def fake_draft(_connection, **kwargs):
         captured.update(kwargs)
-        return {"updated_at": "t"}
+        return {"decision_id": "dec_t", "status": "pending"}
 
     monkeypatch.setattr(
-        "boss_engine.services.skill_definitions.save_skill", fake_save)
+        "boss_engine.services.skill_definitions.draft_for_approval", fake_draft)
     ctx = SkillExecutorContext(
         settings=Settings(), connection=None, project_id="p", actor="video_editor")
     execute_code_remember(ctx, {
@@ -172,7 +172,8 @@ def test_an_agent_cannot_save_a_program_below_the_approval_floor(monkeypatch):
         "risk_tier": 1,
     })
     assert captured["risk_tier"] == 2
-    assert captured["trusted"] is False
+    # A PROPOSAL, never a save (BOSSAPP-843): drafts carry no trust and write nothing.
+    assert "trusted" not in captured and captured["mode"] == "upsert"
 
     execute_code_remember(ctx, {
         "skill_key": "hold_the_slide",

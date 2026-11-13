@@ -66,6 +66,17 @@ _READERS = {
         "owner: a count of its own rows (Improve BOSS, a number never a name)",
     "engine/boss_engine/services/skill_registry.py::list_project_skills": "owner: project rows",
     "engine/boss_engine/services/skill_registry.py::ensure_skill": "owner: upsert",
+    # BOSSAPP-841..844: the save path's own validation, and the version/test/source stores
+    # reading the ONE skill row they version, test or sync — never "which skills exist".
+    "engine/boss_engine/services/skill_definitions.py::prepare_skill":
+        "owner: create vs overwrite (save_skill's checks)",
+    "engine/boss_engine/services/skill_versions.py::current": "versions of one skill",
+    "engine/boss_engine/services/skill_versions.py::record": "locks the row it versions",
+    "engine/boss_engine/services/skill_versions.py::list_versions": "versions of one skill",
+    "engine/boss_engine/services/skill_versions.py::get_version": "one version of one skill",
+    "engine/boss_engine/services/skill_sources.py::_trusted": "one synced skill's trust flag",
+    "engine/boss_engine/services/skill_tests.py::grade_with_decider":
+        "the label of the skill a run belongs to",
     # "What points at this server" — a reference check before a delete, not a catalogue read.
     "engine/boss_engine/services/mcp_registry.py::mcp_server_references":
         "reference check before deleting a server",
@@ -93,6 +104,14 @@ _OWNER_READ_CALLERS = {
         "one skill's config at execution",
     "engine/boss_engine/services/skill_executors.py::execute_guide":
         "one guide's body at execution",
+    # Writers of one skill (BOSSAPP-841..844): the row they are about to change or test.
+    "engine/boss_engine/services/skill_definitions.py::propose_change":
+        "the base a draft's diff is taken against",
+    "engine/boss_engine/services/skill_definitions.py::draft_for_approval":
+        "create vs update of the drafted skill",
+    "engine/boss_engine/services/skill_sources.py::sync_one": "the synced skill it versions",
+    "engine/boss_engine/services/skill_tests.py::_skill": "the one skill whose cases run",
+    "engine/boss_engine/services/skill_versions.py::restore": "the skill it re-saves",
 }
 
 _SHIPPING = ("engine/boss_engine", "apps/api/app", "apps/worker")

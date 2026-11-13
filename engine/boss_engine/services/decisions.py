@@ -1314,11 +1314,15 @@ class DecisionService:
             except McpServerError as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action == "activate_authored_skill":
-            # The draft the card showed becomes the skill other agents can run. Until this, a
-            # create is stored disabled and an update has not been written.
-            from .skill_definitions import activate_authored_skill
+            # The draft the card showed becomes the skill other agents can run. Until this,
+            # nothing is written: the draft is a diff-bound consent (change_consent, 843), and
+            # a skill changed since the draft refuses rather than writing another diff.
+            from .skill_definitions import ConsentStale, activate_authored_skill
 
-            activate_authored_skill(connection, row, actor)
+            try:
+                activate_authored_skill(connection, row, actor)
+            except ConsentStale as stale:
+                raise InvalidDecisionTransitionError(str(stale)) from stale
         elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
             # A paid call whose outcome was never settled. Approving settles it: a reply the
             # receipt holds is recorded (usage and cost) and replayed by the step, never paid
@@ -1375,6 +1379,11 @@ class DecisionService:
                 refuse_tool_change(connection, str(row["project_id"]), server_id,
                                    str(rec.get("tool") or ""), actor=actor,
                                    decision_id=str(row["id"]))
+        elif (row["recommendation"] or {}).get("action") == "activate_authored_skill":
+            # A refused draft's consent can never be spent (change_consent, BOSSAPP-843).
+            from .change_consent import reject_for_decision
+
+            reject_for_decision(connection, str(row["id"]), actor)
 
     def _handle_non_approved_follow_on(
         self,
