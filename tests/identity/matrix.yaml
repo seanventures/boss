@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1877 operations.
+# 1890 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -392,6 +392,13 @@
 "POST /v1/channels/{provider}/connect": ["permit integration:manage @ project(body=project_id)", "OA"]
 "GET /v1/chaos": ["permit reliability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/chaos/run": ["permit reliability:manage @ project(body=project_id)", "OA"]
+"GET /v1/chat/endpoints": ["permit integration:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/chat/endpoints": ["permit integration:manage @ project(body=project_id)", "OA"]
+"POST /v1/chat/endpoints/{endpoint_id}/status": ["permit integration:manage @ project(body=project_id)", "OA"]
+"GET /v1/chat/links": ["authenticated:self:people", "OAPVU"]
+"POST /v1/chat/links/confirm": ["authenticated:self:people", "OAPVU"]
+"POST /v1/chat/links/peek": ["authenticated:self:people", "OAPVU"]
+"POST /v1/chat/links/{link_id}/revoke": ["authenticated:self:people", "OAPVU"]
 "POST /v1/ci-config/generate": ["permit cicd:manage @ org", "OAP"]
 "GET /v1/ci/gate": ["permit github:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/ci/waits": ["permit github:sync @ project(body=project_id)", "OAP"]
@@ -697,6 +704,7 @@
 "DELETE /v1/event-subscriptions/{subscription_id}": ["permit integration:manage @ project(query=project_id)", "OA"]
 "PATCH /v1/event-subscriptions/{subscription_id}": ["permit integration:manage @ project(body=project_id)", "OA"]
 "GET /v1/events": ["permit activity:read @ project(query=project_id)|org", "OAPVU"]
+"GET /v1/events/stream": ["permit activity:read @ project(query=project_id)|org", "OAPVU"]
 "GET /v1/experiments": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/experiments": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "POST /v1/experiments/{experiment_id}/promote": ["permit improvement:manage @ project(body=project_id)", "OA"]
@@ -1406,6 +1414,8 @@
 "GET /v1/projects/{project_id}/github-changes/{owner}/{repo}/{number}/files": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/github-changes/{owner}/{repo}/{number}/merge": ["permit decision:approve @ project(path=project_id)", "OAP"]
 "POST /v1/projects/{project_id}/github-changes/{owner}/{repo}/{number}/request-changes": ["permit decision:approve @ project(path=project_id)", "OAP"]
+"POST /v1/projects/{project_id}/github-changes/{owner}/{repo}/{number}/sync": ["permit decision:approve @ project(path=project_id)", "OAP"]
+"GET /v1/projects/{project_id}/github-changes/{owner}/{repo}/{number}/sync-preview": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/projects/{project_id}/github-changes/{owner}/{repo}/{number}/tree": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/projects/{project_id}/github-changes/{owner}/{repo}/{number}/viewed": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/github-changes/{owner}/{repo}/{number}/viewed": ["permit code_task:steer @ project(path=project_id)", "OAP"]
@@ -1438,6 +1448,8 @@
 "POST /v1/projects/{project_id}/local-changes/{number}/merge": ["permit decision:approve @ project(path=project_id)", "OAP"]
 "POST /v1/projects/{project_id}/local-changes/{number}/request-changes": ["permit decision:approve @ project(path=project_id)", "OAP"]
 "POST /v1/projects/{project_id}/local-changes/{number}/review": ["permit code_task:create @ project(path=project_id)", "OAP"]
+"POST /v1/projects/{project_id}/local-changes/{number}/sync": ["permit decision:approve @ project(path=project_id)", "OAP"]
+"GET /v1/projects/{project_id}/local-changes/{number}/sync-preview": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/projects/{project_id}/local-changes/{number}/tree": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/projects/{project_id}/local-changes/{number}/viewed": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/local-changes/{number}/viewed": ["permit code_task:steer @ project(path=project_id)", "OAP"]
@@ -1798,6 +1810,7 @@
 "POST /v1/webhook-endpoints/{endpoint_id}/deliver": ["permit comms:send @ project(body=project_id)", "OAP"]
 "POST /v1/webhooks/bitbucket": ["public:hmac_signed_webhook", "OAPVU"]
 "POST /v1/webhooks/github": ["public:hmac_signed_webhook", "OAPVU"]
+"POST /v1/webhooks/inbound/chat/{endpoint_id}": ["public:hmac_signed_webhook", "OAPVU"]
 "POST /v1/webhooks/inbound/workflow/{path_token}": ["public:hmac_signed_webhook", "OAPVU"]
 "POST /v1/webhooks/inbound/{source}": ["public:hmac_signed_webhook", "OAPVU"]
 "POST /v1/webhooks/plane": ["public:hmac_signed_webhook", "OAPVU"]

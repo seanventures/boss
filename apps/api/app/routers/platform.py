@@ -459,3 +459,11 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .workflow_webhooks import router as workflow_webhooks_router
 
     app.include_router(workflow_webhooks_router)
+
+    # Decide from Slack and phone (BOSSAPP-834): chat endpoints, links, the signed public door;
+    # and realtime event push authorized per event (BOSSAPP-835). Unguarded, like the above.
+    from .chat_channels import router as chat_channels_router
+    from .event_stream import router as event_stream_router
+
+    app.include_router(chat_channels_router)
+    app.include_router(event_stream_router)

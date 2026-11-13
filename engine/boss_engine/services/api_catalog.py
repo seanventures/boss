@@ -248,6 +248,8 @@ RESOURCE_DOMAINS = {
     "factory": "delivery",
     "focused-agents": "agents",
     "channels": "ops",
+    # Two-way chat endpoints and identity links (BOSSAPP-834): decisions answered from Slack.
+    "chat": "ops",
     "investigations": "ops",
     "discoveries": "knowledge",
     "packs": "agents",

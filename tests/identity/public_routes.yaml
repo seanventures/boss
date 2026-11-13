@@ -216,6 +216,9 @@ POST /v1/webhooks/github:
 POST /v1/webhooks/inbound/{source}:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.webhooks:InboundWebhookService.ingest
+POST /v1/webhooks/inbound/chat/{endpoint_id}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.chat_channels:verify_request
 POST /v1/webhooks/inbound/workflow/{path_token}:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.workflow_webhooks:receive
