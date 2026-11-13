@@ -13001,3 +13001,33 @@ CREATE TABLE IF NOT EXISTS agent_feedback (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_feedback_once_per_run ON agent_feedback (project_id, dedupe_key);
 CREATE INDEX IF NOT EXISTS idx_agent_feedback_target ON agent_feedback (project_id, target_kind, target, status);
+-- 890 (services/skill_policy.py): the org's and project's declarative skill-access rules, read
+-- in order (position, then project before org, then id); the first rule that matches decides and
+-- no match allows — an install without rules behaves exactly as before. Checked where a skill is
+-- created or edited (save_skill, draft_skill), imported (skill_sources), installed (a capability
+-- bundle), tested (skill_tests), removed (delete_skill), given to an agent (assign_skill_to_role)
+-- and invoked (SkillRuntimeService.invoke). A revoked rule is kept for the audit.
+CREATE TABLE IF NOT EXISTS skill_policy_rules (
+  id TEXT PRIMARY KEY,
+  org_id TEXT REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 100,
+  effect TEXT NOT NULL CHECK (effect IN ('allow', 'deny')),
+  actions JSONB NOT NULL DEFAULT '["*"]'::jsonb,
+  skill_pattern TEXT NOT NULL DEFAULT '*',
+  role_pattern TEXT NOT NULL DEFAULT '*',
+  actor_kind TEXT NOT NULL DEFAULT 'any' CHECK (actor_kind IN ('any', 'person', 'agent')),
+  source_pattern TEXT NOT NULL DEFAULT '*',
+  min_risk_tier INTEGER CHECK (min_risk_tier BETWEEN 0 AND 3),
+  note TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'revoked')),
+  hit_count INTEGER NOT NULL DEFAULT 0,
+  last_hit_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  updated_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (project_id IS NOT NULL OR org_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_policy_rules_project ON skill_policy_rules (project_id, status);
+CREATE INDEX IF NOT EXISTS idx_skill_policy_rules_org ON skill_policy_rules (org_id, status) WHERE project_id IS NULL;

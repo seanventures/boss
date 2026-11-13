@@ -262,6 +262,11 @@ def import_source(connection: Connection, fetcher: Fetcher, *, project_id: str, 
     loc = parse_locator(kind, locator)
     fetched_files = fetched.files
     skill = shown["skill"]
+    # WHERE SKILLS MAY COME FROM, AS DATA (BOSSAPP-890): checked with the source it comes from.
+    from .skill_policy import check
+
+    check(connection, project_id, action="import", skill_key=skill["skill_key"],
+          source=f"{loc.kind}:{locator.strip()}", risk_tier=0, actor=actor)
     saved = save_skill(
         connection, project_id=project_id, actor=actor, skill_key=skill["skill_key"],
         label=skill["label"], behaviour_kind="guide", summary=skill["summary"],
@@ -360,6 +365,12 @@ def sync_one(engine: Any, settings: Any, source_id: str, *,
             live = get_skill(c, project_id, source["skill_key"])
             if live is None:
                 return finish("error", error=f"skill {source['skill_key']!r} no longer exists.")
+            # A RULE WRITTEN SINCE THE IMPORT still governs its updates (BOSSAPP-890).
+            from .skill_policy import check
+
+            check(c, project_id, action="import", skill_key=source["skill_key"],
+                  source=f"{loc.kind}:{source['locator']}", risk_tier=live["risk_tier"],
+                  actor=SYNC_ACTOR, actor_kind="person")
             note = f"synced from {loc.kind}:{source['locator']}@{upstream.sha[:12]}"
             if source["auto_update"] and _trusted(c, project_id, source["skill_key"]):
                 save_skill(c, project_id=project_id, actor=SYNC_ACTOR,

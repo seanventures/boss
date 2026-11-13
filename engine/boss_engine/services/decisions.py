@@ -1368,11 +1368,15 @@ class DecisionService:
             # nothing is written: the draft is a diff-bound consent (change_consent, 843), and
             # a skill changed since the draft refuses rather than writing another diff.
             from .skill_definitions import ConsentStale, activate_authored_skill
+            from .skill_policy import SkillPolicyDenied
 
             try:
                 activate_authored_skill(connection, row, actor)
             except ConsentStale as stale:
                 raise InvalidDecisionTransitionError(str(stale)) from stale
+            except SkillPolicyDenied as refused:
+                # A skill-access rule (BOSSAPP-890) written after the draft refuses it now.
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
             # A paid call whose outcome was never settled. Approving settles it: a reply the
             # receipt holds is recorded (usage and cost) and replayed by the step, never paid

@@ -125,6 +125,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/tool-policies.ts#updateRule": "mcp_server:review",         // PATCH /v1/tool-policies/{id}
   "lib/tool-policies.ts#revokeRule": "mcp_server:review",         // DELETE /v1/tool-policies/{id}
   "lib/tool-policies.ts#simulate": "mcp_server:read",             // POST …/simulate (records nothing)
+  // lib/skill-policies.ts — Skills & MCP › Rules › Skill access (BOSSAPP-890)
+  "lib/skill-policies.ts#createSkillRule": "skill:manage",        // POST /v1/skill-policies
+  "lib/skill-policies.ts#updateSkillRule": "skill:manage",        // PATCH /v1/skill-policies/{id}
+  "lib/skill-policies.ts#revokeSkillRule": "skill:manage",        // DELETE /v1/skill-policies/{id}
+  "lib/skill-policies.ts#simulateSkillRule": "skill:read",        // POST …/simulate (records nothing)
   // lib/agent-feedback.ts — Activity › Feedback (BOSSAPP-889)
   "lib/agent-feedback.ts#setFeedbackStatus": "agent:update",     // PATCH /v1/agent-feedback/{id}
   // lib/watch-app.ts — Project › Health › Watch this app
@@ -241,6 +246,9 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // Skills & MCP › Rules (lib/tool-policies.ts, BOSSAPP-815): the simulate box is a read.
     "/v1/tool-policies/simulate": "mcp_server:read",
     "/v1/tool-policies": "mcp_server:review",
+    // Skills & MCP › Rules › Skill access (lib/skill-policies.ts, BOSSAPP-890): simulate reads.
+    "/v1/skill-policies/simulate": "skill:read",
+    "/v1/skill-policies": "skill:manage",
     // Activity › Feedback (lib/agent-feedback.ts, BOSSAPP-889): a person closes a record.
     "/v1/agent-feedback/": "agent:update",
   },

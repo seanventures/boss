@@ -109,6 +109,10 @@ def run_cases(connection: Connection, settings: Any, *, project_id: str, actor: 
     from . import eval_harness, skill_versions
 
     skill = _skill(connection, project_id, skill_key)
+    from .skill_policy import check
+
+    check(connection, project_id, action="test", skill_key=skill_key,
+          risk_tier=skill.get("risk_tier"), actor=actor)
     chosen = (skill_versions.get_version(connection, project_id, skill_key, version)
               if version not in (None, "") else
               skill_versions.current(connection, project_id, skill_key))

@@ -580,7 +580,15 @@ def save_skill(
     behaviour = prepared["behaviour_kind"]
     tier = prepared["risk_tier"]
     who = origin if origin in ORIGINS else _origin_of(connection, project_id, actor)
-    from . import change_consent, skill_versions
+    from . import change_consent, skill_policy, skill_versions
+
+    # THE ORG'S SKILL-ACCESS RULES (BOSSAPP-890): checked before anything is spent or written.
+    # No rule allows, so an install without rules saves exactly as before.
+    skill_policy.check(
+        connection, project_id, action="edit" if prepared["exists"] else "create",
+        skill_key=key, risk_tier=tier, actor=actor,
+        actor_kind="agent" if who == "agent" else "person",
+        role_key=(str(actor or "").removeprefix("agent:").lower() if who == "agent" else None))
 
     consent_id = None
     if who == "agent" or require_consent:
@@ -765,6 +773,14 @@ def draft_for_approval(
         connection, project_id=project_id, skill_key=skill_key, label=label,
         behaviour_kind=behaviour_kind, summary=summary, knowledge=knowledge, inputs=inputs,
         produces=produces, config=config or {}, risk_tier=risk_tier, mode=intent)
+    # REFUSED NOW, NOT AT APPROVAL (BOSSAPP-890): a draft the skill-access policy forbids never
+    # becomes a card a person approves only to see it refused.
+    from . import skill_policy
+
+    skill_policy.check(connection, project_id, action="edit" if prepared["exists"] else "create",
+                       skill_key=prepared["skill_key"], risk_tier=prepared["risk_tier"],
+                       actor=actor, actor_kind="agent",
+                       role_key=str(actor or "").removeprefix("agent:").lower() or None)
     return propose_change(connection, project_id=project_id, actor=actor, prepared=prepared,
                           mode=intent)
 
@@ -882,6 +898,9 @@ def delete_skill(
       the same breath — but a choice, made on purpose. Before this, deleting left the grant
       behind and the agent page showed "no such skill here any more" forever.
     """
+    from . import skill_policy
+
+    skill_policy.check(connection, project_id, action="remove", skill_key=skill_key, actor=actor)
     refs = skill_references(connection, project_id, skill_key)
     if refs["custom_steps"]:
         steps = ", ".join(s["label"] or s["step_key"] for s in refs["custom_steps"][:8])
@@ -987,6 +1006,12 @@ def assign_skill_to_role(
     if source is None:
         raise SkillDefinitionError(
             f"no skill {skill!r} in this project — author one, or enable a built-in first.")
+    # WHICH ROLES MAY HOLD WHICH SKILLS, AS DATA (BOSSAPP-890): the role checked is the one being
+    # given the skill; who is giving it is the actor.
+    from . import skill_policy
+
+    skill_policy.check(connection, project_id, action="hold", skill_key=skill, role_key=role,
+                       actor=actor)
 
     row = connection.execute(
         text(
