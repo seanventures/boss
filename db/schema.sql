@@ -13197,6 +13197,7 @@ CREATE TABLE IF NOT EXISTS pack_provenance (
   installed_by TEXT NOT NULL DEFAULT '',
   installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, pack_id, item_kind, item_key)
+);
 -- BOSSAPP-w4-ops1 ── multi-account pools (886), CLI gateways (887), reflection (888), agent
 -- feedback (889), skill-access policy (890). One block, appended after every other block.
 -- 889 (services/agent_feedback.py): an agent's complaint or suggestion about something it worked
