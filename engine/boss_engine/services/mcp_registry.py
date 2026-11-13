@@ -463,9 +463,21 @@ def auth_headers(connection: Connection, settings: Any, project_id: str,
     401 that reads like the server's fault."""
     from .connection_credentials import headers_for
 
-    return headers_for(connection, settings, project_id, server,
-                       _raw_auth(connection, project_id, str(server.get("id") or "")),
-                       principal=principal)
+    raw = _raw_auth(connection, project_id, str(server.get("id") or ""))
+    headers = headers_for(connection, settings, project_id, server, raw, principal=principal)
+    # THE HEADER POLICY (BOSSAPP-873): secret static headers, and an allowlist that strips any
+    # other extra header. Every road's headers come from here, so every road obeys it. A server
+    # with no policy ({}) sends exactly what it sent before.
+    from . import mcp_headers_policy as hp
+
+    policy = hp.read(connection, project_id, str(server.get("id") or ""))
+    if not policy:
+        return headers
+    sign_in = {"authorization"}
+    if raw.get("header_name"):
+        sign_in.add(str(raw["header_name"]).lower())
+    return hp.apply(connection, settings if settings is not None else _settings_now(), policy,
+                    headers, sign_in=sign_in)
 
 
 # --------------------------------------------------------------------------- #
@@ -1936,8 +1948,17 @@ def call_tool_with_receipt(
         )
     started = time.monotonic()
     try:
+        # OPT-IN CALL METADATA (BOSSAPP-873): X-BOSS-Run-Id / X-BOSS-Agent / traceparent, only
+        # when the server's headers policy forwards them; empty (nothing sent) otherwise.
+        from . import mcp_headers_policy as hp
+
+        forwarded = hp.call_headers(
+            hp.read(connection, project_id, str(server.get("id") or "")),
+            run_id=str(who.get("run_id") or about.get("run_id") or "") or None,
+            agent=(audit_agent if audit_agent != "mcp_registry" else None))
         output = MCPClient(settings).call_tool(server["url"], tool_name, inputs,
-                                               headers=headers)
+                                               headers=headers,
+                                               **({"call_headers": forwarded} if forwarded else {}))
     except Exception as exc:
         receipts.mark_failed(
             connection,

@@ -354,3 +354,13 @@ A meta-tool that runs another tool by name, such as `COMPOSIO_MULTI_EXECUTE_TOOL
 **Suggested limits.** Each aggregator suggests a per-run rate limit. On Composio the limit is on the execute meta-tool; on the others it covers all tools. You can add these limits from **Rules › Suggested limits**.
 
 These entries were written from each vendor's published documentation. BOSS's tests have not run them against a live account.
+
+### Headers BOSS sends upstream
+
+By default a call to an MCP server carries the server's sign-in, any plain headers set on its auth, and BOSS's protocol headers. You can change this per server under **Upstream headers** in the server's drawer, or with `POST /v1/mcp/servers/{id}/headers-policy`. There are three settings:
+
+- **Send** (`forward`) turns on per-call metadata: `X-BOSS-Run-Id`, `X-BOSS-Agent`, and the W3C `traceparent` of the current span. `traceparent` is sent only when BOSS's own tracing is on. These headers go on each `tools/call` request only, never on the session's `initialize`.
+- **Only send** (`allow`) is an allowlist. When it is set, BOSS strips every extra header that is not on the list. The sign-in header and BOSS's protocol headers are always sent.
+- **Secret headers** (`secret_headers`) are static headers whose values are secrets, such as a tenant key. Each value is written to the secret store and read only when a call is made. The console shows only the last four characters. To keep a value that is already stored, send it as `{"keep": true}`.
+
+A policy cannot set `Authorization`, BOSS's protocol headers or the `X-BOSS-*` names. Every header still passes BOSS's passthrough check, so no policy can send a BOSS session, key or run token to a server. An empty policy (`{}`) sends exactly what BOSS sent before this setting existed.

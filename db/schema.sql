@@ -12974,3 +12974,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_access_grants_live
   ON mcp_access_grants (project_id, server_id, role_key, tool) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_mcp_access_grants_role ON mcp_access_grants (project_id, role_key, status);
 -- ================================ end BOSSAPP-846-848 ==
+-- BOSSAPP-w4-observability ──────────────────────────────────────────────────────────────────────
+-- 873: what an MCP call may carry upstream besides the server's own sign-in
+-- (services/mcp_headers_policy.py). {} = exactly what was sent before. Keys:
+--   allow           [header names]  only these extra headers go upstream; any other is stripped
+--   secret_headers  {name: {secret_ref_id, last4}}  static headers whose values live in the store
+--   forward         [run_id | agent | traceparent]  X-BOSS-Run-Id, X-BOSS-Agent, W3C traceparent
+ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS headers_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- ================================ end BOSSAPP-w4-observability ==

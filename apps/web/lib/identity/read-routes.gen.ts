@@ -438,6 +438,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["mcp/servers", "mcp_server:read"],
   ["mcp/servers/{}/credentials", "mcp_server:read"],
   ["mcp/servers/{}/export", "mcp_server:read"],
+  ["mcp/servers/{}/headers-policy", "mcp_server:read"],
   ["mcp/stdio-instances", "mcp_server:read"],
   ["mcp/stdio-templates", "mcp_server:read"],
   ["meeting-roles", "meeting:read"],

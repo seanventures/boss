@@ -23,6 +23,7 @@ import { serverProvenance } from "./library";
 import { PolicySeg, ReviewRow, RiskDot } from "./tools-section";
 import { TrySection } from "./try-section";
 import { AccessGrantsList, SignInSection } from "./mcp-signin";
+import { HeadersSection } from "./mcp-headers";
 
 /** The Kit abilities a server backs (Library docs for context7; Web research and Web search for
  *  web-intel). Their recommendations star the drawer's agents and their Try it runs here too. */
@@ -249,6 +250,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
                     onClick={() => void saveTest()}>{busy ? "Testing…" : authType === "oauth" ? "Save" : "Save & test"}</GatedButton>
           </div>
           <SignInSection projectId={projectId} actor={actor} server={server} crew={crew} onChanged={() => onChanged()} />
+          <HeadersSection projectId={projectId} actor={actor} serverId={server.id} />
         </Section>
         <Section id="tools" label="Tools" tip="What agents may call, and when they ask">
           {!server.trusted && server.enabled ? (

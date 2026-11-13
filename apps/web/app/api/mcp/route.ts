@@ -66,6 +66,12 @@ export async function GET(req: Request) {
     if (!ID.test(serverId)) return NextResponse.json({ error: "server_id is required" }, { status: 400 });
     return forward(`/v1/mcp/servers/${q(serverId)}/credentials?project_id=${q(projectId)}`, { method: "GET" });
   }
+  if (url.searchParams.get("view") === "headers_policy") {
+    // What a call to one server may carry upstream besides its sign-in (BOSSAPP-873).
+    const serverId = String(url.searchParams.get("server_id") ?? "");
+    if (!ID.test(serverId)) return NextResponse.json({ error: "server_id is required" }, { status: 400 });
+    return forward(`/v1/mcp/servers/${q(serverId)}/headers-policy?project_id=${q(projectId)}`, { method: "GET" });
+  }
   if (url.searchParams.get("view") === "access_grants") {
     // Tools agents were granted from a Grant card (BOSSAPP-848).
     const serverId = String(url.searchParams.get("server_id") ?? "");
@@ -86,7 +92,7 @@ const ACTIONS = ["test", "register", "update", "review", "delete", "catalogue_ad
                  "policy", "grant", "revoke", "stdio_template_create", "gateway_create",
                  "gateway_token", "gateway_token_revoke", "gateway_revoke",
                  "oauth_start", "oauth_mine", "credential_policy",
-                 "credential_remove", "token_mine", "grant_revoke"] as const;
+                 "credential_remove", "token_mine", "grant_revoke", "headers_policy"] as const;
 
 export async function POST(req: Request) {
   let body: Record<string, unknown>;
@@ -167,6 +173,11 @@ export async function POST(req: Request) {
   if (action === "token_mine") {
     return forward(`/v1/mcp/servers/${q(serverId)}/credentials/mine`, { method: "POST", body: {
       project_id: projectId, actor, token: String(body.token ?? "") } });
+  }
+  if (action === "headers_policy") {
+    const policy = body.headers_policy && typeof body.headers_policy === "object" ? body.headers_policy : {};
+    return forward(`/v1/mcp/servers/${q(serverId)}/headers-policy`, { method: "POST", body: {
+      project_id: projectId, actor, headers_policy: policy } });
   }
   if (action === "credential_policy") {
     return forward(`/v1/mcp/servers/${q(serverId)}/credential-policy`, { method: "POST", body: {

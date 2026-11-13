@@ -89,6 +89,7 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kit-api.ts#mcpApi.signIn": "mcp_server:review",            // POST /v1/mcp/servers/{id}/oauth/start
   "lib/kit-api.ts#mcpApi.signInMine": "connection:use_own",       // POST /v1/mcp/servers/{id}/oauth/mine
   "lib/kit-api.ts#mcpApi.credentialPolicy": "mcp_server:review",  // POST /v1/mcp/servers/{id}/credential-policy
+  "lib/kit-api.ts#mcpApi.setHeadersPolicy": "mcp_server:review",  // POST /v1/mcp/servers/{id}/headers-policy (BOSSAPP-873)
   // DELETE …/credentials/mine/{id} (your own: connection:use_own) or …/credentials/{id}
   // (anyone's: mcp_server:review); each button gates its own.
   "lib/kit-api.ts#mcpApi.removeCredential": ["connection:use_own", "mcp_server:review"],
