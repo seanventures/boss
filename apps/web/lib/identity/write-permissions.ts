@@ -128,6 +128,7 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/work-ux.ts#refreshOutputs": "work_item:manage",            // POST …/{id}/outputs/refresh
   "lib/work-ux.ts#createCard": "work_item:manage",                // POST /v1/status-cards
   "lib/work-ux.ts#refreshCard": "work_item:manage",               // POST /v1/status-cards/{id}/refresh
+  "lib/work-ux.ts#deleteCard": "work_item:manage",                // DELETE /v1/status-cards/{id}
   "lib/work-items.ts#grantAccess": "work_item:manage",            // POST …/{id}/access (BOSSAPP-876)
   "lib/work-items.ts#breakGlass": "role_binding:assign",           // POST …/{id}/break-glass (audited read)
   "lib/work-items.ts#holdTree": "workflow_run:control",           // POST /v1/work-holds (BOSSAPP-878)
@@ -158,6 +159,8 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/subscription-pools.ts#addPoolMember": "entitlement:manage",     // POST …/{id}/members
   "lib/subscription-pools.ts#updatePoolMember": "entitlement:manage",  // PATCH …/members/{id}
   "lib/subscription-pools.ts#removePoolMember": "entitlement:manage",  // DELETE …/members/{id}
+  "lib/subscription-pools.ts#setPoolStatus": "entitlement:manage",     // PATCH /v1/subscription-pools/{id}
+  "lib/subscription-pools.ts#deletePool": "entitlement:manage",        // DELETE /v1/subscription-pools/{id} (empty only)
   // lib/llm-gateways.ts — Setup › Advanced › Gateways (BOSSAPP-887)
   "lib/llm-gateways.ts#createGateway": "model_provider:manage",   // POST /v1/llm-gateways
   "lib/llm-gateways.ts#updateGateway": "model_provider:manage",   // PATCH /v1/llm-gateways/{id}

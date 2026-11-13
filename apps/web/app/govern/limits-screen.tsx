@@ -98,17 +98,21 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
     burst: dollars(controls.burst?.value_effective),
     choice: (view?.at_limit?.value ?? "pause") as AtLimit,
     unpriced: (view?.unpriced?.value ?? "estimate") as UnpricedPolicy,
-  }), [controls, view?.at_limit?.value, view?.unpriced?.value]);
+    allowance: dollars(view?.unpriced?.allowance_usd_micros),
+  }), [controls, view?.at_limit?.value, view?.unpriced?.value, view?.unpriced?.allowance_usd_micros]);
   const [month, setMonth] = useState(start.month);
   const [day, setDay] = useState(start.day);
   const [burst, setBurst] = useState(start.burst);
   const [choice, setChoice] = useState<AtLimit>(start.choice);
   const [unpriced, setUnpriced] = useState<UnpricedPolicy>(start.unpriced);
+  // BOSSAPP-1042 (869): "Block it" blocks past a daily allowance — editable here, not a bare $0.00.
+  const [allowance, setAllowance] = useState(start.allowance);
   // The fields follow the server until someone types (a poll never overwrites an edit).
   const touched = useRef(false);
   useEffect(() => {
     if (touched.current) return;
     setMonth(start.month); setDay(start.day); setBurst(start.burst); setChoice(start.choice); setUnpriced(start.unpriced);
+    setAllowance(start.allowance);
   }, [start]);
   const edit = <T,>(set: (v: T) => void) => (v: T) => { touched.current = true; set(v); };
 
@@ -154,6 +158,7 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
   const monthN = readNumber(month, MONEY);
   const dayN = readNumber(day, MONEY);
   const burstN = readNumber(burst, BURST);
+  const allowanceN = readNumber(allowance, BURST);
   const rowErrors = Object.fromEntries((rows ?? []).map((r) => {
     const t = (rowText[r.project_id] ?? "").trim();
     return [r.project_id, t === "" ? null : readNumber(t, MONEY).error];
@@ -162,12 +167,13 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
   // After Pace moved, a cap is "changed" when it differs from what Pace sets.
   const from = paceMoved && paceBase ? paceBase : start;
   const capsChanged = month !== from.month || day !== from.day || burst !== from.burst || choice !== start.choice
-    || unpriced !== start.unpriced;
+    || unpriced !== start.unpriced || allowance !== start.allowance;
   // Only what was changed is sent, so only what was changed has to be valid; its reason shows.
   const monthErr = month !== start.month ? monthN.error : null;
   const dayErr = day !== start.day ? dayN.error : null;
   const burstErr = burst !== start.burst ? burstN.error : null;
-  const invalid = Boolean(monthErr || dayErr || burstErr || Object.values(rowErrors).some(Boolean));
+  const allowanceErr = allowance !== start.allowance ? allowanceN.error : null;
+  const invalid = Boolean(monthErr || dayErr || burstErr || allowanceErr || Object.values(rowErrors).some(Boolean));
   const paused = usePausedDays(projectId, monthN.value, dayN.value);
 
   const monthPeriod = view?.meter.periods.find((p) => p.period === "month");
@@ -192,6 +198,7 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
       if (burst !== from.burst) body.burst_usd_per_min = burstN.value;
       if (choice !== start.choice) body.at_limit = choice;
       if (unpriced !== start.unpriced) body.unpriced_policy = unpriced;
+      if (allowance !== start.allowance) body.unpriced_allowance_usd = allowanceN.value;
       // Pace just moved the budget's version; this save follows it in the same press.
       const r = await governWrite("limits", body, paceMoved ? null : view?.versions.budget);
       if (!r.ok) { setBusy(false); setFailure(failureOf(r, "limits")); return; }
@@ -277,10 +284,14 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
             </label>
           ))}
         </div>
+        {unpriced === "block" ? (
+          <MoneyField id="gv-unpriced-allowance" label="Allowed per day" testid="allowance" value={allowance}
+                      onChange={edit(setAllowance)} error={allowanceErr}
+                      hint="Past it, paid work waits" />
+        ) : null}
         <span className="gv-muted" data-testid="gv-unpriced-today"
               title="Calls to a model BOSS has no price for, charged at the dearest known rate">
           {money(view?.unpriced?.unpriced_today_usd_micros ?? 0)} unpriced today
-          {unpriced === "block" ? `, allowance ${money(view?.unpriced?.allowance_usd_micros ?? 0)}` : ""}
         </span>
       </section>
 

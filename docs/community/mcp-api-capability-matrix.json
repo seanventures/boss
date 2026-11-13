@@ -4,12 +4,12 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 2093,
+  "operation_count": 2094,
   "counts": {
     "api_policy_gated": 1796,
     "excluded": 117,
     "human_confirmation_gated": 73,
-    "operator_only_unavailable": 107
+    "operator_only_unavailable": 108
   },
   "operations": [
     {
@@ -33939,6 +33939,24 @@
       "typed_input_schema": true,
       "runtime_validated_input_schema": true,
       "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/subscription-pools/{pool_id}",
+      "alias": "delete_v1_subscription_pools_pool_id_6a76f6f9",
+      "domain": "other",
+      "summary": "Delete Pool",
+      "mcp_status": "operator_only_unavailable",
+      "reason": "trusted_operator_confirmation_unavailable",
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": false,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
     },

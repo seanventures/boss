@@ -16,7 +16,7 @@ import { Field, FormError, FormGrid } from "../../components/form-kit";
 import { GatedButton } from "../../components/gated";
 import { SectionLabel } from "../section-label";
 import {
-  createGateway, deleteGateway, HARNESS_WORDS, readGateways, testGateway, updateGateway, type Gateway,
+  createGateway, deleteGateway, gatewayFormError, HARNESS_WORDS, readGateways, testGateway, updateGateway, type Gateway,
 } from "../../lib/llm-gateways";
 
 export function GatewaysRow({ projectId }: { projectId: string }) {
@@ -96,6 +96,10 @@ function AddGateway({ projectId, onAdded }: { projectId: string; onAdded: () => 
   const [scope, setScope] = useState<"project" | "org">("project");
   const [err, setErr] = useState<string | null>(null);
   const save = async () => {
+    // Never a silent Save: a missing or malformed field is said, and nothing is sent.
+    const wrong = gatewayFormError({ name, url, secret });
+    if (wrong) { setErr(wrong); return; }
+    setErr(null);
     const r = await createGateway(projectId, { name: name.trim(), protocol, base_url: url.trim(), secret, scope });
     setSecret("");
     if (r.ok) onAdded(); else setErr(r.error ?? "Not saved.");
@@ -115,7 +119,7 @@ function AddGateway({ projectId, onAdded }: { projectId: string; onAdded: () => 
       </Field>
       <FormError>{err}</FormError>
       <GatedButton permission="model_provider:manage" projectId={projectId} className="su-link" data-testid="gateways-save"
-                   disabled={!url.trim() || !secret} onClick={() => void save()}>Save gateway</GatedButton>
+                   onClick={() => void save()}>Save gateway</GatedButton>
     </FormGrid>
   );
 }

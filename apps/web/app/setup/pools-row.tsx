@@ -5,6 +5,9 @@
  * subscriptions used as one. Each run takes the account with the most room and keeps it for its
  * task; an account at its limit is skipped, and only when every one is does work wait. Per
  * account: its room, Pause/Resume, a fresh login, Remove. A login is never shown again.
+ * Per pool (BOSSAPP-1042): Pause/Resume the whole pool, and Remove it — only once it is empty,
+ * because each account's Remove is what deletes its stored login; the API refuses the rest.
+ * The credential field is named for what it is: Claude's long-lived token, Codex's auth.json.
  *
  * The row keeps Setup's anatomy (label column, body column) and the Add form is the one form
  * kit (components/form-kit.tsx, BOSSAPP-1039) — never a hand-rolled stack of bare inputs.
@@ -15,7 +18,8 @@ import { Field, FormError, FormGrid } from "../../components/form-kit";
 import { GatedButton } from "../../components/gated";
 import { SectionLabel } from "../section-label";
 import {
-  addPoolMember, createPool, ENGINE_WORDS, readPools, removePoolMember, ROOM_WORDS, updatePoolMember, type Pool,
+  addPoolMember, createPool, CREDENTIAL_WORDS, deletePool, ENGINE_WORDS, readPools, removePoolMember, ROOM_WORDS,
+  setPoolStatus, updatePoolMember, type Pool,
 } from "../../lib/subscription-pools";
 
 const ENGINES: Pool["engine"][] = ["claude_code", "codex"];
@@ -24,6 +28,7 @@ export function PoolsRow({ projectId }: { projectId: string }) {
   const [pools, setPools] = useState<Pool[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [said, setSaid] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<Pool | null>(null);
 
   const load = useCallback(async () => {
     const r = await readPools(projectId);
@@ -48,8 +53,37 @@ export function PoolsRow({ projectId }: { projectId: string }) {
         {error ? <div className="su-faint" data-testid="pools-error">{error}</div> : null}
         {(pools ?? []).map((pool) => (
           <div key={pool.id} className="su-stack" data-testid={`pool-${pool.engine}`}>
-            <strong title={`${pool.members.length} accounts; each run takes the one with most room`}>
-              {ENGINE_WORDS[pool.engine]} pool</strong>
+            <div className="su-line">
+              <strong title={`${pool.members.length} accounts; each run takes the one with most room`}>
+                {ENGINE_WORDS[pool.engine]} pool</strong>
+              {pool.status === "disabled" ? <span className="su-faint" data-testid={`pool-off-${pool.engine}`}>Paused: runs use the single login</span> : null}
+              <span className="su-line su-actions">
+                <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
+                             data-testid={`pool-toggle-${pool.engine}`}
+                             onClick={() => void act(setPoolStatus(projectId, pool.id, pool.status === "active" ? "disabled" : "active"),
+                                                     pool.status === "active" ? "Pool paused." : "Pool back on.")}>
+                  {pool.status === "active" ? "Pause pool" : "Resume pool"}</GatedButton>
+                <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
+                             data-testid={`pool-remove-${pool.engine}`}
+                             onClick={() => {
+                               if (pool.members.length) {
+                                 setRemoving(null);
+                                 setSaid(`Remove its ${pool.members.length} account${pool.members.length === 1 ? "" : "s"} first.`);
+                               } else { setSaid(null); setRemoving(pool); }
+                             }}>Remove pool</GatedButton>
+              </span>
+            </div>
+            {removing?.id === pool.id ? (
+              <div className="su-confirm" role="alertdialog" data-testid={`pool-remove-confirm-${pool.engine}`}>
+                <strong>Remove the {ENGINE_WORDS[pool.engine]} pool?</strong>
+                <span>Runs go back to the single login.</span>
+                <GatedButton permission="entitlement:manage" projectId={projectId} type="button" className="su-btn su-btn-sm su-btn-danger"
+                             data-testid={`pool-remove-yes-${pool.engine}`}
+                             onClick={() => { setRemoving(null); void act(deletePool(projectId, pool.id), `${ENGINE_WORDS[pool.engine]} pool removed.`); }}>
+                  Remove</GatedButton>
+                <button type="button" className="su-link" onClick={() => setRemoving(null)}>Keep</button>
+              </div>
+            ) : null}
             {pool.members.map((m) => (
               <div key={m.id} className="su-line" data-testid={`pool-member-${m.id}`} data-status={m.status}>
                 <span>{m.label}</span>{" "}
@@ -73,7 +107,9 @@ export function PoolsRow({ projectId }: { projectId: string }) {
             <AddAccount projectId={projectId} pool={pool} onAdded={() => { setSaid("Account added."); void load(); }} />
           </div>
         ))}
-        {said ? <div role="status" data-testid="pools-said">{said}</div> : null}
+        {said ? <div role="status" data-testid="pools-said"
+                     title={said.startsWith("Remove its") ? "Each account's Remove also deletes its stored login; a pool goes only once empty." : undefined}>
+          {said}</div> : null}
         {missing.map((engine) => (
           <div key={engine} className="su-line">
             <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
@@ -108,8 +144,8 @@ function AddAccount({ projectId, pool, onAdded }: { projectId: string; pool: Poo
   return (
     <FormGrid label={`Add a ${ENGINE_WORDS[pool.engine]} account`} testId={`pool-add-${pool.engine}`}>
       <Field label="Name"><input aria-label="Account name" value={label} placeholder="whose seat" onChange={(e) => setLabel(e.target.value)} /></Field>
-      <Field label="Login" tip={pool.engine === "codex" ? "The account's auth.json" : "The account's long-lived token"}>
-        <input aria-label="Account login" type="password" autoComplete="off" value={login}
+      <Field label={CREDENTIAL_WORDS[pool.engine].label} tip={CREDENTIAL_WORDS[pool.engine].tip}>
+        <input aria-label={CREDENTIAL_WORDS[pool.engine].label} type="password" autoComplete="off" value={login}
                onChange={(e) => setLogin(e.target.value)} /></Field>
       <FormError>{err}</FormError>
       <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"

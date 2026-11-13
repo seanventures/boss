@@ -237,3 +237,26 @@ def test_a_refused_member_leaves_rotation(eng, project, store):
         fresh = sp.update_member(c, Settings(), project, a["id"], actor="operator",
                                  credential=TOKEN_A)
         assert fresh["status"] == "active"
+
+
+def test_an_empty_pool_deletes_one_with_accounts_is_refused(eng, project, store):
+    """BOSSAPP-1042: a pool can be deleted, but never by cascading its accounts' rows — that
+    would orphan their stored logins. Refused while it has accounts; once each is removed (with
+    its login), the empty pool goes and starting a new one for the engine works again."""
+    with eng.begin() as c:
+        pool, (a, b) = _pool(c, project)
+        with pytest.raises(sp.PoolError, match="remove its 2 accounts first"):
+            sp.delete_pool(c, project, pool["id"], actor="operator")
+        assert sp.get_pool(c, project, "claude_code") is not None
+        assert len(store.held) == 2, "a refused delete touches no login"
+        for m in (a, b):
+            sp.remove_member(c, Settings(), project, m["id"], actor="operator")
+        assert store.held == {}
+        assert sp.delete_pool(c, project, pool["id"], actor="operator") == {"deleted": pool["id"]}
+        assert sp.get_pool(c, project, "claude_code") is None
+        with pytest.raises(LookupError):
+            sp.delete_pool(c, project, pool["id"], actor="operator")
+        sp.create_pool(c, project, engine="claude_code", name="again", actor="operator")
+        other = f"p_{uuid.uuid4().hex[:10]}"
+        with pytest.raises(LookupError):                        # another project's id: not found
+            sp.delete_pool(c, other, sp.get_pool(c, project, "claude_code")["id"], actor="operator")

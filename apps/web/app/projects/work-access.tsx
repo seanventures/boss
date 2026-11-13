@@ -6,8 +6,14 @@
  * whoever is granted here; a grant reaches every item underneath. When someone read it past its
  * privacy (break-glass), the notice says who and why. A private BLOCKER shows only as "Private
  * item"; "Read (audited)" is the one way past it — with a reason, recorded, and shown to its people.
+ *
+ * Turning Private OFF (BOSSAPP-1042 e) used to leave the grant chips and say "Private: only its
+ * people…": the handler read `e.target.checked` after the PATCH answered, by when React had put
+ * the controlled box back to the old value, so the OFF press said the ON words. The new value is
+ * read at the press, the box follows it at once, and grants show only while they mean something
+ * (private here or above). Grants are kept, not revoked — they apply again if it is made private.
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Eye, LockSimple, ShieldWarning } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
@@ -18,27 +24,39 @@ export function ItemAccess({ projectId, item, demo, onChanged }: {
 }) {
   const [party, setParty] = useState("");
   const [said, setSaid] = useState<string | null>(null);
+  // The press's value until the item reloads with it (or the PATCH is refused).
+  const [pressed, setPressed] = useState<boolean | null>(null);
+  useEffect(() => { setPressed(null); }, [item.visibility]);
   const after = (r: { ok: boolean; error: string | null }, ok: string) => { setSaid(r.ok ? ok : r.error); if (r.ok) onChanged(); };
-  const priv = item.visibility === "private";
+  const priv = pressed ?? item.visibility === "private";
+  // `restricted` counts the item's own privacy too, so it is only trusted once the item reloaded
+  // after a press; until then, grants show only if the press made it private.
+  const restricted = pressed === null && item.restricted;
+  const setPrivate = (next: boolean) => {
+    setPressed(next);
+    void updateItem(projectId, item.id, { visibility: next ? "private" : "project" }, "Private").then((r) => {
+      if (!r.ok) setPressed(null);
+      after(r, next ? "Private: only its people and those granted can see it." : "Visible to the project.");
+    });
+  };
   const valid = /^(person|agent):[A-Za-z0-9_.@:+-]+$/.test(party.trim());
   return (
     <div className="wt-line" data-testid="wt-access">
       <LockSimple size={12} aria-hidden />
       <label className="wt-field">
         <input type="checkbox" checked={priv} disabled={demo} data-testid="wt-private"
-               onChange={(e) => void updateItem(projectId, item.id, { visibility: e.target.checked ? "private" : "project" }, "Private")
-                 .then((r) => after(r, e.target.checked ? "Private: only its people and those granted can see it." : "Visible to the project."))} />
+               onChange={(e) => setPrivate(e.target.checked)} />
         Private
       </label>
-      {item.restricted && !priv ? <span className="wt-faint">Private through the item above it.</span> : null}
-      {(item.access ?? []).map((g) => (
+      {restricted && !priv ? <span className="wt-faint">Private through the item above it.</span> : null}
+      {(priv || restricted ? item.access ?? [] : []).map((g) => (
         <span key={g.party} className="wt-label" data-testid={`wt-grant-${g.party}`}>
           {partyName(g.party)}
           <GatedButton permission="work_item:manage" projectId={projectId} className="wt-fold" disabled={demo} aria-label={`Remove ${g.party}`}
                        onClick={() => void grantAccess(projectId, item.id, g.party, true).then((r) => after(r, "Access removed."))}>×</GatedButton>
         </span>
       ))}
-      {priv || item.restricted ? (
+      {priv || restricted ? (
         <>
           <input className="input" value={party} onChange={(e) => setParty(e.target.value)} placeholder="person:id or agent:role"
                  aria-label="Grant access to" data-testid="wt-grant-party" disabled={demo} />
