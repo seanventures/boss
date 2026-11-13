@@ -1758,7 +1758,7 @@ def call_tool_with_receipt(
     policy_context: Optional[dict[str, Any]] = None,
     # BOSSAPP-847: whose CREDENTIAL the call carries (an identity object for
     # auth_headers) — distinct from `principal`, the audit row's acting-identity string.
-    acting_principal: Any = None,
+    credential_principal: Any = None,
 ) -> dict[str, Any]:
     """The one EFFECT of calling an MCP tool: a receipt, the call, and the receipt settled.
 
@@ -1879,8 +1879,8 @@ def call_tool_with_receipt(
             f"Did not call {tool_name}: arguments do not match the approved call."
         )
     # Whose credential: the caller's principal when it names one, else the run's (BOSSAPP-847).
-    headers = (auth_headers(connection, settings, project_id, server) if acting_principal is None
-               else auth_headers(connection, settings, project_id, server, principal=acting_principal))
+    headers = (auth_headers(connection, settings, project_id, server) if credential_principal is None
+               else auth_headers(connection, settings, project_id, server, principal=credential_principal))
     org_id, workspace_id = tenant_scope
     receipts = ReceiptService()
     receipt, created = receipts.create_or_reuse(
