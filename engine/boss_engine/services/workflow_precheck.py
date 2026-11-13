@@ -1272,6 +1272,19 @@ def check_engine(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]
                            + " in the image (Dockerfile.community runtime stage) and rebuild.")
             continue
         notes.append(f"{r.engine}: runtime binaries on PATH")
+        # BOSSAPP-858: the CLI's release window, when the engine declared one (none by default).
+        from .harness_registry import version_verdict
+
+        ver = ctx.once(f"engine_version:{r.engine}|{r.model or ''}",
+                       lambda r=r: version_verdict(r.engine, r.model or None))
+        if ver is not None and ver.blocks:
+            verdict = "will_fail"
+            notes[-1] = f"{r.engine}: {ver.detail}"
+            actions.append((ver.hint or f"Upgrade {r.engine}.") + " Rebuild the image, or pin "
+                           "the job to another engine or model in Repo and models.")
+            continue
+        if ver is not None and ver.status == "model_fallback":
+            notes.append(f"{r.engine}: {ver.detail} (an engine.model_fallback event will say so)")
         if ctx.offline:
             continue
         probe = ctx.once(f"engine_probe:{'|'.join(r.key())}", lambda r=r: engine_startup.probe(

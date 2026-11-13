@@ -118,6 +118,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving a reflection's instruction proposal adds exactly that document to the agent, as
     # the approving person (reflection.apply_prompt_diff, BOSSAPP-888).
     "apply_agent_prompt_diff",
+    # Approving an agent's (or the maintainer's) wiki change writes exactly that page onto the
+    # revision it was proposed against (wiki.apply_for_decision, BOSSAPP-891).
+    "apply_wiki_patch",
     # Approving a "Tool changed" card clears the MCP tool's quarantine and accepts the new
     # definition (mcp_registry.accept_tool_change); rejecting turns it Off (BOSSAPP-818).
     "review_tool_change",

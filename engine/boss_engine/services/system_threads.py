@@ -99,6 +99,7 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("backup scheduler not started", exc_info=True)
         started["backup_scheduler"] = False
+    try:
         # Skill sources (BOSSAPP-841): upstream changes become new versions or parked consents.
         from . import skill_sources
 

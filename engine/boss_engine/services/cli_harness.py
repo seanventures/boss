@@ -298,9 +298,33 @@ class CliHarnessSpec:
     #: Where the agent's skills are synced per run: "{workspace}/<dir>", "{home}/<dir>" (the
     #: CLI's own home, per run), "{env}" ($BOSS_SKILLS_DIR). Empty: this CLI reads no skills.
     skills_dir: str = ""
+    # --- the release window BOSS drives this CLI within (BOSSAPP-858) -----------
+    #: Oldest release BOSS drives (inclusive). Empty: no lower bound.
+    min_version: str = ""
+    #: First release BOSS has NOT been checked against (exclusive). Empty: no upper bound.
+    max_version: str = ""
+    #: (model glob, min release): a model matching the glob needs at least that release.
+    model_minimums: tuple = ()
+    #: The CLI's models best-first: where a routed model the installed CLI cannot run falls
+    #: back to (runtime_versions.nearest_fallback), with an engine.model_fallback event.
+    model_fallbacks: tuple = ()
 
     def supports_read_only(self) -> bool:
         return bool(self.read_only_args)
+
+    def version_window(self):
+        """runtime_versions.VersionWindow when any bound is declared, else None (the default:
+        nothing about the version is checked, exactly as before BOSSAPP-858)."""
+        if not (self.min_version or self.max_version or self.model_minimums):
+            return None
+        from .runtime_versions import VersionWindow
+
+        return VersionWindow(binary=self.binary, min_version=self.min_version,
+                             max_version=self.max_version,
+                             model_minimums=tuple(tuple(p) for p in self.model_minimums),
+                             model_fallbacks=tuple(self.model_fallbacks),
+                             version_args=tuple(self.version_args),
+                             install_hint=self.install_hint)
 
 
 #: The CLIs BOSS ships a spec for. NONE is marked verified: a spec written from a CLI's
@@ -605,8 +629,11 @@ def load_specs(settings) -> dict[str, CliHarnessSpec]:
             if key not in CliHarnessSpec.__dataclass_fields__:
                 continue
             if key in ("args", "write_args", "read_only_args", "env_passthrough",
-                       "env_exclude") and isinstance(value, list):
+                       "env_exclude", "model_fallbacks") and isinstance(value, list):
                 value = tuple(value)
+            if key == "model_minimums" and isinstance(value, (list, dict)):
+                pairs = value.items() if isinstance(value, dict) else value
+                value = tuple((str(p), str(v)) for p, v in pairs)
             fields[key] = value
         fields["name"] = name
         try:
@@ -1995,6 +2022,18 @@ class GenericCliCodeAgent:
                                                   message=f"{verdict.message} [{said}]")
             raise harness_failures.trip(verdict)
 
+    def _versioned_model(self, model: Optional[str]) -> Optional[str]:
+        """The model this session runs (BOSSAPP-858): unchanged unless the spec declares a
+        release window and the routed model needs a newer CLI than the one installed — then the
+        nearest declared fallback, with an engine.model_fallback event. A CLI outside its
+        window refuses to start, with the install hint."""
+        window = self.spec.version_window()
+        if window is None:
+            return model
+        from .runtime_versions import apply_fallback
+
+        return apply_fallback(self.spec.name, window, model)
+
     @tidies_workspace
     @_proxy_scoped
     @delivers_kit
@@ -2006,6 +2045,7 @@ class GenericCliCodeAgent:
 
         self._preflight(read_only=read_only,
                         read_only_by_copy=bool(_ignored.get("_contract_read_only_copy")))
+        model = self._versioned_model(model)
         import re as _re
         import tempfile
 

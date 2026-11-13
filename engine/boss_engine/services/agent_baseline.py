@@ -106,7 +106,9 @@ KNOWLEDGE_TOOLS: tuple[str, ...] = ("kg_symbol", "kg_callers", "kg_blast_radius"
                                      # the approved business rules that govern code (BOSSAPP-768)
                                      "kg_rules",
                                      # a node's typed neighbours (rulebook source G6)
-                                     "kg_neighbors")
+                                     "kg_neighbors",
+                                     # the project wiki people read (BOSSAPP-891)
+                                     "wiki_read")
 
 #: `knowledge.propose` offers `kg_propose_fact`: the one bundle that writes. What it writes is
 #: always `inferred` (quarantined, forgettable, never above governed or approved), so it is
@@ -119,7 +121,10 @@ PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",
                                        "kg_propose_rule",
                                        # what the agent learned while working, recorded the moment
                                        # it learns it, inferred and forgettable (BOSSAPP-768 §4.1)
-                                       "record_learning")
+                                       "record_learning",
+                                       # a wiki change, proposed for a person to approve as a
+                                       # diff; the agent never writes a page (BOSSAPP-891)
+                                       "wiki_propose")
 
 #: Bundles allowed to offer a write tool, and which ones: {bundle: its writes}. Each such tool must
 #: declare reversibility "safe"; any other tool a bundle names must be a read.
