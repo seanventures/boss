@@ -31851,6 +31851,16 @@ app.include_router(build_decision_examples_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# TEAM TEMPLATES (BOSSAPP-894): a pack's reporting lines and starter work in one governed apply,
+# with provenance digests for drift (routers/team_templates.py).
+from .routers.team_templates import build_team_templates_router
+
+app.include_router(build_team_templates_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
 # INFRA AND OBSERVABILITY (infra-observability spec §6.2): one ETag'd view per tab, polled by
 # the console; Infra routes by target kind so one button replaces three (routers/infra_view.py,
 # routers/observability_view.py).

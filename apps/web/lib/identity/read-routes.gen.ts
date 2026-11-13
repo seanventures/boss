@@ -506,6 +506,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["outputs", "artifact:read"],
   ["packs", "pack:read"],
   ["packs/{}", "pack:read"],
+  ["packs/{}/drift", "pack:read"],
   ["packs/{}/export", "pack:read"],
   ["pipeline-adapters/catalog", "cicd:read"],
   ["pipeline-profiles", "pipeline:read"],

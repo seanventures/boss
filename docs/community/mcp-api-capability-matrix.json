@@ -4,9 +4,9 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 1997,
+  "operation_count": 1999,
   "counts": {
-    "api_policy_gated": 1712,
+    "api_policy_gated": 1714,
     "excluded": 116,
     "human_confirmation_gated": 73,
     "operator_only_unavailable": 96
@@ -24692,6 +24692,24 @@
     },
     {
       "method": "GET",
+      "path": "/v1/packs/{pack_id}/drift",
+      "alias": "get_v1_packs_pack_id_drift_b81f6871",
+      "domain": "agents",
+      "summary": "Drift",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": true
+    },
+    {
+      "method": "GET",
       "path": "/v1/packs/{pack_id}/export",
       "alias": "get_v1_packs_pack_id_export_7678de15",
       "domain": "agents",
@@ -24707,6 +24725,24 @@
       "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/packs/{pack_id}/team",
+      "alias": "post_v1_packs_pack_id_team_37b053fa",
+      "domain": "agents",
+      "summary": "Team",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "typed_json_body",
+      "mounted_input_schema_quality": "typed_json_body",
+      "request_body_type_enforcement": "pydantic_fields",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
     },
     {
       "method": "POST",

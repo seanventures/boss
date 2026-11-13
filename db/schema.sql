@@ -13097,3 +13097,21 @@ CREATE TABLE IF NOT EXISTS decision_examples (
 );
 CREATE INDEX IF NOT EXISTS idx_decision_examples_project
   ON decision_examples (project_id, created_at DESC);
+-- ── 894 TEAM TEMPLATES ─────────────────────────────────────────────────────────────────────────
+-- services/team_templates.py: a pack's `org` (reporting lines, org_assignments) and
+-- `starter_tasks` (work items) are applied in one transaction after a dry run, replayed through
+-- the same services the console uses. One row per applied item: its digest as installed and what
+-- it became, so drift (in_sync / modified / missing) is a comparison, not a guess.
+CREATE TABLE IF NOT EXISTS pack_provenance (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  pack_id TEXT NOT NULL,
+  pack_version TEXT NOT NULL DEFAULT '0.0.0',
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('role', 'org', 'task')),
+  item_key TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  target_ref TEXT,
+  installed_by TEXT NOT NULL DEFAULT '',
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, pack_id, item_kind, item_key)
+);
