@@ -19,6 +19,7 @@ import { actorWords, looksLikeAnId } from "../lib/actor-words";
 import { agentIdentity, loadedIdentities } from "../lib/agent-identity";
 import { idGet } from "../lib/identity/api";
 import { avatarTone } from "../lib/identity/avatar";
+import { useIdentityVersion } from "../lib/use-agent-identities";
 
 // ── The one directory read, shared by every <Who> on the page ─────────────────────────────
 
@@ -52,7 +53,7 @@ const PERSON_ID = /^(usr|prn|sa|svc)_/i;
 export type WhoView = {
   /** The name to read, or null when nothing resolved (the id is then shown, never a blank). */
   name: string | null;
-  kind: "person" | "agent" | null;
+  party: "person" | "agent" | null;
   /** The raw value, for the tooltip. */
   id: string;
 };
@@ -63,24 +64,24 @@ export function resolveWho(raw: string | null | undefined, dir: People | null): 
   const m = /^(person|agent|system):(.*)$/.exec(whole);
   const hint = m ? m[1] : null;
   const key = (m ? m[2] : whole).trim();
-  if (!key) return { name: whole ? null : "someone", kind: null, id: whole };
+  if (!key) return { name: whole ? null : "someone", party: null, id: whole };
   if (hint === "agent" || /^agt_/i.test(key)) {
     if (/^agt_/i.test(key)) {
       for (const i of loadedIdentities().values()) {
-        if (i.agentId === key) return { name: i.name, kind: "agent", id: whole };
+        if (i.agentId === key) return { name: i.name, party: "agent", id: whole };
       }
-      return { name: null, kind: "agent", id: whole };
+      return { name: null, party: "agent", id: whole };
     }
-    return { name: agentIdentity(key).name, kind: "agent", id: whole };
+    return { name: agentIdentity(key).name, party: "agent", id: whole };
   }
   if (PERSON_ID.test(key)) {
     const named = dir?.get(key)?.trim();
-    return { name: named && !looksLikeAnId(named) ? named : null, kind: "person", id: whole };
+    return { name: named && !looksLikeAnId(named) ? named : null, party: "person", id: whole };
   }
   // A word, not an id: "ceo" is the owner, a typed name passes through.
   const words = actorWords(key);
   const named = words === "a person" || words === "an agent" || looksLikeAnId(words) ? null : words;
-  return { name: named, kind: hint === "person" ? "person" : null, id: whole };
+  return { name: named, party: hint === "person" ? "person" : null, id: whole };
 }
 
 /** The view for one raw value, loading the directory once when a person id needs it. */
@@ -96,8 +97,10 @@ export function useWho(raw: string | null | undefined): WhoView {
     loadPeople();
     return () => { waiters.delete(wake); };
   }, [needsPeople]);
-  // `people` is module state; the bump above re-renders when it lands.
-  return useMemo(() => resolveWho(id, people), [id, needsPeople && !people]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Agents' names come from the identity store, which loads after first render: subscribe, so a
+  // name that lands later replaces the id. `people` is module state; the bump above re-renders.
+  const identities = useIdentityVersion();
+  return useMemo(() => resolveWho(id, people), [id, needsPeople && !people, identities]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 // ── The component ──────────────────────────────────────────────────────────────────────────

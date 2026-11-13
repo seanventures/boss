@@ -16,11 +16,11 @@ afterEach(() => { cleanup(); primePeople(null); vi.unstubAllGlobals(); });
 describe("resolveWho", () => {
   it("names what it can and refuses to guess the rest", () => {
     const dir = new Map([["usr_wsw5h4abcdef", "Ada Lovelace"]]);
-    expect(resolveWho("usr_wsw5h4abcdef", dir)).toMatchObject({ name: "Ada Lovelace", kind: "person" });
-    expect(resolveWho("person:usr_wsw5h4abcdef", dir)).toMatchObject({ name: "Ada Lovelace", kind: "person" });
-    expect(resolveWho("usr_nobodyknows1", dir)).toMatchObject({ name: null, kind: "person" });
+    expect(resolveWho("usr_wsw5h4abcdef", dir)).toMatchObject({ name: "Ada Lovelace", party: "person" });
+    expect(resolveWho("person:usr_wsw5h4abcdef", dir)).toMatchObject({ name: "Ada Lovelace", party: "person" });
+    expect(resolveWho("usr_nobodyknows1", dir)).toMatchObject({ name: null, party: "person" });
     expect(resolveWho("person:ceo", dir)).toMatchObject({ name: "the owner" });
-    expect(resolveWho("agent:qa", dir).kind).toBe("agent");
+    expect(resolveWho("agent:qa", dir).party).toBe("agent");
     expect(resolveWho("agent:qa", dir).name).toBeTruthy();
     expect(resolveWho("", dir)).toMatchObject({ name: "someone" });
   });
