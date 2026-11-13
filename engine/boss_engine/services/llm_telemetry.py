@@ -457,6 +457,13 @@ def record_llm_call(
             with begin(ctx.get("db_engine")) as c:
                 _write(c)
             set_llm_context(last_llm_call_id=row_id)
+        # BOSS'S OWN TELEMETRY (BOSSAPP-867): the same call as an OTel GenAI span and metrics
+        # counters. Both are off unless configured, and then this returns at once.
+        from .self_telemetry import record_model_span
+
+        record_model_span(engine_name=engine_name, model=model, usage=u, latency_ms=latency_ms,
+                          ok=ok, error=error, stage=stage or ctx.get("stage"),
+                          cost_usd_micros=int(cost_usd_micros or 0))
         return row_id
     except Exception as exc:  # noqa: BLE001 — telemetry must never break the pipeline
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)

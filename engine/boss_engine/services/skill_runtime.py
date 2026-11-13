@@ -163,6 +163,27 @@ class SkillRuntimeService:
                 actual_cost=None, cost_receipt_id=None,
                 created_by_job_id=created_by_job_id, reason=reason, result={}, actor=actor)
 
+        # THE ORG'S SKILL-ACCESS RULES (BOSSAPP-890): a rule can refuse a call the grant above
+        # allows, never allow one it refused. No rule allows — the default is unchanged.
+        from .skill_policy import SkillPolicyDenied, check as policy_check
+
+        try:
+            policy_check(connection, project_id, action="invoke", skill_key=skill_id,
+                         role_key=str(caller or "").removeprefix("agent:").lower() or None,
+                         risk_tier=skill.get("risk_tier"), actor=caller)
+        except SkillPolicyDenied as refused:
+            record_policy_eval(
+                connection, project_id, "skill.invoke", "deny",
+                action=skill_id, reason=str(refused),
+                detail={"caller": caller, "mode": mode, "skill_policy_rule": refused.rule_id})
+            return self._record(
+                connection, project_id, skill_id, caller, mode,
+                status="denied", permission_decision="deny", attempts=0,
+                max_attempts=max_attempts, estimate=estimate, reservation_id=None,
+                actual_cost=None, cost_receipt_id=None,
+                created_by_job_id=created_by_job_id, reason=str(refused), result={},
+                actor=actor)
+
         # HOLDING AN MCP-CALLING SKILL IS NOT HOLDING ITS SERVER. Review of milestone/integration:
         # a skill grant is `safe` (the chat model makes it itself) and a server grant is not, so
         # an `mcp_tool` skill was a way round the server grant. The caller must hold the server

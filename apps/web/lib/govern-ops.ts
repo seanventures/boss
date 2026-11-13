@@ -37,7 +37,8 @@ export const GOVERN_OPS: Record<string, GovernOp> = {
   limits: { method: "POST", path: () => "/v1/govern/limits",
             body: (b) => {
               const out: Record<string, unknown> = { project_id: b.project_id, actor: b.actor };
-              for (const k of ["monthly_cap_usd", "daily_cap_usd", "burst_usd_per_min", "at_limit"]) {
+              for (const k of ["monthly_cap_usd", "daily_cap_usd", "burst_usd_per_min", "at_limit",
+                                "unpriced_policy", "unpriced_allowance_usd"]) {
                 if (b[k] !== undefined && b[k] !== null && b[k] !== "") out[k] = b[k];
               }
               return out;

@@ -31,7 +31,8 @@ from sqlalchemy.engine import Connection
 
 from .core import create_blocking_decision, emit_event, make_id
 
-SUBJECT_KINDS = ("skill", "prompt")
+#: "wiki" (BOSSAPP-891): an agent's change to a wiki page, written by wiki.save_page.
+SUBJECT_KINDS = ("skill", "prompt", "wiki")
 
 
 class ConsentRequired(PermissionError):

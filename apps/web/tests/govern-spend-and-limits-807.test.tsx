@@ -270,6 +270,16 @@ describe("Screen B — Govern › Limits", () => {
     expect(toasts).toContain("Limits saved");
   });
 
+  it("unpriced usage (BOSSAPP-869): estimate by default, block is sent as unpriced_policy", async () => {
+    await openLimits();
+    expect(($("[data-testid=gv-unpriced-estimate]") as HTMLInputElement).checked).toBe(true);
+    expect(t("[data-testid=gv-unpriced-today]")).toContain("unpriced today");
+    await click($("[data-testid=gv-unpriced-block]"));
+    await click($("[data-testid=gv-save-limits]"));
+    expect(posts("limits").map((c) => c.body)).toEqual([
+      { op: "limits", project_id: "p1", actor: "ceo", unpriced_policy: "block" }]);
+  });
+
   it("Pace is the first card: moving it fills the caps below, which can be fine-tuned, and Save writes both", async () => {
     await openLimits();
     expect($("[data-testid=gv-limits] .gv-card")!.getAttribute("data-testid")).toBe("gv-pace-card");

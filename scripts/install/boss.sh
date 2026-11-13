@@ -28,7 +28,9 @@ Commands:
                       command for scripts; --plain is plain text. First run sets up Rich
                       and prompt_toolkit in ~/.local/share/boss/metatron-venv
   password [reset]    Show the console password (terminal only), or rotate it
-  doctor [--probe]    Check the install can do its job (runs checkup.sh)
+  doctor [--probe]    Check the install can do its job (runs checkup.sh). --repair lists the
+                      known remedy for each failed check; --repair --apply runs the safe ones
+                      (start what is stopped, restart a silent API) and checks again
   logs [-f] [SERVICE] Recent service logs (api, worker, web, db)
   connect [WHAT]      The Models step: find model keys, subscriptions, coding CLIs, and
                       Ollama on this machine, offer to connect each one (one question
@@ -62,7 +64,9 @@ Commands:
   upgrade [--to REF]  Back up, then move to the newest release (or REF). Never jumps to
                       main unless you installed from main or pass --to main. If the new
                       release cannot start, the previous one is put back (--no-rollback: don't).
-                      Also: --dry-run, --backup-dir PATH, --web, --no-web
+                      Also: --dry-run, --backup-dir PATH, --web, --no-web,
+                      --channel stable|rc (follow final releases only, or release
+                      candidates too; remembered in .boss-release)
   rollback            Put back the release that ran before the last upgrade, from the images
                       upgrade kept (prev-<tag>), in seconds and without a build. Refuses when
                       the upgrade changed the database schema, unless --restore-backup PATH
@@ -245,13 +249,16 @@ issue_host_key() {
 }
 
 release_line() {
-  local ref channel commit
+  local ref channel commit follow
   ref="$(grep -m 1 '^BOSS_RELEASE_REF=' "$INSTALL_DIR/.boss-release" 2>/dev/null | cut -d= -f2- || true)"
   channel="$(grep -m 1 '^BOSS_RELEASE_CHANNEL=' "$INSTALL_DIR/.boss-release" 2>/dev/null | cut -d= -f2- || true)"
+  # BOSSAPP-895: the releases a release install follows (stable | rc), when the operator chose.
+  follow="$(grep -m 1 '^BOSS_CHANNEL=' "$INSTALL_DIR/.boss-release" 2>/dev/null | cut -d= -f2- || true)"
   commit="$(git -C "$INSTALL_DIR" rev-parse --short=12 HEAD 2>/dev/null ||
             head -c 12 "$INSTALL_DIR/.boss-shipped-commit" 2>/dev/null || echo unknown)"
   if [[ -n "$ref" ]]; then
-    printf '%s (%s channel, commit %s)\n' "$ref" "${channel:-unknown}" "$commit"
+    printf '%s (%s channel%s, commit %s)\n' "$ref" "${channel:-unknown}" \
+      "${follow:+, follows $follow}" "$commit"
   else
     printf 'not recorded (installed before releases were recorded; boss update records it), commit %s\n' "$commit"
   fi
@@ -350,6 +357,7 @@ cmd_upgrade() {
     case "$1" in
       --to|--ref) args+=(--ref "${2:?--to needs a ref}"); shift 2 ;;
       --backup-dir) args+=(--backup-dir "${2:?--backup-dir needs a path}"); shift 2 ;;
+      --channel) args+=(--channel "${2:?--channel needs stable or rc}"); shift 2 ;;
       --dry-run|--web|--no-web|--no-rollback) args+=("$1"); shift ;;
       --without) args+=(--without "${2:?--without needs a self-fix id}"); shift 2 ;;
       *) die "unknown upgrade option: $1 (see boss help)" ;;

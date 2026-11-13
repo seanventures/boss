@@ -802,6 +802,13 @@ class DecisionService:
             self._handle_approved_follow_on(
                 connection, refreshed, actor, note=note, force=force, always_allow=always_allow
             )
+            if force:
+                # A FORCED approval overrode BOSS's own gate: kept as a decision example
+                # (BOSSAPP-893, decision_examples.capture_override; never fails the answer).
+                from .decision_examples import capture_override
+
+                capture_override(connection, refreshed, action="approve", actor=actor, note=note,
+                                 force=True)
             # The person's approval is signed now, under the step it releases — not a tick later.
             from . import agent_acts
 
@@ -851,6 +858,10 @@ class DecisionService:
                 connection, refreshed, action="reject", actor=actor, note=note
             )
             self._handle_rejected_follow_on(connection, refreshed, actor=actor)
+            # A person said no to what BOSS recommended: kept as a decision example (BOSSAPP-893).
+            from .decision_examples import capture_override
+
+            capture_override(connection, refreshed, action="reject", actor=actor, note=note)
             # A gate answered no FAILS ITS STEP now (agents-home D3): the run stops there with
             # Retry and Skip, and its acts say so at once (workflows.refuse_gates_of).
             from . import agent_acts, workflows as workflow_runtime
@@ -901,6 +912,10 @@ class DecisionService:
             self._handle_non_approved_follow_on(
                 connection, refreshed, action="revise", actor=actor, note=note
             )
+            # Sent back with changes: an override too, with the person's note (BOSSAPP-893).
+            from .decision_examples import capture_override
+
+            capture_override(connection, refreshed, action="revise", actor=actor, note=note)
             return self.get_row(connection, decision_id)
 
         if action == "delegate":
@@ -1378,10 +1393,33 @@ class DecisionService:
             # nothing is written: the draft is a diff-bound consent (change_consent, 843), and
             # a skill changed since the draft refuses rather than writing another diff.
             from .skill_definitions import ConsentStale, activate_authored_skill
+            from .skill_policy import SkillPolicyDenied
 
             try:
                 activate_authored_skill(connection, row, actor)
             except ConsentStale as stale:
+                raise InvalidDecisionTransitionError(str(stale)) from stale
+            except SkillPolicyDenied as refused:
+                # A skill-access rule (BOSSAPP-890) written after the draft refuses it now.
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "apply_agent_prompt_diff":
+            # THE REFLECTION AGENT PROPOSED AN INSTRUCTION DOCUMENT (BOSSAPP-888): the approving
+            # person adds exactly the document shown; instructions changed since refuse it.
+            from .agent_instructions import InstructionError
+            from .reflection import ReflectionError, apply_prompt_diff
+
+            try:
+                apply_prompt_diff(connection, row, actor)
+            except (ReflectionError, InstructionError) as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "apply_wiki_patch":
+            # An agent's (or the maintainer's) wiki change (BOSSAPP-891): the page the card showed
+            # is written onto the revision it was proposed against, or refused when it moved.
+            from .wiki import WikiError, apply_for_decision as apply_wiki_patch
+
+            try:
+                apply_wiki_patch(connection, row, actor)
+            except WikiError as stale:
                 raise InvalidDecisionTransitionError(str(stale)) from stale
         elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
             # A paid call whose outcome was never settled. Approving settles it: a reply the
@@ -1486,11 +1524,18 @@ class DecisionService:
             from .secret_proposals import on_refused as refuse_proposal
 
             refuse_proposal(connection, row, actor)
-        elif (row["recommendation"] or {}).get("action") == "activate_authored_skill":
-            # A refused draft's consent can never be spent (change_consent, BOSSAPP-843).
+        elif (row["recommendation"] or {}).get("action") in ("activate_authored_skill",
+                                                             "apply_agent_prompt_diff"):
+            # A refused draft's consent can never be spent (change_consent, BOSSAPP-843); the
+            # same for a reflection's instruction proposal (BOSSAPP-888).
             from .change_consent import reject_for_decision
 
             reject_for_decision(connection, str(row["id"]), actor)
+        elif rec.get("action") == "apply_wiki_patch":
+            # A refused wiki change's consent can never be spent either (BOSSAPP-891).
+            from .change_consent import reject_for_decision as refuse_wiki_patch
+
+            refuse_wiki_patch(connection, str(row["id"]), actor)
 
     def _handle_non_approved_follow_on(
         self,
@@ -2743,7 +2788,7 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
     if row is None or row["status"] != "pending":
         return False
     if row.get("action") in ("review_architecture", "self_fix.install", "self_fix.remove",
-                             "activate_authored_skill"):
+                             "activate_authored_skill", "apply_agent_prompt_diff"):
         # An architecture, a BOSS self-fix, and an agent-drafted skill are approved by a person,
         # never by a setting. Policy approval would mark the card approved and skip the
         # follow-on, so the skill would stay unusable and nobody could approve it again.

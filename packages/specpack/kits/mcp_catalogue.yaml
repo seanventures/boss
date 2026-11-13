@@ -3,6 +3,11 @@
 # Only servers that answer Streamable HTTP with no key or a token are listed: BOSS's agents run
 # headless, so an OAuth-only server cannot be offered until OAuth lands (spec §7). Each entry
 # starts UNREVIEWED when added — the operator reviews it with one press in its drawer.
+#
+# `suggested_rules` (BOSSAPP-868): default tool-policy rules for this server — rate limits first —
+# that Skills & MCP › Rules offers under "Suggested limits" once the server is added. Each is a
+# rule body (tool glob, effect, rate_limit {max_calls, window_seconds, bucket project|run|agent});
+# nothing is applied until a person presses Add. `why` is the one-line reason shown beside it.
 catalogue:
   - key: context7
     name: context7
@@ -31,6 +36,11 @@ catalogue:
     token_url: "https://github.com/settings/personal-access-tokens"
     scopes_tip: "repo, read:org"
     description: Issues, PRs and code on GitHub.
+    suggested_rules:
+      - tool: "create_*"
+        effect: rate_limit
+        rate_limit: {max_calls: 30, window_seconds: 3600, bucket: run}
+        why: One looping run cannot open hundreds of issues or pull requests.
   - key: sentry
     name: sentry
     label: Sentry

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AlwaysAllowOption, alwaysAllowOffer, pinnable } from "../app/always-allow-ui";
 import { ToolRules } from "../app/skills/tool-rules";
-import { conditionWords, ordered, parseRules, readConditions, scopeWords } from "../lib/tool-policies";
+import { conditionWords, ordered, parseRules, parseSuggestions, rateWords, readConditions, scopeWords } from "../lib/tool-policies";
 import { $, $$, mount, settle, unmount } from "./_helpers/live-render";
 
 const RULES = { policies: [
@@ -116,5 +116,42 @@ describe("Always allow on the card", () => {
     const sent = calls.find((c) => c.url.includes("/v1/decisions/dec_1/approve"));
     expect(sent?.body).toEqual({ actor: "ceo", always_allow: { expiry: "7d", match_args: ["path"] } });
     expect($('[data-testid="always-allow-done"]')?.textContent).toContain("note now runs without asking for forge");
+  });
+});
+
+describe("rate limits: buckets and suggested limits (BOSSAPP-868)", () => {
+  it("reads a bucket, says it in words, and defaults to the project", () => {
+    const [run, plain] = parseRules({ policies: [
+      { id: "r1", effect: "rate_limit", rate_limit: { max_calls: 30, window_seconds: 3600, bucket: "run" } },
+      { id: "r2", effect: "rate_limit", rate_limit: { max_calls: 5, window_seconds: 60 } },
+    ] });
+    expect(run.rate_limit).toEqual({ max_calls: 30, window_seconds: 3600, bucket: "run" });
+    expect(rateWords(run.rate_limit!)).toBe("30/3600s per run");
+    expect(rateWords(plain.rate_limit!)).toBe("5/60s");
+  });
+
+  it("offers the catalogue's suggestions and adds one as offered", async () => {
+    const rule = { scope: "project", priority: 100, effect: "rate_limit", conditions: [],
+                   selector: { server: "github", tool: "create_*" },
+                   rate_limit: { max_calls: 30, window_seconds: 3600, bucket: "run" } };
+    const calls: { url: string; method: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const method = String(init?.method ?? "GET");
+      calls.push({ url: String(url), method, body: init?.body ? JSON.parse(String(init.body)) : {} });
+      if (String(url).includes("/suggestions")) {
+        return json({ suggestions: [{ server: "github", catalogue: "github", why: "loops", rule }] });
+      }
+      if (method === "GET") return json({ policies: [] });
+      return json({ policy: {} }, 201);
+    }));
+    expect(parseSuggestions({ suggestions: [{ server: "github", rule }] })[0].summary.rate_limit?.bucket).toBe("run");
+    await mount(<ToolRules projectId="p1" actor="ceo" />);
+    await settle();
+    expect($('[data-testid="tool-rules-suggestion-0"]')?.textContent).toContain("30/3600s per run");
+    ($('[data-testid="tool-rules-suggestion-add-0"]') as HTMLButtonElement).click();
+    await settle();
+    const post = calls.find((c) => c.method === "POST");
+    expect(post?.url).toContain("/v1/tool-policies");
+    expect(post?.body).toEqual({ project_id: "p1", ...rule });
   });
 });

@@ -768,6 +768,15 @@ def main() -> None:
     configure_logging()
 
     engine = get_engine(settings)
+    # BOSS'S OWN TELEMETRY (BOSSAPP-867): off unless OTEL_EXPORTER_OTLP_ENDPOINT, SENTRY_DSN or
+    # BOSS_METRICS_PORT is set; the worker is where model calls happen, so its spans matter most.
+    try:
+        from boss_engine.config import get_settings as _engine_settings
+        from boss_engine.services.self_telemetry import install as _install_telemetry
+
+        _install_telemetry(_engine_settings(), engine=engine, service="boss-worker")
+    except Exception:  # noqa: BLE001 — never block the worker on telemetry
+        LOGGER.warning("self-telemetry unavailable", exc_info=True)
     db_ready = database_is_reachable(engine)
     if db_ready:
         # A BOSS_GITHUB_TOKEN already moved into the vault (Setup › Repo) is not read from this

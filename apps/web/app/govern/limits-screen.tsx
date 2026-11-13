@@ -15,7 +15,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
 import {
-  governWrite, money, readGovern, readNumber, type AtLimit, type CapPreview as CapPreviewData, type GovernView,
+  governWrite, money, readGovern, readNumber, type AtLimit, type UnpricedPolicy, type CapPreview as CapPreviewData, type GovernView,
   type Envelope, type ProjectLimitRow, type ProjectLimitsView,
 } from "../../lib/govern";
 import { showToast } from "../client-forms";
@@ -27,6 +27,12 @@ export const AT_LIMIT_CHOICES: { key: AtLimit; label: string; hint: string }[] =
   { key: "pause", label: "Pause new work and ask me", hint: "Running builds stop at next step" },
   { key: "cheaper", label: "Switch to cheaper models", hint: "Keep going, lower quality" },
   { key: "stop", label: "Stop everything", hint: "Nothing runs until the next period" },
+];
+
+/** BOSSAPP-869: what happens to spend BOSS cannot price. */
+export const UNPRICED_CHOICES: { key: UnpricedPolicy; label: string; hint: string }[] = [
+  { key: "estimate", label: "Estimate it", hint: "Charged at the dearest rate" },
+  { key: "block", label: "Block it", hint: "Paid work waits and asks you" },
 ];
 
 const dollars = (micros: number | null | undefined) =>
@@ -91,16 +97,18 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
     day: dollars(controls.daily_cap?.value_effective),
     burst: dollars(controls.burst?.value_effective),
     choice: (view?.at_limit?.value ?? "pause") as AtLimit,
-  }), [controls, view?.at_limit?.value]);
+    unpriced: (view?.unpriced?.value ?? "estimate") as UnpricedPolicy,
+  }), [controls, view?.at_limit?.value, view?.unpriced?.value]);
   const [month, setMonth] = useState(start.month);
   const [day, setDay] = useState(start.day);
   const [burst, setBurst] = useState(start.burst);
   const [choice, setChoice] = useState<AtLimit>(start.choice);
+  const [unpriced, setUnpriced] = useState<UnpricedPolicy>(start.unpriced);
   // The fields follow the server until someone types (a poll never overwrites an edit).
   const touched = useRef(false);
   useEffect(() => {
     if (touched.current) return;
-    setMonth(start.month); setDay(start.day); setBurst(start.burst); setChoice(start.choice);
+    setMonth(start.month); setDay(start.day); setBurst(start.burst); setChoice(start.choice); setUnpriced(start.unpriced);
   }, [start]);
   const edit = <T,>(set: (v: T) => void) => (v: T) => { touched.current = true; set(v); };
 
@@ -153,7 +161,8 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
   const changedRows = (rows ?? []).filter((r) => (rowText[r.project_id] ?? "").trim() !== dollars(r.limit_usd_micros));
   // After Pace moved, a cap is "changed" when it differs from what Pace sets.
   const from = paceMoved && paceBase ? paceBase : start;
-  const capsChanged = month !== from.month || day !== from.day || burst !== from.burst || choice !== start.choice;
+  const capsChanged = month !== from.month || day !== from.day || burst !== from.burst || choice !== start.choice
+    || unpriced !== start.unpriced;
   // Only what was changed is sent, so only what was changed has to be valid; its reason shows.
   const monthErr = month !== start.month ? monthN.error : null;
   const dayErr = day !== start.day ? dayN.error : null;
@@ -182,6 +191,7 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
       if (day !== from.day) body.daily_cap_usd = dayN.value;
       if (burst !== from.burst) body.burst_usd_per_min = burstN.value;
       if (choice !== start.choice) body.at_limit = choice;
+      if (unpriced !== start.unpriced) body.unpriced_policy = unpriced;
       // Pace just moved the budget's version; this save follows it in the same press.
       const r = await governWrite("limits", body, paceMoved ? null : view?.versions.budget);
       if (!r.ok) { setBusy(false); setFailure(failureOf(r, "limits")); return; }
@@ -253,6 +263,25 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
             </label>
           ))}
         </div>
+      </section>
+
+      <section className="gv-card" aria-labelledby="gv-unpriced-h" data-testid="gv-unpriced">
+        <h3 id="gv-unpriced-h" className="gv-card-title">Spend BOSS cannot price</h3>
+        <div role="radiogroup" aria-labelledby="gv-unpriced-h" className="gv-radios">
+          {UNPRICED_CHOICES.map((c) => (
+            <label key={c.key} className="gv-radio" data-checked={unpriced === c.key || undefined}>
+              <input type="radio" name="gv-unpriced" value={c.key} checked={unpriced === c.key}
+                     data-testid={`gv-unpriced-${c.key}`} onChange={() => edit(setUnpriced)(c.key)} />
+              <span className="gv-radio-label">{c.label}</span>
+              <span className="gv-radio-hint">{c.hint}</span>
+            </label>
+          ))}
+        </div>
+        <span className="gv-muted" data-testid="gv-unpriced-today"
+              title="Calls to a model BOSS has no price for, charged at the dearest known rate">
+          {money(view?.unpriced?.unpriced_today_usd_micros ?? 0)} unpriced today
+          {unpriced === "block" ? `, allowance ${money(view?.unpriced?.allowance_usd_micros ?? 0)}` : ""}
+        </span>
       </section>
 
       <section className="gv-card" aria-labelledby="gv-perproject-h" data-testid="gv-perproject">

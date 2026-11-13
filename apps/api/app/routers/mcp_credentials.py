@@ -42,6 +42,11 @@ class PolicyBody(ProjectBody):
     policy: str
 
 
+class HeadersPolicyBody(ProjectBody):
+    #: {allow?: [names], secret_headers?: {name: value | {keep: true}}, forward?: [run_id|agent|traceparent]}
+    headers_policy: dict[str, Any]
+
+
 class TokenBody(ProjectBody):
     subject: str = "me"
     role_key: Optional[str] = None
@@ -218,6 +223,39 @@ def build_mcp_credentials_router(
                                  creds.CredentialPrincipal(person_id=me)) if me else None
         return {"server_id": server_id, "credential_policy": server["credential_policy"],
                 "auth_status": server["auth_status"], "credentials": rows, "you": uses}
+
+    # ------------------------------------------------------------------ 873: headers policy
+    @router.get("/v1/mcp/servers/{server_id}/headers-policy")
+    @permit(P.MCP_SERVER_READ, scope=Scope.project(query="project_id"))
+    def get_headers_policy(server_id: str, project_id: str) -> dict[str, Any]:
+        """What a call to this server may carry upstream besides its sign-in (BOSSAPP-873):
+        the allowlist, the secret headers (names and last four only) and the forwarded
+        metadata. {} everywhere = exactly what was sent before."""
+        from boss_engine.services import mcp_headers_policy as hp
+
+        with begin(engine) as connection:
+            require_reader(connection, project_id)
+            _server(connection, project_id, server_id)
+            policy = hp.read(connection, project_id, server_id)
+        return {"server_id": server_id, "headers_policy": hp.public(policy),
+                "forward_choices": [{"key": k, "header": v} for k, v in hp.FORWARD.items()]}
+
+    @router.post("/v1/mcp/servers/{server_id}/headers-policy")
+    @permit(P.MCP_SERVER_REVIEW, scope=Scope.project(body="project_id"))
+    def set_headers_policy(server_id: str, body: HeadersPolicyBody) -> dict[str, Any]:
+        """Replace the server's headers policy. A secret header's value is written to the
+        secret store; send ``{"keep": true}`` for one to keep the value already stored."""
+        from boss_engine.services import mcp_headers_policy as hp
+
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, body.project_id, body.actor, "pack_manage")
+            server = _server(connection, body.project_id, server_id)
+            try:
+                shown = hp.set_policy(connection, settings(), body.project_id, server,
+                                      body.headers_policy, actor=actor)
+            except hp.HeadersPolicyError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+        return {"server_id": server_id, "headers_policy": shown}
 
     @router.post("/v1/mcp/servers/{server_id}/credential-policy")
     @permit(P.MCP_SERVER_REVIEW, scope=Scope.project(body="project_id"))

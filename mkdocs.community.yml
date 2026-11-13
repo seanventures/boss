@@ -81,6 +81,7 @@ nav:
       - Provider apply and recovery: PROVIDER_RECOVERY.md
       - Restored data and startup holds: RESTORED_STATE_HOLD.md
       - Historical financial exposure: LEGACY_FINANCIAL_HOLD.md
+      - BOSS's own telemetry: SELF_TELEMETRY.md
   - Connect:
       - Interfaces: interfaces.md
       - GitHub: CONNECT_GITHUB.md

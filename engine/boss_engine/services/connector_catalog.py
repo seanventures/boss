@@ -91,8 +91,22 @@ CONNECTOR_SCHEMA: dict[str, Any] = {
         "setup": {"type": "string", "minLength": 1},
         "risk_notes": {"type": "string", "minLength": 1},
         "docs_url": {"type": "string"},
+        # BOSSAPP-870: an MCP AGGREGATOR (Composio, Arcade, Zapier, Pipedream) fronts many apps
+        # behind one server. `toolkit_pattern` is how its tool names carry the app ("toolkit"),
+        # with one placeholder — {TOOLKIT} (upper case), {toolkit} (lower) or {Toolkit} (as
+        # typed) — so a rule can target one app (toolkit_selector); `execute_tools` names the
+        # meta-tools that run another tool by name (their arguments, not their name, say which).
+        "aggregator": {"type": "object", "required": ["toolkit_pattern"], "properties": {
+            "toolkit_pattern": {"type": "string"},
+            "execute_tools": {"type": "array", "items": {"type": "string"}},
+            "example_toolkits": {"type": "array", "items": {"type": "string"}}}},
+        # BOSSAPP-868: default tool-policy rules offered (never applied) once the server is added.
+        "suggested_rules": {"type": "array", "items": {"type": "object", "required": ["tool"]}},
     },
 }
+
+#: The placeholders an aggregator's toolkit_pattern may carry (exactly one).
+TOOLKIT_PLACEHOLDERS = ("{TOOLKIT}", "{toolkit}", "{Toolkit}")
 
 
 class CatalogError(ValueError):
@@ -177,6 +191,36 @@ def validate_definition(d: Any) -> list[str]:
                 bad(f"risk.tool_policies[{glob}]", "must be allow, ask or off")
     elif risk is not None:
         bad("risk", "must be a mapping")
+    agg = d.get("aggregator")
+    if agg is not None:
+        if not isinstance(agg, dict):
+            bad("aggregator", "must be a mapping")
+        else:
+            pattern = str(agg.get("toolkit_pattern") or "")
+            if sum(pattern.count(p) for p in TOOLKIT_PLACEHOLDERS) != 1 or "*" not in pattern:
+                bad("aggregator.toolkit_pattern",
+                    "must carry exactly one {TOOLKIT}/{toolkit}/{Toolkit} and a '*'")
+            for field in ("execute_tools", "example_toolkits"):
+                value = agg.get(field, [])
+                if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+                    bad(f"aggregator.{field}", "must be a list of names")
+    rules = d.get("suggested_rules")
+    if rules is not None:
+        if not isinstance(rules, list):
+            bad("suggested_rules", "must be a list")
+        else:
+            from .tool_policy_engine import ToolPolicyError, validate as validate_rule
+
+            for i, rule in enumerate(rules):
+                if not isinstance(rule, dict) or not str(rule.get("tool") or "").strip():
+                    bad(f"suggested_rules[{i}]", "must name a tool glob")
+                    continue
+                try:
+                    validate_rule({"effect": rule.get("effect") or "rate_limit",
+                                   "rate_limit": rule.get("rate_limit"),
+                                   "scope": rule.get("scope") or "project"})
+                except ToolPolicyError as error:
+                    bad(f"suggested_rules[{i}]", f"is not a rule: {error}")
     return out
 
 
@@ -468,6 +512,8 @@ def catalog_view(settings: Any, *, project_id: Optional[str] = None, query: str 
             "template_ready": d["transport"] != "stdio" or d["key"] in templates,
             "definition_version": versions.get(d["key"]),
             "prefill": prefill(d, project_id or "{project_id}"),
+            # BOSSAPP-870: how an aggregator names one app's tools, for a rule's selector.
+            "aggregator": dict(d["aggregator"]) if isinstance(d.get("aggregator"), dict) else None,
         })
     return {"schema_version": SCHEMA_VERSION, "catalog_version": str(catalog["catalog_version"]),
             "total": len(every),
@@ -493,6 +539,27 @@ def tool_overrides(d: dict[str, Any], tool_names: list[str]) -> dict[str, dict[s
                     out[target][name] = value
                     break
     return out
+
+
+def toolkit_glob(d: dict[str, Any], toolkit: str) -> Optional[str]:
+    """The tool glob that selects one app ("toolkit") on an aggregator, e.g. Composio + gmail →
+    ``GMAIL_*``; None for a connector that is not an aggregator or an empty toolkit name."""
+    agg = d.get("aggregator") if isinstance(d.get("aggregator"), dict) else None
+    name = re.sub(r"[^A-Za-z0-9_-]", "", str(toolkit or ""))
+    if not agg or not name:
+        return None
+    pattern = str(agg.get("toolkit_pattern") or "")
+    return (pattern.replace("{TOOLKIT}", name.upper()).replace("{toolkit}", name.lower())
+            .replace("{Toolkit}", name))
+
+
+def toolkit_selector(d: dict[str, Any], server_name: str, toolkit: str) -> Optional[dict[str, str]]:
+    """A tool-policy selector ({server, tool}) for one app behind an aggregator server — what
+    POST /v1/tool-policies takes, so "deny every Gmail tool on Composio" is one rule. A meta-tool
+    that executes another tool by name (``execute_tools``) is NOT covered by it: target that one
+    by name, with a condition on the argument that names the tool."""
+    glob = toolkit_glob(d, toolkit)
+    return {"server": str(server_name), "tool": glob} if glob else None
 
 
 def schema_json() -> str:

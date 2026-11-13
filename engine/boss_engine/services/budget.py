@@ -1341,6 +1341,17 @@ class BudgetGovernor:
                            amount_usd_micros=amount_usd_micros, snapshot=snapshot)
             return refused
 
+        # BOSSAPP-869: a project that allows no spend BOSS cannot price. Off by default
+        # (budget_unpriced_policy = estimate): nothing is read and reserve() is unchanged.
+        from .unpriced_policy import refusal as unpriced_refusal
+
+        refused = unpriced_refusal(connection, self.settings, project_id, category=category,
+                                   reason=reason, amount_usd_micros=amount_usd_micros,
+                                   budget_state=snapshot.get("budget_state"))
+        if refused is not None:
+            record_refusal(connection, project_id, refused, category=category, reason=reason,
+                           amount_usd_micros=amount_usd_micros, snapshot=snapshot)
+            return refused
         # BOSSAPP-863: every matching org / project / agent / workflow budget (scoped_budgets),
         # not only this project's policy. A no-op while none is set.
         from .scoped_budgets import reserve_refusal

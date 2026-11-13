@@ -28,6 +28,7 @@ from .budget import (
 )
 from .included_spend import INCLUDED_SQL, MONEY_SQL
 from .spend_limits import at_limit_view
+from .unpriced_policy import view as unpriced_view
 
 #: The budget state, as the meter says it. One map: the screen never shows `orange`.
 STATE_LABELS = {"green": "Under cap", "yellow": "Heads-up", "orange": "Cheaper builds",
@@ -42,6 +43,9 @@ ENFORCED: dict[str, tuple[str, str]] = {
     "monthly_cap": ("Hard cap", "hard_cap"),
     "burst": ("Waits", "waits"),
     "pace": ("Preset", "preset"),
+    # BOSSAPP-869: read by BudgetGovernor.reserve (unpriced_policy.refusal) with the policy
+    # set to block; past it, paid work waits for a person.
+    "budget_unpriced_allowance_usd_micros": ("Hard cap", "hard_cap"),
     "code_agent_max_concurrency": ("Review panel", "review_panel"),
     "code_agent_max_turns": ("Each agent", "each_agent"),
     # The build's writing stages, capped again by the machine (project_settings.build_parallelism).
@@ -305,6 +309,8 @@ def build(connection: Connection, settings: Any, project_id: str, *,
         # BOSSAPP-807: what happens when a limit is reached (spend_limits.at_limit), as the
         # enforcement path reads it.
         "at_limit": at_limit_view(connection, settings, project_id),
+        # BOSSAPP-869: spend BOSS cannot price (unpriced_policy), as reserve() reads it.
+        "unpriced": unpriced_view(connection, settings, project_id),
         "versions": {"budget": budget_version},
     }
 

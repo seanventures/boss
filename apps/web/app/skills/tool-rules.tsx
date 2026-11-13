@@ -14,8 +14,9 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
 import {
-  conditionWords, createRule, EFFECT_WORDS, EFFECTS, ordered, readConditions, readRules, revokeRule,
-  scopeWords, simulate, updateRule, parseSimulation, type Effect, type Rule, type Simulation,
+  BUCKET_WORDS, BUCKETS, conditionWords, createRule, EFFECT_WORDS, EFFECTS, ordered, rateWords, readConditions,
+  readRules, readSuggestions, revokeRule, scopeWords, simulate, updateRule, parseSimulation,
+  type Bucket, type Effect, type Rule, type Simulation, type Suggestion,
 } from "../../lib/tool-policies";
 
 type Filter = "all" | "decision";
@@ -79,7 +80,7 @@ export function ToolRules({ projectId }: { projectId: string; actor?: string }) 
                   <td>{r.priority}</td>
                   <td>{scopeWords(r.scope)}{r.source === "decision" ? <span className="tp-tag" title={r.source_decision_id ?? ""}>Always allow</span> : null}</td>
                   <td><span className={`tp-eff tp-eff-${r.effect}`}>{EFFECT_WORDS[r.effect]}</span>
-                    {r.rate_limit ? <span className="tp-muted"> {r.rate_limit.max_calls}/{r.rate_limit.window_seconds}s</span> : null}</td>
+                    {r.rate_limit ? <span className="tp-muted" data-testid={`tool-rule-rate-${r.id}`}> {rateWords(r.rate_limit)}</span> : null}</td>
                   <td className="tp-mono">{r.selector.tool} @ {r.selector.server}</td>
                   <td className="tp-mono" title={r.expires_at ? `Expires ${r.expires_at}` : undefined}>
                     {r.conditions.length ? conditionWords(r.conditions) : "any arguments"}</td>
@@ -102,8 +103,41 @@ export function ToolRules({ projectId }: { projectId: string; actor?: string }) 
           </table>
         </div>
       ) : null}
+      <Suggested projectId={projectId} rulesVersion={rules} onAdded={(m) => { setSaid(m); void load(); }} />
       <SimulateBox projectId={projectId} />
     </div>
+  );
+}
+
+/** SUGGESTED LIMITS (BOSSAPP-868): the MCP catalogue's default rules for this project's catalogue
+ *  servers that it does not have yet. Nothing applies by itself; Add writes the rule as shown. */
+function Suggested({ projectId, rulesVersion, onAdded }: { projectId: string; rulesVersion: unknown; onAdded: (m: string) => void }) {
+  const [items, setItems] = useState<Suggestion[]>([]);
+  useEffect(() => {
+    let live = true;
+    void readSuggestions(projectId).then((r) => { if (live && r.ok && "data" in r && r.data) setItems(r.data); });
+    return () => { live = false; };
+  }, [projectId, rulesVersion]);
+  if (!items.length) return null;
+  return (
+    <section className="tp-sim" aria-label="Suggested limits" data-testid="tool-rules-suggested">
+      <h4>Suggested limits</h4>
+      <ul className="tp-suggest">
+        {items.map((s, i) => (
+          <li key={`${s.server}-${i}`} data-testid={`tool-rules-suggestion-${i}`}>
+            <span className={`tp-eff tp-eff-${s.summary.effect}`}>{EFFECT_WORDS[s.summary.effect]}</span>{" "}
+            {s.summary.rate_limit ? <span className="tp-muted">{rateWords(s.summary.rate_limit)} </span> : null}
+            <span className="tp-mono">{s.summary.selector.tool} @ {s.summary.selector.server}</span>
+            {s.why ? <span className="tp-muted" title={s.why}> · why</span> : null}{" "}
+            <GatedButton permission="mcp_server:review" projectId={projectId} className="kit-link"
+                         data-testid={`tool-rules-suggestion-add-${i}`}
+                         onClick={() => void createRule(projectId, s.rule).then((r) => onAdded(r.ok ? "Rule added." : r.error ?? "Not saved."))}>
+              Add
+            </GatedButton>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -116,6 +150,7 @@ function AddRule({ projectId, onAdded }: { projectId: string; onAdded: () => voi
   const [conds, setConds] = useState("");
   const [cap, setCap] = useState("20");
   const [windowS, setWindowS] = useState("3600");
+  const [bucket, setBucket] = useState<Bucket>("project");
   const [err, setErr] = useState<string | null>(null);
   const parsed = readConditions(conds);
   const save = async () => {
@@ -123,7 +158,8 @@ function AddRule({ projectId, onAdded }: { projectId: string; onAdded: () => voi
     const r = await createRule(projectId, {
       effect, scope: scope.trim() || "project", priority: Number(priority) || 0,
       selector: { server: server.trim() || "*", tool: tool.trim() || "*" }, conditions: parsed.conditions,
-      ...(effect === "rate_limit" ? { rate_limit: { max_calls: Number(cap) || 0, window_seconds: Number(windowS) || 60 } } : {}),
+      ...(effect === "rate_limit" ? { rate_limit: { max_calls: Number(cap) || 0, window_seconds: Number(windowS) || 60,
+                                                     ...(bucket === "project" ? {} : { bucket }) } } : {}),
     });
     if (r.ok) onAdded(); else setErr(r.error ?? "Not saved.");
   };
@@ -139,7 +175,9 @@ function AddRule({ projectId, onAdded }: { projectId: string; onAdded: () => voi
       {effect === "rate_limit" ? (
         <label>Calls per window<span className="tp-pair">
           <input aria-label="Max calls" inputMode="numeric" value={cap} onChange={(e) => setCap(e.target.value)} />
-          <input aria-label="Window seconds" inputMode="numeric" value={windowS} onChange={(e) => setWindowS(e.target.value)} /></span></label>
+          <input aria-label="Window seconds" inputMode="numeric" value={windowS} onChange={(e) => setWindowS(e.target.value)} />
+          <select aria-label="Counted" value={bucket} onChange={(e) => setBucket(e.target.value as Bucket)}>
+            {BUCKETS.map((b) => <option key={b} value={b}>{BUCKET_WORDS[b]}</option>)}</select></span></label>
       ) : null}
       <label className="tp-wide">When (optional, one per line)<textarea aria-label="Conditions" rows={2} value={conds}
         placeholder={"$.path prefix /prod\n$.branch equals \"main\""} onChange={(e) => setConds(e.target.value)} /></label>

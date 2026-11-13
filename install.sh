@@ -240,8 +240,10 @@ Options:
   --postgres-port N       Host port for Postgres (default 5432)
   --ref REF               Release tag, branch, or full commit SHA to install. Default: the
                           ref this install recorded in .boss-release, else the newest
-                          release tag. Recorded for reruns and \`boss upgrade\`
-  --backup-dir PATH       Private recovery backup location for an upgrade
+                          release tag. Recorded for reruns and \`boss upgrade\`.
+                          BOSS_CHANNEL=rc in the environment follows release candidates
+                          too (stable: final releases only); recorded in .boss-release
+  --backup-dir PATH      Private recovery backup location for an upgrade
   --skip-model-key        Do not ask for a model key (API starts; model calls fail closed)
   --no-install-deps       Do not install missing VM packages
   --connect-found         Connect what was found on this machine without asking: a Codex,
@@ -903,9 +905,15 @@ pick_release() {
   # <<< boss_pick_release
 }
 # The newest stable release; the newest prerelease only when no stable release exists.
+# BOSS_CHANNEL=rc (BOSSAPP-895): an early adopter's fresh install takes the newest release,
+# release candidates included.
 newest_release() {
   local tags stable
   tags="$(cat)"
+  if [[ "${BOSS_CHANNEL:-}" == rc ]]; then
+    printf '%s\n' "$tags" | pick_release 1
+    return 0
+  fi
   stable="$(printf '%s\n' "$tags" | pick_release 0)"
   if [[ -n "$stable" ]]; then
     printf '%s\n' "$stable"
@@ -1110,16 +1118,21 @@ write_release_state() {
   tmp="$INSTALL_DIR/$RELEASE_STATE_NAME.writing.$$"
   # The local BOSS self-fix stack (scripts/install/self_fix_installer.py) is kept: boss upgrade
   # and boss update re-apply it after this run (restack), so it is never dropped silently.
-  local stack_ref stack_head
+  local stack_ref stack_head follow
   stack_ref="$(state_value BOSS_STACK_REF)"
   stack_head="$(state_value BOSS_STACK_HEAD)"
+  # The release channel the operator chose (BOSSAPP-895: stable | rc) is kept the same way; a
+  # BOSS_CHANNEL in the environment of this run sets it. Unset: no line, as before.
+  follow="${BOSS_CHANNEL:-$(state_value BOSS_CHANNEL)}"
+  [[ "$follow" == stable || "$follow" == rc ]] || follow=""
   printf '%s\n' \
     "# BOSS install record, written by install.sh. Not secret. Reruns and boss upgrade read it." \
     "BOSS_RELEASE_REF=$ref" \
     "BOSS_RELEASE_CHANNEL=$INSTALLED_CHANNEL" \
     "BOSS_INSTALLED_COMMIT=$head" \
     "BOSS_INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    ${stack_ref:+"BOSS_STACK_REF=$stack_ref"} ${stack_head:+"BOSS_STACK_HEAD=$stack_head"} > "$tmp"
+    ${stack_ref:+"BOSS_STACK_REF=$stack_ref"} ${stack_head:+"BOSS_STACK_HEAD=$stack_head"} \
+    ${follow:+"BOSS_CHANNEL=$follow"} > "$tmp"
   mv -f "$tmp" "$INSTALL_DIR/$RELEASE_STATE_NAME"
   # Keep the record out of `git status` in this checkout. The exported repository has no
   # .gitignore entry for it, so use the checkout's own exclude file; nothing tracked changes.

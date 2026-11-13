@@ -99,6 +99,7 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("backup scheduler not started", exc_info=True)
         started["backup_scheduler"] = False
+    try:
         # Skill sources (BOSSAPP-841): upstream changes become new versions or parked consents.
         from . import skill_sources
 
@@ -120,4 +121,14 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("extension scheduler not started", exc_info=True)
         started["extension_scheduler"] = False
+    try:
+        # The reflection agent's schedule (BOSSAPP-888): paused by default — a tick does work
+        # only for a project that turned reflection on, and it only ever proposes.
+        from . import reflection
+
+        reflection.start(engine, settings)
+        started["reflection"] = True
+    except Exception:  # noqa: BLE001
+        _log.warning("reflection schedule not started", exc_info=True)
+        started["reflection"] = False
     return started
