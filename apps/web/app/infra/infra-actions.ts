@@ -176,6 +176,16 @@ export const putSecret = (projectId: string, actor: string, f: { name: string; v
   send<{ name?: string; fingerprint?: string; last4?: string }>("POST", "/v1/secrets", { project_id: projectId, actor, ...f }, P("infra-secrets", "Upload"));
 export const generateKeypair = (projectId: string, actor: string, f: { name: string; backend: string }) =>
   send<{ public_key?: string; fingerprint?: string }>("POST", "/v1/secrets/keypair", { project_id: projectId, actor, ...f }, P("infra-secrets", "Generate keypair"));
+// BOSSAPP-865: who resolved a secret (run, person, agent, version), and its versions. No values.
+export type SecretAccessEvent = {
+  id: string; version: number | null; outcome: "resolved" | "refused"; reason: string | null;
+  run_id: string | null; person_id: string | null; agent_role: string | null; principal: string | null;
+  accessed_at: string | null;
+};
+export type SecretVersion = { version: number; fingerprint: string | null; last4: string | null; created_by: string; created_at: string | null };
+export type SecretAccessLog = { version: number | null; versions: SecretVersion[]; events: SecretAccessEvent[] };
+export const secretAccessLog = (projectId: string, secretRefId: string) =>
+  read<SecretAccessLog>(`/v1/secrets/${enc(secretRefId)}/access-log?project_id=${enc(projectId)}`);
 export const verifySecret = (secretRefId: string, actor: string) =>
   send<{ resolvable?: boolean; fingerprint_unchanged?: boolean; error?: string }>(
     "POST", `/v1/secrets/${enc(secretRefId)}/verify`, { actor }, P("infra-secrets", "Verify"));

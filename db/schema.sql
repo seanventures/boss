@@ -12974,3 +12974,55 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_access_grants_live
   ON mcp_access_grants (project_id, server_id, role_key, tool) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_mcp_access_grants_role ON mcp_access_grants (project_id, role_key, status);
 -- ================================ end BOSSAPP-846-848 ==
+
+-- BOSSAPP-w4-governance ── governance set (862-866, 871, 872) ───────────────────────────────────
+-- 865 (services/secret_access_log.py): which run, person or agent resolved which secret, at which
+-- version. secret_access_events is append-only (update/delete raise), one row per resolution
+-- through secret_backends.resolve_secret_ref (resolved or refused; never the value). A secret's
+-- versions are counted per write (put_secret): secret_versions keeps what BOSS may remember of
+-- each (fingerprint, last4, who, when), never the material. secret_refs.scope_type gains 'user'
+-- (scope_id = usr_ principal) and 'agent' (scope_id = role key): such a reference resolves only
+-- for that person or that agent.
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE IF NOT EXISTS secret_versions (
+  id TEXT PRIMARY KEY,
+  secret_ref_id TEXT NOT NULL REFERENCES secret_refs(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  fingerprint TEXT,
+  last4 TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (secret_ref_id, version)
+);
+CREATE TABLE IF NOT EXISTS secret_access_events (
+  id TEXT PRIMARY KEY,
+  secret_ref_id TEXT NOT NULL,
+  project_id TEXT,
+  version INTEGER,
+  outcome TEXT NOT NULL CHECK (outcome IN ('resolved', 'refused')),
+  reason TEXT,
+  run_id TEXT,
+  person_id TEXT,
+  agent_role TEXT,
+  principal TEXT,
+  accessed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_secret_access_events_ref
+  ON secret_access_events (secret_ref_id, accessed_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_secret_access_events_run
+  ON secret_access_events (run_id) WHERE run_id IS NOT NULL;
+CREATE OR REPLACE FUNCTION secret_access_events_append_only()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'secret_access_events is append-only';
+END;
+$$;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'secret_access_events_no_update') THEN
+    CREATE TRIGGER secret_access_events_no_update
+      BEFORE UPDATE OR DELETE ON secret_access_events
+      FOR EACH ROW EXECUTE FUNCTION secret_access_events_append_only();
+  END IF;
+END;
+$$;

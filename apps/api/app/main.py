@@ -9441,6 +9441,22 @@ def _owned_secret_scope(connection, project_id: str, payload: dict) -> tuple[str
     """Only let the generic upload address this project's own backend keys."""
     scope_id = str(payload.get("scope_id") or project_id)
     requested_type = str(payload.get("scope_type") or "")
+    if requested_type in ("user", "agent") and scope_id != project_id:
+        # BOSSAPP-865: a secret only one person (a usr_ principal) or one agent (a role key of
+        # this project) may resolve. The subject must exist where the secret lives.
+        if requested_type == "user":
+            found = scope_id.startswith("usr_") and connection.execute(
+                text("SELECT 1 FROM identity_principals ip JOIN workspaces w ON w.org_id = ip.org_id "
+                     "JOIN projects p ON p.workspace_id = w.id "
+                     "WHERE ip.id = :s AND ip.kind = 'user' AND p.id = :project_id"),
+                {"s": scope_id, "project_id": project_id}).first()
+        else:
+            found = connection.execute(
+                text("SELECT 1 FROM roles WHERE role_key = :s AND project_id = :project_id"),
+                {"s": scope_id, "project_id": project_id}).first()
+        if not found:
+            raise HTTPException(status_code=403, detail="Secret scope is not in this project.")
+        return requested_type, scope_id
     if scope_id == project_id:
         scope_type = "project"
     else:
@@ -9564,6 +9580,27 @@ def verify_secret_endpoint(secret_ref_id: str, payload: Optional[dict] = None):
         require_project_actor(connection, row["project_id"], actor, "integration_manage")
         return verify_secret(connection, settings, secret_ref_id,
                              actor=actor)
+
+
+@app.get("/v1/secrets/{secret_ref_id}/access-log")
+@permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
+def secret_access_log_endpoint(secret_ref_id: str, project_id: str, limit: int = 100,
+                               before: Optional[str] = None):
+    """BOSSAPP-865: who resolved this secret — which run, person or agent, at which version,
+    resolved or refused — newest first, and its versions. Metadata only: no value, ever."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secret_access_log import access_log
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, project_id, read_actor(_secret_actor()), "integration_manage",
+        )
+        owned = connection.execute(
+            text("SELECT 1 FROM secret_refs WHERE id = :id AND project_id = :project_id"),
+            {"id": secret_ref_id, "project_id": project_id}).first()
+        if not owned:
+            raise HTTPException(status_code=404, detail="Secret ref not found in project.")
+        return access_log(connection, secret_ref_id, limit=limit, before=before)
 
 
 @app.get("/v1/secrets/{secret_ref_id}")

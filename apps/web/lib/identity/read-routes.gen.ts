@@ -637,6 +637,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["secret-refs/{}", "secret:read_metadata"],
   ["secrets", "secret:read_metadata"],
   ["secrets/{}", "secret:read_metadata"],
+  ["secrets/{}/access-log", "secret:read_metadata"],
   ["security-scan/latest", "assurance:read"],
   ["security-scan/runs", "assurance:read"],
   ["security-scan/runs/{}", "assurance:read"],
