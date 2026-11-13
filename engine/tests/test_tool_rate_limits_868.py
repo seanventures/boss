@@ -1,3 +1,4 @@
+# ruff: noqa: F811 — pytest fixtures imported by name and used as arguments
 """BOSSAPP-868: the remaining surface of rate limits on tool calls.
 
 815 already shipped effect=rate_limit (max_calls, window_seconds) counted over tool_call_audit and

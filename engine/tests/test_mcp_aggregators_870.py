@@ -1,3 +1,4 @@
+# ruff: noqa: F811 — pytest fixtures imported by name and used as arguments
 """BOSSAPP-870: MCP aggregators (Composio, Arcade, Zapier, Pipedream) in the connector catalog.
 
   * each is a valid connector-catalog entry in `automation`, with its auth quirk in its setup
