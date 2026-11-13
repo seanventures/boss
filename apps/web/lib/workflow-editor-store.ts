@@ -16,6 +16,7 @@
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
+import { useUnsavedGuard } from "./unsaved-guard";
 import { fetchPalette, fetchSpec } from "./workflow-api";
 import type {
   EditorAction, EditorMeta, EditorState, Palette, Spec, SpecStep,
@@ -596,12 +597,7 @@ export function useWorkflowEditor(key: string | "new", projectId: string,
     return () => clearTimeout(timer);
   }, [state, loading, offer, storageKey]);
 
-  useEffect(() => {
-    if (!dirty) return;
-    const guard = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
-    window.addEventListener("beforeunload", guard);
-    return () => window.removeEventListener("beforeunload", guard);
-  }, [dirty]);
+  useUnsavedGuard(dirty);
 
   const dispatch = useCallback((action: EditorAction) => {
     // Saved: the draft kept under the key it was edited as ("new", or the standard a copy was

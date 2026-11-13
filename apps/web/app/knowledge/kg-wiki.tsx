@@ -9,11 +9,20 @@
  * person changed gets the refresh as a proposal instead).
  *
  * One door for every read and write: lib/wiki.ts. Writes are pre-greyed on knowledge:manage.
+ *
+ * NOTHING TYPED IS LOST SILENTLY (BOSSAPP-1037). The new-page editor used to print "Saved as
+ * <slug>" the moment a title existed — before any PUT — so a person read it as saved and walked
+ * away. The slug line now says "Will be saved as <slug>" until Save succeeds, and only a real
+ * save says "Saved". While the editor holds unsaved text, closing the tab asks (beforeunload) and
+ * every in-app move that would drop it (another page, New page, Cancel) asks first — the one
+ * guard, lib/unsaved-guard.ts. A save puts the page in the list at once from the PUT's answer,
+ * then re-reads the list; a list read that answers late can never paint over a newer one.
  */
 import React, { useCallback, useEffect, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
 import { kgWhen } from "../../lib/kg-view";
+import { useUnsavedGuard } from "../../lib/unsaved-guard";
 import {
   WIKI_MANAGE, getWikiPage, getWikiPages, getWikiRevisions, maintainWiki, restoreWikiPage, saveWikiPage, slugOf,
   type WikiPage, type WikiPageRow, type WikiRevision,
@@ -23,6 +32,7 @@ import { Markdown } from "../markdown";
 type Who = { projectId: string; actor: string };
 
 const WHO_WORDS: Record<string, string> = { person: "a person", agent: "an agent", system: "the graph" };
+const NEW_PAGE = { title: "", body: "" };
 
 /** [[slug]] and [[slug|label]] become links that open the page here. */
 function linked(body: string): string {
@@ -30,35 +40,58 @@ function linked(body: string): string {
     (_m, slug: string, label?: string) => `[${label || slug}](/?area=knowledge&kg_tab=wiki&wiki=${slug})`);
 }
 
-function Editor({ w, slug, initial, onSaved, onCancel }: {
+/**
+ * What the editor holds, as words: is anything unsaved, which slug a Save writes, and the line
+ * shown under the title. Never "Saved" before the PUT answered (BOSSAPP-1037).
+ */
+export function wikiDraft(o: { slug: string | null; initial: { title: string; body: string };
+                               title: string; body: string }): {
+  dirty: boolean; target: string; slugLine: string | null;
+} {
+  const target = o.slug ?? slugOf(o.title);
+  const dirty = o.title !== o.initial.title || o.body !== o.initial.body;
+  return { dirty, target, slugLine: !o.slug && target ? `Will be saved as ${target}` : null };
+}
+
+function Editor({ w, slug, initial, onSaved, onCancel, onDirty }: {
   w: Who; slug: string | null; initial: { title: string; body: string };
-  onSaved: (slug: string) => void; onCancel: () => void;
+  onSaved: (slug: string, row: WikiPageRow | null) => void; onCancel: () => void;
+  onDirty: (dirty: boolean) => void;
 }) {
   const [title, setTitle] = useState(initial.title);
   const [body, setBody] = useState(initial.body);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const target = slug ?? slugOf(title);
+  const { dirty, target, slugLine } = wikiDraft({ slug, initial, title, body });
+  useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
+  useEffect(() => () => onDirty(false), [onDirty]);
   const save = async () => {
     if (!title.trim() || !target) { setError("A page needs a title."); return; }
     setBusy(true); setError(null);
     const r = await saveWikiPage(w, target, title, body);
     setBusy(false);
     if (!r.ok) { setError(r.error); return; }
-    onSaved(target);
+    const rev = r.data?.revision;
+    onDirty(false);
+    onSaved(target, rev ? {
+      slug: target, title: rev.title || title, revision_no: rev.revision_no,
+      author_kind: (rev.author_kind as WikiPageRow["author_kind"]) || "person", author_id: rev.author_id,
+      updated_at: rev.created_at, maintained_by: null, pending: 0, chars: body.length,
+    } : null);
   };
   return (
     <div className="kg-doc-form" data-testid="wiki-editor">
       <input className="input" aria-label="Title" data-testid="wiki-title" value={title}
              onChange={(e) => setTitle(e.target.value)} placeholder="Page title" />
-      {!slug && target ? <span className="kg-quiet">Saved as {target}</span> : null}
+      {slugLine ? <span className="kg-quiet" data-testid="wiki-slug">{slugLine}</span> : null}
+      {dirty ? <span className="kg-quiet" data-testid="wiki-unsaved">Not saved yet</span> : null}
       <textarea className="input" aria-label="Page" data-testid="wiki-body" rows={14} value={body}
                 onChange={(e) => setBody(e.target.value)} placeholder="Markdown. Link a page as [[slug]]." />
       {error ? <div className="kg-banner" data-tone="red" role="alert" data-testid="wiki-error">{error}</div> : null}
       <span className="kg-doc-pick">
         <GatedButton permission={WIKI_MANAGE} projectId={w.projectId} className="ag-btn" data-testid="wiki-save"
                      disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</GatedButton>
-        <button type="button" className="inf-link" onClick={onCancel}>Cancel</button>
+        <button type="button" className="inf-link" data-testid="wiki-cancel" onClick={onCancel}>Cancel</button>
       </span>
     </div>
   );
@@ -105,9 +138,18 @@ export function WikiTab({ projectId, actor, archived = false }: { projectId: str
   const [mode, setMode] = useState<"read" | "edit" | "new" | "history">("read");
   const [note, setNote] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const leave = useUnsavedGuard(dirty);
+  /** Leave the editor (or stay, if the person keeps their unsaved text). */
+  const away = (go: () => void) => leave(() => { setDirty(false); go(); });
 
+  // Only the newest list read may paint: an older one answering late (a retry while the API
+  // warmed up, a slow first read) must never put back a list from before a save.
+  const listSeq = React.useRef(0);
   const loadPages = useCallback(async () => {
+    const seq = ++listSeq.current;
     const r = await getWikiPages(w);
+    if (seq !== listSeq.current) return;
     if (r.ok) {
       setPages({ data: r.data.pages, error: null });
       setOpen((cur) => cur ?? r.data.pages[0]?.slug ?? null);
@@ -127,6 +169,21 @@ export function WikiTab({ projectId, actor, archived = false }: { projectId: str
   }, [loadPages]);
   useEffect(() => { if (open) void loadPage(open); }, [open, loadPage]);
 
+  /** A real save: the page is in the list now (from the PUT's answer), then the list is re-read. */
+  const saved = (slug: string, row: WikiPageRow | null, opened: boolean) => {
+    if (row) {
+      listSeq.current += 1; // a read already in flight predates this save
+      setPages((cur) => ({ error: null, data: [...(cur.data ?? []).filter((p) => p.slug !== slug), row]
+        .sort((a, b) => (a.slug === "knowledge" ? -1 : b.slug === "knowledge" ? 1 : a.title.toLowerCase().localeCompare(b.title.toLowerCase()))) }));
+    }
+    setDirty(false);
+    setMode("read");
+    if (opened) setOpen(slug);
+    setNote(`Saved “${row?.title ?? slug}”.`);
+    void loadPages();
+    void loadPage(slug);
+  };
+
   const refresh = async () => {
     setRefreshing(true); setNote(null);
     const r = await maintainWiki(w);
@@ -144,7 +201,7 @@ export function WikiTab({ projectId, actor, archived = false }: { projectId: str
       <aside data-testid="wiki-list">
         <span className="kg-doc-pick">
           <GatedButton permission={WIKI_MANAGE} projectId={projectId} className="ag-btn" data-testid="wiki-new"
-                       disabled={archived} onClick={() => { setMode("new"); }}>New page</GatedButton>
+                       disabled={archived} onClick={() => away(() => setMode("new"))}>New page</GatedButton>
           <GatedButton permission={WIKI_MANAGE} projectId={projectId} className="inf-link" data-testid="wiki-refresh"
                        disabled={archived || refreshing} title="Render the graph's current facts into the kg-* pages"
                        onClick={() => void refresh()}>{refreshing ? "Refreshing…" : "Refresh from the graph"}</GatedButton>
@@ -158,7 +215,7 @@ export function WikiTab({ projectId, actor, archived = false }: { projectId: str
           {(pages.data ?? []).map((p) => (
             <li key={p.slug}>
               <button type="button" className="inf-link" data-testid="wiki-page-link" aria-current={p.slug === open}
-                      onClick={() => { setOpen(p.slug); setMode("read"); }}>{p.title}</button>
+                      onClick={() => away(() => { setOpen(p.slug); setMode("read"); })}>{p.title}</button>
               {p.pending ? <span className="kg-quiet" data-testid="wiki-pending-count"> · {p.pending} waiting</span> : null}
             </li>
           ))}
@@ -166,14 +223,14 @@ export function WikiTab({ projectId, actor, archived = false }: { projectId: str
       </aside>
       <section data-testid="wiki-page">
         {mode === "new" ? (
-          <Editor w={w} slug={null} initial={{ title: "", body: "" }} onCancel={() => setMode("read")}
-                  onSaved={(slug) => { setMode("read"); setOpen(slug); void loadPages(); void loadPage(slug); }} />
+          <Editor w={w} slug={null} initial={NEW_PAGE} onCancel={() => away(() => setMode("read"))} onDirty={setDirty}
+                  onSaved={(slug, row) => saved(slug, row, true)} />
         ) : page.error ? <p className="kg-quiet" role="alert">{page.error}</p>
           : !page.data ? <p className="kg-quiet">{open ? "Loading…" : "Pick a page."}</p>
           : mode === "edit" ? (
             <Editor w={w} slug={page.data.slug} initial={{ title: page.data.title, body: page.data.body }}
-                    onCancel={() => setMode("read")}
-                    onSaved={(slug) => { setMode("read"); void loadPages(); void loadPage(slug); }} />
+                    onCancel={() => away(() => setMode("read"))} onDirty={setDirty}
+                    onSaved={(slug, row) => saved(slug, row, false)} />
           ) : (
             <article>
               <div className="kg-doc-head">
