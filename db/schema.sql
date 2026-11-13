@@ -12651,3 +12651,47 @@ DO $$ BEGIN
 END $$;
 -- Last-Event-ID replay reads "the events after this one" in (created_at, id) order.
 CREATE INDEX IF NOT EXISTS idx_events_created_id ON events (created_at, id);
+
+-- ============================ TOOL POLICIES v2 (BOSSAPP-815/817) ============================
+-- The ordered tool-policy engine (engine/boss_engine/services/tool_policy_engine.py): rules as
+-- data, read by decide() at the MCP gateway, the receipt door and the kernel's tool set. A rule
+-- with source='decision' is an "Always allow" a person chose on an approval (BOSSAPP-817).
+-- BOSSAPP-815-817
+CREATE TABLE IF NOT EXISTS tool_policies_v2 (
+  id TEXT PRIMARY KEY,
+  org_id TEXT,
+  project_id TEXT,
+  scope TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 100,
+  effect TEXT NOT NULL,
+  selector JSONB NOT NULL DEFAULT '{}'::jsonb,
+  conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rate_limit JSONB,
+  source TEXT NOT NULL DEFAULT 'operator',
+  source_decision_id TEXT,
+  schema_sha256 TEXT,
+  note TEXT,
+  expires_at TIMESTAMPTZ,
+  hit_count BIGINT NOT NULL DEFAULT 0,
+  last_hit_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  revoked_reason TEXT,
+  CONSTRAINT tool_policies_v2_effect CHECK (effect IN ('allow', 'ask', 'deny', 'rate_limit')),
+  CONSTRAINT tool_policies_v2_source CHECK (source IN ('operator', 'decision')),
+  CONSTRAINT tool_policies_v2_status CHECK (status IN ('active', 'disabled', 'revoked')),
+  CONSTRAINT tool_policies_v2_scope CHECK (
+    scope IN ('org', 'project') OR scope LIKE 'agent:_%' OR scope LIKE 'workflow:_%'),
+  CONSTRAINT tool_policies_v2_owner CHECK (scope = 'org' OR project_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_tool_policies_v2_project
+  ON tool_policies_v2 (project_id, status, priority);
+CREATE INDEX IF NOT EXISTS idx_tool_policies_v2_org
+  ON tool_policies_v2 (org_id, status) WHERE project_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tool_policies_v2_decision
+  ON tool_policies_v2 (source_decision_id) WHERE source_decision_id IS NOT NULL;
+-- ============================ end TOOL POLICIES v2 (BOSSAPP-815/817) ========================
