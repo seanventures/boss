@@ -15,10 +15,24 @@ class ExecutionSubstrate(str, Enum):
     PREVIEW_HOST = "preview_host"
     PREVIEW_DOCKER = "preview_docker"
     PREVIEW_ROOTFS = "preview_rootfs"
+    # Pluggable execution environments (BOSSAPP-824). 'ssh' runs in this phase;
+    # the others are recognized vocabulary whose drivers land in phase 2 — the
+    # factory refuses them in words, but a run that DID happen on one must be
+    # able to record it.
+    SSH = "ssh"
+    KUBERNETES = "kubernetes"
+    E2B = "e2b"
+    DAYTONA = "daytona"
 
 
 _LOCAL = {"local", "subprocess", "local_subprocess"}
 _MICROVM = {"microvm", "firecracker", "gvisor"}
+_ENVIRONMENT = {
+    "ssh": ExecutionSubstrate.SSH,
+    "kubernetes": ExecutionSubstrate.KUBERNETES,
+    "e2b": ExecutionSubstrate.E2B,
+    "daytona": ExecutionSubstrate.DAYTONA,
+}
 
 
 def normalize_build_substrate(value: Optional[str]) -> ExecutionSubstrate:
@@ -27,6 +41,8 @@ def normalize_build_substrate(value: Optional[str]) -> ExecutionSubstrate:
         return ExecutionSubstrate.LOCAL_SUBPROCESS
     if normalized in _MICROVM:
         return ExecutionSubstrate.MICROVM
+    if normalized in _ENVIRONMENT:
+        return _ENVIRONMENT[normalized]
     raise ValueError(f"Unsupported execution substrate: {value!r}")
 
 

@@ -301,6 +301,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # BOSSAPP-824 — pluggable execution environments (CRUD + probe)
+    try:
+        from .environments import router as environments_router
+
+        app.include_router(environments_router)
+    except ImportError:
+        pass
+
     # Agent-wide OSS key management (KMS)
     try:
         from .agent_kms import router as agent_kms_router
