@@ -12131,3 +12131,47 @@ CREATE INDEX IF NOT EXISTS idx_environment_leases_env
 CREATE INDEX IF NOT EXISTS idx_environment_leases_run
   ON environment_leases (run_id, state);
 -- ================================ end EXECUTION ENVIRONMENTS (BOSSAPP-824) ==
+
+-- BOSSAPP-825
+-- TOOLCHAIN IMAGES (BOSSAPP-825): a project's own build-sandbox image, built
+-- interactively. An operator starts a throwaway setup container, installs what
+-- the project needs (a JDK, Go, browsers, private tools) through the console's
+-- terminal, and Capture commits it (`docker commit`, then a push to the local
+-- registry when one is configured). With BOSS_SANDBOX_COMMAND_RUNTIME=docker a
+-- build of that project then runs its commands in the latest READY image
+-- instead of BOSS_SANDBOX_CONTAINER_IMAGE (services/toolchain_images.py). No
+-- ready row: the default image, exactly as before.
+CREATE TABLE IF NOT EXISTS toolchain_images (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  -- the image the setup container started from
+  base          TEXT NOT NULL,
+  -- building: the setup session is open (phase 'session') or Capture is
+  -- committing/pushing it (phase 'capturing') | ready: builds use it |
+  -- failed: capture failed or the session was discarded (error says which)
+  status        TEXT NOT NULL DEFAULT 'building'
+    CHECK (status IN ('building', 'ready', 'failed')),
+  phase         TEXT NOT NULL DEFAULT 'session',
+  -- the setup container while the session is open; cleared once captured
+  container_id  TEXT,
+  -- what a build runs: '<registry>/boss-toolchain/<project>:<id>' or the
+  -- daemon-local tag 'boss-toolchain/<project>:<id>' without a registry
+  image_ref     TEXT,
+  -- sha256 content digest: the registry's manifest digest after a push, else
+  -- the local image id
+  digest        TEXT,
+  -- the setup transcript: every command the operator ran, with exit codes,
+  -- and the Dockerfile that reproduces it (FROM base + RUN per command)
+  transcript    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dockerfile    TEXT,
+  error         TEXT,
+  created_by    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_toolchain_images_project
+  ON toolchain_images (project_id, status, created_at DESC);
+-- One open setup session per project: a second Start is refused, not stacked.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_toolchain_images_open_session
+  ON toolchain_images (project_id) WHERE status = 'building';
+-- ================================ end TOOLCHAIN IMAGES (BOSSAPP-825) ==
