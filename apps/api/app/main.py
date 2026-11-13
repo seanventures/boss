@@ -1817,6 +1817,13 @@ from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
 
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
+# BOSS'S OWN TELEMETRY (BOSSAPP-867, services/self_telemetry.py): OTel traces when
+# OTEL_EXPORTER_OTLP_ENDPOINT is set, Sentry when SENTRY_DSN is, a Prometheus listener when
+# BOSS_METRICS_PORT is. With none set this does nothing at all; it never raises.
+from boss_engine.services import self_telemetry as _self_telemetry  # noqa: E402
+
+_self_telemetry.install(settings, app=app, engine=engine, service="boss-api")
+
 
 @app.exception_handler(RequestValidationError)
 async def request_validation_without_input(_request: Request, exc: RequestValidationError):

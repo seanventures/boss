@@ -1843,6 +1843,9 @@ def call_tool_with_receipt(
                 # A spent rate limit (BOSSAPP-868): the audit row keeps the structured refusal.
                 screen["policy"]["reason"] = decided.get("reason")
                 screen["policy"]["refusal"] = decided.get("refusal")
+        from .self_telemetry import metrics_count_tool_call
+
+        metrics_count_tool_call(outcome)  # BOSSAPP-867: a no-op unless /metrics is on
         record_tool_call(
             connection,
             project_id=project_id,
@@ -1951,14 +1954,20 @@ def call_tool_with_receipt(
         # OPT-IN CALL METADATA (BOSSAPP-873): X-BOSS-Run-Id / X-BOSS-Agent / traceparent, only
         # when the server's headers policy forwards them; empty (nothing sent) otherwise.
         from . import mcp_headers_policy as hp
+        from .self_telemetry import tool_span
 
-        forwarded = hp.call_headers(
-            hp.read(connection, project_id, str(server.get("id") or "")),
-            run_id=str(who.get("run_id") or about.get("run_id") or "") or None,
-            agent=(audit_agent if audit_agent != "mcp_registry" else None))
-        output = MCPClient(settings).call_tool(server["url"], tool_name, inputs,
-                                               headers=headers,
-                                               **({"call_headers": forwarded} if forwarded else {}))
+        run_ref = str(who.get("run_id") or about.get("run_id") or "") or None
+        agent_ref = audit_agent if audit_agent != "mcp_registry" else None
+        # BOSS'S OWN TRACE (BOSSAPP-867): an execute_tool span around the call (a no-op when
+        # tracing is off); a forwarded traceparent names this span.
+        with tool_span(str(server.get("name") or ""), tool_name, run_id=run_ref,
+                       agent=agent_ref):
+            forwarded = hp.call_headers(hp.read(connection, project_id,
+                                                str(server.get("id") or "")),
+                                        run_id=run_ref, agent=agent_ref)
+            output = MCPClient(settings).call_tool(
+                server["url"], tool_name, inputs, headers=headers,
+                **({"call_headers": forwarded} if forwarded else {}))
     except Exception as exc:
         receipts.mark_failed(
             connection,
