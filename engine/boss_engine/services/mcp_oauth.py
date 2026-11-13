@@ -436,12 +436,19 @@ def _state_hash(state: str) -> str:
 
 
 def start(connection: Connection, settings: Any, project_id: str, server_id: str, *,
-          subject_kind: str, subject_id: str, redirect_uri: str, actor: str) -> dict[str, Any]:
-    """Begin one sign-in: keep the verifier and the state's hash, answer the provider's URL."""
+          subject_kind: str, subject_id: str, redirect_uri: str, actor: str,
+          started_by: Optional[str] = None) -> dict[str, Any]:
+    """Begin one sign-in: keep the verifier and the state's hash, answer the provider's URL.
+
+    `started_by` is the VERIFIED principal who pressed Sign in (None on an install without
+    identity); the callback must come back signed in as them (:func:`complete`). A person's own
+    sign-in is always theirs."""
     from .connection_credentials import SUBJECT_KINDS
 
     if subject_kind not in SUBJECT_KINDS or not str(subject_id or "").strip():
         raise McpOAuthError("bad_subject", "Say whose sign-in this is.")
+    if subject_kind == "user":
+        started_by = subject_id
     _, auth = _server_and_auth(connection, project_id, server_id)
     oauth = auth.get("oauth") or {}
     if not oauth.get("authorization_endpoint") or not oauth.get("client_id"):
@@ -452,10 +459,10 @@ def start(connection: Connection, settings: Any, project_id: str, server_id: str
     connection.execute(text("DELETE FROM mcp_oauth_pending WHERE expires_at < now()"))
     connection.execute(text(
         "INSERT INTO mcp_oauth_pending (state_hash, project_id, server_id, subject_kind, "
-        "subject_id, code_verifier, redirect_uri, created_by, expires_at) VALUES "
-        "(:h, :p, :s, :k, :sub, :v, :r, :by, now() + make_interval(secs => :ttl))"),
+        "subject_id, code_verifier, redirect_uri, created_by, started_by_principal, expires_at) "
+        "VALUES (:h, :p, :s, :k, :sub, :v, :r, :by, :sbp, now() + make_interval(secs => :ttl))"),
         {"h": _state_hash(state), "p": project_id, "s": server_id, "k": subject_kind,
-         "sub": subject_id, "v": verifier, "r": redirect_uri, "by": actor,
+         "sub": subject_id, "v": verifier, "r": redirect_uri, "by": actor, "sbp": started_by,
          "ttl": PENDING_TTL_SECONDS})
     query = {"response_type": "code", "client_id": oauth["client_id"],
              "redirect_uri": redirect_uri, "code_challenge": challenge,
@@ -471,13 +478,14 @@ def start(connection: Connection, settings: Any, project_id: str, server_id: str
 
 
 def begin_sign_in(begin: Begin, settings: Any, project_id: str, server_id: str, *,
-                  subject_kind: str, subject_id: str, redirect_uri: str, actor: str
-                  ) -> dict[str, Any]:
+                  subject_kind: str, subject_id: str, redirect_uri: str, actor: str,
+                  started_by: Optional[str] = None) -> dict[str, Any]:
     """Prepare (discover, register) then start: what the console's Sign in button calls."""
     prepare(begin, settings, project_id, server_id, redirect_uri=redirect_uri, actor=actor)
     with begin() as connection:
         return start(connection, settings, project_id, server_id, subject_kind=subject_kind,
-                     subject_id=subject_id, redirect_uri=redirect_uri, actor=actor)
+                     subject_id=subject_id, redirect_uri=redirect_uri, actor=actor,
+                     started_by=started_by)
 
 
 # --------------------------------------------------------------------------- #
@@ -526,12 +534,17 @@ def _connected_as(body: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def complete(begin: Begin, settings: Any, *, state: str, code: str = "", error: str = ""
-             ) -> dict[str, Any]:
+def complete(begin: Begin, settings: Any, *, state: str, code: str = "", error: str = "",
+             completed_by: Optional[str] = None) -> dict[str, Any]:
     """The callback: spend the pending sign-in, trade the code, keep the tokens in the vault.
 
     The state is single-use whatever happens next (a replayed callback finds nothing), and it
-    is the ONLY thing that says which server and whose sign-in this is — never a query field."""
+    is the ONLY thing that says which server and whose sign-in this is — never a query field.
+
+    BOUND TO WHOEVER STARTED IT. `completed_by` is the verified principal of the browser that
+    came back (None when it carries no BOSS session). A sign-in started by a known principal —
+    always so for a person's own — completes only for that same principal: a consent link handed
+    to someone else cannot put THEIR provider account under the starter's name (login CSRF)."""
     from . import connection_credentials as creds
 
     if not str(state or "").strip():
@@ -540,13 +553,17 @@ def complete(begin: Begin, settings: Any, *, state: str, code: str = "", error: 
         pending = connection.execute(text(
             "DELETE FROM mcp_oauth_pending WHERE state_hash = :h RETURNING project_id, server_id, "
             "subject_kind, subject_id, code_verifier, redirect_uri, created_by, "
-            "(expires_at < now()) AS expired"), {"h": _state_hash(state)}).mappings().first()
+            "started_by_principal, (expires_at < now()) AS expired"),
+            {"h": _state_hash(state)}).mappings().first()
     if pending is None:
         raise McpOAuthError("invalid_state", "This sign-in link is not one BOSS started, or it "
                                              "was already used. Press Sign in again.")
     if pending["expired"]:
         raise McpOAuthError("expired", "This sign-in took longer than ten minutes. Press Sign in "
                                        "again.")
+    if pending["started_by_principal"] and pending["started_by_principal"] != completed_by:
+        raise McpOAuthError("not_the_starter", "This sign-in was started by someone else. Press "
+                                               "Sign in yourself, signed in to BOSS as you.")
     if error:
         raise McpOAuthError("denied", f"The provider did not sign BOSS in: {str(error)[:120]}.")
     if not str(code or "").strip():

@@ -249,16 +249,20 @@ def _oauth_server(eng, project, fake, *, name="linear", policy="shared"):
     return server["id"]
 
 
-def _sign_in(eng, project, fake, sid, *, subject_kind="org", subject_id=None):
+def _sign_in(eng, project, fake, sid, *, subject_kind="org", subject_id=None,
+             started_by=None, completed_by="same"):
     redirect = "https://boss.example.test" + mcp_oauth.CALLBACK_PATH
     with eng.begin() as c:
         subject_id = subject_id or creds.org_of_project(c, project)
     started = mcp_oauth.begin_sign_in(eng.begin, None, project, sid, subject_kind=subject_kind,
                                       subject_id=subject_id, redirect_uri=redirect,
-                                      actor="operator")
+                                      actor="operator", started_by=started_by)
     code, state = fake.issue_code(started["redirect"])
     assert state == started["state"]
-    return mcp_oauth.complete(eng.begin, None, state=state, code=code), started
+    if completed_by == "same":
+        completed_by = subject_id if subject_kind == "user" else started_by
+    return mcp_oauth.complete(eng.begin, None, state=state, code=code,
+                              completed_by=completed_by), started
 
 
 def _server(eng, project, sid):
@@ -800,3 +804,21 @@ def test_the_server_row_and_public_auth_never_show_a_secret(eng, project, fake):
     assert "s3cr3t-value" not in shown
     assert server["auth"]["oauth"] == {"client_id": "typed", "client_source": "manual"}
     assert server["credential_policy"] == "shared" and server["auth_status"] == "not_connected"
+
+
+def test_a_sign_in_completes_only_for_whoever_started_it(eng, project, fake, people):
+    """Login CSRF: a consent link handed to someone else must not sign THEIR account in under
+    the starter's name. A person's own sign-in is bound to them; a shared one to its starter."""
+    sid = _oauth_server(eng, project, fake, policy="per_user")
+    for wrong in (None, OTHER):
+        with pytest.raises(mcp_oauth.McpOAuthError) as refused:
+            _sign_in(eng, project, fake, sid, subject_kind="user", subject_id=PERSON,
+                     completed_by=wrong)
+        assert refused.value.code == "not_the_starter"
+    shared = _oauth_server(eng, project, fake, name="notion")
+    with pytest.raises(mcp_oauth.McpOAuthError):
+        _sign_in(eng, project, fake, shared, started_by=PERSON, completed_by=OTHER)
+    with eng.begin() as c:
+        assert creds.list_credentials(c, project, server_id=shared) == []
+    done, _ = _sign_in(eng, project, fake, shared, started_by=PERSON, completed_by=PERSON)
+    assert done["credential"]["subject_kind"] == "org"

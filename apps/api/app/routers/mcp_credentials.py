@@ -65,6 +65,17 @@ def _public_origin() -> str:
     return base
 
 
+def _principal(request: Request) -> Optional[str]:
+    """The verified principal of this request, or None (no BOSS credential, e.g. a bare redirect)."""
+    from ..identity_guard import request_auth
+
+    try:
+        ctx = getattr(request.state, "identity", None) or request_auth(request)
+    except Exception:  # noqa: BLE001 — a refused credential is no principal here
+        return None
+    return str(ctx.principal.id) if ctx is not None else None
+
+
 def _person(request: Request) -> str:
     """The signed-in PERSON (a usr_ principal) — "my own account" is never anyone else's."""
     from boss_engine.identity.principal import PrincipalKind
@@ -134,7 +145,8 @@ def build_mcp_credentials_router(
         try:
             return mcp_oauth.begin_sign_in(opener, settings(), body.project_id, server_id,
                                            subject_kind=kind, subject_id=subject_id,
-                                           redirect_uri=redirect_uri, actor=actor)
+                                           redirect_uri=redirect_uri, actor=actor,
+                                           started_by=_principal(request))
         except Exception as error:  # noqa: BLE001
             _fail(error)
             raise
@@ -157,7 +169,8 @@ def build_mcp_credentials_router(
     @router.get("/v1/mcp/oauth/callback")
     @public(reason=PublicReason.OAUTH_STATE_BOUND_CALLBACK,
             verifier=identity_verifiers.mcp_oauth_state)
-    def finish_sign_in(state: str = "", code: str = "", error: str = "") -> Response:
+    def finish_sign_in(request: Request, state: str = "", code: str = "",
+                       error: str = "") -> Response:
         """Where the provider sends the browser back. Public by necessity (a redirect carries no
         BOSS credential); safe because nothing happens without a state BOSS minted, stored only
         as a hash, single-use and ten minutes long. Answers a page, never a token."""
@@ -176,7 +189,8 @@ def build_mcp_credentials_router(
                 media_type="text/html", status_code=200 if ok else 400)
 
         try:
-            done = mcp_oauth.complete(opener, settings(), state=state, code=code, error=error)
+            done = mcp_oauth.complete(opener, settings(), state=state, code=code, error=error,
+                                      completed_by=_principal(request))
         except mcp_oauth.McpOAuthError as refused:
             return page("Not signed in", refused.message, False)
         except creds.CredentialError as refused:

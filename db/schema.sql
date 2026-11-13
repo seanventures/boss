@@ -12686,6 +12686,9 @@ CREATE TABLE IF NOT EXISTS mcp_oauth_pending (
   code_verifier TEXT NOT NULL,
   redirect_uri TEXT NOT NULL,
   created_by TEXT NOT NULL,
+  -- The verified principal who pressed Sign in. The callback must come back signed in as the same
+  -- one, so a consent link handed to somebody else cannot sign THEIR account in under this state.
+  started_by_principal TEXT,
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
