@@ -8,6 +8,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 
+import { CheckGroup, CheckRow, Field, FormError, FormGrid } from "../../components/form-kit";
 import { GatedButton } from "../../components/gated";
 import {
   createSkillRule, parseSkillSimulation, readSkillRules, revokeSkillRule, ruleWords, simulateSkillRule,
@@ -109,30 +110,30 @@ function AddSkillRule({ projectId, onAdded }: { projectId: string; onAdded: () =
     if (r.ok) onAdded(); else setErr(r.error ?? "Not saved.");
   };
   return (
-    <div className="tp-form" data-testid="skill-access-form">
-      <label>Does<select aria-label="Skill rule effect" value={effect} onChange={(e) => setEffect(e.target.value as "allow" | "deny")}>
-        <option value="deny">Deny</option><option value="allow">Allow</option></select></label>
-      <label>Scope<select aria-label="Skill rule scope" value={scope} onChange={(e) => setScope(e.target.value as "project" | "org")}>
-        <option value="project">This project</option><option value="org">The organization</option></select></label>
-      <label>Order<input aria-label="Skill rule position" inputMode="numeric" value={position} onChange={(e) => setPosition(e.target.value)} /></label>
-      <fieldset className="tp-wide" aria-label="Skill rule actions">
+    <FormGrid label="Add a skill rule" testId="skill-access-form">
+      <Field label="Does"><select aria-label="Skill rule effect" value={effect} onChange={(e) => setEffect(e.target.value as "allow" | "deny")}>
+        <option value="deny">Deny</option><option value="allow">Allow</option></select></Field>
+      <Field label="Scope"><select aria-label="Skill rule scope" value={scope} onChange={(e) => setScope(e.target.value as "project" | "org")}>
+        <option value="project">This project</option><option value="org">The organization</option></select></Field>
+      <Field label="Order"><input aria-label="Skill rule position" inputMode="numeric" value={position} onChange={(e) => setPosition(e.target.value)} /></Field>
+      <CheckGroup label="Actions" tip="Which actions on a skill this rule decides">
         {SKILL_ACTIONS.map((a) => (
-          <label key={a} className="tp-check"><input type="checkbox" checked={actions.includes(a)}
-                 data-testid={`skill-access-action-${a}`} onChange={() => toggle(a)} />{a}</label>
+          <CheckRow key={a} label={a} checked={actions.includes(a)}
+                    testId={`skill-access-action-${a}`} onChange={() => toggle(a)} />
         ))}
-      </fieldset>
-      <label>Skills<input aria-label="Skill rule skills" value={skill} placeholder="deploy_* or a key" onChange={(e) => setSkill(e.target.value)} /></label>
-      <label>Role<input aria-label="Skill rule role" value={role} placeholder="* or forge" onChange={(e) => setRole(e.target.value)} /></label>
-      <label>Done by<select aria-label="Skill rule actor" value={kind} onChange={(e) => setKind(e.target.value as "any" | "person" | "agent")}>
-        <option value="any">Anyone</option><option value="person">A person</option><option value="agent">An agent</option></select></label>
-      <label>From<input aria-label="Skill rule source" value={source} placeholder="github:https://github.com/acme/*" onChange={(e) => setSource(e.target.value)} /></label>
-      <label>Tier at least<select aria-label="Skill rule tier" value={tier} onChange={(e) => setTier(e.target.value)}>
-        <option value="">Any</option>{[0, 1, 2, 3].map((t) => <option key={t} value={String(t)}>{t}</option>)}</select></label>
-      <label className="tp-wide">Why (shown when it refuses)<input aria-label="Skill rule note" value={note} onChange={(e) => setNote(e.target.value)} /></label>
-      {err ? <p className="tp-said">{err}</p> : null}
+      </CheckGroup>
+      <Field label="Skills"><input aria-label="Skill rule skills" value={skill} placeholder="deploy_* or a key" onChange={(e) => setSkill(e.target.value)} /></Field>
+      <Field label="Role"><input aria-label="Skill rule role" value={role} placeholder="* or forge" onChange={(e) => setRole(e.target.value)} /></Field>
+      <Field label="Done by"><select aria-label="Skill rule actor" value={kind} onChange={(e) => setKind(e.target.value as "any" | "person" | "agent")}>
+        <option value="any">Anyone</option><option value="person">A person</option><option value="agent">An agent</option></select></Field>
+      <Field label="From"><input aria-label="Skill rule source" value={source} placeholder="github:https://github.com/acme/*" onChange={(e) => setSource(e.target.value)} /></Field>
+      <Field label="Tier at least"><select aria-label="Skill rule tier" value={tier} onChange={(e) => setTier(e.target.value)}>
+        <option value="">Any</option>{[0, 1, 2, 3].map((t) => <option key={t} value={String(t)}>{t}</option>)}</select></Field>
+      <Field label="Why (shown when it refuses)" wide><input aria-label="Skill rule note" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+      <FormError>{err}</FormError>
       <GatedButton permission="skill:manage" projectId={projectId} className="kit-btn" data-testid="skill-access-save"
                    onClick={() => void save()}>Save rule</GatedButton>
-    </div>
+    </FormGrid>
   );
 }
 

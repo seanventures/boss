@@ -13,6 +13,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 
+import { CheckGroup, CheckRow, Field, FormGrid } from "../../components/form-kit";
 import { GatedButton } from "../../components/gated";
 import { headersPolicyInput, mcpApi, type ForwardKey, type HeadersPolicyView } from "../../lib/kit-api";
 import { showToast } from "../client-forms";
@@ -54,20 +55,8 @@ export function HeadersSection({ projectId, actor, serverId }: { projectId: stri
 
   return (
     <div className="kit-signin" data-testid="kit-mcp-headers">
-      <div className="kit-field">
-        <span className="kit-field-label" data-tip="Tag each call so the server's own audit can be joined to BOSS's">Send</span>
-        {view.forward_choices.map((c) => (
-          <label key={c.key} className="kit-check" data-tip={`Adds the ${c.header} header to each call`}>
-            <input type="checkbox" checked={forward.includes(c.key)} data-testid={`kit-mcp-headers-forward-${c.key}`}
-                   onChange={() => toggle(c.key)} /> {FORWARD_WORDS[c.key]}
-          </label>
-        ))}
-      </div>
-      <label className="kit-field">
-        <span className="kit-field-label" data-tip="Only these extra headers go upstream; the sign-in always does. Empty: no limit">Only send</span>
-        <input type="text" value={allow} spellCheck={false} placeholder="Any header" data-testid="kit-mcp-headers-allow"
-               onChange={(e) => setAllow(e.target.value)} />
-      </label>
+      {/* The section says what it is (the walker met an unnamed block of controls, BOSSAPP-1039). */}
+      <h4 className="kit-signin-head">Upstream headers</h4>
       {Object.entries(policy.secret_headers).map(([n, s]) => (
         <div key={n} className="kit-field" data-testid={`kit-mcp-headers-secret-${n}`}>
           <span className="kit-field-label" data-tip="A header whose value is kept in the secret store">Secret</span>
@@ -78,15 +67,31 @@ export function HeadersSection({ projectId, actor, serverId }: { projectId: stri
           </button>
         </div>
       ))}
-      <div className="kit-field">
-        <span className="kit-field-label" data-tip="Add a header whose value is a secret">Secret</span>
-        <input type="text" value={name} placeholder="X-Tenant-Key" aria-label="Header name" data-testid="kit-mcp-headers-name"
-               onChange={(e) => setName(e.target.value)} />
-        <input type="password" value={value} autoComplete="new-password" aria-label="Header value" data-testid="kit-mcp-headers-value"
-               onChange={(e) => setValue(e.target.value)} />
+      {/* The one form kit (BOSSAPP-1039): every control in the section is a kit field, the Send
+          boxes sit ON their words, never ~130px away. */}
+      <FormGrid label="Upstream headers">
+        <CheckGroup label="Send" tip="Tag each call so the server's own audit can be joined to BOSS's">
+          {view.forward_choices.map((c) => (
+            <CheckRow key={c.key} label={FORWARD_WORDS[c.key]} tip={`Adds the ${c.header} header to each call`}
+                      checked={forward.includes(c.key)} testId={`kit-mcp-headers-forward-${c.key}`}
+                      onChange={() => toggle(c.key)} />
+          ))}
+        </CheckGroup>
+        <Field label="Only send" wide tip="Only these extra headers go upstream; the sign-in always does. Empty: no limit">
+          <input type="text" value={allow} spellCheck={false} placeholder="Any header" data-testid="kit-mcp-headers-allow"
+                 onChange={(e) => setAllow(e.target.value)} />
+        </Field>
+        <Field label="Secret header" tip="Add a header whose value is a secret">
+          <input type="text" value={name} placeholder="X-Tenant-Key" aria-label="Header name" data-testid="kit-mcp-headers-name"
+                 onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Value">
+          <input type="password" value={value} autoComplete="new-password" aria-label="Header value" data-testid="kit-mcp-headers-value"
+                 onChange={(e) => setValue(e.target.value)} />
+        </Field>
         <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-sm" disabled={busy}
                      data-testid="kit-mcp-headers-save" onClick={() => void save()}>Save</GatedButton>
-      </div>
+      </FormGrid>
     </div>
   );
 }

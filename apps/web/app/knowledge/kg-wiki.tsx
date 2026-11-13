@@ -19,10 +19,21 @@ import {
   type WikiPage, type WikiPageRow, type WikiRevision,
 } from "../../lib/wiki";
 import { Markdown } from "../markdown";
+import { ConfirmSheet } from "../projects/confirm-sheet";
+import { Who } from "../who";
+// The console's confirm sheet and its px- classes (loaded by the project pages; the wiki lives
+// in Knowledge, so it brings them itself).
+import "../projects/px.css";
 
-type Who = { projectId: string; actor: string };
+type Caller = { projectId: string; actor: string };
 
-const WHO_WORDS: Record<string, string> = { person: "a person", agent: "an agent", system: "the graph" };
+/** Who wrote a revision: the graph by name, a person or agent through <Who> (BOSSAPP-1040). */
+function By({ rev, face = false }: { rev: Pick<WikiRevision, "author_kind" | "author_id">; face?: boolean }) {
+  if (rev.author_kind === "system") return <>the graph</>;
+  const id = (rev.author_id || "").trim() || rev.author_kind;
+  const party = rev.author_kind === "agent" && !/^(agent:|agt_)/i.test(id) ? `agent:${id}` : id;
+  return <Who id={party} face={face} />;
+}
 
 /** [[slug]] and [[slug|label]] become links that open the page here. */
 function linked(body: string): string {
@@ -31,7 +42,7 @@ function linked(body: string): string {
 }
 
 function Editor({ w, slug, initial, onSaved, onCancel }: {
-  w: Who; slug: string | null; initial: { title: string; body: string };
+  w: Caller; slug: string | null; initial: { title: string; body: string };
   onSaved: (slug: string) => void; onCancel: () => void;
 }) {
   const [title, setTitle] = useState(initial.title);
@@ -64,9 +75,13 @@ function Editor({ w, slug, initial, onSaved, onCancel }: {
   );
 }
 
-function History({ w, slug, onRestored }: { w: Who; slug: string; onRestored: () => void }) {
+function History({ w, slug, onRestored }: { w: Caller; slug: string; onRestored: () => void }) {
   const [revs, setRevs] = useState<WikiRevision[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The revision open read-only; the history API already carries each revision's body. */
+  const [viewing, setViewing] = useState<WikiRevision | null>(null);
+  /** The revision Restore asks about: the console's confirm sheet, never a bare write. */
+  const [restoring, setRestoring] = useState<WikiRevision | null>(null);
   useEffect(() => {
     const ctl = new AbortController();
     void getWikiRevisions(w, slug, ctl.signal).then((r) => {
@@ -76,24 +91,55 @@ function History({ w, slug, onRestored }: { w: Who; slug: string; onRestored: ()
   }, [w, slug]);
   if (error) return <p className="kg-quiet" role="alert">{error}</p>;
   if (!revs) return <p className="kg-quiet">Loading history…</p>;
+  if (viewing) {
+    return (
+      <div data-testid="wiki-revision-view">
+        <p className="kg-quiet">
+          Revision {viewing.revision_no} by <By rev={viewing} />
+          {viewing.created_at ? `, ${kgWhen(viewing.created_at)}` : ""} — read-only.{" "}
+          <button type="button" className="inf-link" data-testid="wiki-revision-back"
+                  onClick={() => setViewing(null)}>Back to history</button>
+        </p>
+        <div data-testid="wiki-revision-body" data-user-text><Markdown text={linked(viewing.body)} /></div>
+      </div>
+    );
+  }
   return (
-    <ul className="kg-doc-clause-list" data-testid="wiki-history">
-      {revs.map((rev) => (
-        <li key={rev.id} className="kg-doc-clause" data-testid="wiki-revision">
-          <span className="kg-doc-clause-section">v{rev.revision_no}</span>
-          <span className="kg-doc-clause-text">
-            {WHO_WORDS[rev.author_kind] ?? rev.author_kind} ({rev.author_id}){rev.source_note ? ` — ${rev.source_note}` : ""}
-          </span>
-          {rev.created_at ? <span className="kg-quiet">{kgWhen(rev.created_at)}</span> : null}
-          {rev.current ? <span className="kg-quiet">current</span> : (
-            <GatedButton permission={WIKI_MANAGE} projectId={w.projectId} className="inf-link" data-testid="wiki-restore"
-                         onClick={() => void restoreWikiPage(w, slug, rev.revision_no).then((r) => { if (r.ok) onRestored(); })}>
-              Restore
-            </GatedButton>
-          )}
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="kg-doc-clause-list" data-testid="wiki-history">
+        {revs.map((rev) => (
+          <li key={rev.id} className="kg-doc-clause" data-testid="wiki-revision">
+            <span className="kg-doc-clause-section">v{rev.revision_no}</span>
+            <span className="kg-doc-clause-text">
+              <By rev={rev} face />{rev.source_note ? ` — ${rev.source_note}` : ""}
+            </span>
+            {rev.created_at ? <span className="kg-quiet">{kgWhen(rev.created_at)}</span> : null}
+            <button type="button" className="inf-link" data-testid="wiki-revision-open"
+                    onClick={() => setViewing(rev)}>View</button>
+            {rev.current ? <span className="kg-quiet">current</span> : (
+              <GatedButton permission={WIKI_MANAGE} projectId={w.projectId} className="inf-link" data-testid="wiki-restore"
+                           onClick={() => setRestoring(rev)}>
+                Restore
+              </GatedButton>
+            )}
+          </li>
+        ))}
+      </ul>
+      {restoring ? (
+        <ConfirmSheet title={`Restore v${restoring.revision_no}?`} press="Restore" testid="wiki-restore-confirm"
+                      lede="The page goes back to this revision; the restore is recorded as a new revision."
+                      rows={[{ label: "Page", value: slug, mono: true },
+                             { label: "Revision", value: `v${restoring.revision_no}` },
+                             { label: "By", value: <By rev={restoring} /> }]}
+                      onConfirm={async () => {
+                        const r = await restoreWikiPage(w, slug, restoring.revision_no);
+                        if (!r.ok) return r.error;
+                        onRestored();
+                        return null;
+                      }}
+                      onClose={() => setRestoring(null)} />
+      ) : null}
+    </>
   );
 }
 
@@ -178,8 +224,8 @@ export function WikiTab({ projectId, actor, archived = false }: { projectId: str
             <article>
               <div className="kg-doc-head">
                 <span className="kg-doc-title" data-testid="wiki-page-title">{page.data.title}</span>
-                <span className="kg-quiet">
-                  v{page.data.revision.revision_no} by {WHO_WORDS[page.data.revision.author_kind] ?? "someone"}
+                <span className="kg-quiet" data-testid="wiki-byline">
+                  v{page.data.revision.revision_no} by <By rev={page.data.revision} />
                   {page.data.revision.created_at ? `, ${kgWhen(page.data.revision.created_at)}` : ""}
                 </span>
                 <GatedButton permission={WIKI_MANAGE} projectId={projectId} className="inf-link" data-testid="wiki-edit"

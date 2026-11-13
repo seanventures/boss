@@ -16,6 +16,8 @@ import {
   restoreDoc, saveDoc, type Doc, type DocDiff, type DocRevision,
 } from "../../lib/documents";
 
+import { Who } from "../who";
+
 const KIND_WORDS: Record<string, string> = { prd: "PRD", plan: "Plan", minutes: "Minutes", architecture: "Architecture", note: "Note" };
 
 export function ItemDocuments({ projectId, workItemId, demo }: { projectId: string; workItemId: string; demo: boolean }) {
@@ -112,7 +114,7 @@ export function DocEditor({ projectId, id, demo, onChanged }: { projectId: strin
   const threads = doc.threads ?? [];
   return (
     <div className="wt-panel" data-testid="wt-doc-editor">
-      {doc.locked_by ? <p className="wt-faint" data-testid="wt-doc-locked">{doc.locked_by} is editing.</p> : null}
+      {doc.locked_by ? <p className="wt-faint" data-testid="wt-doc-locked"><Who id={doc.locked_by} face={false} /> is editing.</p> : null}
       <textarea ref={area} className="textarea wt-json" rows={10} value={text} onChange={(e) => setText(e.target.value)}
                 onSelect={pick} onMouseUp={pick} onKeyUp={pick} aria-label="Document text" data-testid="wt-doc-text" disabled={demo} />
       <div className="wt-line">
@@ -132,7 +134,7 @@ export function DocEditor({ projectId, id, demo, onChanged }: { projectId: strin
       </div>
       {theirs ? (
         <div className="wt-feedback" role="alert" data-testid="wt-doc-conflict">
-          <p>Revision {theirs.revision_no} by {theirs.author_id || theirs.author_kind}:</p>
+          <p>Revision {theirs.revision_no} by <Who id={theirs.author_id || theirs.author_kind} face={false} />:</p>
           <pre className="wt-pre">{(theirs.body ?? "").slice(0, 2000)}</pre>
           <div className="wt-line">
             <button type="button" className="px-btn" onClick={takeTheirs} data-testid="wt-doc-take-theirs">Use theirs</button>
@@ -146,7 +148,7 @@ export function DocEditor({ projectId, id, demo, onChanged }: { projectId: strin
             <li key={t.id} data-e={t.status === "resolved" ? "completed" : t.anchor_state === "orphaned" ? "rejected" : "raised"} data-testid={`wt-thread-${t.id}`}>
               <span className="wt-ev" title={ANCHOR_WORDS[t.anchor_state]}>{t.status === "resolved" ? "Resolved" : ANCHOR_WORDS[t.anchor_state]}</span>
               <span className="wt-comment">“{t.quote.slice(0, 80)}”</span>
-              {t.comments.map((c) => <span key={c.id}><b>{c.author}</b> {c.body}</span>)}
+              {t.comments.map((c) => <span key={c.id}><Who id={c.author} bold /> {c.body}</span>)}
               {t.status === "open" ? (
                 <span className="wt-line">
                   <input className="input" value={reply[t.id] ?? ""} onChange={(e) => setReply({ ...reply, [t.id]: e.target.value })}
@@ -171,7 +173,7 @@ export function DocEditor({ projectId, id, demo, onChanged }: { projectId: strin
           {(doc.revisions ?? []).map((v) => (
             <li key={v.id}>
               <span className="wt-ev">Rev {v.revision_no}</span>
-              <span className="wt-faint">{v.author_kind === "agent" ? "agent " : ""}{v.author_id}{v.note ? ` · ${v.note}` : ""}</span>
+              <span className="wt-faint"><Who id={v.author_id || v.author_kind} />{v.note ? ` · ${v.note}` : ""}</span>
               {v.revision_no > 1 ? <button type="button" className="px-btn" onClick={() => void showDiff(v.revision_no)} data-testid={`wt-doc-diff-${v.revision_no}`}>Changes</button> : null}
               {v.revision_no !== doc.current_revision_no ? (
                 <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo}

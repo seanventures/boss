@@ -128,6 +128,11 @@ const onOver = (e: Event) => {
 };
 const onFocus = (e: Event) => {
   if (pinned) return;
+  // Focus moved BY CODE, not by the keyboard: an overlay opening focuses its heading
+  // (tabindex="-1", skills/overlay.tsx), and that heading's tip then sat over the form under it
+  // until the next pointer-down (BOSSAPP-1039, the MCP drawer's server description over the URL
+  // field). A tabindex="-1" element is unreachable by Tab, so no keyboard user loses a tip.
+  if (e.target instanceof HTMLElement && e.target.getAttribute("tabindex") === "-1") return;
   const el = tipTarget(e.target);
   if (el) show(el, true);
 };
