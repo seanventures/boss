@@ -8,6 +8,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 
+import { Field, FormGrid } from "../../components/form-kit";
 import { GatedButton } from "../../components/gated";
 import {
   PROPOSAL_WORDS, readReflection, runReflection, setReflection, type ReflectionState,
@@ -48,13 +49,20 @@ export function ReflectionPanel({ projectId }: { projectId: string }) {
       {error ? <p data-testid="reflection-error">{error}</p> : null}
       {state ? (
         <div className="afb-actions">
-          <GatedButton permission="agent:update" projectId={projectId} className="kit-link" data-testid="reflection-toggle"
-                       title="Reflect on agents' recent runs on a schedule; it only proposes"
-                       onClick={() => void toggle()}>{state.enabled ? "Pause" : "Turn on"}</GatedButton>
-          <input aria-label="Agent to reflect on" placeholder="agent, e.g. forge" value={role}
-                 onChange={(e) => setRole(e.target.value)} />
-          <GatedButton permission="agent:update" projectId={projectId} className="kit-link" data-testid="reflection-run"
-                       disabled={!role.trim()} onClick={() => void runNow()}>Reflect now</GatedButton>
+          <p className="afb-line">
+            <GatedButton permission="agent:update" projectId={projectId} className="kit-link" data-testid="reflection-toggle"
+                         title="Reflect on agents' recent runs on a schedule; it only proposes"
+                         onClick={() => void toggle()}>{state.enabled ? "Pause" : "Turn on"}</GatedButton>
+          </p>
+          {/* The one form kit (BOSSAPP-1039): a labelled field, never a bare input between links. */}
+          <FormGrid label="Reflect now">
+            <Field label="Agent">
+              <input aria-label="Agent to reflect on" placeholder="e.g. forge" value={role}
+                     onChange={(e) => setRole(e.target.value)} />
+            </Field>
+            <GatedButton permission="agent:update" projectId={projectId} className="kit-link" data-testid="reflection-run"
+                         disabled={!role.trim()} onClick={() => void runNow()}>Reflect now</GatedButton>
+          </FormGrid>
         </div>
       ) : null}
       {said ? <p role="status" data-testid="reflection-said">{said}</p> : null}

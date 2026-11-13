@@ -327,6 +327,8 @@
 .aa-pin { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 0.75rem; }
 /* MCP sign-in and whose account (BOSSAPP-846/847); tools granted on request (BOSSAPP-848). */
 .kit-signin { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+/* A signed section says what it is (BOSSAPP-1039: the headers block had no heading). */
+.kit-signin-head { margin: 0; font: 600 0.8125rem var(--sans); color: var(--ink); }
 .kit-signin .kit-chip[data-status="needs_reauth"] { color: var(--warn-text, var(--ink)); }
 .kit-granted { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .decision-grant-card { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }

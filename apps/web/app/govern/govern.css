@@ -91,7 +91,13 @@
 .gv-input:focus { outline: none; border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
 .gv-money-input { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
 .gv-bounds { font-size: 0.76rem; color: var(--faint); }
-.gv-field-error { flex-basis: 100%; font-size: 0.8rem; color: var(--red); }
+/* An error line never claims a flex container's main axis: inside a column (.gv-card) a
+   flex-basis of 100% demanded the card's whole HEIGHT, squeezed every sibling to its min-height
+   and painted the error over the scoped-budgets add row — real clicks on "Hard stop" and "Add"
+   landed on the error span and were swallowed (BOSSAPP-1036). The full-line behaviour belongs
+   only to the row-wrap edit form, where 100% of the MAIN axis is a line, not the column. */
+.gv-field-error { font-size: 0.8rem; color: var(--red); }
+.gv-edit-form .gv-field-error { flex-basis: 100%; }
 .gv-input[aria-invalid="true"] { border-color: var(--red); }
 .gv-preview-line { font-size: 0.8rem; color: var(--accent-text); }
 .gv-edit-buttons { display: inline-flex; gap: 6px; }
@@ -196,7 +202,6 @@
 .gv-proj-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .gv-limit-label { font-size: 0.88rem; font-weight: 600; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gv-limit-hint { font-size: 0.8rem; color: var(--muted); }
-.gv-limit-hint .gv-field-error { flex-basis: auto; }
 .gv-radios { display: flex; flex-direction: column; gap: 6px; }
 .gv-radio { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: center; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--r); cursor: pointer; }
 .gv-radio[data-checked] { border-color: var(--accent-line); background: var(--accent-soft); }

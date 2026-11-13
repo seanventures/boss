@@ -13,6 +13,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 
+import { CheckGroup, CheckRow } from "../../components/form-kit";
 import { GatedButton } from "../../components/gated";
 import { headersPolicyInput, mcpApi, type ForwardKey, type HeadersPolicyView } from "../../lib/kit-api";
 import { showToast } from "../client-forms";
@@ -54,15 +55,16 @@ export function HeadersSection({ projectId, actor, serverId }: { projectId: stri
 
   return (
     <div className="kit-signin" data-testid="kit-mcp-headers">
-      <div className="kit-field">
-        <span className="kit-field-label" data-tip="Tag each call so the server's own audit can be joined to BOSS's">Send</span>
+      {/* The section says what it is (the walker met an unnamed block of controls, BOSSAPP-1039). */}
+      <h4 className="kit-signin-head">Upstream headers</h4>
+      {/* The one form kit's checkbox row (BOSSAPP-1039): the box sits ON its words, never apart. */}
+      <CheckGroup label="Send" tip="Tag each call so the server's own audit can be joined to BOSS's">
         {view.forward_choices.map((c) => (
-          <label key={c.key} className="kit-check" data-tip={`Adds the ${c.header} header to each call`}>
-            <input type="checkbox" checked={forward.includes(c.key)} data-testid={`kit-mcp-headers-forward-${c.key}`}
-                   onChange={() => toggle(c.key)} /> {FORWARD_WORDS[c.key]}
-          </label>
+          <CheckRow key={c.key} label={FORWARD_WORDS[c.key]} tip={`Adds the ${c.header} header to each call`}
+                    checked={forward.includes(c.key)} testId={`kit-mcp-headers-forward-${c.key}`}
+                    onChange={() => toggle(c.key)} />
         ))}
-      </div>
+      </CheckGroup>
       <label className="kit-field">
         <span className="kit-field-label" data-tip="Only these extra headers go upstream; the sign-in always does. Empty: no limit">Only send</span>
         <input type="text" value={allow} spellCheck={false} placeholder="Any header" data-testid="kit-mcp-headers-allow"
