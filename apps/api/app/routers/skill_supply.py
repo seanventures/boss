@@ -98,6 +98,9 @@ def build_skill_supply_router(
             if "failed its latest test run" in str(error):
                 status = 409
             raise HTTPException(status_code=status, detail=str(error)) from error
+        if getattr(error, "rule_id", None) and isinstance(error, skill_definitions.SkillDefinitionError):
+            # A skill-access rule refused it (BOSSAPP-890, skill_policy.SkillPolicyDenied).
+            raise HTTPException(status_code=403, detail=str(error)) from error
         if isinstance(error, skill_definitions.SkillExistsError):
             raise HTTPException(status_code=409, detail=str(error)) from error
         if isinstance(error, skill_definitions.SkillDefinitionError):

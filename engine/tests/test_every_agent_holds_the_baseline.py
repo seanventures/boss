@@ -62,7 +62,7 @@ def test_every_agent_holds_the_knowledge_graph():
     assert "knowledge.read" in ab.BASELINE_SKILLS
     assert ab.bundles()["knowledge.read"] == ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why",
                                               "kg_search", "kg_precedent", "kg_cypher", "kg_schema",
-                                              "kg_rules", "kg_neighbors")
+                                              "kg_rules", "kg_neighbors", "wiki_read")
     reg = _registry()
     assert all(reg.get(t).kind == "read" for t in ab.KNOWLEDGE_TOOLS)
 
@@ -78,7 +78,9 @@ def test_kg_propose_fact_is_in_every_agents_baseline():
     assert holders == []
     # BOSSAPP-768: proposing a business rule rides the same bundle — every agent may propose one,
     # none may approve one (knowledge:review is never delegable).
-    assert ab.bundles()["knowledge.propose"] == ("kg_propose_fact", "kg_propose_rule", "record_learning")
+    # BOSSAPP-891: a wiki change rides it too — proposed as a diff, written only on approval.
+    assert ab.bundles()["knowledge.propose"] == ("kg_propose_fact", "kg_propose_rule", "record_learning",
+                                                 "wiki_propose")
     for tool in ab.PROPOSE_FACT_TOOLS:
         spec = ab.bundle_tool_spec("knowledge.propose", tool)
         assert spec is not None and spec.kind == "write" and spec.reversibility == "safe", tool
@@ -122,7 +124,8 @@ def test_every_agent_can_file_a_gap_in_boss_itself():
     BOSS for BOSS to fix itself. It is the fundamentals' only write, it is safe, and it only
     queues for a person (queues_for_review), so it runs in the turn that found it."""
     assert "file_platform_gap" in ab.FUNDAMENTALS_TOOLS
-    assert ab.BUNDLE_WRITES["boss.fundamentals"] == ("file_platform_gap",)
+    # ...and its friction reports (BOSSAPP-889), the same kind of write: a record a person reads.
+    assert ab.BUNDLE_WRITES["boss.fundamentals"] == ("file_platform_gap", "report_friction")
     spec = ab.bundle_tool_spec("boss.fundamentals", "file_platform_gap")
     assert spec is not None and spec.kind == "write" and spec.reversibility == "safe"
     assert spec.queues_for_review and not spec.operator_only

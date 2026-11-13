@@ -753,3 +753,9 @@
 }
 /* A lesson's incidents ("Learned in INC-1 · applied in INC-2"): each opens its incident node. */
 .kg-link { font: inherit; padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+/* Wiki (BOSSAPP-891): the page list beside the page; one column on a phone. */
+.kg-wiki { display: grid; grid-template-columns: minmax(180px, 240px) 1fr; gap: 16px; align-items: start; }
+.kg-wiki textarea.input { font-family: var(--mono, monospace); min-height: 16rem; }
+@media (max-width: 720px) {
+  .kg-wiki { grid-template-columns: 1fr; }
+}

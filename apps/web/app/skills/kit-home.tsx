@@ -30,6 +30,7 @@ import { Library } from "./library";
 import { TestCrewModal } from "./test-crew-modal";
 import { WhoCan } from "./who-can";
 import { KitTemplates } from "../../components/v2/templates/kit-templates";
+import { SkillAccessRules } from "./skill-access-rules";
 import { ToolRules } from "./tool-rules";
 
 export function KitHome({ projectId, actor }: { projectId: string; actor: string }) {
@@ -147,7 +148,7 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
             <button key={t} type="button" role="tab" aria-selected={tab === t} className="kit-tab"
                     data-testid={`kit-tab-${t}`} onClick={() => switchTab(t)}
                     title={t === "templates" ? "App templates: import, review, approve, trial, hide"
-                      : t === "rules" ? "Tool rules: deny, ask, allow or rate-limit tool calls, in order; Always allow" : undefined}>
+                      : t === "rules" ? "Tool rules: deny, ask, allow or rate-limit tool calls, in order; Always allow. Skill access: who may create, import, install, hold or run which skills" : undefined}>
               {t === "kit" ? "Kit" : t === "who" ? "Who can" : t === "library" ? "Library" : t === "templates" ? "Templates" : "Rules"}
             </button>
           ))}
@@ -248,6 +249,8 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
 
       {/* BOSSAPP-815/817: the ordered tool-policy rules and the revocable Always allow rows. */}
       {tab === "rules" ? <ToolRules projectId={projectId} actor={actor} /> : null}
+      {/* BOSSAPP-890: who may create, import, install, hold or run which skills, as rules. */}
+      {tab === "rules" ? <SkillAccessRules projectId={projectId} /> : null}
 
       {crewOpen && kit ? (
         <TestCrewModal projectId={projectId} actor={actor} abilities={kit.abilities}

@@ -316,6 +316,15 @@ class CapabilityBundleService:
         if skill.get("system") is True:
             raise CapabilityBundleError("imported project skills cannot be system skills")
         self.entitlements.validate_skill_spec(skill, "capability bundle")
+        # WHO MAY INSTALL WHAT, FROM WHOM (BOSSAPP-890): the source is the bundle's publisher.
+        from .skill_policy import check
+
+        publisher = bundle.get("publisher") or {}
+        said = str(publisher.get("id") or publisher.get("name") or "") if isinstance(
+            publisher, dict) else ""
+        check(connection, project_id, action="install", skill_key=skill_id,
+              source=f"bundle:{said or 'unsigned'}", risk_tier=skill.get("risk_tier"),
+              actor=actor)
         item = ensure_skill(
             connection,
             project_id,

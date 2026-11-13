@@ -12974,6 +12974,377 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_access_grants_live
   ON mcp_access_grants (project_id, server_id, role_key, tool) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_mcp_access_grants_role ON mcp_access_grants (project_id, role_key, status);
 -- ================================ end BOSSAPP-846-848 ==
+-- BOSSAPP-855-860
+-- ── Runtime extras: hosted remote agents, workspace runtime services, per-agent run policy,
+-- runtime version windows, per-agent signing keys, tailnet previews ─────────────────────────────
+-- 858 (services/runtime_versions.py) needs no table: a version window is declared on the
+-- engine's spec, never stored.
+-- 857 (services/role_run_policy.py): a role's own run policy, enforced at job claim.
+-- {max_concurrent, max_daily_runs, max_daily_cost_usd}; '{}' (the default) = no policy, and the
+-- claim path asks nothing.
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS run_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- The role a job runs as (enqueue_job(role_key=…) or payload.role_key). NULL: no role's policy.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS role_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_jobs_role_live
+  ON jobs (project_id, role_key, status) WHERE role_key IS NOT NULL;
+-- One row per job claimed for a role WITH a policy: what max_daily_runs counts. A reclaim of
+-- the same job does not count twice.
+CREATE TABLE IF NOT EXISTS role_job_claims (
+  job_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_role_job_claims_day
+  ON role_job_claims (project_id, role_key, claimed_at);
+-- 857: no-progress back-off for monitors and schedules. backoff_max_factor 1 = off (default);
+-- above 1, each wake that reports nothing new doubles the wait, up to that many intervals.
+ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS backoff_max_factor INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS no_progress_streak INTEGER NOT NULL DEFAULT 0;
+DO $wake_backoff$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_wakeups_backoff_max_factor_check') THEN
+    ALTER TABLE agent_wakeups ADD CONSTRAINT agent_wakeups_backoff_max_factor_check
+      CHECK (backoff_max_factor BETWEEN 1 AND 64);
+  END IF;
+END $wake_backoff$;
+-- 859 (services/agent_keys.py): an agent's own persistent Ed25519 signing key. The private half
+-- is a vault item (kind signing_key) and never leaves BOSS; the public JWK is published at
+-- GET /v1/agents/{agent_id}/jwks. kid = RFC 7638 thumbprint. One active key per agent; a rotated
+-- key is 'retired' (still published, verifies what it signed); a compromised one 'revoked'.
+CREATE TABLE IF NOT EXISTS agent_keys (
+  kid TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  alg TEXT NOT NULL DEFAULT 'EdDSA' CHECK (alg = 'EdDSA'),
+  public_jwk JSONB NOT NULL,
+  public_pem TEXT NOT NULL,
+  private_vault_item_id TEXT NOT NULL REFERENCES identity_vault_items(id),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'retired', 'revoked')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  retired_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_keys_active ON agent_keys (agent_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_agent_keys_role ON agent_keys (project_id, role_key, status);
+-- 860 (services/preview_expose.py, scripts/expose/boss-expose): a preview's own HTTPS origin
+-- (tailnet port or Caddy subdomain), set only after BOSS verified it from outside. NULL: the
+-- preview is served under BOSS's preview origin as before (BOSS_PREVIEW_EXPOSE off, the default).
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS exposed_url TEXT;
+-- 855 (services/remote_agents.py): hosted remote agents as harnesses (kind remote_agent,
+-- boss.harness.remote/v1). Org-level profiles; a profile runs only with a positive spend ceiling
+-- per BOSS run AND a person's retention acknowledgement. The bearer token is NAMED (token_env),
+-- never stored here. Registered verified=False as harness 'remote:<name>'.
+CREATE TABLE IF NOT EXISTS remote_agent_profiles (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'generic' CHECK (provider IN ('generic')),
+  base_url TEXT NOT NULL,
+  token_env TEXT,
+  spend_ceiling_usd_micros BIGINT NOT NULL CHECK (spend_ceiling_usd_micros > 0),
+  retention_ack_by TEXT,
+  retention_ack_at TIMESTAMPTZ,
+  retention_terms TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  poll_seconds DOUBLE PRECISION NOT NULL DEFAULT 3.0,
+  timeout_seconds INTEGER NOT NULL DEFAULT 3600,
+  description TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, name)
+);
+-- ================================ end BOSSAPP-855-860 ==
+
+-- BOSSAPP-w4-ops2
+-- ── 891 THE PROJECT WIKI ───────────────────────────────────────────────────────────────────────
+-- services/wiki.py: pages per project, every save a revision (append-only; a restore is a new
+-- revision). save_page is the one writer; an agent's write consumes a diff-bound change_consent
+-- (subject_kind 'wiki', BOSSAPP-843) and a person's edit is its own consent. `maintained_by`
+-- 'kg' marks a page the maintainer renders from the knowledge graph (kg_nodes stay canonical).
+CREATE TABLE IF NOT EXISTS wiki_pages (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  current_revision_id TEXT,
+  maintained_by TEXT,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, slug)
+);
+CREATE TABLE IF NOT EXISTS wiki_revisions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  revision_no INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  content_hash TEXT NOT NULL,
+  author_kind TEXT NOT NULL DEFAULT 'person'
+    CHECK (author_kind IN ('person', 'agent', 'system')),
+  author_id TEXT NOT NULL DEFAULT '',
+  source_note TEXT NOT NULL DEFAULT '',
+  consent_id TEXT,
+  -- kg_nodes ids a maintained revision was rendered from (provenance, not a foreign key: a
+  -- closed fact keeps the revision that cited it readable).
+  sources JSONB NOT NULL DEFAULT '[]'::jsonb,
+  restored_from TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (page_id, revision_no)
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_revisions_page ON wiki_revisions (page_id, revision_no DESC);
+-- A wiki change is a third kind of consented subject. Widened only when the live constraint
+-- does not already allow it, so a restart takes no lock on change_consents.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'change_consents'::regclass
+       AND conname = 'change_consents_subject_kind_check'
+       AND pg_get_constraintdef(oid) LIKE '%wiki%') THEN
+    ALTER TABLE change_consents DROP CONSTRAINT IF EXISTS change_consents_subject_kind_check;
+    ALTER TABLE change_consents ADD CONSTRAINT change_consents_subject_kind_check
+      CHECK (subject_kind IN ('skill', 'prompt', 'wiki'));
+  END IF;
+END $$;
+-- ── 892 EXTERNAL MEMORY BACKENDS ───────────────────────────────────────────────────────────────
+-- services/memory_backends.py: a project's outside memory store (mem0 today), a MIRROR of
+-- agent_memory, never its source. The credential is NAMED (an env variable allowlisted by
+-- env_refs), never stored. Every memory that may leave is queued in memory_exports as a snapshot
+-- `pending_review`; only a person's approval lets that exact text be sent. Actor-scoped memories
+-- and unreviewed lessons are never queued. A forgotten memory's copy is deleted (op 'delete').
+CREATE TABLE IF NOT EXISTS memory_backends (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('mem0')),
+  base_url TEXT NOT NULL,
+  credential_env TEXT NOT NULL DEFAULT '',
+  read_enabled BOOLEAN NOT NULL DEFAULT false,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE TABLE IF NOT EXISTS memory_exports (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  backend_id TEXT NOT NULL REFERENCES memory_backends(id) ON DELETE CASCADE,
+  memory_id TEXT NOT NULL,
+  op TEXT NOT NULL CHECK (op IN ('write', 'delete')),
+  -- The exact text a person approved; what is sent, whatever the memory says later.
+  body TEXT NOT NULL DEFAULT '',
+  snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending_review'
+    CHECK (status IN ('pending_review', 'approved', 'rejected', 'written', 'skipped')),
+  external_id TEXT,
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_exports_open
+  ON memory_exports (backend_id, memory_id, op) WHERE status IN ('pending_review', 'approved');
+CREATE INDEX IF NOT EXISTS idx_memory_exports_queue
+  ON memory_exports (project_id, status, created_at);
+-- ── 893 DECISION EXAMPLES ──────────────────────────────────────────────────────────────────────
+-- services/decision_examples.py: what a person decided, kept as a labelled example for evaluating
+-- and tuning the decision model. `override` rows are captured automatically when a person rejects
+-- or sends back a recommendation, or forces an approval; `saved` rows are a person's "Save as
+-- example". `snapshot` is the decision as it was shown; the export anonymizes it (placeholders
+-- for secret-shaped keys, redaction patterns, pseudonyms for people). One row per (decision,
+-- source): answering again updates it.
+CREATE TABLE IF NOT EXISTS decision_examples (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  decision_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('override', 'saved')),
+  action TEXT,
+  outcome TEXT NOT NULL
+    CHECK (outcome IN ('approve', 'approve_forced', 'reject', 'revise', 'execute')),
+  recommended TEXT NOT NULL DEFAULT 'approve',
+  snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  note TEXT NOT NULL DEFAULT '',
+  label TEXT NOT NULL DEFAULT '',
+  decided_by TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (decision_id, source)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_examples_project
+  ON decision_examples (project_id, created_at DESC);
+-- ── 894 TEAM TEMPLATES ─────────────────────────────────────────────────────────────────────────
+-- services/team_templates.py: a pack's `org` (reporting lines, org_assignments) and
+-- `starter_tasks` (work items) are applied in one transaction after a dry run, replayed through
+-- the same services the console uses. One row per applied item: its digest as installed and what
+-- it became, so drift (in_sync / modified / missing) is a comparison, not a guess.
+CREATE TABLE IF NOT EXISTS pack_provenance (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  pack_id TEXT NOT NULL,
+  pack_version TEXT NOT NULL DEFAULT '0.0.0',
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('role', 'org', 'task')),
+  item_key TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  target_ref TEXT,
+  installed_by TEXT NOT NULL DEFAULT '',
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, pack_id, item_kind, item_key)
+);
+-- BOSSAPP-w4-ops1 ── multi-account pools (886), CLI gateways (887), reflection (888), agent
+-- feedback (889), skill-access policy (890). One block, appended after every other block.
+-- 889 (services/agent_feedback.py): an agent's complaint or suggestion about something it worked
+-- with — a tool, a skill, a grant it lacked, a brief, a model. Filed with `report_friction` (every
+-- agent's baseline); idempotent per run (dedupe_key = run + role + kind + target), so a looping
+-- agent files once. The body is redacted of credentials before it is stored.
+CREATE TABLE IF NOT EXISTS agent_feedback (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT,
+  run_ref TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK (kind IN ('complaint', 'suggestion')),
+  target_kind TEXT NOT NULL CHECK (target_kind IN
+    ('tool', 'skill', 'grant', 'brief', 'workflow', 'model', 'platform', 'other')),
+  target TEXT NOT NULL,
+  body TEXT NOT NULL,
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'acknowledged', 'resolved', 'dismissed')),
+  dedupe_key TEXT NOT NULL,
+  filed_by TEXT NOT NULL,
+  resolved_by TEXT,
+  resolution TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_feedback_once_per_run ON agent_feedback (project_id, dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_target ON agent_feedback (project_id, target_kind, target, status);
+-- 890 (services/skill_policy.py): the org's and project's declarative skill-access rules, read
+-- in order (position, then project before org, then id); the first rule that matches decides and
+-- no match allows — an install without rules behaves exactly as before. Checked where a skill is
+-- created or edited (save_skill, draft_skill), imported (skill_sources), installed (a capability
+-- bundle), tested (skill_tests), removed (delete_skill), given to an agent (assign_skill_to_role)
+-- and invoked (SkillRuntimeService.invoke). A revoked rule is kept for the audit.
+CREATE TABLE IF NOT EXISTS skill_policy_rules (
+  id TEXT PRIMARY KEY,
+  org_id TEXT REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 100,
+  effect TEXT NOT NULL CHECK (effect IN ('allow', 'deny')),
+  actions JSONB NOT NULL DEFAULT '["*"]'::jsonb,
+  skill_pattern TEXT NOT NULL DEFAULT '*',
+  role_pattern TEXT NOT NULL DEFAULT '*',
+  actor_kind TEXT NOT NULL DEFAULT 'any' CHECK (actor_kind IN ('any', 'person', 'agent')),
+  source_pattern TEXT NOT NULL DEFAULT '*',
+  min_risk_tier INTEGER CHECK (min_risk_tier BETWEEN 0 AND 3),
+  note TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'revoked')),
+  hit_count INTEGER NOT NULL DEFAULT 0,
+  last_hit_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  updated_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (project_id IS NOT NULL OR org_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_policy_rules_project ON skill_policy_rules (project_id, status);
+CREATE INDEX IF NOT EXISTS idx_skill_policy_rules_org ON skill_policy_rules (org_id, status) WHERE project_id IS NULL;
+-- 888 (services/reflection.py): one row per reflection over an agent's recent runs — the evidence
+-- it read and the proposals it opened (skill_diff through skill_definitions.propose_change,
+-- agent_prompt_diff through change_consent subject 'prompt'). It only proposes: every change is a
+-- diff-bound consent a person approves. Paused by default: no reflection_settings row, or
+-- enabled = false, means the schedule never runs it (a person may still press Reflect now).
+CREATE TABLE IF NOT EXISTS reflection_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  trigger TEXT NOT NULL CHECK (trigger IN ('manual', 'scheduled')),
+  status TEXT NOT NULL CHECK (status IN ('proposed', 'nothing_to_propose', 'failed')),
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  proposals JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_reflection_runs_project ON reflection_runs (project_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS reflection_settings (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  every_hours INTEGER NOT NULL DEFAULT 168 CHECK (every_hours BETWEEN 1 AND 2160),
+  roles JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_run_at TIMESTAMPTZ,
+  updated_by TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- 887 (services/llm_gateway.py): an operator-named LLM gateway (LiteLLM, Portkey, an internal
+-- one) the coding CLIs are routed through, per project or for the whole org (a project's own
+-- wins). The key lives in the secret store under `secret_key` (never in this table, never in a
+-- sandbox): the CLI gets a model-proxy run token and the loopback base URL, and the proxy forwards
+-- to `base_url` with the real key. One active gateway per protocol per scope.
+CREATE TABLE IF NOT EXISTS llm_gateways (
+  id TEXT PRIMARY KEY,
+  org_id TEXT REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+  base_url TEXT NOT NULL,
+  secret_key TEXT NOT NULL,
+  harnesses JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  last_test JSONB,
+  created_by TEXT NOT NULL,
+  updated_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (project_id IS NOT NULL OR org_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_gateways_project_active
+  ON llm_gateways (project_id, protocol) WHERE status = 'active' AND project_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_gateways_org_active
+  ON llm_gateways (org_id, protocol) WHERE status = 'active' AND project_id IS NULL;
+-- 886 (services/subscription_pools.py): several subscription accounts for one provider in a
+-- project, used as one pool. Each member's login lives in the secret store under its own name
+-- (`secret_name`, the same subscription namespace the single login uses; never in a table) and
+-- its windows in subscription_accounts under `account_key` (<engine>:pool:<member id>). A run is
+-- given the member with the most headroom, pinned for the rest of its task; the pool is exhausted
+-- only when every member is.
+CREATE TABLE IF NOT EXISTS subscription_pools (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  engine TEXT NOT NULL CHECK (engine IN ('claude_code', 'codex')),
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, engine)
+);
+CREATE TABLE IF NOT EXISTS subscription_pool_members (
+  id TEXT PRIMARY KEY,
+  pool_id TEXT NOT NULL REFERENCES subscription_pools(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  secret_name TEXT NOT NULL,
+  account_key TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'needs_reauth')),
+  last_assigned_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (pool_id, label)
+);
+CREATE TABLE IF NOT EXISTS subscription_pool_pins (
+  pool_id TEXT NOT NULL REFERENCES subscription_pools(id) ON DELETE CASCADE,
+  task_ref TEXT NOT NULL,
+  member_id TEXT NOT NULL REFERENCES subscription_pool_members(id) ON DELETE CASCADE,
+  pinned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (pool_id, task_ref)
+);
 -- BOSSAPP-w4-observability ──────────────────────────────────────────────────────────────────────
 -- 873: what an MCP call may carry upstream besides the server's own sign-in
 -- (services/mcp_headers_policy.py). {} = exactly what was sent before. Keys:

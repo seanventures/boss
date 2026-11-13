@@ -119,6 +119,9 @@ class HarnessSpec:
     #: Where the harness came from: "builtin", or "plugin:<id>" for an installable adapter
     #: loaded from a manifest behind the trust gate (harness_plugins).
     source: str = "builtin"
+    #: The CLI release window this engine is driven within (runtime_versions.VersionWindow,
+    #: BOSSAPP-858). None: no version is checked — presence on PATH is the whole check.
+    version: Optional[object] = None
 
 
 _REGISTRY: dict[str, HarnessSpec] = {}
@@ -146,6 +149,7 @@ def register_harness(
     runtime: tuple[RuntimeBinary, ...] = (),
     failure_patterns: tuple[FailurePattern, ...] = (),
     source: str = "builtin",
+    version: Optional[object] = None,
 ) -> HarnessSpec:
     key = (name or "").strip().lower()
     if not key:
@@ -158,7 +162,8 @@ def register_harness(
     spec = HarnessSpec(name=key, build=build, kind=kind, description=description,
                        requires=tuple(requires), verified=verified,
                        aliases=tuple(a.lower() for a in aliases), runtime=tuple(runtime),
-                       failure_patterns=tuple(failure_patterns), source=source)
+                       failure_patterns=tuple(failure_patterns), source=source,
+                       version=version)
     _REGISTRY[key] = spec
     for alias in spec.aliases:
         _ALIASES[alias] = key
@@ -183,10 +188,24 @@ def resolve_name(name: Optional[str], default: str = "claude_code") -> str:
     return _ALIASES.get(key, key)
 
 
+#: prefix -> resolver(key) -> Optional[HarnessSpec]: harnesses registered on first use, from a
+#: store this leaf module cannot read itself (BOSSAPP-855: `remote:<profile>` from the database).
+_RESOLVERS: dict[str, Callable[[str], Optional[HarnessSpec]]] = {}
+
+
+def register_resolver(prefix: str, resolver: Callable[[str], Optional[HarnessSpec]]) -> None:
+    _RESOLVERS[prefix] = resolver
+
+
 def get_harness(name: Optional[str]) -> HarnessSpec:
     _ensure_builtins()
     key = resolve_name(name)
     spec = _REGISTRY.get(key)
+    if spec is None:
+        for prefix, resolver in list(_RESOLVERS.items()):
+            if key.startswith(prefix):
+                spec = resolver(key)
+                break
     if spec is None:
         known = ", ".join(sorted(_REGISTRY)) or "(none registered)"
         raise UnknownHarness(
@@ -209,8 +228,9 @@ def available_harnesses() -> list[dict]:
     shown = [s for s in _REGISTRY.values()
              if s.kind != "conformance"
              or (os.environ.get("BOSS_SCRIPTED_ENGINE") or "").strip().lower() in ("1", "true", "yes")]
-    return [
-        {
+    out = []
+    for s in sorted(shown, key=lambda x: x.name):
+        row = {
             "name": s.name,
             "kind": s.kind,
             "description": s.description,
@@ -220,8 +240,11 @@ def available_harnesses() -> list[dict]:
             "runtime": [r.binary for r in s.runtime],
             "source": s.source,
         }
-        for s in sorted(shown, key=lambda x: x.name)
-    ]
+        if s.version is not None and getattr(s.version, "declared", False):
+            # Only an engine that declared a window says so: an undeclared one lists as before.
+            row["version_window"] = s.version.view()
+        out.append(row)
+    return out
 
 
 def runtime_requirements(name: Optional[str]) -> tuple[RuntimeBinary, ...]:
@@ -250,6 +273,23 @@ def missing_runtime(name: Optional[str], which: Callable[[str], Optional[str]] =
                     ) -> list[RuntimeBinary]:
     """The declared binaries of engine `name` that are not on this process's PATH."""
     return [r for r in runtime_requirements(name) if not which(r.binary)]
+
+
+def version_window(name: Optional[str]):
+    """Engine `name`'s declared CLI release window (BOSSAPP-858), or None."""
+    try:
+        window = get_harness(name).version
+    except UnknownHarness:
+        return None
+    return window if window is not None and getattr(window, "declared", False) else None
+
+
+def version_verdict(name: Optional[str], model: Optional[str] = None, **probe):
+    """runtime_versions.VersionVerdict for engine `name` running `model`; None when the engine
+    declared no window (the default — nothing is probed)."""
+    from .runtime_versions import verdict_for
+
+    return verdict_for(version_window(name), model, **probe)
 
 
 def clear_registry_for_tests() -> None:
