@@ -21,6 +21,7 @@ import {
 import { showToast } from "../client-forms";
 import { FailureLine, failureOf, type Failure } from "./control-board";
 import { resetDay } from "./spend-home";
+import { ScopedBudgetsCard } from "./scoped-budgets";
 
 export const AT_LIMIT_CHOICES: { key: AtLimit; label: string; hint: string }[] = [
   { key: "pause", label: "Pause new work and ask me", hint: "Running builds stop at next step" },
@@ -201,6 +202,7 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
   const dirty = paceMoved || capsChanged || changedRows.length > 0;
 
   return (
+    <>
     <form className="gv-limits" data-testid="gv-limits" noValidate
           onSubmit={(e) => { e.preventDefault(); void save(); }}>
       <button type="button" className="ag-link gv-back" data-testid="gv-back" onClick={onBack}>← Spend</button>
@@ -291,5 +293,8 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
         Advanced: pace, token guides, review rounds
       </button>
     </form>
+    {/* BOSSAPP-863: budgets by org, project, agent or workflow, checked mid-stage. */}
+    <ScopedBudgetsCard projectId={projectId} actor={actor} />
+    </>
   );
 }

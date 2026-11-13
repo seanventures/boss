@@ -239,6 +239,10 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // An agent's proposed secret: the person types the value and stores it
     // (app/secret-proposal-card.tsx, BOSSAPP-871; secret:manage @ the decision).
     "/v1/secret-proposals/": "secret:manage",
+    // Govern › Limits › Budgets by agent or workflow (app/govern/scoped-budgets.tsx, BOSSAPP-863):
+    // add and remove a scoped budget (budget:manage at org).
+    "/v1/budget-policies/scoped": "budget:manage",
+    "/v1/budget-policies/scoped/": "budget:manage",
     // Skills & MCP › Rules (lib/tool-policies.ts, BOSSAPP-815): the simulate box is a read.
     "/v1/tool-policies/simulate": "mcp_server:read",
     "/v1/tool-policies": "mcp_server:review",

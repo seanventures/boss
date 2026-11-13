@@ -117,6 +117,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["boss-recommendations", "improvement:read"],
   ["boss-recommendations.md", "improvement:read"],
   ["break-glass/grants", "role_binding:read"],
+  ["budget-policies/scoped", "budget:read"],
   ["budget/allocations", "budget:read"],
   ["budget/daily", "budget:read"],
   ["budget/forecast", "budget:read"],

@@ -13067,3 +13067,25 @@ CREATE TABLE IF NOT EXISTS identity_instance_admins (
 );
 CREATE INDEX IF NOT EXISTS idx_identity_instance_admins_live
   ON identity_instance_admins (principal_id) WHERE ended_at IS NULL;
+-- 863 (services/scoped_budgets.py): budgets at org, project, agent (role) and workflow scope. One
+-- active row per (org, scope, period[, project for a role]); a replaced or removed policy is kept
+-- with status 'removed'. Spend is money on llm_calls in the period; BudgetGovernor.reserve refuses
+-- past a hard-stop cap and a paid call past one signals its run to stop at the next turn.
+CREATE TABLE IF NOT EXISTS scoped_budget_policies (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('org', 'project', 'role', 'workflow')),
+  scope_id TEXT NOT NULL,
+  project_id TEXT,
+  period TEXT NOT NULL DEFAULT 'month' CHECK (period IN ('day', 'month')),
+  cap_usd_micros BIGINT NOT NULL CHECK (cap_usd_micros > 0),
+  warn_pct NUMERIC NOT NULL DEFAULT 0.8,
+  hard_stop BOOLEAN NOT NULL DEFAULT true,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'removed')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_scoped_budget_policies_live
+  ON scoped_budget_policies (org_id, scope_type, scope_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_llm_calls_role_time ON llm_calls (role, created_at) WHERE role IS NOT NULL;
