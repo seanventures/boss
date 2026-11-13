@@ -23,6 +23,7 @@ import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
 import { PrdRecordView } from "./prd-record";
 import { TypedAnswer, TypedDecisionForm } from "./typed-form-ui";
+import { DecisionOptions, optionsOf } from "./decision-options-ui";
 import { AlwaysAllowOption, alwaysAllowOffer } from "./always-allow-ui";
 import { parseForm } from "../lib/typed-form";
 import { SubmitButton } from "./submit-button";
@@ -1283,6 +1284,10 @@ export function DecisionActions({ decision, projectId, actorId }: {
       ? <TypedDecisionForm decisionId={decision.id} form={typedForm} projectId={projectId} actorId={actorId}
                            onAnswered={setAnswered} />
       : <TypedAnswer form={typedForm} answer={decision.answer} by={decision.answeredBy} />;
+  }
+  // OPTIONS WITH SIGNED EFFECTS (BOSSAPP-879): one Choose per option, its effects in words.
+  if (optionsOf(decision.recommendation).length) {
+    return <DecisionOptions decision={decision} projectId={projectId} actorId={actorId} offers={offers} />;
   }
   // "ALWAYS ALLOW THIS" (BOSSAPP-817): an Ask card about a tier 0-1 tool call may approve the
   // call AND keep allowing it for this agent; the engine said whether it may (always_allow_offer).

@@ -303,6 +303,11 @@ def create_item(connection: Connection, settings: Any = None, *, project_id: str
         add_labels(connection, project_id, item_id, labels, actor=actor)
     emit_event(connection, project_id, "work_item.created", actor, "work_item", item_id,
                {"subject_type": subject_type, "parent_id": parent_id, "status": status})
+    # What the item MENTIONS (BOSSAPP-882, work_outputs): another item's key, a PR, a link.
+    from . import work_outputs
+
+    work_outputs.quietly(work_outputs.refresh_mentions, connection, project_id=project_id,
+                         item_id=item_id, actor=actor)
     return get_item(connection, project_id, item_id)
 
 
@@ -348,6 +353,12 @@ def update_item(connection: Connection, settings: Any = None, *, project_id: str
                            {**sets, "id": item_id})
         emit_event(connection, project_id, "work_item.updated", actor, "work_item", item_id,
                    {"fields": sorted(sets)})
+        if {"title", "description"} & set(sets):
+            # The text changed: what it mentions is read again (BOSSAPP-882, work_outputs).
+            from . import work_outputs
+
+            work_outputs.quietly(work_outputs.refresh_mentions, connection,
+                                 project_id=project_id, item_id=item_id, actor=actor)
     if "status" in fields and fields["status"] != row["status"]:
         target = _status(fields["status"])
         if target == "done":
@@ -374,6 +385,7 @@ def set_status(connection: Connection, settings: Any = None, *, project_id: str,
     emit_event(connection, project_id, "work_item.status_changed", actor, "work_item", item_id,
                {"from": row["status"], "to": status})
     if status == "cancelled":
+        _closed(connection, project_id, item_id, actor)
         # A cancelled blocker no longer blocks: what it held may go.
         wake_unblocked(connection, settings, project_id=project_id, item_id=item_id, actor=actor)
     return get_item(connection, project_id, item_id)
@@ -392,6 +404,15 @@ def delete_item(connection: Connection, *, project_id: str, item_id: str, actor:
 
 
 # ── completion and the blocker wake ──────────────────────────────────────────────────────────
+
+def _closed(connection: Connection, project_id: str, item_id: str, actor: str) -> None:
+    """An item closed: its status cards (and its ancestors') are refreshed and it keeps a
+    closing summary (BOSSAPP-883, status_cards). Never fails the close."""
+    from . import status_cards, work_outputs
+
+    work_outputs.quietly(status_cards.on_item_closed, connection, project_id=project_id,
+                         item_id=item_id, actor=actor)
+
 
 def complete_item(connection: Connection, settings: Any = None, *, project_id: str,
                   item_id: str, actor: str, origin: Optional[str] = None) -> dict[str, Any]:
@@ -414,6 +435,7 @@ def mark_done(connection: Connection, settings: Any = None, *, project_id: str, 
         "UPDATE work_items SET status = 'done', resolved_at = now(), resolved_by = :a, "
         "updated_at = now() WHERE id = :id"), {"a": actor, "id": item_id})
     emit_event(connection, project_id, "work_item.completed", actor, "work_item", item_id, {})
+    _closed(connection, project_id, item_id, actor)
     return wake_unblocked(connection, settings, project_id=project_id, item_id=item_id,
                           actor=actor)
 
@@ -598,6 +620,13 @@ def on_run_completed(connection: Connection, settings: Any = None, *, kind: str,
                 return None
             row = connection.execute(text("SELECT * FROM work_items WHERE id = :id FOR UPDATE"),
                                      {"id": item_id}).mappings().first()
+            if row is not None:
+                # What the run produced joins the item's outputs (BOSSAPP-882): its PR, preview,
+                # deploy, PRD — whether or not the item completes below.
+                from . import work_outputs
+
+                work_outputs.quietly(work_outputs.collect, connection,
+                                     project_id=row["project_id"], item_id=item_id, actor=actor)
             if row is None or row["status"] in CLOSED or row["status"] == "in_review":
                 return None
             if row.get("ambient") or not is_primary(row, kind, run_id):

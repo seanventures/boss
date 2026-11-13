@@ -2875,6 +2875,10 @@ class DecisionActionRequest(BaseModel):
     # source=decision allow rule (tool_policy_engine.grant_from_decision). Refused, with the
     # approval, on any other card or a tool the card did not offer it for.
     always_allow: Optional[dict[str, Any]] = None
+    # The option a person chose on a decision whose options carry signed effects (BOSSAPP-879,
+    # services/decision_options): its id. Verified (exists, signature holds) before the
+    # approval is recorded; refused on a decision without options.
+    choose: Optional[str] = None
 
 
 class DecisionDigestRequest(BaseModel):

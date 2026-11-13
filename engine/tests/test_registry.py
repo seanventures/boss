@@ -16,6 +16,8 @@ _EXPECTED_TOOLS: set[str] = {
     "request_tool_access",
     # AN AGENT PROPOSES A SECRET (BOSSAPP-871): a card the person types the value on.
     "propose_secret",
+    # WORK UX, SET 2 (BOSSAPP-879): options with signed effects, a card a person chooses on.
+    "offer_options", "watch_work_item", "propose_hire", "request_budget_override",
     # THE KNOWLEDGE GRAPH (BOSSAPP-622): where code is, who depends on it, what a change can
     # break, the facts and precedent behind it; and kg_propose_fact, the one write (an `inferred`
     # fact), offered through the knowledge.propose bundle, which every agent holds.
@@ -277,7 +279,7 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 187, (
+    assert len(reg.names()) == 191, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 103  # + wiki_read (BOSSAPP-891) + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
@@ -285,7 +287,7 @@ def test_default_registry_shape():
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 84  # + propose_secret (BOSSAPP-871), + report_friction (BOSSAPP-889), + wiki_propose (BOSSAPP-891), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
+    assert len(write) == 88  # + offer_options (BOSSAPP-879), watch_work_item (880), propose_hire, request_budget_override (884), + propose_secret (BOSSAPP-871), + report_friction (BOSSAPP-889), + wiki_propose (BOSSAPP-891), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
     # + file_platform_gap, request_self_fix (BOSSAPP-571's doorway) + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
@@ -490,6 +492,12 @@ _SAFE_WRITES = [
     # A SECRET PROPOSAL IS A QUESTION (BOSSAPP-871): it opens a card and stores nothing; the value
     # comes only from the person who types it.
     "propose_secret",
+    # OPTIONS ARE A QUESTION (BOSSAPP-879): the card runs nothing until a person picks one, and
+    # then only that option's signed effects on BOSS's own work graph. A WATCHDOG (BOSSAPP-880)
+    # is a row that tells a person when a subtree stops; attaching it again replaces it. A HIRE
+    # OR A BUDGET OVERRIDE (BOSSAPP-884) is a question: nothing is created or raised until a
+    # person approves it.
+    "offer_options", "watch_work_item", "propose_hire", "request_budget_override",
     # A SCAN READS THE APP AND WRITES FINDINGS. It runs the pinned scanners on the app's own code
     # in a sandbox and against BOSS's own targets only; nothing in the app or the world changes,
     # and running it twice records a second scan (APP_TEMPLATES_AND_SECURITY_LOOP.md §4).

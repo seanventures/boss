@@ -479,6 +479,7 @@ class DecisionService:
         settle_at: Optional[str] = None,
         answer: Optional[dict] = None,
         always_allow: Optional[dict] = None,
+        choose: Optional[str] = None,
     ) -> dict:
         if action not in {"approve", "reject", "revise", "delegate", "execute", "settle"}:
             raise ValueError(f"Unsupported action: {action}")
@@ -752,6 +753,19 @@ class DecisionService:
                         typed_forms.record_answer(connection, form_row, answer, actor=actor)
                 except typed_forms.FormError as refused:
                     raise InvalidDecisionTransitionError(str(refused)) from refused
+            # AN OPTION WITH SIGNED EFFECTS (BOSSAPP-879): the choice is verified (its option
+            # exists and its signature holds) before the approval is recorded; a choice sent to
+            # a decision without options is refused the same way.
+            from . import decision_options
+
+            if decision_options.is_option_decision(row) or choose:
+                if not decision_options.is_option_decision(row):
+                    raise InvalidDecisionTransitionError(
+                        "this decision has no options to choose from")
+                try:
+                    decision_options.chosen(row, choose)
+                except decision_options.OptionError as refused:
+                    raise InvalidDecisionTransitionError(str(refused)) from refused
             connection.execute(
                 text(
                     """
@@ -800,7 +814,8 @@ class DecisionService:
                                                  action="approve", note=note)
             refreshed = self.get_row(connection, decision_id)
             self._handle_approved_follow_on(
-                connection, refreshed, actor, note=note, force=force, always_allow=always_allow
+                connection, refreshed, actor, note=note, force=force, always_allow=always_allow,
+                choose=choose,
             )
             if force:
                 # A FORCED approval overrode BOSS's own gate: kept as a decision example
@@ -1058,6 +1073,7 @@ class DecisionService:
         note: Optional[str] = None,
         force: bool = False,
         always_allow: Optional[dict] = None,
+        choose: Optional[str] = None,
     ) -> None:
         """Approval context must be explicitly threaded into the follow-on.
 
@@ -1421,6 +1437,46 @@ class DecisionService:
                 apply_wiki_patch(connection, row, actor)
             except WikiError as stale:
                 raise InvalidDecisionTransitionError(str(stale)) from stale
+        elif action == "choose_option":
+            # AN OPTION WITH SIGNED EFFECTS (BOSSAPP-879, decision_options): the chosen option's
+            # effects run, each recorded in decision_effect_runs; a target that changed since
+            # the question was asked is skipped, never guessed at.
+            from .decision_options import OptionError, carry_out
+
+            try:
+                carry_out(connection, self.settings, row, choose=choose, actor=actor)
+            except OptionError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "role.hire":
+            # AN AGENT PROPOSED A HIRE (BOSSAPP-884, agent_requests): exactly the signed draft is
+            # created through agents.create_agent, sponsored by the approver. Refused (approval
+            # not recorded) when the draft changed or the agent door says no.
+            from .agent_requests import RequestError, on_hire_approved
+
+            try:
+                on_hire_approved(connection, row, actor)
+            except RequestError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "budget.override":
+            # AN AGENT ASKED TO GO OVER THE CAP FOR ONE BUILD (BOSSAPP-884): the override is
+            # recorded for that build's lineage only; a build the cap already stopped is retried
+            # once this approval has committed.
+            from .agent_requests import RequestError, on_override_approved, resume_after_override
+
+            try:
+                granted = on_override_approved(connection, row, actor)
+            except RequestError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+            if granted["resume"]:
+                settings, jobs, decision_id = self.settings, self.jobs, str(row["id"])
+
+                def _resume() -> None:
+                    from ..db import get_engine
+
+                    resume_after_override(get_engine(), settings, jobs, decision_id=decision_id,
+                                          run_id=granted["run_id"])
+
+                _spawn_as_this_request(_resume)
         elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
             # A paid call whose outcome was never settled. Approving settles it: a reply the
             # receipt holds is recorded (usage and cost) and replayed by the step, never paid

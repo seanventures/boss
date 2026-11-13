@@ -17,6 +17,7 @@ import {
   POLICY_EXAMPLE, STATUS_WORDS, completeItem, createItem, flatten, partyName, readItem, readPolicy,
   readTree, relateItem, updateItem, type WorkNode, type WorkStatus, type WorkTree,
 } from "../../lib/work-items";
+import { ItemCards, OutputsSection, StatusCards, WatchSection } from "./work-item-extras";
 import "./work-tree.css";
 
 const SETTABLE: WorkStatus[] = ["backlog", "todo", "active", "blocked", "cancelled"];
@@ -70,6 +71,7 @@ export function WorkTreeView({ projectId, demo = false }: { projectId: string; d
         </GatedButton>
       </div>
       {said ? <p className="wt-said" role="alert">{said}</p> : null}
+      <StatusCards projectId={projectId} demo={demo} />
       {!rows.length ? (
         <div className="px-card wt-empty" data-testid="wt-empty">
           <TreeStructure size={18} aria-hidden /> No work items yet. Add one above; runs and builds join it as they start.
@@ -226,6 +228,9 @@ export function ItemPanel({ projectId, id, all, demo, onChanged }: {
           Runs: {item.runs.map((r) => `${RUN_WORDS[r.kind] ?? r.kind} ${r.status}`).join(" · ")}
         </p>
       ) : null}
+      <ItemCards projectId={projectId} id={id} demo={demo} />
+      <OutputsSection projectId={projectId} id={id} demo={demo} />
+      <WatchSection projectId={projectId} id={id} demo={demo} />
       {said ? <p className="wt-said" role="status" data-testid="wt-said">{said}</p> : null}
     </div>
   );

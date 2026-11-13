@@ -13569,3 +13569,133 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_oauth_grants_refresh ON mcp_oauth_grant
   WHERE refresh_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_mcp_oauth_grants_principal ON mcp_oauth_grants (principal_id)
   WHERE revoked_at IS NULL;
+-- BOSSAPP-w4-work-ux2
+-- ── Work UX, set 2 (BOSSAPP-879..884) ──────────────────────────────────────────────────────────
+-- 879 (services/decision_options.py): a decision's options carry typed, signed effects on the
+-- work-item graph (recommendation.effect_options, each with target_snapshot and an hs1 `sig`).
+-- Choosing one runs exactly its effects; every effect's outcome is one row here. A target that
+-- changed since the question was asked is `skipped_stale`, never guessed at.
+CREATE TABLE IF NOT EXISTS decision_effect_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  decision_id TEXT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
+  option_id TEXT NOT NULL,
+  effect_index INTEGER NOT NULL,
+  effect_type TEXT NOT NULL,
+  target_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('done', 'skipped_stale', 'failed')),
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  actor TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (decision_id, effect_index)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_effect_runs_project ON decision_effect_runs (project_id, created_at DESC);
+-- 880 (services/work_watchdogs.py): a person's watchdog on a work item's subtree. The monitor
+-- tick evaluates its conditions (stopped_unfinished | blocked | closed | stalled) and fires ONCE
+-- per fingerprint of what matched: an event plus one message per contact point through the
+-- notifications outbox. Nothing matching clears the fingerprint, so the next stop is told again.
+CREATE TABLE IF NOT EXISTS work_item_watchdogs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  root_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  watcher TEXT NOT NULL,                     -- person:<id> | agent:<role>
+  conditions JSONB NOT NULL DEFAULT '["stopped_unfinished", "blocked"]'::jsonb,
+  stall_hours INTEGER NOT NULL DEFAULT 24,
+  instructions TEXT NOT NULL DEFAULT '',
+  contact_point_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  last_fingerprint TEXT,
+  last_fired_at TIMESTAMPTZ,
+  last_fired JSONB,
+  fired_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (root_item_id, watcher)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_watchdogs_project ON work_item_watchdogs (project_id, enabled);
+-- 882 (services/work_outputs.py): every output of a work item in one place — its PRs, previews,
+-- deploys, artifacts and documents — filled when a run of the item completes (and on Refresh),
+-- or recorded by hand; source_kind/source_id name the row its live status is read from.
+CREATE TABLE IF NOT EXISTS work_item_outputs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('pull_request', 'preview', 'deploy', 'artifact', 'document',
+                                     'other')),
+  ref TEXT NOT NULL,                         -- a URL or a BOSS id
+  title TEXT NOT NULL DEFAULT '',
+  status TEXT,
+  source_kind TEXT,                          -- code_task | app_preview | preview_sandbox | stack_deployment | meeting
+  source_id TEXT,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (work_item_id, kind, ref)
+);
+-- What a work item MENTIONS: parsed from its title and description (source 'mention', replaced
+-- when the text changes) or added by a person (source 'manual'). Backlinks are this read the
+-- other way (to_kind 'work_item', to_ref = the item).
+CREATE TABLE IF NOT EXISTS work_item_refs (
+  project_id TEXT NOT NULL,
+  from_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  to_kind TEXT NOT NULL CHECK (to_kind IN ('work_item', 'pull_request', 'decision', 'code_task',
+                                           'workflow_run', 'document')),
+  to_ref TEXT NOT NULL,
+  mention TEXT,
+  source TEXT NOT NULL DEFAULT 'mention' CHECK (source IN ('mention', 'manual')),
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (from_item_id, to_kind, to_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_refs_to ON work_item_refs (to_kind, to_ref);
+-- 883 (services/status_cards.py): a standing question with a stored answer. A card (the whole
+-- project, or one work item and its subtree) is recomposed on its schedule, when an item in its
+-- scope closes, or on demand, into a numbered document revision; an unchanged document writes
+-- none. kind 'closing' is the summary an item keeps when it closes. Deterministic only: `mode`
+-- is 'deterministic' (a model-written mode is not built).
+CREATE TABLE IF NOT EXISTS status_cards (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'card' CHECK (kind IN ('card', 'closing')),
+  scope JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {} = the project; {work_item_id} = that subtree
+  prompt TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'deterministic' CHECK (mode IN ('deterministic')),
+  refresh_minutes INTEGER NOT NULL DEFAULT 60,
+  next_refresh_at TIMESTAMPTZ,
+  pinned BOOLEAN NOT NULL DEFAULT true,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_status_cards_due ON status_cards (next_refresh_at) WHERE refresh_minutes > 0;
+CREATE INDEX IF NOT EXISTS idx_status_cards_scope ON status_cards (project_id, (scope->>'work_item_id'));
+CREATE TABLE IF NOT EXISTS status_card_revisions (
+  card_id TEXT NOT NULL REFERENCES status_cards(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  project_id TEXT NOT NULL,
+  document TEXT NOT NULL,
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  trigger TEXT NOT NULL,                     -- created | schedule | close | manual
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (card_id, revision)
+);
+-- 884 (services/agent_requests.py): an approved `budget.override` decision. The build lineage
+-- (root_run_id: the run and its retries) may spend up to the caps plus extra_usd_micros at the
+-- stage-boundary cap check (build_budget.cap_reached with the run); no other build gains room.
+-- A `role.hire` needs no table: its draft lives on the decision until a person approves it.
+CREATE TABLE IF NOT EXISTS budget_overrides (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  root_run_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  extra_usd_micros BIGINT NOT NULL CHECK (extra_usd_micros > 0),
+  decision_id TEXT NOT NULL UNIQUE REFERENCES decisions(id) ON DELETE CASCADE,
+  approved_by TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_budget_overrides_lineage ON budget_overrides (project_id, root_run_id, status);
+-- ================================ end BOSSAPP-w4-work-ux2 ==

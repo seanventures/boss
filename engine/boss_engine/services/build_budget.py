@@ -211,7 +211,8 @@ def inflight_money(connection: Any, project_id: str) -> int:
         "FROM spent LEFT JOIN settled ON settled.r = spent.r"), {"p": project_id}).scalar() or 0)
 
 
-def cap_reached(budget: Any, connection: Any, project_id: str) -> Optional[dict[str, Any]]:
+def cap_reached(budget: Any, connection: Any, project_id: str,
+                run_id: Optional[str] = None) -> Optional[dict[str, Any]]:
     """The cap a running build has crossed, or None. Money only: the money settled in each cap's
     period plus what running builds have spent unsettled. Other work's holds are a moment, not
     spending (BudgetGovernor.cap_refusal's `headroom`), so they never stop a build.
@@ -238,10 +239,21 @@ def cap_reached(budget: Any, connection: Any, project_id: str) -> Optional[dict[
     if not capped:
         return None  # unmetered, or no cap set: nothing to cross
     building = inflight_money(connection, project_id)
+    # A PERSON SAID THIS BUILD MAY GO OVER (BOSSAPP-884, agent_requests): an approved
+    # budget.override adds its amount to every cap, for this run's lineage only.
+    headroom = 0
+    if run_id:
+        from .agent_requests import override_headroom
+
+        try:
+            with connection.begin_nested():
+                headroom = override_headroom(connection, project_id, run_id)
+        except Exception:  # noqa: BLE001 — an override that cannot be read grants nothing
+            headroom = 0
     for period in capped:  # status_for_project orders the day first
         cap = int(period["cap_usd_micros"])
         spent = int(period.get("actual_usd_micros") or 0) + building
-        if spent < cap:
+        if spent < cap + headroom:
             continue
         from .model_failures import cap_used_sentence, resets_sentence
 

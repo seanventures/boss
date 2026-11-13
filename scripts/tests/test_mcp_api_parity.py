@@ -178,8 +178,12 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     # BOSSAPP-819 it holds their DELETE/remove tails: DELETE /v1/environments/{id}, DELETE
     # /v1/skill-definitions/{key}/tests/cases/{id}, DELETE /v1/work-items/{id} and the work
     # item's labels/remove and relations/remove. (/v1/tool-calls* are reads: api_policy_gated.)
+    # +2 (BOSSAPP-880/883): DELETE a work item's watchdog and DELETE a status card, DELETE
+    # tails like the work item's own.
     for key in (("DELETE", "/v1/environments/{environment_id}"),
-                ("DELETE", "/v1/work-items/{work_item_id}")):
+                ("DELETE", "/v1/work-items/{work_item_id}"),
+                ("DELETE", "/v1/work-items/{work_item_id}/watchdogs/{watchdog_id}"),
+                ("DELETE", "/v1/status-cards/{card_id}")):
         assert rows[key]["mcp_status"] == "operator_only_unavailable"
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 105  # +1: DELETE /v1/decision-examples/{id} (BOSSAPP-893, a person drops an example); +1: POST .../signing-keys/{kid}/revoke (BOSSAPP-859, a person revokes an agent key); +8: the P0-P2 Paperclip wave (PRs #68-#74) — tool-policy writes, MCP credential/template/gateway writes, extensions install, org-chain takeover; +3: w4 ops set 1 (BOSSAPP-886/887/890) — the DELETEs of a pool account, an LLM gateway and a skill-access rule; +5 the w4 governance set: DELETE /v1/instance/admins/{id} (872), DELETE /v1/budget-policies/scoped/{id} (863), and 862's person-only OAuth acts (approve a device code, revoke a token, revoke a connected app)
+               for row in community["operations"]) == 107  # +1: DELETE /v1/decision-examples/{id} (BOSSAPP-893, a person drops an example); +1: POST .../signing-keys/{kid}/revoke (BOSSAPP-859, a person revokes an agent key); +8: the P0-P2 Paperclip wave (PRs #68-#74) — tool-policy writes, MCP credential/template/gateway writes, extensions install, org-chain takeover; +3: w4 ops set 1 (BOSSAPP-886/887/890) — the DELETEs of a pool account, an LLM gateway and a skill-access rule; +5 the w4 governance set: DELETE /v1/instance/admins/{id} (872), DELETE /v1/budget-policies/scoped/{id} (863), and 862's person-only OAuth acts (approve a device code, revoke a token, revoke a connected app); +2 work UX set 2 (BOSSAPP-880/882 DELETEs)

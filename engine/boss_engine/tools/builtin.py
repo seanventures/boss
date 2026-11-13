@@ -3779,6 +3779,70 @@ def _register_work_item_tools(reg: ToolRegistry) -> None:
                 "fields": [f["key"] for f in asked["form"]["fields"]]}
 
     @reg.tool(
+        "offer_options",
+        "Offer a person up to 8 real alternatives, each carrying TYPED effects on the work "
+        "graph that run if they pick it: comment {target, body}, create {title, description?, "
+        "parent?, assignee?}, update_status {target, status}, assign {target, assignee}, "
+        "cancel_tree {target}. Targets are work item ids. Each option is signed when asked; an "
+        "effect whose target changed before the person chose is skipped. Returns the decision "
+        "id; nothing runs until a person picks an option.",
+        _obj({"question": {"type": "string"},
+              "options": {"type": "array", "items": {"type": "object"},
+                          "description": "[{id?, label, detail?, effects: [{type, ...}]}]"},
+              "work_item_id": {"type": "string", "description": "the item it is about"},
+              "context": {"type": "string", "description": "one or two sentences of why"}},
+             required=["question", "options"]),
+        kind="write", reversibility="safe", permission="work_item:manage",
+        exposure=Exposure(tags=("work", "decisions")))
+    def offer_options(ctx, *, project_id, actor, args):
+        from ..services import decision_options
+
+        try:
+            with ctx.begin() as c:
+                offered = decision_options.offer(
+                    c, project_id=project_id, question=str(args.get("question") or ""),
+                    options=args.get("options") or [], asker=str(actor or "agent"),
+                    work_item_id=args.get("work_item_id") or None,
+                    context=str(args.get("context") or ""))
+        except (ValueError, LookupError) as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": True, "status": "asked", "decision_id": offered["decision_id"],
+                "options": [o["id"] for o in offered["options"]]}
+
+    @reg.tool(
+        "watch_work_item",
+        "Put a watchdog on a work item's subtree for the person you act for (or yourself): "
+        "BOSS tells them once each time the subtree stops with work still open "
+        "(stopped_unfinished), has blocked work (blocked), was closed (closed: re-verify it) or "
+        "has not moved for stall_hours (stalled). Messages go through the project's "
+        "notification channels. Watching again replaces the conditions; enabled=false pauses.",
+        _obj({"work_item_id": {"type": "string"},
+              "conditions": {"type": "array", "items": {"type": "string", "enum": [
+                  "stopped_unfinished", "blocked", "closed", "stalled"]}},
+              "stall_hours": {"type": "integer", "minimum": 1, "maximum": 720},
+              "instructions": {"type": "string", "description": "what to check when it fires"},
+              "enabled": {"type": "boolean"}},
+             required=["work_item_id"]),
+        kind="write", reversibility="safe", permission="work_item:manage",
+        exposure=Exposure(tags=("work",)))
+    def watch_work_item(ctx, *, project_id, actor, args):
+        from ..services import work_watchdogs
+
+        who = str(actor or "agent")
+        try:
+            with ctx.begin() as c:
+                attached = work_watchdogs.attach(
+                    c, project_id=project_id, root_item_id=str(args.get("work_item_id") or ""),
+                    watcher=who if ":" in who else f"person:{who}",
+                    conditions=args.get("conditions"),
+                    stall_hours=int(args.get("stall_hours") or 24),
+                    instructions=str(args.get("instructions") or ""),
+                    enabled=args.get("enabled") is not False)
+        except (ValueError, LookupError) as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": True, **_json_safe(attached)}
+
+    @reg.tool(
         "request_tool_access",
         "Ask a person for MCP tools you do not hold yet: name the server, EXACTLY the tools you "
         "need (as the server lists them) and why, in a sentence. A Grant card opens in Needs "
@@ -3812,6 +3876,68 @@ def _register_work_item_tools(reg: ToolRegistry) -> None:
         except ToolAccessError as refused:
             return {"ok": False, "error": str(refused)}
         return {"ok": asked["status"] in ("asked", "already_held"), **_json_safe(asked)}
+
+    @reg.tool(
+        "propose_hire",
+        "Ask a person to hire a new agent the work needs and nobody on the project covers: its "
+        "name, what it is for, the skills it should hold, who it reports to, and why, in a "
+        "sentence. A Hire card opens in Needs you; NOTHING is created unless a person approves, "
+        "and then exactly your draft. Check list_agents first: never propose a role that exists.",
+        _obj({"name": {"type": "string"}, "purpose": {"type": "string"},
+              "reason": {"type": "string", "description": "why the work needs it, for the person"},
+              "role_key": {"type": "string", "description": "optional; made from the name"},
+              "skills": {"type": "array", "items": {"type": "string"}},
+              "reports_to": {"type": "string", "description": "an existing agent's role key"}},
+             required=["name", "purpose", "reason"]),
+        kind="write", reversibility="safe", permission="skill:invoke",
+        exposure=Exposure(tags=("agents", "decisions")))
+    def propose_hire(ctx, *, project_id, actor, args):
+        from ..services.agent_requests import RequestError
+        from ..services.agent_requests import propose_hire as _propose
+        from ..services.tool_access_requests import requesting_role
+
+        try:
+            with ctx.begin() as c:
+                role = requesting_role(c, project_id, str(actor or ""))
+                if role is None:
+                    return {"ok": False, "error": "Only an agent proposes a hire; a person adds "
+                                                  "agents in Agent Studio."}
+                asked = _propose(c, project_id=project_id, proposer=f"agent:{role}",
+                                 name=str(args.get("name") or ""),
+                                 purpose=str(args.get("purpose") or ""),
+                                 reason=str(args.get("reason") or ""),
+                                 role_key=args.get("role_key") or None,
+                                 skills=[str(s) for s in args.get("skills") or []],
+                                 reports_to=args.get("reports_to") or None)
+        except RequestError as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": True, **_json_safe(asked)}
+
+    @reg.tool(
+        "request_budget_override",
+        "Ask a person to let ONE build (and its retries) spend over the project's budget cap: "
+        "the build's run id, how much more in US dollars, and why. An override card opens in "
+        "Needs you; nothing changes unless a person approves. Approved, that build may spend up "
+        "to the cap plus the amount for 7 days, and a build the cap stopped is resumed.",
+        _obj({"run_id": {"type": "string", "description": "the build (crun_...)"},
+              "extra_usd": {"type": "number", "minimum": 0.01, "maximum": 500},
+              "reason": {"type": "string"}},
+             required=["run_id", "extra_usd", "reason"]),
+        kind="write", reversibility="safe", permission="skill:invoke",
+        exposure=Exposure(tags=("budget", "decisions")))
+    def request_budget_override(ctx, *, project_id, actor, args):
+        from ..services.agent_requests import RequestError, request_override
+
+        try:
+            extra = int(round(float(args.get("extra_usd") or 0) * 1_000_000))
+            with ctx.begin() as c:
+                asked = request_override(c, project_id=project_id, asker=str(actor or "agent"),
+                                         run_id=str(args.get("run_id") or ""),
+                                         extra_usd_micros=extra,
+                                         reason=str(args.get("reason") or ""))
+        except (RequestError, LookupError, ValueError) as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": True, **_json_safe(asked)}
 
     @reg.tool(
         "propose_secret",

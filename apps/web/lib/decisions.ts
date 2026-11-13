@@ -70,6 +70,9 @@ export type DecisionActionOffer = {
   action: "approve" | "reject" | "revise" | "delegate" | "execute" | "settle";
   /** Which settlement a legacy-exposure card records. Both buttons share action "settle". */
   settle_at?: "zero" | "estimate" | null;
+  /** The option an Approve picks on a card whose options carry signed effects (engine
+   *  decision_options, BOSSAPP-879). Every option's Approve shares action "approve". */
+  choose?: string | null;
   label: string;
   tone: "approve" | "reject" | "neutral";
   effect: string;
