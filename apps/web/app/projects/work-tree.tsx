@@ -18,6 +18,7 @@ import {
   readTree, relateItem, updateItem, type WorkNode, type WorkStatus, type WorkTree,
 } from "../../lib/work-items";
 import { ItemAccess, PrivateBlocker } from "./work-access";
+import { ItemHold } from "./work-hold";
 import { ItemDocuments } from "./work-docs";
 import "./work-tree.css";
 
@@ -94,6 +95,7 @@ export function WorkTreeView({ projectId, demo = false }: { projectId: string; d
                   <span className="wt-title">{node.title}</span>
                 </button>
                 <StatusChip status={node.status} />
+                {node.on_hold ? <span className="wt-blocked" data-testid="wt-on-hold">On hold</span> : null}
                 {node.blocked_by.length ? (
                   <span className="wt-blocked" data-testid="wt-blocked"
                         title={`Waits for ${node.blocked_by.map((b) => b.human_key || b.title).join(", ")}`}>
@@ -226,6 +228,7 @@ export function ItemPanel({ projectId, id, all, demo, onChanged }: {
           ))}
         </ol>
       ) : null}
+      <ItemHold projectId={projectId} item={item} demo={demo} onChanged={() => { void load(); onChanged(); }} />
       <ItemAccess projectId={projectId} item={item} demo={demo} onChanged={() => { void load(); onChanged(); }} />
       <ItemDocuments projectId={projectId} workItemId={id} demo={demo} />
       {item.runs?.length ? (

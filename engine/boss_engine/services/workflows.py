@@ -5816,6 +5816,11 @@ def claim_step(
         raise WorkflowNotFoundError("Workflow run not found.")
     if run["status"] not in {"running", "waiting"}:
         return None
+    # A WORK TREE ON HOLD (BOSSAPP-878, mode pause): nothing under it is claimed.
+    from . import work_holds
+
+    if work_holds.run_is_held(connection, run_id, mode="pause"):
+        return None
     # Attempts past their step's timeout end first, so one is failed (and maybe retried, or
     # sent down its error path) rather than reclaimed below as a mere lapsed lease.
     if _time_out_overdue_steps(connection, run_id):
@@ -7228,6 +7233,13 @@ def resume_run(
         raise WorkflowNotFoundError("Workflow run not found.")
     if run["status"] != "paused":
         raise WorkflowConflictError("Only paused workflow runs can resume.")
+    # A RUN ON HOLD WITH ITS WORK TREE (BOSSAPP-878) resumes when the tree is restored, so it
+    # comes back exactly as the hold found it — never one run at a time behind the hold's back.
+    from . import work_holds
+
+    if work_holds.run_is_held(connection, run_id):
+        raise WorkflowConflictError(
+            "This run is on hold with its work tree; restore the tree to resume it.")
     connection.execute(
         text(
             """

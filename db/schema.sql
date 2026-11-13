@@ -13212,4 +13212,38 @@ CREATE TABLE IF NOT EXISTS workflow_schedule_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_schedule_runs_schedule
   ON workflow_schedule_runs (schedule_id, created_at DESC);
+-- 878 HOLDING A WHOLE WORK TREE (services/work_holds.py). One hold on a root — a work item (its
+-- whole subtree and every run of it) or a workflow run (it and its child runs) — snapshots each
+-- member's status as it was, pauses what was running (mode 'pause'; 'drain' lets running work
+-- finish and starts nothing new), and is restored EXACTLY: only what the hold paused is resumed.
+-- While a hold is active nothing under it is claimed by a worker (jobs, workflow steps), woken by
+-- a finished blocker, started by a deferred start, or resumed by hand.
+CREATE TABLE IF NOT EXISTS run_holds (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  root_kind TEXT NOT NULL CHECK (root_kind IN ('work_item', 'workflow_run')),
+  root_id TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'pause' CHECK (mode IN ('pause', 'drain')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'restored')),
+  reason TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  restored_by TEXT,
+  restored_at TIMESTAMPTZ,
+  restore_summary JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_run_holds_active_root
+  ON run_holds (root_kind, root_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_run_holds_project ON run_holds (project_id, status, created_at DESC);
+CREATE TABLE IF NOT EXISTS run_hold_members (
+  hold_id TEXT NOT NULL REFERENCES run_holds(id) ON DELETE CASCADE,
+  member_kind TEXT NOT NULL CHECK (member_kind IN ('work_item', 'workflow_run')),
+  member_id TEXT NOT NULL,
+  prior_status TEXT NOT NULL,
+  action TEXT NOT NULL,                      -- paused | already_paused | left_running | held
+  restored_action TEXT,                      -- resumed | left_paused | gone | still_held | kept
+  PRIMARY KEY (hold_id, member_kind, member_id)
+);
+CREATE INDEX IF NOT EXISTS idx_run_hold_members_member
+  ON run_hold_members (member_kind, member_id);
 -- ================================ end BOSSAPP-w4-work-ux1 ==

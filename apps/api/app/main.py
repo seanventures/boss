@@ -31987,6 +31987,13 @@ from .routers.work_items import build_work_items_router
 app.include_router(build_work_items_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor, viewer=lambda: read_actor("")))
+# HOLDING A WHOLE WORK TREE (routers/work_holds.py, services/work_holds.py; BOSSAPP-878): pause a
+# work item's subtree or a run's tree, and restore it exactly; both with a dry run.
+from .routers.work_holds import build_work_holds_router
+
+app.include_router(build_work_holds_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor, viewing=_view_work_as_reader))
 # THE TOOL-CALL AUDIT (routers/tool_calls.py, services/tool_call_audit.py; BOSSAPP-819): every
 # tool call BOSS decided, filtered and keyset-paged, and the same filter as NDJSON.
 from .routers.tool_calls import build_tool_calls_router

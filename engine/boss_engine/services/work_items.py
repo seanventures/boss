@@ -183,6 +183,9 @@ def serialize(connection: Connection, row: Mapping[str, Any], *,
         item["children"] = [_brief(r) for r in kids if r["id"] not in hidden]
         item["stages"] = stage_log(connection, row["id"])
         item["restricted"] = restricted(connection, row["id"])
+        from . import work_holds
+
+        item["hold"] = work_holds.item_hold(connection, row["id"])   # BOSSAPP-878
         item["access"] = access_list(connection, row["id"])
         # THE BREAK-GLASS NOTICE: whoever can read the item sees who read it past its privacy.
         item["break_glass_reads"] = [
@@ -265,7 +268,11 @@ def tree(connection: Connection, project_id: str, *, include_closed: bool = True
         {"p": project_id, "amb": include_ambient, "closed": include_closed,
          "closed_set": list(CLOSED), "label": label,
          "n": max(1, min(int(limit), 2000)), **visible_params(connection)}).mappings().all()
-    nodes = {r["id"]: {**serialize(connection, r), "children": []} for r in rows}
+    from . import work_holds
+
+    held = work_holds.held_items(connection, [r["id"] for r in rows])   # BOSSAPP-878
+    nodes = {r["id"]: {**serialize(connection, r), "children": [], "on_hold": r["id"] in held}
+             for r in rows}
     roots = []
     for node in nodes.values():
         parent = nodes.get(node["parent_id"] or "")
@@ -620,17 +627,21 @@ def wake_unblocked(connection: Connection, settings: Any = None, *, project_id: 
 
 
 def start_or_resume(connection: Connection, settings: Any = None, *, project_id: str,
-                    item_id: str, actor: str) -> list[dict[str, Any]]:
+                    item_id: str, actor: str, resume_paused: bool = True) -> list[dict[str, Any]]:
     """Resume the item's paused workflow runs, and launch the start that waited on its
     blockers (execution_state.deferred_start). Each in its own savepoint: one run that cannot
     move never stops the others."""
+    from . import work_holds
     from . import workflows as wf
 
     out: list[dict[str, Any]] = []
-    for run_id in connection.execute(text(
+    # A WORK TREE ON HOLD (BOSSAPP-878) wakes nothing: restoring the tree does.
+    if work_holds.held_items(connection, [item_id]):
+        return [{"kind": "hold", "action": "held"}]
+    for run_id in (connection.execute(text(
             "SELECT id FROM workflow_runs WHERE project_id = :p AND work_item_id = :w "
             "AND status = 'paused' ORDER BY created_at"),
-            {"p": project_id, "w": item_id}).scalars().all():
+            {"p": project_id, "w": item_id}).scalars().all() if resume_paused else []):
         try:
             with connection.begin_nested():
                 wf.resume_run(connection, project_id, run_id, actor)
@@ -641,6 +652,8 @@ def start_or_resume(connection: Connection, settings: Any = None, *, project_id:
     state = _json(connection.execute(text(
         "SELECT execution_state FROM work_items WHERE id = :id"), {"id": item_id}).scalar(), {}) or {}
     deferred = state.get("deferred_start")
+    if open_blockers(connection, item_id):
+        deferred = None                          # still waits on a blocker: its wake starts it
     if isinstance(deferred, dict) and deferred.get("workflow_version_id"):
         try:
             with connection.begin_nested():
@@ -661,10 +674,22 @@ def start_or_resume(connection: Connection, settings: Any = None, *, project_id:
 def defer_start(connection: Connection, *, project_id: str, item_id: str,
                 workflow_version_id: str, input_data: Optional[Mapping[str, Any]] = None,
                 actor: str) -> dict[str, Any]:
-    """Start a workflow for this item now, or — while it has open blockers — once they close."""
+    """Start a workflow for this item now, or — while it has open blockers, or its work tree is
+    on hold (BOSSAPP-878) — once they close / the tree is restored."""
+    from . import work_holds
     from . import workflows as wf
 
     _row(connection, project_id, item_id, for_update=True)
+    if work_holds.held_items(connection, [item_id]):
+        connection.execute(text(
+            "UPDATE work_items SET execution_state = COALESCE(execution_state, '{}'::jsonb) || "
+            "jsonb_build_object('deferred_start', CAST(:d AS JSONB)), updated_at = now() "
+            "WHERE id = :id"),
+            {"d": json.dumps({"workflow_version_id": workflow_version_id,
+                              "input": dict(input_data or {}), "by": actor}), "id": item_id})
+        emit_event(connection, project_id, "work_item.start_deferred", actor, "work_item",
+                   item_id, {"workflow_version_id": workflow_version_id, "held": True})
+        return {"status": "deferred", "held": True, "blocked_by": open_blockers(connection, item_id)}
     if open_blockers(connection, item_id):
         connection.execute(text(
             "UPDATE work_items SET status = 'blocked', execution_state = "
