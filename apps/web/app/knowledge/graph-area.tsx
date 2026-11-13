@@ -30,11 +30,12 @@ import { KgIntro, KgIntroLegend, KgSetup, KgSetupChip, KgSetupStrip, KgStart, in
 import { KgArchived, KgIndexing, KgLoading } from "./kg-states";
 import { KgSettings } from "./kg-settings";
 import { DocumentsTab } from "./kg-documents";
+import { WikiTab } from "./kg-wiki";
 import { RulesReview } from "./rules-review";
 import "../infra/infra.css";
 import "./kg.css";
 
-type GraphTab = "graph" | "rules" | "settings" | "setup" | "documents";
+type GraphTab = "graph" | "rules" | "settings" | "setup" | "documents" | "wiki";
 
 type Deep = { tab: GraphTab | null; node: string | null; scan: string | null; sub: "facts" | "rules" | null };
 
@@ -45,7 +46,7 @@ function readDeep(): Deep {
   const t = p.get("kg_tab");
   const node = p.get("kg_node");
   return {
-    tab: t === "rules" || t === "settings" || t === "graph" || t === "setup" || t === "documents" ? t : node ? "graph" : null,
+    tab: t === "rules" || t === "settings" || t === "graph" || t === "setup" || t === "documents" || t === "wiki" ? t : node ? "graph" : null,
     node,
     scan: p.get("kg_scan"),
     sub: p.get("kg_sub") === "facts" ? "facts" : null,
@@ -183,6 +184,7 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
     { key: "graph", label: "Graph", tip: "The whole repository, or one symbol, rule or learning and what connects to it" },
     { key: "rules", label: "Rules review", tip: "Business rules agents proposed: approve, edit or reject", count: proposed ? proposed : undefined },
     { key: "documents", label: "Documents", tip: "The regulation documents and clauses in this project's Knowledge Graph" },
+    { key: "wiki", label: "Wiki", tip: "Readable project pages: people edit, agents propose changes you approve, the graph's facts kept current" },
     { key: "settings", label: "Settings", tip: "Indexing, embeddings and retention" },
   ];
 
@@ -218,6 +220,8 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
     body = <KgSettings projectId={projectId} actor={actor} />;
   } else if (tab === "documents") {
     body = <DocumentsTab projectId={projectId} actor={actor} archived={archived} />;
+  } else if (tab === "wiki") {
+    body = <WikiTab projectId={projectId} actor={actor} archived={archived} />;
   } else if (tab === "setup") {
     body = (
       <KgSetup w={w} setup={setup.data} error={setup.error} archived={archived}

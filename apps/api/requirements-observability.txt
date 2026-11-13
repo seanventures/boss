@@ -1,0 +1,14 @@
+# OPTIONAL: BOSS's own traces and error reports (BOSSAPP-867, engine/boss_engine/services/
+# self_telemetry.py, docs/community/SELF_TELEMETRY.md). NOT part of the default image: BOSS runs
+# the same without these, and only the features you configure need them.
+#
+#   pip install -r apps/api/requirements-observability.txt
+#
+# The OpenTelemetry SDK must match the opentelemetry-api the image already carries (pulled in by
+# mcp and claude-agent-sdk): 1.45.2 here, instrumentation 0.66b2 is its pair.
+opentelemetry-sdk==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2
+opentelemetry-instrumentation-fastapi==0.66b2
+opentelemetry-instrumentation-sqlalchemy==0.66b2
+opentelemetry-instrumentation-httpx==0.66b2
+sentry-sdk==2.75.0

@@ -107,7 +107,7 @@ class MCPClient:
 
     # ------------------------------------------------------------------ transport
     def _post(self, url: str, payload: dict, headers: Optional[dict],
-              session: Optional[_Session]) -> httpx.Response:
+              session: Optional[_Session], extra: Optional[dict] = None) -> httpx.Response:
         # No token passthrough (IDENTITY.md §7.14): an upstream server gets only its OWN stored auth,
         # never a BOSS session, key, run token, DPoP proof or egress credential.
         from boss_engine.identity.tokens import refuse_passthrough
@@ -120,6 +120,11 @@ class MCPClient:
             from .mcp_stdio_supervisor import resolve as resolve_stdio
 
             url, upstream = resolve_stdio(self.settings, url, upstream)
+        if extra:
+            # PER-CALL METADATA (BOSSAPP-873, mcp_headers_policy.call_headers): on this request
+            # only, never part of the session key; refused like any header if it carries a BOSS
+            # credential.
+            upstream = {**upstream, **refuse_passthrough(extra)}
         sent = {"Accept": "application/json, text/event-stream",
                 "Content-Type": "application/json", **upstream}
         if session is not None:
@@ -150,9 +155,10 @@ class MCPClient:
         return data.get("result") if isinstance(data, dict) else None
 
     def _rpc(self, url: str, method: str, params: Optional[dict] = None, rid: int = 1,
-             headers: Optional[dict] = None, session: Optional[_Session] = None) -> Any:
+             headers: Optional[dict] = None, session: Optional[_Session] = None,
+             extra: Optional[dict] = None) -> Any:
         resp = self._post(url, {"jsonrpc": "2.0", "id": rid, "method": method,
-                                "params": params or {}}, headers, session)
+                                "params": params or {}}, headers, session, extra)
         return self._answer(resp, rid)
 
     # ------------------------------------------------------------------ session
@@ -202,16 +208,19 @@ class MCPClient:
                 _SESSIONS[key] = session
         return session
 
-    def _call(self, url: str, method: str, params: dict, headers: Optional[dict]) -> Any:
+    def _call(self, url: str, method: str, params: dict, headers: Optional[dict],
+              extra: Optional[dict] = None) -> Any:
         session = self._session(url, headers)
         try:
-            return self._rpc(url, method, params, rid=1, headers=headers, session=session)
+            return self._rpc(url, method, params, rid=1, headers=headers, session=session,
+                             extra=extra)
         except httpx.HTTPStatusError as error:
             # A SESSION THE SERVER NO LONGER KNOWS answers 404 (Streamable HTTP §session
             # management). Initialize again, once.
             if error.response.status_code == 404 and session is not None and session.session_id:
                 session = self._session(url, headers, fresh=True)
-                return self._rpc(url, method, params, rid=1, headers=headers, session=session)
+                return self._rpc(url, method, params, rid=1, headers=headers, session=session,
+                                 extra=extra)
             raise
 
     # ------------------------------------------------------------------ methods
@@ -230,9 +239,10 @@ class MCPClient:
         return tools
 
     def call_tool(self, url: str, name: str, args: dict,
-                  headers: Optional[dict] = None) -> Any:
+                  headers: Optional[dict] = None, call_headers: Optional[dict] = None) -> Any:
+        """``call_headers``: per-call metadata (BOSSAPP-873) sent on this tools/call only."""
         result = self._call(url, "tools/call", {"name": name, "arguments": args or {}},
-                            headers) or {}
+                            headers, call_headers) or {}
         content = result.get("content") if isinstance(result, dict) else None
         texts = [
             c.get("text", "")

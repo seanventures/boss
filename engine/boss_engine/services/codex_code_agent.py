@@ -219,6 +219,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
         # The job's credential choice ("sub:"/"key:" on its model): _env applies it, the CLI
         # gets the bare model name.
         self._pick, model = split_pick(model)
+        model = self._versioned_model(model)   # BOSSAPP-858: release window / model fallback
         # ONE environment per session: each `_env()` issues a model-proxy run token, and the
         # billing stamp reads the same env the child ran with. An API key reaches the child
         # only as a run token (model_proxy), so its presence is what says "metered".

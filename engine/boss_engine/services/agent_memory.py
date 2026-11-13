@@ -142,7 +142,23 @@ def remember(
     ).mappings().one()
     emit_event(connection, project_id, "memory.recorded", actor, "agent_memory", row["id"],
                {"kind": kind, "scope": scope, "status": row["status"]})
+    _mirror(connection, project_id, row["id"])
     return dict(row)
+
+
+def _mirror(connection: Connection, project_id: str, memory_id: str) -> None:
+    """Queue what an external memory backend should see (BOSSAPP-892). A project without one
+    costs one indexed read; a failure here never fails the memory write itself."""
+    from .memory_backends import on_memory_changed
+
+    try:
+        with connection.begin_nested():
+            on_memory_changed(connection, project_id, memory_id)
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).warning("memory backend queue skipped for %s", memory_id,
+                                            exc_info=True)
 
 
 def review(
@@ -171,6 +187,7 @@ def review(
             "(it may already be active, rejected, or retired)")
     emit_event(connection, project_id, "memory.reviewed", actor, "agent_memory", memory_id,
                {"decision": decision})
+    _mirror(connection, project_id, memory_id)
     return dict(row)
 
 
@@ -187,6 +204,7 @@ def forget(
     if row is None:
         raise MemoryError_(f"no active memory {memory_id!r} on this project")
     emit_event(connection, project_id, "memory.retired", actor, "agent_memory", memory_id, {})
+    _mirror(connection, project_id, memory_id)
     return dict(row)
 
 

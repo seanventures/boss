@@ -61,6 +61,11 @@ def _apply(text: str, patterns: list[tuple[str, re.Pattern]]) -> tuple[str, dict
     from .build_services import scrub as _scrub_live
 
     out = _scrub_live(text)
+    # BOSSAPP-866: every secret value resolved for a run (run_secret_redaction), with its
+    # base64 and URL-encoded forms, removed exactly. A no-op while nothing is registered.
+    from .run_secret_redaction import scrub as _scrub_known
+
+    out = _scrub_known(out)
     if out != text:
         summary["SECRET"] = 1
     for label, pattern in patterns:

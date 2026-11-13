@@ -410,6 +410,16 @@ def record_llm_call(
                     "call_class": call_class,
                 },
             )
+            # BOSSAPP-863: a PAID call is where a scoped budget (org / project / agent /
+            # workflow) is checked mid-stage; one past a hard-stop cap tells the run to stop at
+            # its next turn (scoped_budgets.after_call; never raises, a no-op with no policy).
+            if not included and int(cost_usd_micros or 0) > 0:
+                from .run_secret_redaction import current_run_id
+                from .scoped_budgets import after_call
+
+                after_call(c, project_id=ctx.get("project_id"), role=role,
+                           workflow_run_id=ctx.get("workflow_run_id"),
+                           run_id=ctx.get("run_id") or current_run_id())
             # A PROVIDER'S CAPACITY IS A GOVERNED FACT, AND THIS IS WHERE IT IS OBSERVED.
             #
             # Every engine already reports here, which makes it the one place that can know
@@ -447,6 +457,13 @@ def record_llm_call(
             with begin(ctx.get("db_engine")) as c:
                 _write(c)
             set_llm_context(last_llm_call_id=row_id)
+        # BOSS'S OWN TELEMETRY (BOSSAPP-867): the same call as an OTel GenAI span and metrics
+        # counters. Both are off unless configured, and then this returns at once.
+        from .self_telemetry import record_model_span
+
+        record_model_span(engine_name=engine_name, model=model, usage=u, latency_ms=latency_ms,
+                          ok=ok, error=error, stage=stage or ctx.get("stage"),
+                          cost_usd_micros=int(cost_usd_micros or 0))
         return row_id
     except Exception as exc:  # noqa: BLE001 — telemetry must never break the pipeline
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)

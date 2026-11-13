@@ -116,6 +116,39 @@ def authenticate_transport(headers: Mapping[str, str], *, method: str = "POST", 
         return None
 
 
+def _oauth_issuer() -> str:
+    """The authorization server for this MCP server (BOSSAPP-862): BOSS_MCP_OAUTH_ISSUER (the
+    API's public origin). Opt-in: unset, OAuth is not advertised and nothing changes."""
+    import os
+
+    return (os.environ.get("BOSS_MCP_OAUTH_ISSUER") or "").rstrip("/")
+
+
+def oauth_resource_metadata() -> Optional[dict]:
+    issuer = _oauth_issuer()
+    if not issuer:
+        return None
+    import os
+
+    from ..services.mcp_oauth_server import protected_resource_metadata
+
+    resource = (os.environ.get("BOSS_MCP_PUBLIC_URL") or f"{issuer}/mcp").rstrip("/")
+    return protected_resource_metadata(resource, issuer)
+
+
+def _bearer_challenge() -> str:
+    """`Bearer`, plus RFC 9728's resource_metadata pointer when OAuth is configured (unchanged
+    otherwise)."""
+    import os
+
+    issuer = _oauth_issuer()
+    if not issuer:
+        return "Bearer"
+    base = (os.environ.get("BOSS_MCP_PUBLIC_URL") or f"{issuer}/mcp").rstrip("/")
+    origin = base.rsplit("/mcp", 1)[0] if base.endswith("/mcp") else base
+    return f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource"'
+
+
 class MCPServer:
     """Bridges MCP JSON-RPC calls onto the engine tool registry.
 
@@ -473,7 +506,7 @@ class MCPServer:
                     raise HTTPException(
                         status_code=401,
                         detail="identity required: present your BOSS API key or run token",
-                        headers={"WWW-Authenticate": "Bearer"})
+                        headers={"WWW-Authenticate": _bearer_challenge()})
                 return None
             if candidate and _is_boss_credential(candidate):
                 from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
@@ -488,7 +521,7 @@ class MCPServer:
             raise HTTPException(
                 status_code=401,
                 detail="MCP bearer token required",
-                headers={"WWW-Authenticate": "Bearer"},
+                headers={"WWW-Authenticate": _bearer_challenge()},
             )
 
         @app.post("/mcp")
@@ -516,6 +549,16 @@ class MCPServer:
                 _REQUEST_CREDENTIAL.reset(cred)
                 _REQUEST_AUTH.reset(token)
             return resp if resp is not None else {"jsonrpc": "2.0", "result": {}}
+
+        @app.get("/.well-known/oauth-protected-resource")
+        @app.get("/.well-known/oauth-protected-resource/mcp")
+        async def protected_resource():  # type: ignore[no-redef]
+            """RFC 9728 (BOSSAPP-862): where a 401'd MCP client finds BOSS's authorization
+            server. 404 until BOSS_MCP_OAUTH_ISSUER names it."""
+            meta = oauth_resource_metadata()
+            if meta is None:
+                raise HTTPException(status_code=404, detail="OAuth is not configured")
+            return meta
 
         @app.get("/health")
         async def health(request: Request):  # type: ignore[no-redef]

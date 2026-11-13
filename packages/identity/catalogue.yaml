@@ -1285,6 +1285,22 @@ categories:
   # ---- Operations and assurance ------------------------------------------------------------------
   - category: "Operations and assurance"
     permissions:
+      # INSTANCE ADMINISTRATION (BOSSAPP-872): running the install — plugins and extensions,
+      # backups, the instance admins themselves — separate from any org's data. Org Owner and
+      # Admin hold these until the first instance admin is named (identity/instance_admin.py);
+      # from then on ONLY instance admins do, whatever org role they hold (none needed).
+      - key: instance:read
+        title: "View the instance"
+        description: "See the install's backups and who its instance admins are."
+        roles: [owner, admin]
+        scope: org
+        flags: []
+      - key: instance:manage
+        title: "Run the instance"
+        description: "Install, enable and disable plugins and extensions, and name or remove instance admins."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
       - key: system:read
         title: "View the system"
         description: "See health, status, diagnostics, the API catalogue and the edition."

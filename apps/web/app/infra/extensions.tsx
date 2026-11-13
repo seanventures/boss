@@ -12,8 +12,8 @@
  *               URLs and secrets, Remove. Its settings panel, if it has one, opens under the row
  *               in a sandboxed frame.
  *
- * Installing and turning on need setup:manage (third-party code will run); turning off needs
- * infra:provision (the emergency stop), like Plugins.
+ * Installing, turning on and off, and removing need instance:manage (BOSSAPP-872): running the
+ * install is an instance admin's job, separate from any org's data, like Plugins.
  */
 import React, { useState } from "react";
 
@@ -68,7 +68,7 @@ function InstallBox({ onInstalled }: { onInstalled: () => void }) {
           <input data-testid="inf-ext-checksum" value={checksum} onChange={(e) => setChecksum(e.target.value)}
                  placeholder="sha256:…" />
         </label>
-        <GatedButton permission="setup:manage" type="button" className="ag-btn" data-testid="inf-ext-check"
+        <GatedButton permission="instance:manage" type="button" className="ag-btn" data-testid="inf-ext-check"
                      disabled={busy || !source.trim()} title="Read the bundle; nothing is installed yet"
                      onClick={() => void check()}>{busy && !preview ? "…" : "Check"}</GatedButton>
       </div>
@@ -89,7 +89,7 @@ function InstallBox({ onInstalled }: { onInstalled: () => void }) {
             <input type="checkbox" data-testid="inf-ext-accept" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
             Allow these
           </label>
-          <GatedButton permission="setup:manage" type="button" className="ag-btn" data-testid="inf-ext-install-go"
+          <GatedButton permission="instance:manage" type="button" className="ag-btn" data-testid="inf-ext-install-go"
                        disabled={busy || !accepted || !matches || !preview.trust.trusted}
                        title="Copy it into BOSS and record its checksum as approved"
                        onClick={() => void install()}>{busy ? "…" : "Install"}</GatedButton>
@@ -166,11 +166,11 @@ function ExtensionRowView({ e, projectId, onChanged }: { e: ExtensionRow; projec
         </td>
         <td>
           {e.enabled ? (
-            <GatedButton permission="infra:provision" type="button" className="ag-btn" disabled={busy}
+            <GatedButton permission="instance:manage" type="button" className="ag-btn" disabled={busy}
                          data-testid="inf-ext-off" title="Turn off in this project: its tools, events and panel stop"
                          onClick={() => void toggle(false)}>{busy ? "…" : "On"}</GatedButton>
           ) : (
-            <GatedButton permission="setup:manage" type="button" className="ag-btn" disabled={busy || blocked}
+            <GatedButton permission="instance:manage" type="button" className="ag-btn" disabled={busy || blocked}
                          data-testid="inf-ext-on" title={blocked ? e.trust.problems.join("\n") : "Turn on in this project"}
                          onClick={() => void toggle(true)}>{busy ? "…" : "Off"}</GatedButton>
           )}
@@ -182,7 +182,7 @@ function ExtensionRowView({ e, projectId, onChanged }: { e: ExtensionRow; projec
             <button type="button" className="ag-btn" data-testid="inf-ext-settings"
                     onClick={() => setOpen(open === "settings" ? "" : "settings")}>Settings</button>
           ) : null}
-          <GatedButton permission="setup:manage" type="button" className="ag-btn" disabled={busy}
+          <GatedButton permission="instance:manage" type="button" className="ag-btn" disabled={busy}
                        data-testid="inf-ext-remove" title="Uninstall everywhere and delete its data"
                        onClick={() => void remove()}>Remove</GatedButton>
         </td>

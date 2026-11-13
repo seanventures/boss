@@ -93,7 +93,12 @@ export type GovernView = {
   versions: { budget: string };
   /** BOSSAPP-807: what happens when a limit is reached, as the engine reads it. */
   at_limit?: AtLimitView;
+  /** BOSSAPP-869: spend BOSS cannot price — estimate (default) or block past a daily allowance. */
+  unpriced?: UnpricedView;
 };
+export type UnpricedPolicy = "estimate" | "block";
+export type UnpricedView = { value: UnpricedPolicy; choices: UnpricedPolicy[]; default: UnpricedPolicy;
+                             allowance_usd_micros: number; unpriced_today_usd_micros: number };
 export type AtLimit = "pause" | "cheaper" | "stop";
 export type AtLimitView = { value: AtLimit; choices: AtLimit[]; default: AtLimit; source: "set" | "default";
                             version: string; changed_by: string | null };

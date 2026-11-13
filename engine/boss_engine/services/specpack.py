@@ -279,6 +279,12 @@ class SpecPackService:
             not isinstance(x, str) or not x.strip() for x in requires
         ):
             errors.append("requires must be a list of non-empty strings")
+        # A TEAM (BOSSAPP-894): reporting lines and starter work, both optional. A pack without
+        # them is validated exactly as before.
+        from .team_templates import has_team, validate_team
+
+        if has_team(pack_spec):
+            errors.extend(validate_team(pack_spec))
         status = pack_spec.get("status")
         if status is not None and status not in ("draft", "active", "deprecated"):
             errors.append("status must be draft/active/deprecated or omitted")

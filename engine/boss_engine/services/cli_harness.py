@@ -298,9 +298,33 @@ class CliHarnessSpec:
     #: Where the agent's skills are synced per run: "{workspace}/<dir>", "{home}/<dir>" (the
     #: CLI's own home, per run), "{env}" ($BOSS_SKILLS_DIR). Empty: this CLI reads no skills.
     skills_dir: str = ""
+    # --- the release window BOSS drives this CLI within (BOSSAPP-858) -----------
+    #: Oldest release BOSS drives (inclusive). Empty: no lower bound.
+    min_version: str = ""
+    #: First release BOSS has NOT been checked against (exclusive). Empty: no upper bound.
+    max_version: str = ""
+    #: (model glob, min release): a model matching the glob needs at least that release.
+    model_minimums: tuple = ()
+    #: The CLI's models best-first: where a routed model the installed CLI cannot run falls
+    #: back to (runtime_versions.nearest_fallback), with an engine.model_fallback event.
+    model_fallbacks: tuple = ()
 
     def supports_read_only(self) -> bool:
         return bool(self.read_only_args)
+
+    def version_window(self):
+        """runtime_versions.VersionWindow when any bound is declared, else None (the default:
+        nothing about the version is checked, exactly as before BOSSAPP-858)."""
+        if not (self.min_version or self.max_version or self.model_minimums):
+            return None
+        from .runtime_versions import VersionWindow
+
+        return VersionWindow(binary=self.binary, min_version=self.min_version,
+                             max_version=self.max_version,
+                             model_minimums=tuple(tuple(p) for p in self.model_minimums),
+                             model_fallbacks=tuple(self.model_fallbacks),
+                             version_args=tuple(self.version_args),
+                             install_hint=self.install_hint)
 
 
 #: The CLIs BOSS ships a spec for. NONE is marked verified: a spec written from a CLI's
@@ -605,8 +629,11 @@ def load_specs(settings) -> dict[str, CliHarnessSpec]:
             if key not in CliHarnessSpec.__dataclass_fields__:
                 continue
             if key in ("args", "write_args", "read_only_args", "env_passthrough",
-                       "env_exclude") and isinstance(value, list):
+                       "env_exclude", "model_fallbacks") and isinstance(value, list):
                 value = tuple(value)
+            if key == "model_minimums" and isinstance(value, (list, dict)):
+                pairs = value.items() if isinstance(value, dict) else value
+                value = tuple((str(p), str(v)) for p, v in pairs)
             fields[key] = value
         fields["name"] = name
         try:
@@ -1591,7 +1618,21 @@ class GenericCliCodeAgent:
             token = self._resolve_secret(self.spec.token_env)
             if token:
                 env[self.spec.token_env] = token
-        if self.spec.name == "codex" and getattr(self, "_pick", None):
+        # AN OPERATOR'S LLM GATEWAY (llm_gateway, BOSSAPP-887): when this project routes this
+        # harness through one, the run goes there through the model proxy, never on the CLI's
+        # own login. None — the default — changes nothing below.
+        from . import llm_gateway
+
+        gateway = llm_gateway.for_harness(self.spec.name, self.settings)
+        if getattr(self, "_pool", None) is not None and self.spec.home_env:
+            # A POOL MEMBER'S OWN HOME (BOSSAPP-886), and only its login: the subscription is
+            # the member's, so no API key rides along.
+            env[self.spec.home_env] = self.cli_home()
+            env.pop("OPENAI_API_KEY", None)
+            env.pop("CODEX_API_KEY", None)
+        elif self.spec.name == "codex" and gateway is not None:
+            llm_gateway.isolate_codex_home(env, home=self.cli_home())
+        elif self.spec.name == "codex" and getattr(self, "_pick", None):
             apply_codex_pick(env, self._pick, home=self.cli_home(),
                              resolve_secret=self._resolve_secret)
         # THE AGENT'S KIT (harness_delivery): a per-run CODEX_HOME, $BOSS_MCP_CONFIG, ... —
@@ -1605,6 +1646,12 @@ class GenericCliCodeAgent:
         # A PROVIDER API KEY NEVER REACHES THE CLI (model_proxy): an Anthropic, OpenAI or
         # OpenRouter key passed through above becomes a run token for the loopback proxy, with
         # the base URL the CLI reads. A CLI's own login (a token, an auth file) is untouched.
+        if gateway is not None:
+            try:
+                return llm_gateway.apply(env, gateway, harness=self.spec.name,
+                                         settings=self.settings)
+            except llm_gateway.GatewayUnavailable as refused:
+                raise CliHarnessUnavailable(str(refused)) from refused
         return _model_proxy.shield_env(env, settings=self.settings)
 
     def _argv(self, prompt: str, *, read_only: bool, model: Optional[str]) -> list[str]:
@@ -1703,10 +1750,17 @@ class GenericCliCodeAgent:
         _log.info("%s authorised from %s", self.spec.name, self.spec.token_env)
         return {"authorised": True, "reason": "signed in from the stored token"}
 
-    def cli_home(self) -> str:
-        """Where this CLI keeps its own state, honouring its home env var when set."""
+    def _base_home(self) -> str:
         configured = os.environ.get(self.spec.home_env, "") if self.spec.home_env else ""
         return os.path.expanduser(configured or self.spec.default_home or "~")
+
+    def cli_home(self) -> str:
+        """Where this CLI keeps its own state, honouring its home env var when set. A run on a
+        pool member (BOSSAPP-886) has a home of its own beside it, one per member."""
+        pool = getattr(self, "_pool", None)
+        if pool is not None:
+            return f"{self._base_home().rstrip('/')}-pool-{pool.member_id}"
+        return self._base_home()
 
     def _write_auth_file(self, content: str) -> str:
         """Place the credential file with an owner-only mode, atomically.
@@ -1815,12 +1869,12 @@ class GenericCliCodeAgent:
         (this run path, codex_login's control-plane refresher, Connect) — so no owner can
         rotate without the store keeping up.
         """
-        return sync_rotated_credential(self.spec, self.settings,
+        return sync_rotated_credential(self._pool_spec(), self.settings,
                                        cli_home=self.cli_home()).get("synced", False)
 
     def _credential_provenance(self) -> str:
         """Which credential copy this harness is running on, for an auth-failure message."""
-        return credential_provenance(self.spec, self.settings, cli_home=self.cli_home())
+        return credential_provenance(self._pool_spec(), self.settings, cli_home=self.cli_home())
 
     def _resolve_secret(self, name: str) -> Optional[str]:
         """A stored value: the environment, then the secret store, under either key.
@@ -1870,6 +1924,13 @@ class GenericCliCodeAgent:
                     f"{self.spec.name} is not authenticated for this service user. "
                     f"{found.get('next_step') or self.spec.signin_hint}"
                 )
+        # A MULTI-ACCOUNT POOL (subscription_pools, BOSSAPP-886): a codex run in a project with
+        # a pool spends on the member with the most headroom, on that member's own login and
+        # CODEX_HOME. No pool (the default) leaves `_pool` None and everything below as it was.
+        self._pool = self._choose_pool_member()
+        if self._pool is not None:
+            self._restore_pool_login()
+            return
         # Sign in from the stored credential if this deployment has one and the CLI is not
         # already signed in — a token for some CLIs, the CLI's own auth file for others.
         # Cheap after the first call: `detect` short-circuits on "already signed in".
@@ -1877,6 +1938,58 @@ class GenericCliCodeAgent:
                 and not getattr(self, "_auth_checked", False)):
             self._auth_checked = True
             self._auth_state = self.ensure_authorised()
+
+    def _choose_pool_member(self):
+        """The pool member this codex run spends on, or None. A gateway-routed run (BOSSAPP-887)
+        never uses a subscription, so it never draws from a pool."""
+        if self.spec.name != "codex" or not (self.spec.auth_file_secret and
+                                             self.spec.auth_file_name):
+            return None
+        from . import llm_gateway, subscription_pools
+
+        if llm_gateway.for_harness(self.spec.name, self.settings) is not None:
+            return None
+        try:
+            return subscription_pools.assignment_for(self.spec.name, self.settings)
+        except subscription_pools.PoolExhausted as full:
+            raise CliHarnessUnavailable(str(full)) from full
+
+    def _pool_spec(self) -> "CliHarnessSpec":
+        """This harness's spec with the pool member's store name as its credential: every seam
+        that reads or syncs the login (stored_credential, sync_rotated_credential,
+        credential_provenance) then works on the member, through the one store path."""
+        import dataclasses
+
+        pool = getattr(self, "_pool", None)
+        if pool is None:
+            return self.spec
+        return dataclasses.replace(self.spec, auth_file_secret=pool.secret_name)
+
+    def _restore_pool_login(self) -> None:
+        """Place the member's login in its own CODEX_HOME — never over the single login's home —
+        unless that home already holds a NEWER generation (never go backwards)."""
+        pool = self._pool
+        content = stored_credential(self.settings, pool.secret_name, strict=True,
+                                    include_env=False)
+        if not content:
+            raise CliHarnessUnavailable(
+                f"the pool account {pool.label!r} has no stored login. Replace its login in "
+                "Repo and models, or remove it from the pool.")
+        try:
+            json.loads(content)
+        except json.JSONDecodeError:
+            raise CliHarnessUnavailable(
+                f"the stored login of pool account {pool.label!r} is not valid JSON") from None
+        home = self.cli_home()
+        os.makedirs(home, mode=0o700, exist_ok=True)
+        base_config = os.path.join(self._base_home(), "config.toml")
+        if os.path.isfile(base_config) and not os.path.exists(os.path.join(home, "config.toml")):
+            shutil.copyfile(base_config, os.path.join(home, "config.toml"))
+        on_disk = self._current_auth_file()
+        if (on_disk or "").strip() == content.strip() or _newer_credential(
+                on_disk, content) == "disk":
+            return
+        self._write_auth_file(content)
 
     def _raise_harness_verdict(self, *, stdout: str, stderr: str, summary: str,
                                ok: bool) -> None:
@@ -1891,6 +2004,12 @@ class GenericCliCodeAgent:
             verdict = harness_failures.classify(f"{summary}\n{stderr or ''}",
                                                 engine=self.engine, where="engine")
         if verdict is not None:
+            if verdict.kind == "auth_refused" and getattr(self, "_pool", None) is not None:
+                # A POOL MEMBER'S LOGIN WAS REFUSED (BOSSAPP-886): out of rotation until a person
+                # replaces it; the pool's other accounts carry on.
+                from .subscription_pools import mark_needs_reauth
+
+                mark_needs_reauth(self.settings, self._pool.member_id)
             if verdict.kind == "auth_refused":
                 # NAME THE COPY. "Reconnect in Repo and models" is only actionable when the
                 # store and the CLI's file agree; when they have diverged, which copy failed is
@@ -1903,6 +2022,18 @@ class GenericCliCodeAgent:
                                                   message=f"{verdict.message} [{said}]")
             raise harness_failures.trip(verdict)
 
+    def _versioned_model(self, model: Optional[str]) -> Optional[str]:
+        """The model this session runs (BOSSAPP-858): unchanged unless the spec declares a
+        release window and the routed model needs a newer CLI than the one installed — then the
+        nearest declared fallback, with an engine.model_fallback event. A CLI outside its
+        window refuses to start, with the install hint."""
+        window = self.spec.version_window()
+        if window is None:
+            return model
+        from .runtime_versions import apply_fallback
+
+        return apply_fallback(self.spec.name, window, model)
+
     @tidies_workspace
     @_proxy_scoped
     @delivers_kit
@@ -1914,6 +2045,7 @@ class GenericCliCodeAgent:
 
         self._preflight(read_only=read_only,
                         read_only_by_copy=bool(_ignored.get("_contract_read_only_copy")))
+        model = self._versioned_model(model)
         import re as _re
         import tempfile
 

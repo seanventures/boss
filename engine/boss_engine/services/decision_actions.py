@@ -115,6 +115,12 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "self_fix.install",
     # Approving an agent-drafted skill writes that draft enabled. Until then it is not usable.
     "activate_authored_skill",
+    # Approving a reflection's instruction proposal adds exactly that document to the agent, as
+    # the approving person (reflection.apply_prompt_diff, BOSSAPP-888).
+    "apply_agent_prompt_diff",
+    # Approving an agent's (or the maintainer's) wiki change writes exactly that page onto the
+    # revision it was proposed against (wiki.apply_for_decision, BOSSAPP-891).
+    "apply_wiki_patch",
     # Approving a "Tool changed" card clears the MCP tool's quarantine and accepts the new
     # definition (mcp_registry.accept_tool_change); rejecting turns it Off (BOSSAPP-818).
     "review_tool_change",
@@ -139,6 +145,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # An agent's budget override for one build: approving lets that build lineage spend up to the
     # cap plus the amount, and resumes a build the cap stopped (agent_requests, BOSSAPP-884).
     "budget.override",
+    # Approving an agent's proposed secret writes the value the person typed on the card
+    # through put_secret and binds it (secret_proposals.on_approved, BOSSAPP-871).
+    "store_proposed_secret",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on

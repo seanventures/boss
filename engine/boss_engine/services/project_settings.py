@@ -160,6 +160,24 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "models. stop: nothing runs until the period resets.",
         "kind": "choice", "choices": ["pause", "cheaper", "stop"],
     },
+    # SPEND BOSS CANNOT PRICE (BOSSAPP-869, services/unpriced_policy.py): read by
+    # BudgetGovernor.reserve. estimate is today's behaviour; block holds paid work once today's
+    # unpriced money is past the allowance below and opens the increase-or-defer decision.
+    "budget_unpriced_policy": {
+        "attr": "budget_unpriced_policy",
+        "label": "Unpriced usage",
+        "help": "estimate: a model BOSS has no price for is charged at the dearest known rate and "
+                "labelled. block: once today's unpriced money passes the allowance, paid work "
+                "waits and asks you.",
+        "kind": "choice", "choices": ["estimate", "block"],
+    },
+    "budget_unpriced_allowance_usd_micros": {
+        "attr": "budget_unpriced_allowance_usd_micros",
+        "label": "Unpriced allowance per day (micro-dollars)",
+        "help": "With Unpriced usage set to block: how much unpriced money a day is tolerated "
+                "before paid work waits. 0 = none.",
+        "kind": "int", "min": 0, "max": 1_000_000_000_000,
+    },
     # PER-CLASS CALL GOVERNANCE (BOSSAPP-999, services/call_classes.py): deny a class of model
     # calls outright, or cap it by calls-per-day / tokens-per-day — VOLUME caps, because a
     # $0-settling subscription call cannot be money-capped. Enforced where calls are authorized

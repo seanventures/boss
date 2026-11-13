@@ -201,6 +201,9 @@ class LimitsBody(BaseModel):
     daily_cap_usd: Optional[float] = Field(default=None, gt=0, le=1_000_000)
     burst_usd_per_min: Optional[float] = Field(default=None, ge=0, le=1_000_000)
     at_limit: Optional[str] = Field(default=None, pattern="^(pause|cheaper|stop)$")
+    #: BOSSAPP-869: spend BOSS cannot price — estimate (default) or block past the allowance.
+    unpriced_policy: Optional[str] = Field(default=None, pattern="^(estimate|block)$")
+    unpriced_allowance_usd: Optional[float] = Field(default=None, ge=0, le=1_000_000)
 
 
 @router.post("/v1/govern/limits")
@@ -241,6 +244,14 @@ def post_limits(body: LimitsBody, request: Request) -> Response:
             if body.at_limit is not None:
                 ps.set_one(connection, body.project_id, spend_limits.AT_LIMIT_KNOB,
                            body.at_limit, actor, scope="project")
+            from boss_engine.services import unpriced_policy
+
+            if body.unpriced_policy is not None:
+                ps.set_one(connection, body.project_id, unpriced_policy.POLICY_KNOB,
+                           body.unpriced_policy, actor, scope="project")
+            if body.unpriced_allowance_usd is not None:
+                ps.set_one(connection, body.project_id, unpriced_policy.ALLOWANCE_KNOB,
+                           micros(body.unpriced_allowance_usd), actor, scope="project")
         except setup_actions.SetupActionError as error:
             said = getattr(error, "detail", {}) or {}
             raise HTTPException(status_code=422, detail=" ".join(

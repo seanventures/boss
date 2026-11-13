@@ -103,4 +103,32 @@ timeout_seconds: 900            # per command
 - Commands run **without a shell**, one command per entry. Each one must start with an executable on the sandbox allowlist (`BOSS_SANDBOX_VALIDATION_ALLOWED_COMMANDS`). A manifest that does not validate fails the gate and shows its error.
 - A task's explicit `test_commands` override the manifest.
 
+### Runtime services during a build
+
+An app that needs more than one process to run (an API beside a worker) can declare them under `runtime:`. BOSS provisions them before the first agent runs, keeps them running for the length of the build, and stops them when the build ends:
+
+```yaml
+runtime:
+  provision: ["npm ci"]                  # optional; once, before any service starts
+  teardown: ["node scripts/cleanup.js"]  # optional; once, at the end, while services still run
+  services:
+    - name: api
+      run: "node server.js"              # one command, no shell; PORT is set for it
+      port: auto                         # or a fixed port from 1024 to 65535
+      depends_on: [worker]               # started first, stopped last
+      health: {http: /healthz}           # or {tcp: true}; none = still running after 1s
+      ready_seconds: 60
+      env: {LOG_LEVEL: debug}
+    - name: worker
+      run: "node worker.js"
+      start: on_demand                   # an agent starts it when it needs it
+```
+
+- Every service sees `PORT`, and `BOSS_SERVICE_<NAME>_PORT` and `BOSS_SERVICE_<NAME>_URL` for every service. The agents' brief lists them.
+- The processes belong to the build. Stop ends them, and nothing outlives the run.
+- During the build, agents use the `runtime_service` tool on the run's `boss_run` gateway server to see status and logs, and to start, stop or restart a service. The tool exists only on builds that declare `runtime:`.
+- Each start, stop, restart, provision and teardown is recorded as a `code_task.runtime_service` event.
+- The top-level `services: [postgres]` key is unrelated. It asks for the build's own throwaway database.
+- A build that runs in a microVM cannot reach host-supervised services, so it fails with that reason.
+
 Without a manifest, a Python repository with a `conftest.py`, a `pytest.ini`, or pytest configured in `pyproject.toml`, `setup.cfg` or `tox.ini` is verified with `python3 -m pytest -q`. Other Python repositories use `unittest`. Web defaults run in the package that contains the change.
