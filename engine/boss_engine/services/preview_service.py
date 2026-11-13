@@ -1984,6 +1984,10 @@ def _diagnose_listening_port(log_path: str, port_hint: int,
 #: `turn_subject.cause_marks` refuses to count an answer that only repeats this advice as one
 #: that used the recorded failure (the port_timeout misdiagnosis was exactly that).
 START_FAILURE_ADVICE: dict[str, str] = {
+    # BOSSAPP-860: the app ran, but its own HTTPS origin (BOSS_PREVIEW_EXPOSE) was not verified.
+    "expose_failed": ("The app started, but BOSS could not give it its own HTTPS origin and "
+                      "verify it from outside: check the boss-expose helper and its backend "
+                      "(tailscale serve or Caddy), or turn BOSS_PREVIEW_EXPOSE off."),
     "no_page_at_root": ("The app started but serves nothing at '/'. Check that the build "
                         "produced a UI and not only an API, then preview it again."),
     "no_health_route": ("The app started but its declared health path answered 404. Fix the "
@@ -2023,6 +2027,8 @@ CRASH_MARKERS: tuple[str, ...] = (
 
 def _classify_start_failure(message: str, *, exited: Optional[bool] = None) -> tuple[str, str]:
     lowered = message.lower()
+    if lowered.startswith("expose:"):
+        return "expose_failed", START_FAILURE_ADVICE["expose_failed"]
     # AN APP THAT IS LISTENING DID NOT TIME OUT. Checked before the generic "port" rule below,
     # which matches the word in this message too and labelled it port_timeout — telling the
     # operator to "ensure HOST/PORT are honored" about an app that honoured both and bound
@@ -3061,6 +3067,16 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             logger.debug("preview %s: start record not kept", preview_id, exc_info=True)
         return _fail(why, command=" ".join(command), exited=exit_code is not None)
 
+    # ITS OWN HTTPS ORIGIN (BOSSAPP-860), only with BOSS_PREVIEW_EXPOSE on: mapped by the
+    # boss-expose helper and verified from outside before the preview is marked running.
+    from . import preview_expose
+
+    try:
+        _exposed = preview_expose.attach(preview_id, port)
+    except preview_expose.ExposeFailed as exc:
+        _kill(proc.pid)
+        return _fail(f"expose: {exc}", command=" ".join(command), exited=False)
+
     url = f"http://127.0.0.1:{port}"
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     with begin(engine) as c:
@@ -3075,13 +3091,23 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
                    {"run_id": run_id, "url": url, "repo": f"{owner}/{repo}", "branch": branch})
     demo_logins = record_demo_logins(engine, preview_id, app_env)
-    return publicize_preview({
+    return _with_exposed(engine, preview_id, _exposed, publicize_preview({
         "id": preview_id, "status": "running", "url": url, "port": port, "demo_logins": demo_logins,
         "pid": proc.pid, "expires_at": expires.isoformat(), "run_id": run_id,
         "repo": f"{owner}/{repo}", "branch": branch,
         "substrate": ExecutionSubstrate.PREVIEW_HOST.value,
         "build_substrate": build_substrate,
-    }, settings=settings)
+    }, settings=settings))
+
+
+def _with_exposed(engine, preview_id: str, exposed: Optional[dict], out: dict) -> dict:
+    """BOSSAPP-860: record and return the preview's verified own origin. Unchanged when None."""
+    if not exposed:
+        return out
+    with begin(engine) as c:
+        c.execute(text("UPDATE app_previews SET exposed_url = :u WHERE id = :id"),
+                  {"u": exposed["url"], "id": preview_id})
+    return {**out, "exposed_url": exposed["url"], "open_url": exposed["url"]}
 
 
 def _java_build_of(app_dir: Path) -> Optional[str]:
@@ -3329,6 +3355,15 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         _docker_rmi(tag)
         return _fail(f"container did not serve HTTP. logs: {logs[-300:]}", command=docker_command)
 
+    from . import preview_expose
+
+    try:
+        _exposed = preview_expose.attach(preview_id, host_port)
+    except preview_expose.ExposeFailed as exc:
+        _docker_rm(tag)
+        _docker_rmi(tag)
+        return _fail(f"expose: {exc}", command=docker_command)
+
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     with begin(engine) as c:
         c.execute(text(
@@ -3342,14 +3377,14 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
                    {"run_id": run_id, "url": url, "mode": "docker", "image": tag})
     demo_logins = record_demo_logins(engine, preview_id, app_env)
-    return publicize_preview({
+    return _with_exposed(engine, preview_id, _exposed, publicize_preview({
         "id": preview_id, "status": "running", "url": url, "port": host_port, "mode": "docker",
         "demo_logins": demo_logins,
         "container_id": container_id, "image": tag, "expires_at": expires.isoformat(),
         "run_id": run_id, "repo": f"{owner}/{repo}", "branch": branch,
         "substrate": ExecutionSubstrate.PREVIEW_DOCKER.value,
         "build_substrate": build_substrate,
-    }, settings=settings)
+    }, settings=settings))
 
 
 def start_rootfs_preview(
@@ -4214,6 +4249,11 @@ def smoke_test(
 
 
 def _teardown(row, settings: Optional[Settings] = None) -> None:
+    # Its own origin goes first (BOSSAPP-860; a no-op unless BOSS_PREVIEW_EXPOSE is on), so
+    # nothing outside keeps reaching a port about to be reused.
+    from . import preview_expose
+
+    preview_expose.detach(str(row.get("id") or ""))
     if row.get("mode") == "docker":
         _docker_rm(row.get("container_id"))
         if row.get("id"):

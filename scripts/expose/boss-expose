@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""boss-expose: give a preview its own HTTPS origin, through a least-privilege helper (BOSSAPP-860).
+
+The same privilege split as boss-sandbox-exec: BOSS runs unprivileged and asks this small helper,
+by argv, for ONE narrow thing; the helper alone holds the right to change what the host serves.
+It imports nothing from BOSS, reads its configuration only from a root-owned file BOSS cannot
+write, validates every argument against that file, and fails closed.
+
+    boss-expose map <label> <port>    expose 127.0.0.1:<port> at its own HTTPS origin
+    boss-expose unmap <label>         remove it
+    boss-expose list                  what is exposed now
+
+Every answer is one JSON object on stdout. Exit 0 = done, 125 = refused (an argument the
+configuration does not allow), 126 = the backend failed.
+
+Configuration (/etc/boss/expose.json; BOSS_EXPOSE_CONFIG is honoured ONLY when the helper is not
+running as root, so a test can point it at a scratch file and BOSS can never redirect a
+privileged helper):
+
+    {"backend": "tailscale" | "caddy",
+     "port_range": [19000, 19999],               # the only local ports it will map
+     "state": "/var/lib/boss-expose/state.json",
+     "tailscale": {"binary": "/usr/bin/tailscale", "host": "<node>.<tailnet>.ts.net",
+                   "https_ports": [8443, 8499]},  # one HTTPS port per preview = its own origin
+     "caddy": {"admin": "http://127.0.0.1:2019", "server": "srv0",
+               "domain": "previews.example.com"}} # <label>.<domain>, TLS by Caddy
+
+Install (optional; previews stay path-proxied under BOSS's preview origin without it):
+
+    install -o root -g boss -m 0750 scripts/expose/boss-expose /usr/local/libexec/boss/boss-expose
+    echo 'boss ALL=(root) NOPASSWD: /usr/local/libexec/boss/boss-expose' > /etc/sudoers.d/boss-expose
+
+and set BOSS_PREVIEW_EXPOSE=on (BOSS_EXPOSE_SUDO=1 to call it through sudo).
+"""
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+DEFAULT_CONFIG = "/etc/boss/expose.json"
+LABEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+REFUSED, FAILED = 125, 126
+
+
+def out(payload, code=0):
+    sys.stdout.write(json.dumps(payload, sort_keys=True) + "\n")
+    sys.exit(code)
+
+
+def refuse(reason):
+    out({"ok": False, "refused": True, "error": reason}, REFUSED)
+
+
+def fail(reason):
+    out({"ok": False, "error": reason}, FAILED)
+
+
+def load_config():
+    path = DEFAULT_CONFIG
+    if os.geteuid() != 0 and os.environ.get("BOSS_EXPOSE_CONFIG"):
+        path = os.environ["BOSS_EXPOSE_CONFIG"]
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as exc:
+        fail(f"no usable configuration at {path}: {exc}")
+    if cfg.get("backend") not in ("tailscale", "caddy"):
+        fail("configuration: backend must be tailscale or caddy")
+    lo, hi = (cfg.get("port_range") or [19000, 19999])[:2]
+    cfg["port_range"] = (int(lo), int(hi))
+    cfg.setdefault("state", "/var/lib/boss-expose/state.json")
+    return cfg
+
+
+def load_state(cfg):
+    try:
+        with open(cfg["state"], encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(cfg, state):
+    os.makedirs(os.path.dirname(cfg["state"]) or ".", exist_ok=True)
+    tmp = cfg["state"] + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, sort_keys=True)
+    os.replace(tmp, cfg["state"])
+
+
+def listening(port):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2):
+            return True
+    except OSError:
+        return False
+
+
+def run(argv):
+    # Fixed argv, never a shell; the binary comes from the root-owned configuration.
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
+    if done.returncode != 0:
+        fail(f"{os.path.basename(argv[0])} exited {done.returncode}: "
+             f"{(done.stderr or done.stdout or '').strip()[-300:]}")
+
+
+def caddy(cfg, method, path, body=None):
+    base = str(cfg["caddy"].get("admin") or "http://127.0.0.1:2019").rstrip("/")
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(base + path, data=data, method=method)
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        if method == "DELETE" and exc.code == 404:
+            return 404
+        fail(f"caddy admin {method} {path} answered {exc.code}")
+    except (urllib.error.URLError, OSError) as exc:
+        fail(f"caddy admin unreachable: {exc}")
+
+
+def do_map(cfg, label, port_text):
+    if not LABEL.match(label or ""):
+        refuse("label must be lower-case letters, digits and '-', at most 40")
+    if not port_text.isdigit():
+        refuse("port must be a number")
+    port = int(port_text)
+    lo, hi = cfg["port_range"]
+    if not lo <= port <= hi:
+        refuse(f"port {port} is outside the preview range {lo}-{hi}")
+    if not listening(port):
+        refuse(f"nothing is listening on 127.0.0.1:{port}")
+    state = load_state(cfg)
+    if label in state:
+        refuse(f"{label} is already exposed; unmap it first")
+    if cfg["backend"] == "tailscale":
+        ts = cfg.get("tailscale") or {}
+        host = str(ts.get("host") or "")
+        if not host:
+            fail("configuration: tailscale.host is required")
+        first, last = (ts.get("https_ports") or [8443, 8499])[:2]
+        used = {int(v.get("https_port", 0)) for v in state.values()}
+        free = [p for p in range(int(first), int(last) + 1) if p not in used]
+        if not free:
+            fail("every configured tailnet HTTPS port is in use")
+        https_port = free[0]
+        run([str(ts.get("binary") or "tailscale"), "serve", "--bg", f"--https={https_port}",
+             f"http://127.0.0.1:{port}"])
+        entry = {"port": port, "https_port": https_port, "url": f"https://{host}:{https_port}"}
+    else:
+        cd = cfg.get("caddy") or {}
+        domain, server = str(cd.get("domain") or ""), str(cd.get("server") or "srv0")
+        if not domain:
+            fail("configuration: caddy.domain is required")
+        hostname = f"{label}.{domain}"
+        caddy(cfg, "POST", f"/config/apps/http/servers/{server}/routes", {
+            "@id": f"boss-expose-{label}", "match": [{"host": [hostname]}],
+            "handle": [{"handler": "reverse_proxy",
+                        "upstreams": [{"dial": f"127.0.0.1:{port}"}]}], "terminal": True})
+        entry = {"port": port, "host": hostname, "url": f"https://{hostname}"}
+    state[label] = entry
+    save_state(cfg, state)
+    out({"ok": True, "label": label, **entry})
+
+
+def do_unmap(cfg, label):
+    if not LABEL.match(label or ""):
+        refuse("label must be lower-case letters, digits and '-', at most 40")
+    state = load_state(cfg)
+    entry = state.get(label)
+    if entry is None:
+        out({"ok": True, "label": label, "removed": False})
+    if cfg["backend"] == "tailscale":
+        ts = cfg.get("tailscale") or {}
+        run([str(ts.get("binary") or "tailscale"), "serve", f"--https={entry['https_port']}",
+             "off"])
+    else:
+        caddy(cfg, "DELETE", f"/id/boss-expose-{label}")
+    state.pop(label, None)
+    save_state(cfg, state)
+    out({"ok": True, "label": label, "removed": True})
+
+
+def main(argv):
+    if not argv or argv[0] not in ("map", "unmap", "list"):
+        refuse("usage: boss-expose map <label> <port> | unmap <label> | list")
+    cfg = load_config()
+    if argv[0] == "list":
+        out({"ok": True, "exposed": load_state(cfg)})
+    if argv[0] == "map":
+        if len(argv) != 3:
+            refuse("usage: boss-expose map <label> <port>")
+        do_map(cfg, argv[1], argv[2])
+    if len(argv) != 2:
+        refuse("usage: boss-expose unmap <label>")
+    do_unmap(cfg, argv[1])
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

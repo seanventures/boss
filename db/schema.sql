@@ -13028,4 +13028,8 @@ CREATE TABLE IF NOT EXISTS agent_keys (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_keys_active ON agent_keys (agent_id) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_agent_keys_role ON agent_keys (project_id, role_key, status);
+-- 860 (services/preview_expose.py, scripts/expose/boss-expose): a preview's own HTTPS origin
+-- (tailnet port or Caddy subdomain), set only after BOSS verified it from outside. NULL: the
+-- preview is served under BOSS's preview origin as before (BOSS_PREVIEW_EXPOSE off, the default).
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS exposed_url TEXT;
 -- ================================ end BOSSAPP-855-860 ==
