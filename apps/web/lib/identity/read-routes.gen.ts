@@ -58,6 +58,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["agents/{}/lineage", "agent_passport:read"],
   ["agents/{}/passport", "agent_passport:read"],
   ["agents/{}/prompt", "agent:read"],
+  ["agents/{}/run-policy", "agent:read"],
   ["agents/{}/versions/{}/instructions", "agent:read"],
   ["ai-sre/bench", "reliability:read"],
   ["ai-sre/capabilities", "reliability:read"],

@@ -58,6 +58,9 @@ class AgentUpdateBody(BaseModel):
     persona: Optional[dict[str, Any]] = None
     #: Organization's `Move to…`: a shipped team key, the operator's own team, or null (Yours).
     team: Optional[str] = None
+    #: BOSSAPP-857: {max_concurrent, max_daily_runs, max_daily_cost_usd}, enforced at job claim.
+    #: `{}` or null clears it.
+    run_policy: Optional[dict[str, Any]] = None
     # IDENTITY FIELDS ARE FACTS, NOT SETTINGS. Accepted here only so a body carrying one is
     # refused by name (422 "Identity fields are fixed") instead of being silently ignored.
     agent_id: Optional[Any] = None
@@ -218,12 +221,37 @@ def build_agents_router(
             actor = require_write_actor(connection, body.project_id, body.actor, "role_review")
             if grants:
                 require_write_actor(connection, body.project_id, actor, "workflow_manage")
+            policy = None
+            if "run_policy" in given:
+                from boss_engine.services import role_run_policy
+
+                try:
+                    policy = role_run_policy.set_policy(connection, body.project_id, role_key,
+                                                        body.run_policy)
+                except role_run_policy.RunPolicyError as error:
+                    raise HTTPException(status_code=422, detail={
+                        "field": "run_policy", "message": str(error)}) from error
             try:
-                return agents.update_agent(
+                out = agents.update_agent(
                     connection, body.project_id, role_key, actor=actor, **changes,
                     grant_skills=body.grant_skills, grant_mcp_servers=body.grant_mcp_servers)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
+            if policy is not None and isinstance(out, dict):
+                out = {**out, "run_policy": policy}
+            return out
+
+    @router.get("/v1/agents/{role_key}/run-policy")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
+    def get_run_policy(role_key: str, project_id: str) -> dict[str, Any]:
+        """The agent's run policy (BOSSAPP-857) and what it has used today against it."""
+        from boss_engine.services import role_run_policy
+
+        with begin(engine) as connection:
+            require_reader(connection, project_id)
+            return {"role_key": role_key,
+                    "run_policy": role_run_policy.policy_for(connection, project_id, role_key),
+                    "today": role_run_policy.usage_today(connection, project_id, role_key)}
 
     @router.delete("/v1/agents/{role_key}")
     @permit(P.AGENT_LIFECYCLE, scope=Scope.project(query="project_id"))

@@ -12974,3 +12974,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_access_grants_live
   ON mcp_access_grants (project_id, server_id, role_key, tool) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_mcp_access_grants_role ON mcp_access_grants (project_id, role_key, status);
 -- ================================ end BOSSAPP-846-848 ==
+-- BOSSAPP-855-860
+-- ── Runtime extras: hosted remote agents, workspace runtime services, per-agent run policy,
+-- runtime version windows, per-agent signing keys, tailnet previews ─────────────────────────────
+-- 858 (services/runtime_versions.py) needs no table: a version window is declared on the
+-- engine's spec, never stored.
+-- 857 (services/role_run_policy.py): a role's own run policy, enforced at job claim.
+-- {max_concurrent, max_daily_runs, max_daily_cost_usd}; '{}' (the default) = no policy, and the
+-- claim path asks nothing.
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS run_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- The role a job runs as (enqueue_job(role_key=…) or payload.role_key). NULL: no role's policy.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS role_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_jobs_role_live
+  ON jobs (project_id, role_key, status) WHERE role_key IS NOT NULL;
+-- One row per job claimed for a role WITH a policy: what max_daily_runs counts. A reclaim of
+-- the same job does not count twice.
+CREATE TABLE IF NOT EXISTS role_job_claims (
+  job_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_role_job_claims_day
+  ON role_job_claims (project_id, role_key, claimed_at);
+-- 857: no-progress back-off for monitors and schedules. backoff_max_factor 1 = off (default);
+-- above 1, each wake that reports nothing new doubles the wait, up to that many intervals.
+ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS backoff_max_factor INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS no_progress_streak INTEGER NOT NULL DEFAULT 0;
+DO $wake_backoff$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_wakeups_backoff_max_factor_check') THEN
+    ALTER TABLE agent_wakeups ADD CONSTRAINT agent_wakeups_backoff_max_factor_check
+      CHECK (backoff_max_factor BETWEEN 1 AND 64);
+  END IF;
+END $wake_backoff$;
+-- ================================ end BOSSAPP-855-860 ==
