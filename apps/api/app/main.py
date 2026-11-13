@@ -31816,6 +31816,11 @@ from .routers.work_items import build_work_items_router
 app.include_router(build_work_items_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
+# THE TOOL-CALL AUDIT (routers/tool_calls.py, services/tool_call_audit.py; BOSSAPP-819): every
+# tool call BOSS decided, filtered and keyset-paged, and the same filter as NDJSON.
+from .routers.tool_calls import build_tool_calls_router
+
+app.include_router(build_tool_calls_router(engine=engine, require_reader=require_project_reader))
 # The AI SRE incident squad (routers/incident_squad.py, services/incident_squad.py).
 from .routers.incident_squad import build_incident_squad_router
 
