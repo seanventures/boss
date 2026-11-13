@@ -160,6 +160,10 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kg-view.ts#promoteFact": "knowledge:manage",   // POST /v1/knowledge/facts/{id}/promote
   "lib/kg-view.ts#rejectFact": "knowledge:manage",    // POST /v1/knowledge/facts/{id}/reject
   "lib/kg-view.ts#forgetFact": "knowledge:manage",    // POST /v1/knowledge/facts/{id}/forget
+  // lib/wiki.ts — the Knowledge Graph's Wiki tab (BOSSAPP-891).
+  "lib/wiki.ts#saveWikiPage": "knowledge:manage",     // PUT /v1/wiki/pages/{slug}
+  "lib/wiki.ts#restoreWikiPage": "knowledge:manage",  // POST /v1/wiki/pages/{slug}/restore
+  "lib/wiki.ts#maintainWiki": "knowledge:manage",     // POST /v1/wiki/maintain
   // lib/kg-setup.ts — a knowledge-graph project's setup: the team step (the default-team door).
   "lib/kg-setup.ts#setProjectTeam": "work_item:manage", // POST /v1/projects/{id}/agents action=set
 
