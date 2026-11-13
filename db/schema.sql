@@ -13165,4 +13165,51 @@ CREATE TABLE IF NOT EXISTS work_item_break_glass_reads (
 );
 CREATE INDEX IF NOT EXISTS idx_work_item_break_glass_reads_item
   ON work_item_break_glass_reads (work_item_id, created_at DESC);
+-- 877 ROUTINES (services/workflow_schedules.py). A schedule may also be a five-field cron
+-- expression read in its time zone (cadence 'cron'); say what happens when a firing comes while
+-- its last run is still going (concurrency_policy: always_enqueue | skip_if_active | coalesce —
+-- one run when the active one ends); how missed firings are caught up after downtime (catch_up:
+-- none | one | all, at most catch_up_max); and skip a firing when nothing happened in the project
+-- since the last run (activity_gate {"kinds": ["work_item.", ...], "min_events": 1}). Its input
+-- may use {{fired_at}} {{date}} {{since}} {{last_run_at}} {{schedule_name}}. Every firing —
+-- started, suppressed (with the reason), refused or failed — is a workflow_schedule_runs row.
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS cron_expr TEXT;
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS concurrency_policy TEXT NOT NULL DEFAULT 'always_enqueue';
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS catch_up TEXT NOT NULL DEFAULT 'one';
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS catch_up_max INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS activity_gate JSONB;
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS coalesced_pending BOOLEAN NOT NULL DEFAULT false;
+DO $$ BEGIN
+  -- The cadence check gains 'cron' (extended, not rewritten: the three cadences stay).
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workflow_schedules_cadence_check'
+             AND conrelid = 'workflow_schedules'::regclass
+             AND pg_get_constraintdef(oid) NOT LIKE '%cron%') THEN
+    ALTER TABLE workflow_schedules DROP CONSTRAINT workflow_schedules_cadence_check;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workflow_schedules_cadence_check'
+                 AND conrelid = 'workflow_schedules'::regclass) THEN
+    ALTER TABLE workflow_schedules ADD CONSTRAINT workflow_schedules_cadence_check
+      CHECK (cadence IN ('hourly', 'daily', 'weekly', 'cron'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workflow_schedules_routine_check'
+                 AND conrelid = 'workflow_schedules'::regclass) THEN
+    ALTER TABLE workflow_schedules ADD CONSTRAINT workflow_schedules_routine_check CHECK (
+      concurrency_policy IN ('always_enqueue', 'skip_if_active', 'coalesce')
+      AND catch_up IN ('none', 'one', 'all') AND catch_up_max BETWEEN 1 AND 50
+      AND (cadence <> 'cron' OR cron_expr IS NOT NULL));
+  END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS workflow_schedule_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  schedule_id TEXT NOT NULL REFERENCES workflow_schedules(id) ON DELETE CASCADE,
+  scheduled_for TIMESTAMPTZ NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('started', 'suppressed', 'coalesced', 'refused', 'failed')),
+  reason TEXT,
+  run_id TEXT,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_schedule_runs_schedule
+  ON workflow_schedule_runs (schedule_id, created_at DESC);
 -- ================================ end BOSSAPP-w4-work-ux1 ==

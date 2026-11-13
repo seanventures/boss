@@ -29,6 +29,7 @@ an instant; the fields that produced it are local, because that is what was mean
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -169,8 +170,11 @@ def require_schedule_inputs(spec: dict[str, Any], input_data: Optional[dict[str,
     return data
 
 
-def describe(cadence: str, minute: int, hour: int, weekday: Optional[int], tz_name: str) -> str:
+def describe(cadence: str, minute: int, hour: int, weekday: Optional[int], tz_name: str,
+             cron_expr: Optional[str] = None) -> str:
     """The schedule as a sentence. What the console shows, and what a test can assert on."""
+    if cadence == "cron":
+        return f"on cron '{cron_expr}' ({tz_name})"
     if cadence == "hourly":
         return f"every hour at :{minute:02d} ({tz_name})"
     at = f"{hour:02d}:{minute:02d}"
@@ -220,6 +224,166 @@ def next_occurrence(
     if candidate <= now:
         candidate += timedelta(days=7)
     return candidate.astimezone(timezone.utc)
+
+
+# ── Cron, when the three cadences are not enough (BOSSAPP-877) ─────────────────────────────────
+# The note at the top said cron was "a column away"; this is that column. Five standard fields
+# (minute hour day-of-month month day-of-week; `*`, lists, ranges, `/step`, month and day names,
+# 7 = Sunday), read in the schedule's own zone like every other cadence. Day-of-month and
+# day-of-week together mean EITHER, as cron always has.
+
+_CRON_FIELDS = (("minute", 0, 59), ("hour", 0, 23), ("day of month", 1, 31), ("month", 1, 12),
+                ("day of week", 0, 7))
+_CRON_NAMES = {
+    3: {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug",
+                                         "sep", "oct", "nov", "dec"))},
+    4: {d: i for i, d in enumerate(("sun", "mon", "tue", "wed", "thu", "fri", "sat"))},
+}
+#: The furthest a cron search looks ahead before calling the expression unsatisfiable (Feb 30).
+_CRON_HORIZON_DAYS = 366 * 5
+
+
+def parse_cron(expr: str) -> tuple[frozenset[int], ...]:
+    """The five fields as sets of allowed values, or ScheduleError naming the field that is wrong.
+    Returns (minutes, hours, days, months, weekdays, dom_restricted, dow_restricted); the last
+    two are flags, non-empty when that field was restricted (not `*`)."""
+    parts = str(expr or "").split()
+    if len(parts) != 5:
+        raise ScheduleError("a cron expression has five fields: minute hour day-of-month month "
+                            f"day-of-week — got {len(parts)} in {expr!r}.")
+    out: list[frozenset[int]] = []
+    for index, (part, (name, low, high)) in enumerate(zip(parts, _CRON_FIELDS)):
+        values: set[int] = set()
+        for piece in part.lower().split(","):
+            step = 1
+            had_step = "/" in piece
+            if had_step:
+                piece, _, raw_step = piece.partition("/")
+                if not raw_step.isdigit() or int(raw_step) < 1:
+                    raise ScheduleError(f"the {name} field's step must be a whole number — got {part!r}.")
+                step = int(raw_step)
+            if piece in ("*", ""):
+                start, end = low, high
+            else:
+                bounds = piece.split("-")
+                if len(bounds) > 2:
+                    raise ScheduleError(f"the {name} field is not a value or range — got {part!r}.")
+                nums = []
+                for b in bounds:
+                    b = _CRON_NAMES.get(index, {}).get(b, b)
+                    if not str(b).isdigit():
+                        raise ScheduleError(f"the {name} field has {b!r}, which is not a number.")
+                    nums.append(int(b))
+                start, end = nums[0], nums[-1]
+                if had_step and len(bounds) == 1:
+                    end = high
+            if not (low <= start <= high and low <= end <= high) or start > end:
+                raise ScheduleError(f"the {name} field must be within {low}-{high} — got {part!r}.")
+            values.update(range(start, end + 1, step))
+        if index == 4 and 7 in values:
+            values.discard(7)
+            values.add(0)
+        out.append(frozenset(values))
+    out.append(frozenset({1}) if parts[2] != "*" else frozenset())
+    out.append(frozenset({1}) if parts[4] != "*" else frozenset())
+    return tuple(out)
+
+
+def next_cron(expr: str, tz_name: str, after: Optional[datetime] = None) -> datetime:
+    """The next instant (UTC) the cron expression names, STRICTLY after `after`, in its zone."""
+    minutes, hours, days, months, weekdays, dom_set, dow_set = parse_cron(expr)
+    zone = ZoneInfo(tz_name)
+    start = (after or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    local = start.astimezone(zone).replace(second=0, microsecond=0, tzinfo=None) + timedelta(minutes=1)
+    limit = local + timedelta(days=_CRON_HORIZON_DAYS)
+
+    def day_ok(t: datetime) -> bool:
+        dom = t.day in days
+        dow = ((t.weekday() + 1) % 7) in weekdays
+        if dom_set and dow_set:
+            return dom or dow
+        return dom and dow
+
+    t = local
+    while t < limit:
+        if t.month not in months:
+            t = (t.replace(day=1, hour=0, minute=0) + timedelta(days=32)).replace(day=1)
+            continue
+        if not day_ok(t):
+            t = t.replace(hour=0, minute=0) + timedelta(days=1)
+            continue
+        if t.hour not in hours:
+            t = t.replace(minute=0) + timedelta(hours=1)
+            continue
+        if t.minute not in minutes:
+            t += timedelta(minutes=1)
+            continue
+        instant = t.replace(tzinfo=zone).astimezone(timezone.utc)
+        if instant > start:
+            return instant
+        t += timedelta(minutes=1)
+    raise ScheduleError(f"the cron expression {expr!r} never comes round (no date matches it).")
+
+
+def next_for(row: Any, *, after: Optional[datetime] = None, tz_name: Optional[str] = None) -> datetime:
+    """The next occurrence of a stored schedule (any cadence, cron included)."""
+    zone = tz_name or row["timezone"]
+    if row["cadence"] == "cron":
+        return next_cron(str(row.get("cron_expr") or ""), zone, after)
+    return next_occurrence(cadence=row["cadence"], minute=row["minute"], hour=row["hour"],
+                           weekday=row["weekday"], tz_name=zone, after=after)
+
+
+CONCURRENCY_POLICIES = ("always_enqueue", "skip_if_active", "coalesce")
+CATCH_UP = ("none", "one", "all")
+#: How late a firing may run under catch_up 'none' and still count as on time (a slow tick).
+ON_TIME_GRACE = timedelta(minutes=5)
+#: How many missed occurrences one tick will even look at.
+_MAX_MISSED_SCAN = 200
+_TEMPLATE = re.compile(r"\{\{\s*(fired_at|date|since|last_run_at|schedule_name)\s*\}\}")
+
+
+def _routine(concurrency_policy: Any, catch_up: Any, catch_up_max: Any,
+             activity_gate: Any) -> tuple[str, str, int, Optional[dict[str, Any]]]:
+    policy = str(concurrency_policy or "always_enqueue").strip().lower()
+    if policy not in CONCURRENCY_POLICIES:
+        raise ScheduleError(f"concurrency_policy must be one of {', '.join(CONCURRENCY_POLICIES)}.")
+    catch = str(catch_up or "one").strip().lower()
+    if catch not in CATCH_UP:
+        raise ScheduleError(f"catch_up must be one of {', '.join(CATCH_UP)}.")
+    try:
+        cap = int(catch_up_max if catch_up_max is not None else 3)
+    except (TypeError, ValueError):
+        raise ScheduleError("catch_up_max must be a whole number from 1 to 50.") from None
+    if not 1 <= cap <= 50:
+        raise ScheduleError("catch_up_max must be from 1 to 50.")
+    gate = None
+    if activity_gate not in (None, "", False, {}):
+        if activity_gate is True:
+            activity_gate = {}
+        if not isinstance(activity_gate, dict):
+            raise ScheduleError("activity_gate is an object: {\"kinds\": [\"work_item.\"], \"min_events\": 1}.")
+        kinds = activity_gate.get("kinds") or ["work_item.", "git.", "code_task.", "document."]
+        if not isinstance(kinds, list) or not all(isinstance(k, str) and k.strip() for k in kinds):
+            raise ScheduleError("activity_gate.kinds is a list of event-type prefixes, such as \"work_item.\".")
+        try:
+            least = int(activity_gate.get("min_events") or 1)
+        except (TypeError, ValueError):
+            raise ScheduleError("activity_gate.min_events must be a whole number.") from None
+        gate = {"kinds": sorted({k.strip() for k in kinds}), "min_events": max(1, least)}
+    return policy, catch, cap, gate
+
+
+def render_input(value: Any, context: dict[str, str]) -> Any:
+    """A schedule's stored input with {{fired_at}} {{date}} {{since}} {{last_run_at}}
+    {{schedule_name}} filled in for this firing. Pure; anything else is left as written."""
+    if isinstance(value, str):
+        return _TEMPLATE.sub(lambda m: context.get(m.group(1), ""), value)
+    if isinstance(value, dict):
+        return {k: render_input(v, context) for k, v in value.items()}
+    if isinstance(value, list):
+        return [render_input(v, context) for v in value]
+    return value
 
 
 # ── Readiness ──────────────────────────────────────────────────────────────────
@@ -299,7 +463,14 @@ def _row(row: Any) -> dict[str, Any]:
         # Rendered here rather than in the console, so the API, the CLI and the UI cannot
         # describe the same schedule three different ways.
         "describes": describe(row["cadence"], row["minute"], row["hour"],
-                              row["weekday"], row["timezone"]),
+                              row["weekday"], row["timezone"], row.get("cron_expr")),
+        # BOSSAPP-877: the routine's own rules.
+        "cron_expr": row.get("cron_expr"),
+        "concurrency_policy": row.get("concurrency_policy") or "always_enqueue",
+        "catch_up": row.get("catch_up") or "one",
+        "catch_up_max": int(row.get("catch_up_max") or 3),
+        "activity_gate": row.get("activity_gate") if isinstance(row.get("activity_gate"), dict) else None,
+        "coalesced_pending": bool(row.get("coalesced_pending")),
     }
 
 
@@ -318,8 +489,17 @@ def create(
     input_data: Optional[dict[str, Any]] = None,
     enabled: bool = True,
     start_anyway: Optional[list[str]] = None,
+    cron_expr: Optional[str] = None,
+    concurrency_policy: str = "always_enqueue",
+    catch_up: str = "one",
+    catch_up_max: int = 3,
+    activity_gate: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Schedule a workflow. The first occurrence is computed now, not at the first tick.
+
+    A `cron_expr` makes it a cron schedule (cadence 'cron'; minute/hour/weekday are unused).
+    `concurrency_policy`, `catch_up`/`catch_up_max` and `activity_gate` are the routine's rules
+    (BOSSAPP-877; see run_due).
 
     The result carries `readiness`: what the workflow needs from this project, and which of
     the missing things this schedule was told it may start without."""
@@ -349,10 +529,21 @@ def create(
     link = _consent.require_for_schedule(connection, project_id=project_id, spec=spec,
                                          input_data=input_data, name=name) or {}
 
-    cadence, minute, hour, weekday, tz_name = validate(
-        cadence=cadence, minute=minute, hour=hour, weekday=weekday, tz_name=tz_name)
-    due = next_occurrence(cadence=cadence, minute=minute, hour=hour,
-                          weekday=weekday, tz_name=tz_name)
+    policy, catch, cap, gate = _routine(concurrency_policy, catch_up, catch_up_max, activity_gate)
+    cron_expr = " ".join(str(cron_expr or "").split()) or None
+    if cron_expr or str(cadence or "").strip().lower() == "cron":
+        if not cron_expr:
+            raise ScheduleError("a cron schedule needs its cron expression (five fields).")
+        parse_cron(cron_expr)
+        _, _, _, _, tz_name = validate(cadence="daily", minute=0, hour=0, weekday=None,
+                                       tz_name=tz_name)
+        cadence, minute, hour, weekday = "cron", 0, 0, None
+        due = next_cron(cron_expr, tz_name)
+    else:
+        cadence, minute, hour, weekday, tz_name = validate(
+            cadence=cadence, minute=minute, hour=hour, weekday=weekday, tz_name=tz_name)
+        due = next_occurrence(cadence=cadence, minute=minute, hour=hour,
+                              weekday=weekday, tz_name=tz_name)
 
     row = connection.execute(
         text(
@@ -360,11 +551,13 @@ def create(
             INSERT INTO workflow_schedules (
                 id, project_id, workflow_key, name, cadence, minute, hour, weekday,
                 timezone, input, actor, enabled, next_run_at, start_anyway,
-                on_behalf_of, grant_id
+                on_behalf_of, grant_id, cron_expr, concurrency_policy, catch_up,
+                catch_up_max, activity_gate
             ) VALUES (
                 :id, :p, :k, :name, :cadence, :minute, :hour, :weekday,
                 :tz, CAST(:input AS JSONB), :actor, :enabled, :due,
-                CAST(:anyway AS JSONB), :obo, :grant
+                CAST(:anyway AS JSONB), :obo, :grant, :cron, :policy, :catch, :cap,
+                CAST(:gate AS JSONB)
             ) RETURNING *
             """
         ),
@@ -372,12 +565,14 @@ def create(
          "cadence": cadence, "minute": minute, "hour": hour, "weekday": weekday,
          "tz": tz_name, "input": json.dumps(input_data or {}), "actor": actor,
          "enabled": bool(enabled), "due": due, "anyway": json.dumps(accepted),
-         "obo": link.get("on_behalf_of"), "grant": link.get("grant_id")},
+         "obo": link.get("on_behalf_of"), "grant": link.get("grant_id"), "cron": cron_expr,
+         "policy": policy, "catch": catch, "cap": cap,
+         "gate": json.dumps(gate) if gate else None},
     ).mappings().one()
     emit_event(connection, project_id, "workflow.schedule_created", actor,
                "workflow_schedule", row["id"],
                {"workflow_key": workflow_key, "describes": describe(
-                   cadence, minute, hour, weekday, tz_name),
+                   cadence, minute, hour, weekday, tz_name, cron_expr),
                 **({"start_anyway": accepted} if accepted else {})})
     return {**_row(row),
             "readiness": _readiness(connection, project_id, workflow_key, input_data or {},
@@ -425,15 +620,14 @@ def replace_inputs(
     due = row["next_run_at"]
     if tz_name is not None:
         _, _, _, _, zone = validate(
-            cadence=row["cadence"], minute=row["minute"], hour=row["hour"],
+            cadence="daily" if row["cadence"] == "cron" else row["cadence"], minute=row["minute"],
+            hour=row["hour"],
             weekday=row["weekday"], tz_name=tz_name)
         # A zone change moves the instant. Recompute only then, and only while the schedule
         # is running — the same rule as resume, so editing inputs does not make a paused
         # schedule due, and does not skip the occurrence the operator already had.
         if zone != row["timezone"] and row["enabled"]:
-            due = next_occurrence(
-                cadence=row["cadence"], minute=row["minute"], hour=row["hour"],
-                weekday=row["weekday"], tz_name=zone)
+            due = next_for(row, tz_name=zone)
     accepted = (_start_anyway(start_anyway) if start_anyway is not None
                 else [str(k) for k in _json_list(row.get("start_anyway"))])
     updated = connection.execute(
@@ -482,15 +676,13 @@ def set_enabled(
     ).mappings().first()
     if row is None:
         raise ScheduleError(f"no schedule '{schedule_id}'.")
-    due = next_occurrence(cadence=row["cadence"], minute=row["minute"], hour=row["hour"],
-                          weekday=row["weekday"], tz_name=row["timezone"]) if enabled \
-        else row["next_run_at"]
+    due = next_for(row) if enabled else row["next_run_at"]
     updated = connection.execute(
         text(
             """
             UPDATE workflow_schedules
             SET enabled=:e, next_run_at=:due, consecutive_failures=0, last_error=NULL,
-                last_missing=NULL, updated_at=now()
+                last_missing=NULL, coalesced_pending=FALSE, updated_at=now()
             WHERE id=:i AND project_id=:p RETURNING *
             """
         ),
@@ -551,6 +743,151 @@ def _refused(connection: Connection, project_id: str, row: Any, following: datet
     )
 
 
+_KEEP: Any = object()
+
+
+def set_routine(
+    connection: Connection,
+    *,
+    project_id: str,
+    schedule_id: str,
+    actor: str,
+    cron_expr: Any = _KEEP,
+    concurrency_policy: Any = _KEEP,
+    catch_up: Any = _KEEP,
+    catch_up_max: Any = _KEEP,
+    activity_gate: Any = _KEEP,
+) -> dict[str, Any]:
+    """Change a schedule's routine rules (BOSSAPP-877). An argument left out keeps its value; a
+    new cron expression moves the next occurrence (while the schedule is running)."""
+    row = connection.execute(
+        text("SELECT * FROM workflow_schedules WHERE id=:i AND project_id=:p FOR UPDATE"),
+        {"i": schedule_id, "p": project_id},
+    ).mappings().first()
+    if row is None:
+        raise ScheduleError(f"no schedule '{schedule_id}'.")
+    def pick(new: Any, old: Any) -> Any:
+        return old if new is _KEEP else new
+
+    policy, catch, cap, gate = _routine(
+        pick(concurrency_policy, row.get("concurrency_policy")), pick(catch_up, row.get("catch_up")),
+        pick(catch_up_max, row.get("catch_up_max")),
+        pick(activity_gate, row.get("activity_gate")))
+    cadence, cron, due = row["cadence"], row.get("cron_expr"), row["next_run_at"]
+    if cron_expr is not _KEEP:
+        cron_new = " ".join(str(cron_expr or "").split()) or None
+        if not cron_new:
+            raise ScheduleError("a cron expression is five fields; to go back to hourly, daily or "
+                                "weekly, make a new schedule.")
+        parse_cron(cron_new)
+        if cron_new != cron:
+            cadence, cron = "cron", cron_new
+            if row["enabled"]:
+                due = next_cron(cron, row["timezone"])
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_schedules
+            SET cadence=:cadence, cron_expr=:cron, next_run_at=:due, concurrency_policy=:policy,
+                catch_up=:catch, catch_up_max=:cap, activity_gate=CAST(:gate AS JSONB),
+                minute = CASE WHEN :cadence = 'cron' THEN 0 ELSE minute END,
+                hour = CASE WHEN :cadence = 'cron' THEN 0 ELSE hour END,
+                weekday = CASE WHEN :cadence = 'cron' THEN NULL ELSE weekday END,
+                updated_at=now()
+            WHERE id=:i RETURNING *
+            """
+        ),
+        {"cadence": cadence, "cron": cron, "due": due, "policy": policy, "catch": catch,
+         "cap": cap, "gate": json.dumps(gate) if gate else None, "i": schedule_id},
+    ).mappings().one()
+    emit_event(connection, project_id, "workflow.schedule_routine_updated", actor,
+               "workflow_schedule", schedule_id,
+               {"cron_expr": cron, "concurrency_policy": policy, "catch_up": catch,
+                "catch_up_max": cap, "activity_gate": gate})
+    return _row(updated)
+
+
+def firings(connection: Connection, project_id: str, schedule_id: str,
+            limit: int = 50) -> list[dict[str, Any]]:
+    """Every firing of a schedule, newest first: started, or why not (BOSSAPP-877)."""
+    return [{"id": r["id"], "scheduled_for": r["scheduled_for"].isoformat(),
+             "outcome": r["outcome"], "reason": r["reason"], "run_id": r["run_id"],
+             "detail": r["detail"] if isinstance(r["detail"], dict) else {},
+             "created_at": r["created_at"].isoformat()}
+            for r in connection.execute(text(
+                "SELECT * FROM workflow_schedule_runs WHERE project_id = :p AND schedule_id = :s "
+                "ORDER BY created_at DESC, id LIMIT :n"),
+                {"p": project_id, "s": schedule_id, "n": max(1, min(int(limit), 500))}).mappings()]
+
+
+def _record(connection: Connection, project_id: str, row: Any, scheduled_for: datetime,
+            outcome: str, *, reason: Optional[str] = None, run_id: Optional[str] = None,
+            detail: Optional[dict[str, Any]] = None) -> None:
+    connection.execute(text(
+        "INSERT INTO workflow_schedule_runs (id, project_id, schedule_id, scheduled_for, outcome, "
+        "reason, run_id, detail) VALUES (:id, :p, :s, :at, :o, :r, :run, CAST(:d AS JSONB))"),
+        {"id": make_id("wsr"), "p": project_id, "s": row["id"], "at": scheduled_for, "o": outcome,
+         "r": (reason or None) and str(reason)[:500], "run": run_id,
+         "d": json.dumps(detail or {}, default=str)})
+
+
+def plan_firings(row: Any, now: datetime) -> tuple[list[datetime], list[tuple[datetime, str]], datetime]:
+    """What this tick does for one due schedule: the occurrences to start, the ones it will not
+    start (each with its reason), and the next occurrence after now. Pure.
+
+    catch_up 'one' (the default, and what schedules always did): ONE run for however many
+    occurrences were missed. 'all': every missed occurrence, the newest `catch_up_max` of them.
+    'none': only an occurrence that is still on time (within ON_TIME_GRACE); missed ones are
+    recorded and skipped."""
+    following = next_for(row, after=now)
+    due_at = row["next_run_at"]
+    if due_at is None or due_at > now:
+        return [], [], following
+    missed = [due_at]
+    while len(missed) < _MAX_MISSED_SCAN:
+        nxt = next_for(row, after=missed[-1])
+        if nxt > now:
+            break
+        missed.append(nxt)
+    catch = row.get("catch_up") or "one"
+    if catch == "none":
+        latest = missed[-1]
+        fires = [latest] if now - latest <= ON_TIME_GRACE else []
+        skipped = [(at, "missed") for at in missed if at not in fires]
+    elif catch == "all":
+        cap = int(row.get("catch_up_max") or 3)
+        fires = missed[-cap:]
+        skipped = [(at, "catch_up_cap") for at in missed[:-cap]]
+    else:
+        fires = [missed[0]]
+        skipped = [(at, "caught_up_once") for at in missed[1:]]
+    return fires, skipped, following
+
+
+def _active_run(connection: Connection, row: Any) -> Optional[str]:
+    """The run this schedule started that is still going, if any."""
+    from .workflows import TERMINAL_RUN_STATES
+
+    return connection.execute(text(
+        "SELECT r.id FROM workflow_schedule_runs sr JOIN workflow_runs r ON r.id = sr.run_id "
+        "WHERE sr.schedule_id = :s AND sr.outcome = 'started' AND r.status <> ALL(:done) "
+        "ORDER BY sr.created_at DESC LIMIT 1"),
+        {"s": row["id"], "done": sorted(TERMINAL_RUN_STATES)}).scalar()
+
+
+def _activity(connection: Connection, project_id: str, row: Any, gate: dict[str, Any],
+              since: datetime) -> int:
+    """How many events of the gate's kinds happened in the project since `since` — not counting
+    what this schedule's own runs (and their work items) did."""
+    kinds = [f"{k}%" for k in gate.get("kinds") or []]
+    return int(connection.execute(text(
+        "SELECT count(*) FROM events e WHERE e.project_id = :p AND e.created_at > :since "
+        "AND e.event_type LIKE ANY(:kinds) AND NOT EXISTS ("
+        "  SELECT 1 FROM workflow_schedule_runs sr JOIN workflow_runs r ON r.id = sr.run_id "
+        "  WHERE sr.schedule_id = :s AND (e.entity_id = r.id OR e.entity_id = r.work_item_id))"),
+        {"p": project_id, "since": since, "kinds": kinds, "s": row["id"]}).scalar() or 0)
+
+
 def run_due(
     connection: Connection,
     *,
@@ -566,13 +903,20 @@ def run_due(
     run, not a loop.
 
     Computed from NOW rather than from the missed time, so an install that was off for a week
-    starts one run when it comes back rather than seven. Nobody wants six stale digests.
+    starts one run when it comes back rather than seven (catch_up 'one'; BOSSAPP-877 adds 'all',
+    capped, and 'none'). Nobody wants six stale digests.
+
+    THE ROUTINE'S RULES (BOSSAPP-877), in order, each firing it does not start recorded with why
+    (workflow_schedule_runs): the catch-up plan (plan_firings); the ACTIVITY GATE — nothing of
+    the named kinds happened since the last run → skipped "no_activity"; the CONCURRENCY POLICY
+    when its last run is still going — skip_if_active skips ("run_active"), coalesce holds ONE
+    firing until that run ends (coalesced_pending; the tick after it ends starts it),
+    always_enqueue starts regardless.
 
     SELECT ... FOR UPDATE SKIP LOCKED because more than one worker may tick at once: two
     workers claiming the same schedule is the same digest sent twice.
     """
     from . import projects_archive
-    from .workflows import start_run
 
     # AN ARCHIVED PROJECT'S SCHEDULES DO NOT FIRE, and are not advanced either: on restore each
     # one fires once (next_occurrence is computed from now), never once per missed slot.
@@ -583,7 +927,7 @@ def run_due(
         text(
             """
             SELECT * FROM workflow_schedules
-            WHERE project_id = :p AND enabled AND next_run_at <= :now
+            WHERE project_id = :p AND enabled AND (next_run_at <= :now OR coalesced_pending)
             ORDER BY next_run_at
             LIMIT :limit
             FOR UPDATE SKIP LOCKED
@@ -594,125 +938,218 @@ def run_due(
 
     started: list[dict[str, Any]] = []
     for row in due_rows:
-        following = next_occurrence(
-            cadence=row["cadence"], minute=row["minute"], hour=row["hour"],
-            weekday=row["weekday"], tz_name=row["timezone"], after=now)
-
-        fired_at = row["next_run_at"]
         try:
-            # RESOLVED AT FIRE TIME, EVERY TIME. The schedule stores a workflow KEY, so it runs
-            # whatever version is current when it fires — edit the workflow and the next run
-            # picks the change up. Pinning a version at creation would quietly keep running the
-            # one that happened to be active months ago.
-            #
-            # Not via selector_kind: those resolve through the workflow MAPPING table, which is
-            # a different question ("which workflow handles this class of work") and would make
-            # a schedule depend on a mapping somebody may not have.
-            active = connection.execute(
-                text(
-                    """
-                    SELECT active_version_id FROM workflow_definitions
-                    WHERE project_id = :p AND workflow_key = :k
-                    """
-                ),
-                {"p": project_id, "k": row["workflow_key"]},
-            ).scalar()
-            if not active:
-                raise ScheduleError(
-                    f"'{row['workflow_key']}' has no published version to run.")
-            # THE SCHEDULE'S AUTHORITY, CHECKED AT EVERY FIRING: its linked standing grant must still
-            # be live and its creator's. If not, the schedule PAUSES ("Renew authority").
-            from boss_engine.identity import consent as _consent
-            from boss_engine.identity import lineage as _lineage
-
-            try:
-                schedule_acting = _consent.schedule_acting(connection, row)
-            except _consent.AuthorityLost as lost:
-                connection.execute(text(
-                    "UPDATE workflow_schedules SET enabled = FALSE, next_run_at = :due, "
-                    "last_error = :err, updated_at = now() WHERE id = :i"),
-                    {"due": following, "i": row["id"],
-                     "err": f"Renew authority: the grant this schedule runs under has ended ({lost.reason})."})
-                emit_event(connection, project_id, "workflow.schedule_disabled", row["actor"],
-                           "workflow_schedule", row["id"], {"name": row["name"], "error": "authority ended"})
-                started.append({"schedule_id": row["id"], "name": row["name"], "error": "authority ended",
-                                "disabled": True})
-                continue
-            # CHECKED AT EVERY FIRING, NOT ONCE. A schedule runs unattended, so a newsletter on
-            # an install with no mail server would research every Monday and fail at the send
-            # every Monday. What the operator accepted when saving the schedule
-            # (`start_anyway`) is honoured; anything else missing refuses — see the handler
-            # below for what a refusal records.
-            from .workflow_readiness import WorkflowNotReadyError, refuse_unless_ready
-
-            try:
-                readiness = refuse_unless_ready(
-                    connection, None, project_id, version_id=str(active),
-                    input_data={k: v for k, v in (row["input"] if isinstance(row["input"], dict) else {}).items()
-                                if not str(k).startswith("_identity")},
-                    start_anyway=[str(k) for k in _json_list(row.get("start_anyway"))])
-            except WorkflowNotReadyError as refused:
-                _refused(connection, project_id, row, following, refused.readiness)
-                started.append({"schedule_id": row["id"], "name": row["name"],
-                                "error": "not ready", "disabled": False,
-                                "missing": [m["key"] for m in refused.readiness["missing"]
-                                            if m["key"] not in refused.readiness.get(
-                                                "started_anyway", [])]})
-                continue
-            with (_lineage.acting(schedule_acting) if schedule_acting is not None else _lineage.nullcontext()):
-                run = start_run(
-                    connection,
-                    project_id=project_id,
-                    actor=row["actor"],
-                    input_data=_consent.strip_identity(dict(row["input"] if isinstance(row["input"], dict) else {})),
-                    # THE SCHEDULED TIME, NOT NOW. Two workers that both got past the lock, or a
-                    # tick retried after a crash, produce the same key and therefore one run.
-                    dedupe_key=f"schedule:{row['id']}:{fired_at.isoformat()}",
-                    workflow_version_id=str(active),
-                )
-            if not run.get("duplicate"):
-                from .workflow_readiness import record_started_anyway
-
-                record_started_anyway(connection, project_id, row["actor"],
-                                      str(run.get("id") or ""), readiness)
-            connection.execute(
-                text(
-                    """
-                    UPDATE workflow_schedules
-                    SET next_run_at=:due, last_run_at=:fired, last_run_id=:run,
-                        last_error=NULL, last_missing=NULL, consecutive_failures=0,
-                        updated_at=now()
-                    WHERE id=:i
-                    """
-                ),
-                {"due": following, "fired": now, "run": run.get("id"), "i": row["id"]},
-            )
-            started.append({"schedule_id": row["id"], "name": row["name"],
-                            "workflow_key": row["workflow_key"], "run_id": run.get("id"),
+            fires, skipped, following = plan_firings(row, now)
+        except ScheduleError as error:
+            # A cron expression that can no longer come round: stop it, saying why.
+            connection.execute(text(
+                "UPDATE workflow_schedules SET enabled = FALSE, last_error = :e, updated_at = now() "
+                "WHERE id = :i"), {"e": str(error)[:500], "i": row["id"]})
+            started.append({"schedule_id": row["id"], "name": row["name"], "error": str(error),
+                            "disabled": True})
+            continue
+        pending = bool(row.get("coalesced_pending"))
+        if not fires and not skipped and pending:
+            # Not due: only the firing held back for a run that was still going.
+            fires, following = [now], row["next_run_at"]
+        for at, why in skipped:
+            _record(connection, project_id, row, at, "suppressed", reason=why)
+        if not fires:
+            connection.execute(text(
+                "UPDATE workflow_schedules SET next_run_at = :due, updated_at = now() WHERE id = :i"),
+                {"due": following, "i": row["id"]})
+            started.append({"schedule_id": row["id"], "name": row["name"], "skipped": len(skipped),
+                            "reason": skipped[-1][1] if skipped else None,
                             "next_run_at": following.isoformat()})
-        except Exception as error:  # noqa: BLE001 — one bad schedule must not stop the rest
-            failures = int(row["consecutive_failures"] or 0) + 1
-            stop = failures >= MAX_CONSECUTIVE_FAILURES
-            connection.execute(
-                text(
-                    """
-                    UPDATE workflow_schedules
-                    SET next_run_at=:due, last_error=:err, consecutive_failures=:n,
-                        enabled = CASE WHEN :stop THEN FALSE ELSE enabled END,
-                        updated_at=now()
-                    WHERE id=:i
-                    """
-                ),
-                {"due": following, "err": str(error)[:500], "n": failures,
-                 "stop": stop, "i": row["id"]},
-            )
-            emit_event(
-                connection, project_id,
-                "workflow.schedule_disabled" if stop else "workflow.schedule_failed",
-                row["actor"], "workflow_schedule", row["id"],
-                {"name": row["name"], "error": str(error)[:500],
-                 "consecutive_failures": failures},
-            )
-            started.append({"schedule_id": row["id"], "name": row["name"],
-                            "error": str(error)[:200], "disabled": stop})
+            continue
+        held = _hold_back(connection, project_id, row, fires, following, now, pending)
+        if held is not None:
+            started.append(held)
+            continue
+        for at in fires:
+            started.append(_fire(connection, project_id, row, at, following, now))
     return started
+
+
+def _hold_back(connection: Connection, project_id: str, row: Any, fires: list[datetime],
+               following: datetime, now: datetime, pending: bool) -> Optional[dict[str, Any]]:
+    """The activity gate and the concurrency policy. A dict (what the tick reports) when the
+    firings are not started; None when they go ahead."""
+    def move_on(*, coalesce: bool) -> None:
+        connection.execute(text(
+            "UPDATE workflow_schedules SET next_run_at = :due, coalesced_pending = :c, "
+            "updated_at = now() WHERE id = :i"),
+            {"due": following, "c": coalesce, "i": row["id"]})
+
+    gate = row.get("activity_gate") if isinstance(row.get("activity_gate"), dict) else None
+    if gate and not pending:
+        since = row.get("last_run_at") or row.get("created_at") or now
+        seen = _activity(connection, project_id, row, gate, since)
+        if seen < int(gate.get("min_events") or 1):
+            for at in fires:
+                _record(connection, project_id, row, at, "suppressed", reason="no_activity",
+                        detail={"since": since, "events": seen, "kinds": gate.get("kinds")})
+            move_on(coalesce=False)
+            return {"schedule_id": row["id"], "name": row["name"], "skipped": len(fires),
+                    "reason": "no_activity", "next_run_at": following.isoformat()}
+    policy = row.get("concurrency_policy") or "always_enqueue"
+    active = _active_run(connection, row) if policy != "always_enqueue" else None
+    if active:
+        if policy == "coalesce":
+            if not pending:
+                for at in fires:
+                    _record(connection, project_id, row, at, "coalesced", reason="run_active",
+                            detail={"active_run_id": active})
+            move_on(coalesce=True)
+            return {"schedule_id": row["id"], "name": row["name"], "coalesced": True,
+                    "active_run_id": active, "next_run_at": following.isoformat()}
+        for at in fires:
+            _record(connection, project_id, row, at, "suppressed", reason="run_active",
+                    detail={"active_run_id": active})
+        move_on(coalesce=False)
+        return {"schedule_id": row["id"], "name": row["name"], "skipped": len(fires),
+                "reason": "run_active", "active_run_id": active,
+                "next_run_at": following.isoformat()}
+    if pending:
+        connection.execute(text(
+            "UPDATE workflow_schedules SET coalesced_pending = FALSE WHERE id = :i"), {"i": row["id"]})
+    return None
+
+
+def _template_context(row: Any, at: datetime) -> dict[str, str]:
+    zone = ZoneInfo(row["timezone"])
+    last = row.get("last_run_at")
+    since = last or row.get("created_at") or at
+    return {"fired_at": at.isoformat(), "date": at.astimezone(zone).date().isoformat(),
+            "since": since.isoformat(), "last_run_at": last.isoformat() if last else "",
+            "schedule_name": str(row["name"])}
+
+
+def _fire(connection: Connection, project_id: str, row: Any, fired_at: datetime,
+          following: datetime, now: datetime) -> dict[str, Any]:
+    """Start one occurrence (the schedule's authority and readiness checked first), and record
+    what happened as a firing."""
+    from .workflows import start_run
+
+    try:
+        # RESOLVED AT FIRE TIME, EVERY TIME. The schedule stores a workflow KEY, so it runs
+        # whatever version is current when it fires — edit the workflow and the next run
+        # picks the change up. Pinning a version at creation would quietly keep running the
+        # one that happened to be active months ago.
+        #
+        # Not via selector_kind: those resolve through the workflow MAPPING table, which is
+        # a different question ("which workflow handles this class of work") and would make
+        # a schedule depend on a mapping somebody may not have.
+        active = connection.execute(
+            text(
+                """
+                SELECT active_version_id FROM workflow_definitions
+                WHERE project_id = :p AND workflow_key = :k
+                """
+            ),
+            {"p": project_id, "k": row["workflow_key"]},
+        ).scalar()
+        if not active:
+            raise ScheduleError(
+                f"'{row['workflow_key']}' has no published version to run.")
+        # THE SCHEDULE'S AUTHORITY, CHECKED AT EVERY FIRING: its linked standing grant must still
+        # be live and its creator's. If not, the schedule PAUSES ("Renew authority").
+        from boss_engine.identity import consent as _consent
+        from boss_engine.identity import lineage as _lineage
+
+        try:
+            schedule_acting = _consent.schedule_acting(connection, row)
+        except _consent.AuthorityLost as lost:
+            connection.execute(text(
+                "UPDATE workflow_schedules SET enabled = FALSE, next_run_at = :due, "
+                "last_error = :err, updated_at = now() WHERE id = :i"),
+                {"due": following, "i": row["id"],
+                 "err": f"Renew authority: the grant this schedule runs under has ended ({lost.reason})."})
+            emit_event(connection, project_id, "workflow.schedule_disabled", row["actor"],
+                       "workflow_schedule", row["id"], {"name": row["name"], "error": "authority ended"})
+            _record(connection, project_id, row, fired_at, "failed", reason="authority_ended")
+            return {"schedule_id": row["id"], "name": row["name"], "error": "authority ended",
+                    "disabled": True}
+        # TEMPLATED INPUTS (BOSSAPP-877): {{fired_at}} {{date}} {{since}} {{last_run_at}}
+        # {{schedule_name}} are filled in for THIS firing; nothing else is touched.
+        stored = row["input"] if isinstance(row["input"], dict) else {}
+        values = render_input(_consent.strip_identity(dict(stored)), _template_context(row, fired_at))
+        # CHECKED AT EVERY FIRING, NOT ONCE. A schedule runs unattended, so a newsletter on
+        # an install with no mail server would research every Monday and fail at the send
+        # every Monday. What the operator accepted when saving the schedule
+        # (`start_anyway`) is honoured; anything else missing refuses — see the handler
+        # below for what a refusal records.
+        from .workflow_readiness import WorkflowNotReadyError, refuse_unless_ready
+
+        try:
+            readiness = refuse_unless_ready(
+                connection, None, project_id, version_id=str(active),
+                input_data={k: v for k, v in values.items() if not str(k).startswith("_identity")},
+                start_anyway=[str(k) for k in _json_list(row.get("start_anyway"))])
+        except WorkflowNotReadyError as refused:
+            _refused(connection, project_id, row, following, refused.readiness)
+            missing = [m["key"] for m in refused.readiness["missing"]
+                       if m["key"] not in refused.readiness.get("started_anyway", [])]
+            _record(connection, project_id, row, fired_at, "refused", reason="not_ready",
+                    detail={"missing": missing})
+            return {"schedule_id": row["id"], "name": row["name"], "error": "not ready",
+                    "disabled": False, "missing": missing}
+        with (_lineage.acting(schedule_acting) if schedule_acting is not None else _lineage.nullcontext()):
+            run = start_run(
+                connection,
+                project_id=project_id,
+                actor=row["actor"],
+                input_data=values,
+                # THE SCHEDULED TIME, NOT NOW. Two workers that both got past the lock, or a
+                # tick retried after a crash, produce the same key and therefore one run.
+                dedupe_key=f"schedule:{row['id']}:{fired_at.isoformat()}",
+                workflow_version_id=str(active),
+            )
+        if not run.get("duplicate"):
+            from .workflow_readiness import record_started_anyway
+
+            record_started_anyway(connection, project_id, row["actor"],
+                                  str(run.get("id") or ""), readiness)
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_schedules
+                SET next_run_at=:due, last_run_at=:fired, last_run_id=:run,
+                    last_error=NULL, last_missing=NULL, consecutive_failures=0,
+                    updated_at=now()
+                WHERE id=:i
+                """
+            ),
+            {"due": following, "fired": now, "run": run.get("id"), "i": row["id"]},
+        )
+        _record(connection, project_id, row, fired_at, "started", run_id=run.get("id"),
+                detail={"duplicate": True} if run.get("duplicate") else None)
+        return {"schedule_id": row["id"], "name": row["name"],
+                "workflow_key": row["workflow_key"], "run_id": run.get("id"),
+                "next_run_at": following.isoformat()}
+    except Exception as error:  # noqa: BLE001 — one bad schedule must not stop the rest
+        failures = int(row["consecutive_failures"] or 0) + 1
+        stop = failures >= MAX_CONSECUTIVE_FAILURES
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_schedules
+                SET next_run_at=:due, last_error=:err, consecutive_failures=:n,
+                    enabled = CASE WHEN :stop THEN FALSE ELSE enabled END,
+                    updated_at=now()
+                WHERE id=:i
+                """
+            ),
+            {"due": following, "err": str(error)[:500], "n": failures,
+             "stop": stop, "i": row["id"]},
+        )
+        emit_event(
+            connection, project_id,
+            "workflow.schedule_disabled" if stop else "workflow.schedule_failed",
+            row["actor"], "workflow_schedule", row["id"],
+            {"name": row["name"], "error": str(error)[:500],
+             "consecutive_failures": failures},
+        )
+        _record(connection, project_id, row, fired_at, "failed", reason=str(error)[:200])
+        return {"schedule_id": row["id"], "name": row["name"],
+                "error": str(error)[:200], "disabled": stop}

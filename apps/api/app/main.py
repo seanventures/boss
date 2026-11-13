@@ -25667,6 +25667,12 @@ def create_workflow_schedule(payload: WorkflowScheduleBody) -> dict:
                              if "timezone" in payload else None),
                     start_anyway=payload.get("start_anyway"),
                 )
+                # THE ROUTINE'S RULES (BOSSAPP-877), when the edit names any of them.
+                routine = {k: payload[k] for k in _ROUTINE_FIELDS if k in payload}
+                if routine:
+                    updated = {**updated, **schedules.set_routine(
+                        connection, project_id=project_id, schedule_id=schedule_id,
+                        actor=actor, **routine)}
                 return JSONResponse(status_code=200, content=jsonable_encoder(updated))
             enabled = bool(payload.get("enabled", True))
             if enabled:
@@ -25685,9 +25691,30 @@ def create_workflow_schedule(payload: WorkflowScheduleBody) -> dict:
                 enabled=enabled,
                 actor=actor,
                 start_anyway=payload.get("start_anyway"),
+                cron_expr=payload.get("cron_expr"),
+                concurrency_policy=payload.get("concurrency_policy") or "always_enqueue",
+                catch_up=payload.get("catch_up") or "one",
+                catch_up_max=payload.get("catch_up_max") or 3,
+                activity_gate=payload.get("activity_gate"),
             )
     except schedules.ScheduleError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+_ROUTINE_FIELDS = ("cron_expr", "concurrency_policy", "catch_up", "catch_up_max", "activity_gate")
+
+
+@app.get("/v1/delivery-workflows/schedules/{schedule_id}/firings")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
+def list_workflow_schedule_firings(schedule_id: str, project_id: str, limit: int = 50) -> dict:
+    """Every firing of a schedule, newest first: the run it started, or why it did not start
+    (suppressed with its reason, coalesced, refused, failed) — BOSSAPP-877."""
+    from boss_engine.services import workflow_schedules as schedules
+
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        return {"firings": schedules.firings(connection, project_id, schedule_id,
+                                             limit=max(1, min(limit, 500)))}
 
 
 @app.post("/v1/delivery-workflows/schedules/{schedule_id}/enabled")

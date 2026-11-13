@@ -1194,6 +1194,11 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                 input: suppliedInputs(fields, draft.values),
                 // THE UNATTENDED START ANYWAY, stored with the schedule.
                 start_anyway: draft.startAnyway,
+                // THE ROUTINE'S RULES (BOSSAPP-877): cron, overlap, catch-up, the activity gate.
+                ...(draft.cron.trim() ? { cron_expr: draft.cron.trim() } : {}),
+                concurrency_policy: draft.concurrency,
+                catch_up: draft.catchUp,
+                activity_gate: draft.gate ? { kinds: ["work_item.", "git.", "code_task.", "document."] } : null,
                 ...(draft.scheduleId ? { schedule_id: draft.scheduleId } : {}),
               });
             return Boolean((result as { ok?: boolean }).ok);
