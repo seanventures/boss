@@ -12974,3 +12974,103 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_access_grants_live
   ON mcp_access_grants (project_id, server_id, role_key, tool) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_mcp_access_grants_role ON mcp_access_grants (project_id, role_key, status);
 -- ================================ end BOSSAPP-846-848 ==
+-- BOSSAPP-w4-work-ux1
+-- ── Work UX set 1 (BOSSAPP-874..878): documents, the personal inbox, private items, routines,
+-- and holding a whole work tree. Every table here hangs off the canonical work_items graph
+-- (BOSSAPP-830) or extends a table that already exists; nothing above is rewritten.
+--
+-- 874 DOCUMENTS (services/documents.py). A PRD, a plan, minutes or an architecture document is
+-- a `documents` row with an APPEND-ONLY history of `document_revisions` (the skill_versions
+-- pattern: a save that changes nothing adds nothing; a restore is a new revision). Every save
+-- names the revision it was made from (base_revision_id); a save from a stale base is refused
+-- (409) instead of silently overwriting the other writer. A person may hold a short edit lock.
+-- `source_ref` ties a document to what it was opened from (artifact:<id>,
+-- architecture_review:<id>), so opening the same PRD twice is one document.
+CREATE TABLE IF NOT EXISTS documents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL DEFAULT 'note'
+    CHECK (kind IN ('prd', 'plan', 'minutes', 'architecture', 'note')),
+  title TEXT NOT NULL,
+  source_ref TEXT,
+  current_revision_id TEXT,
+  current_revision_no INTEGER NOT NULL DEFAULT 0,
+  locked_by TEXT,
+  locked_until TIMESTAMPTZ,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_source
+  ON documents (project_id, source_ref) WHERE source_ref IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_documents_work_item
+  ON documents (work_item_id, updated_at DESC) WHERE work_item_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS document_revisions (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  revision_no INTEGER NOT NULL CHECK (revision_no >= 1),
+  base_revision_id TEXT,
+  body TEXT NOT NULL,
+  body_hash TEXT NOT NULL,
+  author_kind TEXT NOT NULL DEFAULT 'person'
+    CHECK (author_kind IN ('person', 'agent', 'system')),
+  author_id TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  restored_from TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (document_id, revision_no)
+);
+-- A revision is never changed. It goes only with its whole document (the cascade from
+-- documents, whose row is already gone when this fires).
+CREATE OR REPLACE FUNCTION document_revisions_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' AND NOT EXISTS (SELECT 1 FROM documents WHERE id = OLD.document_id) THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'document_revisions is append-only (%)', TG_OP USING ERRCODE = 'P0001';
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'document_revisions_append_only'
+                 AND tgrelid = 'document_revisions'::regclass) THEN
+    CREATE TRIGGER document_revisions_append_only BEFORE UPDATE OR DELETE
+      ON document_revisions FOR EACH ROW EXECUTE FUNCTION document_revisions_append_only();
+  END IF;
+END $$;
+-- A comment thread anchored to a passage: the quote plus a little text either side, and where
+-- it sat in the revision it was last anchored to. Every new revision re-anchors the open
+-- threads (exact | moved | fuzzy | orphaned); the open ones are handed to the agent that
+-- writes the next revision.
+CREATE TABLE IF NOT EXISTS doc_comment_threads (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  revision_id TEXT NOT NULL,
+  quote TEXT NOT NULL,
+  prefix TEXT NOT NULL DEFAULT '',
+  suffix TEXT NOT NULL DEFAULT '',
+  start_offset INTEGER,
+  end_offset INTEGER,
+  anchor_state TEXT NOT NULL DEFAULT 'exact'
+    CHECK (anchor_state IN ('exact', 'moved', 'fuzzy', 'orphaned')),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+  created_by TEXT NOT NULL,
+  resolved_by TEXT,
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_comment_threads_doc
+  ON doc_comment_threads (document_id, status, created_at);
+CREATE TABLE IF NOT EXISTS doc_comments (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES doc_comment_threads(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  author TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_comments_thread ON doc_comments (thread_id, created_at);
+-- ================================ end BOSSAPP-w4-work-ux1 ==

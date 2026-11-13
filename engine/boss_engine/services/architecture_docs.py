@@ -491,7 +491,13 @@ def _settings(settings: Any) -> Any:
 
 
 def _store_version(connection: Connection, settings: Any, review: Mapping[str, Any],
-                   version: int, written: Mapping[str, Any], *, note: str = "") -> str:
+                   version: int, written: Mapping[str, Any], *, note: str = "",
+                   document_base: Optional[str] = None) -> str:
+    # THE DOCUMENT BEHIND THE ARCHITECTURE (BOSSAPP-874): every version is also the next revision
+    # of one document people can comment on and edit. Written FIRST, from the revision the
+    # architect read: a person's edit saved while the architect was writing is a conflict
+    # (documents.DocumentConflict) the caller turns into "written again next tick".
+    _record_document(connection, review, written["markdown"], base=document_base)
     return create_artifact(
         connection, _settings(settings), review["project_id"], None, ARTIFACT_TYPE,
         f"Architecture v{version}: {review.get('title') or 'this product'}"[:200],
@@ -510,6 +516,33 @@ def _store_version(connection: Connection, settings: Any, review: Mapping[str, A
             "cost_usd_micros": written.get("cost_usd_micros") or 0,
         },
     )
+
+
+def _document_ref(review: Mapping[str, Any]) -> str:
+    return f"architecture_review:{review['id']}"
+
+
+def _record_document(connection: Connection, review: Mapping[str, Any], markdown: str, *,
+                     base: Optional[str]) -> None:
+    """Write the architect's version as the document's next revision. A conflict propagates
+    (the revision loop retries); any other failure is logged and never stops the review."""
+    from . import documents
+
+    try:
+        with connection.begin_nested():
+            work_item_id = connection.execute(
+                text("SELECT work_item_id FROM workflow_runs WHERE id = :r"),
+                {"r": review["workflow_run_id"]}).scalar()
+            documents.record_agent_revision(
+                connection, project_id=review["project_id"], source_ref=_document_ref(review),
+                kind="architecture",
+                title=f"Architecture: {review.get('title') or 'this product'}",
+                body=markdown, author=f"agent:{review['architect']}", base_revision_id=base,
+                work_item_id=work_item_id)
+    except documents.DocumentConflict:
+        raise
+    except Exception:  # noqa: BLE001 — the review's own artifact and decision must stand
+        log.warning("architecture document not recorded for %s", review.get("id"), exc_info=True)
 
 
 def _open_decision(connection: Connection, review: Mapping[str, Any], version: int,
@@ -801,11 +834,22 @@ def revise_sent_back(connection: Connection, settings: Any, *, project_id: str,
         ).scalar()
         previous = _json(previous, {}) or {}
         version = int(review["current_version"] or 0) + 1
+        # THE DOCUMENT AS PEOPLE LEFT IT (BOSSAPP-874): their edits are what the architect
+        # revises, and their open comment threads — each with the passage it is anchored to —
+        # are part of what it is asked to answer. `doc_base` is the revision it read.
+        from . import documents
+
+        doc = documents.for_source(connection, project_id, _document_ref(review))
+        doc_base = doc["current_revision_id"] if doc else None
+        previous_markdown = (doc["body"] if doc and doc.get("body")
+                             else str(previous.get("markdown") or ""))
+        threads_brief = documents.open_threads_brief(connection, doc["id"]) if doc else ""
+        asked = "\n\n".join(p for p in (note, threads_brief) if p)
         try:
             prd_markdown = _prd_for(connection, review)
             written = draft(connection, settings, project_id, architect=review["architect"],
                             run_id=run_id, prd=prd_markdown, title=review.get("title") or "",
-                            previous=str(previous.get("markdown") or ""), note=note,
+                            previous=previous_markdown, note=asked,
                             version=version, step_id=review["step_id"], review_id=review_id,
                             prd_sha256=(_json(review.get("prd_source"), {}) or {}).get("prd_sha256"))
         except (ArchitectureDraftError, ArchitectureRefused) as error:
@@ -815,7 +859,18 @@ def revise_sent_back(connection: Connection, settings: Any, *, project_id: str,
             done.append({"run_id": run_id, "step_id": review["step_id"],
                          "outcome": "architecture_revision_failed", "error": str(error)})
             continue
-        artifact_id = _store_version(connection, settings, review, version, written, note=note)
+        try:
+            artifact_id = _store_version(connection, settings, review, version, written,
+                                         note=note, document_base=doc_base)
+        except documents.DocumentConflict as conflict:
+            connection.execute(
+                text("UPDATE architecture_reviews SET error = :e, updated_at = now() "
+                     "WHERE id = :i"),
+                {"e": ("The document was edited while the architect wrote; it writes again "
+                       f"from the new text next tick ({conflict})")[:500], "i": review_id})
+            done.append({"run_id": run_id, "step_id": review["step_id"],
+                         "outcome": "architecture_revision_conflict", "error": str(conflict)})
+            continue
         old = _json(connection.execute(
             text("SELECT recommendation FROM decisions WHERE id = :d"),
             {"d": review["decision_id"]}).scalar(), {}) or {}

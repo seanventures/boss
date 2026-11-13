@@ -48,4 +48,9 @@
   .wt-who { margin-left: 0; }
   .wt-new { max-width: none; }
 }
+/* Documents on an item (BOSSAPP-874): the conflict's other text and a revision diff. */
+.wt-pre { margin: 0; max-height: 240px; overflow: auto; white-space: pre-wrap; font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-meta); padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.wt-pre [data-d="add"] { color: var(--green-text, #067647); background: color-mix(in srgb, #12b76a 9%, transparent); }
+.wt-pre [data-d="del"] { color: var(--red-text, #b42318); background: color-mix(in srgb, #d92d20 9%, transparent); }
 

@@ -17,6 +17,7 @@ import {
   POLICY_EXAMPLE, STATUS_WORDS, completeItem, createItem, flatten, partyName, readItem, readPolicy,
   readTree, relateItem, updateItem, type WorkNode, type WorkStatus, type WorkTree,
 } from "../../lib/work-items";
+import { ItemDocuments } from "./work-docs";
 import "./work-tree.css";
 
 const SETTABLE: WorkStatus[] = ["backlog", "todo", "active", "blocked", "cancelled"];
@@ -221,6 +222,7 @@ export function ItemPanel({ projectId, id, all, demo, onChanged }: {
           ))}
         </ol>
       ) : null}
+      <ItemDocuments projectId={projectId} workItemId={id} demo={demo} />
       {item.runs?.length ? (
         <p className="wt-faint" data-testid="wt-runs">
           Runs: {item.runs.map((r) => `${RUN_WORDS[r.kind] ?? r.kind} ${r.status}`).join(" · ")}

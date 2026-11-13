@@ -31903,6 +31903,13 @@ def _ambient_org_actor(connection, claimed_actor: str | None) -> str:
 app.include_router(build_ambient_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor, org_actor=_ambient_org_actor))
+# DOCUMENTS (routers/documents.py, services/documents.py; BOSSAPP-874): PRDs, plans, minutes and
+# architectures with append-only revisions, base-revision conflict checks and anchored comments.
+from .routers.documents import build_documents_router
+
+app.include_router(build_documents_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 # ONE WORK-ITEM GRAPH (routers/work_items.py, services/work_items.py; BOSSAPP-830/831): the tree,
 # CRUD, relations, labels, goals, the policy-aware done and start.
 from .routers.work_items import build_work_items_router
