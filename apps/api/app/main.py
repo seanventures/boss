@@ -24201,6 +24201,13 @@ def decision_inbox(
             ),
             params,
         ).mappings().all()
+        # A decision about a private work item is shown only to those who may read the item.
+        hidden = _hidden_work_items(connection, project_id, [
+            (row["recommendation"] or {}).get("work_item_id")
+            for row in rows if isinstance(row["recommendation"], dict)])
+        if hidden:
+            rows = [row for row in rows if not (isinstance(row["recommendation"], dict)
+                    and row["recommendation"].get("work_item_id") in hidden)]
         return DecisionInboxResponse(
             project_id=project_id,
             items=[decision_card_from_row(row, connection, project_id) for row in rows],
@@ -24237,6 +24244,10 @@ def get_decision(decision_id: str, project_id: Optional[str] = None) -> Decision
         if not row:
             raise HTTPException(status_code=404, detail="Decision not found")
         require_project_reader(connection, row["project_id"])
+        rec = row["recommendation"] if isinstance(row["recommendation"], dict) else {}
+        if rec.get("work_item_id") and _hidden_work_items(
+                connection, row["project_id"], [rec.get("work_item_id")]):
+            raise HTTPException(status_code=404, detail="Decision not found")
         return decision_card_from_row(row, connection)
 
 
@@ -28265,12 +28276,16 @@ def list_workflow_runs(
 ) -> WorkflowRunListResponse:
     with begin(engine) as connection:
         try:
-            return WorkflowRunListResponse(
-                project_id=project_id,
-                items=workflow_runtime.list_runs(
-                    connection, project_id, status=status, limit=limit
-                ),
-            )
+            items = workflow_runtime.list_runs(connection, project_id, status=status, limit=limit)
+            # A run of a private work item is listed only to those who may read the item.
+            linked = dict(connection.execute(text(
+                "SELECT id, work_item_id FROM workflow_runs WHERE id = ANY(:ids) "
+                "AND work_item_id IS NOT NULL"),
+                {"ids": [str(i.get("id")) for i in items]}).all()) if items else {}
+            hidden = _hidden_work_items(connection, project_id, linked.values())
+            if hidden:
+                items = [i for i in items if linked.get(str(i.get("id"))) not in hidden]
+            return WorkflowRunListResponse(project_id=project_id, items=items)
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
 
@@ -28339,6 +28354,10 @@ def get_workflow_run(run_id: str, project_id: str) -> WorkflowRunDetail:
             raise HTTPException(status_code=404, detail="workflow run not found")
         require_project_reader(connection, stored_project)
         if project_id != stored_project:
+            raise HTTPException(status_code=404, detail="workflow run not found")
+        item_of_run = connection.execute(
+            text("SELECT work_item_id FROM workflow_runs WHERE id = :r"), {"r": run_id}).scalar()
+        if item_of_run and _hidden_work_items(connection, project_id, [item_of_run]):
             raise HTTPException(status_code=404, detail="workflow run not found")
         try:
             return WorkflowRunDetail(
@@ -31907,22 +31926,40 @@ app.include_router(build_ambient_router(
 # architectures with append-only revisions, base-revision conflict checks and anchored comments.
 from .routers.documents import build_documents_router
 
+def _view_work_as_reader(connection) -> None:
+    """PRIVATE WORK ITEMS (BOSSAPP-876): this request reads the work graph as its signed-in
+    viewer; identity/authz.work_item_visible_sql hides what they may not read."""
+    from boss_engine.services import work_items as _wi
+
+    _wi.view_as(connection, read_actor(""))
+
+
+def _hidden_work_items(connection, project_id: str, ids) -> set:
+    """The work items among `ids` this request's viewer may not read (BOSSAPP-876): a run or a
+    decision on one of them is not shown to them, exactly as if it did not exist."""
+    from boss_engine.services import work_items as _wi
+
+    _view_work_as_reader(connection)
+    return _wi.hidden_ids(connection, project_id, ids)
+
+
 app.include_router(build_documents_router(
     engine=engine, require_reader=require_project_reader,
-    require_write_actor=require_project_write_actor))
+    require_write_actor=require_project_write_actor, viewing=_view_work_as_reader))
 # THE PERSONAL INBOX (routers/inbox.py, services/inbox.py; BOSSAPP-875): the signed-in person's
 # decisions, work and failed runs, ranked by deadline, risk and how much work each blocks.
 from .routers.inbox import build_inbox_router
 
 app.include_router(build_inbox_router(
-    engine=engine, require_reader=require_project_reader, viewer=lambda: read_actor("")))
+    engine=engine, require_reader=require_project_reader, viewer=lambda: read_actor(""),
+    viewing=_view_work_as_reader))
 # ONE WORK-ITEM GRAPH (routers/work_items.py, services/work_items.py; BOSSAPP-830/831): the tree,
 # CRUD, relations, labels, goals, the policy-aware done and start.
 from .routers.work_items import build_work_items_router
 
 app.include_router(build_work_items_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
-    require_write_actor=require_project_write_actor))
+    require_write_actor=require_project_write_actor, viewer=lambda: read_actor("")))
 # THE TOOL-CALL AUDIT (routers/tool_calls.py, services/tool_call_audit.py; BOSSAPP-819): every
 # tool call BOSS decided, filtered and keyset-paged, and the same filter as NDJSON.
 from .routers.tool_calls import build_tool_calls_router

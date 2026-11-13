@@ -63,7 +63,7 @@ const PASSTHROUGH: Record<string, string> = {
   "app/agents/org-actions.ts": "refuses through the mirror itself; its buttons (org-teams, org-agent-panel) are gated — the callAction test checks them",
   "app/workflows/editor/save/use-save-flow.tsx": "applyWorkClass runs inside Save, which workflow-editor.tsx gates on workflow:publish",
   "lib/watch-app.ts": "its helpers (registered) send through obsWrite; app/projects/watch-app.tsx gates each press on observability:manage",
-  "lib/work-items.ts": "its helpers (registered) send through obsWrite; app/projects/work-tree.tsx gates each press on work_item:manage",
+  "lib/work-items.ts": "its helpers (registered) send through obsWrite; app/projects/work-tree.tsx and work-access.tsx gate each press on work_item:manage / role_binding:assign",
   "lib/documents.ts": "its helpers (registered) send through obsWrite; app/projects/work-docs.tsx gates each press on work_item:manage",
   "lib/inbox.ts": "its helpers (registered) send through obsWrite; app/projects/work-inbox.tsx gates each press on work_item:read",
   "lib/tool-policies.ts": "its helpers (registered) send through obsWrite; app/skills/tool-rules.tsx gates each press on mcp_server:review / mcp_server:read",

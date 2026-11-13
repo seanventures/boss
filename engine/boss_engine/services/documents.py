@@ -156,11 +156,15 @@ def get_document(connection: Connection, project_id: str, document_id: str) -> d
 def list_documents(connection: Connection, project_id: str, *,
                    work_item_id: Optional[str] = None) -> list[dict[str, Any]]:
     _visible_item(connection, project_id, work_item_id)
+    from . import work_items
+
+    # A document on a private item is listed only to those who may read the item (BOSSAPP-876).
     rows = connection.execute(text(
         "SELECT * FROM documents d WHERE d.project_id = :p "
         "AND (CAST(:w AS TEXT) IS NULL OR d.work_item_id = :w) "
+        "AND " + work_items.visible_sql(connection, "d.work_item_id") + " "
         "ORDER BY d.updated_at DESC LIMIT 200"),
-        {"p": project_id, "w": work_item_id}).mappings()
+        {"p": project_id, "w": work_item_id, **work_items.visible_params(connection)}).mappings()
     return [_public(connection, r, detail=False) for r in rows]
 
 

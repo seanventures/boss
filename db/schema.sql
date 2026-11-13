@@ -13125,4 +13125,44 @@ CREATE TABLE IF NOT EXISTS inbox_snoozes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, person, item_key)
 );
+-- 876 PRIVATE WORK ITEMS (services/work_items.py; the predicate is identity/authz.py
+-- work_item_visible_sql). A private item — and everything under it in the tree — is readable
+-- only by its parties (creator, assignee, responsible person) and the holders of a live grant on
+-- it or on a private item above it. Every work, run, decision, inbox and document read applies
+-- that one predicate. The only way past it is an audited break-glass read: a row here, an event,
+-- and a notice the item's parties see on it.
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'project';
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_visibility_check'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_visibility_check
+      CHECK (visibility IN ('project', 'private'));
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_work_items_private
+  ON work_items (project_id) WHERE visibility = 'private';
+CREATE TABLE IF NOT EXISTS work_item_access_grants (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  party TEXT NOT NULL,                       -- person:<id> | agent:<role>
+  granted_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_by TEXT,
+  revoked_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_item_access_grants_live
+  ON work_item_access_grants (work_item_id, party) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_work_item_access_grants_party
+  ON work_item_access_grants (party) WHERE revoked_at IS NULL;
+CREATE TABLE IF NOT EXISTS work_item_break_glass_reads (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  actor TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (length(reason) >= 10),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_break_glass_reads_item
+  ON work_item_break_glass_reads (work_item_id, created_at DESC);
 -- ================================ end BOSSAPP-w4-work-ux1 ==

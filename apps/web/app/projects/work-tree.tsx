@@ -10,13 +10,14 @@
  * Board.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { CaretDown, CaretRight, LinkSimple, Plus, TreeStructure } from "@phosphor-icons/react";
+import { CaretDown, CaretRight, LinkSimple, LockSimple, Plus, TreeStructure } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import {
   POLICY_EXAMPLE, STATUS_WORDS, completeItem, createItem, flatten, partyName, readItem, readPolicy,
   readTree, relateItem, updateItem, type WorkNode, type WorkStatus, type WorkTree,
 } from "../../lib/work-items";
+import { ItemAccess, PrivateBlocker } from "./work-access";
 import { ItemDocuments } from "./work-docs";
 import "./work-tree.css";
 
@@ -89,6 +90,7 @@ export function WorkTreeView({ projectId, demo = false }: { projectId: string; d
                 ) : <span className="wt-fold" aria-hidden />}
                 <button type="button" className="wt-open" onClick={() => setOpen(open === node.id ? null : node.id)}>
                   {node.human_key ? <span className="wt-key">{node.human_key}</span> : null}
+                  {node.visibility === "private" ? <LockSimple size={11} aria-label="Private" data-testid="wt-private-mark" /> : null}
                   <span className="wt-title">{node.title}</span>
                 </button>
                 <StatusChip status={node.status} />
@@ -180,7 +182,9 @@ export function ItemPanel({ projectId, id, all, demo, onChanged }: {
       <div className="wt-line">
         <LinkSimple size={12} aria-hidden />
         <span className="wt-faint">Blocked by</span>
-        {item.blocked_by.map((b) => <span key={b.id} className="wt-blocked">{b.human_key || b.title}</span>)}
+        {item.blocked_by.map((b) => b.private
+          ? <PrivateBlocker key={b.id} projectId={projectId} blocker={b} demo={demo} />
+          : <span key={b.id} className="wt-blocked">{b.human_key || b.title}</span>)}
         <select className="input" value={blocker} onChange={(e) => setBlocker(e.target.value)} aria-label="Add a blocker"
                 data-testid="wt-blocker-select" disabled={demo}>
           <option value="">Add a blocker…</option>
@@ -222,6 +226,7 @@ export function ItemPanel({ projectId, id, all, demo, onChanged }: {
           ))}
         </ol>
       ) : null}
+      <ItemAccess projectId={projectId} item={item} demo={demo} onChanged={() => { void load(); onChanged(); }} />
       <ItemDocuments projectId={projectId} workItemId={id} demo={demo} />
       {item.runs?.length ? (
         <p className="wt-faint" data-testid="wt-runs">

@@ -883,3 +883,38 @@ def viewer_parties(conn: Any, actor: Optional[str]) -> list[str]:
     except Exception:  # noqa: BLE001 — an install without the identity tables: the name alone
         pass
     return sorted(names | {f"person:{n}" for n in names})
+
+
+# ── PRIVATE WORK ITEMS: THE ONE READ PREDICATE (BOSSAPP-876) ─────────────────────────────────
+# A work item is RESTRICTED when it, or any item above it in the tree, is `visibility =
+# 'private'` (privacy flows down to sub-items). A restricted item is visible to a viewer who is a
+# PARTY on it or on an item above it, up to and including the topmost private one: its creator,
+# its assignee, the person responsible for it, or someone holding a live grant
+# (work_item_access_grants) — so a grant on the private epic reaches every story under it, and
+# being the assignee of a PUBLIC root above a private subtree does not. Everything else (an
+# unrestricted item) is visible to whoever may read the project.
+#
+# Every work, run, decision, inbox and document read of the work graph calls this one predicate
+# with two bound parameters: `:wv_all` (true for BOSS's own reads, which see everything) and
+# `:wv_parties` (viewer_parties of the viewer). An audited break-glass read is the only way
+# past it (services/work_items.break_glass_read).
+
+def work_item_visible_sql(item_col: str) -> str:
+    """SQL that is true when the work item whose id is `item_col` may be read by the viewer
+    (`:wv_all`, `:wv_parties`). True for a NULL id (nothing to hide)."""
+    return (
+        "(CAST(:wv_all AS BOOLEAN) OR COALESCE(("
+        "WITH RECURSIVE up(id, parent_id, depth) AS ("
+        f"  SELECT a.id, a.parent_id, 0 FROM work_items a WHERE a.id = {item_col} "
+        "  UNION ALL SELECT p.id, p.parent_id, up.depth + 1 FROM work_items p "
+        "  JOIN up ON p.id = up.parent_id WHERE up.depth < 64), "
+        "marks AS (SELECT up.depth, u.visibility = 'private' AS priv, "
+        "  (u.created_by = ANY(CAST(:wv_parties AS TEXT[])) "
+        "   OR u.assignee = ANY(CAST(:wv_parties AS TEXT[])) "
+        "   OR u.responsible_person = ANY(CAST(:wv_parties AS TEXT[])) "
+        "   OR EXISTS (SELECT 1 FROM work_item_access_grants g WHERE g.work_item_id = u.id "
+        "              AND g.revoked_at IS NULL AND g.party = ANY(CAST(:wv_parties AS TEXT[])))) AS party "
+        "  FROM up JOIN work_items u ON u.id = up.id) "
+        "SELECT CASE WHEN NOT COALESCE(bool_or(priv), false) THEN true "
+        "  ELSE COALESCE(bool_or(party AND depth <= (SELECT max(depth) FROM marks WHERE priv)), false) "
+        "END FROM marks), true))")

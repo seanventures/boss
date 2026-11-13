@@ -120,6 +120,8 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/work-items.ts#updateItem": "work_item:manage",             // PATCH /v1/work-items/{id}
   "lib/work-items.ts#completeItem": "work_item:manage",           // POST …/{id}/complete
   "lib/work-items.ts#relateItem": "work_item:manage",             // POST …/{id}/relations
+  "lib/work-items.ts#grantAccess": "work_item:manage",            // POST …/{id}/access (BOSSAPP-876)
+  "lib/work-items.ts#breakGlass": "role_binding:assign",           // POST …/{id}/break-glass (audited read)
   // lib/documents.ts — a work item's documents (BOSSAPP-874)
   "lib/documents.ts#createDoc": "work_item:manage",               // POST /v1/documents
   "lib/documents.ts#saveDoc": "work_item:manage",                 // POST /v1/documents/{id}/revisions
