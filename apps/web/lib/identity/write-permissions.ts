@@ -127,6 +127,10 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/documents.ts#commentOn": "work_item:manage",               // POST …/{id}/threads
   "lib/documents.ts#replyTo": "work_item:manage",                 // POST …/threads/{t}/replies
   "lib/documents.ts#resolveThread": "work_item:manage",           // POST …/threads/{t}/resolve
+  // lib/inbox.ts — the signed-in person's own read state and snoozes (BOSSAPP-875)
+  "lib/inbox.ts#markRead": "work_item:read",                      // POST /v1/inbox/read
+  "lib/inbox.ts#snoozeEntry": "work_item:read",                   // POST /v1/inbox/snooze
+  "lib/inbox.ts#archiveEntry": "work_item:read",                  // POST /v1/inbox/snooze archive
   // lib/tool-policies.ts — Skills & MCP › Rules (BOSSAPP-815/817)
   "lib/tool-policies.ts#createRule": "mcp_server:review",         // POST /v1/tool-policies
   "lib/tool-policies.ts#updateRule": "mcp_server:review",         // PATCH /v1/tool-policies/{id}
@@ -242,6 +246,8 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     "/v1/work-items": "work_item:manage",
     // A work item's documents (lib/documents.ts, BOSSAPP-874).
     "/v1/documents": "work_item:manage",
+    // The person's own inbox read state and snoozes (lib/inbox.ts, BOSSAPP-875).
+    "/v1/inbox/": "work_item:read",
     // A typed question's Send answer / Decline (app/typed-form-ui.tsx, BOSSAPP-832); "Approve +
     // always allow" on a tool-call Ask card (app/always-allow-ui.tsx, BOSSAPP-817).
     "/v1/decisions/": "decision:approve",

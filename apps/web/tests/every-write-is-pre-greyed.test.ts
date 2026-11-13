@@ -65,6 +65,7 @@ const PASSTHROUGH: Record<string, string> = {
   "lib/watch-app.ts": "its helpers (registered) send through obsWrite; app/projects/watch-app.tsx gates each press on observability:manage",
   "lib/work-items.ts": "its helpers (registered) send through obsWrite; app/projects/work-tree.tsx gates each press on work_item:manage",
   "lib/documents.ts": "its helpers (registered) send through obsWrite; app/projects/work-docs.tsx gates each press on work_item:manage",
+  "lib/inbox.ts": "its helpers (registered) send through obsWrite; app/projects/work-inbox.tsx gates each press on work_item:read",
   "lib/tool-policies.ts": "its helpers (registered) send through obsWrite; app/skills/tool-rules.tsx gates each press on mcp_server:review / mcp_server:read",
   "app/always-allow-ui.tsx": "sends through obsWrite (/v1/decisions/ registered); its one press is a GatedButton on decision:approve",
 };

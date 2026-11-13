@@ -854,3 +854,32 @@ def may_spawn(ctx: AuthContext, child_agent_id: str, *, db: Any = None) -> Decis
         if child != "active":
             return Decision.deny(label, scope, DenyReason.CHAIN_INACTIVE, (child_agent_id,))
     return Decision(True, label, scope)
+
+
+# ── WHO A VIEWER IS, AS THE WORK GRAPH NAMES PEOPLE (BOSSAPP-875/876) ─────────────────────────
+# The work graph names a person `person:<id>` (assignee, responsible_person, a grant's party) and
+# records who made a thing by the raw actor ("ceo", "usr_…", "person:ceo"). A signed-in principal
+# also answers to its legacy member ids ("ceo", "executive_console"). `viewer_parties` is every
+# name one viewer goes by, so "is this mine" and "may this viewer see it" compare like with like.
+
+def viewer_parties(conn: Any, actor: Optional[str]) -> list[str]:
+    """Every name `actor` goes by in the work graph: bare and `person:`-prefixed, plus the
+    principal it is and the legacy member ids that principal carries (and the reverse). An
+    `agent:<role>` stays itself. Empty for no actor."""
+    raw = str(actor or "").strip()
+    if not raw:
+        return []
+    if raw.startswith(("agent:", "role:")):
+        return [raw]
+    bare = raw[len("person:"):] if raw.startswith("person:") else raw
+    names = {bare}
+    try:
+        with conn.begin_nested():
+            for row in conn.execute(text(
+                    "SELECT id, legacy_member_ids FROM identity_principals "
+                    "WHERE id = :b OR :b = ANY(legacy_member_ids)"), {"b": bare}).mappings():
+                names.add(str(row["id"]))
+                names.update(str(m) for m in (row["legacy_member_ids"] or []))
+    except Exception:  # noqa: BLE001 — an install without the identity tables: the name alone
+        pass
+    return sorted(names | {f"person:{n}" for n in names})

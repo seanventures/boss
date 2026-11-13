@@ -13073,4 +13073,56 @@ CREATE TABLE IF NOT EXISTS doc_comments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX IF NOT EXISTS idx_doc_comments_thread ON doc_comments (thread_id, created_at);
+-- 875 THE PERSONAL ATTENTION INBOX (services/inbox.py). `inbox_items` is every open thing a person
+-- may need to act on, in one shape: a decision waiting for an answer, a work item someone answers
+-- for that is blocked / in review / to do, and a run of such an item that failed lately. Its
+-- `targets` are the parties it is for (person:<id> / agent:<role>; [] = whoever may answer); the
+-- service ranks it for one person by deadline, risk and how much open work it blocks
+-- (work_item_relations). Read state, snoozes and archives are per person and keyed by item_key.
+CREATE OR REPLACE VIEW inbox_items AS
+  SELECT d.project_id, 'decision:' || d.id AS item_key, 'decision'::text AS kind, d.id AS ref_id,
+         d.question AS title,
+         (CASE WHEN d.delegated_to IS NOT NULL THEN jsonb_build_array(d.delegated_to)
+               ELSE '[]'::jsonb END)
+           || (CASE WHEN jsonb_typeof(d.recommendation -> 'participants') = 'array'
+                    THEN d.recommendation -> 'participants' ELSE '[]'::jsonb END) AS targets,
+         NULLIF(d.recommendation ->> 'work_item_id', '') AS work_item_id,
+         d.risk_tier AS risk_tier, d.deadline_at AS deadline_at, d.created_at AS created_at
+  FROM decisions d WHERE d.status IN ('pending', 'delegated')
+  UNION ALL
+  SELECT w.project_id, 'work_item:' || w.id, 'work_item', w.id,
+         COALESCE(w.human_key || ' ', '') || w.title,
+         to_jsonb(array_remove(ARRAY[w.responsible_person,
+           CASE WHEN w.assignee LIKE 'person:%' THEN w.assignee END], NULL)),
+         w.id,
+         CASE w.priority_band WHEN 'p0' THEN 3 WHEN 'p1' THEN 2 WHEN 'p2' THEN 1 ELSE 0 END,
+         w.due_at, w.updated_at
+  FROM work_items w
+  WHERE w.status IN ('todo', 'active', 'blocked', 'in_review') AND NOT w.ambient
+    AND (w.responsible_person IS NOT NULL OR w.assignee LIKE 'person:%')
+  UNION ALL
+  SELECT r.project_id, 'failed_run:' || r.id, 'failed_run', r.id,
+         'Failed: ' || COALESCE(w.human_key || ' ', '') || w.title,
+         to_jsonb(array_remove(ARRAY[w.responsible_person,
+           CASE WHEN w.assignee LIKE 'person:%' THEN w.assignee END], NULL)),
+         w.id, 2, NULL::timestamptz, r.updated_at
+  FROM workflow_runs r JOIN work_items w ON w.id = r.work_item_id
+  WHERE r.status IN ('failed', 'deadlettered') AND r.updated_at > now() - interval '14 days'
+    AND w.status NOT IN ('done', 'cancelled');
+CREATE TABLE IF NOT EXISTS inbox_read_state (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  person TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, person, item_key)
+);
+CREATE TABLE IF NOT EXISTS inbox_snoozes (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  person TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'snooze' CHECK (kind IN ('snooze', 'archive')),
+  until TIMESTAMPTZ,                       -- NULL for an archive: hidden until unarchived
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, person, item_key)
+);
 -- ================================ end BOSSAPP-w4-work-ux1 ==

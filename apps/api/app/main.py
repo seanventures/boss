@@ -31910,6 +31910,12 @@ from .routers.documents import build_documents_router
 app.include_router(build_documents_router(
     engine=engine, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
+# THE PERSONAL INBOX (routers/inbox.py, services/inbox.py; BOSSAPP-875): the signed-in person's
+# decisions, work and failed runs, ranked by deadline, risk and how much work each blocks.
+from .routers.inbox import build_inbox_router
+
+app.include_router(build_inbox_router(
+    engine=engine, require_reader=require_project_reader, viewer=lambda: read_actor("")))
 # ONE WORK-ITEM GRAPH (routers/work_items.py, services/work_items.py; BOSSAPP-830/831): the tree,
 # CRUD, relations, labels, goals, the policy-aware done and start.
 from .routers.work_items import build_work_items_router
