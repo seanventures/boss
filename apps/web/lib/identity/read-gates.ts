@@ -106,6 +106,9 @@ export const API_READ_OPS: Readonly<Record<string, ApiRead>> = {
       : u.searchParams.get("catalogue") ? "catalogue" : ""),
     ops: { "": "setup", repos: "setup/repository/repos", available: "setup/repository/available", catalogue: "setup/models/{}/catalogue",
            ci_workflows: "setup/repository/{}/ci-workflows" } },
+  "/api/skill-supply": byView({ versions: "skill-definitions/{}/versions", diff: "skill-definitions/{}/diff",
+                                tests: "skill-definitions/{}/tests", sources: "skill-sources",
+                                consents: "skill-consents" }, "versions"),
   "/api/skills": byView({ "": "skill-definitions", builtin: "skills", assignments: "role-skills" }),
   "/api/workflow-report": one("workflow-runs/{}/report"),
 };
