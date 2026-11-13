@@ -12662,3 +12662,40 @@ DO $$ BEGIN
 END $$;
 -- Last-Event-ID replay reads "the events after this one" in (created_at, id) order.
 CREATE INDEX IF NOT EXISTS idx_events_created_id ON events (created_at, id);
+
+-- ── BOSSAPP-885: AN ORG CHART THAT CARRIES AUTHORITY (services/org_chain.py) ──────────────────
+-- org_assignments.reports_to was display-only. A stall that would interrupt a person is first
+-- offered to the responsible agent's manager (an agent) — one row here, one rung at a time, each
+-- with a deadline; a pass or a deadline moves it up the chain, and a chain with no agent left
+-- falls through to the exact person path the caller would have taken (`fallback`), so work is
+-- never stranded. One row per run ever: a run the chain already had its chance on goes to the
+-- person. A takeover writes `authority_path` (who acted, under whose chain) here and on the run.
+-- No reports_to rows → no row here: the default path is unchanged.
+CREATE TABLE IF NOT EXISTS org_chain_escalations (
+  id TEXT PRIMARY KEY,                                  -- 'orgesc_…'
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  origin TEXT NOT NULL CHECK (origin IN ('person_wait', 'stuck_work')),
+  run_kind TEXT NOT NULL DEFAULT 'code_task',
+  run_id TEXT NOT NULL,
+  work_item_id TEXT,
+  subject TEXT NOT NULL,                                -- agent:<role> whose work stalled
+  chain JSONB NOT NULL DEFAULT '[]'::jsonb,             -- the chain of command when it stalled
+  rung INTEGER NOT NULL DEFAULT 1,
+  offered_to TEXT NOT NULL,                             -- agent:<role> holding the offer now
+  reason TEXT NOT NULL DEFAULT '',
+  question TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'taken', 'fell_through', 'superseded')),
+  deadline TIMESTAMPTZ NOT NULL,
+  asked_at TIMESTAMPTZ,                                 -- the offered manager's turn ran
+  fallback JSONB NOT NULL DEFAULT '{}'::jsonb,          -- what the person path needs
+  taken_by TEXT,
+  authority_path JSONB,
+  outcome TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_org_chain_escalations_run ON org_chain_escalations (run_id);
+CREATE INDEX IF NOT EXISTS idx_org_chain_escalations_open
+  ON org_chain_escalations (project_id, status, deadline);

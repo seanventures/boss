@@ -286,6 +286,46 @@ def _withdraw_if_done(connection: Any, decision_id: Optional[str], *, note: str)
     return bool(changed)
 
 
+def _chain_reasons() -> frozenset[str]:
+    from .org_chain import PERSON_WAIT_CHAIN_REASONS
+
+    return PERSON_WAIT_CHAIN_REASONS
+
+
+def _offer_to_chain(connection: Any, *, run_id: str, project_id: str, task_id: Optional[str],
+                    reason: str, question: str, blocker_type: str,
+                    refused_grant_id: Optional[str], scope: Mapping[str, Any]
+                    ) -> Optional[dict[str, Any]]:
+    """BOSSAPP-885: offer the stalled run to its agent's manager before a person. None when the
+    org chart has no manager agent above it (or the chain already had this run): the caller's
+    person path runs unchanged."""
+    from . import org_chain
+
+    offer = org_chain.escalate_first(
+        connection, None, project_id=project_id, origin="person_wait", run_id=run_id,
+        reason=reason, question=question,
+        fallback={"task_id": task_id, "reason": reason, "question": question,
+                  "blocker_type": blocker_type, "refused_grant_id": refused_grant_id})
+    if offer is None:
+        return None
+    opened_at = now_utc().isoformat()
+    ctx = {"scope": scope, "decision_id": None, "blocker_type": blocker_type, "reason": reason,
+           "opened_at": opened_at, "ask": question, "refused_grant_id": refused_grant_id,
+           "chain_escalation_id": offer["id"], "offered_to": offer["offered_to"]}
+    connection.execute(text(
+        "UPDATE code_task_runs SET status = :status, phase = :phase, "
+        "finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) || CAST(:person_wait AS jsonb), "
+        "updated_at = now() WHERE id = :id"),
+        {"status": STATUS_WAITING_ON_PERSON, "phase": org_chain.PHASE_AWAITING_MANAGER,
+         "person_wait": json.dumps({"person_wait": _jsonable(ctx)}), "id": run_id})
+    emit_event(connection, project_id, "code_task.waiting_on_manager", "boss", "code_task_run",
+               run_id, {"escalation_id": offer["id"], "offered_to": offer["offered_to"],
+                        "reason": reason})
+    return {"status": STATUS_WAITING_ON_PERSON, "phase": org_chain.PHASE_AWAITING_MANAGER,
+            "blocker_type": blocker_type, "decision_id": None, "escalation_id": offer["id"],
+            "offered_to": offer["offered_to"], "scope": dict(scope), "opened_at": opened_at}
+
+
 def enter_waiting_on_person(
     connection: Any,
     budget: Any,
@@ -297,11 +337,17 @@ def enter_waiting_on_person(
     question: str,
     blocker_type: str = BLOCKER_AUTHORITY_NO_GRANT,
     refused_grant_id: Optional[str] = None,
+    chain: bool = True,
 ) -> dict[str, Any]:
     """Pauses a run on a person -- or, when that person's grant ALREADY covers it, puts it straight
     back in the queue under that grant (nothing to ask). Pausing preserves workspace/branch/stage,
     releases any held budget reservation, and joins (or raises) the ONE card for this builder in
-    this project, so four squad builds refused for the same grant are one ask, not four."""
+    this project, so four squad builds refused for the same grant are one ask, not four.
+
+    BOSSAPP-885: a STALL (org_chain.PERSON_WAIT_CHAIN_REASONS) whose agent has a manager agent on
+    the org chart is offered to that manager first: the run pauses in `awaiting_manager` and no
+    person is asked; org_chain.poll_due falls through to this same function (`chain=False`) when
+    the chain is exhausted. No manager agent declared → exactly the path below, unchanged."""
     scope = grant_scope_for_run(connection, {"run_id": run_id, "project_id": project_id})
     recipient = recipient_for_run(connection, {"run_id": run_id, "project_id": project_id})
     run = _load_run(connection, run_id) or {"id": run_id, "project_id": project_id,
@@ -336,6 +382,13 @@ def enter_waiting_on_person(
                 "blocker_type": blocker_type, "scope": scope}
 
     budget.release(run_id=run_id)
+
+    if chain and not review and reason in _chain_reasons():
+        held = _offer_to_chain(connection, run_id=run_id, project_id=project_id, task_id=task_id,
+                               reason=reason, question=question, blocker_type=blocker_type,
+                               refused_grant_id=refused_grant_id, scope=scope)
+        if held is not None:
+            return held
 
     agent_key = (scope.get("agents") or scope.get("role_keys") or ["builder"])[0]
     builder = _builder_name(connection, scope)

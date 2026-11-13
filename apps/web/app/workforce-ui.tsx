@@ -8,7 +8,7 @@ import type { AgentStudioFeed } from "../lib/agent-studio";
 import { AgentDetail } from "./agent-detail-ui";
 import { PanelsView, orphanProfiles } from "./agent-profile-ui";
 import { AgentQuickCreate } from "./agent-quick-create";
-import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
+import type { OrgChart, OrgNode, TakeoverOffer, V2Agent, Workforce } from "../lib/v2/workforce";
 import { apiWrite } from "../lib/api-write";
 import { identityOf, isLive, openAgent } from "../lib/agent-world";
 import { useAttention, useLivePresence } from "../lib/agents-live";
@@ -20,6 +20,7 @@ import { DirectoryView } from "./agents/directory-view";
 import { LiveBoardView, liveDot } from "./agents/live-board";
 import { OrgView } from "./agents/org-view";
 import { PlanVsWork } from "./agents/org-drift";
+import { ChainChips, TakeoverQueue } from "./agents/org-chain";
 import type { OrgDrift } from "../lib/agents-org-board";
 import { notifyChanged } from "./changed";
 import { ActivityRiver } from "./agents/activity-river";
@@ -484,7 +485,8 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
     try {
       const r = await fetch(`/api/org?project_id=${encodeURIComponent(projectId)}`,
                             { cache: "no-store" });
-      if (r.ok) setLive(await r.json());
+      // apiReachable is the page's, not the API's: a refreshed chart without it read as "unavailable".
+      if (r.ok) setLive({ ...(await r.json()), apiReachable: true });
     } catch { /* keep what is on screen; a failed refresh is not a reason to blank it */ }
   }, [projectId]);
 
@@ -514,6 +516,23 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
       const r = await apiWrite(url, { method: "DELETE" });
       if (!r.ok) setNote("Could not reset it.");
       else await reload();
+    } finally { setBusy(false); }
+  }, [projectId, actor, reload]);
+
+  // BOSSAPP-885: the manager the chain offered the stalled work to takes it over (as that
+  // manager); the work moves to them and resumes, and nobody else is asked.
+  const takeOver = useCallback(async (offer: TakeoverOffer) => {
+    setBusy(true); setNote(null);
+    try {
+      const r = await apiWrite(`/api/org`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op: "takeover", project_id: projectId, actor, taker: offer.offered_to,
+                               run_id: offer.run_id, work_item_id: offer.work_item_id }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) setNote(body.error ?? body.detail ?? "Could not take it over.");
+      else { await reload(); notifyChanged("org-lines"); }
     } finally { setBusy(false); }
   }, [projectId, actor, reload]);
 
@@ -581,7 +600,7 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
       </div>
       <p className="detail" data-testid="org-provenance">
         {view === "planned"
-          ? "Arrange responsibilities for this project. This plan does not change task routing."
+          ? "Arrange responsibilities for this project. This plan does not change task routing. A stalled role's work goes to its manager first, then a person."
           : `Read-only work handoffs from the last ${chartNow.window_hours} hours.${chartNow.root_inferred
             ? " A display root was selected because the handoffs form a cycle." : ""}`}
       </p>
@@ -603,6 +622,11 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
       </div>
       {note ? <p className="org-note" data-tone="error"
                  data-testid="org-note">{note}</p> : null}
+
+      {view === "planned" ? (
+        <TakeoverQueue offers={chartNow.takeover_offers ?? []} names={namesById} busy={busy}
+                       onTakeOver={(offer) => void takeOver(offer)} />
+      ) : null}
 
       {drift && (placedCount > 0 || drift.lines > 0) && view === "planned" ? (
         <PlanVsWork drift={drift} busy={busy} declared={declared}
@@ -655,6 +679,7 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
                       <span className="org-node-role">{humanise(n.role || n.id)}</span>
                     ) : null}
                     {view === "observed" && n.task ? <span className="org-node-task">{n.task}</span> : null}
+                    {view === "planned" ? <ChainChips view={chartNow.chains?.[n.id]} names={namesById} /> : null}
                   </div>
                   <span className="org-node-parent">
                     {parentId ? namesById.get(parentId) ?? humanise(parentId)

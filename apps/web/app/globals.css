@@ -6875,6 +6875,27 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* BOSSAPP-885: a role's chain of command (who takes its stalled work) and the queue of stalled
+   work offered to a manager before a person is asked. */
+.org-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0;
+  font-size: 0.57895rem; color: var(--muted); }
+.org-chain-rung { padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; }
+.org-chain-rung[data-kind="person"] { border-color: var(--accent-line); color: var(--ink); }
+.org-chain-rung[data-retired] { text-decoration: line-through; color: var(--red); }
+.org-chain-sep { color: var(--faint, var(--muted)); }
+.org-chain-blocked { padding: 1px 6px; border-radius: 999px; background: var(--red-soft); color: var(--red); }
+.org-takeover { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--border);
+  border-left: 2px solid var(--amber); border-radius: 4px; }
+.org-takeover-head { margin: 0 0 6px; font-size: 0.68421rem; }
+.org-takeover-head span { color: var(--muted); font-weight: 400; }
+.org-takeover-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 6px 0; border-top: 1px solid var(--border); }
+.org-takeover-what { display: grid; gap: 2px; min-width: 0; }
+.org-takeover-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 700px) {
+  .org-takeover-row { flex-direction: column; align-items: flex-start; }
+}
+
 @media (max-width: 700px) {
   .org-list-head { display: none; }
   .org-node { grid-template-columns: minmax(0, 1fr); gap: 5px; }
