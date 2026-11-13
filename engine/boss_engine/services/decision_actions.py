@@ -115,6 +115,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "self_fix.install",
     # Approving an agent-drafted skill writes that draft enabled. Until then it is not usable.
     "activate_authored_skill",
+    # Approving an agent's (or the maintainer's) wiki change writes exactly that page onto the
+    # revision it was proposed against (wiki.apply_for_decision, BOSSAPP-891).
+    "apply_wiki_patch",
     # Approving a "Tool changed" card clears the MCP tool's quarantine and accepts the new
     # definition (mcp_registry.accept_tool_change); rejecting turns it Off (BOSSAPP-818).
     "review_tool_change",

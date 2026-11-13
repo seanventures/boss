@@ -31821,6 +31821,16 @@ app.include_router(build_skill_supply_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# THE PROJECT WIKI (BOSSAPP-891): pages and revisions; agents propose, people approve
+# (routers/wiki.py).
+from .routers.wiki import build_wiki_router
+
+app.include_router(build_wiki_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
 # INFRA AND OBSERVABILITY (infra-observability spec §6.2): one ETag'd view per tab, polled by
 # the console; Infra routes by target kind so one button replaces three (routers/infra_view.py,
 # routers/observability_view.py).

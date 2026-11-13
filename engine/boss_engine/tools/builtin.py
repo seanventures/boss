@@ -9113,6 +9113,10 @@ def build_default_registry() -> ToolRegistry:
     from .learning_tools import register_learning_tools
 
     register_learning_tools(reg)
+    # The project wiki: read it, and propose changes a person approves (BOSSAPP-891).
+    from .wiki_tools import register_wiki_tools
+
+    register_wiki_tools(reg)
     # The captain's powers are the BOSS agent's actions now, not a second engine (BOSSAPP-759).
     from .captain_tools import register_captain_tools
 
@@ -9188,6 +9192,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # investigation, a cause, a workaround), stored inferred with its evidence, so the next agent
     # on this code is given it (BOSSAPP-768). Never above a governed or approved fact.
     "record_learning",
+    # "Update the wiki: ..." from chat: one proposed page change, written only when a person
+    # approves exactly that diff (wiki.propose_patch, BOSSAPP-891).
+    "wiki_propose",
     # "Scan my app" from chat: the pinned scanners on the app's own code, BOSS's own targets only.
     "run_security_scan",
     # SETUP REPAIR, because a diagnosis with no matching capability is a loop — and setup is

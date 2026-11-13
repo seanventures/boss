@@ -12974,3 +12974,56 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_access_grants_live
   ON mcp_access_grants (project_id, server_id, role_key, tool) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_mcp_access_grants_role ON mcp_access_grants (project_id, role_key, status);
 -- ================================ end BOSSAPP-846-848 ==
+
+-- BOSSAPP-w4-ops2
+-- ── 891 THE PROJECT WIKI ───────────────────────────────────────────────────────────────────────
+-- services/wiki.py: pages per project, every save a revision (append-only; a restore is a new
+-- revision). save_page is the one writer; an agent's write consumes a diff-bound change_consent
+-- (subject_kind 'wiki', BOSSAPP-843) and a person's edit is its own consent. `maintained_by`
+-- 'kg' marks a page the maintainer renders from the knowledge graph (kg_nodes stay canonical).
+CREATE TABLE IF NOT EXISTS wiki_pages (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  current_revision_id TEXT,
+  maintained_by TEXT,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, slug)
+);
+CREATE TABLE IF NOT EXISTS wiki_revisions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  revision_no INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  content_hash TEXT NOT NULL,
+  author_kind TEXT NOT NULL DEFAULT 'person'
+    CHECK (author_kind IN ('person', 'agent', 'system')),
+  author_id TEXT NOT NULL DEFAULT '',
+  source_note TEXT NOT NULL DEFAULT '',
+  consent_id TEXT,
+  -- kg_nodes ids a maintained revision was rendered from (provenance, not a foreign key: a
+  -- closed fact keeps the revision that cited it readable).
+  sources JSONB NOT NULL DEFAULT '[]'::jsonb,
+  restored_from TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (page_id, revision_no)
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_revisions_page ON wiki_revisions (page_id, revision_no DESC);
+-- A wiki change is a third kind of consented subject. Widened only when the live constraint
+-- does not already allow it, so a restart takes no lock on change_consents.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'change_consents'::regclass
+       AND conname = 'change_consents_subject_kind_check'
+       AND pg_get_constraintdef(oid) LIKE '%wiki%') THEN
+    ALTER TABLE change_consents DROP CONSTRAINT IF EXISTS change_consents_subject_kind_check;
+    ALTER TABLE change_consents ADD CONSTRAINT change_consents_subject_kind_check
+      CHECK (subject_kind IN ('skill', 'prompt', 'wiki'));
+  END IF;
+END $$;

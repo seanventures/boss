@@ -1373,6 +1373,15 @@ class DecisionService:
                 activate_authored_skill(connection, row, actor)
             except ConsentStale as stale:
                 raise InvalidDecisionTransitionError(str(stale)) from stale
+        elif action == "apply_wiki_patch":
+            # An agent's (or the maintainer's) wiki change (BOSSAPP-891): the page the card showed
+            # is written onto the revision it was proposed against, or refused when it moved.
+            from .wiki import WikiError, apply_for_decision as apply_wiki_patch
+
+            try:
+                apply_wiki_patch(connection, row, actor)
+            except WikiError as stale:
+                raise InvalidDecisionTransitionError(str(stale)) from stale
         elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
             # A paid call whose outcome was never settled. Approving settles it: a reply the
             # receipt holds is recorded (usage and cost) and replayed by the step, never paid
@@ -1475,6 +1484,11 @@ class DecisionService:
             from .change_consent import reject_for_decision
 
             reject_for_decision(connection, str(row["id"]), actor)
+        elif rec.get("action") == "apply_wiki_patch":
+            # A refused wiki change's consent can never be spent either (BOSSAPP-891).
+            from .change_consent import reject_for_decision as refuse_wiki_patch
+
+            refuse_wiki_patch(connection, str(row["id"]), actor)
 
     def _handle_non_approved_follow_on(
         self,
