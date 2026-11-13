@@ -7120,7 +7120,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         def _impl_over_budget(final: bool = False) -> bool:
             dl = _impl_deadline if (final or _warm_fix_ran[0]) else _impl_work_deadline
-            return dl is not None and time.time() >= dl
+            # BOSSAPP-814 seam: time parked at the MCP gateway for a person is not spent.
+            from . import stage_clock
+            return dl is not None and time.time() >= stage_clock.extended(
+                run_id, dl, since=_impl_deadline - _impl_budget_s)
 
         def _within_budget(call, model):
             """A session the deadline ended is a finished attempt (its tests then run), not a
