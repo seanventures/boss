@@ -123,6 +123,10 @@ class BitbucketAdapter:
 
     # --- pull requests --------------------------------------------------------
     def create_pull_request(self, branch_name: str, title: str, body: str) -> PullRequestResult:
+        # BOSSAPP-866: a secret value handed to the run never reaches the PR text.
+        from .run_secret_redaction import scrub as _scrub_known
+
+        title, body = _scrub_known(title), _scrub_known(body)
         # Dedupe: an open PR from the same source branch is reused, mirroring GitHub behavior.
         existing = self._request(
             "GET", f"{self._repo_path()}/pullrequests"

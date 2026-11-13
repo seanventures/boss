@@ -1166,6 +1166,11 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
     backend = backend_for(row["storage_backend"] or row["ref_kind"], settings)
     value = backend.get(row["ref_key"])
     _hold_to_provider(secret_ref_id, row, value)
+    # BOSSAPP-866: the value is known exactly from here on, so every output of the run it was
+    # handed to (turns, tool logs, PR text) is scrubbed of it, in any encoding.
+    from .run_secret_redaction import register as _register_known
+
+    _register_known(value)
     return value
 
 

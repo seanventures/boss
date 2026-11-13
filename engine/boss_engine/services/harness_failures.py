@@ -279,6 +279,11 @@ def run_scope(run_id: str) -> Iterator[None]:
         yield
     finally:
         _RUN.reset(token)
+        # BOSSAPP-866: the run's resolved secret values stay scrubbed for a grace period
+        # (a late event, the failure reason), then are forgotten.
+        from .run_secret_redaction import release
+
+        release(str(run_id))
 
 
 def current_run() -> Optional[str]:
