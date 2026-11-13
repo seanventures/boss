@@ -23,6 +23,7 @@ import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
 import { PrdRecordView } from "./prd-record";
 import { TypedAnswer, TypedDecisionForm } from "./typed-form-ui";
+import { AlwaysAllowOption, alwaysAllowOffer } from "./always-allow-ui";
 import { parseForm } from "../lib/typed-form";
 import { SubmitButton } from "./submit-button";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
@@ -1271,8 +1272,14 @@ export function DecisionActions({ decision, projectId, actorId }: {
                            onAnswered={setAnswered} />
       : <TypedAnswer form={typedForm} answer={decision.answer} by={decision.answeredBy} />;
   }
+  // "ALWAYS ALLOW THIS" (BOSSAPP-817): an Ask card about a tier 0-1 tool call may approve the
+  // call AND keep allowing it for this agent; the engine said whether it may (always_allow_offer).
+  const offer = (decision.status === "pending" || decision.status === "delegated")
+    ? alwaysAllowOffer(decision.recommendation) : null;
   return (
-    // A layout-free wrapper: it only hears which button was pressed.
+    <>
+    {offer ? <AlwaysAllowOption decisionId={decision.id} offer={offer} projectId={projectId} actorId={actorId} /> : null}
+    {/* A layout-free wrapper: it only hears which button was pressed. */}
     <div className="im-contents" onClickCapture={onPress}>
     <DecisionResolveForm className="dq-actions">
       <input type="hidden" name="decision_id" value={decision.id} />
@@ -1393,6 +1400,7 @@ export function DecisionActions({ decision, projectId, actorId }: {
       </span>
     </DecisionResolveForm>
     </div>
+    </>
   );
 }
 
