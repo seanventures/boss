@@ -63,6 +63,11 @@ Commands:
                       main unless you installed from main or pass --to main. If the new
                       release cannot start, the previous one is put back (--no-rollback: don't).
                       Also: --dry-run, --backup-dir PATH, --web, --no-web
+  rollback            Put back the release that ran before the last upgrade, from the images
+                      upgrade kept (prev-<tag>), in seconds and without a build. Refuses when
+                      the upgrade changed the database schema, unless --restore-backup PATH
+                      (the backup the upgrade printed) restores the pre-upgrade database first.
+                      Also: --dry-run
   self-fix COMMAND    BOSS fixes itself: install the fixes you approved (scripts/install/
                       self_fix_installer.py). seed (mirror BOSS's source for its fixes),
                       enroll (this host's installer key, kept 0600, never printed),
@@ -397,6 +402,21 @@ PY
   printf 'Authorization: Bearer %s\n' "$key" | curl -fsS -m 10 -X POST "$url/v1/self/host-sample" -H @- \
     -H 'Content-Type: application/json' --data "$body" >/dev/null &&
     printf 'boss: host sample posted (%s)\n' "$(printf '%s' "$body" | head -c 80)…"
+}
+
+cmd_rollback() {
+  need_install
+  [[ -f "$INSTALL_DIR/scripts/install/rollback.sh" ]] ||
+    die "this release has no rollback.sh; use: boss upgrade --to REF"
+  local args=(--dir "$INSTALL_DIR")
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --restore-backup) args+=(--restore-backup "${2:?--restore-backup needs a path}"); shift 2 ;;
+      --dry-run) args+=("$1"); shift ;;
+      *) die "unknown rollback option: $1 (see boss help)" ;;
+    esac
+  done
+  bash "$INSTALL_DIR/scripts/install/rollback.sh" "${args[@]}"
 }
 
 cmd_prune() {
@@ -1631,6 +1651,7 @@ case "$COMMAND" in
   logs) cmd_logs "$@" ;;
   connect) cmd_connect "$@" ;;
   upgrade) cmd_upgrade "$@" ;;
+  rollback) cmd_rollback "$@" ;;
   update) cmd_update "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   prune) cmd_prune "$@" ;;

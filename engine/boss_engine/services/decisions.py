@@ -1295,6 +1295,24 @@ class DecisionService:
             from .governed_host_deploy import on_decision_approved as approve_host
 
             approve_host(connection, self.settings, row, actor)
+        elif action == "review_tool_change":
+            # A changed MCP tool a person looked at (BOSSAPP-818): its quarantine is cleared and
+            # the definition the card showed becomes the accepted one (reviewer recorded on the
+            # tool). Refused, approval not recorded, when the server changed it again since.
+            from .mcp_registry import McpServerError, accept_tool_change, tool_change_server_id
+
+            server_id = tool_change_server_id(connection, str(row["project_id"]), recommendation)
+            try:
+                # A server deleted since leaves nothing to clear; the approval still stands.
+                if server_id:
+                    accept_tool_change(
+                        connection, str(row["project_id"]), server_id,
+                        str(recommendation.get("tool") or ""), actor=actor,
+                        schema_sha256=recommendation.get("schema_sha256"),
+                        description_sha256=recommendation.get("description_sha256"),
+                        decision_id=str(row["id"]))
+            except McpServerError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action == "activate_authored_skill":
             # The draft the card showed becomes the skill other agents can run. Until this,
             # nothing is written: the draft is a diff-bound consent (change_consent, 843), and
@@ -1351,6 +1369,16 @@ class DecisionService:
             from .governed_host_deploy import on_decision_not_approved as refuse_host
 
             refuse_host(connection, self.settings, row, actor, "rejected")
+        elif rec.get("action") == "review_tool_change":
+            # A changed MCP tool refused (BOSSAPP-818): it stays quarantined and is turned Off.
+            # A server deleted since leaves nothing to turn off.
+            from .mcp_registry import refuse_tool_change, tool_change_server_id
+
+            server_id = tool_change_server_id(connection, str(row["project_id"]), rec)
+            if server_id:
+                refuse_tool_change(connection, str(row["project_id"]), server_id,
+                                   str(rec.get("tool") or ""), actor=actor,
+                                   decision_id=str(row["id"]))
         elif (row["recommendation"] or {}).get("action") == "activate_authored_skill":
             # A refused draft's consent can never be spent (change_consent, BOSSAPP-843).
             from .change_consent import reject_for_decision

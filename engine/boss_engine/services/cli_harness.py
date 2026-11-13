@@ -1841,13 +1841,20 @@ class GenericCliCodeAgent:
 
         timeout = _cap_to_deadline(int(timeout), read_only=read_only)
         started = time.monotonic()
+        # THE DISPATCH SEAM (BOSSAPP-828): with BOSS_RUNNER_URL unset this is exactly
+        # owned_process.run(...) with these arguments; with it set, the boss-runner sidecar owns
+        # the process and a restarted API re-attaches to this same turn (`session_key`).
+        from . import runner_dispatch
+
+        turn = dict(session_key=runner_dispatch.turn_key(self.spec.name, model or "", read_only, prompt),
+                    collect_files=[final_path] if final_path else [])
         try:
-            proc = owned_process.run(
+            proc = runner_dispatch.run(
                 low_priority(argv),
                 cwd=str(cwd),
                 input=(prompt if self.spec.prompt_via == "stdin" else None),
                 capture_output=True, text=True, timeout=timeout,
-                start_new_session=True, env=self._env(),
+                start_new_session=True, env=self._env(), **turn,
             )
         except subprocess.TimeoutExpired:
             record_llm_call(engine_name=self.engine, usage={"model": model or ""},
@@ -1871,11 +1878,13 @@ class GenericCliCodeAgent:
                 _log.info("%s credential was revoked; restored and retrying once",
                           self.spec.name)
                 try:
-                    proc = owned_process.run(
+                    proc = runner_dispatch.run(
                         low_priority(argv), cwd=str(cwd),
                         input=(prompt if self.spec.prompt_via == "stdin" else None),
                         capture_output=True, text=True, timeout=timeout,
                         start_new_session=True, env=self._env(),
+                        session_key=turn["session_key"] + ":retry",
+                        collect_files=turn["collect_files"],
                     )
                     ok = proc.returncode == 0
                     if ok:

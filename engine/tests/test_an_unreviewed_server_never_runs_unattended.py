@@ -42,6 +42,8 @@ TEST_DB = os.environ.get(
     os.environ.get("DATABASE_URL", "postgresql+psycopg://boss:boss@localhost:5432/boss_test"),
 )
 TOOL = "create_issue"
+_LISTED = {"name": TOOL, "inputSchema": {"type": "object",
+                                         "properties": {"title": {"type": "string"}}}}
 
 
 @pytest.fixture(scope="module")
@@ -88,8 +90,7 @@ def mcp_calls(monkeypatch):
     """What reached the server. The tool list is answered so the agent loop can offer it."""
     calls: list[tuple[str, dict]] = []
     monkeypatch.setattr(MCPClient, "list_tools",
-                        lambda self, url, headers=None: [{"name": TOOL, "inputSchema": {
-                            "type": "object", "properties": {"title": {"type": "string"}}}}])
+                        lambda self, url, headers=None: [dict(_LISTED)])
     monkeypatch.setattr(MCPClient, "call_tool",
                         lambda self, url, tool, args, headers=None: calls.append((tool, args))
                         or {"issue": 42})
@@ -117,8 +118,10 @@ def _unreviewed_server(c, project) -> str:
         c, project, "tracker", "http://tracker:9/mcp", risk_tier=2, actor="op", enabled=False)
     mcp_registry.update_mcp_server(c, project, server["id"], actor="op", enabled=True,
                                    risk_tier=0)
+    # The same list the server answers the agent loop with: a different schema here would be a
+    # tool CHANGE, quarantined to Ask (BOSSAPP-818), which is not what these tests are about.
     mcp_registry.record_reachability(c, project, server["id"], reachable=True,
-                                     tools=[{"name": TOOL}])
+                                     tools=[dict(_LISTED)])
     assert mcp_registry.reviewed(mcp_registry.get_mcp_server(c, project, server["id"])) is False
     return str(server["id"])
 

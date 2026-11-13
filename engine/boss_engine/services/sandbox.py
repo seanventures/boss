@@ -253,6 +253,14 @@ def _tidies_after_command(fn):
     return run
 
 
+def _runner_retained(path) -> bool:
+    try:
+        from .runner_dispatch import retained
+    except Exception:  # noqa: BLE001 — teardown never fails over this
+        return False
+    return retained(path)
+
+
 class EphemeralSandbox:
     """One isolated clone per task. Use as a context manager so the working tree
     is always torn down, even on failure::
@@ -595,6 +603,10 @@ class EphemeralSandbox:
         if self._repo_files is not None:
             self._repo_files.close()
             self._repo_files = None
+        if self.path and self._owns_dir and _runner_retained(self.path):
+            # A boss-runner turn still works in this checkout across the restart (BOSSAPP-828):
+            # it is kept, and the re-attached turn carries its tree over and removes it.
+            self._owns_dir = False
         if self.path and self._owns_dir and self.path.exists():
             shutil.rmtree(self.path, ignore_errors=True)
         if self.path and self._owns_dir:
