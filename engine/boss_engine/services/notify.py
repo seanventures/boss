@@ -802,6 +802,87 @@ def deliver_due(engine, settings: Any, *, now: Optional[datetime] = None,
     return {"sent": sent, "failed": failed}
 
 
+# --------------------------------------------------------------------------- #
+# The chat outbox (BOSSAPP-834): two-way chat endpoints (services/chat_channels.py)
+# --------------------------------------------------------------------------- #
+#: A chat message is tried this many times, then dead-lettered (`chat.delivery_dead`).
+MAX_CHAT_ATTEMPTS = 6
+
+
+def enqueue_chat(connection, *, endpoint_id: str, project_id: str, kind: str, payload: dict,
+                 dedupe_key: str, now: Optional[datetime] = None) -> Optional[str]:
+    """A message to a chat endpoint is a row BEFORE it is sent (idempotent on `dedupe_key`), so
+    a crash, a slow channel or a 500 from Slack never loses it. Returns the row id, or None when
+    the same message is already queued."""
+    row_id = make_id("cob")
+    got = connection.execute(sql(
+        "INSERT INTO chat_outbox (id, endpoint_id, project_id, kind, dedupe_key, payload, "
+        " next_attempt_at) VALUES (:i, :e, :p, :k, :d, CAST(:pl AS JSONB), :t) "
+        "ON CONFLICT (dedupe_key) DO NOTHING RETURNING id"),
+        {"i": row_id, "e": endpoint_id, "p": project_id, "k": kind, "d": dedupe_key,
+         "pl": json.dumps(payload, default=str), "t": now or _now()}).scalar()
+    return got
+
+
+def chat_backoff_seconds(attempts: int) -> int:
+    """30 s, 1 min, 2 min, 4 min, 8 min… capped at an hour."""
+    return min(3600, 15 * (2 ** max(1, attempts)))
+
+
+def deliver_chat_due(engine, settings: Any, *, now: Optional[datetime] = None, limit: int = 50,
+                     sender: Any = None, endpoint_id: Optional[str] = None) -> dict[str, int]:
+    """Claim due chat messages (a 2-minute lease, SKIP LOCKED) and send each OUTSIDE the claiming
+    transaction, one transaction per message: one dead channel blocks nothing else. A failure
+    is retried with backoff; after MAX_CHAT_ATTEMPTS the row is `dead` and an event says so.
+    `endpoint_id` sends just that endpoint's (a press's answer, right after its request commits)."""
+    from ..db import begin
+    from .core import emit_event
+
+    now = now or _now()
+    if sender is None:
+        from .chat_channels import deliver as sender
+    with begin(engine) as c:
+        ids_clause = "AND endpoint_id = :ep " if endpoint_id else ""
+        rows = [dict(r) for r in c.execute(sql(
+            "UPDATE chat_outbox SET next_attempt_at = :lease WHERE id IN (SELECT id FROM "
+            " chat_outbox WHERE status IN ('pending', 'failed') AND next_attempt_at <= :now "
+            + ids_clause +
+            " ORDER BY created_at LIMIT :n FOR UPDATE SKIP LOCKED) RETURNING *"),
+            {"now": now, "lease": now + timedelta(minutes=2), "n": limit,
+             "ep": endpoint_id}).mappings().all()]
+    out = {"sent": 0, "failed": 0, "dead": 0}
+    for row in rows:
+        with begin(engine) as c:
+            try:
+                with c.begin_nested():
+                    receipt = sender(c, settings, row)
+            except Exception as exc:  # noqa: BLE001 — a dead channel is a receipt, not a crash
+                attempts = int(row["attempts"]) + 1
+                dead = attempts >= MAX_CHAT_ATTEMPTS
+                word = f"{type(exc).__name__}: {exc}"[:300]
+                c.execute(sql(
+                    "UPDATE chat_outbox SET attempts = :a, status = :s, last_error = :w, "
+                    " next_attempt_at = :t WHERE id = :i"),
+                    {"a": attempts, "s": "dead" if dead else "failed", "w": word,
+                     "t": now + timedelta(seconds=chat_backoff_seconds(attempts)),
+                     "i": row["id"]})
+                if dead:
+                    emit_event(c, row["project_id"], "chat.delivery_dead", "boss.chat",
+                               "chat_endpoint", row["endpoint_id"],
+                               {"outbox_id": row["id"], "kind": row["kind"],
+                                "attempts": attempts, "error": word})
+                    out["dead"] += 1
+                else:
+                    out["failed"] += 1
+                continue
+            c.execute(sql(
+                "UPDATE chat_outbox SET status = 'sent', sent_at = :now, attempts = attempts + 1, "
+                " receipt = CAST(:r AS JSONB), last_error = NULL WHERE id = :i"),
+                {"now": now, "r": json.dumps(receipt or {}, default=str), "i": row["id"]})
+            out["sent"] += 1
+    return out
+
+
 def outbox(connection, project_id: str, limit: int = 50) -> list[dict[str, Any]]:
     """The notifications BOSS sent (or holds), newest first, each with the worst SEV level of
     the alerts it carried (`sev`, null for BOSS's own self-checks)."""
@@ -825,6 +906,6 @@ def outbox(connection, project_id: str, limit: int = 50) -> list[dict[str, Any]]
     return out
 
 
-__all__ = ["CONTACT_KINDS", "contact_point_view", "create_contact_point", "deliver",
-           "deliver_due", "ensure_console", "ensure_root", "outbox", "plan", "policies",
+__all__ = ["CONTACT_KINDS", "MAX_CHAT_ATTEMPTS", "contact_point_view", "create_contact_point",
+           "deliver", "deliver_chat_due", "deliver_due", "enqueue_chat", "ensure_console", "ensure_root", "outbox", "plan", "policies",
            "preview", "quiet_now", "route", "send_test", "set_rule_notify", "verify"]
