@@ -38,6 +38,9 @@ _BY_ACTION: dict[str, tuple[str, str]] = {
     "sign_in_to_subscription_again": ("Sign in to a subscription again", "Models"),
     "review_pull_request": ("Review a pull request", "Factory"),
     "change_sync_branch": ("Sync a change's branch", "Changes"),
+    "gateway_tool_call": ("Let a build agent use a tool", "Build agents"),
+    "gateway_ask_person": ("A build agent has a question", "Build agents"),
+    "gateway_request_approval": ("A build agent asks for approval", "Build agents"),
 }
 
 #: Refusal families (decision_actions.REFUSALS): (title, source).

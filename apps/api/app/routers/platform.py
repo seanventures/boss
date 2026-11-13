@@ -16,6 +16,11 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .workflow_test_runs import router as workflow_test_runs_router
 
     app.include_router(workflow_test_runs_router)
+    # boss-runner's outbox pushes (BOSSAPP-828). Unguarded for the same reason: a runner whose
+    # pushes 404 would look dead to the reclaim path while its turn is alive.
+    from .runner import router as runner_router
+
+    app.include_router(runner_router)
     # System health: deploy readiness, the system doctor's findings and actions (stability).
     try:
         from .system_health import router as system_health_router
@@ -301,6 +306,21 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # BOSSAPP-824 — pluggable execution environments (CRUD + probe)
+    try:
+        from .environments import router as environments_router
+
+        app.include_router(environments_router)
+    except ImportError:
+        pass
+
+    # BOSSAPP-825 — per-project toolchain images (setup session, capture)
+    try:
+        from .toolchain_images import router as toolchain_images_router
+
+        app.include_router(toolchain_images_router)
+    except ImportError:
+        pass
     # BOSSAPP-837 — project and org export / import (secrets as placeholders)
     from .portability import router as portability_router
 

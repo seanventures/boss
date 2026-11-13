@@ -12068,6 +12068,176 @@ CREATE INDEX IF NOT EXISTS idx_llm_calls_class ON llm_calls (project_id, call_cl
 -- a refused call (no result) and on rows that predate the column.
 ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;
 
+-- ===========================================================================
+-- EXECUTION ENVIRONMENTS (BOSSAPP-824 phase 1): pluggable remote execution.
+-- Where a governed build's sandbox runs. A row names a place (a driver plus its
+-- config) a build can run: the control-plane box itself ('local'), a machine
+-- reached over SSH ('ssh', config.host_id names the deployment_hosts row whose
+-- key and pinned host key are reused), the existing micro-VM lane ('microvm'),
+-- or a phase-2 driver ('kubernetes', 'e2b', 'daytona' — recognized, refused in
+-- words until their drivers land). project_id NULL means org-wide: the row is
+-- an instance-level environment every project may resolve to.
+-- Secrets NEVER live here: secret_refs holds secret_refs.id references only
+-- (kubeconfig/service_account kinds already exist in secrets_service).
+-- Resolution precedence (services/sandbox_provider.make_governed_sandbox_provider):
+-- explicit spec override -> agent-bound row (config.agents) -> project default
+-- (config.default) -> instance default (project_id IS NULL, config.default)
+-- -> the BOSS_GOVERNED_SANDBOX_PROVIDER knob. With nothing configured the
+-- factory returns the LocalSubprocessProvider exactly as before.
+CREATE TABLE IF NOT EXISTS execution_environments (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT REFERENCES projects(id) ON DELETE CASCADE,  -- NULL: org-wide
+  name        TEXT NOT NULL,
+  driver      TEXT NOT NULL
+    CHECK (driver IN ('local', 'ssh', 'kubernetes', 'microvm', 'e2b', 'daytona')),
+  config      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- registered: known, not yet probed | verified: probe passed | degraded: last
+  -- probe failed | retired: never resolve here again
+  status      TEXT NOT NULL DEFAULT 'registered',
+  created_by  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- UNIQUE(project_id, name) would not dedupe org-wide rows (NULLs are distinct),
+-- so each scope pins its own partial index.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_environments_project_name
+  ON execution_environments (project_id, name) WHERE project_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_environments_org_name
+  ON execution_environments (name) WHERE project_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_execution_environments_project
+  ON execution_environments (project_id, status, created_at DESC);
+
+-- One build's hold on an environment (the shape preview_sandboxes proved: a
+-- durable reservation with a TTL and one reaper). acquire() writes a row,
+-- teardown releases it, and the resource reaper expires leases whose holder
+-- never came back (services/execution_environments.reap_leases, registered on
+-- resource_reaper.tick).
+CREATE TABLE IF NOT EXISTS environment_leases (
+  id             TEXT PRIMARY KEY,
+  environment_id TEXT NOT NULL REFERENCES execution_environments(id) ON DELETE CASCADE,
+  -- driver+image+cpu/mem of what was asked for — lets a later phase pool and
+  -- re-hand matching sandboxes instead of provisioning again.
+  fingerprint    TEXT NOT NULL DEFAULT '',
+  state          TEXT NOT NULL DEFAULT 'held'
+    CHECK (state IN ('held', 'released', 'expired')),
+  run_id         TEXT,                                  -- the holder
+  acquired_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at     TIMESTAMPTZ,
+  released_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_environment_leases_env
+  ON environment_leases (environment_id, state, acquired_at DESC);
+CREATE INDEX IF NOT EXISTS idx_environment_leases_run
+  ON environment_leases (run_id, state);
+-- ================================ end EXECUTION ENVIRONMENTS (BOSSAPP-824) ==
+
+-- ===========================================================================
+-- BOSSAPP-826
+-- WORKSPACE SNAPSHOTS (BOSSAPP-826): a build's working tree survives an ephemeral
+-- REMOTE sandbox. At each stage checkpoint the uncommitted tree (and, when no
+-- lockfile keys a seed, the dependency dirs) is tarred through the 824 sandbox
+-- sync_out seam into BOSS's object store (S3_*, services/object_store.py); a
+-- repair round of the same root run restores the latest one (sync_in) before its
+-- stage runs. kind='seed' rows hold dependency dirs only (node_modules, venv),
+-- keyed by a hash of the repository's lockfiles (seed_key), so a FRESH run of the
+-- same repo with the same lockfiles warm-starts its dependencies.
+-- Off by default (BOSS_WORKSPACE_SNAPSHOTS=off|remote). Rows past expires_at are
+-- reaped with their object by services/workspace_snapshots.reap_expired,
+-- registered on resource_reaper.tick (the 824 lease-reaper pattern).
+-- Objects live in the store; the row is the index (digest = sha256 of the object).
+CREATE TABLE IF NOT EXISTS workspace_snapshots (
+  id           TEXT PRIMARY KEY,
+  run_id       TEXT NOT NULL,                 -- the run whose sandbox was captured
+  root_run_id  TEXT,                          -- the lineage a repair restores from
+  project_id   TEXT,
+  repo         TEXT NOT NULL DEFAULT '',      -- owner/repo
+  kind         TEXT NOT NULL DEFAULT 'full' CHECK (kind IN ('full', 'seed')),
+  generation   INTEGER NOT NULL DEFAULT 0,    -- full: 1, 2, ... per root run; seed: 0
+  label        TEXT,                          -- the checkpoint label (write_tests, implement…)
+  seed_key     TEXT,                          -- seed: the lockfile hash; full: the seed it leans on
+  object_key   TEXT NOT NULL,
+  digest       TEXT NOT NULL,                 -- sha256 of the stored object
+  bytes        BIGINT NOT NULL DEFAULT 0,
+  manifest     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  expires_at   TIMESTAMPTZ,
+  last_used_at TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_snapshots_generation
+  ON workspace_snapshots (root_run_id, generation) WHERE kind = 'full';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_snapshots_seed
+  ON workspace_snapshots (project_id, repo, seed_key) WHERE kind = 'seed';
+CREATE INDEX IF NOT EXISTS idx_workspace_snapshots_root
+  ON workspace_snapshots (root_run_id, kind, generation DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_snapshots_expiry
+  ON workspace_snapshots (expires_at);
+-- ================================ end WORKSPACE SNAPSHOTS (BOSSAPP-826) ==
+
+-- BOSSAPP-825
+-- TOOLCHAIN IMAGES (BOSSAPP-825): a project's own build-sandbox image, built
+-- interactively. An operator starts a throwaway setup container, installs what
+-- the project needs (a JDK, Go, browsers, private tools) through the console's
+-- terminal, and Capture commits it (`docker commit`, then a push to the local
+-- registry when one is configured). With BOSS_SANDBOX_COMMAND_RUNTIME=docker a
+-- build of that project then runs its commands in the latest READY image
+-- instead of BOSS_SANDBOX_CONTAINER_IMAGE (services/toolchain_images.py). No
+-- ready row: the default image, exactly as before.
+CREATE TABLE IF NOT EXISTS toolchain_images (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  -- the image the setup container started from
+  base          TEXT NOT NULL,
+  -- building: the setup session is open (phase 'session') or Capture is
+  -- committing/pushing it (phase 'capturing') | ready: builds use it |
+  -- failed: capture failed or the session was discarded (error says which)
+  status        TEXT NOT NULL DEFAULT 'building'
+    CHECK (status IN ('building', 'ready', 'failed')),
+  phase         TEXT NOT NULL DEFAULT 'session',
+  -- the setup container while the session is open; cleared once captured
+  container_id  TEXT,
+  -- what a build runs: '<registry>/boss-toolchain/<project>:<id>' or the
+  -- daemon-local tag 'boss-toolchain/<project>:<id>' without a registry
+  image_ref     TEXT,
+  -- sha256 content digest: the registry's manifest digest after a push, else
+  -- the local image id
+  digest        TEXT,
+  -- the setup transcript: every command the operator ran, with exit codes,
+  -- and the Dockerfile that reproduces it (FROM base + RUN per command)
+  transcript    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dockerfile    TEXT,
+  error         TEXT,
+  created_by    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_toolchain_images_project
+  ON toolchain_images (project_id, status, created_at DESC);
+-- One open setup session per project: a second Start is refused, not stacked.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_toolchain_images_open_session
+  ON toolchain_images (project_id) WHERE status = 'building';
+-- ================================ end TOOLCHAIN IMAGES (BOSSAPP-825) ==
+
+-- BOSSAPP-828
+-- boss-runner sessions: a coding-agent turn owned by the runner sidecar instead of the API
+-- (apps/runner, services/runner_dispatch.py, services/runner_registry.py). `seq` is the API's
+-- cumulative ACK of the runner's outbox, `last_heartbeat` is the runner's last push. The reclaim
+-- path (run_liveness.progressing, jobs.reap_lost_leases) asks this registry before it declares a
+-- run dead: a turn whose runner still reports its process alive is re-attached, not re-run.
+CREATE TABLE IF NOT EXISTS runner_sessions (
+    session_id      TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL,                 -- the code-task run (crun_...)
+    identity_run_id TEXT NOT NULL,                 -- the run token's boss_task.run
+    runner_id       TEXT NOT NULL,
+    session_key     TEXT NOT NULL DEFAULT '',
+    seq             BIGINT NOT NULL DEFAULT 0,
+    state           TEXT NOT NULL DEFAULT 'running',
+    alive           BOOLEAN NOT NULL DEFAULT true,
+    last_heartbeat  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_runner_sessions_run ON runner_sessions (run_id, state, last_heartbeat DESC);
 -- BOSSAPP-838 ── scheduled self-backups ─────────────────────────────────────────────────────────
 -- services/backup_scheduler.py: one API thread (whichever holds backup_scheduler_lease) takes a
 -- pg_dump every BOSS_BACKUP_INTERVAL_MINUTES, verifies it with `pg_restore --list`, optionally

@@ -205,6 +205,25 @@ services:
     ports:
       - "127.0.0.1:${BOSS_MAILPIT_PORT:-8025}:8025"
 
+  # PROJECT TOOLCHAIN IMAGES' LOCAL REGISTRY (BOSSAPP-825). OFF BY DEFAULT: only the
+  # `toolchains` profile starts it. Project › Settings › Toolchain › Capture commits the setup
+  # container and, with BOSS_TOOLCHAIN_REGISTRY=127.0.0.1:${BOSS_TOOLCHAIN_REGISTRY_PORT:-5000}
+  # in .env, pushes it here so a build pins it by digest. The host daemon pushes and pulls, so
+  # the port is on the host loopback (docker trusts 127.0.0.1 registries without TLS) and never
+  # on a public interface. Without the profile, captured images stay in the local daemon
+  # (docker images boss-toolchain/*) and builds run them by tag. Official image, pinned.
+  registry:
+    image: registry:2.8.3
+    profiles: ["toolchains"]
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - boss_community_toolchain_registry:/var/lib/registry
+    ports:
+      - "127.0.0.1:${BOSS_TOOLCHAIN_REGISTRY_PORT:-5000}:5000"
+
   api:
     build:
       context: ../..
@@ -422,8 +441,14 @@ services:
       # (BOSS_SANDBOX_NETWORK=required refuses to start; off skips the fence). SANDBOX.md.
       BOSS_SANDBOX_ISOLATION: ${BOSS_SANDBOX_ISOLATION:-required}
       BOSS_SANDBOX_NETWORK: ${BOSS_SANDBOX_NETWORK:-enforce}
+      # BOSSAPP-825: where Capture pushes project toolchain images (empty = local daemon only).
+      BOSS_TOOLCHAIN_REGISTRY: ${BOSS_TOOLCHAIN_REGISTRY:-}
       BOSS_SANDBOX_ROOT_PATH: /var/lib/boss/sandboxes
       BOSS_EGRESS_URL: ${BOSS_EGRESS_URL:-http://egress:8090}
+      # BOSS-RUNNER (BOSSAPP-828): set to http://runner:8095 (and start the `runner` profile) to let
+      # the runner sidecar own coding-agent processes, so an API restart re-attaches to in-flight
+      # turns instead of re-running them. Empty (the default): turns run in this container as before.
+      BOSS_RUNNER_URL: ${BOSS_RUNNER_URL:-}
       BOSS_EGRESS_CONNECT_PROXY: ${BOSS_EGRESS_CONNECT_PROXY:-http://egress:8091}
       BOSS_EGRESS_SERVICE_KEY_FILE: /var/lib/boss/identity/egress-service.key
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
@@ -520,6 +545,9 @@ services:
       # Device login is local to the Unix user. Share the owner-only Grok home with the
       # worker so API setup and governed jobs see the same renewable session.
       - boss_community_grok_home:/home/boss/.grok
+      # Build sandboxes, shared with the runner sidecar (BOSSAPP-828): a turn the runner owns keeps
+      # working in its checkout while this container restarts.
+      - boss_community_sandboxes:/var/lib/boss/sandboxes
     # A model server on this machine (Ollama) is reachable as host.docker.internal. Docker
     # Desktop resolves the name already; on Linux this maps it to the host's bridge address.
     # Nothing is published: this only lets the container dial out to the host.
@@ -612,6 +640,8 @@ services:
       # The worker runs no builds (it leases jobs and asks the API to run them), but BOSS code in
       # it is never allowed to run one unisolated either: fail closed, like the api.
       BOSS_SANDBOX_ISOLATION: ${BOSS_SANDBOX_ISOLATION:-required}
+      # BOSSAPP-825: a build pulls its project toolchain image from here when one was pushed.
+      BOSS_TOOLCHAIN_REGISTRY: ${BOSS_TOOLCHAIN_REGISTRY:-}
       BOSS_DB_POOL_SIZE: ${BOSS_WORKER_DB_POOL_SIZE:-5}
       # Lease slots: `auto` = the API's measured "Builds at once"; a number pins it.
       BOSS_WORKER_SLOTS: ${BOSS_WORKER_SLOTS:-auto}
@@ -909,6 +939,67 @@ services:
       retries: 12
       start_period: 20s
 
+  # BOSS-RUNNER (BOSSAPP-828, apps/runner): owns coding-agent processes instead of the API, so an
+  # API restart (an upgrade) re-attaches to in-flight turns instead of paying for them again. Opt
+  # in: `--profile runner` and BOSS_RUNNER_URL=http://runner:8095 in .env. Its outbox and command
+  # journal live in boss_community_runner; it reports to the API as each run (DPoP run tokens
+  # bound to its in-memory key), so it needs no database and no service key.
+  runner:
+    profiles: ["runner"]
+    build:
+      context: ../..
+      dockerfile: Dockerfile.community
+      target: runner
+      args:
+        BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
+        BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
+    image: boss-community-runner:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
+    command: ["python", "-m", "apps.runner.boss_runner"]
+    restart: unless-stopped
+    # The same sandbox boundary as the API (scripts/sandbox/entrypoint.sh): root with NET_ADMIN
+    # only to fence the sandbox uids' network, then `boss` for good.
+    user: "0:0"
+    cap_add:
+      - NET_ADMIN
+    init: true
+    pids_limit: ${BOSS_API_PIDS_LIMIT:-4096}
+    # Its turns end with it; a deploy that restarts only the API leaves this running.
+    stop_grace_period: 30s
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      BOSS_EDITION: community
+      BOSS_RUNNER_API_URL: http://api:8000
+      BOSS_RUNNER_STATE_DIR: /var/lib/boss/runner
+      BOSS_RUNNER_PORT: "8095"
+      BOSS_SANDBOX_ISOLATION: ${BOSS_SANDBOX_ISOLATION:-required}
+      BOSS_SANDBOX_NETWORK: ${BOSS_SANDBOX_NETWORK:-enforce}
+      BOSS_SANDBOX_ROOT_PATH: /var/lib/boss/sandboxes
+      BOSS_BUILD_SERVICES_PG_PASSWORD_FILE: /run/boss-build-services/password
+      BOSS_BUILD_SERVICES_SANDBOX_PORT: "5433"
+    volumes:
+      - boss_community_runner:/var/lib/boss/runner
+      - boss_community_sandboxes:/var/lib/boss/sandboxes
+      - boss_community_repos:/var/lib/boss/repos
+      - boss_community_toolchain_cache:/var/lib/boss/toolchain-cache
+      - boss_community_build_services_secret:/run/boss-build-services
+      - boss_community_cli_home:/home/boss/.codex
+      - boss_community_claude_home:/home/boss/.claude
+      - boss_community_grok_home:/home/boss/.grok
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8095/healthz', timeout=5).read()"
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
   web:
     profiles: ["web"]
     build:
@@ -970,9 +1061,15 @@ volumes:
   boss_community_artifacts:
   boss_community_identity:
   boss_community_toolchain_cache:
+  # Project toolchain images pushed by Capture (the `toolchains` profile's registry).
+  boss_community_toolchain_registry:
   # Local projects' bare repositories and GitHub mirrors: their only copy until published.
   boss_community_repos:
   # Independent of restored database and identity/key archives.
   boss_community_recovery:
+  # boss-runner's outbox, command journal and session logs (BOSSAPP-828).
+  boss_community_runner:
+  # Build sandboxes, shared by the API and the runner (BOSSAPP-828).
+  boss_community_sandboxes:
   # Scheduled database backups (BOSSAPP-838).
   boss_community_backups:

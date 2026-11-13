@@ -221,6 +221,7 @@ COPY third_party/notices ./third_party/notices
 COPY apps/api ./apps/api
 COPY apps/worker ./apps/worker
 COPY apps/egress ./apps/egress
+COPY apps/runner ./apps/runner
 COPY api ./api
 COPY db ./db
 COPY engine/boss_engine ./engine/boss_engine
@@ -293,6 +294,14 @@ CMD ["python", "-m", "apps.worker.boss_worker.main"]
 FROM python-runtime AS egress
 EXPOSE 8090
 CMD ["python", "-m", "apps.egress.boss_egress"]
+
+# boss-runner (BOSSAPP-828): owns coding-agent processes so a turn survives an API restart. Same
+# entrypoint as the API (it fences the sandbox uids' network before becoming boss), since the
+# workloads it runs are the API's sandboxed workloads. The API uses it when BOSS_RUNNER_URL is set.
+FROM python-runtime AS runner
+EXPOSE 8095
+ENTRYPOINT ["/usr/local/bin/boss-entrypoint"]
+CMD ["python", "-m", "apps.runner.boss_runner"]
 
 # THE MCP SERVERS BOSS SHIPS (devops-reference, web-intel, doc-render), one process, three ports.
 # Every install seeds them and the cast holds them; without this service they were unreachable.

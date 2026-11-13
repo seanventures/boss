@@ -70,6 +70,22 @@ class Settings(BaseSettings):
     s3_secret_access_key: Optional[str] = Field(default=None, alias="S3_SECRET_ACCESS_KEY")
     s3_bucket: Optional[str] = Field(default=None, alias="S3_BUCKET")
     s3_region: Optional[str] = Field(default=None, alias="S3_REGION")
+    # Workspace snapshots across ephemeral sandboxes (BOSSAPP-826): at each stage
+    # checkpoint a REMOTE sandbox's uncommitted tree + dependency dirs go to the S3_*
+    # store above, and a repair round (or a fresh run with the same lockfiles)
+    # restores them instead of re-installing. off = nothing runs (the default);
+    # remote = only when the sandbox is not on this box (local sandboxes already
+    # keep a warm checkout via lineage_sandbox).
+    workspace_snapshots: str = Field(default="off", alias="BOSS_WORKSPACE_SNAPSHOTS")
+    # A run lineage's full snapshots, and the lockfile-keyed dependency seeds, are
+    # reaped after these TTLs (resource_reaper.tick). Hard ceilings, like the warm
+    # lineage TTL: a snapshot can carry a build's .env-shaped leftovers.
+    workspace_snapshot_ttl_hours: int = Field(
+        default=72, alias="BOSS_WORKSPACE_SNAPSHOT_TTL_HOURS", ge=1, le=24 * 14
+    )
+    workspace_seed_ttl_hours: int = Field(
+        default=24 * 7, alias="BOSS_WORKSPACE_SEED_TTL_HOURS", ge=1, le=24 * 30
+    )
     # SCHEDULED SELF-BACKUPS (BOSSAPP-838, services/backup_scheduler.py). Off unless the install
     # turns it on (community-compose.yml does, writing into the boss_community_backups volume).
     backup_schedule_enabled: bool = Field(default=False, alias="BOSS_BACKUP_SCHEDULE_ENABLED")
@@ -1408,6 +1424,16 @@ class Settings(BaseSettings):
     sandbox_container_memory: str = Field(default="2g", alias="BOSS_SANDBOX_CONTAINER_MEMORY")
     sandbox_container_cpus: str = Field(default="2", alias="BOSS_SANDBOX_CONTAINER_CPUS")
     sandbox_container_pids: int = Field(default=512, alias="BOSS_SANDBOX_CONTAINER_PIDS")
+    # --- per-project toolchain images (BOSSAPP-825) -----------------------
+    # A project's own build image, built in a console setup session and captured with
+    # `docker commit` (services/toolchain_images.py). With a registry (the compose
+    # `toolchains` profile runs one on 127.0.0.1:5000) the image is pushed and pinned by
+    # digest; empty keeps it in the local docker daemon only.
+    toolchain_registry: str = Field(default="", alias="BOSS_TOOLCHAIN_REGISTRY")
+    #: The setup session installs tools, so it has network (unlike a build container).
+    toolchain_setup_network: str = Field(default="bridge", alias="BOSS_TOOLCHAIN_SETUP_NETWORK")
+    #: Base for a new setup session; empty means BOSS_SANDBOX_CONTAINER_IMAGE.
+    toolchain_default_base: str = Field(default="", alias="BOSS_TOOLCHAIN_DEFAULT_BASE")
 
     # --- agent-boundary permissions (P0-E / BOSS-411) -------------------
     # BOSS governs at the WORKFLOW level (decisions, gates, budget) and, until now,

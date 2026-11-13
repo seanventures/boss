@@ -1,0 +1,3 @@
+# boss-runner runs from the python-runtime image (Dockerfile.community, target `runner`), which
+# already installs the API's requirements. It imports only boss_engine.identity.{dpop,jwks}
+# (cryptography) and the standard library; nothing extra to install.

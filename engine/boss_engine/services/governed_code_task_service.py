@@ -92,7 +92,15 @@ from .pipeline_profiles import (
     route_for_step,
     sensitive_markers_in,
 )
-from .sandbox_provider import LocalSubprocessProvider, MicroVMProvider
+# LocalSubprocessProvider stays importable here: the factory's default answer is
+# that provider, and tests patch its acquire through this module. The PIPELINE
+# never constructs it directly any more — make_governed_sandbox_provider is the
+# one seam (BOSSAPP-824), and a test enforces that.
+from .sandbox_provider import (
+    LocalSubprocessProvider,  # noqa: F401 — tests patch acquire via this module
+    MicroVMProvider,
+    make_governed_sandbox_provider,
+)
 from .software_factory import SoftwareFactoryService, commit_change
 from .workspace_perms import write_text as _ws_write
 
@@ -4817,7 +4825,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             token = repo_token(settings, owner, repo,
                                connection=c, project_id=project_id)
 
-    provider = LocalSubprocessProvider(settings)
+    # THE GRANULAR SANDBOX SEAM IS PLUGGABLE (BOSSAPP-824): the factory resolves
+    # the step's explicit override, then the agent's, the project's and the
+    # instance's default execution environment, and falls back to exactly the
+    # LocalSubprocessProvider this line used to hard-code. With nothing
+    # configured the behaviour is byte-identical. The micro-VM lane is NOT
+    # chosen here — _resolve_use_microvm below still owns it, freeze flag and
+    # all; this seam provisions the control plane's working checkout. The
+    # factory opens (and contains) its own lookup transaction.
+    provider = make_governed_sandbox_provider(
+        settings, engine=engine, project_id=project_id, spec=spec)
     # Lane defaults: builder engine for design/tests/implement, adversary engine for
     # review/security/consistency/mutation — the model that wrote the code isn't the one
     # judging it (removes self-review bias). VAG B2 layers per-STEP (engine, model) routing
@@ -5029,8 +5046,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # explicitly on the task); else the project-level setting applies.
     use_microvm = _resolve_use_microvm(settings, spec)
     from .execution_substrate import normalize_build_substrate
+    # The audit record of where THIS run's working stages execute: the micro-VM
+    # lane when selected, else the resolved provider's kind (BOSSAPP-824 —
+    # 'local' for the default LocalSubprocessProvider, exactly as before).
     execution_substrate = normalize_build_substrate(
-        "microvm" if use_microvm else "local"
+        "microvm" if use_microvm else getattr(provider, "kind", "local")
     ).value
     fctx = {**fctx, "execution_substrate": execution_substrate}
     with _transaction(engine) as c:
@@ -5636,6 +5656,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     def _mark_stage_done(stage: str) -> None:
         mark_stage_done(engine, project_id, run_id, stage)
 
+    # BOSSAPP-826 WORKSPACE SNAPSHOTS: armed at the provision site below only when
+    # BOSS_WORKSPACE_SNAPSHOTS=remote and the sandbox is remote. None otherwise, so with
+    # the knob off (the default) _checkpoint behaves exactly as before.
+    _ws_snapshot: list = [None]
+
     def _checkpoint(label: str) -> int:
         """Push whatever the sandbox holds to the work branch. Best-effort, never fatal.
 
@@ -5650,6 +5675,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         """
         if use_microvm:
             return 0  # that path already commits per stage
+        if _ws_snapshot[0] is not None:
+            # BOSSAPP-826: alongside the push, the remote sandbox's uncommitted tree and
+            # dependency dirs go to the object store (before the push hold: a held push still
+            # snapshots). Best-effort — never raises, never fails the run.
+            from . import workspace_snapshots as _ws_snapshots
+
+            _ws_snapshots.capture_best_effort(_ws_snapshot[0], sandbox, label)
         if _push_held(f"checkpoint:{label}"):
             return 0
         try:
@@ -5814,6 +5846,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               token="", egress=SimpleNamespace(
                                   clone_url=_lr.file_url(_lr.mirror_path(owner, repo, settings)),
                                   git_config=[], own_git=None))
+        # BOSSAPP-826: a REMOTE sandbox (only with BOSS_WORKSPACE_SNAPSHOTS=remote) gets this
+        # lineage's latest workspace snapshot back — or the dependency seed matching its
+        # lockfiles — before any stage runs, and arms the stage-end snapshot in _checkpoint.
+        # Off / local sandbox: enabled_for reads settings and returns False; nothing else runs.
+        from . import workspace_snapshots as _ws_snapshots
+
+        if not use_microvm and _ws_snapshots.enabled_for(settings, provider, sandbox):
+            _ws_snapshot[0] = _ws_snapshots.context_for(
+                engine, settings, run_id=run_id, root_run_id=root_run, project_id=project_id,
+                owner=owner, repo=repo)
+            _ws_snapshots.restore_best_effort(_ws_snapshot[0], sandbox, is_repair=_is_repair)
         if _brief_refused:
             _repo_verdict = repository_stack_verdict(getattr(sandbox, "path", None))
             if _repo_verdict is None or not _repo_verdict.ok:
@@ -7120,7 +7163,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         def _impl_over_budget(final: bool = False) -> bool:
             dl = _impl_deadline if (final or _warm_fix_ran[0]) else _impl_work_deadline
-            return dl is not None and time.time() >= dl
+            # BOSSAPP-814 seam: time parked at the MCP gateway for a person is not spent.
+            from . import stage_clock
+            return dl is not None and time.time() >= stage_clock.extended(
+                run_id, dl, since=_impl_deadline - _impl_budget_s)
 
         def _within_budget(call, model):
             """A session the deadline ended is a finished attempt (its tests then run), not a
