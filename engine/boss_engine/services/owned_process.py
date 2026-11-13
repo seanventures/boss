@@ -539,6 +539,42 @@ def _child_env(env: Optional[dict[str, str]], token: str) -> dict[str, str]:
     return base
 
 
+def workload_spawn(args: Any, owner: Optional[Owner], kwargs: dict[str, Any], *,
+                   sandboxed: Optional[bool] = None) -> tuple[Any, Any]:
+    """What a workload spawn for `owner` becomes: the argv wrapped for the run's sandbox uid, and
+    `kwargs` (env, cwd; `shell` consumed) adjusted in place. Returns (sandbox or None, args).
+
+    One definition for every process that runs a run's workload, wherever it is spawned: here
+    (OwnedPopen), or by the boss-runner sidecar (runner_dispatch, BOSSAPP-828)."""
+    sandbox = None
+    # THE SANDBOX BOUNDARY (sandbox_identity, IDENTITY.md §7.6): a workload spawned for a run
+    # that holds a sandbox uid runs AS that uid, never as the control plane's. `sandboxed=False`
+    # is for BOSS's own operations on the run (its git with a credential the agent must not see).
+    # Keyed on the BOUND IDENTITY, not on the owner's kind: an owner that holds a sandbox uid
+    # (sandbox_identity.bind/acquire, on it or any owner enclosing it) is running a workload,
+    # whatever it is called. Gating on WORKLOAD_KINDS let the template trial (owner kind
+    # `template_trial`) bind a uid and still run the template's code as the API's uid.
+    if sandboxed is not False and owner is not None:
+        from . import sandbox_identity
+
+        sandbox = sandbox_identity.for_owner(owner)
+        if sandbox is not None:
+            args = sandbox.wrap(args, shell=bool(kwargs.pop("shell", False)))
+            kwargs["env"] = sandbox.env(kwargs.get("env"))
+            kwargs["cwd"] = sandbox.cwd(kwargs.get("cwd"))
+    if sandboxed is not False and owner is not None and owner.kind in WORKLOAD_KINDS:
+        # THE RUN'S OWN BUILD SERVICES (build_services): its throwaway database's
+        # DATABASE_URL / PG*, added AFTER the agent allow-list (which withholds the control
+        # plane's DATABASE_URL by name) and only for this run's workloads.
+        from . import build_services
+
+        service_env = build_services.env_for_owner(owner)
+        if service_env:
+            kwargs["env"] = {**(os.environ if kwargs.get("env") is None else kwargs["env"]),
+                             **service_env}
+    return sandbox, args
+
+
 class OwnedPopen(subprocess.Popen):
     """`subprocess.Popen`, owned. Drop-in: `kill()`, `terminate()`, `wait()` and
     `communicate()` keep their meaning, applied to the whole tree.
@@ -557,32 +593,7 @@ class OwnedPopen(subprocess.Popen):
                  refuse_when_stopped: bool = True, sandboxed: Optional[bool] = None,
                  **kwargs: Any) -> None:
         self.owner = owner or current_owner()
-        # THE SANDBOX BOUNDARY (sandbox_identity, IDENTITY.md §7.6): a workload spawned for a run
-        # that holds a sandbox uid runs AS that uid, never as the control plane's. `sandboxed=False`
-        # is for BOSS's own operations on the run (its git with a credential the agent must not see).
-        self.sandbox = None
-        # Keyed on the BOUND IDENTITY, not on the owner's kind: an owner that holds a sandbox uid
-        # (sandbox_identity.bind/acquire, on it or any owner enclosing it) is running a workload,
-        # whatever it is called. Gating on WORKLOAD_KINDS let the template trial (owner kind
-        # `template_trial`) bind a uid and still run the template's code as the API's uid.
-        if sandboxed is not False and self.owner is not None:
-            from . import sandbox_identity
-
-            self.sandbox = sandbox_identity.for_owner(self.owner)
-            if self.sandbox is not None:
-                args = self.sandbox.wrap(args, shell=bool(kwargs.pop("shell", False)))
-                kwargs["env"] = self.sandbox.env(kwargs.get("env"))
-                kwargs["cwd"] = self.sandbox.cwd(kwargs.get("cwd"))
-        if sandboxed is not False and self.owner is not None and self.owner.kind in WORKLOAD_KINDS:
-            # THE RUN'S OWN BUILD SERVICES (build_services): its throwaway database's
-            # DATABASE_URL / PG*, added AFTER the agent allow-list (which withholds the control
-            # plane's DATABASE_URL by name) and only for this run's workloads.
-            from . import build_services
-
-            service_env = build_services.env_for_owner(self.owner)
-            if service_env:
-                kwargs["env"] = {**(os.environ if kwargs.get("env") is None else kwargs["env"]),
-                                 **service_env}
+        self.sandbox, args = workload_spawn(args, self.owner, kwargs, sandboxed=sandboxed)
         if self.owner is not None and refuse_when_stopped:
             stopped = next((i for i in self.owner.ids() if i in _CANCELLED), None)
             if stopped:

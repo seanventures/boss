@@ -63,9 +63,10 @@ class ReplayDb:
 def verify_runner_call(headers: dict[str, str], *, method: str, url: str, db: ReplayDb) -> str:
     """The API's check of a runner call: `Authorization: DPoP <token>` + a proof for exactly this
     method and URL, by the key the token is bound to. Returns the token."""
-    scheme, _, token = headers.get("Authorization", "").partition(" ")
+    headers = {k.lower(): v for k, v in headers.items()}
+    scheme, _, token = headers.get("authorization", "").partition(" ")
     assert scheme == "DPoP" and token
     claims = jwks.split(token).claims
-    dpop.verify_proof(headers.get("DPoP"), htm=method, htu=url, access_token=token,
+    dpop.verify_proof(headers.get("dpop"), htm=method, htu=url, access_token=token,
                       expected_jkt=claims["cnf"]["jkt"], db=db)
     return token
