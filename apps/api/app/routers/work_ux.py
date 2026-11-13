@@ -7,6 +7,8 @@
   detach. The monitor tick evaluates it and tells the watcher once per stop.
 * 881 one search over work (services/work_search): GET /v1/search, only the sources the caller
   may read.
+* 882 outputs and cross-references on a work item (services/work_outputs): read, record by
+  hand, refresh from its runs; add a reference.
 
 WHO MAY DO WHAT: reading follows the thing read (decision:read, work_item:read ...); every change
 is attributed to the signed-in member (require_write_actor), never to a claimed actor.
@@ -44,6 +46,17 @@ class WatchdogBody(Body):
     enabled: bool = True
 
 
+class OutputBody(Body):
+    kind: str = Field(pattern="^(pull_request|preview|deploy|artifact|document|other)$")
+    ref: str = Field(min_length=1, max_length=1000)
+    title: str = Field(default="", max_length=300)
+
+
+class RefBody(Body):
+    to_kind: str = Field(pattern="^(work_item|pull_request|decision|code_task|workflow_run|document)$")
+    to_ref: str = Field(min_length=1, max_length=500)
+
+
 def _party(actor: str) -> str:
     return actor if ":" in actor else f"person:{actor}"
 
@@ -51,7 +64,7 @@ def _party(actor: str) -> str:
 def build_work_ux_router(*, engine, settings: Callable[[], Any],
                          require_reader: Callable[..., None],
                          require_write_actor: Callable[..., str]) -> APIRouter:
-    from boss_engine.services import decision_options, work_watchdogs
+    from boss_engine.services import decision_options, work_outputs, work_watchdogs
 
     router = APIRouter(tags=["work-ux"])
 
@@ -163,5 +176,43 @@ def build_work_ux_router(*, engine, settings: Callable[[], Any],
         with begin(engine) as c:
             require_reader(c, project_id)
             return work_search.search(c, project_id=project_id, q=q, kinds=allowed, limit=limit)
+
+    # ── 882: outputs and cross-references on a work item ───────────────────────────────────
+    @router.get("/v1/work-items/{work_item_id}/outputs")
+    @permit(P.WORK_ITEM_READ, scope=Scope.of("work_item", path="work_item_id"))
+    def item_outputs(work_item_id: str, project_id: str) -> dict:
+        """Its PRs, previews, deploys, artifacts and documents (status read live from each
+        source), what it mentions, and the items that mention it."""
+        with begin(engine) as c:
+            require_reader(c, project_id)
+            return _errors(lambda: work_outputs.view(c, project_id, work_item_id))
+
+    @router.post("/v1/work-items/{work_item_id}/outputs", status_code=201)
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.of("work_item", path="work_item_id"))
+    def record_output(work_item_id: str, payload: OutputBody) -> dict:
+        return _write(payload, lambda c, actor: work_outputs.record(
+            c, project_id=payload.project_id, item_id=work_item_id, kind=payload.kind,
+            ref=payload.ref, title=payload.title, actor=actor))
+
+    @router.post("/v1/work-items/{work_item_id}/outputs/refresh")
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.of("work_item", path="work_item_id"))
+    def refresh_outputs(work_item_id: str, payload: Body) -> dict:
+        """Collect the outputs of the runs that serve it, and re-read what its text mentions."""
+        def run(c, actor):
+            work_outputs.refresh_mentions(c, project_id=payload.project_id, item_id=work_item_id,
+                                          actor=actor)
+            touched = work_outputs.collect(c, project_id=payload.project_id,
+                                           item_id=work_item_id, actor=actor)
+            return {"collected": touched, **work_outputs.view(c, payload.project_id,
+                                                              work_item_id)}
+
+        return _write(payload, run)
+
+    @router.post("/v1/work-items/{work_item_id}/refs", status_code=201)
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.of("work_item", path="work_item_id"))
+    def add_reference(work_item_id: str, payload: RefBody) -> dict:
+        return {"refs": _write(payload, lambda c, actor: work_outputs.add_ref(
+            c, project_id=payload.project_id, item_id=work_item_id, to_kind=payload.to_kind,
+            to_ref=payload.to_ref, actor=actor))}
 
     return router

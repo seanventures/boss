@@ -17,7 +17,7 @@ import {
   POLICY_EXAMPLE, STATUS_WORDS, completeItem, createItem, flatten, partyName, readItem, readPolicy,
   readTree, relateItem, updateItem, type WorkNode, type WorkStatus, type WorkTree,
 } from "../../lib/work-items";
-import { WatchSection } from "./work-item-extras";
+import { OutputsSection, WatchSection } from "./work-item-extras";
 import "./work-tree.css";
 
 const SETTABLE: WorkStatus[] = ["backlog", "todo", "active", "blocked", "cancelled"];
@@ -227,6 +227,7 @@ export function ItemPanel({ projectId, id, all, demo, onChanged }: {
           Runs: {item.runs.map((r) => `${RUN_WORDS[r.kind] ?? r.kind} ${r.status}`).join(" · ")}
         </p>
       ) : null}
+      <OutputsSection projectId={projectId} id={id} demo={demo} />
       <WatchSection projectId={projectId} id={id} demo={demo} />
       {said ? <p className="wt-said" role="status" data-testid="wt-said">{said}</p> : null}
     </div>

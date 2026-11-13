@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1994 operations.
+# 1998 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -1912,6 +1912,10 @@
 "POST /v1/work-items/{work_item_id}/complete": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
 "POST /v1/work-items/{work_item_id}/labels": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
 "POST /v1/work-items/{work_item_id}/labels/remove": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
+"GET /v1/work-items/{work_item_id}/outputs": ["permit work_item:read @ work_item(path=work_item_id)", "OAPVU"]
+"POST /v1/work-items/{work_item_id}/outputs": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
+"POST /v1/work-items/{work_item_id}/outputs/refresh": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
+"POST /v1/work-items/{work_item_id}/refs": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
 "POST /v1/work-items/{work_item_id}/relations": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
 "POST /v1/work-items/{work_item_id}/relations/remove": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
 "POST /v1/work-items/{work_item_id}/start": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]

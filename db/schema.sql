@@ -13018,4 +13018,39 @@ CREATE TABLE IF NOT EXISTS work_item_watchdogs (
   UNIQUE (root_item_id, watcher)
 );
 CREATE INDEX IF NOT EXISTS idx_work_item_watchdogs_project ON work_item_watchdogs (project_id, enabled);
+-- 882 (services/work_outputs.py): every output of a work item in one place — its PRs, previews,
+-- deploys, artifacts and documents — filled when a run of the item completes (and on Refresh),
+-- or recorded by hand; source_kind/source_id name the row its live status is read from.
+CREATE TABLE IF NOT EXISTS work_item_outputs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('pull_request', 'preview', 'deploy', 'artifact', 'document',
+                                     'other')),
+  ref TEXT NOT NULL,                         -- a URL or a BOSS id
+  title TEXT NOT NULL DEFAULT '',
+  status TEXT,
+  source_kind TEXT,                          -- code_task | app_preview | preview_sandbox | stack_deployment | meeting
+  source_id TEXT,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (work_item_id, kind, ref)
+);
+-- What a work item MENTIONS: parsed from its title and description (source 'mention', replaced
+-- when the text changes) or added by a person (source 'manual'). Backlinks are this read the
+-- other way (to_kind 'work_item', to_ref = the item).
+CREATE TABLE IF NOT EXISTS work_item_refs (
+  project_id TEXT NOT NULL,
+  from_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  to_kind TEXT NOT NULL CHECK (to_kind IN ('work_item', 'pull_request', 'decision', 'code_task',
+                                           'workflow_run', 'document')),
+  to_ref TEXT NOT NULL,
+  mention TEXT,
+  source TEXT NOT NULL DEFAULT 'mention' CHECK (source IN ('mention', 'manual')),
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (from_item_id, to_kind, to_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_refs_to ON work_item_refs (to_kind, to_ref);
 -- ================================ end BOSSAPP-w4-work-ux2 ==

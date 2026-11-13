@@ -79,3 +79,27 @@ def test_one_search_finds_work_by_its_content(client):
     only = client.get("/v1/search", params={"project_id": HOME, "q": "nightly ledger",
                                             "kinds": "decision"}).json()
     assert only["searched"] == ["decision"] and all(h["kind"] == "decision" for h in only["items"])
+
+
+def test_outputs_and_references_on_a_work_item(client):
+    api = _create(client, "Payments API")
+    form = _create(client, "Card form",
+                   description=f"Needs {api['human_key']}; see https://docs.acme.dev/cards")
+    got = client.get(f"/v1/work-items/{form['id']}/outputs", params={"project_id": HOME}).json()
+    assert [(r["to_kind"], r["to_ref"]) for r in got["refs"]] == [
+        ("document", "https://docs.acme.dev/cards"), ("work_item", api["id"])]
+    back = client.get(f"/v1/work-items/{api['id']}/outputs", params={"project_id": HOME}).json()
+    assert [b["id"] for b in back["backlinks"]] == [form["id"]]
+    r = client.post(f"/v1/work-items/{form['id']}/outputs", json={
+        "project_id": HOME, "actor": "ceo", "kind": "document", "ref": "https://docs/x",
+        "title": "Design"})
+    assert r.status_code == 201, r.text
+    assert [o["title"] for o in r.json()["outputs"]] == ["Design"]
+    assert client.post(f"/v1/work-items/{form['id']}/outputs", json={
+        "project_id": HOME, "actor": "ceo", "kind": "poem", "ref": "x"}).status_code == 422
+    refreshed = client.post(f"/v1/work-items/{form['id']}/outputs/refresh",
+                            json={"project_id": HOME, "actor": "ceo"})
+    assert refreshed.status_code == 200 and refreshed.json()["collected"] == 0
+    added = client.post(f"/v1/work-items/{api['id']}/refs", json={
+        "project_id": HOME, "actor": "ceo", "to_kind": "work_item", "to_ref": form["id"]})
+    assert added.status_code == 201 and added.json()["refs"][0]["source"] == "manual"

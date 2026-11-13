@@ -6,14 +6,17 @@
  *
  *   Watch     — a person's watchdog on this item's subtree: which stops to be told about, and
  *               who already watches it (engine work_watchdogs).
+ *   Outputs   — its PRs, previews, deploys, artifacts and documents with their status now, what
+ *               its text mentions and which items mention it (engine work_outputs).
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { Bell, BellSlash } from "@phosphor-icons/react";
+import { ArrowClockwise, Bell, BellSlash, LinkSimple, Package } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { partyName } from "../../lib/work-items";
 import {
-  WATCH_WORDS, attachWatchdog, detachWatchdog, readWatchdogs, type WatchCondition, type Watchdog,
+  OUTPUT_WORDS, WATCH_WORDS, attachWatchdog, detachWatchdog, openable, readOutputs, readWatchdogs,
+  recordOutput, refreshOutputs, type Outputs, type WatchCondition, type Watchdog,
 } from "../../lib/work-ux";
 
 const ALL: WatchCondition[] = ["stopped_unfinished", "blocked", "closed", "stalled"];
@@ -70,6 +73,70 @@ export function WatchSection({ projectId, id, demo }: { projectId: string; id: s
         </GatedButton>
       </div>
       {said ? <p className="wt-said" role="status" data-testid="wt-watch-said">{said}</p> : null}
+    </details>
+  );
+}
+
+/** Its PRs, previews, deploys, artifacts and documents with live status; what it mentions; who mentions it. */
+export function OutputsSection({ projectId, id, demo }: { projectId: string; id: string; demo: boolean }) {
+  const [data, setData] = useState<Outputs | null>(null);
+  const [link, setLink] = useState("");
+  const [said, setSaid] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const r = await readOutputs(projectId, id);
+    setData(r.ok && r.data ? r.data : { outputs: [], refs: [], backlinks: [] });
+  }, [projectId, id]);
+  useEffect(() => { void load(); }, [load]);
+  const after = async (r: { ok: boolean; error: string | null }, ok: string | null) => {
+    setSaid(r.ok ? ok : r.error);
+    if (r.ok) await load();
+  };
+  const total = (data?.outputs.length ?? 0) + (data?.refs.length ?? 0) + (data?.backlinks.length ?? 0);
+  return (
+    <details className="wt-policy" data-testid="wt-outputs" open={Boolean(data?.outputs.length)}>
+      <summary><Package size={12} aria-hidden /> Outputs &amp; links {total ? `· ${total}` : ""}</summary>
+      {data?.outputs.length ? (
+        <ul className="wt-list" aria-label="Outputs">
+          {data.outputs.map((o) => (
+            <li key={o.id} className="wt-line" data-testid={`wt-output-${o.kind}`}>
+              <span className="wt-label">{OUTPUT_WORDS[o.kind] ?? o.kind}</span>
+              {openable(o.ref) ? <a href={o.ref} target="_blank" rel="noopener noreferrer">{o.title}</a> : <span>{o.title}</span>}
+              {o.status ? <span className="wt-chip" data-testid="wt-output-status">{o.status.replace(/_/g, " ")}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : <p className="wt-faint">No outputs yet. A run's PR, preview and deploy land here when it finishes.</p>}
+      {data?.refs.length ? (
+        <p className="wt-line wt-faint" data-testid="wt-refs">
+          <LinkSimple size={12} aria-hidden /> Mentions:{" "}
+          {data.refs.map((r) => (
+            <span key={`${r.to_kind}-${r.to_ref}`} className="wt-label" title={r.source === "manual" ? "Added by hand" : "Mentioned in its text"}>
+              {r.to_kind === "work_item" ? (r.human_key || r.title || r.to_ref) : `${OUTPUT_WORDS[r.to_kind] ?? r.to_kind} ${r.to_ref}`}
+            </span>
+          ))}
+        </p>
+      ) : null}
+      {data?.backlinks.length ? (
+        <p className="wt-line wt-faint" data-testid="wt-backlinks">
+          Mentioned by: {data.backlinks.map((b) => <span key={b.id} className="wt-label">{b.human_key || b.title}</span>)}
+        </p>
+      ) : null}
+      <div className="wt-line">
+        <input className="input wt-new" value={link} onChange={(e) => setLink(e.target.value)} disabled={demo}
+               placeholder="Add a link (a doc, a dashboard…)" aria-label="Add an output link" data-testid="wt-output-link" />
+        <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo || !openable(link.trim())}
+                     onClick={() => void recordOutput(projectId, id, { kind: "document", ref: link.trim() })
+                       .then((r) => { if (r.ok) setLink(""); return after(r, null); })}
+                     data-testid="wt-output-add">
+          Add
+        </GatedButton>
+        <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo}
+                     onClick={() => void refreshOutputs(projectId, id).then((r) => after(r, "Up to date."))}
+                     data-testid="wt-output-refresh">
+          <ArrowClockwise size={12} aria-hidden /> Refresh
+        </GatedButton>
+      </div>
+      {said ? <p className="wt-said" role="status" data-testid="wt-outputs-said">{said}</p> : null}
     </details>
   );
 }

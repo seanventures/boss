@@ -7,7 +7,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SearchResults } from "../app/projects/search-results";
-import { WatchSection } from "../app/projects/work-item-extras";
+import { OutputsSection, WatchSection } from "../app/projects/work-item-extras";
 import { parseSearch, parseWatchdogs } from "../lib/work-ux";
 import { $, mount, settle, unmount } from "./_helpers/live-render";
 
@@ -49,6 +49,35 @@ describe("the watchdog on a work tree", () => {
     ($('[data-testid="wt-unwatch"]') as HTMLButtonElement).click();
     await settle();
     expect(calls.some((c) => c.method === "DELETE" && c.url.startsWith("/v1/work-items/w2/watchdogs/wdg_1?project_id=p1"))).toBe(true);
+  });
+});
+
+describe("outputs and references on a work item", () => {
+  const OUT = {
+    outputs: [
+      { id: "wio_1", kind: "pull_request", ref: "https://github.com/acme/app/pull/9", title: "PR #9 · Wallet", status: "completed" },
+      { id: "wio_2", kind: "artifact", ref: "art_1", title: "Minutes", status: null },
+    ],
+    refs: [{ to_kind: "work_item", to_ref: "w3", source: "mention", human_key: "WI-3", title: "Payments API" },
+           { to_kind: "document", to_ref: "https://docs/x", source: "manual" }],
+    backlinks: [{ id: "w9", human_key: "WI-9", title: "Epic", status: "todo" }],
+  };
+
+  it("shows each output with its status, what it mentions and who mentions it; Add takes only a link", async () => {
+    const calls: Call[] = [];
+    serve(calls, (url, method) => (method === "GET" ? OUT : { ...OUT, collected: 1 }));
+    await mount(<OutputsSection projectId="p1" id="w2" demo={false} />);
+    await settle();
+    const pr = $('[data-testid="wt-output-pull_request"]');
+    expect(pr?.querySelector("a")?.getAttribute("href")).toBe("https://github.com/acme/app/pull/9");
+    expect(pr?.textContent).toContain("completed");
+    expect($('[data-testid="wt-output-artifact"] a')).toBeNull();          // an id, not a link
+    expect($('[data-testid="wt-refs"]')?.textContent).toContain("WI-3");
+    expect($('[data-testid="wt-backlinks"]')?.textContent).toContain("WI-9");
+    expect(($('[data-testid="wt-output-add"]') as HTMLButtonElement).disabled).toBe(true);
+    ($('[data-testid="wt-output-refresh"]') as HTMLButtonElement).click();
+    await settle();
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/work-items/w2/outputs/refresh")).toBe(true);
   });
 });
 

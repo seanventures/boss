@@ -725,6 +725,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["work-items/labels", "work_item:read"],
   ["work-items/tree", "work_item:read"],
   ["work-items/{}", "work_item:read"],
+  ["work-items/{}/outputs", "work_item:read"],
   ["work-items/{}/watchdogs", "work_item:read"],
   ["work-orchestration/overview", "work_item:read"],
   ["work-plane/board", "work_item:read"],

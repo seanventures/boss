@@ -55,6 +55,35 @@ export function parseSearch(w: unknown): { items: SearchHit[]; searched: string[
     searched: arr(o.searched).map(str),
   };
 }
+// ── 882: outputs and cross-references on a work item ─────────────────────────────────────────
+export type Output = { id: string; kind: string; ref: string; title: string; status: string };
+export type ItemRef = { to_kind: string; to_ref: string; source: string; title: string; human_key: string; status: string };
+export type Backlink = { id: string; human_key: string; title: string; status: string };
+export type Outputs = { outputs: Output[]; refs: ItemRef[]; backlinks: Backlink[] };
+export const OUTPUT_WORDS: Record<string, string> = {
+  pull_request: "PR", preview: "Preview", deploy: "Deploy", artifact: "Artifact", document: "Doc", other: "Link",
+  work_item: "Item", decision: "Decision", code_task: "Build", workflow_run: "Run",
+};
+export function parseOutputs(w: unknown): Outputs {
+  const o = obj(w);
+  return {
+    outputs: arr(o.outputs).map(obj).map((x) => ({ id: str(x.id), kind: str(x.kind), ref: str(x.ref),
+      title: str(x.title) || str(x.ref), status: str(x.status) })).filter((x) => x.ref),
+    refs: arr(o.refs).map(obj).map((x) => ({ to_kind: str(x.to_kind), to_ref: str(x.to_ref), source: str(x.source),
+      title: str(x.title), human_key: str(x.human_key), status: str(x.status) })).filter((x) => x.to_ref),
+    backlinks: arr(o.backlinks).map(obj).map((x) => ({ id: str(x.id), human_key: str(x.human_key),
+      title: str(x.title), status: str(x.status) })).filter((x) => x.id),
+  };
+}
+/** A link to open, when the ref is one (a URL); otherwise null (an id shown as text). */
+export const openable = (ref: string): string | null => (/^https?:\/\//.test(ref) ? ref : null);
+export const readOutputs = (projectId: string, id: string): Promise<ReadResult<Outputs>> =>
+  aaRead(`${item(id)}/outputs?${q(projectId)}`, parseOutputs);
+export const refreshOutputs = (projectId: string, id: string): Promise<WriteResult> =>
+  obsWrite(`${item(id)}/outputs/refresh`, { project_id: projectId }, press(`out:${id}`, "Refresh"));
+export const recordOutput = (projectId: string, id: string, body: { kind: string; ref: string; title?: string }): Promise<WriteResult> =>
+  obsWrite(`${item(id)}/outputs`, { project_id: projectId, ...body }, press(`out:${id}`, "Add"));
+
 export const searchWork = (projectId: string, query: string, signal?: AbortSignal) =>
   aaRead(`/v1/search?${q(projectId)}&q=${encodeURIComponent(query)}&limit=12`, parseSearch, null, signal);
 
