@@ -70,7 +70,9 @@ def set_one(
     # a role the chart did not contain, so it rendered at the top level while its "Reports to"
     # column named a parent — two answers to one question. Placing the parent (top level, where
     # it would render anyway) makes the plan say what the chart shows.
-    place_parent = bool(parent) and parent not in edges
+    # A PERSON AT THE TOP (BOSSAPP-885, `person:<id>`) is not a seat on the chart: the chain of
+    # command ends there (org_chain), so nothing is placed for it.
+    place_parent = bool(parent) and parent not in edges and not parent.startswith("person:")
     edges[agent_id] = parent
     if place_parent:
         edges[parent] = None
