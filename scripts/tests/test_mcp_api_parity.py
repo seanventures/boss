@@ -182,4 +182,6 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
                 ("DELETE", "/v1/work-items/{work_item_id}")):
         assert rows[key]["mcp_status"] == "operator_only_unavailable"
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 95  # +8: the P0-P2 Paperclip wave (PRs #68-#74) — tool-policy writes, MCP credential/template/gateway writes, extensions install, org-chain takeover
+               for row in community["operations"]) == 100  # +5 the w4 governance set: DELETE
+    # /v1/instance/admins/{id} (872), DELETE /v1/budget-policies/scoped/{id} (863), and 862's
+    # person-only OAuth acts (approve a device code, revoke a token, revoke a connected app). +8: the P0-P2 Paperclip wave (PRs #68-#74) — tool-policy writes, MCP credential/template/gateway writes, extensions install, org-chain takeover

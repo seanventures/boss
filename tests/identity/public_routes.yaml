@@ -9,6 +9,9 @@ DELETE /v1/previews/{preview_id}/web/{path:path}:
 GET /.well-known/boss-jwks.json:
   reason: jwks
   verifier: null
+GET /.well-known/oauth-authorization-server:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.routes_mcp_oauth:verify_mcp_oauth_request
 GET /docs:
   reason: api_description
   verifier: null
@@ -78,6 +81,9 @@ GET /v1/identity/github/app/created:
 GET /v1/identity/github/app/installed:
   reason: oauth_state_bound_callback
   verifier: boss_engine.identity.github_setup:complete_install
+GET /v1/mcp-oauth/authorize:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.routes_mcp_oauth:verify_mcp_oauth_request
 GET /v1/mcp/oauth/callback:
   reason: oauth_state_bound_callback
   verifier: boss_engine.services.mcp_oauth:complete
@@ -219,6 +225,18 @@ POST /v1/investigations/{investigation_id}/do:
 POST /v1/investigations/{investigation_id}/host:
   reason: per_investigation_callback_token
   verifier: boss_engine.services.debug_session:authorise
+POST /v1/mcp-oauth/device_authorization:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.routes_mcp_oauth:verify_mcp_oauth_request
+POST /v1/mcp-oauth/register:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.routes_mcp_oauth:verify_mcp_oauth_request
+POST /v1/mcp-oauth/revoke:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.routes_mcp_oauth:verify_mcp_oauth_request
+POST /v1/mcp-oauth/token:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.routes_mcp_oauth:verify_mcp_oauth_request
 POST /v1/previews/{preview_id}/feedback:
   reason: preview_capability_url
   verifier: boss_engine.services.feedback_agent:submit_preview_feedback

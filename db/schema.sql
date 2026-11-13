@@ -13134,3 +13134,59 @@ CREATE TABLE IF NOT EXISTS cost_adjustments (
   UNIQUE (project_id, provider, invoice_ref, line_ref)
 );
 CREATE INDEX IF NOT EXISTS idx_cost_adjustments_period ON cost_adjustments (project_id, provider, period_start);
+-- 862 (services/mcp_oauth_server.py): OAuth 2.1 + device login for BOSS's own MCP server. Public
+-- clients registered dynamically (RFC 7591); single-use, 5-minute authorization codes bound to a
+-- PKCE S256 challenge; device codes (RFC 8628); a grant per connected app whose access token is a
+-- scoped, short-lived personal API key (identity_api_credentials) and whose refresh token is
+-- stored only as a hash and rotated on every use (a spent one presented again revokes the grant).
+CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  client_name TEXT NOT NULL,
+  redirect_uris JSONB NOT NULL DEFAULT '[]'::jsonb,
+  grant_types JSONB NOT NULL DEFAULT '["authorization_code", "refresh_token"]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+  code_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  principal_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  scopes TEXT[] NOT NULL DEFAULT '{}',
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_device_codes (
+  device_code_hash TEXT PRIMARY KEY,
+  user_code TEXT NOT NULL UNIQUE,
+  client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  scopes TEXT[] NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied', 'used')),
+  principal_id TEXT,
+  org_id TEXT,
+  interval_seconds INTEGER NOT NULL DEFAULT 5,
+  last_polled_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_grants (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  principal_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  scopes TEXT[] NOT NULL DEFAULT '{}',
+  api_key_id TEXT,
+  refresh_hash TEXT,
+  spent_refresh_hashes TEXT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  refreshed_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  revoked_reason TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_oauth_grants_refresh ON mcp_oauth_grants (refresh_hash)
+  WHERE refresh_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mcp_oauth_grants_principal ON mcp_oauth_grants (principal_id)
+  WHERE revoked_at IS NULL;
