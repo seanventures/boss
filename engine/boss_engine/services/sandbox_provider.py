@@ -324,6 +324,7 @@ class MicroVMProvider:
         from ..schemas import FileChange
         from .code_agent import CodeAgentResult
         from .sandbox import CommandResult, DiffSummary
+        from .sandbox_contract import is_terminal
 
         # Community GA honesty: never claim microVM execution while frozen.
         ensure_microvm_execution_allowed(self.settings)
@@ -365,7 +366,11 @@ class MicroVMProvider:
                     ) from exc
                 pdata = pr.json()
                 last_status = pdata.get("status")
-                if last_status in ("done", "failed", "timeout"):
+                # EVERY terminal status ends the poll — the §2 contract's set
+                # (sandbox_contract.is_terminal), not a private subset of it.
+                # "cancelled" was missing here, so a cancelled task was polled
+                # until this loop's own deadline instead of ending at once.
+                if is_terminal(last_status):
                     data = pdata
                     break
             # NOTE: we do NOT release the VM here. The control plane releases it on

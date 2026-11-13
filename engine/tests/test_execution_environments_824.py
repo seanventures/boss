@@ -556,3 +556,68 @@ class TestGovernedSeamIsPluggable:
                 is ExecutionSubstrate.LOCAL_SUBPROCESS)  # unchanged
         with pytest.raises(ValueError):
             normalize_build_substrate("mainframe")  # unknown is still rejected
+
+
+# ── a cancelled micro-VM task ends the poll at once ──────────────────────────
+
+
+class FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+        self.status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class FakeSandboxHost:
+    """httpx.Client stand-in: submit answers with an id, every poll answers
+    'cancelled' (the Go sandbox-service now emits it)."""
+
+    instances: list = []
+
+    def __init__(self, *args, **kwargs):
+        self.polls = 0
+        FakeSandboxHost.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def post(self, url, **kwargs):
+        return FakeResponse({"sandbox_task_id": "sbx_1"})
+
+    def get(self, url, **kwargs):
+        self.polls += 1
+        return FakeResponse({"status": "cancelled",
+                             "error": "cancelled by the operator"})
+
+
+class TestCancelledMicroVMTaskIsTerminal:
+    def test_cancelled_ends_the_poll_at_once_with_the_reason(self, monkeypatch):
+        import httpx
+
+        from boss_engine.services.sandbox_provider import MicroVMProvider
+
+        monkeypatch.setattr(httpx, "Client", FakeSandboxHost)
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        FakeSandboxHost.instances.clear()
+        provider = MicroVMProvider(settings(
+            microvm_claims_frozen=False,
+            sandbox_agent_url="http://sandbox.test:8088",
+            sandbox_token="",
+            sandbox_agent_timeout_seconds=600,
+            sandbox_poll_interval_seconds=3,
+        ))
+        with pytest.raises(RuntimeError, match="cancelled"):
+            provider.run_code_task({"task_id": "crun_c", "engine": "echo"},
+                                   tenant_id="prj_1")
+        # ONE poll, not 600 seconds of them: cancelled is terminal — the §2
+        # contract's own set (sandbox_contract.is_terminal), not a private
+        # subset — so the loop ends the moment the host says it.
+        assert FakeSandboxHost.instances[-1].polls == 1
