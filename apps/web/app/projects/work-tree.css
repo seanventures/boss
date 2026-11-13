@@ -54,3 +54,6 @@
 .wt-pre [data-d="add"] { color: var(--green-text, #067647); background: color-mix(in srgb, #12b76a 9%, transparent); }
 .wt-pre [data-d="del"] { color: var(--red-text, #b42318); background: color-mix(in srgb, #d92d20 9%, transparent); }
 
+.wt-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.wt-card { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; flex: 1 1 100%; }
+.wt-card h3 { margin: 0; font-size: var(--fs-body, 14px); }

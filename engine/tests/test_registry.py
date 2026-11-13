@@ -14,6 +14,10 @@ _EXPECTED_TOOLS: set[str] = {
     "list_work_items", "create_work_item", "link_work_items", "complete_work_item", "ask_human",
     # AN AGENT ASKS FOR MCP TOOLS (BOSSAPP-848): a Grant card a person answers.
     "request_tool_access",
+    # AN AGENT PROPOSES A SECRET (BOSSAPP-871): a card the person types the value on.
+    "propose_secret",
+    # WORK UX, SET 2 (BOSSAPP-879): options with signed effects, a card a person chooses on.
+    "offer_options", "watch_work_item", "propose_hire", "request_budget_override",
     # THE KNOWLEDGE GRAPH (BOSSAPP-622): where code is, who depends on it, what a change can
     # break, the facts and precedent behind it; and kg_propose_fact, the one write (an `inferred`
     # fact), offered through the knowledge.propose bundle, which every agent holds.
@@ -31,6 +35,8 @@ _EXPECTED_TOOLS: set[str] = {
     # LEARNING WHILE EXECUTING (BOSSAPP-768 S2b): what an agent learned, recorded the moment it
     # learns it — one `inferred` item with evidence, the run's provenance, forgettable.
     "record_learning",
+    # THE PROJECT WIKI (BOSSAPP-891): read it; propose a change a person approves as a diff.
+    "wiki_read", "wiki_propose",
     "kg_cypher",   # read-only Cypher over the project's AGE projection
     "kg_schema",   # what that graph holds: labels, relationship types and counts, properties
     # THE CAPTAIN'S POWERS (BOSSAPP-759): retired as an engine, kept as the one agent's actions.
@@ -43,6 +49,8 @@ _EXPECTED_TOOLS: set[str] = {
     # ...and the doorway (BOSSAPP-571): a gap an agent diagnosed in BOSS, filed in the turn that
     # found it (it only queues for a person); and the self-fix a person presses to start.
     "list_platform_gaps", "file_platform_gap", "request_self_fix",
+    # AN AGENT'S FRICTION, RECORDED FOR A PERSON (BOSSAPP-889): Activity › Feedback.
+    "report_friction",
     # Setup, answered and repaired rather than described. `diagnose_setup` is the whole
     # picture in one call; the other two are the actions that used to be instructions.
     "diagnose_setup",
@@ -271,15 +279,15 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 183, (
+    assert len(reg.names()) == 191, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 102  # + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
+    assert len(read) == 103  # + wiki_read (BOSSAPP-891) + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
     # + list_platform_gaps (BOSSAPP-571's doorway) + kg_rules (the approved business rules, BOSSAPP-768)
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 81  # + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
+    assert len(write) == 88  # + offer_options (BOSSAPP-879), watch_work_item (880), propose_hire, request_budget_override (884), + propose_secret (BOSSAPP-871), + report_friction (BOSSAPP-889), + wiki_propose (BOSSAPP-891), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
     # + file_platform_gap, request_self_fix (BOSSAPP-571's doorway) + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
@@ -469,6 +477,9 @@ _SAFE_WRITES = [
     # A GAP IN BOSS ITSELF, FILED (BOSSAPP-571): one recommendation row a person reviews; it changes
     # nothing else, and filing it again counts the same cause again (queues_for_review).
     "file_platform_gap",
+    # AN AGENT'S FRICTION REPORT (BOSSAPP-889): one row a person reads; the same report from the
+    # same run is kept once (queues_for_review).
+    "report_friction",
     # THE CAPTAIN OBSERVES AND KEEPS GOALS (BOSSAPP-759): a watch tick records what it saw and
     # applies nothing; a goal is a row the captain scores. Running either again records again.
     "captain_watch", "captain_set_goal",
@@ -478,6 +489,15 @@ _SAFE_WRITES = [
     # A TOOL REQUEST IS A QUESTION (BOSSAPP-848): it opens a Grant card and grants nothing; the
     # person's approval is what gives the agent the tools.
     "request_tool_access",
+    # A SECRET PROPOSAL IS A QUESTION (BOSSAPP-871): it opens a card and stores nothing; the value
+    # comes only from the person who types it.
+    "propose_secret",
+    # OPTIONS ARE A QUESTION (BOSSAPP-879): the card runs nothing until a person picks one, and
+    # then only that option's signed effects on BOSS's own work graph. A WATCHDOG (BOSSAPP-880)
+    # is a row that tells a person when a subtree stops; attaching it again replaces it. A HIRE
+    # OR A BUDGET OVERRIDE (BOSSAPP-884) is a question: nothing is created or raised until a
+    # person approves it.
+    "offer_options", "watch_work_item", "propose_hire", "request_budget_override",
     # A SCAN READS THE APP AND WRITES FINDINGS. It runs the pinned scanners on the app's own code
     # in a sandbox and against BOSS's own targets only; nothing in the app or the world changes,
     # and running it twice records a second scan (APP_TEMPLATES_AND_SECURITY_LOOP.md §4).
@@ -549,6 +569,8 @@ _SAFE_WRITES = [
     "add_document_from_file",
     # What an agent learned while working: one `inferred` item, with evidence (BOSSAPP-768 S2b).
     "record_learning",
+    # A wiki change proposed as a diff; no page moves until a person approves it (BOSSAPP-891).
+    "wiki_propose",
     # Re-queues only steps whose recorded blocker has actually cleared — each one something the
     # operator could have retried by hand from the same screen.
     "recheck_workflow_run",

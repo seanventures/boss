@@ -279,6 +279,11 @@ def run_scope(run_id: str) -> Iterator[None]:
         yield
     finally:
         _RUN.reset(token)
+        # BOSSAPP-866: the run's resolved secret values stay scrubbed for a grace period
+        # (a late event, the failure reason), then are forgotten.
+        from .run_secret_redaction import release
+
+        release(str(run_id))
 
 
 def current_run() -> Optional[str]:
@@ -288,6 +293,11 @@ def current_run() -> Optional[str]:
 def reset(run_id: Optional[str]) -> None:
     with _LOCK:
         _TRIPPED.pop(str(run_id or ""), None)
+    # A new execution of the run starts without a budget stop too (BOSSAPP-863): a retry after
+    # the budget was raised is checked again on its own calls.
+    from .scoped_budgets import clear
+
+    clear(str(run_id or ""))
 
 
 def trip(verdict: HarnessVerdict) -> HarnessFailure:
@@ -316,6 +326,10 @@ def raise_if_tripped() -> None:
     verdict = tripped()
     if verdict is not None:
         raise HarnessFailure(verdict)
+    # BOSSAPP-863: a scoped budget reached mid-stage stops the run before a new session.
+    from .scoped_budgets import raise_if_stopped
+
+    raise_if_stopped()
 
 
 def failure_of(exc: Optional[BaseException], run_id: Optional[str] = None
@@ -339,6 +353,10 @@ def check_turn(turn: Mapping[str, Any], *, engine: Optional[str]) -> None:
     from .knowledge.learning_writeback import observe_turn  # learning while executing (BOSSAPP-768)
 
     observe_turn(turn)
+    # BOSSAPP-863: a scoped budget reached mid-stage stops the run at this turn.
+    from .scoped_budgets import raise_if_stopped
+
+    raise_if_stopped()
     if not isinstance(turn, Mapping) or turn.get("direction") != "tool_result":
         return
     ok = turn.get("ok")

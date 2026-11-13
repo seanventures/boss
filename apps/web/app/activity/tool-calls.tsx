@@ -15,6 +15,10 @@ import {
   type ToolCall, type ToolCallFilterKey, type ToolCallFilters,
 } from "../../lib/tool-calls";
 import { consoleHref } from "../url-intent";
+import { AgentFeedback } from "./agent-feedback";
+
+/** Activity's views: the log, the tool-call audit (BOSSAPP-819), agents' feedback (BOSSAPP-889). */
+type ActivityTab = "log" | "tools" | "feedback";
 
 const FILTER_LABEL: Record<ToolCallFilterKey, string> = {
   decision: "Decision", outcome: "Outcome", screen: "Screen", tool: "Tool", server_id: "Server", run_id: "Run",
@@ -228,17 +232,18 @@ function ToolCallDrawer({ call, onClose, onFilter }: {
 
 /** Activity's two views: the log of everything, and the tool-call audit. `?activity_tab=tools`. */
 export function ActivityTabs({ log, projectId }: { log: React.ReactNode; projectId: string }) {
-  const [tab, setTab] = useState<"log" | "tools">("log");
+  const [tab, setTab] = useState<ActivityTab>("log");
   useEffect(() => {
     try {
-      if (new URLSearchParams(window.location.search).get("activity_tab") === "tools") setTab("tools");
+      const asked = new URLSearchParams(window.location.search).get("activity_tab");
+      if (asked === "tools" || asked === "feedback") setTab(asked);
     } catch { /* no URL: the log */ }
   }, []);
-  const choose = (next: "log" | "tools") => {
+  const choose = (next: ActivityTab) => {
     setTab(next);
     try {
       const params = new URLSearchParams(window.location.search);
-      if (next === "tools") params.set("activity_tab", "tools"); else params.delete("activity_tab");
+      if (next !== "log") params.set("activity_tab", next); else params.delete("activity_tab");
       const qs = params.toString();
       window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
     } catch { /* a sandboxed frame keeps the in-memory tab */ }
@@ -251,8 +256,12 @@ export function ActivityTabs({ log, projectId }: { log: React.ReactNode; project
         <button type="button" role="tab" aria-selected={tab === "tools"} className="tc-tab"
                 data-testid="activity-tab-tools" title="Every tool call BOSS decided"
                 onClick={() => choose("tools")}>Tool calls</button>
+        <button type="button" role="tab" aria-selected={tab === "feedback"} className="tc-tab"
+                data-testid="activity-tab-feedback" title="What agents complained about or suggested"
+                onClick={() => choose("feedback")}>Feedback</button>
       </div>
-      {tab === "tools" ? <ToolCalls projectId={projectId} /> : log}
+      {tab === "tools" ? <ToolCalls projectId={projectId} />
+        : tab === "feedback" ? <AgentFeedback projectId={projectId} /> : log}
     </>
   );
 }

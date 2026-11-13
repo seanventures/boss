@@ -692,6 +692,7 @@ from .request_bodies import (
     RoleSkillBody,
     SecretKeypairBody,
     SecretPutBody,
+    SecretProposalStoreBody,
     TargetSecretBindBody,
     WebAppBuildBody,
     WorkflowApplyBody,
@@ -1816,6 +1817,13 @@ identity_guard.bind_app(app)
 from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
 
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
+
+# BOSS'S OWN TELEMETRY (BOSSAPP-867, services/self_telemetry.py): OTel traces when
+# OTEL_EXPORTER_OTLP_ENDPOINT is set, Sentry when SENTRY_DSN is, a Prometheus listener when
+# BOSS_METRICS_PORT is. With none set this does nothing at all; it never raises.
+from boss_engine.services import self_telemetry as _self_telemetry  # noqa: E402
+
+_self_telemetry.install(settings, app=app, engine=engine, service="boss-api")
 
 
 @app.exception_handler(RequestValidationError)
@@ -9441,6 +9449,22 @@ def _owned_secret_scope(connection, project_id: str, payload: dict) -> tuple[str
     """Only let the generic upload address this project's own backend keys."""
     scope_id = str(payload.get("scope_id") or project_id)
     requested_type = str(payload.get("scope_type") or "")
+    if requested_type in ("user", "agent") and scope_id != project_id:
+        # BOSSAPP-865: a secret only one person (a usr_ principal) or one agent (a role key of
+        # this project) may resolve. The subject must exist where the secret lives.
+        if requested_type == "user":
+            found = scope_id.startswith("usr_") and connection.execute(
+                text("SELECT 1 FROM identity_principals ip JOIN workspaces w ON w.org_id = ip.org_id "
+                     "JOIN projects p ON p.workspace_id = w.id "
+                     "WHERE ip.id = :s AND ip.kind = 'user' AND p.id = :project_id"),
+                {"s": scope_id, "project_id": project_id}).first()
+        else:
+            found = connection.execute(
+                text("SELECT 1 FROM roles WHERE role_key = :s AND project_id = :project_id"),
+                {"s": scope_id, "project_id": project_id}).first()
+        if not found:
+            raise HTTPException(status_code=403, detail="Secret scope is not in this project.")
+        return requested_type, scope_id
     if scope_id == project_id:
         scope_type = "project"
     else:
@@ -9566,6 +9590,27 @@ def verify_secret_endpoint(secret_ref_id: str, payload: Optional[dict] = None):
                              actor=actor)
 
 
+@app.get("/v1/secrets/{secret_ref_id}/access-log")
+@permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
+def secret_access_log_endpoint(secret_ref_id: str, project_id: str, limit: int = 100,
+                               before: Optional[str] = None):
+    """BOSSAPP-865: who resolved this secret — which run, person or agent, at which version,
+    resolved or refused — newest first, and its versions. Metadata only: no value, ever."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secret_access_log import access_log
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, project_id, read_actor(_secret_actor()), "integration_manage",
+        )
+        owned = connection.execute(
+            text("SELECT 1 FROM secret_refs WHERE id = :id AND project_id = :project_id"),
+            {"id": secret_ref_id, "project_id": project_id}).first()
+        if not owned:
+            raise HTTPException(status_code=404, detail="Secret ref not found in project.")
+        return access_log(connection, secret_ref_id, limit=limit, before=before)
+
+
 @app.get("/v1/secrets/{secret_ref_id}")
 @permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
 def get_secret_metadata_endpoint(secret_ref_id: str, project_id: str):
@@ -9604,6 +9649,50 @@ def bind_secret_endpoint(target_id: str, payload: TargetSecretBindBody):
                 actor=actor)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/v1/secret-proposals/{decision_id}/store")
+@permit(P.SECRET_MANAGE, scope=Scope.of("decision", path="decision_id"))
+def store_proposed_secret_endpoint(decision_id: str, payload: SecretProposalStoreBody):
+    """BOSSAPP-871: a person types the value of a secret an agent proposed, and approves.
+
+    The value goes from this request through the one approval door (the decision's own approval
+    checks, its approver binding, two-person rules) to put_secret, held only in a context
+    variable for this call: it is never written to the decision, its note or an event, and no
+    response carries it. A plain Approve of the same card is refused."""
+    body = payload.payload()
+    value = body.get("value")
+    if not isinstance(value, str) or not value:
+        raise HTTPException(status_code=422, detail="value is required")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.identity.approvals import ApprovalPending
+    from boss_engine.services.secret_proposals import ACTION, typed_value
+
+    with begin(engine) as connection:
+        rec = connection.execute(
+            text("SELECT recommendation FROM decisions WHERE id = :id"), {"id": decision_id},
+        ).scalar()
+        if not isinstance(rec, dict) or rec.get("action") != ACTION:
+            raise HTTPException(status_code=404, detail="No proposed-secret card with that id.")
+        request = DecisionActionRequest(
+            actor=str(body.get("actor") or current_api_principal.get() or "executive_console"),
+            note=body.get("note"))
+        try:
+            with typed_value(decision_id, value):
+                row = approve_decision_in(connection, decision_id, request)
+        except ApprovalPending as pending:
+            # A tier-3 card's first approval cannot hold the value until the second: refuse it.
+            raise HTTPException(status_code=409, detail=(
+                "This card needs a second approver first; store the value on the last "
+                "approval.")) from pending
+        stored = connection.execute(
+            text("SELECT name, secret_ref_id, status FROM secret_proposals WHERE decision_id = :d"),
+            {"d": decision_id}).mappings().first()
+        return {"decision_id": decision_id, "status": row.get("status"),
+                "name": (stored or {}).get("name"),
+                "secret_ref_id": (stored or {}).get("secret_ref_id"),
+                "raw_secret_stored": False}
 
 
 # --------------------------------------------------------------------------- #
@@ -18076,8 +18165,9 @@ def save_skill_definition(payload: open_bodies.SkillDefinitionSaveBody) -> dict:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except SkillDefinitionError as error:
             # 422, not 500: everything this raises is something the operator can fix, and the
-            # message is already written for them.
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            # message is already written for them. A skill-access rule's refusal is 403 (890).
+            raise HTTPException(status_code=getattr(error, "status", 422),
+                                detail=str(error)) from error
 
 
 @app.patch("/v1/skill-definitions/{skill_key}")
@@ -18414,7 +18504,8 @@ def assign_role_skill(payload: RoleSkillBody) -> dict:
                 skill_id=str(payload.get("skill_id") or ""),
             )
         except SkillDefinitionError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            raise HTTPException(status_code=getattr(error, "status", 422),
+                                detail=str(error)) from error
 
 
 @app.delete("/v1/role-skills")
@@ -18458,7 +18549,8 @@ def delete_skill_definition(
         except SkillInUseError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except SkillDefinitionError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            raise HTTPException(status_code=getattr(error, "status", 422),
+                                detail=str(error)) from error
 
 
 # --------------------------------------------------------------------------- #
@@ -24351,6 +24443,8 @@ def approve_decision_in(connection, decision_id: str, payload: DecisionActionReq
             answer=payload.answer,
             # "Always allow this" on a tool-call Ask card (BOSSAPP-817).
             always_allow=payload.always_allow,
+            # The chosen option of a decision with signed effects (BOSSAPP-879).
+            choose=payload.choose,
         )
     except DecisionNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -31867,6 +31961,46 @@ app.include_router(build_skill_supply_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# THE PROJECT WIKI (BOSSAPP-891): pages and revisions; agents propose, people approve
+# (routers/wiki.py).
+from .routers.wiki import build_wiki_router
+
+app.include_router(build_wiki_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
+# EXTERNAL MEMORY BACKENDS (BOSSAPP-892): a reviewed mirror of agent memory in mem0
+# (routers/memory_backends.py).
+from .routers.memory_backends import build_memory_backends_router
+
+app.include_router(build_memory_backends_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
+# DECISION EXAMPLES (BOSSAPP-893): overrides captured, Save as example, anonymized JSONL export
+# (routers/decision_examples.py).
+from .routers.decision_examples import build_decision_examples_router
+
+app.include_router(build_decision_examples_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
+# TEAM TEMPLATES (BOSSAPP-894): a pack's reporting lines and starter work in one governed apply,
+# with provenance digests for drift (routers/team_templates.py).
+from .routers.team_templates import build_team_templates_router
+
+app.include_router(build_team_templates_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
 # INFRA AND OBSERVABILITY (infra-observability spec §6.2): one ETag'd view per tab, polled by
 # the console; Infra routes by target kind so one button replaces three (routers/infra_view.py,
 # routers/observability_view.py).
@@ -31987,6 +32121,14 @@ from .routers.work_items import build_work_items_router
 app.include_router(build_work_items_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor, viewer=lambda: read_actor("")))
+# WORK UX, SET 2 (routers/work_ux.py; BOSSAPP-879..884): decision options with signed effects,
+# watchdogs on a work tree, one search over work, outputs and references, status cards, and
+# agent-proposed hires and budget overrides.
+from .routers.work_ux import build_work_ux_router
+
+app.include_router(build_work_ux_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 # HOLDING A WHOLE WORK TREE (routers/work_holds.py, services/work_holds.py; BOSSAPP-878): pause a
 # work item's subtree or a run's tree, and restore it exactly; both with a dry run.
 from .routers.work_holds import build_work_holds_router
@@ -32005,6 +32147,41 @@ from .routers.tool_policies import build_tool_policies_router
 
 app.include_router(build_tool_policies_router(
     engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# AGENT FEEDBACK (routers/agent_feedback.py, services/agent_feedback.py; BOSSAPP-889): what agents
+# complained about or suggested (report_friction), read and closed by a person.
+from .routers.agent_feedback import build_agent_feedback_router
+
+app.include_router(build_agent_feedback_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# THE DECLARATIVE SKILL-ACCESS POLICY (routers/skill_policies.py, services/skill_policy.py;
+# BOSSAPP-890): the org's ordered allow/deny rules over skills, CRUD and the simulator.
+from .routers.skill_policies import build_skill_policies_router
+
+app.include_router(build_skill_policies_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# THE REFLECTION AGENT (routers/reflection.py, services/reflection.py; BOSSAPP-888): proposes
+# skill and instruction changes from an agent's runs; paused by default; a person approves each.
+from .routers.reflection import build_reflection_router
+
+app.include_router(build_reflection_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# LLM GATEWAYS FOR THE CODING CLIS (routers/llm_gateways.py, services/llm_gateway.py;
+# BOSSAPP-887): an operator-named gateway the harnesses are routed through, via the model proxy.
+from .routers.llm_gateways import build_llm_gateways_router
+
+app.include_router(build_llm_gateways_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# MULTI-ACCOUNT POOLS (routers/subscription_pools.py, services/subscription_pools.py;
+# BOSSAPP-886): several Claude or Codex subscriptions used as one, chosen by headroom.
+from .routers.subscription_pools import build_subscription_pools_router
+
+app.include_router(build_subscription_pools_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
 # The AI SRE incident squad (routers/incident_squad.py, services/incident_squad.py).
 from .routers.incident_squad import build_incident_squad_router
@@ -32378,6 +32555,18 @@ app.include_router(build_infra_platform_router())
 from .routes_extensions import build_extensions_router  # noqa: E402  (BOSSAPP-861 extensions)
 
 app.include_router(build_extensions_router())
+from .routes_instance import build_instance_router  # noqa: E402  (BOSSAPP-872 instance admins)
+
+app.include_router(build_instance_router())
+from .routes_scoped_budgets import build_scoped_budgets_router  # noqa: E402  (BOSSAPP-863)
+
+app.include_router(build_scoped_budgets_router())
+from .routes_subscription_fees import build_subscription_fees_router  # noqa: E402  (BOSSAPP-864)
+
+app.include_router(build_subscription_fees_router())
+from .routes_mcp_oauth import build_mcp_oauth_router  # noqa: E402  (BOSSAPP-862)
+
+app.include_router(build_mcp_oauth_router())
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

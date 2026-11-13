@@ -1,0 +1,37 @@
+id: delivery_team_pack
+version: 1.0.0
+description: >
+  A delivery team that is ready to work: an engineering captain who reports to the manager you
+  choose, a backend engineer, QA and a release manager reporting to the captain, and the first
+  week's starter work assigned to them. Apply it from Packs › Team (dry run first).
+requires:
+  - default_safety
+installs:
+  roles: [engineering_captain, backend_engineer, qa, release_manager]
+  workflows: []
+  policies: [default_safety]
+  skills: []
+org:
+  - role: engineering_captain
+    display_name: Delivery lead
+  - role: backend_engineer
+    reports_to: engineering_captain
+  - role: qa
+    reports_to: engineering_captain
+  - role: release_manager
+    reports_to: engineering_captain
+starter_tasks:
+  - key: map-the-repo
+    title: Map the repository and its build
+    description: Read the repository, list how it builds and tests, and note what is missing.
+    assignee: engineering_captain
+  - key: ci-baseline
+    title: Get the test suite green on main
+    description: Run the existing tests, fix or quarantine what fails, and record the baseline.
+    assignee: qa
+    parent: map-the-repo
+  - key: release-checklist
+    title: Write the release checklist
+    description: How a change goes from merged to deployed here, step by step.
+    assignee: release_manager
+status: active

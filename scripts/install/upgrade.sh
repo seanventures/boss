@@ -71,8 +71,26 @@ installed_ref() {
   fi
 }
 
+# RELEASE CHANNELS (BOSSAPP-895). BOSS_CHANNEL in .boss-release says which releases a release
+# install follows: `stable` only final releases (v1.2), `rc` also release candidates (v1.3-rc1),
+# for early adopters. Unset keeps the rule installs always had: a stable install stays on stable
+# releases, a prerelease install may also move to a newer prerelease. Never a downgrade.
+channel_is_valid() { [[ "$1" == stable || "$1" == rc ]]; }
+recorded_channel() {
+  grep -m 1 '^BOSS_CHANNEL=' "$1/.boss-release" 2>/dev/null | cut -d= -f2- || true
+}
+# Record the channel in .boss-release (the installer keeps the line on every rerun).
+record_channel() {
+  local dir="$1" channel="$2" tmp
+  tmp="$dir/.boss-release.writing.$$"
+  { grep -v '^BOSS_CHANNEL=' "$dir/.boss-release" 2>/dev/null || true
+    printf 'BOSS_CHANNEL=%s\n' "$channel"; } > "$tmp"
+  mv -f "$tmp" "$dir/.boss-release"
+}
+
 INSTALL_DIR="${BOSS_INSTALL_DIR:-$HOME/boss}"
 REF="${BOSS_REPO_REF:-}"
+CHANNEL=""
 BACKUP_DIR=""
 WEB_MODE=""
 DRY_RUN=0
@@ -81,11 +99,13 @@ WITHOUT=()
 
 usage() {
   cat <<'EOF'
-Usage: upgrade.sh [--dir INSTALL_DIR] [--ref REF] [--backup-dir PATH]
+Usage: upgrade.sh [--dir INSTALL_DIR] [--ref REF] [--channel stable|rc] [--backup-dir PATH]
                   [--web | --no-web] [--dry-run] [--no-rollback] [--without SFX]...
 
 Without --ref, an install stays on the channel it was installed from:
   release  moves to the newest published release tag (v*), never to main
+           --channel stable: final releases only; --channel rc: release candidates too
+           (recorded as BOSS_CHANNEL in .boss-release, so later upgrades follow it)
   branch   fast-forwards that branch (main for installs made before releases were recorded)
   pinned   a commit install needs --ref to move
 The installed ref is recorded in .boss-release; `boss upgrade` runs this script.
@@ -113,6 +133,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
     --ref) REF="${2:?--ref needs a ref}"; shift 2 ;;
+    --channel)
+      channel_is_valid "${2:-}" || { echo '--channel takes stable or rc' >&2; exit 2; }
+      CHANNEL="$2"; shift 2 ;;
     --backup-dir) BACKUP_DIR="${2:?--backup-dir needs a path}"; shift 2 ;;
     --no-web|--web)
       [[ -z "$WEB_MODE" ]] || { echo 'Choose only one of --web and --no-web.' >&2; exit 2; }
@@ -136,18 +159,37 @@ INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
 
 OLD_COMMIT="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
 CURRENT_REF="$(installed_ref "$INSTALL_DIR")"
+if [[ -n "$CHANNEL" ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "Would follow the $CHANNEL channel from now on (BOSS_CHANNEL in .boss-release)."
+  else
+    record_channel "$INSTALL_DIR" "$CHANNEL"
+    echo "Following the $CHANNEL channel from now on."
+  fi
+else
+  CHANNEL="$(recorded_channel "$INSTALL_DIR")"
+  channel_is_valid "$CHANNEL" || CHANNEL=""
+fi
 if [[ -z "$REF" ]]; then
   case "$(ref_channel "$CURRENT_REF")" in
     release)
       # The newest release tag, and never an older one: the installed tag is a candidate.
       # A stable install moves only to a stable release; a prerelease install may also move
-      # to a newer prerelease.
+      # to a newer prerelease. BOSS_CHANNEL overrides which releases count (BOSSAPP-895).
       include_pre=0
       [[ "$CURRENT_REF" != *-* ]] || include_pre=1
+      case "$CHANNEL" in stable) include_pre=0 ;; rc) include_pre=1 ;; esac
       tags="$(git -C "$INSTALL_DIR" ls-remote --tags --refs origin 'v*' </dev/null | sed 's#.*refs/tags/##')" ||
         { echo 'Could not list releases from origin; nothing changed.' >&2; exit 1; }
       REF="$(printf '%s\n%s\n' "$tags" "$CURRENT_REF" | pick_release "$include_pre")"
       [[ -n "$REF" ]] || REF="$CURRENT_REF"
+      # NEVER A DOWNGRADE: a prerelease install switched to `stable` waits for a final release
+      # newer than the candidate it runs, rather than stepping back to an older one.
+      if [[ "$REF" != "$CURRENT_REF" &&
+            "$(printf '%s\n%s\n' "$REF" "$CURRENT_REF" | pick_release 1)" != "$REF" ]]; then
+        echo "No ${CHANNEL:-stable} release is newer than $CURRENT_REF yet; staying on it."
+        REF="$CURRENT_REF"
+      fi
       if [[ "$REF" == "$CURRENT_REF" ]]; then
         echo "Already on the newest release, $CURRENT_REF; verifying with a safe installer rerun."
       else
@@ -156,7 +198,10 @@ if [[ -z "$REF" ]]; then
     pinned)
       echo "This install is pinned to commit $CURRENT_REF. Pass --ref (boss upgrade --to REF) to move it; nothing changed." >&2
       exit 1 ;;
-    *) REF="$CURRENT_REF" ;;
+    *)
+      [[ -z "$CHANNEL" ]] ||
+        echo "BOSS_CHANNEL=$CHANNEL applies to release installs; this one follows $CURRENT_REF."
+      REF="$CURRENT_REF" ;;
   esac
 fi
 ref_is_valid "$REF" || { echo 'That ref is not a valid Git ref name; nothing changed.' >&2; exit 2; }

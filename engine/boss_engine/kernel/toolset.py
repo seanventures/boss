@@ -221,10 +221,15 @@ class RegistryToolSet:
         try:
             verdict = self.policy(call, args, state)
             if verdict is not None and verdict["decision"] == "deny":
-                return ToolResult(call.id, call.name, "refused", {
+                refused = {
                     "ok": False, "status": "refused", "error": "denied_by_policy",
                     "matched_policy_ids": verdict["matched_policy_ids"],
-                    "message": f"'{call.name}' NOT run: {verdict['explanation']}"})
+                    "message": f"'{call.name}' NOT run: {verdict['explanation']}"}
+                if verdict.get("refusal"):
+                    # A spent rate limit (BOSSAPP-868): the agent reads when to try again.
+                    refused.update(reason="rate_limited", refusal=verdict["refusal"],
+                                   retry_after_seconds=verdict.get("retry_after_seconds"))
+                return ToolResult(call.id, call.name, "refused", refused)
             if verdict is not None and verdict["decision"] == "ask" and approved is None:
                 self.pending.append({"tool": call.name, "args": args,
                                      "policy": verdict["matched_policy_ids"]})

@@ -517,6 +517,22 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
             return DecisionService(settings).expire_overdue(c)
     out["decisions_expired"] = guard("deadlines", deadlines) or 0
     out["routed"] = guard("routes", routes)
+    # A PERSON'S WATCHDOGS ON WORK TREES (BOSSAPP-880, work_watchdogs): a subtree that stopped
+    # unfinished, has blocked work, closed or stalled is told once per fingerprint, queued in
+    # the same outbox and delivered just below.
+    def watchdogs():
+        from . import work_watchdogs
+
+        return work_watchdogs.sweep(engine, settings, now=now)
+    out["watchdogs"] = guard("watchdogs", watchdogs)
+
+    # STATUS CARDS (BOSSAPP-883, status_cards): each card whose refresh time passed is
+    # recomposed; a changed document is stored as its next revision.
+    def cards():
+        from . import status_cards
+
+        return status_cards.sweep(engine, settings, now=now)
+    out["status_cards"] = guard("status_cards", cards)
     out["delivery"] = guard("deliver", lambda: notify.deliver_due(engine, settings, now=now))
     # Two-way chat (BOSSAPP-834): decision cards and answers, retried with backoff, dead-lettered.
     out["chat"] = guard("chat", lambda: notify.deliver_chat_due(engine, settings, now=now))

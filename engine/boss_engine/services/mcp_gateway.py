@@ -238,6 +238,27 @@ RUN_TOOLS: list[dict] = [
          "title": {"type": "string"}, "body": {"type": "string"}}}},
 ]
 _RUN_TOOL_NAMES = frozenset(t["name"] for t in RUN_TOOLS)
+#: BOSSAPP-856: listed only on a build that declared runtime services (boss.verify.yaml runtime:).
+RUNTIME_TOOL: dict = {
+    "name": "runtime_service",
+    "description": ("See and manage the app's runtime services this build runs beside your "
+                    "workspace (its database, API, worker): status, start, stop, restart, or "
+                    "read a service's recent logs."),
+    "inputSchema": {"type": "object", "required": ["action"], "properties": {
+        "action": {"type": "string", "enum": ["status", "start", "stop", "restart", "logs"]},
+        "service": {"type": "string", "description": "The service's name (all, for status)."},
+        "lines": {"type": "integer", "description": "How many log lines (logs only)."}}}}
+#: BOSSAPP-859: listed only to an agent that holds a signing key (agent_keys). The private key
+#: never leaves BOSS: the agent sends what to sign and gets a detached signature back.
+SIGN_TOOL: dict = {
+    "name": "sign",
+    "description": ("Sign something you produced with your own agent key, so anyone can check "
+                    "it came from you using your public keys (the returned jwks path). Returns "
+                    "a detached Ed25519 signature; your key never leaves BOSS."),
+    "inputSchema": {"type": "object", "required": ["payload"], "properties": {
+        "payload": {"type": "string", "description": "The exact text to sign."},
+        "purpose": {"type": "string", "enum": ["output"],
+                    "description": "What the signature is for (always 'output' here)."}}}}
 #: report_* tools: (event type, the argument carried, its label on the live feed).
 _REPORTS = {
     "report_blocked": ("code_task.agent_blocked", "reason", "Blocked"),
@@ -451,8 +472,8 @@ class McpGateway:
         if method == "ping":
             return _rpc_result(rid, {})
         if method == "tools/list":
-            tools = RUN_TOOLS if server_key == RUN_SERVER else self._upstream_tools(grant,
-                                                                                   server_key)
+            tools = (RUN_TOOLS + self._keyed_tools(grant) if server_key == RUN_SERVER
+                     else self._upstream_tools(grant, server_key))
             return _rpc_result(rid, {"tools": tools})
         if method == "tools/call":
             name = str(params.get("name") or "")
@@ -606,8 +627,69 @@ class McpGateway:
         return tool_text(called.get("output"), meta=meta)
 
     # ---- the run's own tools -----------------------------------------------------------------
+    def _keyed_tools(self, grant: GatewayGrant) -> list[dict]:
+        """Tools only some runs have: `runtime_service` when the build declared runtime services
+        (BOSSAPP-856), `sign` when its agent holds a signing key (BOSSAPP-859)."""
+        from . import runtime_services
+
+        extra = [RUNTIME_TOOL] if runtime_services.for_run(grant.run_id) is not None else []
+        return extra + self._signing_tools(grant)
+
+    def _signing_tools(self, grant: GatewayGrant) -> list[dict]:
+        if not grant.role_key:
+            return []
+        try:
+            from .agent_keys import has_active_key
+
+            with self._tx() as c:
+                return [SIGN_TOOL] if has_active_key(c, grant.project_id, grant.role_key) else []
+        except Exception:  # noqa: BLE001 — a lookup never takes the run's tools away
+            log.debug("mcp gateway: signing-key lookup failed", exc_info=True)
+            return []
+
+    def _sign(self, grant: GatewayGrant, arguments: dict) -> dict:
+        from .agent_keys import AgentKeyError, sign
+
+        payload = arguments.get("payload")
+        if not isinstance(payload, str) or not payload:
+            return tool_error("bad_arguments", "sign needs 'payload' (text)")
+        if str(arguments.get("purpose") or "output") != "output":
+            return tool_error("bad_arguments", "sign's purpose is 'output'")
+        if not grant.role_key:
+            return tool_error("no_agent", "this run is not an agent's, so there is no key")
+        try:
+            with self._tx() as c:
+                signed = sign(c, grant.project_id, grant.role_key, payload, purpose="output")
+        except AgentKeyError as error:
+            return tool_error("no_key", str(error))
+        self._run_event(grant, "agent.output_signed",
+                        {"kid": signed["kid"], "agent_id": signed["agent_id"],
+                         "role_key": grant.role_key, "bytes": len(payload.encode("utf-8"))},
+                        line=f"Signed {len(payload)} characters with key {signed['kid'][:8]}")
+        return tool_text(signed)
+
+    def _runtime_service(self, grant: GatewayGrant, arguments: dict) -> dict:
+        from . import runtime_services
+
+        sup = runtime_services.for_run(grant.run_id)
+        if sup is None:
+            return tool_error("no_runtime_services", "this build declares no runtime services")
+        try:
+            out = sup.act(str(arguments.get("action") or "status"),
+                          str(arguments.get("service") or ""),
+                          int(arguments.get("lines") or 80))
+        except (runtime_services.RuntimeServicesError, ValueError) as error:
+            return tool_error("runtime_service_failed", str(error))
+        return tool_text(out)
+
     def call_run_tool(self, grant: GatewayGrant, name: str, arguments: dict,
                       sink: Optional[Sink] = None) -> dict:
+        if name == RUNTIME_TOOL["name"]:
+            grant.calls["run"] += 1
+            return self._runtime_service(grant, arguments)
+        if name == SIGN_TOOL["name"]:
+            grant.calls["run"] += 1
+            return self._sign(grant, arguments)
         if name not in _RUN_TOOL_NAMES:
             return tool_error("unknown_tool", f"no tool '{name}' on {RUN_SERVER}")
         grant.calls["run"] += 1

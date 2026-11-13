@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "9cb59a9882803edb"
+CATALOGUE_FINGERPRINT = "acacf3702bb4806d"
 
 
 class Permission(StrEnum):
@@ -188,6 +188,8 @@ class Permission(StrEnum):
     COMMS_READ = "comms:read"
     COMMS_SEND = "comms:send"
     COMMS_MANAGE = "comms:manage"
+    INSTANCE_READ = "instance:read"
+    INSTANCE_MANAGE = "instance:manage"
     SYSTEM_READ = "system:read"
     SYSTEM_OPERATE = "system:operate"
     OBSERVABILITY_READ = "observability:read"
@@ -396,6 +398,8 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "comms:read": PermissionMeta(key="comms:read", title="View comms", description="See the comms inbox, outbox and policies.", category="Secrets and integrations", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "comms:send": PermissionMeta(key="comms:send", title="Send messages", description="Queue and deliver an outbound message.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "comms:manage": PermissionMeta(key="comms:manage", title="Manage comms", description="Change comms policies and email configuration.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "instance:read": PermissionMeta(key="instance:read", title="View the instance", description="See the install's backups and who its instance admins are.", category="Operations and assurance", roles=('owner', 'admin'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "instance:manage": PermissionMeta(key="instance:manage", title="Run the instance", description="Install, enable and disable plugins and extensions, and name or remove instance admins.", category="Operations and assurance", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "system:read": PermissionMeta(key="system:read", title="View the system", description="See health, status, diagnostics, the API catalogue and the edition.", category="Operations and assurance", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "system:operate": PermissionMeta(key="system:operate", title="Operate the system", description="Run System Doctor actions, sweeps, ticks, backfills and refreshes.", category="Operations and assurance", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "observability:read": PermissionMeta(key="observability:read", title="View observability", description="See apps, models, sources, LLM calls, traces and metrics.", category="Operations and assurance", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
@@ -439,7 +443,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 195
+    "owner": frozenset({  # 197
         "directory:read",
         "user:read",
         "user:invite",
@@ -612,6 +616,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "comms:read",
         "comms:send",
         "comms:manage",
+        "instance:read",
+        "instance:manage",
         "system:read",
         "system:operate",
         "observability:read",
@@ -636,7 +642,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "admin": frozenset({  # 186
+    "admin": frozenset({  # 188
         "directory:read",
         "user:read",
         "user:invite",
@@ -801,6 +807,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "comms:read",
         "comms:send",
         "comms:manage",
+        "instance:read",
+        "instance:manage",
         "system:read",
         "system:operate",
         "observability:read",

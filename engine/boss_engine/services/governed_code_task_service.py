@@ -4477,6 +4477,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     finally:
         if mcp is not None:
             mcp.cleanup()
+        # Its runtime services' teardown runs while they are still up (BOSSAPP-856); a build that
+        # declared none has nothing registered and this is a dictionary lookup.
+        from .runtime_services import teardown_run as _runtime_teardown
+
+        _runtime_teardown(run_id)
         # Whatever is still running under this build's name ends with it (a background child
         # an exception unwound past, a seat the panel deadline gave up on).
         owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
@@ -5527,7 +5532,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         try:
             with _transaction(engine) as c:
                 _build_budget.renew(budget, c, project_id, reservation_id)
-                reached = _build_budget.cap_reached(budget, c, project_id)
+                # With the run: an approved budget override for its lineage adds room (884).
+                reached = _build_budget.cap_reached(budget, c, project_id, run_id=run_id)
         except Exception:  # noqa: BLE001 — never let the check itself break a run
             _log_caught(logger)
             return
@@ -5976,6 +5982,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             from .build_services import brief as _services_brief
 
             instructions = f"{instructions}\n\n{_services_brief(_services_lease)}"
+        # RUNTIME SERVICES (runtime_services, BOSSAPP-856): the app's declared services (an API
+        # beside its worker), provisioned and started under this build's ownership so agents can
+        # run the app and test against it mid-build. None when the repo declares no `runtime:`.
+        from . import runtime_services as _runtime_services
+
+        _runtime = _runtime_services.start_for_run(
+            engine, run_id, project_id, getattr(_pinned_manifest, "manifest", None), root,
+            use_microvm=use_microvm)
+        if _runtime is not None:
+            instructions = f"{instructions}\n\n{_runtime.brief()}"
         if _gate_plan0.source != "task":
             verify_commands = list(_gate_plan0.commands)
             test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)

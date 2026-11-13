@@ -172,8 +172,12 @@ def enqueue_job(
     workload_class: str = "general",
     resource_units: int = 1,
     on_behalf_of: Optional[Any] = None,
+    role_key: Optional[str] = None,
 ) -> dict[str, Any]:
     """Insert a queued job without importing budget, entitlement, or agent services.
+
+    ``role_key`` (or a ``role_key`` in the payload) names the agent the job runs as, so that
+    role's run policy (role_run_policy, BOSSAPP-857) is enforced when it is claimed.
 
     A non-null ``dedupe_key`` makes enqueue idempotent within a project.  Budget
     and reservation enforcement intentionally remains at lease time.
@@ -243,14 +247,16 @@ def enqueue_job(
                 id, project_id, task_id, work_item_id, tracker_binding_id,
                 allocation_id, kind, priority, priority_score, workload_class,
                 resource_units, status, payload, data_boundary, max_attempts,
-                attempt, run_after, dedupe_key, on_behalf_of, grant_id, chain, on_behalf_system
+                attempt, run_after, dedupe_key, on_behalf_of, grant_id, chain, on_behalf_system,
+                role_key
             )
             VALUES (
                 :id, :project_id, :task_id, :work_item_id, :tracker_binding_id,
                 :allocation_id, :kind, :priority, :priority_score,
                 :workload_class, :resource_units, 'queued',
                 CAST(:payload AS JSONB), :data_boundary, :max_attempts,
-                0, :run_after, :dedupe_key, :on_behalf_of, :grant_id, CAST(:chain AS JSONB), :on_behalf_system
+                0, :run_after, :dedupe_key, :on_behalf_of, :grant_id, CAST(:chain AS JSONB), :on_behalf_system,
+                :role_key
             )
             ON CONFLICT (project_id, dedupe_key)
               WHERE dedupe_key IS NOT NULL
@@ -279,6 +285,7 @@ def enqueue_job(
             "run_after": run_after,
             "dedupe_key": dedupe_key,
             **identity_columns,
+            "role_key": (str(role_key or (payload or {}).get("role_key") or "").strip() or None),
         },
     ).mappings().first()
     created = row is not None
@@ -614,7 +621,7 @@ class JobLeaseService:
             SELECT id, project_id, task_id, work_item_id, tracker_binding_id,
                    allocation_id, kind, payload, data_boundary, priority_score,
                    workload_class, resource_units, attempt, max_attempts, status,
-                   last_error, priority
+                   last_error, priority, role_key
             FROM jobs
             WHERE kind IN :capabilities
               AND """ + projects_archive.live_sql("jobs.project_id") + """
@@ -786,6 +793,33 @@ class JobLeaseService:
                     budget_policy,
                 )
                 continue
+            # THE ROLE'S OWN RUN POLICY (BOSSAPP-857): one runaway agent must not take the whole
+            # project's envelope. Asked only of a job that names a role whose policy is set; a
+            # reclaim (its holder died) is never held back.
+            policy_role = None
+            if candidate["status"] not in {"leased", "running"}:
+                from . import role_run_policy
+
+                policy_role = role_run_policy.role_of(candidate)
+                role_policy = (role_run_policy.policy_for(connection, candidate["project_id"],
+                                                          policy_role)
+                               if policy_role else {})
+                if not role_policy:
+                    policy_role = None
+                else:
+                    hold = role_run_policy.hold_for(connection, candidate["project_id"],
+                                                    policy_role, candidate["id"], role_policy)
+                    if hold is not None:
+                        self.work_orchestration.release_job_slot(
+                            connection,
+                            project_id=candidate["project_id"],
+                            job_id=candidate["id"],
+                            allocation_id=candidate["allocation_id"],
+                            resource_units=int(candidate["resource_units"] or 1),
+                            reason="role_run_policy_deferred",
+                        )
+                        role_run_policy.defer(connection, candidate["id"], hold)
+                        continue
             if self._requires_reservation(candidate["kind"], payload):
                 reservation_id = self._reservation_id_from_payload(payload)
                 reservation = (
@@ -814,6 +848,11 @@ class JobLeaseService:
                     )
                     continue
 
+            if policy_role:
+                from . import role_run_policy
+
+                role_run_policy.record_claim(connection, candidate["project_id"], policy_role,
+                                             candidate["id"])
             row = connection.execute(
                 text(
                     """

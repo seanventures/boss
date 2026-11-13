@@ -142,6 +142,10 @@ class McpRepoHost:
         return path
 
     def create_pull_request(self, branch_name: str, title: str, body: str) -> PullRequestResult:
+        # BOSSAPP-866: a secret value handed to the run never reaches the PR text.
+        from .run_secret_redaction import scrub as _scrub_known
+
+        title, body = _scrub_known(title), _scrub_known(body)
         out = self._call("create_pull_request", {
             "repository": self.repository_full_name, "source_branch": branch_name,
             "title": title, "description": body})

@@ -49,7 +49,8 @@ def test_every_spending_stage_boundary_checks_the_caps_and_delivery_does_not():
     # Every phase change is a boundary; only the delivery phases are exempt.
     assert '_abort_if_cancelled(f"phase->{name}", spends=name not in _DELIVERY_PHASES)' in source
     assert 'if spends:\n            _stop_if_cap_reached(where)' in source
-    assert "_build_budget.cap_reached(budget, c, project_id)" in source
+    # With the run, so an approved budget override for its lineage counts (BOSSAPP-884).
+    assert "_build_budget.cap_reached(budget, c, project_id, run_id=run_id)" in source
     assert "_build_budget.renew(budget, c, project_id, reservation_id)" in source
     from boss_engine.services.governed_code_task_service import (_DELIVERY_PHASES,
                                                                  BuildBudgetStopped,

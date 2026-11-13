@@ -60,6 +60,17 @@ class Settings(BaseSettings):
         default=6, alias="BOSS_SANDBOX_IDLE_TTL_HOURS", ge=1, le=24
     )
     sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
+    # BOSS'S OWN TELEMETRY (BOSSAPP-867, services/self_telemetry.py). All off by default and no
+    # package is a dependency: Sentry needs sentry-sdk, traces the OpenTelemetry SDK + OTLP/HTTP
+    # exporter (OTEL_EXPORTER_OTLP_HEADERS and the rest of the OTEL_* env are read by the SDK).
+    sentry_traces_sample_rate: float = Field(
+        default=0.0, alias="BOSS_SENTRY_TRACES_SAMPLE_RATE", ge=0.0, le=1.0)
+    otel_exporter_otlp_endpoint: Optional[str] = Field(
+        default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT")
+    otel_service_name: Optional[str] = Field(default=None, alias="OTEL_SERVICE_NAME")
+    # A Prometheus /metrics listener of its own (0 = off), outside the API and its sign-in.
+    metrics_port: int = Field(default=0, alias="BOSS_METRICS_PORT", ge=0, le=65535)
+    metrics_host: str = Field(default="127.0.0.1", alias="BOSS_METRICS_HOST")
     supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
     supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
     supabase_service_role_key: Optional[str] = Field(
@@ -1250,6 +1261,13 @@ class Settings(BaseSettings):
     # project_settings `budget_at_limit` (services/spend_limits.py): pause (ask a person, today's
     # behaviour), cheaper (keep going on low-cost models) or stop (nothing runs until it resets).
     budget_at_limit: str = Field(default="pause", alias="BOSS_BUDGET_AT_LIMIT")
+    # BOSSAPP-869: spend BOSS cannot price (services/unpriced_policy.py; project_settings
+    # `budget_unpriced_policy`). estimate (today's behaviour: charged at the dearest known rate and
+    # labelled) or block (past the day's allowance below, reserve() refuses and opens the
+    # increase-or-defer decision).
+    budget_unpriced_policy: str = Field(default="estimate", alias="BOSS_BUDGET_UNPRICED_POLICY")
+    budget_unpriced_allowance_usd_micros: int = Field(
+        default=0, alias="BOSS_BUDGET_UNPRICED_ALLOWANCE_USD_MICROS", ge=0)
     # THE CODE GRAPH OF A REGISTERED REPOSITORY (services/knowledge/repo_index.py): every repository
     # registered in a project is cloned (BOSS's own clone path) and parsed into the graph, and its
     # base branch is re-checked; parsing only, no model is called. 0 turns it off install-wide.

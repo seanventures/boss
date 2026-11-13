@@ -276,14 +276,20 @@ def _with_skills(mcp: HarnessMcp, connection: Connection, project_id: str,
     try:
         from sqlalchemy import text as _text
 
+        from .skill_catalogue import entries as catalogue_entries
+
         with connection.begin_nested():
-            rows = connection.execute(_text(
-                "SELECT d.skill_key, d.label, d.summary, d.knowledge FROM skill_definitions d "
-                "JOIN role_skills r ON r.project_id = d.project_id AND r.skill_id = d.skill_key "
-                "WHERE d.project_id = :p AND r.role_key = :r AND d.enabled "
-                "ORDER BY d.skill_key"),
-                {"p": project_id, "r": role}).mappings().all()
-        mcp.skills_dir = write_skills_bundle([dict(r) for r in rows])
+            held = {str(r["skill_id"]) for r in connection.execute(_text(
+                "SELECT skill_id FROM role_skills WHERE project_id = :p AND role_key = :r"),
+                {"p": project_id, "r": role}).mappings().all()}
+            catalogue = catalogue_entries(connection, project_id) if held else {}
+        rows = [
+            {"skill_key": skill_id, "label": entry["label"], "summary": entry["summary"],
+             "knowledge": str((entry.get("spec") or {}).get("knowledge") or "")}
+            for skill_id, entry in sorted(catalogue.items())
+            if skill_id in held and entry["source"] == "authored" and entry["enabled"]
+        ]
+        mcp.skills_dir = write_skills_bundle(rows)
     except Exception:  # noqa: BLE001 — skills are additive; never fail the run on them
         import logging
 

@@ -125,9 +125,11 @@ describe("Screen A — Govern › Spend is the landing", () => {
     expect($("[data-testid=gv-hero-fill]")!.getAttribute("style")).toContain("41.20%");
     expect($("[data-testid=gv-hero-forecast]")).not.toBeNull();
     expect(t("[data-testid=gv-hero-sub]")).toBe("$38.00 today of $100" + "1,240 subscription calls, included, $0" + "Resets Dec 1");
-    // Two reads open it — the limits view and this month's spend — and nothing is written.
+    // Three reads open it — the limits view, this month's spend and (BOSSAPP-864) the month
+    // reconciled against invoices and seat fees — and nothing is written.
     expect(g.calls.map((c) => `${c.method} ${c.url}`)).toEqual([
-      "GET /api/govern?project_id=p1&view=limits", "GET /api/govern?project_id=p1&view=spend&window=month"]);
+      "GET /api/govern?project_id=p1&view=limits", "GET /api/govern?project_id=p1&view=spend&window=month",
+      "GET /v1/spend/reconciliation?project_id=p1"]);
   });
 
   it("draws each day of the month with today marked and the daily cap named", async () => {
@@ -266,6 +268,16 @@ describe("Screen B — Govern › Limits", () => {
       { op: "project_limit", project_id: "p1", actor: "ceo", monthly_limit_usd: null },
       { op: "project_limit", project_id: "p2", actor: "ceo", monthly_limit_usd: 150 }]);
     expect(toasts).toContain("Limits saved");
+  });
+
+  it("unpriced usage (BOSSAPP-869): estimate by default, block is sent as unpriced_policy", async () => {
+    await openLimits();
+    expect(($("[data-testid=gv-unpriced-estimate]") as HTMLInputElement).checked).toBe(true);
+    expect(t("[data-testid=gv-unpriced-today]")).toContain("unpriced today");
+    await click($("[data-testid=gv-unpriced-block]"));
+    await click($("[data-testid=gv-save-limits]"));
+    expect(posts("limits").map((c) => c.body)).toEqual([
+      { op: "limits", project_id: "p1", actor: "ceo", unpriced_policy: "block" }]);
   });
 
   it("Pace is the first card: moving it fills the caps below, which can be fine-tuned, and Save writes both", async () => {

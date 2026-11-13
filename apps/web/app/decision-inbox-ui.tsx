@@ -23,6 +23,7 @@ import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
 import { PrdRecordView } from "./prd-record";
 import { TypedAnswer, TypedDecisionForm } from "./typed-form-ui";
+import { DecisionOptions, optionsOf } from "./decision-options-ui";
 import { AlwaysAllowOption, alwaysAllowOffer } from "./always-allow-ui";
 import { parseForm } from "../lib/typed-form";
 import { SubmitButton } from "./submit-button";
@@ -46,6 +47,7 @@ import type { TaskFeedItem } from "../lib/tasks";
 import { ChangeSetApproval, isChangeSetDecision } from "./multirepo/change-set-approval";
 import { SelfFixCard, cardOf, isSelfFixDecision } from "./self-fix/approval-card";
 import { GrantAccessCard, grantOf } from "./skills/grant-card";
+import { SecretProposalCard, secretProposalOf } from "./secret-proposal-card";
 import { MonitoringPackCard, monitoringPackOf } from "./workflows/monitoring-pack";
 
 /**
@@ -382,6 +384,7 @@ function decisionImpact(decision: DecisionFeedItem): { label: string; tone: stri
   if (action === "review_infra_provisioning") return { label: "infra", tone: "amber" };
   if (action === "role.autonomy_change") return { label: "access", tone: "red" };
   if (action === "grant_tool_access") return { label: "tool access", tone: "amber" };
+  if (action === "store_proposed_secret") return { label: "secret", tone: "amber" };
   if (action.startsWith("self_improvement")) return { label: "rollout", tone: "teal" };
   if (action === "execute_agent_tool") return { label: "publish", tone: "teal" };
   if (action === "resume_agent_run") return { label: "agent tool", tone: "teal" };
@@ -1269,12 +1272,22 @@ export function DecisionActions({ decision, projectId, actorId }: {
   // typed answer is what the card shows.
   const typedForm = parseForm(decision.formSchema);
   const [answered, setAnswered] = useState<string | null>(null);
+  // AN AGENT'S PROPOSED SECRET (BOSSAPP-871): the person types the value; Approve is Store.
+  const proposal = secretProposalOf(decision.recommendation);
+  if (proposal && (decision.status === "pending" || decision.status === "delegated")) {
+    if (answered) return <p className="tq-said" data-testid="secret-proposal-sent">{answered === "stored" ? "Stored — the agent can use it now." : "Declined — the agent was told."}</p>;
+    return <SecretProposalCard decisionId={decision.id} proposal={proposal} actorId={actorId} onDone={setAnswered} />;
+  }
   if (typedForm) {
     if (answered) return <p className="tq-said" data-testid="typed-sent">{answered === "approved" ? "Answer sent — the agent carries on with it." : "Declined — the agent was told why."}</p>;
     return decision.status === "pending" || decision.status === "delegated"
       ? <TypedDecisionForm decisionId={decision.id} form={typedForm} projectId={projectId} actorId={actorId}
                            onAnswered={setAnswered} />
       : <TypedAnswer form={typedForm} answer={decision.answer} by={decision.answeredBy} />;
+  }
+  // OPTIONS WITH SIGNED EFFECTS (BOSSAPP-879): one Choose per option, its effects in words.
+  if (optionsOf(decision.recommendation).length) {
+    return <DecisionOptions decision={decision} projectId={projectId} actorId={actorId} offers={offers} />;
   }
   // "ALWAYS ALLOW THIS" (BOSSAPP-817): an Ask card about a tier 0-1 tool call may approve the
   // call AND keep allowing it for this agent; the engine said whether it may (always_allow_offer).

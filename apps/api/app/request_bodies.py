@@ -406,6 +406,15 @@ class SecretPutBody(OpenProjectBody):
     scope_id: SkipValidation[str | None] = None
 
 
+class SecretProposalStoreBody(OpenRequestBody):
+    """BOSSAPP-871: the value a PERSON typed on an agent's proposed-secret card. Write only."""
+    model_config = ConfigDict(json_schema_extra={"required": ["value"]})
+
+    value: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+    note: SkipValidation[str | None] = None
+    actor: SkipValidation[str | None] = None
+
+
 class SecretKeypairBody(OpenProjectBody):
     model_config = ConfigDict(json_schema_extra={"required": ["project_id", "name"]})
 

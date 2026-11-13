@@ -38,3 +38,6 @@
   .pxj-scope { display: none; }
   .pxj-k { display: none; }
 }
+
+/* ⌘K "Found in" (BOSSAPP-881): the words around a body match, quieter than the title. */
+.pxj-snip { color: var(--faint); font-size: var(--fs-meta); }
