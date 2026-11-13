@@ -83,6 +83,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "wait_for": {"id": ("job", CODE_TASK, "workflow_run")},
     # The work-item graph (BOSSAPP-830/832).
     "ask_human": {"work_item_id": "work_item"},
+    "complete_work_item": {"item_id": "work_item"},
     "create_work_item": {"parent_id": "work_item"},
     "link_work_items": {"item_id": "work_item", "other_id": "work_item"},
     "list_work_items": {"item_id": "work_item"},

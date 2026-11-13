@@ -3652,6 +3652,31 @@ def _register_work_item_tools(reg: ToolRegistry) -> None:
         return {"ok": True, "relations": _json_safe(relations)}
 
     @reg.tool(
+        "complete_work_item",
+        "Say a work item is DONE. Its execution policy decides: with no review/approval stages "
+        "it is done now and what it blocked wakes; otherwise it goes to in_review and the first "
+        "stage is asked (a send-back returns it to you with the comment — fix it and call this "
+        "again).",
+        _obj({"item_id": {"type": "string"},
+              "summary": {"type": "string", "description": "one or two sentences of what was done"}},
+             required=["item_id"]),
+        kind="write", reversibility="safe", permission="work_item:manage",
+        exposure=Exposure(tags=("work", "planning")))
+    def complete_work_item(ctx, *, project_id, actor, args):
+        from ..services import work_items as wi
+        from ..services.execution_policy import PolicyError
+
+        try:
+            with ctx.begin() as c:
+                verdict = wi.complete_item(c, getattr(ctx, "settings", None),
+                                           project_id=project_id, item_id=str(args["item_id"]),
+                                           actor=actor, origin=f"agent:{actor}"
+                                           if ":" not in str(actor) else str(actor))
+        except (wi.WorkItemError, PolicyError, LookupError) as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": True, **_json_safe(verdict)}
+
+    @reg.tool(
         "ask_human",
         "Ask a person a TYPED question: it lands in Needs you as a small form and the answer "
         "comes back as data, not prose. Field types: text, select (options), checkbox, "
@@ -9100,7 +9125,7 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "deploy_app",
     # The work-item graph from chat (BOSSAPP-830/832): plan an item, relate two, and ask the
     # person a typed question (its form is drawn in the answer, turn_cards "ask" citation).
-    "create_work_item", "link_work_items", "ask_human",
+    "create_work_item", "link_work_items", "complete_work_item", "ask_human",
     # "Remember that ..." from chat: one fact, stored `inferred` (quarantined, forgettable, never
     # above a governed or approved fact) until a person promotes it (BOSSAPP-622).
     "kg_propose_fact",

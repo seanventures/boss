@@ -1376,11 +1376,14 @@ _TOOL_SCHEMAS: list[dict] = [t["schema"] for t in TOOLS]
 
 
 def _native_tool_schemas(settings: Settings) -> list[dict]:
-    """Offer only tools whose scope can be enforced for this project."""
+    """Offer only tools whose scope can be enforced for this project — and ask_human, the
+    typed question that parks the run until a person answers (typed_forms, BOSSAPP-832)."""
+    from .typed_forms import ASK_HUMAN_SCHEMA
+
     return [schema for schema in _TOOL_SCHEMAS
             if schema["function"]["name"] != "query_db"
             and (schema["function"]["name"] != "run_shell"
-                 or _legacy_agent_shell_allowed(settings))]
+                 or _legacy_agent_shell_allowed(settings))] + [ASK_HUMAN_SCHEMA]
 
 
 def _dispatch(connection: Connection, project_id: str, settings: Settings, name: str, args: dict) -> dict:
@@ -2349,10 +2352,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     # the grant lists any. Before that table existed a bounded run got no MCP tool at all, so an
     # agent could not be given "post to our Mattermost" short of authoring a skill per tool.
     bounded = isinstance(finalize_ctx.get("agent_step"), dict)
-    from .typed_forms import ASK_HUMAN_SCHEMA
-
-    schemas = [] if bounded else (_native_tool_schemas(settings) + list(_WRITE_SCHEMAS)
-                                  + [ASK_HUMAN_SCHEMA])
+    schemas = [] if bounded else _native_tool_schemas(settings) + list(_WRITE_SCHEMAS)
     occupied = {
         str(schema["function"]["name"])
         for schema in schemas

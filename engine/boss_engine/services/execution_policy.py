@@ -181,10 +181,13 @@ def apply_transition(connection: Connection, settings: Any = None, *, project_id
     if item is None:
         raise LookupError(f"no work item {work_item_id} in this project")
     item = dict(item)
-    policy = effective_policy(connection, item, origin)
-    stages = (policy or {}).get("stages") or []
     state = _json(item.get("execution_state"), {}) or {}
     review = state.get("review") if isinstance(state.get("review"), dict) else {}
+    # A done after a send-back keeps the ORIGINAL origin: the run whose policy held it (a worker
+    # re-submitting by hand or by tool must not slip out from under the run's own stages).
+    origin = review.get("origin") or origin
+    policy = effective_policy(connection, item, origin)
+    stages = (policy or {}).get("stages") or []
     if not stages:
         return {"status": "done", "stages": 0}
     if item["status"] == "in_review" and review.get("decision_id"):
@@ -197,11 +200,11 @@ def apply_transition(connection: Connection, settings: Any = None, *, project_id
     round_ = int(review.get("round") or 1)
     escalated = bool(review.get("escalated"))
     decision_id = _raise_stage(connection, item, stages[index], index=index, round_=round_,
-                               origin=origin or review.get("origin"), escalated=escalated,
+                               origin=origin, escalated=escalated,
                                feedback=review.get("feedback"))
     _save_state(connection, work_item_id, {
         "stage": index, "round": round_, "decision_id": decision_id, "escalated": escalated,
-        "origin": origin or review.get("origin"),
+        "origin": origin,
         "worker": review.get("worker") or item.get("assignee") or actor,
     }, status="in_review")
     return {"status": "in_review", "decision_id": decision_id, "stage": index,

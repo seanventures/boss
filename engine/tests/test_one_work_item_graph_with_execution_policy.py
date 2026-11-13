@@ -492,6 +492,31 @@ def test_the_tools_list_create_link_and_ask(eng, project):
                  fields=[{"key": "fw", "type": "select", "options": ["react", "vue"]}])
     assert asked["ok"] and asked["fields"] == ["fw"]
     assert call("ask_human", question="?", fields=[{"type": "nope"}])["ok"] is False
+    # Done through the tool: no stages, so done at once, and what it blocked wakes.
+    finished = call("complete_work_item", item_id=a["id"])
+    assert finished["ok"] and finished["status"] == "done"
+    assert finished["woke"][0]["id"] == b["item"]["id"]
+
+
+def test_a_resubmission_after_a_send_back_stays_under_the_runs_own_stages(eng, project):
+    svc = _decisions(eng)
+    with eng.begin() as c:
+        _ceo(c, project)
+        version = _publish(c, project)
+        run = _start(c, project, version["id"])
+        item_id = c.execute(text("SELECT work_item_id FROM workflow_runs WHERE id = :r"),
+                            {"r": run["id"]}).scalar()
+        c.execute(text("UPDATE workflow_runs SET execution_policy = CAST(:p AS JSONB) "
+                       "WHERE id = :r"), {"p": json.dumps({"stages": [
+                           {"kind": "review", "participants": ["agent:qa"]}]}), "r": run["id"]})
+        _finish(c, run["id"])
+        first = work_items.get_item(c, project, item_id)["execution_state"]["review"]
+        svc.transition(c, first["decision_id"], action="revise", actor="ceo", note="add tests")
+        assert _status(c, item_id) == "active"
+        # The worker re-submits by hand (no run origin now): the run's stage is asked again.
+        again = work_items.complete_item(c, project_id=project, item_id=item_id,
+                                         actor="person:dev", origin="person:dev")
+        assert again["status"] == "in_review" and again["round"] == 2
 
 
 def test_a_chat_turn_that_asked_carries_the_question_for_the_form(eng, project):

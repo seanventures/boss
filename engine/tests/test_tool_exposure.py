@@ -178,8 +178,8 @@ class TestStrictDerivation:
 #: registration (which surfaces see it; conservative default Exposure() = chat + mcp, deferred),
 #: then update these counts in the same change — that is the conscious step.
 EXPECTED_PER_SURFACE = {
-    "chat": 181,   # +4: list/create/link_work_items and ask_human (BOSSAPP-830/832)
-    "mcp": 181,
+    "chat": 182,   # +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832)
+    "mcp": 182,
     "agent_step": 1,   # find_tools; agent steps join when K4 moves them onto the kernel
     "decision": 1,     # find_tools; a decision's read tools stay the caller's (ReadPhase)
     "build": 1,        # find_tools; build stages join at K12
