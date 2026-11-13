@@ -16,6 +16,11 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .workflow_test_runs import router as workflow_test_runs_router
 
     app.include_router(workflow_test_runs_router)
+    # boss-runner's outbox pushes (BOSSAPP-828). Unguarded for the same reason: a runner whose
+    # pushes 404 would look dead to the reclaim path while its turn is alive.
+    from .runner import router as runner_router
+
+    app.include_router(runner_router)
     # System health: deploy readiness, the system doctor's findings and actions (stability).
     try:
         from .system_health import router as system_health_router

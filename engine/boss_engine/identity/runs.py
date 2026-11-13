@@ -288,6 +288,49 @@ def shim_for(run_id: str) -> Optional[Shim]:
         return _SHIMS.get(run_id)
 
 
+def shim_for_task_run(task_run_id: str) -> Optional[Shim]:
+    """The live shim of code-task run `task_run_id`, whichever run id it was started under
+    (`run_ct:<id>`, or `<workflow or change-set run>/ct:<id>`: start_code_task_run)."""
+    tid = str(task_run_id)
+    with _lock:
+        for rid, shim in _SHIMS.items():
+            if rid == f"run_ct:{tid}" or rid.endswith(f"/ct:{tid}"):
+                return shim
+    return None
+
+
+def runner_token(shim: Shim, *, runner_jkt: str, engine: Any) -> Optional[str]:
+    """A `boss:api` run token for the SAME run as `shim`, bound to the boss-runner's DPoP key
+    (BOSSAPP-828: the runner owns the run's harness process and reports on it as the run).
+
+    The MCP bridge's pattern (bridge_headers): a sibling of the run's own token — same person,
+    grant, task and scope, minted as the same first hop — bound to a key only the runner holds.
+    The run's token is verified first (live grant, live person, jti), so a revoked run gets no
+    runner token. A deeper chain is never re-minted as a first hop: None, and the caller keeps the
+    turn in-process."""
+    from . import lineage
+
+    tok = shim.tokens.get(AUD_API)
+    if tok is None or not runner_jkt:
+        return None
+    htu = tokens.issuer() + "/v1/runner/handoff"
+    with engine.begin() as db:
+        claims = tokens.verify_run_token(
+            tok.access_token, audience=AUD_API, htm="POST", htu=htu, db=db,
+            dpop_proof=shim.key.proof("POST", htu, access_token=tok.access_token))
+        if claims.chain.depth == 1 and claims.chain.current is not None:
+            agent_id = claims.chain.current.agent_id
+        elif claims.chain.depth == 0:
+            agent_id = claims.sub            # autonomous: the agent is its own subject
+        else:
+            return None
+        subject = subject_for(lineage.Acting.from_context(tokens.context_for(claims, db=db)), db=db)
+        issued = tokens.mint_run_token(subject=subject, agent=AgentInstance(agent_id, claims.task.run_id),
+                                       grant_id=claims.grant_id, task=claims.task, audience=AUD_API,
+                                       scope=frozenset(claims.scope), cnf_jkt=runner_jkt, db=db)
+    return issued.access_token
+
+
 # ---- the MCP bridge: an agent run calling an API-surface tool ---------------------------------------------
 #
 # An API-surface tool forwards the call to the API AS THE CALLER (M8). An agent run's own token is
