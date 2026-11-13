@@ -12067,3 +12067,115 @@ CREATE INDEX IF NOT EXISTS idx_llm_calls_class ON llm_calls (project_id, call_cl
 -- verdict lands here: {"mode", "verdict": clean|suspicious|unscreened, "rules": [...]}. NULL on
 -- a refused call (no result) and on rows that predate the column.
 ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;
+
+-- BOSSAPP-841-844
+-- ── Skills as a governed supply chain ─────────────────────────────────────────────────────────
+-- 842 VERSIONS. Every save of an authored skill appends a row here (skill_versions.record, called
+-- from skill_definitions.save_skill — the one writer). History is append-only: a restore is a NEW
+-- version copying an old one's content. `current_version_id` names the version the row holds;
+-- `role_skills.pinned_version_id` keeps one agent on an older version (NULL = follow current).
+CREATE TABLE IF NOT EXISTS skill_versions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  skill_id TEXT NOT NULL REFERENCES skill_definitions(id) ON DELETE CASCADE,
+  skill_key TEXT NOT NULL,
+  version_no INTEGER NOT NULL,
+  -- label, summary, behaviour_kind, knowledge, inputs, produces, config, risk_tier
+  content JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- Supporting files a source brought with the skill (path -> text); {} for authored ones.
+  files JSONB NOT NULL DEFAULT '{}'::jsonb,
+  content_hash TEXT NOT NULL,
+  author_kind TEXT NOT NULL DEFAULT 'person'
+    CHECK (author_kind IN ('person', 'agent', 'system', 'sync')),
+  author_id TEXT NOT NULL DEFAULT '',
+  source_note TEXT NOT NULL DEFAULT '',
+  restored_from TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (skill_id, version_no)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_versions_skill
+  ON skill_versions (project_id, skill_key, version_no DESC);
+ALTER TABLE skill_definitions ADD COLUMN IF NOT EXISTS current_version_id TEXT;
+ALTER TABLE role_skills ADD COLUMN IF NOT EXISTS pinned_version_id TEXT;
+
+-- 843 DIFF-BOUND CONSENT. An agent's change to a skill (or a prompt) is written only when a
+-- person approved EXACTLY that change: the write recomputes `diff_hash` from what it is about to
+-- write and the content it would replace, and consumes one approved row with that hash. A
+-- changed base, a changed proposal or a second write finds no row. Console edits are exempt.
+CREATE TABLE IF NOT EXISTS change_consents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('skill', 'prompt')),
+  subject_key TEXT NOT NULL,
+  diff_hash TEXT NOT NULL,
+  base_hash TEXT NOT NULL DEFAULT '',
+  diff TEXT NOT NULL DEFAULT '',
+  proposed JSONB NOT NULL DEFAULT '{}'::jsonb,
+  decision_id TEXT,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'rejected', 'consumed')),
+  requested_by TEXT NOT NULL DEFAULT '',
+  decided_by TEXT,
+  decided_at TIMESTAMPTZ,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_change_consents_subject
+  ON change_consents (project_id, subject_kind, subject_key, status);
+CREATE INDEX IF NOT EXISTS idx_change_consents_decision ON change_consents (decision_id);
+
+-- 841 SOURCES. Where a skill came from outside the project: a GitHub path, a skills.sh entry
+-- (resolved to its GitHub repository) or a plain URL. `pinned_sha` is the commit (GitHub) or the
+-- sha256 of the body (URL) the skill holds. The sync worker never overwrites: an upstream change
+-- becomes a new skill version, applied by itself only when `auto_update` and the skill is
+-- trusted, otherwise parked as a change_consent awaiting a person.
+CREATE TABLE IF NOT EXISTS skill_sources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  org_id TEXT,
+  scope TEXT NOT NULL DEFAULT 'project' CHECK (scope IN ('project', 'org')),
+  kind TEXT NOT NULL CHECK (kind IN ('github', 'url', 'skillsh')),
+  locator TEXT NOT NULL,
+  ref TEXT NOT NULL DEFAULT '',
+  skill_key TEXT NOT NULL,
+  pinned_sha TEXT NOT NULL DEFAULT '',
+  upstream_sha TEXT NOT NULL DEFAULT '',
+  auto_update BOOLEAN NOT NULL DEFAULT false,
+  last_sync_at TIMESTAMPTZ,
+  last_error TEXT,
+  pending_consent_id TEXT,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, skill_key)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_sources_due ON skill_sources (last_sync_at NULLS FIRST);
+
+-- 844 SAVED TEST CASES and VERSION-PINNED RUNS. A run is one case executed against one version
+-- (through eval_harness.run_skill_cases, the same execution and eval_runs record as the suite);
+-- `grade` is the typed answer pass|fail, NULL until graded.
+CREATE TABLE IF NOT EXISTS skill_test_cases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  skill_id TEXT NOT NULL REFERENCES skill_definitions(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (skill_id, name)
+);
+CREATE TABLE IF NOT EXISTS skill_test_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  case_id TEXT NOT NULL REFERENCES skill_test_cases(id) ON DELETE CASCADE,
+  skill_version_id TEXT NOT NULL REFERENCES skill_versions(id) ON DELETE CASCADE,
+  eval_run_id TEXT,
+  status TEXT NOT NULL DEFAULT 'ran' CHECK (status IN ('ran', 'error', 'skipped')),
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  grade TEXT CHECK (grade IS NULL OR grade IN ('pass', 'fail')),
+  notes TEXT NOT NULL DEFAULT '',
+  graded_by TEXT,
+  graded_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_skill_test_runs_case
+  ON skill_test_runs (case_id, skill_version_id, created_at DESC);
