@@ -9,6 +9,9 @@ DELETE /v1/previews/{preview_id}/web/{path:path}:
 GET /.well-known/boss-jwks.json:
   reason: jwks
   verifier: null
+GET /v1/agents/{agent_id}/jwks:
+  reason: jwks
+  verifier: null
 GET /docs:
   reason: api_description
   verifier: null

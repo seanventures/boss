@@ -13008,4 +13008,24 @@ BEGIN
       CHECK (backoff_max_factor BETWEEN 1 AND 64);
   END IF;
 END $wake_backoff$;
+-- 859 (services/agent_keys.py): an agent's own persistent Ed25519 signing key. The private half
+-- is a vault item (kind signing_key) and never leaves BOSS; the public JWK is published at
+-- GET /v1/agents/{agent_id}/jwks. kid = RFC 7638 thumbprint. One active key per agent; a rotated
+-- key is 'retired' (still published, verifies what it signed); a compromised one 'revoked'.
+CREATE TABLE IF NOT EXISTS agent_keys (
+  kid TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  alg TEXT NOT NULL DEFAULT 'EdDSA' CHECK (alg = 'EdDSA'),
+  public_jwk JSONB NOT NULL,
+  public_pem TEXT NOT NULL,
+  private_vault_item_id TEXT NOT NULL REFERENCES identity_vault_items(id),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'retired', 'revoked')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  retired_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_keys_active ON agent_keys (agent_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_agent_keys_role ON agent_keys (project_id, role_key, status);
 -- ================================ end BOSSAPP-855-860 ==

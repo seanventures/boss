@@ -1545,7 +1545,26 @@ def pr_trailers(connection: Connection, code_task_run_id: str) -> str:
                      else f"BOSS-Run: {made['workflow_run_id']}")
     if identity:
         lines.append(identity)
+    evidence = _agent_key_evidence(connection, code_task_run_id, made)
+    if evidence:
+        lines.append(evidence)
     return "\n".join(lines)
+
+
+def _agent_key_evidence(connection: Connection, code_task_run_id: str,
+                        made: dict[str, Any]) -> str:
+    """BOSSAPP-859: the lead agent's signed evidence, when it holds a key. "" otherwise."""
+    try:
+        from .agent_keys import pr_evidence
+
+        lead = made.get("lead") or {}
+        with connection.begin_nested():
+            return pr_evidence(connection, code_task_run_id, agent_id=lead.get("agent_id"),
+                               act_id=made.get("act_id"))
+    except Exception as error:  # noqa: BLE001 — a footer is never worth a failed PR
+        log.warning("agent acts: no signed evidence for %s: %s", code_task_run_id,
+                    type(error).__name__)
+        return ""
 
 
 def identity_trailers(connection: Connection, code_task_run_id: str) -> str:
@@ -1615,9 +1634,39 @@ def sign_commit_message(message: str, run_id: Optional[str] = None) -> str:
                 if len(_SIGNED) > 512:
                     _SIGNED.clear()
                 _SIGNED[rid] = trailers
-        return f"{message.rstrip()}\n\n{trailers}" if trailers else message
+        out = f"{message.rstrip()}\n\n{trailers}" if trailers else message
+        return _agent_signed(out, rid)
     except Exception as error:  # noqa: BLE001 — a trailer is never worth a failed commit
         log.warning("agent acts: commit not signed: %s", type(error).__name__)
+        return message
+
+
+#: run id -> (project_id, role_key) of the lead agent holding a key, or False: asked once per run.
+_KEYED: dict[str, Any] = {}
+
+
+def _agent_signed(message: str, rid: str) -> str:
+    """BOSSAPP-859: the build's lead agent signs the commit when it holds a key (agent_keys).
+    An agent without one: the message is returned exactly as it came. Never raises."""
+    from . import agent_keys
+
+    if agent_keys.COMMIT_TRAILER in message:
+        return message
+    try:
+        from ..db import begin
+
+        signer = _KEYED.get(rid)
+        with begin() as connection:
+            if signer is None:
+                signer = agent_keys.signer_for_run(connection, rid) or False
+                if len(_KEYED) > 512:
+                    _KEYED.clear()
+                _KEYED[rid] = signer
+            if not signer:
+                return message
+            return agent_keys.sign_commit(connection, message, signer)
+    except Exception as error:  # noqa: BLE001 — a signature is never worth a failed commit
+        log.warning("agent acts: commit not agent-signed: %s", type(error).__name__)
         return message
 
 

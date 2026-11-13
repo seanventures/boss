@@ -43,6 +43,19 @@ class AgentCreateBody(BaseModel):
     team: Optional[str] = None
 
 
+class SigningKeyBody(BaseModel):
+    """BOSSAPP-859: create the agent's key, or `rotate` the active one."""
+    project_id: str
+    actor: Optional[str] = None
+    rotate: bool = False
+
+
+class RevokeKeyBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    reason: str = ""
+
+
 class AgentUpdateBody(BaseModel):
     """Every field optional. A field left out is left alone; `reports_to: null` clears it."""
     project_id: str
@@ -240,6 +253,54 @@ def build_agents_router(
             if policy is not None and isinstance(out, dict):
                 out = {**out, "run_policy": policy}
             return out
+
+    # ── The agent's own signing key (BOSSAPP-859) ──────────────────────────────────────────
+    # The private half is a vault item and never leaves BOSS; the public keys are published at
+    # GET /v1/agents/{agent_id}/jwks (identity_agents router).
+
+    def _key_fail(error: Exception):
+        from boss_engine.services.agent_keys import AgentKeyError
+
+        if isinstance(error, AgentKeyError):
+            raise HTTPException(status_code=error.status, detail=str(error)) from error
+        raise error
+
+    @router.get("/v1/agents/{role_key}/signing-keys")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
+    def list_signing_keys(role_key: str, project_id: str) -> dict[str, Any]:
+        from boss_engine.services import agent_keys
+
+        with begin(engine) as connection:
+            require_reader(connection, project_id)
+            return {"role_key": role_key,
+                    "keys": agent_keys.keys_for(connection, project_id, role_key)}
+
+    @router.post("/v1/agents/{role_key}/signing-keys")
+    @permit(P.AGENT_LIFECYCLE, scope=Scope.project(body="project_id"))
+    def create_signing_key(role_key: str, body: SigningKeyBody) -> dict[str, Any]:
+        """Give the agent its key, or with `rotate` retire the active one for a new one."""
+        from boss_engine.services import agent_keys
+
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, body.project_id, body.actor, "role_review")
+            try:
+                return agent_keys.create_key(connection, body.project_id, role_key, actor=actor,
+                                             rotate=body.rotate)
+            except Exception as error:  # noqa: BLE001
+                _key_fail(error)
+
+    @router.post("/v1/agents/{role_key}/signing-keys/{kid}/revoke")
+    @permit(P.AGENT_LIFECYCLE, scope=Scope.project(body="project_id"))
+    def revoke_signing_key(role_key: str, kid: str, body: RevokeKeyBody) -> dict[str, Any]:
+        from boss_engine.services import agent_keys
+
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, body.project_id, body.actor, "role_review")
+            try:
+                return agent_keys.revoke_key(connection, body.project_id, role_key, kid,
+                                             actor=actor, reason=body.reason)
+            except Exception as error:  # noqa: BLE001
+                _key_fail(error)
 
     @router.get("/v1/agents/{role_key}/run-policy")
     @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
