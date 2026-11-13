@@ -48,3 +48,17 @@ export const updatePoolMember = (projectId: string, memberId: string, fields: Re
            press(memberId, label), "PATCH");
 export const removePoolMember = (projectId: string, memberId: string): Promise<WriteResult> =>
   obsWrite(`/v1/subscription-pools/members/${encodeURIComponent(memberId)}?${q(projectId)}`, {}, press(memberId, "Remove"), "DELETE");
+export const setPoolStatus = (projectId: string, poolId: string, status: Pool["status"]): Promise<WriteResult> =>
+  obsWrite(`/v1/subscription-pools/${encodeURIComponent(poolId)}`, { project_id: projectId, status },
+           press(poolId, status === "active" ? "Resume pool" : "Pause pool"), "PATCH");
+/** Delete an EMPTY pool (BOSSAPP-1042); the API refuses one that still has accounts, so no stored
+ *  login is orphaned — each account's Remove deletes its login first. */
+export const deletePool = (projectId: string, poolId: string): Promise<WriteResult> =>
+  obsWrite(`/v1/subscription-pools/${encodeURIComponent(poolId)}?${q(projectId)}`, {}, press(poolId, "Remove pool"), "DELETE");
+
+/** What the account's credential field is, per engine: Claude takes a long-lived token
+ *  (`claude setup-token`), Codex its auth.json. Never called a "login" (BOSSAPP-1042 f). */
+export const CREDENTIAL_WORDS: Record<Pool["engine"], { label: string; tip: string }> = {
+  claude_code: { label: "Long-lived token", tip: "The account's long-lived token, from `claude setup-token`" },
+  codex: { label: "auth.json", tip: "The contents of the account's Codex auth.json" },
+};

@@ -102,6 +102,27 @@ describe("status cards", () => {
     expect(card?.textContent).toContain("Nothing changed.");
   });
 
+  it("Remove asks, Keep sends nothing, and Remove sends one DELETE and drops the card (BOSSAPP-1042)", async () => {
+    const calls: Call[] = [];
+    let gone = false;
+    serve(calls, (url, method) => {
+      if (method === "DELETE") { gone = true; return { deleted: "scard_1" }; }
+      return gone ? { cards: [] } : CARDS;
+    });
+    await mount(<StatusCards projectId="p1" demo={false} />);
+    await settle();
+    const press = async (sel: string) => { ($(sel) as HTMLButtonElement).click(); await settle(); };
+    await press('[data-testid="wt-card-remove"]');
+    expect($('[data-testid="wt-card-remove-confirm"]')?.getAttribute("role")).toBe("alertdialog");
+    await press('[data-testid="wt-card-remove-confirm"] button:not([data-testid])');
+    expect($('[data-testid="wt-card-remove-confirm"]')).toBeNull();
+    expect(calls.filter((c) => c.method === "DELETE")).toEqual([]);
+    await press('[data-testid="wt-card-remove"]');
+    await press('[data-testid="wt-card-remove-yes"]');
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual(["/v1/status-cards/scard_1?project_id=p1"]);
+    expect($('[data-testid="wt-card-scard_1"]')).toBeNull();
+  });
+
   it("an item offers to keep a card until it has one", async () => {
     const calls: Call[] = [];
     serve(calls, (url, method) => (method === "GET" ? { cards: [] } : { card: {} }));

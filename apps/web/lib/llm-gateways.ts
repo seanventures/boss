@@ -36,6 +36,25 @@ export const parseGateways = (w: unknown): Gateway[] => arr(obj(w).gateways).map
 /** "claude_code" → "Claude Code"; the harnesses a gateway routes, in words. */
 export const HARNESS_WORDS: Record<string, string> = { claude_code: "Claude Code", codex: "Codex" };
 
+/**
+ * Why the Add gateway form cannot be saved yet, in words, or null. Mirrors the API's rule
+ * (services/llm_gateway.normalise_url) so a bad URL is said before the press, never a Save that
+ * does nothing (BOSSAPP-1042 d).
+ */
+export function gatewayFormError(f: { name: string; url: string; secret: string }): string | null {
+  if (!f.name.trim()) return "Name the gateway.";
+  const url = f.url.trim();
+  if (!url) return "Enter the gateway's URL, e.g. https://llm-gateway.example.com";
+  let parts: URL;
+  try { parts = new URL(url); } catch { return "That is not a URL. Use one like https://llm-gateway.example.com"; }
+  if (parts.protocol !== "https:" && parts.protocol !== "http:") return "The URL must start with https:// or http://";
+  if (!parts.hostname) return "The URL needs a host, e.g. https://llm-gateway.example.com";
+  if (parts.username || parts.password) return "Put the key in the Key field, never in the URL.";
+  if (parts.search || parts.hash) return "The URL takes no ?query or #fragment.";
+  if (!f.secret) return "Enter the gateway's key.";
+  return null;
+}
+
 const q = (projectId: string) => `project_id=${encodeURIComponent(projectId)}`;
 const one = (id: string) => `/v1/llm-gateways/${encodeURIComponent(id)}`;
 const press = (scope: string, label: string) => ({ scope: `llmgw:${scope}`, label });

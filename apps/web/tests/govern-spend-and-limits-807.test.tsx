@@ -280,6 +280,19 @@ describe("Screen B — Govern › Limits", () => {
       { op: "limits", project_id: "p1", actor: "ceo", unpriced_policy: "block" }]);
   });
 
+  it("Block it shows a USD allowance that is checked and saved as unpriced_allowance_usd (BOSSAPP-1042)", async () => {
+    await openLimits();
+    expect($("[data-testid=gv-input-allowance]")).toBeNull();
+    await click($("[data-testid=gv-unpriced-block]"));
+    expect($("[data-testid=gv-input-allowance]")).not.toBeNull();
+    await setValue($("[data-testid=gv-input-allowance]"), "-1");
+    expect(t("[data-testid=gv-hint-allowance]")).toMatch(/\$0/);
+    await setValue($("[data-testid=gv-input-allowance]"), "2.5");
+    await click($("[data-testid=gv-save-limits]"));
+    expect(posts("limits").map((c) => c.body)).toEqual([
+      { op: "limits", project_id: "p1", actor: "ceo", unpriced_policy: "block", unpriced_allowance_usd: 2.5 }]);
+  });
+
   it("Pace is the first card: moving it fills the caps below, which can be fine-tuned, and Save writes both", async () => {
     await openLimits();
     expect($("[data-testid=gv-limits] .gv-card")!.getAttribute("data-testid")).toBe("gv-pace-card");

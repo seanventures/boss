@@ -6,6 +6,8 @@
   POST   /v1/subscription-pools/{pool_id}/members             add an account (its login → store)
   PATCH  /v1/subscription-pools/members/{member_id}           on/off, order, a fresh login
   DELETE /v1/subscription-pools/members/{member_id}?project_id= remove it and its stored login
+  DELETE /v1/subscription-pools/{pool_id}?project_id=          delete an EMPTY pool (one with
+                                                               accounts is refused: 422)
 
 Reading is entitlement:read; every change is entitlement:manage, attributed to the signed-in
 member (providerops_manage). A login goes IN and never comes back out.
@@ -106,5 +108,13 @@ def build_subscription_pools_router(*, engine, settings: Callable[[], Any],
     def remove_member(member_id: str, project_id: str, actor: Optional[str] = None) -> dict:
         return _write(project_id, actor, lambda c, who: sp.remove_member(
             c, settings(), project_id, member_id, actor=who))
+
+    @router.delete("/v1/subscription-pools/{pool_id}")
+    @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(query="project_id"))
+    def delete_pool(pool_id: str, project_id: str, actor: Optional[str] = None) -> dict:
+        """BOSSAPP-1042: an empty pool goes; one with accounts is refused (422) so no stored
+        login is ever orphaned — remove its accounts first, each with its login."""
+        return _write(project_id, actor, lambda c, who: sp.delete_pool(
+            c, project_id, pool_id, actor=who))
 
     return router

@@ -3,13 +3,15 @@
  * WHO CAN SEE IT (BOSSAPP-876): Private, the grants (a party typed wrong is not sent), the
  * break-glass notice; a private blocker shows only "Private item" and Read (audited) needs a
  * reason before it is sent.
+ * BOSSAPP-1042 (e): turning Private OFF sends visibility "project", unticks at once, says
+ * "Visible to the project." (never the Private words) and hides the grant chips and Grant field.
  */
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ItemAccess, PrivateBlocker } from "../app/projects/work-access";
 import { parseNode } from "../lib/work-items";
-import { $, mount, settle, unmount } from "./_helpers/live-render";
+import { $, mount, rerender, settle, unmount } from "./_helpers/live-render";
 
 const ITEM = parseNode({
   id: "w1", title: "HR case", status: "todo", visibility: "private", restricted: true,
@@ -49,6 +51,31 @@ describe("who can see a work item", () => {
     ($('[data-testid="wt-grant-add"]') as HTMLButtonElement).click();
     await settle();
     expect(calls.find((c) => c.url === "/v1/work-items/w1/access")?.body).toMatchObject({ party: "person:legal", revoke: false });
+  });
+
+  it("turning Private off says so, and the grants and their field go away", async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    serve(calls, { item: {} });
+    await mount(<ItemAccess projectId="p1" item={ITEM} demo={false} onChanged={() => {}} />);
+    expect($('[data-testid="wt-grant-person:hr"]')).not.toBeNull();
+    ($('[data-testid="wt-private"]') as HTMLInputElement).click();
+    await settle();
+    expect(calls.find((c) => c.url === "/v1/work-items/w1")?.body).toMatchObject({ visibility: "project" });
+    expect(($('[data-testid="wt-private"]') as HTMLInputElement).checked).toBe(false);
+    expect($('[data-testid="wt-access-said"]')?.textContent).toBe("Visible to the project.");
+    expect(document.body.textContent).not.toContain("only its people");
+    expect($('[data-testid="wt-grant-person:hr"]')).toBeNull();
+    expect($('[data-testid="wt-grant-party"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("Private through the item above it");
+    // The item reloads as visible: still no chips; the grants are kept server-side, not revoked.
+    await rerender(<ItemAccess projectId="p1" item={{ ...ITEM, visibility: "project", restricted: false }} demo={false} onChanged={() => {}} />);
+    expect($('[data-testid="wt-grant-person:hr"]')).toBeNull();
+    expect(calls.some((c) => c.url.includes("/access"))).toBe(false);
+    // On again: the words and the chips come back.
+    ($('[data-testid="wt-private"]') as HTMLInputElement).click();
+    await settle();
+    expect($('[data-testid="wt-access-said"]')?.textContent).toBe("Private: only its people and those granted can see it.");
+    expect($('[data-testid="wt-grant-person:hr"]')).not.toBeNull();
   });
 
   it("reads a private blocker only with a reason, and says it was recorded", async () => {

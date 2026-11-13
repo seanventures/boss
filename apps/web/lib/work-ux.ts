@@ -103,6 +103,8 @@ export const createCard = (projectId: string, body: { title: string; work_item_i
   obsWrite("/v1/status-cards", { project_id: projectId, ...body }, press("card:new", "Add card"));
 export const refreshCard = (projectId: string, cardId: string): Promise<WriteResult> =>
   obsWrite(`/v1/status-cards/${encodeURIComponent(cardId)}/refresh`, { project_id: projectId }, press(`card:${cardId}`, "Refresh"));
+export const deleteCard = (projectId: string, cardId: string): Promise<WriteResult> =>
+  obsWrite(`/v1/status-cards/${encodeURIComponent(cardId)}?${q(projectId)}`, {}, press(`card:${cardId}`, "Remove"), "DELETE");
 
 export const searchWork = (projectId: string, query: string, signal?: AbortSignal) =>
   aaRead(`/v1/search?${q(projectId)}&q=${encodeURIComponent(query)}&limit=12`, parseSearch, null, signal);

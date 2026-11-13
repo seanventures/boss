@@ -283,6 +283,25 @@ def set_pool_status(connection: Connection, project_id: str, pool_id: str, *, st
     return get_pool(connection, project_id, pool["engine"])
 
 
+def delete_pool(connection: Connection, project_id: str, pool_id: str, *,
+                actor: str) -> dict[str, Any]:
+    """Delete an EMPTY pool (BOSSAPP-1042). A pool that still has accounts is refused, never
+    cascaded: each account's login lives in the secret store, and only remove_member deletes it
+    there — a cascading row delete would leave those logins behind with nothing pointing at them.
+    """
+    pool = _pool_by_id(connection, project_id, pool_id)
+    n = len(pool["members"])
+    if n:
+        raise PoolError(
+            f"remove its {n} account{'s' if n != 1 else ''} first — each Remove also deletes "
+            "that account's stored login; then the empty pool can go")
+    connection.execute(text("DELETE FROM subscription_pools WHERE id = :i AND project_id = :p"),
+                       {"i": pool_id, "p": project_id})
+    emit_event(connection, project_id, "subscription_pool.deleted", actor, "subscription_pool",
+               pool_id, {"engine": pool["engine"]})
+    return {"deleted": pool_id}
+
+
 # ── choosing ─────────────────────────────────────────────────────────────────────────────────
 
 def assign(connection: Connection, project_id: str, engine: str, task_ref: Optional[str], *,

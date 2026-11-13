@@ -13,12 +13,12 @@
  *               item's own cards, its closing summary among them, sit in its row (ItemCards).
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { ArrowClockwise, Bell, BellSlash, Cards, LinkSimple, Package } from "@phosphor-icons/react";
+import { ArrowClockwise, Bell, BellSlash, Cards, LinkSimple, Package, Trash } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { partyName } from "../../lib/work-items";
 import {
-  OUTPUT_WORDS, WATCH_WORDS, attachWatchdog, createCard, detachWatchdog, openable, readCards,
+  OUTPUT_WORDS, WATCH_WORDS, attachWatchdog, createCard, deleteCard, detachWatchdog, openable, readCards,
   readOutputs, readWatchdogs, recordOutput, refreshCard, refreshOutputs, type Outputs,
   type StatusCard, type WatchCondition, type Watchdog,
 } from "../../lib/work-ux";
@@ -148,6 +148,7 @@ export function OutputsSection({ projectId, id, demo }: { projectId: string; id:
 
 function CardView({ projectId, card, demo, onChanged }: { projectId: string; card: StatusCard; demo: boolean; onChanged: () => void }) {
   const [said, setSaid] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
   return (
     <article className="px-card wt-card" data-testid={`wt-card-${card.id}`}>
       <Markdown text={card.document} />
@@ -165,8 +166,25 @@ function CardView({ projectId, card, demo, onChanged }: { projectId: string; car
                      data-testid="wt-card-refresh">
           <ArrowClockwise size={12} aria-hidden /> Refresh
         </GatedButton>
+        {/* BOSSAPP-1042 (883): a card can go; the API had DELETE, the console had no control. */}
+        <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo}
+                     onClick={() => setRemoving(true)} data-testid="wt-card-remove">
+          <Trash size={12} aria-hidden /> Remove
+        </GatedButton>
         {said ? <span className="wt-said" role="status">{said}</span> : null}
       </div>
+      {removing ? (
+        <div className="wt-line" role="alertdialog" aria-label="Remove this status card?" data-testid="wt-card-remove-confirm">
+          <span>Remove this card and its history?</span>
+          <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo}
+                       onClick={() => void deleteCard(projectId, card.id).then((r) => {
+                         setRemoving(false);
+                         if (r.ok) onChanged(); else setSaid(r.error);
+                       })}
+                       data-testid="wt-card-remove-yes">Remove</GatedButton>
+          <button type="button" className="px-btn" onClick={() => setRemoving(false)}>Keep</button>
+        </div>
+      ) : null}
     </article>
   );
 }
