@@ -12651,3 +12651,76 @@ DO $$ BEGIN
 END $$;
 -- Last-Event-ID replay reads "the events after this one" in (created_at, id) order.
 CREATE INDEX IF NOT EXISTS idx_events_created_id ON events (created_at, id);
+
+-- BOSSAPP-849-851
+-- ── Connector catalog, stdio MCP servers and curated gateways ────────────────────────────────────
+-- 850 STDIO TEMPLATES. How BOSS launches a stdio MCP server: the argv, the image it runs in, the
+-- environment names it may receive (never secret values: a server's token is resolved by the
+-- registry at call time and handed to the container as the env var named in `env_from_auth`), the
+-- network it may use ('host' is refused), how long an idle instance lives and how instances are
+-- shared. A server row points at one as `stdio://<project_id>/<name>`; the supervisor
+-- (services/mcp_stdio_supervisor.py) spawns it in a sandboxed container and bridges it to the
+-- streamable-HTTP surface mcp_client already speaks. Writing a template is `host:exec`.
+CREATE TABLE IF NOT EXISTS mcp_stdio_templates (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL CHECK (name ~ '^[a-z0-9][a-z0-9_-]{0,62}$'),
+  description TEXT,
+  argv JSONB NOT NULL,
+  image TEXT NOT NULL,
+  env_allowlist JSONB NOT NULL DEFAULT '[]'::jsonb,
+  env_defaults JSONB NOT NULL DEFAULT '{}'::jsonb,
+  env_from_auth TEXT,
+  network TEXT NOT NULL DEFAULT 'none' CHECK (network <> 'host'),
+  idle_ttl_seconds INTEGER NOT NULL DEFAULT 600 CHECK (idle_ttl_seconds BETWEEN 30 AND 86400),
+  reuse_key TEXT NOT NULL DEFAULT 'credential' CHECK (reuse_key IN ('credential', 'template')),
+  connector_key TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_by TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+
+-- 851 GATEWAYS. A curated slice of a project's MCP servers served to OUTSIDE MCP clients (Claude
+-- Code, Cursor) at /mcp/gw/{id}. `profile` = {"servers": [{"server_id", "tools": [..] | null,
+-- "caps": {tool: "allow" | "off"}}]}; a cap may only make a tool stricter than the registry's own
+-- policy. Every call is proxied through mcp_registry.call_tool_with_receipt, so review, policy,
+-- receipts and the tool_call_audit row are exactly what an inside call gets.
+CREATE TABLE IF NOT EXISTS mcp_gateways (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  profile JSONB NOT NULL DEFAULT '{"servers": []}'::jsonb,
+  allowed_actions JSONB NOT NULL
+    DEFAULT '["tools/list", "tools/call", "search_tools", "run_tool"]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_gateways_active_name
+  ON mcp_gateways (project_id, lower(name)) WHERE status = 'active';
+
+-- A gateway's tokens: only the SHA-256 of each is kept (the token is shown once, at mint), with
+-- its last four for telling two apart, an expiry, and a revocation.
+CREATE TABLE IF NOT EXISTS mcp_gateway_tokens (
+  id TEXT PRIMARY KEY,
+  gateway_id TEXT NOT NULL REFERENCES mcp_gateways(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  last4 TEXT NOT NULL,
+  label TEXT,
+  expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  last_used_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_gateway_tokens_gateway
+  ON mcp_gateway_tokens (gateway_id, created_at DESC);
+-- ================================ end CONNECTORS / STDIO / GATEWAYS (BOSSAPP-849-851) ==
