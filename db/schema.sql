@@ -13070,3 +13070,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_exports_open
   ON memory_exports (backend_id, memory_id, op) WHERE status IN ('pending_review', 'approved');
 CREATE INDEX IF NOT EXISTS idx_memory_exports_queue
   ON memory_exports (project_id, status, created_at);
+-- ── 893 DECISION EXAMPLES ──────────────────────────────────────────────────────────────────────
+-- services/decision_examples.py: what a person decided, kept as a labelled example for evaluating
+-- and tuning the decision model. `override` rows are captured automatically when a person rejects
+-- or sends back a recommendation, or forces an approval; `saved` rows are a person's "Save as
+-- example". `snapshot` is the decision as it was shown; the export anonymizes it (placeholders
+-- for secret-shaped keys, redaction patterns, pseudonyms for people). One row per (decision,
+-- source): answering again updates it.
+CREATE TABLE IF NOT EXISTS decision_examples (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  decision_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('override', 'saved')),
+  action TEXT,
+  outcome TEXT NOT NULL
+    CHECK (outcome IN ('approve', 'approve_forced', 'reject', 'revise', 'execute')),
+  recommended TEXT NOT NULL DEFAULT 'approve',
+  snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  note TEXT NOT NULL DEFAULT '',
+  label TEXT NOT NULL DEFAULT '',
+  decided_by TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (decision_id, source)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_examples_project
+  ON decision_examples (project_id, created_at DESC);

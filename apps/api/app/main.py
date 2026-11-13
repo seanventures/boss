@@ -31841,6 +31841,16 @@ app.include_router(build_memory_backends_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# DECISION EXAMPLES (BOSSAPP-893): overrides captured, Save as example, anonymized JSONL export
+# (routers/decision_examples.py).
+from .routers.decision_examples import build_decision_examples_router
+
+app.include_router(build_decision_examples_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
 # INFRA AND OBSERVABILITY (infra-observability spec §6.2): one ETag'd view per tab, polled by
 # the console; Infra routes by target kind so one button replaces three (routers/infra_view.py,
 # routers/observability_view.py).

@@ -802,6 +802,13 @@ class DecisionService:
             self._handle_approved_follow_on(
                 connection, refreshed, actor, note=note, force=force, always_allow=always_allow
             )
+            if force:
+                # A FORCED approval overrode BOSS's own gate: kept as a decision example
+                # (BOSSAPP-893, decision_examples.capture_override; never fails the answer).
+                from .decision_examples import capture_override
+
+                capture_override(connection, refreshed, action="approve", actor=actor, note=note,
+                                 force=True)
             # The person's approval is signed now, under the step it releases — not a tick later.
             from . import agent_acts
 
@@ -851,6 +858,10 @@ class DecisionService:
                 connection, refreshed, action="reject", actor=actor, note=note
             )
             self._handle_rejected_follow_on(connection, refreshed, actor=actor)
+            # A person said no to what BOSS recommended: kept as a decision example (BOSSAPP-893).
+            from .decision_examples import capture_override
+
+            capture_override(connection, refreshed, action="reject", actor=actor, note=note)
             # A gate answered no FAILS ITS STEP now (agents-home D3): the run stops there with
             # Retry and Skip, and its acts say so at once (workflows.refuse_gates_of).
             from . import agent_acts, workflows as workflow_runtime
@@ -901,6 +912,10 @@ class DecisionService:
             self._handle_non_approved_follow_on(
                 connection, refreshed, action="revise", actor=actor, note=note
             )
+            # Sent back with changes: an override too, with the person's note (BOSSAPP-893).
+            from .decision_examples import capture_override
+
+            capture_override(connection, refreshed, action="revise", actor=actor, note=note)
             return self.get_row(connection, decision_id)
 
         if action == "delegate":

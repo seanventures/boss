@@ -201,6 +201,8 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["deadletters/remediations", "job:read"],
   ["decide", "decision:read"],
   ["decide/activity", "autonomy:read"],
+  ["decision-examples", "decision:read"],
+  ["decision-examples/export", "decision:read"],
   ["decisions/inbox", "decision:read"],
   ["decisions/{}", "decision:read"],
   ["delivery-workflows", "workflow:read"],
