@@ -130,6 +130,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving an agent's tool request gives its role exactly the tools on the Grant card,
     # tier-capped and pinned to their schema hash (tool_access_requests.on_approved, BOSSAPP-848).
     "grant_tool_access",
+    # Choosing one of a decision's options runs exactly that option's signed effects on the
+    # work-item graph, skipping any target that changed since (decision_options, BOSSAPP-879).
+    "choose_option",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -695,6 +698,27 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "suggestions become work items.", needs="form"),
             _action("reject", "Decline", "reject",
                     "Tells the agent you will not answer, and why.", needs="note"),
+            _delegate(),
+        ]
+    from .decision_options import describe_effect, options_of
+
+    if _action_of(decision) == "choose_option" and options_of(decision):
+        # OPTIONS WITH SIGNED EFFECTS (decision_options, BOSSAPP-879): one button per option,
+        # each carrying its option id (as a settle carries settle_at); its effect says what runs.
+        # (A card whose options cannot be read falls through to the general buttons, and its
+        # approve is refused by the transition: "pick one of the options".)
+        offered = []
+        for option in options_of(decision):
+            words = "; ".join(describe_effect(e) for e in option.get("effects") or [])
+            offered.append({**_action(
+                "approve", str(option.get("label") or option.get("id")), "approve",
+                (f"Carries out: {words}. A target changed since the question was asked is "
+                 "skipped." if words else "Records this choice; it carries nothing out.")),
+                "choose": option.get("id")})
+        return [
+            *offered,
+            _action("reject", "None of these", "reject",
+                    "Declines every option; nothing is carried out."),
             _delegate(),
         ]
     if _action_of(decision) in ("deploy_host", "deploy_stack"):

@@ -24340,6 +24340,8 @@ def approve_decision_in(connection, decision_id: str, payload: DecisionActionReq
             answer=payload.answer,
             # "Always allow this" on a tool-call Ask card (BOSSAPP-817).
             always_allow=payload.always_allow,
+            # The chosen option of a decision with signed effects (BOSSAPP-879).
+            choose=payload.choose,
         )
     except DecisionNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -31908,6 +31910,14 @@ app.include_router(build_ambient_router(
 from .routers.work_items import build_work_items_router
 
 app.include_router(build_work_items_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# WORK UX, SET 2 (routers/work_ux.py; BOSSAPP-879..884): decision options with signed effects,
+# watchdogs on a work tree, one search over work, outputs and references, status cards, and
+# agent-proposed hires and budget overrides.
+from .routers.work_ux import build_work_ux_router
+
+app.include_router(build_work_ux_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
 # THE TOOL-CALL AUDIT (routers/tool_calls.py, services/tool_call_audit.py; BOSSAPP-819): every

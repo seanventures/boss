@@ -12974,3 +12974,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_access_grants_live
   ON mcp_access_grants (project_id, server_id, role_key, tool) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_mcp_access_grants_role ON mcp_access_grants (project_id, role_key, status);
 -- ================================ end BOSSAPP-846-848 ==
+-- BOSSAPP-w4-work-ux2
+-- ── Work UX, set 2 (BOSSAPP-879..884) ──────────────────────────────────────────────────────────
+-- 879 (services/decision_options.py): a decision's options carry typed, signed effects on the
+-- work-item graph (recommendation.effect_options, each with target_snapshot and an hs1 `sig`).
+-- Choosing one runs exactly its effects; every effect's outcome is one row here. A target that
+-- changed since the question was asked is `skipped_stale`, never guessed at.
+CREATE TABLE IF NOT EXISTS decision_effect_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  decision_id TEXT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
+  option_id TEXT NOT NULL,
+  effect_index INTEGER NOT NULL,
+  effect_type TEXT NOT NULL,
+  target_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('done', 'skipped_stale', 'failed')),
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  actor TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (decision_id, effect_index)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_effect_runs_project ON decision_effect_runs (project_id, created_at DESC);
+-- ================================ end BOSSAPP-w4-work-ux2 ==

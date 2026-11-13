@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1988 operations.
+# 1990 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -527,6 +527,8 @@
 "POST /v1/decide/replay": ["permit decision:read @ project(body=project_id)", "OAPVU"]
 "PUT /v1/decide/rules/{kind}": ["permit approval_rule:manage @ org", "O"]
 "POST /v1/decide/understand": ["permit work_item:manage @ project(body=project_id)", "OAP"]
+"POST /v1/decision-options": ["permit work_item:manage @ project(body=project_id)", "OAP"]
+"GET /v1/decision-options/{decision_id}/runs": ["permit decision:read @ decision(path=decision_id)", "OAPVU"]
 "POST /v1/decisions/digests": ["permit system:operate @ project(body=project_id)", "OA"]
 "GET /v1/decisions/inbox": ["permit decision:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "POST /v1/decisions/inbox/load": ["permit decision:read @ project(query=project_id) +writes_on_get", "OAPVU"]

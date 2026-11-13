@@ -479,6 +479,7 @@ class DecisionService:
         settle_at: Optional[str] = None,
         answer: Optional[dict] = None,
         always_allow: Optional[dict] = None,
+        choose: Optional[str] = None,
     ) -> dict:
         if action not in {"approve", "reject", "revise", "delegate", "execute", "settle"}:
             raise ValueError(f"Unsupported action: {action}")
@@ -752,6 +753,19 @@ class DecisionService:
                         typed_forms.record_answer(connection, form_row, answer, actor=actor)
                 except typed_forms.FormError as refused:
                     raise InvalidDecisionTransitionError(str(refused)) from refused
+            # AN OPTION WITH SIGNED EFFECTS (BOSSAPP-879): the choice is verified (its option
+            # exists and its signature holds) before the approval is recorded; a choice sent to
+            # a decision without options is refused the same way.
+            from . import decision_options
+
+            if decision_options.is_option_decision(row) or choose:
+                if not decision_options.is_option_decision(row):
+                    raise InvalidDecisionTransitionError(
+                        "this decision has no options to choose from")
+                try:
+                    decision_options.chosen(row, choose)
+                except decision_options.OptionError as refused:
+                    raise InvalidDecisionTransitionError(str(refused)) from refused
             connection.execute(
                 text(
                     """
@@ -800,7 +814,8 @@ class DecisionService:
                                                  action="approve", note=note)
             refreshed = self.get_row(connection, decision_id)
             self._handle_approved_follow_on(
-                connection, refreshed, actor, note=note, force=force, always_allow=always_allow
+                connection, refreshed, actor, note=note, force=force, always_allow=always_allow,
+                choose=choose,
             )
             # The person's approval is signed now, under the step it releases — not a tick later.
             from . import agent_acts
@@ -1043,6 +1058,7 @@ class DecisionService:
         note: Optional[str] = None,
         force: bool = False,
         always_allow: Optional[dict] = None,
+        choose: Optional[str] = None,
     ) -> None:
         """Approval context must be explicitly threaded into the follow-on.
 
@@ -1373,6 +1389,16 @@ class DecisionService:
                 activate_authored_skill(connection, row, actor)
             except ConsentStale as stale:
                 raise InvalidDecisionTransitionError(str(stale)) from stale
+        elif action == "choose_option":
+            # AN OPTION WITH SIGNED EFFECTS (BOSSAPP-879, decision_options): the chosen option's
+            # effects run, each recorded in decision_effect_runs; a target that changed since
+            # the question was asked is skipped, never guessed at.
+            from .decision_options import OptionError, carry_out
+
+            try:
+                carry_out(connection, self.settings, row, choose=choose, actor=actor)
+            except OptionError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
             # A paid call whose outcome was never settled. Approving settles it: a reply the
             # receipt holds is recorded (usage and cost) and replayed by the step, never paid

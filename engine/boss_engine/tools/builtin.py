@@ -3726,6 +3726,37 @@ def _register_work_item_tools(reg: ToolRegistry) -> None:
                 "fields": [f["key"] for f in asked["form"]["fields"]]}
 
     @reg.tool(
+        "offer_options",
+        "Offer a person up to 8 real alternatives, each carrying TYPED effects on the work "
+        "graph that run if they pick it: comment {target, body}, create {title, description?, "
+        "parent?, assignee?}, update_status {target, status}, assign {target, assignee}, "
+        "cancel_tree {target}. Targets are work item ids. Each option is signed when asked; an "
+        "effect whose target changed before the person chose is skipped. Returns the decision "
+        "id; nothing runs until a person picks an option.",
+        _obj({"question": {"type": "string"},
+              "options": {"type": "array", "items": {"type": "object"},
+                          "description": "[{id?, label, detail?, effects: [{type, ...}]}]"},
+              "work_item_id": {"type": "string", "description": "the item it is about"},
+              "context": {"type": "string", "description": "one or two sentences of why"}},
+             required=["question", "options"]),
+        kind="write", reversibility="safe", permission="work_item:manage",
+        exposure=Exposure(tags=("work", "decisions")))
+    def offer_options(ctx, *, project_id, actor, args):
+        from ..services import decision_options
+
+        try:
+            with ctx.begin() as c:
+                offered = decision_options.offer(
+                    c, project_id=project_id, question=str(args.get("question") or ""),
+                    options=args.get("options") or [], asker=str(actor or "agent"),
+                    work_item_id=args.get("work_item_id") or None,
+                    context=str(args.get("context") or ""))
+        except (ValueError, LookupError) as refused:
+            return {"ok": False, "error": str(refused)}
+        return {"ok": True, "status": "asked", "decision_id": offered["decision_id"],
+                "options": [o["id"] for o in offered["options"]]}
+
+    @reg.tool(
         "request_tool_access",
         "Ask a person for MCP tools you do not hold yet: name the server, EXACTLY the tools you "
         "need (as the server lists them) and why, in a sentence. A Grant card opens in Needs "
