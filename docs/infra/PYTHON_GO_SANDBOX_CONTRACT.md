@@ -84,3 +84,29 @@ Python owns the contract + the fallback local provider (OSS single-node). The Go
 density, warm-pool/snapshot-resume, per-repo rootfs cache, and success-release/failure-retain (the scale
 substrate, S1). The **async submit/poll shape here is what makes a single Python worker non-blocking** —
 it submits and polls rather than holding a connection open for the whole multi-minute execution.
+
+## Execution backends (BOSSAPP-824, additive to v1.0)
+
+`services/sandbox-service` now EXECUTES admitted submits when started with a backend
+(`BOSS_SANDBOX_BACKEND=process|firecracker`); with no backend it remains the fail-closed scaffold
+described above. Both backends run the same in-guest pipeline (`sandbox-host/guest/in_guest_agent.py`,
+embedded in the binary with a sync test):
+
+- **process** — the guest pipeline as a local subprocess in a per-task workdir. No isolation claim; it
+  exists so this contract is drivable on any machine/CI (`engine/tests/test_sandbox_service_conformance.py`
+  builds the binary and drives the real Python client through submit → status → result → release).
+- **firecracker** — one microVM per task: kernel + per-task rootfs copy + an ext4 work drive
+  (`mke2fs -d` in, `debugfs` out — no host mounts). Readiness failures 422 with a message naming the
+  missing piece. Operator runbook: `docs/infra/MICROVM_ENABLE.md`; host proof: `scripts/sandbox/microvm-e2e.sh`.
+
+Additive surface shipped with the backends (all conforming to the Python side):
+
+- `test_mode` is now forwarded by `build_submit_request` (the Go `SubmitRequest` always typed it);
+  `engine=echo` always runs as an offline test_mode diagnostic — no repo, network, or credentials.
+- `cancelled` is a terminal status on the Go side too (`POST /v1/sandbox/tasks/{id}/cancel`).
+- Inspection of a retained workspace: `GET /v1/sandbox/tasks/{id}/fs?path=/work/...` (tree + file reads)
+  and `GET /v1/sandbox/tasks/{id}/logs` (serial console / guest agent log) — what `sandbox_console.py`
+  proxies for the console; `hold` accepts both `{ttl_seconds}` and the console's `{hours}`.
+- Auth: `X-Sandbox-Token` (canonical) or the same secret as `Authorization: Bearer`.
+- Poll `result` additionally carries the guest's full shape (`status`, `diff_summary`, `tests`, `usage`,
+  `turns`, `engine`) that `MicroVMProvider.run_code_task` maps into a `CodeAgentResult`.
