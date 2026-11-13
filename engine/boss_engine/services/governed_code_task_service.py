@@ -5656,6 +5656,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     def _mark_stage_done(stage: str) -> None:
         mark_stage_done(engine, project_id, run_id, stage)
 
+    # BOSSAPP-826 WORKSPACE SNAPSHOTS: armed at the provision site below only when
+    # BOSS_WORKSPACE_SNAPSHOTS=remote and the sandbox is remote. None otherwise, so with
+    # the knob off (the default) _checkpoint behaves exactly as before.
+    _ws_snapshot: list = [None]
+
     def _checkpoint(label: str) -> int:
         """Push whatever the sandbox holds to the work branch. Best-effort, never fatal.
 
@@ -5670,6 +5675,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         """
         if use_microvm:
             return 0  # that path already commits per stage
+        if _ws_snapshot[0] is not None:
+            # BOSSAPP-826: alongside the push, the remote sandbox's uncommitted tree and
+            # dependency dirs go to the object store (before the push hold: a held push still
+            # snapshots). Best-effort — never raises, never fails the run.
+            from . import workspace_snapshots as _ws_snapshots
+
+            _ws_snapshots.capture_best_effort(_ws_snapshot[0], sandbox, label)
         if _push_held(f"checkpoint:{label}"):
             return 0
         try:
@@ -5834,6 +5846,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               token="", egress=SimpleNamespace(
                                   clone_url=_lr.file_url(_lr.mirror_path(owner, repo, settings)),
                                   git_config=[], own_git=None))
+        # BOSSAPP-826: a REMOTE sandbox (only with BOSS_WORKSPACE_SNAPSHOTS=remote) gets this
+        # lineage's latest workspace snapshot back — or the dependency seed matching its
+        # lockfiles — before any stage runs, and arms the stage-end snapshot in _checkpoint.
+        # Off / local sandbox: enabled_for reads settings and returns False; nothing else runs.
+        from . import workspace_snapshots as _ws_snapshots
+
+        if not use_microvm and _ws_snapshots.enabled_for(settings, provider, sandbox):
+            _ws_snapshot[0] = _ws_snapshots.context_for(
+                engine, settings, run_id=run_id, root_run_id=root_run, project_id=project_id,
+                owner=owner, repo=repo)
+            _ws_snapshots.restore_best_effort(_ws_snapshot[0], sandbox, is_repair=_is_repair)
         if _brief_refused:
             _repo_verdict = repository_stack_verdict(getattr(sandbox, "path", None))
             if _repo_verdict is None or not _repo_verdict.ok:
