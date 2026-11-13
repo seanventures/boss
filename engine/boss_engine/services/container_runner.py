@@ -106,12 +106,21 @@ class ContainerCommandRunner:
     container outlives the run that made it and nothing else will clean it up.
     """
 
-    def __init__(self, root: Path, settings, *, task_id: str = "") -> None:
+    def __init__(self, root: Path, settings, *, task_id: str = "",
+                 project_id: Optional[str] = None, image: Optional[str] = None,
+                 engine=None) -> None:
         self.root = Path(root).resolve()
         self.settings = settings
         self.task_id = task_id or "task"
         self.binary = shutil.which(getattr(settings, "sandbox_docker_binary", "docker")) or "docker"
         self.image = getattr(settings, "sandbox_container_image", "python:3.11-slim")
+        # BOSSAPP-825: an explicit image wins; otherwise start() asks for the project's
+        # (an environment's config.image, then its ready toolchain image). None keeps
+        # the configured default above — the behaviour before toolchain images.
+        self._explicit_image = (image or "").strip() or None
+        self.project_id = project_id
+        self._engine = engine
+        self.image_source = "default"
         self.network = getattr(settings, "sandbox_container_network", "none") or "none"
         self.memory = getattr(settings, "sandbox_container_memory", "2g")
         self.cpus = str(getattr(settings, "sandbox_container_cpus", "2"))
@@ -123,6 +132,7 @@ class ContainerCommandRunner:
         if self.container_id:
             return self.container_id
         preflight(self.settings)
+        self._choose_image()
         # Named `create_argv`, not `argv`: this starts the container, it does not run the
         # build. test_builds_yield_to_the_control_plane.py treats an `argv` handed to
         # subprocess.run as a build launch that must be niced, and it is right to — the
@@ -169,9 +179,24 @@ class ContainerCommandRunner:
                 + (proc.stderr or proc.stdout or "").strip()
             )
         self.container_id = (proc.stdout or "").strip()
-        _log.info("sandbox container %s started (image=%s network=%s)",
-                  self.container_id[:12], self.image, self.network)
+        _log.info("sandbox container %s started (image=%s source=%s network=%s)",
+                  self.container_id[:12], self.image, self.image_source, self.network)
         return self.container_id
+
+    def _choose_image(self) -> None:
+        """Which image this task's container runs (BOSSAPP-825)."""
+        if self._explicit_image:
+            self.image, self.image_source = self._explicit_image, "explicit"
+            return
+        from .toolchain_images import runner_image_for
+
+        # The governed pipeline passes the run id as task_id, not the project; the
+        # lookup maps one to the other. A failed lookup is None: the default image.
+        chosen = runner_image_for(self.settings, project_id=self.project_id,
+                                  task_id=self.task_id if self.task_id != "task" else None,
+                                  engine=self._engine)
+        if chosen:
+            self.image, self.image_source = chosen, "project"
 
     def stop(self) -> None:
         cid, self.container_id = self.container_id, None

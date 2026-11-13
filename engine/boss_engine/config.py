@@ -1392,6 +1392,16 @@ class Settings(BaseSettings):
     sandbox_container_memory: str = Field(default="2g", alias="BOSS_SANDBOX_CONTAINER_MEMORY")
     sandbox_container_cpus: str = Field(default="2", alias="BOSS_SANDBOX_CONTAINER_CPUS")
     sandbox_container_pids: int = Field(default=512, alias="BOSS_SANDBOX_CONTAINER_PIDS")
+    # --- per-project toolchain images (BOSSAPP-825) -----------------------
+    # A project's own build image, built in a console setup session and captured with
+    # `docker commit` (services/toolchain_images.py). With a registry (the compose
+    # `toolchains` profile runs one on 127.0.0.1:5000) the image is pushed and pinned by
+    # digest; empty keeps it in the local docker daemon only.
+    toolchain_registry: str = Field(default="", alias="BOSS_TOOLCHAIN_REGISTRY")
+    #: The setup session installs tools, so it has network (unlike a build container).
+    toolchain_setup_network: str = Field(default="bridge", alias="BOSS_TOOLCHAIN_SETUP_NETWORK")
+    #: Base for a new setup session; empty means BOSS_SANDBOX_CONTAINER_IMAGE.
+    toolchain_default_base: str = Field(default="", alias="BOSS_TOOLCHAIN_DEFAULT_BASE")
 
     # --- agent-boundary permissions (P0-E / BOSS-411) -------------------
     # BOSS governs at the WORKFLOW level (decisions, gates, budget) and, until now,
