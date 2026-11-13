@@ -407,15 +407,17 @@ def decide(ctx: PolicyContext, *, rules: Optional[Sequence[Mapping[str, Any]]] =
         else:
             notes.append(f"{_describe(chosen)} matched first")
             reason = "policy" if decision != "allow" else "allow"
-    # THE CEILINGS: a rule may only make a call stricter than these.
+    # THE CEILINGS: a rule may only make a call stricter than these. The registry's own policy
+    # (``base``) already carries the tier floor and the quarantine (mcp_registry.tool_policy), so
+    # those two are re-applied to a RULE's allow; the review rule applies to every allow.
     if decision == "allow":
         from .mcp_registry import policy_floor
 
-        if policy_floor(ctx.tier) == "ask":
+        if chosen is not None and policy_floor(ctx.tier) == "ask":
             decision, reason = "ask", "ask"
             ids.append("guard:tier_floor")
             notes.append(f"a tier {ctx.tier} tool changes the world, so it always asks a person")
-        elif ctx.quarantined:
+        elif chosen is not None and ctx.quarantined:
             decision, reason = "ask", "ask"
             ids.append("guard:quarantine")
             notes.append("its definition changed and waits for review, so it asks a person")
