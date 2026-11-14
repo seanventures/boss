@@ -87,6 +87,17 @@ P0:
 
 P1:
   engine:
+    # The harness kernel runs decisions, chat, agent steps and meeting seats (AP-P1b): the
+    # six-hook middleware with mandatory governance, the conformance suites (old loops and
+    # every registered engine), the K4 shadow comparison, and the K14 lint
+    - engine/tests/test_kernel_middleware.py
+    - engine/tests/test_kernel_conformance.py
+    - engine/tests/test_kernel_engine_conformance.py
+    - engine/tests/test_kernel_decisions.py
+    - engine/tests/test_kernel_chat.py
+    - engine/tests/test_kernel_agent_steps.py
+    - engine/tests/test_kernel_meetings.py
+    - engine/tests/test_no_model_call_outside_the_kernel.py
     # The scripted harness benchmark end to end on one task, and a regression it must catch
     - engine/tests/test_harness_bench_e2e.py
     # Operator-reported: tsx Permission denied in the serve proof (crun_247435e1)

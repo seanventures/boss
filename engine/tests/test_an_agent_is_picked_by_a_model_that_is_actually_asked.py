@@ -126,7 +126,8 @@ def test_a_bounded_run_gets_the_mcp_servers_its_agent_holds_pinned_at_start(monk
 def test_a_bounded_run_offers_only_the_granted_tools_of_a_server():
     import inspect
 
-    source = inspect.getsource(agent_loop._drive_run)
+    # The assembly is the agent step's toolset (K4), shared by both loops.
+    source = inspect.getsource(agent_loop.AgentStepToolSet)
     assert 'allow = set(server.get("granted_tools") or [])' in source
     assert "if allow and tool_name not in allow:" in source
 

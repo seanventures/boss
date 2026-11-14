@@ -20,7 +20,7 @@ import json
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -417,9 +417,88 @@ def _panel_blob(personas: list[dict], rnd: dict) -> str:
                          for p in personas)
 
 
+def kernel_meetings() -> bool:
+    """Meeting seats on the kernel (AP-P1b): ON by default (kernel/flags.py);
+    BOSS_KERNEL_MEETINGS=0 is the escape hatch back to the raw adapter call."""
+    from ..kernel.flags import KERNEL_MEETINGS, on
+
+    return on(KERNEL_MEETINGS)
+
+
+class Seat:
+    """How one seat speaks: its adapter, and the budget gate and ledger sink its kernel run is
+    governed by (None: the gate could not be built — a meeting is never ended for want of one —
+    or no ledger is kept)."""
+
+    def __init__(self, adapter: Any, *, gate: Any = None, sink: Any = None,
+                 project_id: str = "", ref: str = ""):
+        self.adapter, self.gate, self.sink = adapter, gate, sink
+        self.project_id, self.ref = project_id, ref
+
+
+def _seat(c, settings, project_id: str, run_id: str, adapter: Any) -> Seat:
+    """The governance a seat's turns run under: the project's budget gate over THIS adapter (the
+    same reservation, category and receipts as any governed turn; GovernedChatAdapter reserves
+    and settles on fresh connections once `c` is closed, so a seat in its own thread is safe),
+    and the run ledger's sink when the ledger is on."""
+    if isinstance(adapter, Seat):
+        return adapter
+    gate = sink = None
+    if kernel_meetings() and project_id and isinstance(c, Connection) \
+            and not isinstance(adapter, _RefusedSeat):
+        # A gate needs the database it reserves in (a real connection; never a test double).
+        try:
+            from ..kernel.governance import project_gate
+
+            gate = project_gate(c, settings, project_id, skill_id="model.meeting_seat",
+                                ref=run_id, adapter=adapter)
+        except Exception:  # noqa: BLE001 — seats were ungoverned before; never end a meeting
+            gate = None
+        try:
+            from ..kernel import ledger as kernel_ledger
+
+            db = getattr(c, "engine", None)
+            if kernel_ledger.enabled() and db is not None:
+                sink = kernel_ledger.DbSink(db)
+                if hasattr(adapter, "_record"):
+                    adapter._record = False  # one llm_calls row per call: the sink's
+        except Exception:  # noqa: BLE001
+            sink = None
+    return Seat(adapter, gate=gate, sink=sink, project_id=project_id, ref=run_id)
+
+
 def _ask(adapter, system_prompt: str, user_prompt: str) -> tuple[str, int, Optional[str]]:
-    _ref, text_out, usage = adapter.create_text_response(user_prompt, system_prompt=system_prompt)
-    return text_out, estimate_cost_usd_micros(usage), usage.get("model")
+    """One seat's turn: (its text, what it cost, the model that spoke).
+
+    ON THE KERNEL (BOSS_KERNEL_MEETINGS, default on): `kernel.run` with presets.meeting_seat over
+    a TextEngine — the same `create_text_response(prompt, system_prompt=...)` the seat always
+    made, now with the kernel's mandatory governance around it: the budget gate reserved and
+    settled per attempt, the call receipted on the run ledger, a provider hiccup retried. Off:
+    the raw call, as before (removed at K14)."""
+    seat = adapter if isinstance(adapter, Seat) else Seat(adapter)
+    if not kernel_meetings():
+        _ref, text_out, usage = seat.adapter.create_text_response(
+            user_prompt, system_prompt=system_prompt)
+        return text_out, estimate_cost_usd_micros(usage), usage.get("model")
+    from .. import kernel
+    from ..kernel import presets
+
+    engine = kernel.TextEngine(seat.adapter, name=type(seat.adapter).__name__)
+    result = kernel.run(kernel.RunSpec(
+        engine=engine, tools=kernel.FunctionToolSet([]), policies=presets.meeting_seat(),
+        project_id=seat.project_id or "", system=system_prompt or None,
+        messages=[{"role": "user", "content": user_prompt}], actor="agent:meeting_seat",
+        stage="meeting", gate=seat.gate, sink=seat.sink))
+    if result.status != "completed":
+        # The old call raised the adapter's own exception out of the phase; so does this.
+        if engine.last_error is not None:
+            raise engine.last_error
+        if result.stopped == "budget_stop":
+            from .model_routing import ModelSpendRefused
+
+            raise ModelSpendRefused(result.error or "the budget refused this seat")
+        raise RuntimeError(result.error or f"the seat's turn ended {result.status}")
+    return result.text, int(result.usage.cost_usd_micros), (result.usage.model or None)
 
 
 class _RefusedSeat:
@@ -1167,6 +1246,11 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         adapter = model_routing.project_chat_adapter(c, settings, run["project_id"])
         seats = {} if facilitating else _seat_adapters(c, settings, run["project_id"],
                                                          personas, purpose)
+        # EVERY SEAT SPEAKS THROUGH THE GOVERNED PIPELINE (AP-P1b): its adapter, under the
+        # project's budget gate and the run ledger (`_seat`; the kernel run is in `_ask`).
+        adapter = _seat(c, settings, run["project_id"], run_id, adapter)
+        seats = {key: _seat(c, settings, run["project_id"], run_id, seat_adapter)
+                 for key, seat_adapter in seats.items()}
     add_cost = 0
     model = (run["usage"] or {}).get("model")
 

@@ -83,6 +83,9 @@ ALLOWED: dict[str, tuple[str, str]] = {
     "engine/boss_engine/services/skill_executors.py": (WORKER, "model.generate_* skills"),
     "engine/boss_engine/services/video_planner.py": (WORKER, "writes a validated edit plan"),
     "engine/boss_engine/services/workflow_drafting.py": (WORKER, "drafts a workflow for review"),
+    "engine/boss_engine/services/tool_result_screen.py": (WORKER, "the optional model check of "
+                                                          "a tool result (mode 'model'); it "
+                                                          "classifies text, chooses nothing"),
     "engine/boss_engine/services/typed_decisions.py": (WORKER, "answers a workflow author's "
                                                        "typed question for its branch"),
     "engine/boss_engine/services/workflow_precheck_agent.py": (WORKER, "advisory read-only "

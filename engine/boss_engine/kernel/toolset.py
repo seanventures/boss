@@ -24,6 +24,15 @@ _BUDGET_WAIT = "budget_wait"
 #: ... "this caller may not do that".
 _REFUSED = ("refused", "denied", "forbidden")
 
+#: A ToolSchema.permission saying "the tool registry's own identity gate decides this call"
+#: (ToolRegistry.invoke -> identity_gate). The kernel's authz middleware never decides it twice.
+GATED_BY_REGISTRY = "@registry"
+#: A ToolSchema.permission saying "this catalogued tool set knows of no permission for this
+#: call": inside a delegated run the authz middleware refuses it (deny by default). A schema
+#: whose permission is None is a caller's own function outside the catalogue (a decision's or
+#: the pre-check's read functions, the ledger reader): its toolset's gates decide it.
+UNDECLARED = "@undeclared"
+
 
 class ToolSet(Protocol):
     def schemas(self, *, step: int, state: RunState) -> list: ...
@@ -176,7 +185,11 @@ class RegistryToolSet:
             out.append(ToolSchema(name=s.name, description=s.description,
                                   parameters=dict(s.parameters), kind=s.kind,
                                   reversibility=getattr(s, "reversibility", "safe"),
-                                  deferred=standing == "deferred"))
+                                  deferred=standing == "deferred",
+                                  # registry.invoke's identity_gate decides these calls (the
+                                  # permission for these arguments, org scope, confinement):
+                                  # the mandatory authz middleware hands over to it.
+                                  permission=GATED_BY_REGISTRY))
         return out
 
     def policy(self, call: ToolCall, args: dict, state: RunState) -> Optional[dict]:
@@ -290,5 +303,6 @@ def unknown(call: ToolCall) -> ToolResult:
         "message": f"'{call.name}' is not one of the tools offered to you. Use one that is."})
 
 
-__all__ = ["Composite", "FunctionToolSet", "ReadOnlyToolSet", "RegistryToolSet", "Tool",
-           "ToolSet", "failed", "result_from", "unknown"]
+__all__ = ["Composite", "FunctionToolSet", "GATED_BY_REGISTRY", "ReadOnlyToolSet",
+           "RegistryToolSet", "Tool", "ToolSet", "UNDECLARED", "failed", "result_from",
+           "unknown"]

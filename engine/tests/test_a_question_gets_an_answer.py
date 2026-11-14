@@ -118,18 +118,24 @@ def test_the_step_limit_produces_findings_not_an_apology():
     import inspect
     from boss_engine.services import agent_loop
 
-    src = inspect.getsource(agent_loop._drive_run)
-    assert "You have used your tool budget" in src
-    assert "Do not apologise and do not ask" in src
-    assert "What you could NOT determine" in src
+    from boss_engine.kernel import presets
+
+    # BOTH LOOPS (K4): the old loop's literal, and the kernel preset an agent run drives on.
+    for src in (inspect.getsource(agent_loop._drive_run_legacy), presets.AGENT_LOOP_ANSWER):
+        assert "You have used your tool budget" in src
+        assert "Do not apologise and do not ask" in src
+        assert "What you could NOT determine" in src
 
 
 def test_the_fallback_string_tells_the_operator_what_to_do_next():
     import inspect
     from boss_engine.services import agent_loop
 
-    src = code_only(agent_loop._drive_run)
+    from boss_engine.kernel import presets
+
+    src = code_only(agent_loop._drive_run_legacy)
     assert "narrowing the question" in src
+    assert "narrowing the question" in presets.AGENT_LOOP_FALLBACK  # the kernel's (K4)
     # Read through code_only: the comment above the fix QUOTES the old string, and matching
     # that instead of the code is the mistake this helper exists to prevent.
     assert "(agent reached its step limit before finishing)" not in src

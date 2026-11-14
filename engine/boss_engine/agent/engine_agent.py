@@ -45,7 +45,8 @@ _UNSCOPED_SQL_TOOLS = frozenset({"query_db", "write_db"})
 #: an API key under BOSS_CHAT_ANTHROPIC_NATIVE) runs through `kernel.run` with
 #: presets.engine_agent instead of the loop below. A CLI text brain (claude_code,
 #: claude_agent_sdk, codex on a subscription login) keeps the loop below UNCHANGED until K8.
-#: Off (the default) is byte-identical to today on every engine.
+#: ON BY DEFAULT since AP-P1b (kernel/flags.py); set to an off word ("0") it is the old loop,
+#: byte-identical, on every engine.
 KERNEL_CHAT_FLAG = "BOSS_KERNEL_CHAT"
 
 #: Chat lanes whose create_chat_completion is the JSON-in-text protocol over a CLI. The kernel
@@ -63,10 +64,10 @@ _CLI_ADAPTER_TYPES = frozenset({"ClaudeCliAdapter", "CodexCliAdapter", "AgentSdk
 
 
 def kernel_chat() -> bool:
-    import os
+    """K6 is ON by default (AP-P1b, kernel/flags.py); BOSS_KERNEL_CHAT=0 is the escape hatch."""
+    from ..kernel.flags import on
 
-    return (os.environ.get(KERNEL_CHAT_FLAG) or "").strip().lower() in ("1", "true", "yes",
-                                                                        "on")
+    return on(KERNEL_CHAT_FLAG)
 
 
 def _cli_text_adapter(adapter: Any) -> bool:
@@ -968,7 +969,9 @@ class EngineAgent:
             if callable(getattr(adapter, "complete", None)) \
                     and getattr(adapter, "traits", None) is not None:
                 engine = adapter  # already a kernel engine (scripted / a test double)
-            elif type(adapter).__name__ in _CLI_ADAPTER_TYPES:
+            elif type(adapter).__name__ in _CLI_ADAPTER_TYPES or _cli_text_adapter(adapter):
+                # A CLI text brain by type OR by ancestry (a subclass, or one under the router's
+                # wrappers): no kernel form until K8, so it keeps its own loop and session.
                 return None
             else:
                 # A kernel run's calls are ledgered by its own sink (kernel/ledger.DbSink ->

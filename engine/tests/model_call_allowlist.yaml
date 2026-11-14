@@ -1,0 +1,143 @@
+# THE K14 LINT'S ALLOWLIST (AP-P1b; HARNESS_KERNEL_DESIGN.md K14, AGENT_PLATFORM.md §4.2).
+#
+# A model call — `create_text_response`, `create_chat_completion`, `stream_text_response`,
+# `create_plain_answer`, a provider SDK's `chat.completions.create` / `messages.create` /
+# `responses.create` — or a coding-engine invocation (`run_role`, `run_research`, `run_verdict`,
+# `run_plain`) may appear only in the kernel package (engine/boss_engine/kernel/, the one loop
+# and its engines) or in a module listed here, with the calls it may make and why.
+# test_no_model_call_outside_the_kernel.py reads this file and fails on:
+#   * a module making such a call that is not the kernel and not listed;
+#   * a listed module making a call its entry does not list;
+#   * a listed module that no longer makes a listed call (the list only shrinks);
+#   * a `legacy` entry whose flag is not on by default (the old loop is the escape hatch only).
+#
+# Sections:
+#   delegate   Delegate harness entry points (decision D4): Claude Code / Codex / the CLI and
+#              research harnesses run their OWN loops; the kernel records them as one opaque
+#              step. These stay outside the kernel by design.
+#   transport  The model adapters and SDK clients themselves (the governed adapter seam) and the
+#              scripted conformance engine.
+#   legacy     An old loop kept behind its kernel flag (default ON) as the escape hatch; K14
+#              deletes it after a release at default-on.
+#   migrate    A worker still calling a model outside the kernel. Each is a Phase 1 follow-up;
+#              none may grow, and new ones are refused.
+
+delegate:
+  engine/boss_engine/services/code_agent.py:
+    calls: [run_role, create_chat_completion]
+    why: "the coding engines (Claude Code, Agent SDK, Codex, native, ACP); NativeCodeAgent's own loop moves at K11"
+  engine/boss_engine/services/engine_contract.py:
+    calls: [run_role]
+    why: "ContractedAgent: the coding contract every engine's run_role goes through"
+  engine/boss_engine/services/cli_harness.py:
+    calls: [run_role]
+    why: "the generic CLI harnesses (grok / cursor / aider)"
+  engine/boss_engine/services/governed_code_task_service.py:
+    calls: [run_role]
+    why: "the governed build pipeline: every stage is a run_role on the contracted engine"
+  engine/boss_engine/services/discovery_service.py:
+    calls: [run_research]
+    why: "web research sessions on a coding engine"
+  engine/boss_engine/services/docs_agent.py:
+    calls: [run_role]
+    why: "documentation through the coding contract"
+  engine/boss_engine/services/engine_startup.py:
+    calls: [run_role]
+    why: "the start door's probe: can the routed engine actually start"
+  engine/boss_engine/services/setup_service.py:
+    calls: [run_role]
+    why: "Repo and models' CLI probe: a login check and one hello run"
+  engine/boss_engine/services/pr_review_again.py:
+    calls: [run_role]
+    why: "re-runs the adversarial review on a pull request's diff"
+  engine/boss_engine/services/self_fix_build.py:
+    calls: [run_role]
+    why: "builds a self-fix through the coding contract (BOSSAPP-571)"
+  engine/boss_engine/services/verifier_debate.py:
+    calls: [run_role]
+    why: "the verifier debate on the coding contract"
+  engine/boss_engine/services/verifier_meta_eval.py:
+    calls: [run_role]
+    why: "scores the verifiers on the coding contract"
+
+transport:
+  engine/boss_engine/services/openai_adapter.py:
+    calls: [chat.completions.create, responses.create]
+    why: "the OpenAI-compatible adapter: the SDK call itself"
+  engine/boss_engine/services/claude_cli_adapter.py:
+    calls: [create_chat_completion, create_text_response]
+    why: "the CLI chat brains and FallingBackAdapter delegating to their inner adapter"
+  engine/boss_engine/services/scripted_engine.py:
+    calls: [run_role]
+    why: "the scripted conformance engine: plays a script, calls no model"
+  engine/boss_engine/services/model_router/store.py:
+    calls: [create_text_response]
+    why: "the model router's reachability probe (one hello per model, no decision)"
+
+legacy:
+  engine/boss_engine/services/agent_loop.py:
+    calls: [create_chat_completion]
+    flag: BOSS_KERNEL_STEPS
+    why: "_drive_run_legacy: the old agent-step loop (K4); runs started before K4 resume on it"
+  engine/boss_engine/agent/engine_agent.py:
+    calls: [create_chat_completion, create_text_response]
+    flag: BOSS_KERNEL_CHAT
+    why: "the old chat loop: the escape hatch, and the CLI text brains' JSON-in-text protocol until K8/K10"
+  engine/boss_engine/services/agent_decision.py:
+    calls: [create_chat_completion, create_text_response]
+    flag: BOSS_KERNEL_DECISIONS
+    why: "_ask_reading (the old read phase) and the single-shot decision asks (_ask_model / _ask_structured), which have no tools to loop over"
+  engine/boss_engine/services/meeting_service.py:
+    calls: [create_text_response]
+    flag: BOSS_KERNEL_MEETINGS
+    why: "the raw seat call behind BOSS_KERNEL_MEETINGS=0"
+
+migrate:
+  engine/boss_engine/services/intent_router.py:
+    calls: [create_chat_completion, create_text_response]
+    why: "route_turn's one-shot classifiers (the intent tool schema); the turn itself runs on the kernel"
+  engine/boss_engine/services/subject_answer.py:
+    calls: [create_chat_completion]
+    why: "route_turn's one-call subject answer"
+  engine/boss_engine/services/workflow_precheck_agent.py:
+    calls: [create_chat_completion]
+    why: "the pre-check's own loop: K3 (BOSS_KERNEL_PRECHECK), not flipped in this phase"
+  engine/boss_engine/services/meeting_actions.py:
+    calls: [create_text_response]
+    why: "extracts a meeting's decisions and actions (a workflow capability, not a seat)"
+  engine/boss_engine/multirepo/change_sets.py:
+    calls: [create_text_response]
+    why: "plans a multi-repo change set"
+  engine/boss_engine/services/architecture_spend.py:
+    calls: [create_text_response]
+    why: "writes architecture docs"
+  engine/boss_engine/services/github_pr_review_agent.py:
+    calls: [create_chat_completion]
+    why: "writes a PR review"
+  engine/boss_engine/services/monitoring_pack.py:
+    calls: [create_text_response]
+    why: "drafts a monitoring pack"
+  engine/boss_engine/services/prd_decomposition.py:
+    calls: [create_chat_completion]
+    why: "splits a PRD into tasks"
+  engine/boss_engine/services/skill_executors.py:
+    calls: [create_chat_completion, create_text_response]
+    why: "the model.generate_* skills"
+  engine/boss_engine/services/software_factory.py:
+    calls: [create_text_response]
+    why: "writes the factory plan artifact (the plan's tool loop itself runs on the kernel via agent_loop)"
+  engine/boss_engine/services/sre_ask.py:
+    calls: [create_text_response]
+    why: "plans a read-only query"
+  engine/boss_engine/services/tool_result_screen.py:
+    calls: [create_text_response]
+    why: "the optional model check of a tool result (mode 'model'), itself governed"
+  engine/boss_engine/services/typed_decisions.py:
+    calls: [create_text_response]
+    why: "answers a workflow author's typed question"
+  engine/boss_engine/services/video_planner.py:
+    calls: [create_text_response]
+    why: "writes a validated edit plan"
+  engine/boss_engine/services/workflow_drafting.py:
+    calls: [create_text_response]
+    why: "drafts a workflow for review"

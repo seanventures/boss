@@ -202,8 +202,11 @@ def test_the_agent_loops_tools_are_decided_against_the_run_token(env):
     from boss_engine.identity import catalogue, runs
     from boss_engine.services import agent_loop
 
-    for name in list(agent_loop._TOOL_FNS) + list(agent_loop._WRITE_FNS):     # every loop tool is declared
-        assert catalogue.is_known(agent_loop.AGENT_TOOL_PERMISSIONS[name]), name
+    # Every loop tool is declared in the native tool registry (K4: the permission sits next to
+    # the tool and ToolSpec checks it against the catalogue), the typed question included.
+    registry = agent_loop.native_tool_registry()
+    for name in list(agent_loop._TOOL_FNS) + list(agent_loop._WRITE_FNS) + ["ask_human"]:
+        assert catalogue.is_known(registry.get(name).permission), name
     g = env.grant()
     maps = dict(mcp_map={"mcp_x": ({}, {})}, repo_map={}, skill_map={"skill_y": {}}, on_demand_loader=None)
     with env.db() as c:

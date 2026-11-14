@@ -182,6 +182,51 @@ class OpenAIChatEngine:
         return estimate_tokens(req)
 
 
+class TextEngine:
+    """A TOOL-LESS engine over `create_text_response(prompt, system_prompt=...)` — the one call
+    every adapter BOSS has answers, the CLI brains (Claude Code, Codex on a subscription)
+    included. Meeting seats, the synthesis and the PRD draft run on it (presets.meeting_seat):
+    they produce text, offer no tools, and until now called the adapter raw, outside every
+    governance seam.
+
+    The conversation is sent as the adapter has always been asked: a single user message is the
+    prompt itself (byte-identical to the old `_ask`); anything longer is rendered role by role.
+    A request offering tools is a programming error here and is refused. `last_error` keeps the
+    adapter's own exception, so a caller can re-raise exactly what the old call raised."""
+
+    def __init__(self, adapter: Any, *, name: str = "text"):
+        self.adapter = adapter
+        self.name = name
+        self.traits = EngineTraits(native_tools=False, family="text")
+        self.last_error: Optional[BaseException] = None
+
+    def complete(self, req: ModelRequest, *, on_delta: Optional[Callable[[str], None]] = None,
+                 cancel: Optional[CancelToken] = None) -> ModelTurn:
+        if req.tools:
+            raise ValueError("TextEngine serves tool-less runs only; this request offers tools")
+        try:
+            _ref, text, usage = self.adapter.create_text_response(
+                self.prompt_of(req.messages), system_prompt=req.system_text())
+        except BaseException as error:
+            self.last_error = error
+            raise
+        text = text if isinstance(text, str) else ("" if text is None else str(text))
+        if on_delta is not None and text:
+            on_delta(text)
+        return ModelTurn(text=text, tool_calls=[], stop_reason="end_turn",
+                         usage=_usage_of(usage), raw={"role": "assistant", "content": text})
+
+    @staticmethod
+    def prompt_of(messages: Sequence[Mapping[str, Any]]) -> str:
+        if len(messages) == 1 and messages[0].get("role") == "user":
+            return str(messages[0].get("content") or "")
+        return "\n\n".join(f"{str(m.get('role') or 'user').upper()}: {m.get('content') or ''}"
+                            for m in messages)
+
+    def count(self, req: ModelRequest) -> int:
+        return estimate_tokens(req)
+
+
 def _usage_of(usage: Any) -> Usage:
     """The adapter's usage dict, priced the way every loop priced it (estimate_cost_usd_micros
     honours an exact cost the backend reported)."""
@@ -195,5 +240,18 @@ def _usage_of(usage: Any) -> Usage:
     return Usage.from_adapter_usage(u, cost_usd_micros=cost)
 
 
+#: EVERY ENGINE THE KERNEL RUNS ON, by name → "module:Class" (AP-P1b acceptance (a)). The kernel
+#: conformance suite (test_kernel_engine_conformance.py) plays its scenarios through each one,
+#: and fails when an Engine class in this package is missing here — so a new engine cannot skip
+#: the suite. Delegate engines (Claude Code, Codex: delegate.py) run their own loops and are
+#: not kernel engines.
+REGISTERED_ENGINES: dict = {
+    "scripted": "boss_engine.kernel.scripted:ScriptedEngine",
+    "openai_chat": "boss_engine.kernel.engine:OpenAIChatEngine",
+    "anthropic_messages": "boss_engine.kernel.anthropic_engine:AnthropicMessagesEngine",
+    "text": "boss_engine.kernel.engine:TextEngine",
+}
+
+
 __all__ = ["Block", "CancelToken", "Engine", "EngineTraits", "ModelRequest", "OpenAIChatEngine",
-           "estimate_tokens", "parse_tool_calls"]
+           "REGISTERED_ENGINES", "TextEngine", "estimate_tokens", "parse_tool_calls"]

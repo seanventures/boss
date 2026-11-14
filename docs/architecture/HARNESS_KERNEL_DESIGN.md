@@ -878,7 +878,7 @@ Corrections made while building, each because the design as written would not ho
 
 ### 8.2b What K2 changed against this design (built 2026-11-10, feat/958-kernel)
 
-K2 is live behind `BOSS_KERNEL_DECISIONS` (default off, byte-identical off): `agent_decision.
+K2 is live behind `BOSS_KERNEL_DECISIONS` (default ON since AP-P1b, §8.2f; byte-identical off): `agent_decision.
 decide`'s READ PHASE and final choice run on `kernel.run` with `presets.decision`, a
 `ReadOnlyToolSet` over the caller's ReadPhase tools, and `_accept` (the candidate/arguments/
 evidence check plus the caller's own `check`) as the VerifyPolicy's `accept_final`, re-asked
@@ -988,7 +988,7 @@ default off; nothing selects the engine until K6). Corrections and decisions mad
 
 ### 8.2e What K6 changed against this design (built 2026-11-10, feat/958-k6)
 
-K6 is live behind `BOSS_KERNEL_CHAT` (default off, byte-identical off, asserted by
+K6 is live behind `BOSS_KERNEL_CHAT` (default ON since AP-P1b, §8.2f; byte-identical off, asserted by
 test_kernel_chat.py): with the flag on, `EngineAgent.chat` runs the turn through `kernel.run`
 with `presets.engine_agent` — `RegistryToolSet(surface="chat", run_tool=EngineAgent._run_tool)`
 so the write hold, the propose-only offers, the escalation guard, the consent offers and the
@@ -1050,6 +1050,59 @@ decisions made while building:
    (test_kernel_chat.test_live_a_chat_threads_second_turn_reads_mostly_from_the_cache, gated on
    BOSS_LIVE_CHAT_CACHE): it runs on a keyed host and prints the cost. The agent-battle set
    runs with the K6 flag carried by a keyed host's battle run, not here.
+
+### 8.2f What AP-P1b changed: the middleware contract, governance mandatory, four surfaces on
+
+Built on feat/ap-p1b-kernel (BOSSAPP-1052; docs/design/AGENT_PLATFORM.md §4.2, §5 Phase 1).
+
+1. **The six-hook middleware contract is the kernel's extension surface** (`kernel/middleware.py`):
+   `before_agent`, `before_model`, `wrap_model_call`, `after_model`, `wrap_tool_call`,
+   `after_agent`; node hooks may jump (`end` / `model` / `tools`, declared in `can_jump_to`),
+   wrap hooks nest. The five policies are built-in middleware: `limits` (StopPolicy,
+   before_model), `context` (ToolPolicy + ContextPolicy, before_model: the request is built
+   here), `recovery` (RecoveryPolicy: wrap_model_call's retries/waits/feedback, and the empty
+   completion pressed at after_model), `verify` (VerifyPolicy at after_model: `accept_final`
+   ends the run or re-asks), `tool_args` (the kernel's own unknown-tool and schema check at
+   wrap_tool_call). `RecoveryPolicy.on_tool_error`'s nudge stays where each call is answered
+   (it follows the step's tool messages).
+2. **Governance is mandatory middleware** (`kernel/governance.py`), appended by `build_chain` to
+   every stack and refused if a spec names one: `telemetry` (model.request per attempt,
+   model.response — the ledger sink's llm_calls rows), `budget` (the run's gate, reserved and
+   settled per attempt), `authz` (the run token decides each tool's declared
+   `ToolSchema.permission`; registry tools hand over to the registry's identity_gate; a hold
+   must be a Decision bound to its arguments; `approval_refusal` is the resume side),
+   `tool_screen` (an outside result screened, marked, remembered; the run tainted),
+   `audit` (a write's idempotency key, latency, "a write ran"). The stack is
+   `[verify] + spec middleware + [limits, context, recovery, tool_args] + governance`: node
+   hooks in order before and reversed after, wraps onion with the first outermost — so
+   governance is NEAREST THE EFFECT (every attempt a retry makes is reserved and receipted; no
+   spec middleware can rewrite arguments after authz decided them), and `verify` is the last
+   word on an answer (a spec's after_model may re-ask before it is accepted).
+3. **Flags, per surface (D3), in `kernel/flags.py` and the community compose:** an unset or
+   empty variable is the default; only an off word ("0") turns a surface back.
+   `BOSS_KERNEL_DECISIONS` ON, `BOSS_KERNEL_CHAT` ON, `BOSS_KERNEL_STEPS` ON (named so in the
+   AP-P1b brief; §8.1 called it `BOSS_KERNEL_AGENT_STEPS`), `BOSS_KERNEL_MEETINGS` ON.
+4. **K4: agent steps on the kernel.** `agent_loop.AgentStepToolSet` is the ONE toolset both
+   loops drive (assembled from the grants: held skills, bundles, held MCP servers, the on-demand
+   loader; natives only for unbounded runs). The private name → permission map is deleted: each
+   native tool declares its catalogue permission next to the tool, catalogued (and checked at
+   build) in `native_tool_registry()`; authz decides it. The checkpoint is the agent_runs row
+   (`_KernelRunStore`, written through `_save_run`), the run is stamped with its loop
+   (`finalize_ctx["loop"]`) and resumes there; approvals resume through `kernel.resume` (the
+   binding checked again), typed answers as `answered`. Each drive keeps the old loop's step
+   budget. A fatal model failure is still raised out of the run (the callers' contract).
+5. **Meeting seats** (`meeting_service._ask`) run `kernel.run` with `presets.meeting_seat` over
+   `kernel.TextEngine` — the same `create_text_response` call, now reserved and settled by the
+   project gate (`model.meeting_seat`), receipted, retried on a hiccup.
+6. **K6 selection fix found by the flip:** a CLI text brain reached by ancestry (a subclass, or
+   under a router wrapper without `_boss_choice`) was wrapped as a native engine; it now keeps
+   its own loop (`_cli_text_adapter`), as by type name.
+7. **K14 lint** (`test_no_model_call_outside_the_kernel.py` + `model_call_allowlist.yaml`): a
+   model call or coding-engine invocation outside `engine/boss_engine/kernel/` must be listed —
+   Delegate entry points, transports, the legacy loops behind flags that are on by default, and
+   the workers still to move; the list only shrinks.
+8. **Every registered engine runs the conformance scenarios** (`engine.REGISTERED_ENGINES`,
+   test_kernel_engine_conformance.py): scripted, OpenAI-compatible, Anthropic Messages, text.
 
 ### 8.4 Intended differences pinned by the K1 conformance suite
 

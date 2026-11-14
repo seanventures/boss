@@ -189,5 +189,25 @@ def native_coder(max_turns: int = 40, *, deadline: Optional[float] = None) -> Po
                          version="recover.native_coder@1"))
 
 
+# ── meeting_service seats, the synthesis and the PRD draft ───────────────────────────────────
+
+def meeting_seat(*, max_wait_seconds: float = 120.0) -> Policies:
+    """One seat's turn of a panel (or the facilitator's synthesis / PRD draft): one model call,
+    no tools, its text is the contribution — the old `_ask` exactly — now inside the governed
+    pipeline. Intended differences, each the safer one: a transient provider error is retried
+    (≤3) where the old call failed the whole phase; a per-minute budget deferral is waited out
+    in place (≤ `max_wait_seconds`) and a cap refusal ends the seat saying so — seats were
+    spent ungoverned before."""
+    return Policies(
+        stop=Caps(max_steps=1, answer="none", version="stop.meeting_seat@1"),
+        context=ClipContext(clip=None, version="ctx.meeting_seat@1"),
+        tools=OfferAll(version="tools.meeting_seat@1"),
+        verify=AcceptAny(),
+        recovery=Recover(empty_retries=0, same_tool_failures=0, wait_mode="inline",
+                         max_wait_seconds=float(max_wait_seconds),
+                         version="recover.meeting_seat@1"))
+
+
 __all__ = ["AGENT_LOOP_ANSWER", "AGENT_LOOP_FALLBACK", "ENGINE_AGENT_NUDGE", "agent_loop",
-           "agent_loop_resume_note", "decision", "engine_agent", "native_coder", "precheck"]
+           "agent_loop_resume_note", "decision", "engine_agent", "meeting_seat", "native_coder",
+           "precheck"]

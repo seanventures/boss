@@ -5,6 +5,7 @@ import re
 import time
 from hashlib import sha256
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Callable, Optional
 
 from sqlalchemy import text
@@ -1195,6 +1196,7 @@ ToolFn = Callable[[Connection, str, Settings, dict], dict]
 TOOLS: list[dict[str, Any]] = [
     {
         "fn": _tool_budget_and_costs,
+        "permission": "budget:read",
         "schema": {
             "type": "function",
             "function": {
@@ -1206,6 +1208,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _tool_run_shell,
+        "permission": "sandbox:exec",  # not delegable: never inside a delegated run
         "schema": {
             "type": "function",
             "function": {
@@ -1238,6 +1241,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _tool_describe_schema,
+        "permission": "system:read",
         "schema": {
             "type": "function",
             "function": {
@@ -1257,6 +1261,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _tool_project_status,
+        "permission": "project:read",
         "schema": {
             "type": "function",
             "function": {
@@ -1268,6 +1273,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _tool_diagnose_deployment,
+        "permission": "deployment:read",
         "schema": {
             "type": "function",
             "function": {
@@ -1292,6 +1298,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _tool_diagnose_preview,
+        "permission": "preview:read",
         "schema": {
             "type": "function",
             "function": {
@@ -1314,6 +1321,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _tool_list_apps,
+        "permission": "artifact:read",
         "schema": {
             "type": "function",
             "function": {
@@ -1334,6 +1342,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _tool_inspect_app,
+        "permission": "artifact:read",
         "schema": {
             "type": "function",
             "function": {
@@ -1355,6 +1364,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _tool_list_repo_files,
+        "permission": "repository:read",
         "schema": {
             "type": "function",
             "function": {
@@ -1370,6 +1380,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _tool_read_repo_file,
+        "permission": "repository:read",
         "schema": {
             "type": "function",
             "function": {
@@ -1553,6 +1564,7 @@ def _wt_publish_document(connection, project_id, settings, args) -> dict:
 WRITE_TOOLS: list[dict[str, Any]] = [
     {
         "fn": _wt_change_existing_app,
+        "permission": "code_task:create",
         "risk_tier": 1,
         "schema": {
             "type": "function",
@@ -1583,6 +1595,7 @@ WRITE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _wt_create_followup_task,
+        "permission": "work_item:manage",
         "risk_tier": 1,
         "schema": {
             "type": "function",
@@ -1603,6 +1616,7 @@ WRITE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _wt_open_incident,
+        "permission": "reliability:respond",
         "risk_tier": 2,
         "schema": {
             "type": "function",
@@ -1619,6 +1633,7 @@ WRITE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "fn": _wt_publish_document,
+        "permission": "github:sync",
         "risk_tier": 2,
         "schema": {
             "type": "function",
@@ -1899,6 +1914,9 @@ def run_agent_loop(
     from .ticket_intake import hold_writes_if_untrusted
 
     finalize_ctx = hold_writes_if_untrusted(connection, finalize_ctx)
+    # K4: which loop drives this run, stamped so it resumes on the same one (finalize_ctx["loop"]).
+    finalize_ctx = {**(finalize_ctx or {}),
+                    "loop": KERNEL_LOOP if kernel_steps() else LEGACY_LOOP}
     _save_run(connection, run_id, project_id, task_id, "running", messages, [], _zero_usage(), finalize_ctx or {}, step=0)
     emit_event(connection, project_id, "agent.run_started", "agent_loop", "agent_run", run_id, {"task_id": task_id})
     # IDENTITY (IDENTITY.md §7.2): with a verified person + grant in context, the loop runs as
@@ -1921,60 +1939,110 @@ def run_agent_loop(
         return _drive_run(connection, settings, run_id, max_steps)
 
 
-#: The catalogue permission each of the loop's own tools needs (IDENTITY.md §6.4). Inside a
-#: delegated run every tool call is decided against the run token (person ∩ ceilings ∩ grant ∩
-#: task); a tool missing here is refused there (deny by default). Skills and MCP tools need
-#: `skill:invoke`; the repository read tools `repository:read`.
-AGENT_TOOL_PERMISSIONS: dict[str, str] = {
-    "describe_schema": "system:read",
-    "diagnose_deployment": "deployment:read",
-    "diagnose_preview": "preview:read",
-    "get_budget_and_costs": "budget:read",
-    "get_project_status": "project:read",
-    "inspect_app": "artifact:read",
-    "list_apps": "artifact:read",
-    "list_repo_files": "repository:read",
-    "read_repo_file": "repository:read",
-    "run_shell": "sandbox:exec",                 # not delegable: never inside a delegated run
-    "change_existing_app": "code_task:create",
-    "create_followup_task": "work_item:manage",
-    "open_incident": "reliability:respond",
-    "publish_document": "github:sync",
-    # A typed question to a person (typed_forms, BOSSAPP-832); its answer may create work items.
-    "ask_human": "work_item:manage",
-}
 #: The native typed-question tool (typed_forms.ASK_HUMAN_SCHEMA); offered to unbounded runs.
 _ASK_HUMAN = "ask_human"
+#: A typed question to a person (typed_forms, BOSSAPP-832); its answer may create work items.
+_ASK_HUMAN_PERMISSION = "work_item:manage"
+
+_NATIVE_REGISTRY: list = []
+
+
+def native_tool_registry() -> Any:
+    """THE LOOP'S OWN TOOLS AS A TOOL REGISTRY (K4, AP-P1b). Each tool's catalogue permission
+    (IDENTITY.md §6.4) is declared NEXT TO THE TOOL (TOOLS / WRITE_TOOLS, `permission`), and
+    ToolSpec checks every key against the catalogue when the registry is built — this replaced
+    a hand-kept name → permission map that a new tool could silently be missing from. Inside a
+    delegated run every call is decided against the run token by the kernel's mandatory authz
+    middleware (or `_identity_refusal` on the old loop), from this declaration; a name not
+    registered here is refused (deny by default).
+
+    The registry is the catalogue (names, schemas, kinds, permissions). The calls themselves are
+    dispatched with the step's own connection (`_dispatch`, `execute_agent_tool`)."""
+    if _NATIVE_REGISTRY:
+        return _NATIVE_REGISTRY[0]
+    from ..tools.registry import ToolRegistry, ToolSpec
+    from .typed_forms import ASK_HUMAN_SCHEMA
+
+    def _dispatched_by_the_loop(*_a: Any, **_k: Any) -> dict:
+        raise RuntimeError("agent_loop's native tools run on the step's connection "
+                           "(agent_loop._dispatch / execute_agent_tool), not registry.invoke")
+
+    registry = ToolRegistry()
+    for entry, kind in [(t, "read") for t in TOOLS] + [(t, "write") for t in WRITE_TOOLS]:
+        fn = entry["schema"]["function"]
+        registry.register(ToolSpec(
+            str(fn["name"]), str(fn.get("description") or ""), dict(fn.get("parameters") or {}),
+            _dispatched_by_the_loop, kind=kind, permission=str(entry["permission"])))
+    ask = ASK_HUMAN_SCHEMA["function"]
+    registry.register(ToolSpec(_ASK_HUMAN, str(ask.get("description") or ""),
+                               dict(ask.get("parameters") or {}), _dispatched_by_the_loop,
+                               kind="write", permission=_ASK_HUMAN_PERMISSION))
+    _NATIVE_REGISTRY.append(registry)
+    return registry
+
+
+def native_tool_permissions() -> dict:
+    """Every native tool an agent can be granted → the catalogue permission it needs, DERIVED
+    from `native_tool_registry()` (ToolSpec.permission). The one reading for every caller —
+    the run's authz, and the agent-version publish check of a spec's `tools.native` against
+    the Passport ceiling (AP-P1a). Never empty: the registry fails to build rather than
+    answer with nothing."""
+    registry = native_tool_registry()
+    return {name: registry.get(name).permission for name in registry.names()}
+
+
+class _DerivedPermissions(Mapping):
+    """`AGENT_TOOL_PERMISSIONS`, kept as a read-only VIEW of the native tool registry for its
+    readers (AP-P1a's ceiling check reads `.get(name)`): derived on first read, never a second
+    hand-kept copy."""
+
+    def _map(self) -> dict:
+        return native_tool_permissions()
+
+    def __getitem__(self, name: str) -> str:
+        return self._map()[name]
+
+    def __iter__(self):
+        return iter(self._map())
+
+    def __len__(self) -> int:
+        return len(self._map())
+
+
+#: Native tool → catalogue permission: a view of `native_tool_registry()` (see above).
+AGENT_TOOL_PERMISSIONS: Mapping = _DerivedPermissions()
+
+
+def _native_permission(name: str) -> Optional[str]:
+    from ..tools.registry import ToolError
+
+    try:
+        return native_tool_registry().get(name).permission
+    except (ToolError, KeyError):
+        return None
 
 
 def _agent_tool_permission(name: str, *, mcp_map: dict, repo_map: dict, skill_map: dict,
                            on_demand_loader: Optional[str]) -> Optional[str]:
+    """The catalogue permission one call of this run needs: a held skill or MCP tool (and the
+    on-demand loader) `skill:invoke`; a bundle tool its bundle's; a native tool what the native
+    registry declares; anything else None — refused inside a delegated run."""
     if name in mcp_map or name in skill_map or (on_demand_loader is not None and name == on_demand_loader):
         return "skill:invoke"
     if name in repo_map:
         spec, tool = repo_map[name]
         return _bundle_tool_permission(str(spec.get("id") or ""), tool)
-    return AGENT_TOOL_PERMISSIONS.get(name)
+    return _native_permission(name)
 
 
 def _identity_refusal(connection: Connection, project_id: str, name: str, **maps: Any) -> Optional[dict]:
     """Inside a delegated run, the tool call is decided against the RUN TOKEN before it runs.
-    Returns the refusal to hand the model, or None to proceed (outside a run: unchanged)."""
-    from boss_engine.identity import lineage as _identity_lineage
-    from boss_engine.identity import runs as _identity_runs
+    Returns the refusal to hand the model, or None to proceed (outside a run: unchanged). The
+    ONE decision is the kernel's (kernel/governance.identity_refusal, the authz middleware's);
+    the old loop asks it with this run's permission for the call."""
+    from ..kernel.governance import identity_refusal
 
-    ctx = _identity_lineage.current_context()
-    if ctx is None or ctx.run_token is None:
-        return None
-    permission = _agent_tool_permission(name, **maps)
-    try:
-        _identity_runs.authorize_tool(permission, project_id, db=connection)
-    except _identity_runs.ToolRefused as refused:
-        return {"status": "refused", "error": "forbidden", "permission": refused.permission,
-                "reason": refused.reason,
-                "message": (f"'{name}' needs {refused.permission}, which this run's authority does not "
-                            "include. Do not retry it; say what you could not do.")}
-    return None
+    return identity_refusal(name, _agent_tool_permission(name, **maps), project_id, connection)
 
 
 def _replace_deferred_tool_result(messages: list, result: dict) -> None:
@@ -2067,6 +2135,61 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
             "decision_id": decision_id,
             "reason": CHANGED,
         }
+    if _on_kernel(run):
+        # K4: a run the kernel drove resumes on the kernel — the held call runs down the same
+        # governed tool chain, bound again to the approval's argument digest
+        # (kernel/governance.approval_refusal), and its result replaces the deferral.
+        emit_event(connection, project_id, "agent.run_resumed", "decision_approval",
+                   "agent_run", run_id, {"tool": pending.get("tool")})
+        return _drive_run_on_kernel(connection, settings, run_id, None, decision={
+            **recommendation, "approved": True, "decision_id": decision_id})
+    result = _execute_approved(connection, settings, run, run_id, pending, decision_id)
+    messages = run["messages"]
+    # THE DEFERRED TOOL PAYLOAD IS NOT THE RESULT.
+    #
+    # The loop writes `deferred_for_approval` into the tool message and stops. Resume
+    # used to tell the model what happened in a user message and leave that payload as
+    # the deferral. A workflow step reads tool payloads to learn what the agent
+    # produced, so the skill a person just approved — the publish, the render, the
+    # program — never reached the next step.
+    if isinstance(messages, list):
+        _replace_deferred_tool_result(messages, result)
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"APPROVED & EXECUTED: a human approved the deferred action "
+                f"'{pending.get('tool')}'. Result: {json.dumps(result)[:2000]}. "
+                "Continue and finalize your plan, incorporating this outcome."
+            ),
+        }
+    )
+    transcript = run["transcript"]
+    transcript.append(
+        {
+            "step": int(run["step"] or 0),
+            "tool": pending.get("tool"),
+            "args": pending.get("args"),
+            "result_preview": _preview_of(result),
+            "deferred": False,
+            "resumed": True,
+        }
+    )
+    _save_run(
+        connection, run_id, project_id, run["task_id"], "running", messages, transcript,
+        run["usage"] or _zero_usage(), run["finalize_ctx"] or {}, step=int(run["step"] or 0), pending=None,
+    )
+    emit_event(connection, project_id, "agent.run_resumed", "decision_approval", "agent_run", run_id, {"tool": pending.get("tool")})
+    return _drive_run(connection, settings, run_id, None)
+
+
+def _execute_approved(connection: Connection, settings: Settings, run: dict, run_id: str,
+                      pending: dict, decision_id: str) -> dict:
+    """THE HELD CALL A PERSON APPROVED, executed — the same three kinds the loop holds (an MCP
+    tool, a held skill, a native write), each re-checked that it is still granted and enabled.
+    One function for both loops: resume_agent_run (old loop) and the kernel's approved call
+    (AgentStepToolSet.invoke with `approved`)."""
+    project_id = run["project_id"]
     if pending.get("kind") == "mcp":
         server = next(
             (
@@ -2189,43 +2312,7 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
             connection, project_id, settings, str(pending.get("tool")), pending.get("args") or {},
             "decision_approval", task_id=run.get("task_id"),
         )
-    messages = run["messages"]
-    # THE DEFERRED TOOL PAYLOAD IS NOT THE RESULT.
-    #
-    # The loop writes `deferred_for_approval` into the tool message and stops. Resume
-    # used to tell the model what happened in a user message and leave that payload as
-    # the deferral. A workflow step reads tool payloads to learn what the agent
-    # produced, so the skill a person just approved — the publish, the render, the
-    # program — never reached the next step.
-    if isinstance(messages, list):
-        _replace_deferred_tool_result(messages, result)
-    messages.append(
-        {
-            "role": "user",
-            "content": (
-                f"APPROVED & EXECUTED: a human approved the deferred action "
-                f"'{pending.get('tool')}'. Result: {json.dumps(result)[:2000]}. "
-                "Continue and finalize your plan, incorporating this outcome."
-            ),
-        }
-    )
-    transcript = run["transcript"]
-    transcript.append(
-        {
-            "step": int(run["step"] or 0),
-            "tool": pending.get("tool"),
-            "args": pending.get("args"),
-            "result_preview": _preview_of(result),
-            "deferred": False,
-            "resumed": True,
-        }
-    )
-    _save_run(
-        connection, run_id, project_id, run["task_id"], "running", messages, transcript,
-        run["usage"] or _zero_usage(), run["finalize_ctx"] or {}, step=int(run["step"] or 0), pending=None,
-    )
-    emit_event(connection, project_id, "agent.run_resumed", "decision_approval", "agent_run", run_id, {"tool": pending.get("tool")})
-    return _drive_run(connection, settings, run_id, None)
+    return result
 
 
 def _sink_for_call(name: str, mcp_map: dict, skill_map: dict) -> Optional[str]:
@@ -2240,15 +2327,10 @@ def _sink_for_call(name: str, mcp_map: dict, skill_map: dict) -> Optional[str]:
 
 def _through_receipt_door(result: dict) -> bool:
     """True when this result came back through mcp_registry.call_tool_with_receipt, which has
-    already screened it (BOSSAPP-822): it, or the invocation wrapped around it, has a receipt."""
-    if "receipt_id" in result or isinstance(result.get("screen"), dict):
-        return True
-    for key in ("result", "output"):
-        inner = result.get(key)
-        if isinstance(inner, dict) and ("receipt_id" in inner
-                                        or isinstance(inner.get("screen"), dict)):
-            return True
-    return False
+    already screened it (BOSSAPP-822). One test for every seam (tool_result_screen)."""
+    from .tool_result_screen import through_receipt_door
+
+    return through_receipt_door(result)
 
 
 def _origin_for_call(name: str, mcp_map: dict, skill_map: dict) -> Optional[str]:
@@ -2330,7 +2412,283 @@ def _hold_for_untrusted_content(
     }, pending
 
 
+def kernel_steps() -> bool:
+    """K4 (AP-P1b): agent runs drive on the harness kernel. ON by default (kernel/flags.py);
+    BOSS_KERNEL_STEPS=0 starts new runs on the old loop."""
+    from ..kernel.flags import KERNEL_STEPS, on
+
+    return on(KERNEL_STEPS)
+
+
+#: finalize_ctx["loop"]: which loop drives a run — stamped when the run starts, so a run resumes
+#: on the loop it started on whatever the flag says by then.
+KERNEL_LOOP = "kernel"
+LEGACY_LOOP = "legacy"
+
+
+def _on_kernel(run: Optional[dict]) -> bool:
+    """Whether `run` drives on the kernel: as stamped; an unstamped run that has not started yet
+    follows BOSS_KERNEL_STEPS; an unstamped run already under way (started before K4) stays on
+    the old loop, which wrote its state."""
+    if not run:
+        return False
+    stamped = (run.get("finalize_ctx") or {}).get("loop")
+    if stamped in (KERNEL_LOOP, LEGACY_LOOP):
+        return stamped == KERNEL_LOOP
+    fresh = (str(run.get("status") or "running") == "running" and not int(run.get("step") or 0)
+             and not run.get("transcript"))
+    return fresh and kernel_steps()
+
+
+def _answered_question(run: dict) -> Optional[dict]:
+    """A kernel run parked on ask_human whose answer typed_forms.resume_with_answer has just put
+    into its conversation: the kernel resumes it as answered (nothing is executed)."""
+    blob = (run.get("finalize_ctx") or {}).get("kernel") or {}
+    pending = blob.get("pending") or {}
+    if blob.get("status") == "awaiting_approval" and pending.get("question") \
+            and run.get("status") == "running":
+        return {"answered": True, "decision_id": pending.get("decision_id")}
+    return None
+
+
 def _drive_run(connection: Connection, settings: Settings, run_id: str, max_steps: Optional[int]) -> dict:
+    """Drive the run `run_id` until it completes or suspends: on the kernel when it started
+    there (K4), else on the old loop."""
+    run = load_agent_run(connection, run_id)
+    if _on_kernel(run):
+        return _drive_run_on_kernel(connection, settings, run_id, max_steps,
+                                    decision=_answered_question(run))
+    return _drive_run_legacy(connection, settings, run_id, max_steps)
+
+
+def _transcript_of(state: Any) -> list:
+    """The kernel's trace in agent_runs.transcript's own shape — what the console, products_of
+    and the step's evidence read: {step, tool, args, result_preview, deferred[, thought]}, the
+    step 0-based per model call as the old loop numbered it, the first call of a step carrying
+    the model's words before it."""
+    thoughts: dict = {}
+    for message in state.messages:
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            calls = message.get("tool_calls") or []
+            said = str(message.get("content") or "").strip()
+            if calls and said:
+                thoughts[str(calls[0].get("id") or "")] = said
+    out: list = []
+    for entry in state.trace:
+        result = entry.get("result")
+        resumed = bool(entry.get("resumed"))
+        held = (entry.get("status") == "deferred" and isinstance(result, dict)
+                and result.get("status") == "deferred_for_approval")
+        row: dict = {"step": int(entry.get("step") or 0) - (0 if resumed else 1),
+                     "tool": entry.get("tool"),
+                     "args": entry.get("args") if isinstance(entry.get("args"), dict) else {},
+                     "result_preview": _preview_of(result), "deferred": held and not resumed}
+        if resumed:
+            row["resumed"] = True
+        else:
+            thought = thoughts.get(str(entry.get("call_id") or ""))
+            if thought:
+                row["thought"] = thought
+        out.append(row)
+    return out
+
+
+class _KernelRunStore:
+    """A kernel-driven agent run's checkpoint IS its agent_runs row, written through this
+    module's own `_save_run` / `load_agent_run`, in the old loop's shape (messages with the
+    system message first, the transcript, usage, step, pending, output_text), so the console,
+    resume, products_of and the workflow read a kernel run exactly as they read an old one. The
+    kernel's own counters ride in finalize_ctx["kernel"]; the run's taint and low-trust memory
+    (which the governance middleware keeps in its state) are mirrored into finalize_ctx."""
+
+    _CARRY = ("tool_screen_untrusted", "untrusted_spans")
+
+    def __init__(self, connection: Connection, *, project_id: str, task_id: Optional[str],
+                 finalize_ctx: dict):
+        self.connection = connection
+        self.project_id, self.task_id = project_id, task_id
+        self.finalize_ctx = dict(finalize_ctx)
+        self.transcript: list = []
+
+    def save(self, state: Any) -> None:
+        blob = state.to_checkpoint()
+        blob.pop("messages", None)
+        fctx = {**self.finalize_ctx,
+                **{k: state.extra[k] for k in self._CARRY if k in state.extra},
+                "kernel": blob}
+        self.transcript = _transcript_of(state)
+        safe = lambda value: json.loads(json.dumps(value, default=str))  # noqa: E731
+        _save_run(self.connection, state.run_id, self.project_id, self.task_id, state.status,
+                  safe(state.openai_messages()), safe(self.transcript),
+                  state.usage.as_adapter_usage(), safe(fctx), step=int(state.step),
+                  pending=safe(state.pending) if state.pending else None,
+                  output_text=state.final_text)
+
+    def load(self, run_id: str) -> Any:
+        from ..kernel.state import RunState
+
+        run = load_agent_run(self.connection, run_id)
+        if run is None:
+            return None
+        blob = dict((run.get("finalize_ctx") or {}).get("kernel") or {})
+        if not blob:
+            return None
+        messages = list(run.get("messages") or [])
+        if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+            messages = messages[1:]
+        blob["messages"] = messages
+        self.transcript = list(run.get("transcript") or [])
+        return RunState.from_checkpoint(blob)
+
+
+def _kernel_engine_for(raw: Any) -> Any:
+    """The kernel Engine over the routed adapter: an adapter that IS an engine (the scripted
+    conformance engine) as it is; any other — every OpenAI-compatible lane and the CLI brains
+    alike — through OpenAIChatEngine, which makes exactly the old loop's call
+    (`create_chat_completion(messages, tools=...)`) on it."""
+    from .. import kernel
+
+    if callable(getattr(raw, "complete", None)) and getattr(raw, "traits", None) is not None:
+        return raw
+    choice = getattr(raw, "_boss_choice", None)
+    return kernel.OpenAIChatEngine(raw, name=str(getattr(choice, "engine", "") or "openai"))
+
+
+def _drive_run_on_kernel(connection: Connection, settings: Settings, run_id: str,
+                         max_steps: Optional[int], *, decision: Optional[dict] = None) -> dict:
+    """THE AGENT RUN ON THE HARNESS KERNEL (K4, AP-P1b, BOSS_KERNEL_STEPS).
+
+    `kernel.run` with presets.agent_loop over AgentStepToolSet: the same model (routed once for
+    the run), the same tools from the same grants, the same holds, waits and resume note — and
+    around every call the kernel's mandatory governance (the budget reserved per attempt, the
+    run token deciding each tool's declared permission, a hold bound to its arguments, the
+    outside result screened and remembered, a write never run twice). Durable: the checkpoint
+    is the agent_runs row (_KernelRunStore), saved after every step.
+
+    Intended differences from the old loop (kernel/presets.py, HARNESS_KERNEL_DESIGN.md §8.4):
+    a transient provider error is retried; an empty completion is pressed twice; a call whose
+    arguments break the tool's schema is refused before it runs (one repair); a budget-deferred
+    MODEL call parks the run (budget_wait) instead of failing it.
+
+    A fatal model failure is raised out of the run, as the old loop raised it, so the callers'
+    contract (agent_steps, the factory) holds."""
+    from .. import kernel
+    from ..agent import transient as _transient
+    from ..kernel import presets
+    from ..kernel.governance import AdapterGate
+    from .model_routing import routing_purpose
+    from .tool_result_screen import screen_result
+
+    run = load_agent_run(connection, run_id)
+    project_id, task_id = run["project_id"], run["task_id"]
+    stored = run["finalize_ctx"] or {}
+    blob = stored.get("kernel") or None
+    finalize_ctx = {k: v for k, v in stored.items() if k != "kernel"}
+    messages = list(run["messages"] or [])
+    system: Optional[str] = None
+    if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+        system = str(messages[0].get("content") or "")
+        messages = messages[1:]
+
+    # The model this project connected, routed ONCE for the run and spent through the budget —
+    # exactly the old loop's adapter (see _drive_run_legacy); here the budget is the kernel's
+    # gate, so every attempt is reserved and receipted by the governance middleware.
+    with routing_purpose(_agent_purpose(connection, run_id, project_id, run["messages"],
+                                        finalize_ctx)):
+        raw = project_chat_adapter(connection, settings, project_id)
+        held = governed(raw, connection, settings, project_id,
+                        skill_id="model.agent_turn", ref=run_id)
+    engine = _kernel_engine_for(raw)
+    gate = AdapterGate(held) if callable(getattr(held, "reserve_turn", None)) else None
+    if gate is None and held is not raw and engine is not raw:
+        # A governed adapter with no gate face (a test double): it governs its own calls.
+        engine = _kernel_engine_for(held)
+    sink = None
+    try:
+        from ..kernel import ledger as kernel_ledger
+
+        if kernel_ledger.enabled() and getattr(connection, "engine", None) is not None:
+            sink = kernel_ledger.DbSink(connection.engine)
+            # One llm_calls row per call (BOSSAPP-998): the kernel's sink writes it.
+            if hasattr(raw, "_record"):
+                raw._record = False
+    except Exception:  # noqa: BLE001 — a run without its ledger is still a run
+        sink = None
+
+    tools = AgentStepToolSet(connection, settings, run, run_id)
+    store = _KernelRunStore(connection, project_id=project_id, task_id=task_id,
+                            finalize_ctx=finalize_ctx)
+    # Each drive gets the old loop's step budget: a resumed run continues with `steps_cap`
+    # more steps, as the old loop's resume did.
+    steps_cap = int(max_steps or settings.agent_max_steps)
+    done = int((blob or {}).get("step") or 0)
+    role = str((finalize_ctx.get("agent_step") or {}).get("role_key")
+               or finalize_ctx.get("role_key") or "agent_loop")
+    spec = kernel.RunSpec(
+        engine=engine, tools=tools, policies=presets.agent_loop(done + steps_cap),
+        project_id=project_id, system=system, messages=messages, run_id=run_id,
+        actor=f"agent:{role}", persist=True, store=store, gate=gate, sink=sink,
+        resume_note=presets.agent_loop_resume_note, extra=finalize_ctx, db=connection,
+        screen=lambda result, ref: screen_result(connection, settings, project_id, result,
+                                                 ref=ref),
+        sleep=lambda seconds: _transient.time.sleep(seconds))
+    if blob is None:
+        result = kernel.run(spec)
+    else:
+        result = kernel.resume(spec, decision=decision)
+    return _kernel_outcome(connection, project_id, run_id, result, store, tools)
+
+
+def _kernel_outcome(connection: Connection, project_id: str, run_id: str, result: Any,
+                    store: _KernelRunStore, tools: AgentStepToolSet) -> dict:
+    """A KernelResult as the dict run_agent_loop / resume_agent_run have always returned."""
+    transcript = list(store.transcript)
+    usage = result.usage.as_adapter_usage()
+    if result.status == "completed":
+        try:
+            from .knowledge.runtime import attribute_shown_facts
+
+            attribute_shown_facts(connection, project_id=project_id, run_id=run_id, success=True)
+        except Exception:
+            pass
+        emit_event(connection, project_id, "agent.run_completed", "agent_loop", "agent_run",
+                   run_id, {"steps": len(transcript), "loop": KERNEL_LOOP})
+        return {"status": "completed", "run_id": run_id, "output_text": result.text,
+                "usage": usage, "transcript": transcript, "tool_calls": len(transcript)}
+    if result.status == "suspended":
+        pending = result.pending or {}
+        emit_event(connection, project_id, "agent.run_suspended", "agent_loop", "agent_run",
+                   run_id, {"decision_id": pending.get("decision_id"),
+                            "tool": pending.get("tool")})
+        return {"status": "suspended", "run_id": run_id,
+                "decision_id": pending.get("decision_id"), "output_text": "", "usage": usage,
+                "transcript": transcript}
+    if result.status == "budget_wait":
+        budget = dict((result.pending or {}).get("budget") or {})
+        retry_after = int(budget.get("retry_after_seconds") or 30)
+        emit_event(connection, project_id, "agent.run_budget_wait", "agent_loop", "agent_run",
+                   run_id, {"retry_after_seconds": retry_after,
+                            "waited_seconds": round(tools.waiter.waited, 1),
+                            "refusal": budget.get("refusal")})
+        return {"status": BUDGET_WAIT, "run_id": run_id, "output_text": "", "usage": usage,
+                "transcript": transcript, "budget": budget, "retry_after_seconds": retry_after,
+                "message": BUDGET_BUSY_MESSAGE}
+    if result.status == "denied":
+        return {"status": "denied", "run_id": run_id, "reason": result.error}
+    if result.status == "cancelled":
+        return {"status": "cancelled", "run_id": run_id, "output_text": result.text,
+                "usage": usage, "transcript": transcript}
+    # FAILED: the old loop raised a model failure out of the run; the callers read it so.
+    if result.stopped == "budget_stop":
+        from .model_routing import ModelSpendRefused
+
+        raise ModelSpendRefused(result.error or "the budget refused this agent turn")
+    raise RuntimeError(result.error or "the agent run failed")
+
+
+def _drive_run_legacy(connection: Connection, settings: Settings, run_id: str, max_steps: Optional[int]) -> dict:
+    """THE OLD LOOP (BOSS_KERNEL_STEPS=0, and runs it started before K4): the same toolset,
+    driven by its own step loop. Kept until K14 deletes it after a release at default-on."""
     run = load_agent_run(connection, run_id)
     project_id = run["project_id"]
     task_id = run["task_id"]
@@ -2359,157 +2717,17 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         adapter = governed(project_chat_adapter(connection, settings, project_id),
                            connection, settings, project_id,
                            skill_id="model.agent_turn", ref=run_id)
-    mcp = MCPClient(settings)
-
-    # A BOUNDED RUN GETS NO NATIVE TOOLS AT ALL.
-    #
-    # In enabled editions, the ordinary loop offers a shell, the project's Postgres, the
-    # repository and deploy tools because it was written for the software factory. An
-    # agent step is the opposite case: an operator gave an agent a set of skills and that set is
-    # the claim about what it can do. Handing it `run_shell` besides makes the grant decorative —
-    # a video editor could read the control plane's database, and "the skills you gave it" would
-    # stop being a true description of its reach.
-    #
-    # MCP SERVERS GO THE SAME WAY: a connector is authority over somebody's account, so being
-    # REGISTERED in the project grants nothing. A bounded run is offered exactly the servers its
-    # agent HOLDS (role_mcp_servers), pinned at step start, and only the granted tool names when
-    # the grant lists any. Before that table existed a bounded run got no MCP tool at all, so an
-    # agent could not be given "post to our Mattermost" short of authoring a skill per tool.
-    bounded = isinstance(finalize_ctx.get("agent_step"), dict)
-    schemas = [] if bounded else _native_tool_schemas(settings) + list(_WRITE_SCHEMAS)
-    occupied = {
-        str(schema["function"]["name"])
-        for schema in schemas
-    }
-    mcp_map: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
-    from .mcp_registry import known_unreachable, record_reachability_quietly
-    from .mcp_registry import needs_person, unreviewed_sentence
-
-    # ONE OWNERSHIP MODEL (integration of the agents and skills-mcp streams): a bounded run is
-    # offered what its agent HOLDS (role_mcp_servers, via agents.held_mcp_servers); the
-    # registry's reachability memory and review rule then apply to those servers exactly as
-    # they do to an unbounded run's. A step's own `mcp` list (the steps stream's scope) narrows
-    # that set — agent_steps.run pins held-and-named into mcp_server_ids — and never widens it.
-    for server in (_granted_mcp_servers(connection, project_id, finalize_ctx["agent_step"])
-                   if bounded
-                   else list_mcp_servers(connection, project_id, enabled_only=True)):
-        if known_unreachable(server):
-            # A SERVER THAT JUST FAILED IS NOT ASKED AGAIN EVERY TURN. The three servers BOSS
-            # seeds point at ports the community compose never starts, and every chat turn paid
-            # a connection timeout per server to rediscover that. The registry remembers the
-            # failure for a minute; the screens show it with what to do about it.
-            continue
-        try:
-            server_tools = mcp.list_tools(
-                server["url"], headers=auth_headers(connection, settings, project_id, server))
-        except Exception as exc:
-            record_reachability_quietly(connection, project_id, server, reachable=False,
-                                        error=f"{type(exc).__name__}: {exc}")
-            emit_event(
-                connection,
-                project_id,
-                "agent.mcp_discovery_failed",
-                "agent_loop",
-                "mcp_server",
-                str(server["id"]),
-                {"server": server["name"], "error": str(exc)},
-            )
-            continue
-        record_reachability_quietly(connection, project_id, server, reachable=True,
-                                    tools=server_tools)
-        allow = set(server.get("granted_tools") or [])
-        for t in server_tools:
-            tool_name = str(t.get("name") or "tool")
-            if allow and tool_name not in allow:
-                continue
-            if _mcp_tool_policy(server, t) == "off":
-                # TURNED OFF IN SKILLS & MCP: never offered, so the model cannot even ask.
-                continue
-            ns = _unique_tool_name(
-                "mcp_" + _slug(server["name"]) + "_" + _slug(tool_name),
-                occupied,
-                f"mcp:{server['id']}:{tool_name}",
-            )
-            schemas.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": ns,
-                        "description": (
-                            f"[MCP · {server['name']}"
-                            + (" · UNREVIEWED server: every call waits for a person"
-                               if needs_person(server) else "")
-                            + f"] {t.get('description', '')}"),
-                        "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
-                    },
-                }
-            )
-            mcp_map[ns] = (server, t)
-
-    skill_resolution = _skill_resolution_for_run(connection, settings, run)
-    # OFF IN SKILLS & MCP MEANS NOT OFFERED (kit.skill_policy): the model cannot call what the
-    # operator turned off, so it does not spend a turn finding out.
-    eager = [spec for spec in skill_resolution["eager"]
-             if _skill_policy(connection, settings, project_id, spec) != "off"]
-    # READ THE REPO IS FIVE TOOLS, ONE SKILL (kit E11): holding `repo.read` offers the engine's
-    # read tools by their own names and schemas; each call is a call of that one skill. The
-    # baseline every agent holds (boss.fundamentals, boss.propose_fix) is offered the same way.
-    from .agent_baseline import bundles as _bundles
-
-    _bundled = set(_bundles())
-    repo_map = _append_bundle_tools(
-        schemas, occupied, [s for s in eager if str(s["id"]) in _bundled])
-    skill_map = _append_skill_tools(
-        schemas,
-        occupied,
-        [spec for spec in eager if str(spec["id"]) not in _bundled],
-    )
+    # WHAT THIS RUN MAY CALL, assembled once from its grants (AgentStepToolSet).
+    tools = AgentStepToolSet(connection, settings, run, run_id)
+    schemas = tools.openai_schemas
+    mcp_map, skill_map = tools.mcp_map, tools.skill_map
     # Spans survive a clipped tool message: the run row keeps them, and a resumed drive
     # rebuilds from that plus any tool message that still carries the mark.
     _untrusted = Ledger.load(finalize_ctx.get("untrusted_spans"))
     _untrusted.absorb_messages(messages)
-    from .tool_result_screen import carried_untrusted, next_write_must_ask, screen_result
-
-    # A phrase-screen hit on a tool result holds the next write. A read keeps its policy.
-    screen_hold = bool(finalize_ctx.get("tool_screen_untrusted"))
-    on_demand_loader: Optional[str] = None
-    if skill_resolution["on_demand"]:
-        on_demand_loader = _unique_tool_name(
-            "load_on_demand_skill", occupied, "skill:on_demand:loader"
-        )
-        discoverable = [
-            {
-                "id": str(skill["id"]),
-                "description": str(skill.get("description") or ""),
-            }
-            for skill in skill_resolution["on_demand"]
-        ]
-        schemas.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": on_demand_loader,
-                    "description": (
-                        "Attach one on-demand BOSS skill for the remainder of this run. "
-                        f"Available skills: {json.dumps(discoverable)}"
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "skill_id": {
-                                "type": "string",
-                                "enum": [item["id"] for item in discoverable],
-                            }
-                        },
-                        "required": ["skill_id"],
-                        "additionalProperties": False,
-                    },
-                },
-            }
-        )
+    from .tool_result_screen import carried_untrusted, screen_result
 
     steps_cap = int(max_steps or settings.agent_max_steps)
-    threshold = int(settings.agent_autonomous_risk_max)
 
     def add_usage(u: dict) -> None:
         total["model"] = u.get("model")
@@ -2522,8 +2740,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     final_text: Optional[str] = None
     last_step = step0
     refused_calls = 0
-    # One waiter per drive, so the per-run bound covers every call this drive makes.
-    waiter = BudgetWaiter()
+    waiter = tools.waiter
     budget_wait: Optional[dict[str, Any]] = None
     for i in range(steps_cap):
         step = step0 + i
@@ -2589,424 +2806,25 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             name = tc["name"]
             is_deferred = False
             # IDENTITY: decided against the run token before anything runs (or is deferred).
-            identity_refused = (_identity_refusal(connection, project_id, name, mcp_map=mcp_map, repo_map=repo_map,
-                                                  skill_map=skill_map, on_demand_loader=on_demand_loader)
+            identity_refused = (_identity_refusal(connection, project_id, name, **tools.maps())
                                 if deferred is None and budget_wait is None else None)
-            # OUTSIDE TEXT DOES NOT LEAVE. A page, a tool result, or a document remembered
-            # earlier in this run waits here instead of being sent. Resume runs the pending
-            # call without asking this again, so an approval can release it.
-            sink = None
-            untrusted_hold = None
-            if deferred is None and budget_wait is None and identity_refused is None:
-                sink = _sink_for_call(name, mcp_map, skill_map)
-                if sink is not None:
-                    untrusted_hold = blocked(args, sink=sink, ledger=_untrusted)
             if deferred is not None:
                 result = {"status": "skipped", "note": "a prior action this turn awaits approval"}
             elif budget_wait is not None:
                 result = {"status": "skipped", "note": BUDGET_BUSY_MESSAGE}
             elif identity_refused is not None:
                 result = identity_refused
-            elif untrusted_hold is not None:
-                result, deferred = _hold_for_untrusted_content(
-                    connection, project_id, task_id, run_id, step, name, args, sink,
-                    untrusted_hold, mcp_map, skill_map, skill_resolution,
-                )
-                is_deferred = True
-            elif on_demand_loader is not None and name == on_demand_loader:
-                requested_id = str(args.get("skill_id") or "")
-                current_resolution = _skill_resolution_for_run(
-                    connection, settings, run
-                )
-                skill = next(
-                    (
-                        item
-                        for item in current_resolution["on_demand"]
-                        if item["id"] == requested_id
-                    ),
-                    None,
-                )
-                if skill is None:
-                    scope = None
-                    if current_resolution.get("role_key") and requested_id:
-                        scope = RoleGovernanceService(settings).check_scope(
-                            connection,
-                            project_id=project_id,
-                            role_key=str(current_resolution["role_key"]),
-                            action="skill.invoke",
-                            skill_id=requested_id,
-                            actor="agent_loop",
-                            evidence_ref=run_id,
-                        )
-                    result = {
-                        "status": "denied",
-                        "skill_id": requested_id,
-                        "reason": (
-                            (scope or {}).get("reason")
-                            if scope and not scope.get("allowed")
-                            else None
-                        )
-                        or "skill is not available on demand for this task",
-                    }
-                else:
-                    loaded = _append_skill_tools(schemas, occupied, [skill])
-                    skill_map.update(loaded)
-                    result = {
-                        "status": "loaded",
-                        "skill_id": requested_id,
-                        "tool_name": next(iter(loaded)),
-                        "available_for_remainder_of_run": True,
-                    }
-                    emit_event(
-                        connection,
-                        project_id,
-                        "agent.skill_lazy_loaded",
-                        "agent_loop",
-                        "agent_run",
-                        run_id,
-                        {"skill_id": requested_id, "step": step},
-                    )
-            elif name == _ASK_HUMAN and not bounded and deferred is None:
-                # A TYPED QUESTION (BOSSAPP-832): a form decision is raised and the run parks
-                # until it is answered; resume_agent_run hands the typed answer back.
-                from .typed_forms import FormError, ask_human
-
-                try:
-                    with connection.begin_nested():
-                        asked = ask_human(
-                            connection, project_id=project_id,
-                            question=str(args.get("question") or ""), form=args.get("fields"),
-                            asker=f"agent_run:{run_id}", run_id=run_id,
-                            work_item_id=str(args.get("work_item_id") or "") or None,
-                            task_id=task_id, context=str(args.get("context") or ""))
-                except (FormError, LookupError) as refused:
-                    result = {"status": "refused", "error": str(refused)}
-                else:
-                    result = {"status": "deferred_for_approval",
-                              "decision_id": asked["decision_id"],
-                              "message": "Your question is with a person; the run resumes with "
-                                         "their typed answer."}
-                    is_deferred = True
-                    deferred = {"tool": name, "args": args, "decision_id": asked["decision_id"],
-                                "kind": "ask_human"}
-            elif name in mcp_map:
-                server, tool = mcp_map[name]
-                tool_name = str(tool.get("name") or "tool")
-                risk = _mcp_tool_risk(server, tool)
-                # AN UNREVIEWED SERVER'S TOOL ALWAYS WAITS FOR A PERSON, whatever its tier.
-                # The tier is the server's own claim; until somebody has reviewed the server
-                # (mcp_registry.reviewed) that claim is the only thing standing between a
-                # registered URL and an unattended call. Round-1 review: a chat-registered
-                # tier-0 server's tools ran in every chat without anyone being asked.
-                unreviewed = needs_person(server)
-                # ASK IS THE OPERATOR'S RULE, and tier >= 2 always asks (spec E7): a tier-2 tool
-                # waits for a person even on an install that raised the autonomy threshold.
-                policy = next_write_must_ask(
-                    {"untrusted": screen_hold},
-                    write=risk >= 2,
-                    policy=_mcp_tool_policy(server, tool),
-                )
-                asks = policy == "ask"
-                if risk > threshold or unreviewed or asks:
-                    decision_id = create_blocking_decision(
-                        connection,
-                        project_id,
-                        task_id,
-                        (f"Approve MCP tool: {server['name']} / {_key_words(tool_name)}"
-                         + (" (server not reviewed yet)" if unreviewed else "")),
-                        {
-                            "action": "resume_agent_run",
-                            "run_id": run_id,
-                            "tool": name,
-                            "kind": "mcp",
-                            "server_id": server["id"],
-                            "tool_name": tool_name,
-                            "args": args,
-                            "task_id": task_id,
-                            **({"tool_screen": "untrusted"} if screen_hold and risk >= 2 else {}),
-                            **bind_held_call(name, args),
-                        },
-                        {},
-                        "agent_mcp_requires_approval",
-                        risk_tier=risk,
-                    )
-                    result = {
-                        "status": "deferred_for_approval",
-                        "decision_id": decision_id,
-                        "message": (
-                            f"MCP tool '{tool_name}' (risk tier {risk}) requires "
-                            "human approval."
-                            + (f" {unreviewed_sentence(server)}" if unreviewed else "")
-                        ),
-                    }
-                    is_deferred = True
-                    if screen_hold and risk >= 2:
-                        screen_hold = False
-                        finalize_ctx["tool_screen_untrusted"] = False
-                    deferred = {
-                        "kind": "mcp",
-                        "tool": name,
-                        "server_id": server["id"],
-                        "tool_name": tool_name,
-                        "args": args,
-                        "decision_id": decision_id,
-                        "step": step,
-                    }
-                    emit_event(
-                        connection,
-                        project_id,
-                        "agent.mcp_deferred",
-                        "agent_loop",
-                        "decision",
-                        decision_id,
-                        {
-                            "server": server["name"],
-                            "tool": tool_name,
-                            "risk_tier": risk,
-                            "step": step,
-                        },
-                    )
-                else:
-                    result, exhausted = waiter.invoke(lambda: _invoke_mcp_skill(
-                        connection,
-                        settings,
-                        project_id,
-                        server,
-                        tool,
-                        args,
-                        run_id=run_id,
-                        step=step,
-                        actor="agent_loop",
-                        agent=_run_agent(run),
-                    ))
-                    if exhausted is not None and bounded:
-                        budget_wait = exhausted
-                    emit_event(
-                        connection,
-                        project_id,
-                        "agent.mcp_invoked",
-                        "agent_loop",
-                        "agent_run",
-                        run_id,
-                        {
-                            "server": server["name"],
-                            "tool": tool_name,
-                            "risk_tier": risk,
-                            "step": step,
-                        },
-                    )
-            elif name in repo_map:
-                spec, tool = repo_map[name]
-                bundle_id = str(spec.get("id") or "repo.read")
-                held_now = any(str(item["id"]) == bundle_id for item in
-                               _skill_resolution_for_run(connection, settings, run)["eager"])
-                if not held_now:
-                    result = {"status": "denied", "skill_id": bundle_id,
-                              "reason": f"{_BUNDLE_LABEL.get(bundle_id, bundle_id)} is no "
-                                        "longer held by this agent"}
-                else:
-                    caller = str(spec.get("caller") or skill_resolution.get("role_key")
-                                 or "agent_loop")
-                    from .agent_baseline import BUNDLE_TOOL_KEY
-
-                    picked = ({"tool": tool, **args} if bundle_id == "repo.read"
-                              else {**args, BUNDLE_TOOL_KEY: tool})
-                    result, exhausted = waiter.invoke(lambda: _invoke_agent_skill(
-                        connection, settings, project_id, bundle_id, caller,
-                        picked, actor="agent_loop", skill_spec=spec))
-                    if exhausted is not None and bounded:
-                        budget_wait = exhausted
-                    emit_event(connection, project_id, "agent.skill_invoked", "agent_loop",
-                               "agent_run", run_id,
-                               {"skill_id": bundle_id, "tool": tool, "step": step})
-            elif name in skill_map:
-                skill = skill_map[name]
-                skill_id = str(skill["id"])
-                current_resolution = _skill_resolution_for_run(
-                    connection, settings, run
-                )
-                current_skill = next(
-                    (
-                        item
-                        for item in current_resolution["eager"]
-                        + current_resolution["on_demand"]
-                        if item["id"] == skill_id
-                    ),
-                    None,
-                )
-                if current_skill is None:
-                    scope = None
-                    if current_resolution.get("role_key"):
-                        scope = RoleGovernanceService(settings).check_scope(
-                            connection,
-                            project_id=project_id,
-                            role_key=str(current_resolution["role_key"]),
-                            action="skill.invoke",
-                            skill_id=skill_id,
-                            actor="agent_loop",
-                            evidence_ref=run_id,
-                        )
-                    result = {
-                        "status": "denied",
-                        "skill_id": skill_id,
-                        "reason": (
-                            (scope or {}).get("reason")
-                            if scope and not scope.get("allowed")
-                            else None
-                        )
-                        or "skill is no longer enabled for this task",
-                    }
-                    current_skill = None
-                if current_skill is None:
-                    step_obj = {
-                        "step": step,
-                        "tool": name,
-                        "args": args,
-                        "result_preview": _preview_of(result),
-                        "deferred": False,
-                    }
-                    if tc_idx == 0 and thought:
-                        step_obj["thought"] = thought
-                    transcript.append(step_obj)
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": clip_for_model(json.dumps(result), 16000),
-                        }
-                    )
-                    continue
-                skill = current_skill
-                risk = int(skill.get("risk_tier") or 0)
-                caller = str(
-                    skill.get("caller")
-                    or skill.get("role_key")
-                    or skill_resolution.get("role_key")
-                    or "agent_loop"
-                )
-                # THE SAME REVIEW RULE AS A DIRECT MCP CALL (mcp_registry.needs_person), read
-                # from the catalogue: an authored mcp_tool skill on an unreviewed server carries
-                # policy.requires_person. Round-2 review: this branch asked only the tier, so
-                # the tool an agent could not call directly without a person ran unattended
-                # once it was wrapped in a skill the agent held.
-                person_reason = str(
-                    (skill.get("policy") or {}).get("requires_person") or "")
-                unreviewed_server = bool(person_reason)
-                if not person_reason and _skill_policy(
-                        connection, settings, project_id, skill) == "ask":
-                    # SET TO ASK IN SKILLS & MCP (and tier >= 2 always is): a person decides.
-                    person_reason = "It is set to ask a person each time in Skills & MCP."
-                # A WRITE-CLASS SKILL after an untrusted tool result waits too (BOSSAPP-822): the
-                # same hold the MCP and built-in write branches apply.
-                screen_asks = next_write_must_ask(
-                    {"untrusted": screen_hold}, write=risk >= 2, policy="allow") == "ask"
-                if screen_asks and not person_reason:
-                    person_reason = ("An earlier tool result in this run was screened as "
-                                     "untrusted, so this write waits for a person.")
-                if risk > threshold or person_reason:
-                    decision_id = create_blocking_decision(
-                        connection,
-                        project_id,
-                        task_id,
-                        f"Approve agent skill: {skill.get('label') or skill.get('name') or _key_words(skill_id)}"
-                        + (" (its MCP server is not reviewed yet)" if unreviewed_server else ""),
-                        {
-                            "action": "resume_agent_run",
-                            "run_id": run_id,
-                            "tool": name,
-                            "kind": "skill",
-                            "skill_id": skill_id,
-                            "caller": caller,
-                            "args": args,
-                            "task_id": task_id,
-                            **({"tool_screen": "untrusted"} if screen_asks else {}),
-                            **bind_held_call(name, args),
-                        },
-                        {},
-                        "agent_skill_requires_approval",
-                        risk_tier=risk,
-                    )
-                    result = {
-                        "status": "deferred_for_approval",
-                        "decision_id": decision_id,
-                        "message": (
-                            f"'{skill_id}' (risk tier {risk}) requires human "
-                            "approval; the run is paused and resumes on approval."
-                            + (f" {person_reason}" if person_reason else "")
-                        ),
-                    }
-                    is_deferred = True
-                    if screen_asks:
-                        screen_hold = False
-                        finalize_ctx["tool_screen_untrusted"] = False
-                    deferred = {
-                        "kind": "skill",
-                        "tool": name,
-                        "skill_id": skill_id,
-                        "caller": caller,
-                        "args": args,
-                        "decision_id": decision_id,
-                    }
-                    emit_event(
-                        connection,
-                        project_id,
-                        "agent.skill_deferred",
-                        "agent_loop",
-                        "decision",
-                        decision_id,
-                        {"skill_id": skill_id, "risk_tier": risk, "step": step},
-                    )
-                else:
-                    result, exhausted = waiter.invoke(lambda: _invoke_agent_skill(
-                        connection,
-                        settings,
-                        project_id,
-                        skill_id,
-                        caller,
-                        args,
-                        actor="agent_loop",
-                        skill_spec=skill,
-                    ))
-                    if exhausted is not None and bounded:
-                        budget_wait = exhausted
-                    emit_event(
-                        connection,
-                        project_id,
-                        "agent.skill_invoked",
-                        "agent_loop",
-                        "agent_run",
-                        run_id,
-                        {"skill_id": skill_id, "step": step},
-                    )
-            elif name in _WRITE_FNS:
-                _, risk = _WRITE_FNS[name]
-                policy = next_write_must_ask(
-                    {"untrusted": screen_hold},
-                    write=True,
-                    policy="ask" if risk > threshold else "allow",
-                )
-                if policy == "ask":
-                    decision_id = create_blocking_decision(
-                        connection, project_id, task_id,
-                        f"Approve agent action: {name}",
-                        {"action": "resume_agent_run", "run_id": run_id, "tool": name,
-                         "args": args, "task_id": task_id,
-                         **({"tool_screen": "untrusted"} if screen_hold else {}),
-                         **bind_held_call(name, args)},
-                        {}, "agent_tool_requires_approval", risk_tier=risk,
-                    )
-                    result = {"status": "deferred_for_approval", "decision_id": decision_id, "message": f"'{name}' (risk tier {risk}) requires human approval; the run is paused and resumes on approval."}
-                    is_deferred = True
-                    if screen_hold:
-                        screen_hold = False
-                        finalize_ctx["tool_screen_untrusted"] = False
-                    deferred = {"tool": name, "args": args, "decision_id": decision_id}
-                    emit_event(connection, project_id, "agent.tool_deferred", "agent_loop", "decision", decision_id, {"tool": name, "risk_tier": risk, "step": step})
-                else:
-                    result = execute_agent_tool(connection, project_id, settings, name, args, "agent_loop", task_id=task_id)
             else:
-                result = _dispatch(connection, project_id, settings, name, args)
-                emit_event(connection, project_id, "agent.tool_invoked", "agent_loop", "task", task_id or project_id, {"tool": name, "step": step})
+                # Everything else is the toolset's to decide: the untrusted-content hold, the
+                # on-demand loader, the typed question, the MCP / skill / write holds on a
+                # Decision, the busy-minute wait (AgentStepToolSet.dispatch).
+                result, held, waited = tools.dispatch(name, args, step=step,
+                                                      flags=finalize_ctx, ledger=_untrusted)
+                if held is not None:
+                    deferred = held
+                    is_deferred = True
+                if waited is not None:
+                    budget_wait = waited
             arrived = _origin_for_call(name, mcp_map, skill_map)
             if (
                 arrived
@@ -3023,7 +2841,6 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 result, _verdict = screen_result(connection, settings, project_id, result,
                                                  ref=f"{run_id}:{name}")
             if carried_untrusted(result):
-                screen_hold = True
                 finalize_ctx["tool_screen_untrusted"] = True
             if (
                 arrived
@@ -3105,6 +2922,645 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         pass
     emit_event(connection, project_id, "agent.run_completed", "agent_loop", "agent_run", run_id, {"steps": len(transcript)})
     return {"status": "completed", "run_id": run_id, "output_text": final_text, "usage": total, "transcript": transcript, "tool_calls": len(transcript)}
+
+
+class AgentStepToolSet:
+    """THE AGENT STEP'S TOOLS, AS ONE TOOLSET (K4, AP-P1b).
+
+    What a run may call is assembled HERE, once per drive, from the grants: a bounded run (a
+    workflow agent step) is offered exactly what its agent holds — its skills (role_skills,
+    bundles by their tools' own names), its MCP servers (role_mcp_servers, narrowed by the step)
+    and the on-demand loader — and nothing native; an unbounded run (the factory plan) adds the
+    loop's native tools, catalogued with their permissions in `native_tool_registry`. Each call
+    is then decided and run by `dispatch`: the untrusted-content hold, the on-demand loader, the
+    typed question, the MCP / skill / write holds on a Decision, the busy-minute wait.
+
+    ONE toolset, TWO loops: the kernel drives it as a kernel ToolSet (`schemas` / `invoke`, the
+    mandatory governance around every call — authz decides the permission each schema declares,
+    the screen reads each schema's origin); the old loop (BOSS_KERNEL_STEPS=0) asks `dispatch`
+    itself. The loop's private copy of all this (a schema list built inline, a permission map
+    beside it) is gone."""
+
+    def __init__(self, connection: Connection, settings: Settings, run: dict, run_id: str):
+        self.connection, self.settings, self.run, self.run_id = connection, settings, run, run_id
+        project_id = self.project_id = run["project_id"]
+        self.task_id = run.get("task_id")
+        finalize_ctx = run.get("finalize_ctx") or {}
+        mcp = MCPClient(settings)
+
+        # A BOUNDED RUN GETS NO NATIVE TOOLS AT ALL.
+        #
+        # In enabled editions, the ordinary loop offers a shell, the project's Postgres, the
+        # repository and deploy tools because it was written for the software factory. An
+        # agent step is the opposite case: an operator gave an agent a set of skills and that set is
+        # the claim about what it can do. Handing it `run_shell` besides makes the grant decorative —
+        # a video editor could read the control plane's database, and "the skills you gave it" would
+        # stop being a true description of its reach.
+        #
+        # MCP SERVERS GO THE SAME WAY: a connector is authority over somebody's account, so being
+        # REGISTERED in the project grants nothing. A bounded run is offered exactly the servers its
+        # agent HOLDS (role_mcp_servers), pinned at step start, and only the granted tool names when
+        # the grant lists any. Before that table existed a bounded run got no MCP tool at all, so an
+        # agent could not be given "post to our Mattermost" short of authoring a skill per tool.
+        bounded = isinstance(finalize_ctx.get("agent_step"), dict)
+        schemas = [] if bounded else _native_tool_schemas(settings) + list(_WRITE_SCHEMAS)
+        occupied = {
+            str(schema["function"]["name"])
+            for schema in schemas
+        }
+        mcp_map: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+        from .mcp_registry import known_unreachable, record_reachability_quietly
+        from .mcp_registry import needs_person
+
+        # ONE OWNERSHIP MODEL (integration of the agents and skills-mcp streams): a bounded run is
+        # offered what its agent HOLDS (role_mcp_servers, via agents.held_mcp_servers); the
+        # registry's reachability memory and review rule then apply to those servers exactly as
+        # they do to an unbounded run's. A step's own `mcp` list (the steps stream's scope) narrows
+        # that set — agent_steps.run pins held-and-named into mcp_server_ids — and never widens it.
+        for server in (_granted_mcp_servers(connection, project_id, finalize_ctx["agent_step"])
+                       if bounded
+                       else list_mcp_servers(connection, project_id, enabled_only=True)):
+            if known_unreachable(server):
+                # A SERVER THAT JUST FAILED IS NOT ASKED AGAIN EVERY TURN. The three servers BOSS
+                # seeds point at ports the community compose never starts, and every chat turn paid
+                # a connection timeout per server to rediscover that. The registry remembers the
+                # failure for a minute; the screens show it with what to do about it.
+                continue
+            try:
+                server_tools = mcp.list_tools(
+                    server["url"], headers=auth_headers(connection, settings, project_id, server))
+            except Exception as exc:
+                record_reachability_quietly(connection, project_id, server, reachable=False,
+                                            error=f"{type(exc).__name__}: {exc}")
+                emit_event(
+                    connection,
+                    project_id,
+                    "agent.mcp_discovery_failed",
+                    "agent_loop",
+                    "mcp_server",
+                    str(server["id"]),
+                    {"server": server["name"], "error": str(exc)},
+                )
+                continue
+            record_reachability_quietly(connection, project_id, server, reachable=True,
+                                        tools=server_tools)
+            allow = set(server.get("granted_tools") or [])
+            for t in server_tools:
+                tool_name = str(t.get("name") or "tool")
+                if allow and tool_name not in allow:
+                    continue
+                if _mcp_tool_policy(server, t) == "off":
+                    # TURNED OFF IN SKILLS & MCP: never offered, so the model cannot even ask.
+                    continue
+                ns = _unique_tool_name(
+                    "mcp_" + _slug(server["name"]) + "_" + _slug(tool_name),
+                    occupied,
+                    f"mcp:{server['id']}:{tool_name}",
+                )
+                schemas.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": ns,
+                            "description": (
+                                f"[MCP · {server['name']}"
+                                + (" · UNREVIEWED server: every call waits for a person"
+                                   if needs_person(server) else "")
+                                + f"] {t.get('description', '')}"),
+                            "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
+                        },
+                    }
+                )
+                mcp_map[ns] = (server, t)
+
+        skill_resolution = _skill_resolution_for_run(connection, settings, run)
+        # OFF IN SKILLS & MCP MEANS NOT OFFERED (kit.skill_policy): the model cannot call what the
+        # operator turned off, so it does not spend a turn finding out.
+        eager = [spec for spec in skill_resolution["eager"]
+                 if _skill_policy(connection, settings, project_id, spec) != "off"]
+        # READ THE REPO IS FIVE TOOLS, ONE SKILL (kit E11): holding `repo.read` offers the engine's
+        # read tools by their own names and schemas; each call is a call of that one skill. The
+        # baseline every agent holds (boss.fundamentals, boss.propose_fix) is offered the same way.
+        from .agent_baseline import bundles as _bundles
+
+        _bundled = set(_bundles())
+        repo_map = _append_bundle_tools(
+            schemas, occupied, [s for s in eager if str(s["id"]) in _bundled])
+        skill_map = _append_skill_tools(
+            schemas,
+            occupied,
+            [spec for spec in eager if str(spec["id"]) not in _bundled],
+        )
+        on_demand_loader: Optional[str] = None
+        if skill_resolution["on_demand"]:
+            on_demand_loader = _unique_tool_name(
+                "load_on_demand_skill", occupied, "skill:on_demand:loader"
+            )
+            discoverable = [
+                {
+                    "id": str(skill["id"]),
+                    "description": str(skill.get("description") or ""),
+                }
+                for skill in skill_resolution["on_demand"]
+            ]
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": on_demand_loader,
+                        "description": (
+                            "Attach one on-demand BOSS skill for the remainder of this run. "
+                            f"Available skills: {json.dumps(discoverable)}"
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "skill_id": {
+                                    "type": "string",
+                                    "enum": [item["id"] for item in discoverable],
+                                }
+                            },
+                            "required": ["skill_id"],
+                            "additionalProperties": False,
+                        },
+                    },
+                }
+            )
+
+
+        self.bounded = bounded
+        self.openai_schemas = schemas
+        self.occupied = occupied
+        self.mcp_map = mcp_map
+        self.repo_map = repo_map
+        self.skill_map = skill_map
+        self.skill_resolution = skill_resolution
+        self.on_demand_loader = on_demand_loader
+        self.threshold = int(settings.agent_autonomous_risk_max)
+        # One waiter per drive, so the per-run bound covers every call this drive makes.
+        self.waiter = BudgetWaiter()
+
+    # ── what each call is ─────────────────────────────────────────────────────────────────
+    def maps(self) -> dict:
+        return {"mcp_map": self.mcp_map, "repo_map": self.repo_map, "skill_map": self.skill_map,
+                "on_demand_loader": self.on_demand_loader}
+
+    def permission_of(self, name: str) -> str:
+        """The call's catalogue permission; UNDECLARED (refused inside a delegated run) when
+        the run's grants and the native registry know of none."""
+        from ..kernel.toolset import UNDECLARED
+
+        return _agent_tool_permission(name, **self.maps()) or UNDECLARED
+
+    def origin_of(self, name: str) -> Optional[str]:
+        return _origin_for_call(name, self.mcp_map, self.skill_map)
+
+    # ── the kernel's ToolSet ──────────────────────────────────────────────────────────────
+    def schemas(self, *, step: int, state: Any) -> list:
+        from ..kernel.types import ToolSchema
+
+        out = []
+        for schema in self.openai_schemas:
+            name = str(schema["function"]["name"])
+            out.append(ToolSchema.from_openai(
+                schema, kind="write" if name in _WRITE_FNS else "read",
+                permission=self.permission_of(name), origin=self.origin_of(name),
+                # An MCP result comes through the receipt door, which screened it already.
+                prescreened=name in self.mcp_map))
+        return out
+
+    def invoke(self, call: Any, *, state: Any, approved: Optional[dict] = None) -> Any:
+        from ..kernel.toolset import result_from
+        from ..kernel.types import ToolResult
+
+        if approved is not None:
+            pending = dict(state.pending or {})
+            return result_from(call, _execute_approved(
+                self.connection, self.settings, self.run, self.run_id, pending,
+                str(approved.get("decision_id") or pending.get("decision_id") or "")))
+        args = dict(call.arguments or {})
+        ledger = Ledger.load(state.extra.get("untrusted_spans"))
+        ledger.absorb_messages(state.messages)
+        result, held, waited = self.dispatch(call.name, args, step=max(0, state.step - 1),
+                                             flags=state.extra, ledger=ledger)
+        if held is not None:
+            return ToolResult(call.id, call.name, "deferred", result,
+                              decision_id=str(held.get("decision_id") or ""),
+                              pending={**held, **({"question": True}
+                                                  if held.get("kind") == _ASK_HUMAN else {})})
+        if waited is not None:
+            return ToolResult(call.id, call.name, "deferred", result, budget=dict(waited))
+        return result_from(call, result)
+
+    # ── one call, decided and run ─────────────────────────────────────────────────────────
+    def dispatch(self, name: str, args: dict, *, step: int, flags: dict,
+                 ledger: Any) -> tuple:
+        """Run one call the identity gate has let through. Returns (the result the model
+        reads, the hold it raised or None, the busy-minute wait or None). `flags` holds the
+        run's "tool_screen_untrusted" (a phrase-screen hit holds the next write); `ledger` is
+        the run's low-trust memory (outside text does not leave without a person)."""
+        connection, settings, run, run_id = (self.connection, self.settings, self.run,
+                                             self.run_id)
+        project_id, task_id = self.project_id, self.task_id
+        mcp_map, skill_map, repo_map = self.mcp_map, self.skill_map, self.repo_map
+        schemas, occupied = self.openai_schemas, self.occupied
+        skill_resolution, bounded, threshold = (self.skill_resolution, self.bounded,
+                                                self.threshold)
+        on_demand_loader, waiter = self.on_demand_loader, self.waiter
+        finalize_ctx = flags
+        screen_hold = bool(finalize_ctx.get("tool_screen_untrusted"))
+        from .mcp_registry import needs_person, unreviewed_sentence
+        from .tool_result_screen import next_write_must_ask
+
+        deferred: Optional[dict] = None
+        budget_wait: Optional[dict] = None
+        # OUTSIDE TEXT DOES NOT LEAVE. A page, a tool result, or a document remembered
+        # earlier in this run waits here instead of being sent. Resume runs the pending
+        # call without asking this again, so an approval can release it.
+        untrusted_hold = None
+        sink = _sink_for_call(name, mcp_map, skill_map)
+        if sink is not None:
+            untrusted_hold = blocked(args, sink=sink, ledger=ledger)
+        if untrusted_hold is not None:
+            result, deferred = _hold_for_untrusted_content(
+                connection, project_id, task_id, run_id, step, name, args, sink,
+                untrusted_hold, mcp_map, skill_map, skill_resolution,
+            )
+        elif on_demand_loader is not None and name == on_demand_loader:
+            requested_id = str(args.get("skill_id") or "")
+            current_resolution = _skill_resolution_for_run(
+                connection, settings, run
+            )
+            skill = next(
+                (
+                    item
+                    for item in current_resolution["on_demand"]
+                    if item["id"] == requested_id
+                ),
+                None,
+            )
+            if skill is None:
+                scope = None
+                if current_resolution.get("role_key") and requested_id:
+                    scope = RoleGovernanceService(settings).check_scope(
+                        connection,
+                        project_id=project_id,
+                        role_key=str(current_resolution["role_key"]),
+                        action="skill.invoke",
+                        skill_id=requested_id,
+                        actor="agent_loop",
+                        evidence_ref=run_id,
+                    )
+                result = {
+                    "status": "denied",
+                    "skill_id": requested_id,
+                    "reason": (
+                        (scope or {}).get("reason")
+                        if scope and not scope.get("allowed")
+                        else None
+                    )
+                    or "skill is not available on demand for this task",
+                }
+            else:
+                loaded = _append_skill_tools(schemas, occupied, [skill])
+                skill_map.update(loaded)
+                result = {
+                    "status": "loaded",
+                    "skill_id": requested_id,
+                    "tool_name": next(iter(loaded)),
+                    "available_for_remainder_of_run": True,
+                }
+                emit_event(
+                    connection,
+                    project_id,
+                    "agent.skill_lazy_loaded",
+                    "agent_loop",
+                    "agent_run",
+                    run_id,
+                    {"skill_id": requested_id, "step": step},
+                )
+        elif name == _ASK_HUMAN and not bounded:
+            # A TYPED QUESTION (BOSSAPP-832): a form decision is raised and the run parks
+            # until it is answered; resume_agent_run hands the typed answer back.
+            from .typed_forms import FormError, ask_human
+
+            try:
+                with connection.begin_nested():
+                    asked = ask_human(
+                        connection, project_id=project_id,
+                        question=str(args.get("question") or ""), form=args.get("fields"),
+                        asker=f"agent_run:{run_id}", run_id=run_id,
+                        work_item_id=str(args.get("work_item_id") or "") or None,
+                        task_id=task_id, context=str(args.get("context") or ""))
+            except (FormError, LookupError) as refused:
+                result = {"status": "refused", "error": str(refused)}
+            else:
+                result = {"status": "deferred_for_approval",
+                          "decision_id": asked["decision_id"],
+                          "message": "Your question is with a person; the run resumes with "
+                                     "their typed answer."}
+                deferred = {"tool": name, "args": args, "decision_id": asked["decision_id"],
+                            "kind": "ask_human"}
+        elif name in mcp_map:
+            server, tool = mcp_map[name]
+            tool_name = str(tool.get("name") or "tool")
+            risk = _mcp_tool_risk(server, tool)
+            # AN UNREVIEWED SERVER'S TOOL ALWAYS WAITS FOR A PERSON, whatever its tier.
+            # The tier is the server's own claim; until somebody has reviewed the server
+            # (mcp_registry.reviewed) that claim is the only thing standing between a
+            # registered URL and an unattended call. Round-1 review: a chat-registered
+            # tier-0 server's tools ran in every chat without anyone being asked.
+            unreviewed = needs_person(server)
+            # ASK IS THE OPERATOR'S RULE, and tier >= 2 always asks (spec E7): a tier-2 tool
+            # waits for a person even on an install that raised the autonomy threshold.
+            policy = next_write_must_ask(
+                {"untrusted": screen_hold},
+                write=risk >= 2,
+                policy=_mcp_tool_policy(server, tool),
+            )
+            asks = policy == "ask"
+            if risk > threshold or unreviewed or asks:
+                decision_id = create_blocking_decision(
+                    connection,
+                    project_id,
+                    task_id,
+                    (f"Approve MCP tool: {server['name']} / {_key_words(tool_name)}"
+                     + (" (server not reviewed yet)" if unreviewed else "")),
+                    {
+                        "action": "resume_agent_run",
+                        "run_id": run_id,
+                        "tool": name,
+                        "kind": "mcp",
+                        "server_id": server["id"],
+                        "tool_name": tool_name,
+                        "args": args,
+                        "task_id": task_id,
+                        **({"tool_screen": "untrusted"} if screen_hold and risk >= 2 else {}),
+                        **bind_held_call(name, args),
+                    },
+                    {},
+                    "agent_mcp_requires_approval",
+                    risk_tier=risk,
+                )
+                result = {
+                    "status": "deferred_for_approval",
+                    "decision_id": decision_id,
+                    "message": (
+                        f"MCP tool '{tool_name}' (risk tier {risk}) requires "
+                        "human approval."
+                        + (f" {unreviewed_sentence(server)}" if unreviewed else "")
+                    ),
+                }
+                if screen_hold and risk >= 2:
+                    screen_hold = False
+                    finalize_ctx["tool_screen_untrusted"] = False
+                deferred = {
+                    "kind": "mcp",
+                    "tool": name,
+                    "server_id": server["id"],
+                    "tool_name": tool_name,
+                    "args": args,
+                    "decision_id": decision_id,
+                    "step": step,
+                }
+                emit_event(
+                    connection,
+                    project_id,
+                    "agent.mcp_deferred",
+                    "agent_loop",
+                    "decision",
+                    decision_id,
+                    {
+                        "server": server["name"],
+                        "tool": tool_name,
+                        "risk_tier": risk,
+                        "step": step,
+                    },
+                )
+            else:
+                result, exhausted = waiter.invoke(lambda: _invoke_mcp_skill(
+                    connection,
+                    settings,
+                    project_id,
+                    server,
+                    tool,
+                    args,
+                    run_id=run_id,
+                    step=step,
+                    actor="agent_loop",
+                    agent=_run_agent(run),
+                ))
+                if exhausted is not None and bounded:
+                    budget_wait = exhausted
+                emit_event(
+                    connection,
+                    project_id,
+                    "agent.mcp_invoked",
+                    "agent_loop",
+                    "agent_run",
+                    run_id,
+                    {
+                        "server": server["name"],
+                        "tool": tool_name,
+                        "risk_tier": risk,
+                        "step": step,
+                    },
+                )
+        elif name in repo_map:
+            spec, tool = repo_map[name]
+            bundle_id = str(spec.get("id") or "repo.read")
+            held_now = any(str(item["id"]) == bundle_id for item in
+                           _skill_resolution_for_run(connection, settings, run)["eager"])
+            if not held_now:
+                result = {"status": "denied", "skill_id": bundle_id,
+                          "reason": f"{_BUNDLE_LABEL.get(bundle_id, bundle_id)} is no "
+                                    "longer held by this agent"}
+            else:
+                caller = str(spec.get("caller") or skill_resolution.get("role_key")
+                             or "agent_loop")
+                from .agent_baseline import BUNDLE_TOOL_KEY
+
+                picked = ({"tool": tool, **args} if bundle_id == "repo.read"
+                          else {**args, BUNDLE_TOOL_KEY: tool})
+                result, exhausted = waiter.invoke(lambda: _invoke_agent_skill(
+                    connection, settings, project_id, bundle_id, caller,
+                    picked, actor="agent_loop", skill_spec=spec))
+                if exhausted is not None and bounded:
+                    budget_wait = exhausted
+                emit_event(connection, project_id, "agent.skill_invoked", "agent_loop",
+                           "agent_run", run_id,
+                           {"skill_id": bundle_id, "tool": tool, "step": step})
+        elif name in skill_map:
+            skill = skill_map[name]
+            skill_id = str(skill["id"])
+            current_resolution = _skill_resolution_for_run(
+                connection, settings, run
+            )
+            current_skill = next(
+                (
+                    item
+                    for item in current_resolution["eager"]
+                    + current_resolution["on_demand"]
+                    if item["id"] == skill_id
+                ),
+                None,
+            )
+            if current_skill is None:
+                scope = None
+                if current_resolution.get("role_key"):
+                    scope = RoleGovernanceService(settings).check_scope(
+                        connection,
+                        project_id=project_id,
+                        role_key=str(current_resolution["role_key"]),
+                        action="skill.invoke",
+                        skill_id=skill_id,
+                        actor="agent_loop",
+                        evidence_ref=run_id,
+                    )
+                result = {
+                    "status": "denied",
+                    "skill_id": skill_id,
+                    "reason": (
+                        (scope or {}).get("reason")
+                        if scope and not scope.get("allowed")
+                        else None
+                    )
+                    or "skill is no longer enabled for this task",
+                }
+                current_skill = None
+            if current_skill is None:
+                # No longer granted: the refusal is the result (not screened: nothing ran).
+                return result, None, None
+            skill = current_skill
+            risk = int(skill.get("risk_tier") or 0)
+            caller = str(
+                skill.get("caller")
+                or skill.get("role_key")
+                or skill_resolution.get("role_key")
+                or "agent_loop"
+            )
+            # THE SAME REVIEW RULE AS A DIRECT MCP CALL (mcp_registry.needs_person), read
+            # from the catalogue: an authored mcp_tool skill on an unreviewed server carries
+            # policy.requires_person. Round-2 review: this branch asked only the tier, so
+            # the tool an agent could not call directly without a person ran unattended
+            # once it was wrapped in a skill the agent held.
+            person_reason = str(
+                (skill.get("policy") or {}).get("requires_person") or "")
+            unreviewed_server = bool(person_reason)
+            if not person_reason and _skill_policy(
+                    connection, settings, project_id, skill) == "ask":
+                # SET TO ASK IN SKILLS & MCP (and tier >= 2 always is): a person decides.
+                person_reason = "It is set to ask a person each time in Skills & MCP."
+            # A WRITE-CLASS SKILL after an untrusted tool result waits too (BOSSAPP-822): the
+            # same hold the MCP and built-in write branches apply.
+            screen_asks = next_write_must_ask(
+                {"untrusted": screen_hold}, write=risk >= 2, policy="allow") == "ask"
+            if screen_asks and not person_reason:
+                person_reason = ("An earlier tool result in this run was screened as "
+                                 "untrusted, so this write waits for a person.")
+            if risk > threshold or person_reason:
+                decision_id = create_blocking_decision(
+                    connection,
+                    project_id,
+                    task_id,
+                    f"Approve agent skill: {skill.get('label') or skill.get('name') or _key_words(skill_id)}"
+                    + (" (its MCP server is not reviewed yet)" if unreviewed_server else ""),
+                    {
+                        "action": "resume_agent_run",
+                        "run_id": run_id,
+                        "tool": name,
+                        "kind": "skill",
+                        "skill_id": skill_id,
+                        "caller": caller,
+                        "args": args,
+                        "task_id": task_id,
+                        **({"tool_screen": "untrusted"} if screen_asks else {}),
+                        **bind_held_call(name, args),
+                    },
+                    {},
+                    "agent_skill_requires_approval",
+                    risk_tier=risk,
+                )
+                result = {
+                    "status": "deferred_for_approval",
+                    "decision_id": decision_id,
+                    "message": (
+                        f"'{skill_id}' (risk tier {risk}) requires human "
+                        "approval; the run is paused and resumes on approval."
+                        + (f" {person_reason}" if person_reason else "")
+                    ),
+                }
+                if screen_asks:
+                    screen_hold = False
+                    finalize_ctx["tool_screen_untrusted"] = False
+                deferred = {
+                    "kind": "skill",
+                    "tool": name,
+                    "skill_id": skill_id,
+                    "caller": caller,
+                    "args": args,
+                    "decision_id": decision_id,
+                }
+                emit_event(
+                    connection,
+                    project_id,
+                    "agent.skill_deferred",
+                    "agent_loop",
+                    "decision",
+                    decision_id,
+                    {"skill_id": skill_id, "risk_tier": risk, "step": step},
+                )
+            else:
+                result, exhausted = waiter.invoke(lambda: _invoke_agent_skill(
+                    connection,
+                    settings,
+                    project_id,
+                    skill_id,
+                    caller,
+                    args,
+                    actor="agent_loop",
+                    skill_spec=skill,
+                ))
+                if exhausted is not None and bounded:
+                    budget_wait = exhausted
+                emit_event(
+                    connection,
+                    project_id,
+                    "agent.skill_invoked",
+                    "agent_loop",
+                    "agent_run",
+                    run_id,
+                    {"skill_id": skill_id, "step": step},
+                )
+        elif name in _WRITE_FNS:
+            _, risk = _WRITE_FNS[name]
+            policy = next_write_must_ask(
+                {"untrusted": screen_hold},
+                write=True,
+                policy="ask" if risk > threshold else "allow",
+            )
+            if policy == "ask":
+                decision_id = create_blocking_decision(
+                    connection, project_id, task_id,
+                    f"Approve agent action: {name}",
+                    {"action": "resume_agent_run", "run_id": run_id, "tool": name,
+                     "args": args, "task_id": task_id,
+                     **({"tool_screen": "untrusted"} if screen_hold else {}),
+                     **bind_held_call(name, args)},
+                    {}, "agent_tool_requires_approval", risk_tier=risk,
+                )
+                result = {"status": "deferred_for_approval", "decision_id": decision_id, "message": f"'{name}' (risk tier {risk}) requires human approval; the run is paused and resumes on approval."}
+                if screen_hold:
+                    screen_hold = False
+                    finalize_ctx["tool_screen_untrusted"] = False
+                deferred = {"tool": name, "args": args, "decision_id": decision_id}
+                emit_event(connection, project_id, "agent.tool_deferred", "agent_loop", "decision", decision_id, {"tool": name, "risk_tier": risk, "step": step})
+            else:
+                result = execute_agent_tool(connection, project_id, settings, name, args, "agent_loop", task_id=task_id)
+        else:
+            result = _dispatch(connection, project_id, settings, name, args)
+            emit_event(connection, project_id, "agent.tool_invoked", "agent_loop", "task", task_id or project_id, {"tool": name, "step": step})
+        return result, deferred, budget_wait
 
 
 def conversation_from_messages(messages: list[dict]) -> list[dict]:

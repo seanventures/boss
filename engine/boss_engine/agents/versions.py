@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import difflib
 import json
+from collections.abc import Mapping
 from typing import Any, Iterable, Optional
 
 import yaml
@@ -197,7 +198,7 @@ def native_tool_permissions() -> dict[str, str]:
             continue
         provider = getattr(mod, "native_tool_permissions", None)
         value = provider() if callable(provider) else getattr(mod, "AGENT_TOOL_PERMISSIONS", None)
-        if isinstance(value, dict) and value:
+        if isinstance(value, Mapping) and len(value):
             found = {str(k): str(v) for k, v in value.items()}
             break
     if not found:

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
+import pytest
 import yaml
 from sqlalchemy import text
 
@@ -74,7 +75,9 @@ def test_c_an_agent_created_from_a_spec_uses_its_skill_in_an_agent_step(client, 
     assert made.json()["version"] == 1 and made.json()["active"] is True
     assert SKILL in _skills(engine, key), "publishing the spec IS the grant"
 
-    model = _UsesTheSkill("ticket")
+    # ticket_search takes {"query"}: the kernel (P1b) checks a call's arguments against the
+    # tool's schema before running it, so the model must call a tool its arguments fit.
+    model = _UsesTheSkill("ticket_search")
     monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: model)
     # One test transaction holds the skill call's budget lock; the model's next turn reserves in
     # that same transaction (the governed adapter's own fallback for a connection it cannot
@@ -251,11 +254,54 @@ def test_studio_runs_go_through_the_governed_agent_pipeline(client, engine, monk
     assert result["agent_step"]["agent"] == "finops_sentinel"
 
 
+@pytest.mark.parametrize("flag, loop", [("1", "kernel"), ("0", "legacy")])
+def test_a_studio_run_drives_on_the_kernel_when_kernel_steps_is_on(client, engine, monkeypatch,
+                                                                     flag, loop):
+    """P1a's Studio route (POST /v1/agent-studio/runs/execute -> agent_steps.run) meets P1b's
+    K4: with BOSS_KERNEL_STEPS on (the default) the Studio run's agent step is driven by the
+    harness kernel, and stamped so; 0 puts it back on the old loop."""
+    from boss_engine.config import get_settings
+    from boss_engine.services import agent_loop
+    from boss_engine.services.agent_studio import AgentStudioService
+
+    monkeypatch.setenv("BOSS_KERNEL_STEPS", flag)
+    studio = AgentStudioService(get_settings())
+    model = _UsesTheSkill("no_such_tool_name_is_offered")
+    model.create_chat_completion = lambda messages, tools=None, **kw: (  # type: ignore[method-assign]
+        {"role": "assistant", "content": "A governed answer.",
+         "raw": {"role": "assistant", "content": "A governed answer."}, "tool_calls": []},
+        {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
+    monkeypatch.setattr(agent_loop, "project_chat_adapter", lambda *_a, **_k: model)
+    driven: list[str] = []
+    real_kernel = agent_loop._drive_run_on_kernel  # noqa: SLF001
+
+    def spy(connection, settings, run_id, *a, **k):
+        driven.append(run_id)
+        return real_kernel(connection, settings, run_id, *a, **k)
+
+    monkeypatch.setattr(agent_loop, "_drive_run_on_kernel", spy)
+    with engine.begin() as c:
+        agent = studio._find_agent_by_key(c, PROJECT, "cfo")  # noqa: SLF001
+        run = studio.start_agent_run(c, project_id=PROJECT, agent_version_id=agent["active_version_id"],
+                                     input_data={"objective": "Summarise spend."}, actor="ceo",
+                                     dedupe_key=None)
+        result = studio.execute_run(c, project_id=PROJECT, run_id=run["id"], actor="worker")
+        run_id = str(result["agent_step"].get("agent_run_id") or "")
+        assert run_id, result["agent_step"]
+        stamped = ((agent_loop.load_agent_run(c, run_id) or {}).get("finalize_ctx") or {}).get("loop")
+    assert result["execution"] == "governed_agent_step"
+    assert result["summary"] == "A governed answer."
+    assert bool(driven) is (loop == "kernel"), driven
+    assert stamped == loop
+
+
 def test_the_ceiling_check_fails_closed_when_the_native_tool_map_is_unreadable(client, engine, monkeypatch):
     """No permission map is never "no permissions needed": a spec naming a native tool is
     refused, and nothing is written."""
     from boss_engine.services import agent_loop
 
+    # Both readings the check knows: the kernel's derived provider (P1b) and the legacy map.
+    monkeypatch.setattr(agent_loop, "native_tool_permissions", lambda: {})
     monkeypatch.setattr(agent_loop, "AGENT_TOOL_PERMISSIONS", {})
     key = _key()
     refused = _create(client, _doc(key, tools={"native": ["read_repo_file"]}))

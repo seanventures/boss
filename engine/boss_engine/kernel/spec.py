@@ -1,9 +1,9 @@
 """RunSpec: everything one kernel run is made of, named in one place.
 
-The engine (or one built by the router), the tools, the five policies, who the run is (project,
-act, lineage), where its state and events go, and the caller's hooks. Nothing here is decided
-by the kernel: a caller that wants agent_loop's rules passes agent_loop's preset
-(presets.py), and the kernel follows them.
+The engine (or one built by the router), the tools, the five policies, the spec's own
+middleware, who the run is (project, act, lineage), where its state and events go, and the
+caller's hooks. Nothing here is decided by the kernel: a caller that wants agent_loop's rules
+passes agent_loop's preset (presets.py), and the kernel follows them.
 """
 from __future__ import annotations
 
@@ -54,6 +54,17 @@ class RunSpec:
     resume_note: Optional[Callable[[dict, str], str]] = None
     #: The caller's own state, carried in the checkpoint untouched.
     extra: dict = field(default_factory=dict)
+    #: The spec's own middleware (kernel/middleware.py), outermost first. The preset's policy
+    #: middleware and the mandatory governance are appended by the kernel and cannot be named
+    #: here: a spec adds behaviour, it never removes a gate.
+    middleware: tuple = ()
+    #: The database the governance middleware decides against (the run token's live
+    #: intersection, inside a delegated run): a connection or an engine.
+    db: Any = None
+    #: The run's tool-result screen: (result, ref) -> (screened, verdict), e.g.
+    #: tool_result_screen.screen_result bound to the project (its mode, the model check). None:
+    #: the deterministic pattern screen.
+    screen: Optional[Callable[[Any, str], Any]] = None
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
 

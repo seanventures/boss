@@ -87,7 +87,7 @@ def test_a_tool_call_written_as_text_is_run_not_printed(monkeypatch):
     # BOSS_KERNEL_CHAT an engine the kernel serves calls tools natively, so a structure
     # written as text is read for its prose and its "meant" calls do not run (an intended
     # difference, HARNESS_KERNEL_DESIGN.md §8.2e; pinned by test_kernel_chat.py).
-    monkeypatch.setenv("BOSS_KERNEL_CHAT", "")
+    monkeypatch.setenv("BOSS_KERNEL_CHAT", "0")
     ran: list = []
     adapter = _Scripted(MALFORMED, "Found it: list_repositories takes a project.")
     turn = _agent(adapter, ran).chat(project_id="p", message="q", max_steps=4)
@@ -96,7 +96,7 @@ def test_a_tool_call_written_as_text_is_run_not_printed(monkeypatch):
 
 
 def test_a_structure_with_no_answer_is_asked_once_for_prose_then_reported_honestly(monkeypatch):
-    monkeypatch.setenv("BOSS_KERNEL_CHAT", "")  # the old loop's re-ask; see the test above
+    monkeypatch.setenv("BOSS_KERNEL_CHAT", "0")  # the old loop's re-ask; see the test above
     ran: list = []
     # at the last step (no tools) the model answers with the protocol again; asked once for prose
     adapter = _Scripted(WELL_FORMED, WELL_FORMED, "The three projects exist; none has a repo.")

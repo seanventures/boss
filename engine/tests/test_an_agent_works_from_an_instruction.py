@@ -224,7 +224,8 @@ def test_the_loop_gives_a_bounded_run_no_native_tools():
 
     from boss_engine.services import agent_loop
 
-    source = inspect.getsource(agent_loop._drive_run)
+    # The assembly is the agent step's toolset (K4), shared by both loops.
+    source = inspect.getsource(agent_loop.AgentStepToolSet)
     assert 'bounded = isinstance(finalize_ctx.get("agent_step"), dict)' in source
     assert "schemas = [] if bounded else" in source
     # REWRITTEN. This asserted a bounded run got NO MCP server at all ("granted by giving the
