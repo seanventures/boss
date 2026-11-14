@@ -1,0 +1,1154 @@
+{
+ "schema": "boss-harness-bench/1",
+ "run": {
+  "id": "hbr_c7e709dc100a442cbf75",
+  "suite": "boss-harness",
+  "suite_version": "1",
+  "suite_sha256": "711fd0435f6eced602b7cbfae28c82c8a8f90a7d968e5ed4e396d7b33a904f1a",
+  "engine": "native:llama3.1:8b",
+  "model": "llama3.1:8b",
+  "level": "delegate",
+  "boss_sha": "3bb9728852ed94f97228fb5748f75345547a15d2",
+  "boss_dirty": false,
+  "config": {
+   "level": "delegate",
+   "model": "llama3.1:8b",
+   "engine": "native:llama3.1:8b",
+   "profile": "balanced",
+   "settings": {
+    "pipeline_profile": "balanced",
+    "model_routing_mode": "fixed",
+    "code_gate_never_block": true,
+    "code_review_panel_size": 1,
+    "code_repair_max_retries": 1,
+    "governed_coding_pipeline": true,
+    "open_pr_when_checks_fail": 1,
+    "code_review_inrun_max_rounds": 2,
+    "code_review_repair_max_rounds": 2
+   },
+   "overrides": {},
+   "risk_tier": 1
+  },
+  "config_fingerprint": "c76c906aa0246edb",
+  "rules": {
+   "guards": {
+    "wall_s": {
+     "max_rise_pct": 25
+    },
+    "cost_usd": {
+     "max_rise_pct": 15
+    },
+    "success_rate": {
+     "max_drop": 0.0
+    },
+    "interventions": {
+     "max_rise": 0
+    }
+   },
+   "k_stdev": 2.0,
+   "metrics": {
+    "turns": {
+     "abs_floor": 0
+    },
+    "wall_s": {
+     "abs_floor": 30,
+     "rel_floor": 0.1
+    },
+    "cost_usd": {
+     "abs_floor": 0.05,
+     "rel_floor": 0.05
+    },
+    "tokens_in": {
+     "abs_floor": 2000,
+     "rel_floor": 0.05
+    },
+    "tokens_out": {
+     "abs_floor": 500,
+     "rel_floor": 0.05
+    },
+    "cache_share": {
+     "abs_floor": 0.02
+    },
+    "model_calls": {
+     "abs_floor": 0
+    },
+    "success_rate": {
+     "abs_floor": 0.0
+    },
+    "interventions": {
+     "abs_floor": 0
+    },
+    "repair_rounds": {
+     "abs_floor": 0
+    }
+   }
+  },
+  "task_ids": [
+   "helpdesk-classify-case",
+   "helpdesk-blank-title",
+   "textkit-word-count",
+   "helpdesk-priority",
+   "helpdesk-stats",
+   "textkit-truncate",
+   "new-slug-service",
+   "new-tempconv"
+  ],
+  "repeat": 1,
+  "budget_usd": 10.0,
+  "status": "completed",
+  "baseline_name": "llama31-delegate",
+  "compared_to": null,
+  "verdict": null,
+  "started_at": "2026-11-12 03:19:36.215436+00:00",
+  "finished_at": "2026-11-12 03:20:14.102395+00:00"
+ },
+ "results": [
+  {
+   "kind": "fix",
+   "calls": {
+    "models": [],
+    "routes": [],
+    "engines": [],
+    "by_stage": {},
+    "failed_calls": 0,
+    "included_calls": 0,
+    "price_estimated_calls": 0
+   },
+   "error": "Unknown code_agent_engine: 'llama3.1'. Registered harnesses: aider, azure, claude_agent_sdk, claude_code, codex, cursor, deepseek, gemini, grok, groq, native, ollama, openrouter, scripted, vllm, xai. [substrate=local_subprocess]",
+   "gates": {
+    "failed": [],
+    "passed": [],
+    "review": "not_run",
+    "status": "missing",
+    "tests_passed": false,
+    "repair_attempts": 0
+   },
+   "phase": "done",
+   "events": [
+    "code_task.auto_retry_withheld",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.effort_chosen",
+    "code_task.failed",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.started"
+   ],
+   "status": "failed",
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "38d672b3e3f6ab46decc465168c2e5738fa975e3",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "lineage": [
+    "crun_fe1ec129c16d4641b3e5"
+   ],
+   "metrics": {
+    "turns": 0,
+    "wall_s": 4.82,
+    "cost_usd": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "tool_calls": 0,
+    "cache_share": 0.0,
+    "model_calls": 0,
+    "lineage_runs": 1,
+    "continuations": 0,
+    "interventions": 0,
+    "repair_rounds": 0,
+    "agent_turn_rows": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0
+   },
+   "success": false,
+   "task_id": "helpdesk-classify-case",
+   "iteration": 1,
+   "acceptance": {
+    "checks": [
+     {
+      "ok": false,
+      "check": "a pull request was opened",
+      "detail": "no pull request, so nothing to accept"
+     }
+    ],
+    "passed": false
+   },
+   "components": {
+    "completed": false,
+    "pr_opened": false,
+    "gates_passed": false,
+    "review_passed": false,
+    "verify_passed": false,
+    "acceptance_passed": false,
+    "no_checks_failing_pr": true
+   },
+   "code_task_run_id": "crun_fe1ec129c16d4641b3e5",
+   "pull_request_url": null,
+   "gate_agent_checks": [
+    {
+     "ok": false,
+     "check": "completed with a PR",
+     "detail": "status=failed pr=none"
+    },
+    {
+     "ok": true,
+     "check": "no advisory-failing gates",
+     "detail": "none"
+    },
+    {
+     "ok": true,
+     "check": "no checks failing on the PR",
+     "detail": "none"
+    },
+    {
+     "ok": false,
+     "check": "the app started",
+     "detail": "no code_task.app_serve_checked"
+    },
+    {
+     "ok": true,
+     "check": "the install works",
+     "detail": "no install failure"
+    },
+    {
+     "ok": true,
+     "check": "test budget not over",
+     "detail": "no code_task.test_budget (no written-tests stage)"
+    },
+    {
+     "ok": true,
+     "check": "build profile recorded",
+     "detail": "present"
+    }
+   ],
+   "interventions_asked": []
+  },
+  {
+   "kind": "fix",
+   "calls": {
+    "models": [],
+    "routes": [],
+    "engines": [],
+    "by_stage": {},
+    "failed_calls": 0,
+    "included_calls": 0,
+    "price_estimated_calls": 0
+   },
+   "error": "Unknown code_agent_engine: 'llama3.1'. Registered harnesses: aider, azure, claude_agent_sdk, claude_code, codex, cursor, deepseek, gemini, grok, groq, native, ollama, openrouter, scripted, vllm, xai. [substrate=local_subprocess]",
+   "gates": {
+    "failed": [],
+    "passed": [],
+    "review": "not_run",
+    "status": "missing",
+    "tests_passed": false,
+    "repair_attempts": 0
+   },
+   "phase": "done",
+   "events": [
+    "code_task.auto_retry_withheld",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.effort_chosen",
+    "code_task.failed",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.started"
+   ],
+   "status": "failed",
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "c5165a4055005da7d1d8e824d839190aae6c920a",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "lineage": [
+    "crun_9c3bd6c6b8bd4760927c"
+   ],
+   "metrics": {
+    "turns": 0,
+    "wall_s": 4.48,
+    "cost_usd": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "tool_calls": 0,
+    "cache_share": 0.0,
+    "model_calls": 0,
+    "lineage_runs": 1,
+    "continuations": 0,
+    "interventions": 0,
+    "repair_rounds": 0,
+    "agent_turn_rows": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0
+   },
+   "success": false,
+   "task_id": "helpdesk-blank-title",
+   "iteration": 1,
+   "acceptance": {
+    "checks": [
+     {
+      "ok": false,
+      "check": "a pull request was opened",
+      "detail": "no pull request, so nothing to accept"
+     }
+    ],
+    "passed": false
+   },
+   "components": {
+    "completed": false,
+    "pr_opened": false,
+    "gates_passed": false,
+    "review_passed": false,
+    "verify_passed": false,
+    "acceptance_passed": false,
+    "no_checks_failing_pr": true
+   },
+   "code_task_run_id": "crun_9c3bd6c6b8bd4760927c",
+   "pull_request_url": null,
+   "gate_agent_checks": [
+    {
+     "ok": false,
+     "check": "completed with a PR",
+     "detail": "status=failed pr=none"
+    },
+    {
+     "ok": true,
+     "check": "no advisory-failing gates",
+     "detail": "none"
+    },
+    {
+     "ok": true,
+     "check": "no checks failing on the PR",
+     "detail": "none"
+    },
+    {
+     "ok": false,
+     "check": "the app started",
+     "detail": "no code_task.app_serve_checked"
+    },
+    {
+     "ok": true,
+     "check": "the install works",
+     "detail": "no install failure"
+    },
+    {
+     "ok": true,
+     "check": "test budget not over",
+     "detail": "no code_task.test_budget (no written-tests stage)"
+    },
+    {
+     "ok": true,
+     "check": "build profile recorded",
+     "detail": "present"
+    }
+   ],
+   "interventions_asked": []
+  },
+  {
+   "kind": "fix",
+   "calls": {
+    "models": [],
+    "routes": [],
+    "engines": [],
+    "by_stage": {},
+    "failed_calls": 0,
+    "included_calls": 0,
+    "price_estimated_calls": 0
+   },
+   "error": "Unknown code_agent_engine: 'llama3.1'. Registered harnesses: aider, azure, claude_agent_sdk, claude_code, codex, cursor, deepseek, gemini, grok, groq, native, ollama, openrouter, scripted, vllm, xai. [substrate=local_subprocess]",
+   "gates": {
+    "failed": [],
+    "passed": [],
+    "review": "not_run",
+    "status": "missing",
+    "tests_passed": false,
+    "repair_attempts": 0
+   },
+   "phase": "done",
+   "events": [
+    "code_task.auto_retry_withheld",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.effort_chosen",
+    "code_task.failed",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.started"
+   ],
+   "status": "failed",
+   "fixture": {
+    "name": "textkit",
+    "commit": "41c32922cad2592bc59e565d67df5e7be589e75f",
+    "sha256": "f63c43bf762a2d2b4d74deac81b2d11ba10703f8430893454acad6ad719a9878"
+   },
+   "lineage": [
+    "crun_f04a4cefa02f4f51ad4a"
+   ],
+   "metrics": {
+    "turns": 0,
+    "wall_s": 4.58,
+    "cost_usd": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "tool_calls": 0,
+    "cache_share": 0.0,
+    "model_calls": 0,
+    "lineage_runs": 1,
+    "continuations": 0,
+    "interventions": 0,
+    "repair_rounds": 0,
+    "agent_turn_rows": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0
+   },
+   "success": false,
+   "task_id": "textkit-word-count",
+   "iteration": 1,
+   "acceptance": {
+    "checks": [
+     {
+      "ok": false,
+      "check": "a pull request was opened",
+      "detail": "no pull request, so nothing to accept"
+     }
+    ],
+    "passed": false
+   },
+   "components": {
+    "completed": false,
+    "pr_opened": false,
+    "gates_passed": false,
+    "review_passed": false,
+    "verify_passed": false,
+    "acceptance_passed": false,
+    "no_checks_failing_pr": true
+   },
+   "code_task_run_id": "crun_f04a4cefa02f4f51ad4a",
+   "pull_request_url": null,
+   "gate_agent_checks": [
+    {
+     "ok": false,
+     "check": "completed with a PR",
+     "detail": "status=failed pr=none"
+    },
+    {
+     "ok": true,
+     "check": "no advisory-failing gates",
+     "detail": "none"
+    },
+    {
+     "ok": true,
+     "check": "no checks failing on the PR",
+     "detail": "none"
+    },
+    {
+     "ok": false,
+     "check": "the app started",
+     "detail": "no code_task.app_serve_checked"
+    },
+    {
+     "ok": true,
+     "check": "the install works",
+     "detail": "no install failure"
+    },
+    {
+     "ok": true,
+     "check": "test budget not over",
+     "detail": "no code_task.test_budget (no written-tests stage)"
+    },
+    {
+     "ok": true,
+     "check": "build profile recorded",
+     "detail": "present"
+    }
+   ],
+   "interventions_asked": []
+  },
+  {
+   "kind": "feature",
+   "calls": {
+    "models": [],
+    "routes": [],
+    "engines": [],
+    "by_stage": {},
+    "failed_calls": 0,
+    "included_calls": 0,
+    "price_estimated_calls": 0
+   },
+   "error": "Unknown code_agent_engine: 'llama3.1'. Registered harnesses: aider, azure, claude_agent_sdk, claude_code, codex, cursor, deepseek, gemini, grok, groq, native, ollama, openrouter, scripted, vllm, xai. [substrate=local_subprocess]",
+   "gates": {
+    "failed": [],
+    "passed": [],
+    "review": "not_run",
+    "status": "missing",
+    "tests_passed": false,
+    "repair_attempts": 0
+   },
+   "phase": "done",
+   "events": [
+    "code_task.auto_retry_withheld",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.effort_chosen",
+    "code_task.failed",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.started"
+   ],
+   "status": "failed",
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "51663e0e28a57b9e841976dae94205f43711f56a",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "lineage": [
+    "crun_7072243522b64eceb63b"
+   ],
+   "metrics": {
+    "turns": 0,
+    "wall_s": 4.48,
+    "cost_usd": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "tool_calls": 0,
+    "cache_share": 0.0,
+    "model_calls": 0,
+    "lineage_runs": 1,
+    "continuations": 0,
+    "interventions": 0,
+    "repair_rounds": 0,
+    "agent_turn_rows": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0
+   },
+   "success": false,
+   "task_id": "helpdesk-priority",
+   "iteration": 1,
+   "acceptance": {
+    "checks": [
+     {
+      "ok": false,
+      "check": "a pull request was opened",
+      "detail": "no pull request, so nothing to accept"
+     }
+    ],
+    "passed": false
+   },
+   "components": {
+    "completed": false,
+    "pr_opened": false,
+    "gates_passed": false,
+    "review_passed": false,
+    "verify_passed": false,
+    "acceptance_passed": false,
+    "no_checks_failing_pr": true
+   },
+   "code_task_run_id": "crun_7072243522b64eceb63b",
+   "pull_request_url": null,
+   "gate_agent_checks": [
+    {
+     "ok": false,
+     "check": "completed with a PR",
+     "detail": "status=failed pr=none"
+    },
+    {
+     "ok": true,
+     "check": "no advisory-failing gates",
+     "detail": "none"
+    },
+    {
+     "ok": true,
+     "check": "no checks failing on the PR",
+     "detail": "none"
+    },
+    {
+     "ok": false,
+     "check": "the app started",
+     "detail": "no code_task.app_serve_checked"
+    },
+    {
+     "ok": true,
+     "check": "the install works",
+     "detail": "no install failure"
+    },
+    {
+     "ok": true,
+     "check": "test budget not over",
+     "detail": "no code_task.test_budget (no written-tests stage)"
+    },
+    {
+     "ok": true,
+     "check": "build profile recorded",
+     "detail": "present"
+    }
+   ],
+   "interventions_asked": []
+  },
+  {
+   "kind": "feature",
+   "calls": {
+    "models": [],
+    "routes": [],
+    "engines": [],
+    "by_stage": {},
+    "failed_calls": 0,
+    "included_calls": 0,
+    "price_estimated_calls": 0
+   },
+   "error": "Unknown code_agent_engine: 'llama3.1'. Registered harnesses: aider, azure, claude_agent_sdk, claude_code, codex, cursor, deepseek, gemini, grok, groq, native, ollama, openrouter, scripted, vllm, xai. [substrate=local_subprocess]",
+   "gates": {
+    "failed": [],
+    "passed": [],
+    "review": "not_run",
+    "status": "missing",
+    "tests_passed": false,
+    "repair_attempts": 0
+   },
+   "phase": "done",
+   "events": [
+    "code_task.auto_retry_withheld",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.effort_chosen",
+    "code_task.failed",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.started"
+   ],
+   "status": "failed",
+   "fixture": {
+    "name": "helpdesk-lite",
+    "commit": "2b429512caf8cd9a0f1c8711d706db14d4202bd4",
+    "sha256": "7078ec19e52b20f32f1484881040b8dfd3e9d20fb8c06af07c23aae9db8db871"
+   },
+   "lineage": [
+    "crun_167d699bc3384cb9a89f"
+   ],
+   "metrics": {
+    "turns": 0,
+    "wall_s": 4.46,
+    "cost_usd": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "tool_calls": 0,
+    "cache_share": 0.0,
+    "model_calls": 0,
+    "lineage_runs": 1,
+    "continuations": 0,
+    "interventions": 0,
+    "repair_rounds": 0,
+    "agent_turn_rows": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0
+   },
+   "success": false,
+   "task_id": "helpdesk-stats",
+   "iteration": 1,
+   "acceptance": {
+    "checks": [
+     {
+      "ok": false,
+      "check": "a pull request was opened",
+      "detail": "no pull request, so nothing to accept"
+     }
+    ],
+    "passed": false
+   },
+   "components": {
+    "completed": false,
+    "pr_opened": false,
+    "gates_passed": false,
+    "review_passed": false,
+    "verify_passed": false,
+    "acceptance_passed": false,
+    "no_checks_failing_pr": true
+   },
+   "code_task_run_id": "crun_167d699bc3384cb9a89f",
+   "pull_request_url": null,
+   "gate_agent_checks": [
+    {
+     "ok": false,
+     "check": "completed with a PR",
+     "detail": "status=failed pr=none"
+    },
+    {
+     "ok": true,
+     "check": "no advisory-failing gates",
+     "detail": "none"
+    },
+    {
+     "ok": true,
+     "check": "no checks failing on the PR",
+     "detail": "none"
+    },
+    {
+     "ok": false,
+     "check": "the app started",
+     "detail": "no code_task.app_serve_checked"
+    },
+    {
+     "ok": true,
+     "check": "the install works",
+     "detail": "no install failure"
+    },
+    {
+     "ok": true,
+     "check": "test budget not over",
+     "detail": "no code_task.test_budget (no written-tests stage)"
+    },
+    {
+     "ok": true,
+     "check": "build profile recorded",
+     "detail": "present"
+    }
+   ],
+   "interventions_asked": []
+  },
+  {
+   "kind": "feature",
+   "calls": {
+    "models": [],
+    "routes": [],
+    "engines": [],
+    "by_stage": {},
+    "failed_calls": 0,
+    "included_calls": 0,
+    "price_estimated_calls": 0
+   },
+   "error": "Unknown code_agent_engine: 'llama3.1'. Registered harnesses: aider, azure, claude_agent_sdk, claude_code, codex, cursor, deepseek, gemini, grok, groq, native, ollama, openrouter, scripted, vllm, xai. [substrate=local_subprocess]",
+   "gates": {
+    "failed": [],
+    "passed": [],
+    "review": "not_run",
+    "status": "missing",
+    "tests_passed": false,
+    "repair_attempts": 0
+   },
+   "phase": "done",
+   "events": [
+    "code_task.auto_retry_withheld",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.effort_chosen",
+    "code_task.failed",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.started"
+   ],
+   "status": "failed",
+   "fixture": {
+    "name": "textkit",
+    "commit": "2e61da1d7b347caca4f5596de89b1125ce6a589d",
+    "sha256": "f63c43bf762a2d2b4d74deac81b2d11ba10703f8430893454acad6ad719a9878"
+   },
+   "lineage": [
+    "crun_a15a63424e5248e283dd"
+   ],
+   "metrics": {
+    "turns": 0,
+    "wall_s": 4.45,
+    "cost_usd": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "tool_calls": 0,
+    "cache_share": 0.0,
+    "model_calls": 0,
+    "lineage_runs": 1,
+    "continuations": 0,
+    "interventions": 0,
+    "repair_rounds": 0,
+    "agent_turn_rows": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0
+   },
+   "success": false,
+   "task_id": "textkit-truncate",
+   "iteration": 1,
+   "acceptance": {
+    "checks": [
+     {
+      "ok": false,
+      "check": "a pull request was opened",
+      "detail": "no pull request, so nothing to accept"
+     }
+    ],
+    "passed": false
+   },
+   "components": {
+    "completed": false,
+    "pr_opened": false,
+    "gates_passed": false,
+    "review_passed": false,
+    "verify_passed": false,
+    "acceptance_passed": false,
+    "no_checks_failing_pr": true
+   },
+   "code_task_run_id": "crun_a15a63424e5248e283dd",
+   "pull_request_url": null,
+   "gate_agent_checks": [
+    {
+     "ok": false,
+     "check": "completed with a PR",
+     "detail": "status=failed pr=none"
+    },
+    {
+     "ok": true,
+     "check": "no advisory-failing gates",
+     "detail": "none"
+    },
+    {
+     "ok": true,
+     "check": "no checks failing on the PR",
+     "detail": "none"
+    },
+    {
+     "ok": false,
+     "check": "the app started",
+     "detail": "no code_task.app_serve_checked"
+    },
+    {
+     "ok": true,
+     "check": "the install works",
+     "detail": "no install failure"
+    },
+    {
+     "ok": true,
+     "check": "test budget not over",
+     "detail": "no code_task.test_budget (no written-tests stage)"
+    },
+    {
+     "ok": true,
+     "check": "build profile recorded",
+     "detail": "present"
+    }
+   ],
+   "interventions_asked": []
+  },
+  {
+   "kind": "new_app",
+   "calls": {
+    "models": [],
+    "routes": [],
+    "engines": [],
+    "by_stage": {},
+    "failed_calls": 0,
+    "included_calls": 0,
+    "price_estimated_calls": 0
+   },
+   "error": "Unknown code_agent_engine: 'llama3.1'. Registered harnesses: aider, azure, claude_agent_sdk, claude_code, codex, cursor, deepseek, gemini, grok, groq, native, ollama, openrouter, scripted, vllm, xai. [substrate=local_subprocess]",
+   "gates": {
+    "failed": [],
+    "passed": [],
+    "review": "not_run",
+    "status": "missing",
+    "tests_passed": false,
+    "repair_attempts": 0
+   },
+   "phase": "done",
+   "events": [
+    "code_task.auto_retry_withheld",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.effort_chosen",
+    "code_task.failed",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.started"
+   ],
+   "status": "failed",
+   "fixture": {
+    "name": "empty",
+    "commit": "7e27744e96967728b7bdd01b2d8bdecee919a934",
+    "sha256": "4d7a4904a9b4ab587165510784c5fe2c5193e7a0acc090eb8a9cff5d9d1782be"
+   },
+   "lineage": [
+    "crun_8bbb9ac5d19c477d9b82"
+   ],
+   "metrics": {
+    "turns": 0,
+    "wall_s": 4.54,
+    "cost_usd": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "tool_calls": 0,
+    "cache_share": 0.0,
+    "model_calls": 0,
+    "lineage_runs": 1,
+    "continuations": 0,
+    "interventions": 0,
+    "repair_rounds": 0,
+    "agent_turn_rows": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0
+   },
+   "success": false,
+   "task_id": "new-slug-service",
+   "iteration": 1,
+   "acceptance": {
+    "checks": [
+     {
+      "ok": false,
+      "check": "a pull request was opened",
+      "detail": "no pull request, so nothing to accept"
+     }
+    ],
+    "passed": false
+   },
+   "components": {
+    "completed": false,
+    "pr_opened": false,
+    "gates_passed": false,
+    "review_passed": false,
+    "verify_passed": false,
+    "acceptance_passed": false,
+    "no_checks_failing_pr": true
+   },
+   "code_task_run_id": "crun_8bbb9ac5d19c477d9b82",
+   "pull_request_url": null,
+   "gate_agent_checks": [
+    {
+     "ok": false,
+     "check": "completed with a PR",
+     "detail": "status=failed pr=none"
+    },
+    {
+     "ok": true,
+     "check": "no advisory-failing gates",
+     "detail": "none"
+    },
+    {
+     "ok": true,
+     "check": "no checks failing on the PR",
+     "detail": "none"
+    },
+    {
+     "ok": false,
+     "check": "the app started",
+     "detail": "no code_task.app_serve_checked"
+    },
+    {
+     "ok": true,
+     "check": "the install works",
+     "detail": "no install failure"
+    },
+    {
+     "ok": true,
+     "check": "test budget not over",
+     "detail": "no code_task.test_budget (no written-tests stage)"
+    },
+    {
+     "ok": true,
+     "check": "build profile recorded",
+     "detail": "present"
+    }
+   ],
+   "interventions_asked": []
+  },
+  {
+   "kind": "new_app",
+   "calls": {
+    "models": [],
+    "routes": [],
+    "engines": [],
+    "by_stage": {},
+    "failed_calls": 0,
+    "included_calls": 0,
+    "price_estimated_calls": 0
+   },
+   "error": "Unknown code_agent_engine: 'llama3.1'. Registered harnesses: aider, azure, claude_agent_sdk, claude_code, codex, cursor, deepseek, gemini, grok, groq, native, ollama, openrouter, scripted, vllm, xai. [substrate=local_subprocess]",
+   "gates": {
+    "failed": [],
+    "passed": [],
+    "review": "not_run",
+    "status": "missing",
+    "tests_passed": false,
+    "repair_attempts": 0
+   },
+   "phase": "done",
+   "events": [
+    "code_task.auto_retry_withheld",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.effort_chosen",
+    "code_task.failed",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.started"
+   ],
+   "status": "failed",
+   "fixture": {
+    "name": "empty",
+    "commit": "01d6c3fc0b74e89a2e2f05eff14c19bc209d87c8",
+    "sha256": "4d7a4904a9b4ab587165510784c5fe2c5193e7a0acc090eb8a9cff5d9d1782be"
+   },
+   "lineage": [
+    "crun_f4064a0b3db1488d8829"
+   ],
+   "metrics": {
+    "turns": 0,
+    "wall_s": 4.47,
+    "cost_usd": 0.0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "tool_calls": 0,
+    "cache_share": 0.0,
+    "model_calls": 0,
+    "lineage_runs": 1,
+    "continuations": 0,
+    "interventions": 0,
+    "repair_rounds": 0,
+    "agent_turn_rows": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0
+   },
+   "success": false,
+   "task_id": "new-tempconv",
+   "iteration": 1,
+   "acceptance": {
+    "checks": [
+     {
+      "ok": false,
+      "check": "a pull request was opened",
+      "detail": "no pull request, so nothing to accept"
+     }
+    ],
+    "passed": false
+   },
+   "components": {
+    "completed": false,
+    "pr_opened": false,
+    "gates_passed": false,
+    "review_passed": false,
+    "verify_passed": false,
+    "acceptance_passed": false,
+    "no_checks_failing_pr": true
+   },
+   "code_task_run_id": "crun_f4064a0b3db1488d8829",
+   "pull_request_url": null,
+   "gate_agent_checks": [
+    {
+     "ok": false,
+     "check": "completed with a PR",
+     "detail": "status=failed pr=none"
+    },
+    {
+     "ok": true,
+     "check": "no advisory-failing gates",
+     "detail": "none"
+    },
+    {
+     "ok": true,
+     "check": "no checks failing on the PR",
+     "detail": "none"
+    },
+    {
+     "ok": false,
+     "check": "the app started",
+     "detail": "no code_task.app_serve_checked"
+    },
+    {
+     "ok": true,
+     "check": "the install works",
+     "detail": "no install failure"
+    },
+    {
+     "ok": true,
+     "check": "test budget not over",
+     "detail": "no code_task.test_budget (no written-tests stage)"
+    },
+    {
+     "ok": true,
+     "check": "build profile recorded",
+     "detail": "present"
+    }
+   ],
+   "interventions_asked": []
+  }
+ ],
+ "summary": {
+  "tasks": [
+   "helpdesk-blank-title",
+   "helpdesk-classify-case",
+   "helpdesk-priority",
+   "helpdesk-stats",
+   "new-slug-service",
+   "new-tempconv",
+   "textkit-truncate",
+   "textkit-word-count"
+  ],
+  "runs": 8,
+  "skipped": 0,
+  "successes": 0,
+  "metrics": {
+   "success_rate": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "wall_s": {
+    "n": 1,
+    "mean": 36.28,
+    "stdev": 0.0,
+    "min": 36.28,
+    "max": 36.28
+   },
+   "tokens_in": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "tokens_out": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "cache_share": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "cost_usd": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "model_calls": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "turns": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "repair_rounds": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "interventions": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   }
+  }
+ }
+}
