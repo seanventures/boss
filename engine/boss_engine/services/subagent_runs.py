@@ -388,6 +388,106 @@ def _wake(connection: Connection, child: dict, sub: dict, nid: str, task: dict) 
         "WHERE id = :n"), {"to": admitted["run_id"], "n": nid})
 
 
+# ── A remote agent as a sub-agent target (P5's adapter) ──────────────────────────────────────
+
+class RemoteTarget:
+    """An A2A agent or an Agent Protocol server (LangGraph) as a kernel/subagents target, through
+    P5's adapter (services/remote_subagents): `run` for `task`, `start` / check / update /
+    cancel for the async tools. P5 records the remote span (under the `task` span: the
+    traceparent is forwarded) and books the remote's reported cost on the parent run; the
+    remote's tokens count against the supervisor's budget like a local child's. A remote has no
+    BOSS Decision to propagate: a synchronous task that stops for input is reported to the parent
+    as such (answer it with an async start + update_subagent)."""
+
+    writes = False
+    parallel_safe = True
+
+    def __init__(self, name: str, ref: Any, *, engine: Any, project_id: str,
+                 description: str = "", timeout: float = 120.0, transport: Any = None,
+                 sleep: Any = None):
+        import time as _time
+
+        self.name, self.ref, self.engine, self.project_id = name, ref, engine, project_id
+        self.description, self.timeout, self.transport = description, timeout, transport
+        self.sleep = sleep or _time.sleep
+
+    def _outcome(self, request: Any, out: dict) -> Any:
+        from ..kernel.subagents import SubagentOutcome
+        from ..kernel.types import Usage
+        from ..protocols import a2a_types as t
+        from . import remote_subagents as rs
+
+        task = t.Task.from_dict(out["task"])
+        cost = rs.cost_of(task.metadata)
+        usage = Usage(model=f"remote:{self.name}", input_tokens=cost["prompt_tokens"],
+                      output_tokens=cost["completion_tokens"],
+                      cost_usd_micros=int(out.get("cost_usd_micros") or 0))
+        report = str(out.get("report") or rs.report_of(task))
+        if task.state == t.TaskState.COMPLETED:
+            return SubagentOutcome(status="completed", child_run_id=task.id, text=report,
+                                   usage=usage)
+        if task.state.interrupted or out.get("timed_out"):
+            why = "is waiting for input" if task.state.interrupted else "did not finish in time"
+            return SubagentOutcome(status="completed", child_run_id=task.id, usage=usage,
+                                   text=f"[remote agent {self.name} {why}] {report}",
+                                   stopped="input_required" if task.state.interrupted
+                                   else "timeout")
+        return SubagentOutcome(status="failed", child_run_id=task.id, usage=usage,
+                               error=f"remote task {task.state.value}: {report}"[:600])
+
+    def run(self, request: Any) -> Any:
+        from . import remote_subagents as rs
+
+        try:
+            out = rs.run(self.engine, project_id=self.project_id,
+                         parent_run_id=request.parent_run_id, ref=self.ref, brief=request.brief,
+                         timeout=self.timeout, traceparent=request.traceparent,
+                         transport=self.transport, sleep=self.sleep)
+        except rs.RemoteAgentError as exc:
+            from ..kernel.subagents import SubagentOutcome
+
+            return SubagentOutcome(status="failed", child_run_id=request.child_run_id,
+                                   error=str(exc)[:600])
+        return self._outcome(request, out)
+
+    def resume(self, request: Any, *, answers: dict) -> Any:
+        from ..kernel.subagents import SubagentOutcome
+
+        return SubagentOutcome(status="failed", child_run_id=request.child_run_id,
+                               error="a remote sub-agent is answered with update_subagent")
+
+    def start(self, request: Any) -> dict:
+        from . import remote_subagents as rs
+
+        out = rs.start(self.engine, project_id=self.project_id,
+                       parent_run_id=request.parent_run_id, ref=self.ref, brief=request.brief,
+                       traceparent=request.traceparent, transport=self.transport)
+        task = dict(out["task"])
+        task["metadata"] = {**dict(task.get("metadata") or {}), "target": self.name,
+                            "remote_handle": out["handle"]}
+        return task
+
+    def check_task(self, task_id: str, entry: dict) -> dict:
+        from . import remote_subagents as rs
+
+        return rs.check(self.engine, project_id=self.project_id, ref=self.ref,
+                        handle=entry["handle"], transport=self.transport)["task"]
+
+    def update_task(self, task_id: str, entry: dict, message: str) -> dict:
+        from . import remote_subagents as rs
+
+        out = rs.update(self.engine, project_id=self.project_id, ref=self.ref,
+                        handle=entry["handle"], answer=message, transport=self.transport)
+        entry["handle"] = out["handle"]
+        return out["task"]
+
+    def cancel_task(self, task_id: str, entry: dict) -> dict:
+        from . import remote_subagents as rs
+
+        return rs.cancel(self.engine, project_id=self.project_id, ref=self.ref,
+                         handle=entry["handle"], transport=self.transport)["task"]
+
+
 # ── What a published spec asks for ────────────────────────────────────────────────────────────
 
 def _active_body(connection: Connection, project_id: str, role: str) -> tuple:
@@ -441,5 +541,5 @@ def middleware_for(connection: Connection, *, project_id: str, role: str, run_id
     return tuple(out)
 
 
-__all__ = ["DbAsyncSubagents", "DbBranches", "OboExchange", "REPORT_CHARS", "TRIGGER",
+__all__ = ["DbAsyncSubagents", "DbBranches", "OboExchange", "REPORT_CHARS", "RemoteTarget", "TRIGGER",
            "WAKE_TRIGGER", "middleware_for", "narrowed_scope", "notify_parent", "task_of"]

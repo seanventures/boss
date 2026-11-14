@@ -594,8 +594,9 @@ class Subagents(Middleware):
         describe = "; ".join(f"{n}: {(self.defs[n].description or getattr(self.targets[n], 'description', '') or '').strip()[:160]}"
                              for n in names)
         specs = tool_specs(names, describe=describe)
+        remote = any(callable(getattr(t, "start", None)) for t in self.targets.values())
         keep = set(SYNC_TOOLS) | (set(ASYNC_TOOLS) if self.coordination.async_tools
-                                  and self.async_port is not None else set())
+                                  and (self.async_port is not None or remote) else set())
         return [s for s in specs if s.name in keep]
 
     # ── hooks ─────────────────────────────────────────────────────────────────────────────
@@ -1011,7 +1012,8 @@ class Subagents(Middleware):
     # ── async ─────────────────────────────────────────────────────────────────────────────
     def async_call(self, run: Any, call: ToolCall) -> ToolResult:
         ex, args, port = self.ex(run), dict(call.arguments or {}), self.async_port
-        if port is None:
+        if port is None and not any(callable(getattr(t, "start", None))
+                                    for t in self.targets.values()):
             from .toolset import unknown
 
             return unknown(call)
@@ -1024,20 +1026,37 @@ class Subagents(Middleware):
                 starter = getattr(target, "start", None)
                 with self._authority(admitted):
                     task = starter(admitted) if callable(starter) else port.start(admitted)
-                ex["async"][str(task.get("id"))] = {"target": admitted.target,
-                                                    "call_id": call.id,
-                                                    "token_budget": admitted.token_budget}
+                ex["async"][str(task.get("id"))] = {
+                    "target": admitted.target, "call_id": call.id,
+                    "token_budget": admitted.token_budget,
+                    # A remote target's own handle (P5's adapter): what check/update/cancel need.
+                    **({"handle": (task.get("metadata") or {}).get("remote_handle")}
+                       if (task.get("metadata") or {}).get("remote_handle") else {})}
                 return ToolResult(call.id, call.name, "ok", {"task": task,
                                                             "child_run_id": task.get("id")})
             task_id = str(args.get("task_id") or "")
             if call.name == LIST:
-                tasks = port.list(run.state.run_id)
+                tasks = port.list(run.state.run_id) if port is not None else []
+                for tid, entry in ex["async"].items():
+                    remote = self.targets.get(str(entry.get("target")))
+                    if entry.get("handle") and callable(getattr(remote, "check_task", None)):
+                        tasks.append(remote.check_task(tid, entry))
                 return ToolResult(call.id, call.name, "ok", {"tasks": tasks})
             if task_id not in ex["async"]:
                 return ToolResult(call.id, call.name, "refused", {
                     "ok": False, "status": "refused", "error": "unknown_task",
                     "message": f"{task_id!r} is not a sub-agent this run started"})
-            if call.name == CHECK:
+            entry = ex["async"][task_id]
+            remote = self.targets.get(str(entry.get("target")))
+            if entry.get("handle") and callable(getattr(remote, "check_task", None)):
+                # A REMOTE child (an A2A agent or an Agent Protocol server): its own protocol.
+                if call.name == CHECK:
+                    task = remote.check_task(task_id, entry)
+                elif call.name == UPDATE:
+                    task = remote.update_task(task_id, entry, str(args.get("message") or ""))
+                else:
+                    task = remote.cancel_task(task_id, entry)
+            elif call.name == CHECK:
                 task = port.check(task_id)
             elif call.name == UPDATE:
                 task = port.update(task_id, str(args.get("message") or ""),
