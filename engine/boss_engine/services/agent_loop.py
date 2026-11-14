@@ -1894,6 +1894,11 @@ def run_agent_loop(
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": user_prompt})
+    # A RUN FOR A FLAGGED TICKET (BOSSAPP-1047): an agent working for a workflow run whose
+    # ticket the injection screen flagged starts with its next write held for a person.
+    from .ticket_intake import hold_writes_if_untrusted
+
+    finalize_ctx = hold_writes_if_untrusted(connection, finalize_ctx)
     _save_run(connection, run_id, project_id, task_id, "running", messages, [], _zero_usage(), finalize_ctx or {}, step=0)
     emit_event(connection, project_id, "agent.run_started", "agent_loop", "agent_run", run_id, {"task_id": task_id})
     # IDENTITY (IDENTITY.md §7.2): with a verified person + grant in context, the loop runs as
