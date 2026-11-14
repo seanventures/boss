@@ -10,7 +10,8 @@ The data the console's Run trace (wireframe A6) and Health (A5) screens draw:
                                             "open the trace from the decision" path (two hops)
   GET /v1/spans/{span_id}                   one span with its redacted input and output
   GET /v1/observability/agent-health        per agent: runs, ok rate, p95, cost, last run, the
-                                            last failed run to open; online evaluators' week
+                                            last failed run to open; online evaluators' week;
+                                            per deployment and the system services (AP-P3)
 
 Reads only; `observability:read` at the project.
 """
@@ -87,9 +88,16 @@ def build_traces_router(*, engine, require_reader: Callable[..., None]) -> APIRo
         hours = max(1, min(int(hours), 24 * 30))
         with begin(engine) as connection:
             require_reader(connection, project_id)
+            # AP-P3: per DEPLOYMENT too (state, ok rate, p95, cost, last failure in plain
+            # words, paused), and the system services that are not agents (D7).
+            from boss_engine.services import agent_health as deployed, system_services
+
+            rows = deployed.deployments(connection, project_id, hours=hours)
             return {"hours": hours,
                     "agents": traces.agent_health(connection, project_id, hours=hours),
-                    "evaluators": online_evaluators.weeks(connection, project_id)}
+                    "evaluators": online_evaluators.weeks(connection, project_id),
+                    "deployments": rows, "alerts": deployed.alerts(rows),
+                    "system_services": system_services.listing(connection)}
 
     return router
 

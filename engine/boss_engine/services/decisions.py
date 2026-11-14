@@ -1107,6 +1107,15 @@ class DecisionService:
             # raised, or the work item is done and what it blocked wakes.
             self._answer_execution_stage(connection, row, verdict="approve", actor=actor, note=note)
             return
+        if action == "promote_agent_deployment":
+            # AN AGENT VERSION PROMOTED TO PRODUCTION (AP-P3, services/agent_deployments.py):
+            # approving applies exactly the version the card named; runs in flight stay on
+            # the version they started on.
+            from . import agent_deployments
+
+            agent_deployments.on_promotion_answered(connection, row, verdict="approve",
+                                                    actor=actor)
+            return
         if action == "resume_interrupt":
             # A KERNEL RUN'S INTERRUPT ANSWERED (AP-P2, services/interrupts.py): the run resumes
             # once EVERY interrupt it waits on is answered — one decision batch, matched by id.
@@ -1636,6 +1645,14 @@ class DecisionService:
             return
         from . import interrupts, typed_forms
 
+        from . import agent_deployments
+
+        if recommendation_action == agent_deployments.ACTION and action == "reject":
+            # Declined: the environment keeps the version it runs (never sent back for changes:
+            # a promotion is re-asked by promoting again).
+            agent_deployments.on_promotion_answered(connection, row, verdict="reject",
+                                                    actor=actor)
+            return
         if recommendation_action == interrupts.ACTION and action == "reject":
             # Declined: the call does not run; the run resumes (with the batch) told so. (Like a
             # form, an interrupt is never sent back for changes: not in REVISE_CONSUMED.)

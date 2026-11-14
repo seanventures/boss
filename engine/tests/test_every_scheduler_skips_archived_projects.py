@@ -62,6 +62,10 @@ GUARDED: dict[str, str] = {
     "services/ambient/roadmap.py::tick": "tick",
     "services/incident_squad.py::tick": "tick",
     "services/incident_squad.py::sweep_rounds": "sweep_rounds",
+    # AP-P3: the bot clock fires only live projects' triggers (`due` picks them with live_sql),
+    # and `fire` refuses an archived project's event or webhook firing.
+    "services/agent_triggers.py::tick": "due",
+    "services/bots.py::tick": "tick",
 }
 
 #: New work refused at its door (ProjectArchived -> 409), checked the same way.
@@ -81,6 +85,10 @@ _RECOVERY = ("recovers work already in flight; any new attempt goes through star
 _TARGETS = "probes only the targets deployment_health.sweep picked, which skips archived projects"
 
 EXEMPT: dict[str, str] = {
+    # AP-P3: the body of focused_agents.tick_due behind BOSS_BOTS_FOCUSED_AGENTS, called after
+    # tick_due skipped an archived project.
+    "services/bots.py::tick_focused_agents": "focused_agents.tick_due's body; tick_due skips "
+                                            "an archived project first",
     "services/add_server.py::claim": "takes the next attempt of ONE server setup that the guarded "
                                      "tick (or that server's own page) picked; starts nothing itself",
     "identity/claim.py::claim": "the owner claim at install time, not a scheduler",
@@ -209,6 +217,8 @@ WORKER_ROUTES: dict[str, str] = {
     "/v1/agent/wakeups/tick": "tick:services/agent_wakeups.py::run_due",
     "/v1/agent-processes/tick-all": "tick:services/agent_process.py::tick_due",
     "/v1/focused-agents/tick-all": "tick:services/focused_agents.py::tick_due",
+    "/v1/bots/tick": "tick:services/bots.py::tick",
+    "/v1/workers/register": _HOUSE + " (the worker advertises its slots)",
     "/v1/factory/flow/tick": "tick:services/factory_flow.py::tick",
     "/v1/process-manager/tick": "tick:services/process_manager.py::tick",
     "/v1/metatron/watch": _HOME + " (observe-only)",

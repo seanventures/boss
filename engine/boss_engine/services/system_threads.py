@@ -17,6 +17,9 @@ a job and is blind while one runs, which is exactly when the host needs watching
   (backup_scheduler, BOSSAPP-838);
 * the extension scheduler: extensions' scheduled jobs and event feeds, one firing per DB lease
   (extensions/jobs.py, BOSSAPP-861).
+
+Each is registered in `system_services` (AP-P3, D7): they are services, not agents, and the
+Health screen lists them in one place.
 """
 from __future__ import annotations
 
@@ -144,4 +147,13 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("reflection schedule not started", exc_info=True)
         started["reflection"] = False
+    # D7 (AP-P3): these are system services, not agents — each in the one registry the Health
+    # screen lists beside the bots (system_services.py). Never stops the API booting.
+    try:
+        from . import system_services
+
+        for key, ok in started.items():
+            system_services.register(engine, key, started=bool(ok))
+    except Exception:  # noqa: BLE001
+        _log.warning("system services not registered", exc_info=True)
     return started

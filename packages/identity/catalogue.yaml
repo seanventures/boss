@@ -941,6 +941,18 @@ categories:
         roles: [owner, admin, operator]
         scope: project
         flags: [delegable]
+      - key: agent:invoke
+        title: "Run deployed agents"
+        description: "Start threads and runs with a deployed agent over its API or MCP tool, stream, wait on and cancel them."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: agent:deploy
+        title: "Deploy agents"
+        description: "Deploy an agent version to an environment, promote it, roll it back, and add or change its triggers."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
       - key: agent_ability:assign
         title: "Give agents skills and MCP servers"
         description: "Give an agent a skill or an MCP server (grants authority)."

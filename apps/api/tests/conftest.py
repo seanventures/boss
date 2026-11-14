@@ -127,6 +127,12 @@ def clean_tables(engine):
             "provider_model_catalog",
             "experiment_assignments",
             "experiments",
+            # AP-P3: deployments, triggers, bots, the system-services registry.
+            "agent_trigger_fires",
+            "agent_triggers",
+            "agent_deployment_history",
+            "agent_deployments",
+            "system_services",
             # AP-P4: run traces and the evaluation loop's data.
             "dataset_experiment_results",
             "dataset_experiments",

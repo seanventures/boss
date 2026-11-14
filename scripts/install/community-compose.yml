@@ -450,6 +450,11 @@ services:
       # AP-P2 (decision D5): workflow agent steps EXECUTE ON THE WORKER (agent_run_worker), not
       # inside the API's tick; 0 drives them in the tick as before. Both services read it.
       BOSS_AGENT_RUNS_ON_WORKERS: ${BOSS_AGENT_RUNS_ON_WORKERS:-1}
+      # AP-P3: the always-on mechanisms that become bots (a trigger, a thread, a recorded run),
+      # each behind its own flag, off until it has run on this install (services/bots.py).
+      BOSS_BOTS_FOCUSED_AGENTS: ${BOSS_BOTS_FOCUSED_AGENTS:-0}
+      BOSS_BOTS_WAKEUPS: ${BOSS_BOTS_WAKEUPS:-0}
+      BOSS_BOTS_SQUAD_OWNERS: ${BOSS_BOTS_SQUAD_OWNERS:-0}
       # The run ledger's dual-write (run_events + llm_calls/tool_call_audit run columns): on by
       # default (AP-P0); 0 turns it off. Retention drops monthly partitions (ledger_retention).
       BOSS_LEDGER_EVENTS: ${BOSS_LEDGER_EVENTS:-1}

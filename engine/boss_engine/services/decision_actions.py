@@ -136,6 +136,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Answering one of a kernel run's interrupts (AP-P2, services/interrupts.on_answered): when
     # it was the last the run waited on, the run resumes with every answer, matched by id.
     "resume_interrupt",
+    # Approving a production promotion of an agent version points prod at exactly that version
+    # (AP-P3, agent_deployments.on_promotion_answered); runs in flight keep theirs.
+    "promote_agent_deployment",
     # Approving an agent's tool request gives its role exactly the tools on the Grant card,
     # tier-capped and pinned to their schema hash (tool_access_requests.on_approved, BOSSAPP-848).
     "grant_tool_access",

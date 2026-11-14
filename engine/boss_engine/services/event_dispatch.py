@@ -376,6 +376,17 @@ def dispatch_event(
             if got.get("entry") is not None:
                 enqueued.append(got["entry"])
             continue
+        if subscription["sink_kind"] == "agent_run":
+            # A BOT'S EVENT TRIGGER (AP-P3, agent_triggers): fire it once per event — admitted
+            # on its thread, pinned to the version deployed now, skipped while its last run is
+            # still going (skip_if_active).
+            from .agent_triggers import on_event
+
+            got = on_event(connection, subscription, event_id=event_id, event_type=event_type,
+                           entity_type=entity_type, entity_id=entity_id, data=data or {})
+            if got is not None:
+                enqueued.append(got)
+            continue
         if subscription["sink_kind"] != "job":
             logger.warning(
                 "event_dispatch.unsupported_sink",

@@ -54,7 +54,8 @@ from sqlalchemy import text
 from .principal import AuthContext, PrincipalKind
 
 #: The decision kinds a person may delegate. Anything else is out of scope (403).
-DELEGABLE_KINDS = ("prd", "architecture", "workflow_gate", "merge_to_release_branch", "build_plan")
+DELEGABLE_KINDS = ("prd", "architecture", "workflow_gate", "merge_to_release_branch", "build_plan",
+                   "agent_interrupt")
 KIND_LABELS = {
     "prd": "PRD approvals",
     "architecture": "Architecture approvals",
@@ -64,6 +65,10 @@ KIND_LABELS = {
     # 20-25 tasks, please do it yourself"). Plan approvals were kind `general` and never
     # delegable, so every sensitive-area build waited on the one person who could press Approve.
     "build_plan": "Build plans, before a build writes code (never identity, security or permissions)",
+    # A DEPLOYED AGENT'S PAUSE (AP-P3): an integration that runs an agent over the API answers the
+    # agent's own interrupts through the Decision API. The hard limits still hold: never a
+    # deploy, a budget, a merge to main or an identity/security change.
+    "agent_interrupt": "A deployed agent's approval pauses, over the API (never deploys or spend)",
 }
 #: A build plan whose sensitive areas include one of these stays the person's (hard_limit).
 _PLAN_AREAS_NEVER_DELEGATED = frozenset({"identity", "security", "secret", "secrets", "credential",
@@ -340,6 +345,8 @@ def kind_for(row: Mapping[str, Any]) -> Optional[str]:
         return "prd" if "prd" in step else "workflow_gate"
     if action == "resume_code_task" and rec.get("plan") is not None:
         return "build_plan"
+    if action == "resume_interrupt" and rec.get("run_id"):
+        return "agent_interrupt"
     return None
 
 

@@ -375,47 +375,27 @@ def _work(engine: Any, settings: Any, report: dict[str, Any], *, project_id: Opt
             report.setdefault("asked", []).append({"work_item_id": s["id"], **got})
         except Exception:  # noqa: BLE001 — one item's ask never stops the others
             log.warning("could not ask about the spent budget of %s", s["id"], exc_info=True)
+    # AP-P3: behind BOSS_BOTS_SQUAD_OWNERS each item's turn is a bot run — fired through the
+    # project's squad-owner trigger, admitted on its thread, recorded like every agent run.
+    from .. import bots
+
+    on_bots = bots.flag_on(bots.BOTS_SQUAD_OWNERS)
     for entry in todo:
-        item_id = entry["id"]
-        pid = entry["project_id"]
+        def unit(entry: dict[str, Any] = entry) -> Any:
+            return _work_entry(engine, settings, entry, report, model=model, decider=decider,
+                               launchers=launchers, incident_mind=incident_mind,
+                               incident_effects=incident_effects, rounds=rounds)
+
+        if not on_bots:
+            unit()
+            continue
         try:
-            if entry["kind"] == "incident":
-                with engine.begin() as c:
-                    out = incident_squad.route_incident(
-                        c, project_id=pid, item_id=item_id, settings=settings,
-                        mind=incident_mind, effects=incident_effects)
-                report["worked"].append({"work_item_id": item_id, "kind": "incident",
-                                         "stage": out.get("stage")})
-                continue
-            if entry["kind"] == "assemble":
-                why = _assemble(engine, item_id)
-                if why is not None:
-                    report["worked"].append({"work_item_id": item_id, "kind": "no_squad",
-                                             "reason": why[:200]})
-                    continue
-            run = squad_turns.collaborate(engine, settings, item_id, rounds=rounds, model=model,
-                                          decider=decider, launchers=launchers)
-            report["worked"].append({
-                "work_item_id": item_id, "kind": "squad", "rounds": run["rounds"],
-                "turns": len(run["turns"]), "settled": [s.get("state") for s in run["settled"]],
-                "stopped": (run.get("stopped") or {}).get("guard")})
-            stop = run.get("stopped") or {}
-            if stop.get("guard") in GUARD_STOPS or (entry.get("owed") and not run["turns"]):
-                # A guard refused the squad's turns (its spend or turn cap, the envelope, a
-                # lease, a take-over): said on the ledger — once since its last squad turn —
-                # owed or not. boss-dogfood 2026-11-07: the item passed its $1.50 squad
-                # budget at 23:28 and every later tick refused it without a word.
-                since = (owed_since(entry) or entry.get("squad_turn_at")
-                         or entry.get("handed_at"))
-                _say_why(engine, item_id, f"a squad guard stopped it ({stop.get('guard')}: "
-                                          f"{stop.get('reason')})", since, report)
+            bots.squad_owner_turn(engine, settings, entry, unit)
         except Exception as exc:  # noqa: BLE001 — one item's failure never stops the others
-            log.warning("ambient owners failed on %s", item_id, exc_info=True)
-            report["worked"].append({"work_item_id": item_id, "kind": "error",
-                                     "reason": f"{type(exc).__name__}: {exc}"[:300]})
-            if owed_since(entry) is not None:
-                _say_why(engine, item_id, f"its turn failed ({type(exc).__name__})",
-                         owed_since(entry), report)
+            log.warning("squad owner bot run failed on %s", entry["id"], exc_info=True)
+            if not any(w.get("work_item_id") == entry["id"] for w in report["worked"]):
+                report["worked"].append({"work_item_id": entry["id"], "kind": "error",
+                                         "reason": f"{type(exc).__name__}: {exc}"[:300]})
     # Incidents the SRE squad is watching recover: look again (no model unless it has a verdict).
     with engine.begin() as c:
         pids = [project_id] if project_id else [str(p) for p in c.execute(text(
@@ -433,6 +413,56 @@ def _work(engine: Any, settings: Any, report: dict[str, Any], *, project_id: Opt
         except Exception:  # noqa: BLE001
             log.warning("incident watch failed for %s", pid, exc_info=True)
     return report
+
+
+def _work_entry(engine: Any, settings: Any, entry: dict[str, Any], report: dict[str, Any], *,
+                model: Any, decider: Any, launchers: Optional[squad_plugins.Launchers],
+                incident_mind: Any, incident_effects: Any, rounds: int) -> Any:
+    """One handed-over item's turn (an incident's route, a squad seated and its rounds). Never
+    raises: a failure is reported on the item. Returns what it added to the report."""
+    from .. import incident_squad
+
+    item_id = entry["id"]
+    pid = entry["project_id"]
+    try:
+        if entry["kind"] == "incident":
+            with engine.begin() as c:
+                out = incident_squad.route_incident(
+                    c, project_id=pid, item_id=item_id, settings=settings,
+                    mind=incident_mind, effects=incident_effects)
+            report["worked"].append({"work_item_id": item_id, "kind": "incident",
+                                     "stage": out.get("stage")})
+            return report["worked"][-1]
+        if entry["kind"] == "assemble":
+            why = _assemble(engine, item_id)
+            if why is not None:
+                report["worked"].append({"work_item_id": item_id, "kind": "no_squad",
+                                         "reason": why[:200]})
+                return report["worked"][-1]
+        run = squad_turns.collaborate(engine, settings, item_id, rounds=rounds, model=model,
+                                      decider=decider, launchers=launchers)
+        report["worked"].append({
+            "work_item_id": item_id, "kind": "squad", "rounds": run["rounds"],
+            "turns": len(run["turns"]), "settled": [s.get("state") for s in run["settled"]],
+            "stopped": (run.get("stopped") or {}).get("guard")})
+        stop = run.get("stopped") or {}
+        if stop.get("guard") in GUARD_STOPS or (entry.get("owed") and not run["turns"]):
+            # A guard refused the squad's turns (its spend or turn cap, the envelope, a
+            # lease, a take-over): said on the ledger — once since its last squad turn —
+            # owed or not. boss-dogfood 2026-11-07: the item passed its $1.50 squad
+            # budget at 23:28 and every later tick refused it without a word.
+            since = (owed_since(entry) or entry.get("squad_turn_at")
+                     or entry.get("handed_at"))
+            _say_why(engine, item_id, f"a squad guard stopped it ({stop.get('guard')}: "
+                                      f"{stop.get('reason')})", since, report)
+    except Exception as exc:  # noqa: BLE001 — one item's failure never stops the others
+        log.warning("ambient owners failed on %s", item_id, exc_info=True)
+        report["worked"].append({"work_item_id": item_id, "kind": "error",
+                                 "reason": f"{type(exc).__name__}: {exc}"[:300]})
+        if owed_since(entry) is not None:
+            _say_why(engine, item_id, f"its turn failed ({type(exc).__name__})",
+                     owed_since(entry), report)
+    return report["worked"][-1] if report["worked"] else None
 
 
 def _say_why(engine: Any, item_id: str, why: str, since: Any, report: dict[str, Any]) -> None:

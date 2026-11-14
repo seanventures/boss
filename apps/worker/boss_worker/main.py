@@ -261,7 +261,10 @@ def _tick_metatron_watch(client: ControlPlaneClient, settings) -> None:
 
 
 def _tick_focused_agents(client: ControlPlaneClient, settings) -> None:
-    """Always-on focused agents. Fail-closed apply. Never kill the worker."""
+    """Always-on focused agents. Fail-closed apply. Never kill the worker.
+
+    AP-P3: with BOSS_BOTS_FOCUSED_AGENTS on (API side), the route this knocks on runs each due
+    agent's duty cycle as a bot run (services/bots.py) — same answer, on the new primitive."""
     global _last_focused_agent_monotonic
     now = time.monotonic()
     if now - _last_focused_agent_monotonic < FOCUSED_AGENT_INTERVAL_SECONDS:
@@ -534,6 +537,7 @@ def _tick_agent_wakeups(client: ControlPlaneClient, settings) -> None:
     down, and the wakeup itself records its own failure against its own row.
     """
     global _last_agent_wakeups_monotonic
+    # AP-P3: with BOSS_BOTS_WAKEUPS on (API side) each wake is a bot run (services/bots.py).
     now = time.monotonic()
     if now - _last_agent_wakeups_monotonic < AGENT_WAKEUPS_INTERVAL_SECONDS:
         return
@@ -553,6 +557,56 @@ def _tick_agent_wakeups(client: ControlPlaneClient, settings) -> None:
             LOGGER.info("wake_tick_duration_seconds %.3f", time.monotonic() - now)
     except Exception:  # noqa: BLE001
         LOGGER.debug("agent_wakeups_failed", exc_info=True)
+
+
+#: THE BOT CLOCK (AP-P3): once a minute, the API fires every bot trigger that is due (cron and
+#: monitor kinds; events and webhooks fire when they arrive) and mirrors the legacy mechanisms
+#: whose migration flag is on. The runs it admits are `agent.run` jobs this worker leases.
+BOT_CLOCK_INTERVAL_SECONDS = 60
+_last_bot_clock_monotonic = 0.0
+
+
+def _tick_bots(client: ControlPlaneClient) -> None:
+    """Never kill the worker; the next tick is a minute away."""
+    global _last_bot_clock_monotonic
+    now = time.monotonic()
+    if now - _last_bot_clock_monotonic < BOT_CLOCK_INTERVAL_SECONDS:
+        return
+    _last_bot_clock_monotonic = now
+    try:
+        out = client.tick_bots() or {}
+        if out.get("fired"):
+            LOGGER.info("bot_clock fired=%s skipped=%s", len(out["fired"]),
+                        len(out.get("skipped") or []))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("bot_clock_failed", exc_info=True)
+
+
+#: WORKER REGISTRATION (AP-P3 §4.4 "Scaling"): advertise this worker and its lease slots every
+#: minute; the API's scaling signal counts live slots against queued agent runs.
+WORKER_REGISTER_INTERVAL_SECONDS = 60
+_last_register_monotonic = 0.0
+_SLOTS = {"total": 1}
+
+
+def _register_worker(client: ControlPlaneClient, settings) -> None:
+    global _last_register_monotonic
+    now = time.monotonic()
+    if now - _last_register_monotonic < WORKER_REGISTER_INTERVAL_SECONDS:
+        return
+    _last_register_monotonic = now
+    project_id = (getattr(settings, "default_project_id", None)
+                  or getattr(settings, "project_id", None) or "boss-dogfood")
+    try:
+        import socket
+
+        busy = sum(1 for t in threading.enumerate()
+                   if t.name.startswith("lease-hb-") and t.is_alive())
+        client.register_worker(str(project_id), settings.worker_id, runner.capabilities(),
+                               slots=int(_SLOTS["total"]), busy_slots=min(busy, _SLOTS["total"]),
+                               host=socket.gethostname())
+    except Exception:  # noqa: BLE001 — an older API, or no permission: never kills the worker
+        LOGGER.debug("worker_register_failed", exc_info=True)
 
 
 def _tick_process_manager(client: ControlPlaneClient, settings) -> None:
@@ -656,6 +710,10 @@ def _run_background_sweeps(settings) -> None:
                 _tick_ambient(client)
                 # Learning too: a 45-minute build must not hold the roadmap and outcomes back.
                 _tick_ambient_learning(client)
+                # AP-P3: bots fire on schedule while a build runs, and the worker says it is
+                # alive (and how many slots it has) whether it is busy or not.
+                _tick_bots(client)
+                _register_worker(client, settings)
             except Exception:  # noqa: BLE001 — a sweep must never take the worker down
                 LOGGER.debug("background_sweep_failed", exc_info=True)
             for _ in range(5):
@@ -831,10 +889,12 @@ def main() -> None:
                          name="boss-worker-sweeps", daemon=True).start()
 
         # MORE THAN ONE BUILD AT A TIME, when the machine has room (stability spec §4b.2).
+        total_slots = worker_slots(client, settings)
+        _SLOTS["total"] = total_slots
         extra_slots = [
             threading.Thread(target=_extra_lease_loop, args=(settings, i),
                              name=f"boss-worker-slot-{i}", daemon=True)
-            for i in range(1, worker_slots(client, settings))
+            for i in range(1, total_slots)
         ]
         for t in extra_slots:
             t.start()
