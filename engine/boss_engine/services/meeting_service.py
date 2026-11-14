@@ -482,13 +482,16 @@ def _ask(adapter, system_prompt: str, user_prompt: str) -> tuple[str, int, Optio
         return text_out, estimate_cost_usd_micros(usage), usage.get("model")
     from .. import kernel
     from ..kernel import presets
+    from ..kernel.durable import store_for
 
     engine = kernel.TextEngine(seat.adapter, name=type(seat.adapter).__name__)
     result = kernel.run(kernel.RunSpec(
         engine=engine, tools=kernel.FunctionToolSet([]), policies=presets.meeting_seat(),
         project_id=seat.project_id or "", system=system_prompt or None,
         messages=[{"role": "user", "content": user_prompt}], actor="agent:meeting_seat",
-        stage="meeting", gate=seat.gate, sink=seat.sink))
+        stage="meeting", gate=seat.gate, sink=seat.sink,
+        # A suspension lives in Postgres, never only in this process (AP-P2).
+        store=store_for(getattr(seat.sink, "engine", None))))
     if result.status != "completed":
         # The old call raised the adapter's own exception out of the phase; so does this.
         if engine.last_error is not None:

@@ -410,6 +410,12 @@ def enter_waiting_on_person(
                "by themselves once the grant exists.")
     else:
         ask = question
+    # ONE INTERRUPT PRIMITIVE (AP-P2, services/interrupts.py): the card is an interrupt with a
+    # stable id per (project, builder, blocker); each waiting run records the id and is resumed
+    # by it.
+    from .interrupts import open_interrupt, person_interrupt
+
+    gate = person_interrupt(project_id, agent_key, action, blocker_type)
     card = _open_card(connection, project_id=project_id, agent_key=agent_key, action=action)
     if card:
         decision_id = card["id"]
@@ -420,14 +426,16 @@ def enter_waiting_on_person(
             "'[]'::jsonb) @> CAST(:r AS jsonb))"),
             {"r": json.dumps([run_id]), "id": decision_id})
     else:
-        decision_id = create_blocking_decision(
-            connection, project_id, task_id, ask,
-            {"action": action, "run_id": run_id, "run_ids": [run_id],
-             "blocker_type": blocker_type, "agent_key": agent_key, "builder": builder,
-             "link": review_setting_link(project_id) if review else GRANT_PAGE, "why": question,
-             **({"basis": "captain_authority", "work_item_id": captain.work_item_id,
-                 "decision": captain.act_id} if review else {})},
-            {}, reason, default_action="hold",
+        decision_id = open_interrupt(
+            connection, project_id=project_id, task_id=task_id, item=gate, question=ask,
+            recommendation={
+                "action": action, "run_id": run_id, "run_ids": [run_id],
+                "blocker_type": blocker_type, "agent_key": agent_key, "builder": builder,
+                "link": review_setting_link(project_id) if review else GRANT_PAGE,
+                "why": question,
+                **({"basis": "captain_authority", "work_item_id": captain.work_item_id,
+                    "decision": captain.act_id} if review else {})},
+            reason=reason, default_action="hold", create=create_blocking_decision,
         )
 
     thread_id = open_thread_and_ask(
@@ -440,7 +448,7 @@ def enter_waiting_on_person(
         "scope": scope, "decision_id": decision_id, "thread_id": thread_id,
         "blocker_type": blocker_type, "reason": reason, "opened_at": opened_at,
         "recipient_principal_id": recipient, "ask": ask, "builder": builder,
-        "refused_grant_id": refused_grant_id,
+        "refused_grant_id": refused_grant_id, "interrupt_id": gate.id,
     }
     connection.execute(text(
         "UPDATE code_task_runs SET status = :status, phase = :phase, decision_id = :decision_id, "
@@ -514,6 +522,14 @@ def verify_and_resume(connection: Any, settings: Any, jobs: Any = None, *,
                          org_id=_org_of_project(connection, run.get("project_id")))
 
     decision_id = run.get("decision_id") or person_wait_ctx.get("decision_id")
+    if person_wait_ctx.get("interrupt_id"):
+        # Resumed by the card's interrupt id (AP-P2): the card this run joined, whichever
+        # decision row holds it now.
+        from .interrupts import find as find_interrupt
+
+        found = find_interrupt(connection, str(person_wait_ctx["interrupt_id"]))
+        if found is not None and found.get("status") in ("pending", "delegated"):
+            decision_id = found["id"]
     if decision_id:
         try:
             with connection.begin_nested():

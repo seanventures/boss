@@ -133,6 +133,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Answering a typed question records the typed answer, makes the accepted task suggestions
     # work items and resumes the agent that asked (typed_forms.on_answered, BOSSAPP-832).
     "answer_form",
+    # Answering one of a kernel run's interrupts (AP-P2, services/interrupts.on_answered): when
+    # it was the last the run waited on, the run resumes with every answer, matched by id.
+    "resume_interrupt",
     # Approving an agent's tool request gives its role exactly the tools on the Grant card,
     # tier-capped and pinned to their schema hash (tool_access_requests.on_approved, BOSSAPP-848).
     "grant_tool_access",

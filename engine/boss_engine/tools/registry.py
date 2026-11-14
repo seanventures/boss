@@ -224,6 +224,12 @@ class ToolSpec:
     #: tool, never in a separate list. Required in practice: the lint test
     #: (test_tool_exposure.py) fails any registered tool that leaves it None.
     exposure: Optional[Exposure] = None
+    #: WHAT A RESUMED RUN MAY DO WITH THIS CALL IF ITS OUTCOME WAS NEVER RECORDED (AP-P2,
+    #: kernel/idempotency.py): idempotent | keyed | irreversible. A write takes its class from
+    #: kernel.idempotency.TOOL_IDEMPOTENCY when the registration names none; a write in neither
+    #: is a lint failure (test_every_write_tool_declares_an_idempotency_class), and the kernel
+    #: reads silence as irreversible.
+    idempotency: Optional[str] = None
 
     def permission_for(self, args: Optional[dict]) -> Optional[str]:
         """The permission THIS call needs (see `permission_by_arg`)."""
@@ -258,6 +264,11 @@ class ToolSpec:
         elif not self.inherits_route_permission:
             raise CatalogueError(f"tool {self.name!r} declares no permission: pass permission= "
                                  "(a catalogue key) or inherits_route_permission=True")
+        from ..kernel import idempotency as _idempotency
+
+        if self.kind == "write" and self.idempotency is None:
+            object.__setattr__(self, "idempotency", _idempotency.declared(self.name))
+        _idempotency.validate(self.idempotency, tool=self.name)
         if self.queues_for_review and (self.kind != "write" or self.reversibility != "safe"
                                        or self.operator_only):
             raise ValueError(f"tool {self.name!r}: queues_for_review is for a safe write a "
@@ -329,6 +340,7 @@ class ToolRegistry:
         queues_for_review: bool = False,
         offer_note: str = "",
         exposure: Optional[Exposure] = None,
+        idempotency: Optional[str] = None,
     ) -> Callable[[ToolHandler], ToolHandler]:
         """Decorator form: @registry.tool("list_x", "…", {...}, kind="read")."""
 
@@ -353,6 +365,7 @@ class ToolRegistry:
                     queues_for_review=queues_for_review,
                     offer_note=offer_note,
                     exposure=exposure,
+                    idempotency=idempotency,
                 )
             )
             return fn

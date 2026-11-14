@@ -446,6 +446,9 @@ services:
       BOSS_KERNEL_CHAT: ${BOSS_KERNEL_CHAT:-1}
       BOSS_KERNEL_STEPS: ${BOSS_KERNEL_STEPS:-1}
       BOSS_KERNEL_MEETINGS: ${BOSS_KERNEL_MEETINGS:-1}
+      # AP-P2 (decision D5): workflow agent steps EXECUTE ON THE WORKER (agent_run_worker), not
+      # inside the API's tick; 0 drives them in the tick as before. Both services read it.
+      BOSS_AGENT_RUNS_ON_WORKERS: ${BOSS_AGENT_RUNS_ON_WORKERS:-1}
       # The run ledger's dual-write (run_events + llm_calls/tool_call_audit run columns): on by
       # default (AP-P0); 0 turns it off. Retention drops monthly partitions (ledger_retention).
       BOSS_LEDGER_EVENTS: ${BOSS_LEDGER_EVENTS:-1}
@@ -754,6 +757,16 @@ services:
       BOSS_KERNEL_CHAT: ${BOSS_KERNEL_CHAT:-1}
       BOSS_KERNEL_STEPS: ${BOSS_KERNEL_STEPS:-1}
       BOSS_KERNEL_MEETINGS: ${BOSS_KERNEL_MEETINGS:-1}
+      # AP-P2 (decision D5): this worker executes agent runs itself (agent.run / agent.resume),
+      # so it needs what an agent's tools reach: the egress (MCP and GitHub calls) and the
+      # default org/workspace/project an agent run falls back to, exactly as the API has them.
+      BOSS_AGENT_RUNS_ON_WORKERS: ${BOSS_AGENT_RUNS_ON_WORKERS:-1}
+      BOSS_EGRESS_URL: ${BOSS_EGRESS_URL:-http://egress:8090}
+      BOSS_EGRESS_CONNECT_PROXY: ${BOSS_EGRESS_CONNECT_PROXY:-http://egress:8091}
+      BOSS_EGRESS_SERVICE_KEY_FILE: /var/lib/boss/identity/egress-service.key
+      BOSS_DEFAULT_ORG_ID: ${BOSS_DEFAULT_ORG_ID:-org_boss}
+      BOSS_DEFAULT_WORKSPACE_ID: ${BOSS_DEFAULT_WORKSPACE_ID:-ws_boss}
+      BOSS_DEFAULT_PROJECT_ID: ${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}
       # The run ledger's dual-write (run_events + llm_calls/tool_call_audit run columns): on by
       # default (AP-P0); 0 turns it off. Retention drops monthly partitions (ledger_retention).
       BOSS_LEDGER_EVENTS: ${BOSS_LEDGER_EVENTS:-1}

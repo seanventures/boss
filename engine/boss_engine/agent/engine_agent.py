@@ -1099,12 +1099,16 @@ class EngineAgent:
                 except Exception:  # noqa: BLE001 — never fail a turn to report progress
                     pass
 
+        from ..kernel.durable import store_for
+
         spec = kernel.RunSpec(
             engine=engine, tools=tools,
             policies=kernel_presets.engine_agent(max_steps, budget=budget),
             project_id=project_id or "", system=system or _SYSTEM_PROMPT,
             messages=list(history or []) + [{"role": "user", "content": message}],
             actor=actor, gate=gate, sink=sink, ledger_reader=reader, on_event=on_event,
+            # A suspended turn lives in Postgres, not this process (AP-P2, kernel/durable.py).
+            store=store_for(getattr(self.ctx, "engine", None)),
             # The transient module's sleeper, so the kernel's backoff is silenced exactly
             # where the old loop's was (tests monkeypatch transient.time.sleep).
             sleep=lambda seconds: _transient.time.sleep(seconds))

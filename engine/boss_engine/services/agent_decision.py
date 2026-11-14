@@ -744,6 +744,7 @@ def _ask_reading_on_kernel(adapter: Any, system: str, prompt: str, *, read: Read
     own adapter keeps whatever governance it came with, as today."""
     from .. import kernel
     from ..kernel.governance import AdapterGate
+    from ..kernel.durable import store_for
     from ..kernel.presets import decision as decision_preset
     from .workflow_precheck_agent import _who_answered
 
@@ -768,7 +769,9 @@ def _ask_reading_on_kernel(adapter: Any, system: str, prompt: str, *, read: Read
                                  result_chars=read.result_chars, accept=accept),
         project_id=project_id or "", system=system,
         messages=[{"role": "user", "content": prompt}],
-        actor="agent_decision", stage=ROUTE_STEP, gate=gate, sink=sink))
+        actor="agent_decision", stage=ROUTE_STEP, gate=gate, sink=sink,
+        # A suspension lives in Postgres, never only in this process (AP-P2).
+        store=store_for(getattr(sink, "engine", None))))
     cost, turns = int(result.usage.cost_usd_micros or 0), int(result.steps or 0)
     if result.status == "completed" and isinstance(result.structured, Mapping):
         return {"answer": dict(result.structured), "cost": cost, "turns": turns,

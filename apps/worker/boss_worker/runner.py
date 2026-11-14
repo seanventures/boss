@@ -400,6 +400,8 @@ def capabilities() -> list[str]:
         # from the local mirror and opens its PR under this lease. Declared here or it sits queued.
         "repo.push_pending",
         "agent.resume",
+        # An agent run admitted to execute HERE, in the worker (AP-P2, D5): agent_run_worker.
+        "agent.run",
         "software_factory.propose_pr",
         "github.pull_request.merge",
         "change_set.merge",
@@ -809,7 +811,7 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 raise RetryableJobError(error)
             raise RuntimeError(error)
         return result
-    if job.kind.startswith("agent.") and job.kind != "agent.resume":
+    if job.kind.startswith("agent.") and job.kind not in ("agent.resume", "agent.run"):
         return build_agent_brief_result(job)
     if job.kind == "enterprise.marketplace.validate":
         return build_marketplace_validation_result(job)
@@ -948,6 +950,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 raise RetryableJobError(error)
             raise RuntimeError(error)
         return result
+    if job.kind in ("agent.run", "agent.resume"):
+        result = _execute_agent_run_here(job, client)
+        if result is not None:
+            return result
     if job.kind == "agent.resume":
         result = client.resume_agent_run({
             "run_id": job.payload["run_id"], "job_id": job.id,
@@ -1124,6 +1130,39 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
 
 AI_SRE_OVERWATCH_INTERVAL_SECONDS = 60
 _last_ai_sre_overwatch_monotonic = 0.0
+
+
+#: Jobs whose lease the heartbeat thread handed back for a shutdown (attempt already given
+#: back): an in-process agent run that drains afterwards does not hand it back a second time.
+HANDED_BACK: dict = {}
+
+
+def _execute_agent_run_here(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any] | None:
+    """AGENT RUNS EXECUTE IN THE WORKER, NOT THE API (AP-P2, D5; agent_run_worker): the kernel
+    drives the run in this process against the database, every write fenced by this job's
+    lease, drained at a step boundary when this worker is told to stop. None: not a worker-
+    admitted run (an `agent.resume` of a run from before AP-P2) — the API resumes it."""
+    from boss_engine.config import get_settings
+    from boss_engine.db import get_engine
+    from boss_engine.services import agent_run_worker
+
+    engine = get_engine(get_settings())
+    run_id = str(job.payload.get("run_id") or "")
+    if job.kind == "agent.resume":
+        with engine.connect() as connection:
+            if not agent_run_worker.on_worker(connection, run_id):
+                return None
+    flag = HANDED_BACK.setdefault(job.id, threading.Event())
+    try:
+        result = agent_run_worker.execute(
+            engine, get_settings(), kind=job.kind, job_id=job.id, run_id=run_id,
+            worker_id=client.worker_id, lease_token=job.lease_token,
+            drain=SHUTDOWN.is_set, handed_back=flag.is_set)
+    finally:
+        HANDED_BACK.pop(job.id, None)
+    if result.get("status") == "failed" and not result.get("job_deferred"):
+        raise RuntimeError(result.get("message") or "Agent run failed.")
+    return result
 
 
 def _tick_ai_sre_overwatch(settings: WorkerSettings) -> None:
@@ -1305,6 +1344,8 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
             # handing_back: the reclaim must not cost the job an attempt (jobs.heartbeat).
             hb_client.heartbeat(settings.worker_id, job.id, job.lease_token,
                                 SHUTDOWN_LEASE_TTL_SECONDS, handing_back=True)
+            if job.id in HANDED_BACK:
+                HANDED_BACK[job.id].set()
             LOGGER.warning(
                 "job_handed_back_for_shutdown worker_id=%s job_id=%s kind=%s — worker is "
                 "stopping (deploy or restart); lease shortened to %ss so this job is "

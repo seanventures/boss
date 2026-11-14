@@ -43,6 +43,8 @@ from .state import RunState, repair_orphans
 from .step_model import Called, complete
 from .step_tools import run_calls
 from .toolset import Composite
+from .interrupts import (UNKNOWN_OUTCOME, answers_by_id, batch_refusal,
+                         pending_interrupts)
 from .types import ControllerState, KernelResult, Step, ToolCall, ToolResult
 
 _LIVE: dict = {}
@@ -72,9 +74,29 @@ class _Run:
                                           stage=spec.stage, scaffold_level=spec.scaffold_level,
                                           actor=spec.actor))
         self.steps: list = []
+        #: A crash-resumed tool batch: how many calls it had and how many were replayed.
+        self.resumed_batch: Optional[dict] = None
 
     def cancelled(self) -> bool:
         return self.token.is_set()
+
+    def durable(self) -> bool:
+        """A checkpointer with pending writes (kernel/durable.py) on a run that persists: the
+        turn is checkpointed before its tools run and each result is written as it lands. A run
+        that does not persist (a chat turn, a decision) writes only when it suspends."""
+        return bool(getattr(self.store, "durable", False)) and bool(self.spec.persist)
+
+    def draining(self) -> bool:
+        try:
+            return bool(self.spec.drain is not None and self.spec.drain())
+        except Exception:  # noqa: BLE001 — a drain check that breaks never stops a run
+            return False
+
+    def checkpoint(self, source: str = "loop") -> None:
+        if getattr(self.store, "durable", False):
+            self.store.save(self.state, source=source)
+        else:
+            self.store.save(self.state)
 
     # ── the loop ──────────────────────────────────────────────────────────────────────────
     def drive(self) -> KernelResult:
@@ -85,11 +107,15 @@ class _Run:
             while True:
                 if self.cancelled():
                     return self.end("cancelled", stopped="cancelled")
+                if self.draining():
+                    # A DEPLOY DRAINS AT A STEP BOUNDARY: the run checkpoints here and its job
+                    # goes back to the queue without spending an attempt (agent_run_worker).
+                    return self.end("drained", stopped="drained")
                 ended = self.step()
                 if ended is not None:
                     return ended
                 if self.spec.persist:
-                    self.store.save(state)
+                    self.checkpoint()
         finally:
             with _LIVE_LOCK:
                 _LIVE.pop(state.run_id, None)
@@ -118,12 +144,21 @@ class _Run:
         if turn.tool_calls and call.answering:
             return self.closing_offer(turn, call.offered)
         if turn.tool_calls:
+            if self.durable():
+                # THE MODEL NODE'S SUPER-STEP: the turn and the calls it asked for are written
+                # before any tool runs, so a crash mid-batch resumes THIS turn's calls (replaying
+                # the ones that finished) instead of asking the model again.
+                state.batch = {"step": state.step, "calls": [
+                    {"id": c.id, "name": c.name, "arguments": c.arguments,
+                     "raw_arguments": c.raw_arguments} for c in turn.tool_calls]}
+                self.checkpoint()
             ended = run_calls(self, turn.tool_calls, call.offered)
+            state.batch = None
             control = ControllerState.SUSPEND if ended else ControllerState.CONTINUE
             self.steps.append(Step(state.step, turn, [], control))
             if ended is not None:
                 return self.end(ended["status"], pending=ended["pending"],
-                                stopped=ended["status"])
+                                stopped=ended.get("stopped") or ended["status"])
             return None
         # A final text no verify layer ended or re-asked (verify is always in the stack, so this
         # is a stack without one): it is the answer.
@@ -174,8 +209,12 @@ class _Run:
             rec.emit("budget.wait", {"mode": "durable", **(pending or {})})
         rec.emit(kind, {"status": state.status, "stopped": state.stopped, "error": error[:600],
                         "steps": state.step})
-        if status in ("awaiting_approval", "budget_wait", "cancelled") or self.spec.persist:
-            self.store.save(state)
+        if status in ("awaiting_approval", "budget_wait", "cancelled", "drained") \
+                or self.spec.persist:
+            self.checkpoint()
+        flush = getattr(self.store, "flush", None)
+        if callable(flush):
+            flush()
         result = KernelResult(
             status="suspended" if state.status == "awaiting_approval" else state.status,
             run_id=state.run_id, text=state.final_text or "", structured=state.structured,
@@ -192,7 +231,8 @@ def _new_state(spec: RunSpec) -> RunState:
     return RunState(run_id=run_id, project_id=spec.project_id,
                     lineage_id=spec.lineage_id or run_id, attempt=int(spec.attempt or 1),
                     act_id=spec.act_id, system=system_blocks(spec.system),
-                    messages=[dict(m) for m in spec.messages], extra=dict(spec.extra))
+                    messages=[dict(m) for m in spec.messages], extra=dict(spec.extra),
+                    thread_id=spec.thread_id)
 
 
 def run(spec: RunSpec) -> KernelResult:
@@ -204,14 +244,15 @@ def run(spec: RunSpec) -> KernelResult:
                                    "lineage_id": state.lineage_id, "attempt": state.attempt,
                                    "middleware": drive.chain.names()})
     if spec.persist:
-        drive.store.save(state)
+        drive.checkpoint("input")
     jump = drive.chain.before_agent(drive)
     if jump is not None and jump.to == "end":
         return drive.jump(jump)
     return drive.drive()
 
 
-def resume(spec: RunSpec, *, decision: Optional[dict] = None) -> KernelResult:
+def resume(spec: RunSpec, *, decision: Optional[dict] = None,
+           answers: Optional[dict] = None) -> KernelResult:
     """Continue the suspended run `spec.run_id` from its checkpoint.
 
     Waiting on a person's APPROVAL: `decision` must approve the held call ({"approved": True,
@@ -228,6 +269,17 @@ def resume(spec: RunSpec, *, decision: Optional[dict] = None) -> KernelResult:
 
     Waiting on the budget: the loop simply goes on.
 
+    WAITING ON SEVERAL (AP-P2, kernel/interrupts.py): `answers` is {interrupt_id: answer} — every
+    interrupt the run waits on, answered, each matched by its stable id (never by order) and
+    checked against its binding before ANY held call runs; the held calls then run in the order
+    the model made them. A single `decision` is matched the same way, by the decision it
+    answers.
+
+    STOPPED MID-STEP (a crash: the checkpoint says `running`; a drain: `drained`): the loop goes
+    on from the last checkpoint. A tool batch that was in flight is finished first: the calls
+    whose results were written are replayed, the rest run, and an irreversible call that
+    started and left no result parks on an unknown-outcome interrupt instead of firing twice.
+
     The ToolSet, engine and policies are the caller's to rebuild (a checkpoint holds data, never
     live objects), as resume_agent_run rebuilds its adapter and tools today."""
     store = spec.store if spec.store is not None else DEFAULT_STORE
@@ -235,7 +287,16 @@ def resume(spec: RunSpec, *, decision: Optional[dict] = None) -> KernelResult:
     if state is None:
         return KernelResult(status="failed", run_id=spec.run_id or "", error="no such run")
     drive = _Run(spec, state)
-    if state.status == "awaiting_approval":
+    if state.status == "awaiting_approval" and _batched(state.pending, answers):
+        refusal = _resume_batch(drive, decision, answers)
+        if refusal is not None:
+            return refusal
+    elif state.status in ("running", "drained"):
+        if state.batch:
+            ended = _finish_batch(drive)
+            if ended is not None:
+                return ended
+    elif state.status == "awaiting_approval":
         pending = state.pending or {}
         if pending.get("question") and (decision or {}).get("answered"):
             if str((decision or {}).get("decision_id") or "") != str(
@@ -258,18 +319,114 @@ def resume(spec: RunSpec, *, decision: Optional[dict] = None) -> KernelResult:
     state.status, state.pending = "running", None
     repaired = repair_orphans(state.messages)
     drive.rec.emit("run.resumed", {"decision_id": (decision or {}).get("decision_id"),
-                                   "orphans_repaired": repaired})
+                                   "orphans_repaired": repaired,
+                                   **({"batch": drive.resumed_batch}
+                                      if drive.resumed_batch else {})})
     jump = drive.chain.before_agent(drive)
     if jump is not None and jump.to == "end":
         return drive.jump(jump)
     return drive.drive()
 
 
-def _run_approved(drive: _Run, decision: dict) -> None:
+def _batched(pending: Optional[dict], answers: Optional[dict]) -> bool:
+    """A resume that goes through the batch rule: answers keyed by id were given, the run waits
+    on more than one interrupt, or on an unknown outcome."""
+    items = pending_interrupts(pending)
+    return answers is not None or len(items) > 1 or any(
+        i.get("kind") == UNKNOWN_OUTCOME for i in items)
+
+
+def _resume_batch(drive: _Run, decision: Optional[dict],
+                  answers: Optional[dict]) -> Optional[KernelResult]:
+    """Release a run waiting on several interrupts: all answered, each to its own decision and
+    still bound to what it approved, or nothing runs (a `denied` result; the run stays
+    suspended). Then each is applied in the order the model made the calls."""
+    state = drive.state
+    pending = dict(state.pending or {})
+    given = answers_by_id(pending, decision=decision, answers=answers)
+    refusal = batch_refusal(pending, given)
+    if refusal:
+        return KernelResult(status="denied", run_id=state.run_id, pending=state.pending,
+                            error=refusal, usage=state.usage, steps=state.step)
+    for item in sorted(pending_interrupts(pending), key=lambda i: _call_order(state, i)):
+        answer = given[str(item.get("id") or "")]
+        # The held call as the tool set reads it on resume (state.pending): the run's own
+        # pending (its kind: mcp / skill / ...) with THIS call's identity.
+        held = {**pending, **{k: item[k] for k in ("tool", "args", "call_id", "step",
+                                                    "decision_id") if k in item},
+                "interrupt_id": item.get("id")}
+        state.pending = held
+        if answer.get("rejected"):
+            _answer_held(drive, item, {"status": "declined", "decision_id": item.get(
+                "decision_id"), "note": "a person declined this call; it did not run",
+                "reason": answer.get("reason") or ""})
+        elif answer.get("answered"):
+            _answer_held(drive, item, {"status": "answered", "answer": answer.get("answer"),
+                                       "decision_id": item.get("decision_id")})
+        elif item.get("kind") == UNKNOWN_OUTCOME and answer.get("happened"):
+            _answer_held(drive, item, answer.get("result") or {
+                "status": "ok", "note": "a person confirmed this call happened"})
+        else:
+            # approved (or: an unknown outcome that did NOT happen, which a person released)
+            _run_approved(drive, {**answer, "approved": True}, held=held)
+    state.pending = None
+    return None
+
+
+def _call_order(state: RunState, item: dict) -> int:
+    call_id = str(item.get("call_id") or "")
+    for index, entry in enumerate(state.trace):
+        if str(entry.get("call_id")) == call_id:
+            return index
+    return len(state.trace)
+
+
+def _answer_held(drive: _Run, item: dict, content: Any) -> None:
+    """What a person said in place of a held call's result: no tool runs."""
+    state = drive.state
+    call_id = str(item.get("call_id") or "")
+    result = ToolResult(call_id, str(item.get("tool") or ""), "ok", content)
+    body = drive.policies.context.render(result)
+    for message in reversed(state.messages):
+        if message.get("role") == "tool" and str(message.get("tool_call_id")) == call_id:
+            message["content"] = body
+            break
+    state.rendered.append(body)
+    state.trace.append({"step": int(item.get("step") or 0), "tool": result.name,
+                        "args": item.get("args") or {}, "status": "ok", "result": content,
+                        "call_id": call_id, "resumed": True})
+    drive.rec.emit("tool.result", {"tool": result.name, "call_id": call_id, "status": "ok",
+                                   "decision_id": item.get("decision_id"),
+                                   "interrupt_id": item.get("id"), "answered": True})
+
+
+def _finish_batch(drive: _Run) -> Optional[KernelResult]:
+    """The tool batch a stopped process left in flight, finished from its pending writes."""
+    state = drive.state
+    batch = dict(state.batch or {})
+    calls = [ToolCall(id=str(c.get("id")), name=str(c.get("name")),
+                      arguments=c.get("arguments") if isinstance(c.get("arguments"), dict)
+                      else None, raw_arguments=str(c.get("raw_arguments") or ""))
+             for c in batch.get("calls") or []]
+    recorded = drive.store.writes(state.checkpoint_id) if drive.durable() \
+        and state.checkpoint_id else {}
+    offered = drive.toolset.schemas(step=state.step, state=state)
+    drive.resumed_batch = {"calls": len(calls), "replayed": sum(
+        1 for c in calls if (recorded.get(c.id) or {}).get("status") not in (None, "started")),
+        "checkpoint_id": state.checkpoint_id}
+    ended = run_calls(drive, calls, offered, recorded=recorded)
+    state.batch = None
+    if ended is not None:
+        return drive.end(ended["status"], pending=ended["pending"], stopped=ended.get(
+            "stopped") or ended["status"])
+    return None
+
+
+def _run_approved(drive: _Run, decision: dict, *, held: Optional[dict] = None) -> None:
     """The held call a person approved, down the same tool chain as any call (authz does not
     ask again, audit never runs it twice, the screen still reads its result)."""
     state, spec = drive.state, drive.spec
-    pending = dict(state.pending or {})
+    pending = dict(held if held is not None else (state.pending or {}))
     args = pending.get("args") if isinstance(pending.get("args"), dict) else {}
     call = ToolCall(id=str(pending.get("call_id") or ""), name=str(pending.get("tool") or ""),
                     arguments=dict(args), raw_arguments=json.dumps(args))

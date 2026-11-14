@@ -601,6 +601,11 @@ CREATE TABLE IF NOT EXISTS decisions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS delegated_to TEXT;
+-- AP-P2: the INTERRUPT this decision answers (kernel/interrupts.py) — a stable id derived from
+-- what waits (run, step, call), so a resume finds its waiting party by id, never by order.
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS interrupt_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_decisions_interrupt ON decisions(interrupt_id)
+  WHERE interrupt_id IS NOT NULL;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS delegated_by TEXT;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS delegated_at TIMESTAMPTZ;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS revision_requested_by TEXT;
@@ -3440,6 +3445,91 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project_id, status, updated_at DESC);
+
+-- AP-P2 (BOSSAPP-1053, docs/design/AGENT_PLATFORM.md §4.3): DURABLE THREADS AND CHECKPOINTS.
+--
+-- A run belongs to a THREAD (agent_threads, surface 'agent'): one active run per thread, a new
+-- input on a busy thread follows the thread's double-text policy (enqueue | reject | interrupt |
+-- rollback). The run row says where it came from (trigger, parent run when forked) and which
+-- agent version produced it; its job is admitted in the SAME transaction (thread_runs.admit).
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS thread_id TEXT;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS agent_version_hash TEXT;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS trigger TEXT;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS parent_run_id TEXT;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS double_text TEXT;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS job_id TEXT;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS input JSONB;
+CREATE INDEX IF NOT EXISTS idx_agent_runs_thread ON agent_runs(thread_id, created_at)
+  WHERE thread_id IS NOT NULL;
+
+-- The thread's RUN state, beside the chat thread's own open/closed `status` (idle, busy,
+-- interrupted, error), the run holding it, and its double-text policy.
+ALTER TABLE agent_threads ADD COLUMN IF NOT EXISTS run_state TEXT NOT NULL DEFAULT 'idle';
+ALTER TABLE agent_threads ADD COLUMN IF NOT EXISTS active_run_id TEXT;
+ALTER TABLE agent_threads ADD COLUMN IF NOT EXISTS agent_id TEXT;
+ALTER TABLE agent_threads ADD COLUMN IF NOT EXISTS deployment_id TEXT;
+ALTER TABLE agent_threads ADD COLUMN IF NOT EXISTS double_text TEXT NOT NULL DEFAULT 'enqueue';
+ALTER TABLE agent_threads ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+DO $$ BEGIN
+  ALTER TABLE agent_threads DROP CONSTRAINT IF EXISTS agent_threads_run_state_check;
+  ALTER TABLE agent_threads ADD CONSTRAINT agent_threads_run_state_check
+    CHECK (run_state IN ('idle', 'busy', 'interrupted', 'error'));
+  ALTER TABLE agent_threads DROP CONSTRAINT IF EXISTS agent_threads_double_text_check;
+  ALTER TABLE agent_threads ADD CONSTRAINT agent_threads_double_text_check
+    CHECK (double_text IN ('enqueue', 'reject', 'interrupt', 'rollback'));
+END $$;
+
+-- One checkpoint per super-step (a model turn, then its tool batch), LangGraph's semantics on
+-- BOSS's own tables. A checkpoint is never updated: a fork writes a NEW one whose parent is the
+-- checkpoint it forked from, so history is a tree and the old branch stays exactly as it was.
+CREATE TABLE IF NOT EXISTS agent_checkpoints (
+  checkpoint_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  thread_id TEXT,
+  parent_checkpoint_id TEXT,
+  ns TEXT NOT NULL DEFAULT '',
+  step INTEGER NOT NULL DEFAULT 0,
+  -- input (the run's first state) | loop (a step boundary) | update (a fork or a person's edit)
+  -- | exit (written only as the run ended or suspended: durability 'exit')
+  source TEXT NOT NULL DEFAULT 'loop',
+  -- '' between steps; 'tools' when the model turn's tool calls are in flight (their results
+  -- are agent_checkpoint_writes rows, so a crash re-runs only the unfinished ones).
+  phase TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'running',
+  state JSONB NOT NULL,
+  state_bytes INTEGER NOT NULL DEFAULT 0,
+  durability TEXT NOT NULL DEFAULT 'sync',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  seq BIGSERIAL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (source IN ('input', 'loop', 'update', 'exit')),
+  CHECK (durability IN ('sync', 'async', 'exit'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_run ON agent_checkpoints(run_id, seq DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_thread ON agent_checkpoints(thread_id, seq DESC)
+  WHERE thread_id IS NOT NULL;
+
+-- The PENDING WRITES of a checkpoint's tool batch: one row per tool call, written as it lands
+-- (status 'started' before a write tool runs, then its result), so a resumed batch replays what
+-- finished, re-runs what never started, and parks an irreversible call that started but left no
+-- result (it may have happened) instead of firing it twice.
+CREATE TABLE IF NOT EXISTS agent_checkpoint_writes (
+  checkpoint_id TEXT NOT NULL REFERENCES agent_checkpoints(checkpoint_id) ON DELETE CASCADE,
+  call_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  step INTEGER NOT NULL DEFAULT 0,
+  idx INTEGER NOT NULL DEFAULT 0,
+  tool TEXT NOT NULL,
+  idempotency TEXT,
+  idempotency_key TEXT,
+  status TEXT NOT NULL,
+  result JSONB,
+  rendered TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (checkpoint_id, call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_checkpoint_writes_run ON agent_checkpoint_writes(run_id, step);
 
 CREATE TABLE IF NOT EXISTS meeting_runs (
   id TEXT PRIMARY KEY,

@@ -1107,6 +1107,13 @@ class DecisionService:
             # raised, or the work item is done and what it blocked wakes.
             self._answer_execution_stage(connection, row, verdict="approve", actor=actor, note=note)
             return
+        if action == "resume_interrupt":
+            # A KERNEL RUN'S INTERRUPT ANSWERED (AP-P2, services/interrupts.py): the run resumes
+            # once EVERY interrupt it waits on is answered — one decision batch, matched by id.
+            from . import interrupts
+
+            interrupts.on_answered(connection, self.settings, row, verdict="approve", actor=actor)
+            return
         if action == "answer_form":
             # A TYPED QUESTION ANSWERED (typed_forms, BOSSAPP-832): accepted task suggestions
             # become work items in this transaction, and the asking agent run resumes.
@@ -1627,8 +1634,13 @@ class DecisionService:
             # comment, or — at the stage's max_rounds — escalates to the responsible person.
             self._answer_execution_stage(connection, row, verdict=action, actor=actor, note=note)
             return
-        from . import typed_forms
+        from . import interrupts, typed_forms
 
+        if recommendation_action == interrupts.ACTION and action == "reject":
+            # Declined: the call does not run; the run resumes (with the batch) told so. (Like a
+            # form, an interrupt is never sent back for changes: not in REVISE_CONSUMED.)
+            interrupts.on_answered(connection, self.settings, row, verdict="reject", actor=actor)
+            return
         if recommendation_action == typed_forms.ACTION and action == "reject":
             # Declined: the asking agent run resumes, told the person declined and why. (A form
             # is never sent back for changes, so it is not in REVISE_CONSUMED.)

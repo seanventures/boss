@@ -7556,7 +7556,7 @@ _AWAIT_LABELS: dict[str, str] = {
     "preview": "the preview to come up",
     "deployment": "the deployment to finish",
     "ci_wait": "CI to finish",
-    "agent_run": "the agent's approved run to finish",
+    "agent_run": "the agent's run to finish",
     "architecture": "a person to approve the architecture",
     # A finished panel's step held until its PRD is approved (runner._hold_for_spec).
     "spec_decision": "the spec (the panel's PRD) to be approved",
