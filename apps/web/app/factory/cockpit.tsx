@@ -45,6 +45,9 @@ import { AppSetupSheet } from "../../components/v2/templates/setup-sheet";
 import { stopBuild, steerBuild } from "./cockpit-actions";
 import { RateIt, ReasonChips, sendReasons } from "../improve/rate-it";
 import { ShareRunSheet } from "../improve/share-run";
+import { TicketChip } from "../tickets/ticket-parts";
+import { providerLabel } from "../projects/linked-ticket";
+import { syncWords } from "../../lib/tickets";
 import { ActPopover, StationFaceView, areaHref, money, secondsWord, spanOf } from "./cockpit-util";
 import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
 import { isWaitingForGitHub } from "../../lib/github-wait";
@@ -464,6 +467,13 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           {c.origin ? (
             <a className="ag-link" href={originHref(c.origin.kind, c.origin.id)} data-testid="fx-origin">
               from <span data-user-text>{c.origin.label}</span></a>
+          ) : null}
+          {c.ticket ? (
+            /* BOSSAPP-1047: the ticket this build works on, with what BOSS last wrote back. */
+            <TicketChip provider={c.ticket.provider} ticketKey={c.ticket.key} url={c.ticket.url || undefined}
+                        sync={syncWords(providerLabel(c.ticket.provider), c.ticket.status, c.ticket.syncStatus)}
+                        tone={c.ticket.syncStatus === "failed" ? "red" : c.ticket.syncStatus === "paused" ? "amber" : "green"}
+                        testid="fx-ticket" />
           ) : null}
           {!stoppable ? <RateIt projectId={projectId} actor={actor} subject="build" id={c.run.id} testId="fx-rate" /> : null}
           <span className="fx-spacer" />

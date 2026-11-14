@@ -371,4 +371,6 @@ export type TokenFound = {
 export type RowKey = "github" | "repository" | "models" | "capacity" | "jobs" | "budget" | "try"
   /** Advanced: the rows folded under it (`focus=` opens the fold on that row). */
   | "advanced" | "github_app" | "repositories" | "ci" | "build_database" | "build_speed" | "toolchains" | "public_url"
-  | "embedding_model";
+  | "embedding_model"
+  /** Setup › Ticket systems (BOSSAPP-1047): on the board, never folded. */
+  | "ticket_systems";

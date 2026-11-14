@@ -65,6 +65,7 @@ const PASSTHROUGH: Record<string, string> = {
   "lib/watch-app.ts": "its helpers (registered) send through obsWrite; app/projects/watch-app.tsx gates each press on observability:manage",
   "lib/skill-policies.ts": "its helpers (registered) send through obsWrite; app/skills/skill-access-rules.tsx gates each press on skill:manage / skill:read",
   "lib/subscription-pools.ts": "its helpers (registered) send through obsWrite; app/setup/pools-row.tsx gates each press on entitlement:manage",
+  "lib/tickets.ts": "its helpers (registered) send through obsWrite; the ticket screens (app/tickets/*, setup/ticket-systems-row.tsx, projects/*) gate each press on integration:manage / work_tracker:write / connection:use_own",
   "lib/llm-gateways.ts": "its helpers (registered) send through obsWrite; app/setup/gateways-row.tsx gates each press on model_provider:manage",
   "lib/reflection.ts": "its helpers (registered) send through obsWrite; app/activity/reflection-panel.tsx gates each press on agent:update",
   "lib/agent-feedback.ts": "its helper (registered) sends through obsWrite; app/activity/agent-feedback.tsx gates each press on agent:update",

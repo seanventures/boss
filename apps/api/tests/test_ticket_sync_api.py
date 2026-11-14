@@ -144,6 +144,46 @@ def test_the_callback_says_connected_when_the_email_is_yours(client, fake, world
         assert client.get("/v1/me/ticket-identities").json()["identities"][0]["email_matches"]
 
 
+def test_a_person_confirms_a_mismatched_account_is_theirs(client, fake, world, engine):
+    """"It's mine" is the API's (Phase C): kept on the person's own sign-in for that account,
+    audited; email_matches stays false, confirmed_by_person becomes true, and only the person
+    themselves can say it."""
+    confirm = f"/v1/me/ticket-identities/{world.conn_id}/confirm"
+    with world.acting_as(world.ctx(world.operator)):
+        # nothing to confirm before a sign-in
+        none = client.post(confirm)
+        assert none.status_code == 404 and none.json()["detail"]["error"] == "not_found"
+        url = client.post(f"/v1/ticket-systems/{world.conn_id}/oauth/start/load").json()[
+            "authorize_url"]
+    code, state = fake.approve(url)
+    with world.acting_as(None, mode="shadow"):
+        assert client.get("/v1/ticket-systems/oauth/callback",
+                          params={"state": state, "code": code}).status_code == 200
+        # a bare request is nobody: refused
+        assert client.post(confirm).status_code in (401, 403)
+    with world.acting_as(world.ctx(world.viewer)):
+        # another person has no sign-in of theirs there: nothing to confirm
+        assert client.post(confirm).status_code == 404
+    with world.acting_as(world.ctx(world.operator)):
+        before = client.get("/v1/me/ticket-identities").json()["identities"][0]
+        assert before["email_matches"] is False and before["needs_confirmation"] is True
+        assert before["confirmed_by_person"] is False
+        done = client.post(confirm)
+        assert done.status_code == 200, done.text
+        mine = done.json()["identity"]
+        assert mine["email_matches"] is False and mine["confirmed_by_person"] is True
+        assert mine["needs_confirmation"] is False and mine["confirmed_at"]
+        listed = client.get("/v1/me/ticket-identities").json()["identities"][0]
+        assert listed["confirmed_by_person"] is True and listed["email_matches"] is False
+    with engine.connect() as db:
+        event = db.execute(text(
+            "SELECT actor, data FROM events WHERE event_type = 'ticket_identity.confirmed' "
+            "ORDER BY created_at DESC LIMIT 1")).mappings().first()
+    assert event is not None and event["actor"] == world.operator.id
+    assert event["data"]["connection_id"] == world.conn_id
+    assert event["data"]["account"] == fake.me_email
+
+
 def _delivery(key=STORY):
     return json.dumps({"webhookEvent": "jira:issue_created",
                        "issue": {"id": str(10000 + D.STORY), "key": key}}).encode()

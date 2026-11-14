@@ -29,6 +29,9 @@ import {
 import { localWith, stampLocal, whenLocal } from "../../lib/local-time";
 import { Empty, Face, Flow, Loading, Failed, EngineNotReady, PxLink, Said, Stations, Cost } from "./kit";
 import { NewWorkBar } from "./new-work";
+import { RowChipsProvider, RowTicket, TicketWorkBand, useRowChips, useTicketConnections, useTicketsParam } from "./ticket-work";
+import { TicketImportPage } from "./ticket-import";
+import type { Connection } from "../../lib/tickets";
 import type { PxCtx } from "./project-page";
 import { WhyLine } from "../../components/stuck-work";
 import "./work.css";
@@ -94,7 +97,8 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const [view, setView] = useState<"list" | "board" | "tree" | "mine">("list");
   // The row a Start just made (the New work modal's): it slides in (150 ms) once the list has it.
   const fresh = ctx.freshWork ?? "";
-  const raw = ctx.work?.items ?? [];
+  // Imported tickets not started yet are drawn once, as T9's "Ready to start" cards (ticket-work).
+  const raw = useMemo(() => (ctx.work?.items ?? []).filter((w) => w.origin !== "ticket_import"), [ctx.work]);
   // DRAG TO RE-RANK (05-23): the order a person just set shows at once; a refusal puts it back.
   const [order, setOrder] = useState<string[] | null>(null);
   const [rankSaid, setRankSaid] = useState<{ text: string; tone?: "red" | "green" }>({ text: "" });
@@ -131,9 +135,16 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const groupOf = (k: WorkState) => shown.filter((w) => w.state === k);
   const boardDrag = useRankDrag(planned, rankable, (id, to) => void rank(id, to));
   const showLoose = filter === "all" || filter === "needs_you";
+  // TICKETS (BOSSAPP-1047 T5/T8/T9): the project's ticket systems, the Import page, row chips.
+  const tickets = useTicketConnections(ctx.projectId, ctx.demo);
+  const ticketsParam = useTicketsParam();
+  const chips = useRowChips(items, tickets.read?.ok ? tickets.read.data : NO_CONNECTIONS);
+  if (ticketsParam === "import") return <TicketImportPage ctx={ctx} conns={tickets.read} />;
   return (
+    <RowChipsProvider chips={chips}>
     <div className="px-stack" data-testid="px-work">
       <NewWorkBar ctx={ctx} said={ctx.workSaid} />
+      <TicketWorkBand ctx={ctx} conns={tickets.read} />
       <div className="px-row px-wrap">
         <div className="px-filters" role="group" aria-label="Filter work">
           <button type="button" className="px-filter" aria-pressed={filter === "all"} onClick={() => setFilter("all")} data-testid="px-work-f-all">All <span className="px-mono">{items.length}</span></button>
@@ -213,8 +224,11 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
         </div>
       )}
     </div>
+    </RowChipsProvider>
   );
 }
+
+const NO_CONNECTIONS: Connection[] = [];
 
 /** Opening a row: the work drawer (05b) in place; the onboarding row opens the onboarding page (screen 10). */
 function openItem(ctx: PxCtx, w: WorkItem) {
@@ -354,6 +368,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
                  onClick={(e) => e.stopPropagation()}>
                 {w.issue.provider === "github" ? <GithubLogo size={11} aria-hidden /> : <Ticket size={11} aria-hidden />}{w.issue.label}</a>
             ) : null}
+            <RowTicket w={w} />
             {w.where ? <span className="px-mono px-ell" data-testid={`px-work-where-${w.id}`} title="The file its failing check names">{w.where}</span> : null}
             {source && w.source !== "code_task" && w.source !== "workflow_run" ? <span>{source}</span> : null}
             {w.state === "stalled" && !w.why ? <StalledTag w={w} /> : null}

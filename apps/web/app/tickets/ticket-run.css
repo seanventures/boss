@@ -1,0 +1,62 @@
+/* Ticket screens owned by Fork A (BOSSAPP-1047 Phase C): T6 linked ticket, the Ask BOSS brief,
+   the New work ticket line, Settings › Ticket system, Account › Ticket accounts. tk-*, tokens only. */
+
+.tk-run { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); font: var(--fs-body)/1.45 var(--sans); color: var(--ink); }
+.tk-run-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.tk-run-h { margin: 0; font: 700 var(--fs-title)/1.3 var(--display); }
+.tk-run-h a { display: inline-flex; align-items: center; gap: 3px; color: var(--accent-text); font-family: var(--mono); text-decoration: none; }
+.tk-run-h a:hover { text-decoration: underline; }
+
+.tk-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.tk-steps li { display: flex; gap: 6px; align-items: flex-start; min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); }
+.tk-steps li span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.tk-steps small { color: var(--muted); font-size: var(--fs-tag); line-height: 1.35; }
+.tk-steps li[data-state="done"] { border-color: var(--green-soft); }
+.tk-steps li[data-state="now"] { border-color: var(--accent-line); }
+.tk-step-dot { display: inline-grid; place-items: center; flex: none; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--surface-3); color: var(--muted); font: 700 var(--fs-label) var(--sans); }
+.tk-steps li[data-state="done"] .tk-step-dot { background: var(--green-soft); color: var(--green); }
+.tk-steps li[data-state="now"] .tk-step-dot { background: var(--accent-soft); color: var(--accent-text); }
+
+.tk-changed { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--amber); border-radius: var(--r); background: var(--amber-soft); }
+.tk-changed > svg { flex: none; color: var(--amber); margin-top: 2px; }
+.tk-changed-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tk-changed-body p { margin: 0; color: var(--ink-soft); overflow-wrap: anywhere; }
+
+.tk-log { display: flex; flex-direction: column; gap: 6px; }
+.tk-log ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.tk-log li { display: grid; grid-template-columns: 3.2rem minmax(0, 1fr); gap: 8px; overflow-wrap: anywhere; }
+.tk-log li[data-status="failed"] { color: var(--red); }
+.tk-log-why { color: var(--red); }
+.tk-log p { margin: 0; }
+
+/* Ask BOSS ticket brief */
+.tk-brief { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.tk-brief-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.tk-brief-note { margin: 0; color: var(--faint); font-size: var(--fs-meta); }
+
+/* New work: what BOSS recognises */
+.tk-recog { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; color: var(--muted); font-size: var(--fs-meta); }
+.tk-recog code { padding: 1px 6px; border-radius: var(--r-sm); background: var(--surface-2); font: var(--fs-tag) var(--mono); color: var(--ink-soft); }
+
+/* Settings › Ticket system, Account › Ticket accounts */
+.tk-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.tk-list > li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--r); background: var(--surface-2); }
+.tk-list-main { display: flex; flex-direction: column; min-width: 0; flex: 1 1 12rem; }
+.tk-list-main b { overflow-wrap: anywhere; }
+.tk-amber { color: var(--amber); font-size: var(--fs-meta); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; flex-basis: 100%; }
+.tk-map { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tk-map select { height: 28px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink); font: 600 var(--fs-meta) var(--sans); }
+
+@media (max-width: 640px) {
+  .tk-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Inside the work drawer, whose own list and paragraph rules would otherwise win: the steps are a
+   wrapping grid (2×2 in a narrow drawer, 4 across when wide) and the card's text is body size. */
+.tk-run ol.tk-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: 6px; height: auto; }
+.tk-run ol.tk-steps > li { height: auto; min-height: 0; margin: 0; }
+.tk-run .tk-changed-body p, .tk-run .tk-log p, .tk-run .tk-log li { font-size: var(--fs-body); line-height: 1.45; }
+.tk-run .tk-changed-body b { font-size: var(--fs-body); }

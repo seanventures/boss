@@ -41,6 +41,7 @@ import {
   StatePill,
 } from "./review-panes";
 import { DockPane, ReviewLayoutProvider, useReviewLayout } from "./review-dock";
+import { TicketSyncBadge } from "../../../projects/linked-ticket";
 import "./change-set.css";
 
 export { InlineNote, Review };
@@ -235,6 +236,8 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
               <StatePill cs={cs} />
               <BranchChips cs={cs} />
               <ChecksPill cs={cs} />
+              {/* The ticket this change is for (BOSSAPP-1047): its key and what BOSS wrote back. */}
+              {cs.run_id ? <TicketSyncBadge runId={cs.run_id} projectId={projectId} /> : null}
               {cs.comment_summary.human_open ? (
                 <span className="cs-pill" data-tone="amber" title="Open line comments from people" data-testid="change-set-open-comments">
                   <ChatCircleDots size={12} aria-hidden />{cs.comment_summary.human_open} open</span>) : null}

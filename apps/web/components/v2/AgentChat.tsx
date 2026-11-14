@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type { V2Agent } from "../../lib/v2/workforce";
 import { apiWrite } from "../../lib/api-write";
+import { TicketBrief, ticketRefOf } from "../../app/tickets/ticket-brief";
 
 /**
  * Talk to one agent.
@@ -141,6 +142,12 @@ export function AgentChat({
             </p>
           ))
         )}
+        {/* T4 (BOSSAPP-1047): the last answer names a ticket — its brief, with one Start. This
+            chat records no tool calls, so the key in the words is resolved. */}
+        {(() => {
+          const last = [...turns].reverse().find((t) => t.role === "agent");
+          return last && !busy && ticketRefOf([], last.text) ? <TicketBrief projectId={projectId} text={last.text} /> : null;
+        })()}
         {/* A waiting signal. "It says it will monitor and update and I don't see any waiting
             signal, it just quits" was a real complaint about this system. */}
         {busy ? (

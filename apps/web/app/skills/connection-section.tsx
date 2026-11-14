@@ -113,7 +113,32 @@ export function optionDefault(f: ProviderField, values: Record<string, string>, 
   return f.default ?? f.options[0].value;
 }
 
-export function ConnectionSection({ ability, projectId, actor, onChanged }: {
+/**
+ * FILE TICKETS POINTS AT ONE PLACE (BOSSAPP-1047): ticket systems are connected and configured in
+ * Setup › Ticket systems (mappings, write-back, the pick-up rule, webhooks). The Kit's own form
+ * still works (folded under "Connect from here instead"), so nothing it could do is lost.
+ */
+export function ConnectionSection(props: {
+  ability: Ability; projectId: string; actor: string; onChanged: (a: Ability) => void;
+}) {
+  if (props.ability.key !== "file_tickets") return <ConnectionForm {...props} />;
+  return (
+    <div className="kit-conn-tickets" data-testid="kit-conn-tickets">
+      <div className="kit-row" data-testid="kit-conn-tickets-setup">
+        <span>Ticket systems live in Setup</span>
+        <a className="kit-btn kit-btn-primary kit-btn-sm" href={`?area=setup&focus=ticket_systems&project_id=${encodeURIComponent(props.projectId)}`}
+           data-tip="Jira, Plane, GitHub Issues, Linear, Azure DevOps: sign-in, which tickets go where, what BOSS writes back"
+           data-testid="kit-conn-tickets-open">Open Setup › Ticket systems <ArrowSquareOut size={12} /></a>
+      </div>
+      <details className="kit-conn-fold" data-testid="kit-conn-tickets-fold">
+        <summary>Connect from here instead</summary>
+        <ConnectionForm {...props} />
+      </details>
+    </div>
+  );
+}
+
+function ConnectionForm({ ability, projectId, actor, onChanged }: {
   ability: Ability; projectId: string; actor: string; onChanged: (a: Ability) => void;
 }) {
   const conn = ability.connection;

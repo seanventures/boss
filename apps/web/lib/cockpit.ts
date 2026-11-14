@@ -161,7 +161,10 @@ export type Cockpit = {
   why: WaitReason | null;
   /** What the Shepherd found when it stopped moving (stuck_work), or null. */
   diagnosis: Diagnosis | null;
+  /** The ticket this build works on (BOSSAPP-1047): its badge; null for a build from no ticket. */
+  ticket: CockpitTicket | null;
 };
+export type CockpitTicket = { provider: string; key: string; url: string; status: string; syncStatus: string; workItemId: string };
 
 // ── Parsers ─────────────────────────────────────────────────────────────────────────────────
 
@@ -350,8 +353,14 @@ export function parseCockpit(w: unknown): Cockpit {
     summary: parseSummary(o.summary),
     why: parseWaitReason(o.why),
     diagnosis: parseDiagnosis(o.diagnosis),
+    ticket: ticketOf(o.ticket),
   };
 }
+const ticketOf = (v: unknown): CockpitTicket | null => {
+  const t = obj(v);
+  return str(t.key) ? { provider: str(t.provider), key: str(t.key), url: str(t.url), status: str(t.status),
+                        syncStatus: str(t.sync_status), workItemId: str(t.work_item_id) } : null;
+};
 
 // ── The poll ────────────────────────────────────────────────────────────────────────────────
 

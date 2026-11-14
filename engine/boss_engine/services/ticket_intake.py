@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -1105,6 +1105,62 @@ def import_tickets(db: Connection, app_settings: Any, *, project_id: str, row: d
                row["id"], {"imported": [i["key"] for i in imported],
                            "already_in_boss": [e["key"] for e in existing]})
     return {"imported": imported, "already_in_boss": existing}
+
+
+def category_of_state(state: Any, status_map: Optional[Mapping[str, Any]] = None) -> Optional[str]:
+    """A ticket's stored status NAME → todo | doing | review | done, or None when unknown. The
+    connection's own status names win; otherwise the common words do (Jira's "In Progress", Plane's
+    "Started", GitHub's "closed")."""
+    name = " ".join(str(state or "").lower().split())
+    if not name:
+        return None
+    for category, mapped in (status_map or {}).items():
+        if mapped and " ".join(str(mapped).lower().split()) == name and category in STATUS_CATEGORIES:
+            return str(category)
+    if any(w in name for w in ("done", "closed", "resolved", "complete", "released", "cancel")):
+        return "done"
+    if "review" in name or "qa" == name or "testing" in name:
+        return "review"
+    if any(w in name for w in ("progress", "started", "doing", "active", "develop")):
+        return "doing"
+    return "todo"
+
+
+def tickets_by_item(db: Connection, project_id: str) -> dict[str, dict[str, Any]]:
+    """Every ticket binding in the project, keyed by work item id AND by each run id it names
+    (``run:<id>``): what the work list hangs on a row as ``ticket`` (BOSSAPP-1047 Phase C).
+    One query; only ticket-system connections (not the Kit's tracker)."""
+    rows = db.execute(text(
+        "SELECT b.work_item_id, b.provider_id, b.external_key, b.external_url, b.external_state, "
+        "b.sync_status, b.metadata, p.provider_key, p.configuration "
+        "FROM work_tracker_bindings b JOIN work_tracker_providers p ON p.id = b.provider_id "
+        "WHERE b.project_id = :p AND p.configuration ? 'ticket_system' "
+        "AND (b.external_key IS NOT NULL OR b.external_url IS NOT NULL) "
+        "ORDER BY b.created_at"), {"p": project_id}).mappings().all()
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        config = row["configuration"] if isinstance(row["configuration"], dict) else {}
+        meta = row["metadata"] if isinstance(row["metadata"], dict) else {}
+        try:
+            status_map = connection_settings_map(config, str(row["provider_key"]))
+        except Exception:  # noqa: BLE001 — an unknown connector still shows its ticket
+            status_map = {}
+        view = {"provider": str(row["provider_key"]), "key": row["external_key"],
+                "url": row["external_url"], "status": row["external_state"],
+                "status_category": category_of_state(row["external_state"], status_map),
+                "sync_status": row["sync_status"], "connection_id": str(row["provider_id"]),
+                "type": meta.get("ticket_type"), "origin": meta.get("origin"),
+                "work_item_id": str(row["work_item_id"])}
+        out.setdefault(str(row["work_item_id"]), view)
+        for run_id in meta.get("run_ids") or []:
+            out.setdefault(f"run:{run_id}", view)
+    return out
+
+
+def connection_settings_map(configuration: Mapping[str, Any], provider_key: str) -> dict[str, Any]:
+    adapter = REGISTRY.get(provider_key)
+    defaults = adapter.status_defaults() if adapter is not None else None
+    return dict(public_settings(dict(configuration), defaults).get("status_map") or {})
 
 
 def binding_of_item(db: Connection, project_id: str, work_item_id: str

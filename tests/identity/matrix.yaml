@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2129 operations.
+# 2130 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/oauth-authorization-server": ["public:oidc_provider_endpoint", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
@@ -1286,6 +1286,7 @@
 "DELETE /v1/mcp/stdio-templates/{template_id}": ["permit host:exec @ project(query=project_id)", "OA"]
 "PATCH /v1/mcp/stdio-templates/{template_id}": ["permit host:exec @ project(query=project_id)", "OA"]
 "GET /v1/me/ticket-identities": ["authenticated:self:people", "OAPVU"]
+"POST /v1/me/ticket-identities/{connection_id}/confirm": ["authenticated:self:people", "OAPVU"]
 "GET /v1/meeting-roles": ["permit meeting:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "POST /v1/meeting-roles": ["permit meeting:configure @ project(body=project_id)", "OA"]
 "POST /v1/meeting-roles/load": ["permit meeting:read @ project(query=project_id) +writes_on_get", "OAPVU"]

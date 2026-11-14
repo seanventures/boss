@@ -337,3 +337,8 @@
 .decision-grant-reason { margin: 0; padding-left: 8px; border-left: 2px solid var(--border); color: var(--muted); }
 .decision-grant-head, .decision-grant-effect { margin: 0; }
 .decision-grant-effect { color: var(--muted); }
+
+/* File tickets: the pointer to Setup › Ticket systems, the Kit form folded under it (BOSSAPP-1047). */
+.kit-conn-tickets { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.kit-conn-fold summary { cursor: pointer; color: var(--muted); font-size: var(--fs-meta); font-weight: 600; }
+.kit-conn-fold[open] summary { margin-bottom: 8px; }

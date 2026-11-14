@@ -1,0 +1,195 @@
+/* Ticket systems (BOSSAPP-1047 Phase C). Classes are tk-*; base tokens only (no raw colours). */
+
+.tk-stack { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.tk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.tk-spacer { flex: 1 1 0; }
+.tk-faint { color: var(--faint); font-size: var(--fs-meta); }
+.tk-muted { color: var(--muted); font-size: var(--fs-ui); }
+.tk-lbl { color: var(--muted); font: 700 var(--fs-tag)/1.3 var(--sans); letter-spacing: 0.04em; text-transform: uppercase; }
+.tk-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tk-mono-text { font-family: var(--mono); font-size: var(--fs-meta); }
+.tk-skel { min-height: 44px; border-radius: var(--r); background: var(--surface-2); animation: tk-pulse 1.4s ease-in-out infinite; }
+@keyframes tk-pulse { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) { .tk-skel { animation: none; } }
+
+/* ── monogram, tags, chips ──────────────────────────────────────────────────────── */
+.tk-mono {
+  display: inline-grid; place-items: center; flex: none;
+  border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent-text);
+  font-family: var(--display); font-weight: 700; line-height: 1;
+}
+.tk-mono[data-provider="plane"] { background: var(--green-soft); color: var(--teal); }
+.tk-mono[data-provider^="github"] { background: var(--surface-3); color: var(--ink-soft); }
+.tk-mono[data-provider="linear"] { background: var(--surface-3); color: var(--accent-text); }
+.tk-tag {
+  display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2);
+  color: var(--ink-soft); font: 600 var(--fs-tag)/1 var(--sans); white-space: nowrap;
+}
+.tk-tag[data-tone="green"] { background: var(--green-soft); border-color: transparent; color: var(--green); }
+.tk-tag[data-tone="amber"] { background: var(--amber-soft); border-color: transparent; color: var(--amber); }
+.tk-tag[data-tone="red"] { background: var(--red-soft); border-color: transparent; color: var(--red); }
+.tk-tag[data-tone="blue"] { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); }
+.tk-tag[data-tone="teal"] { background: var(--green-soft); border-color: transparent; color: var(--teal); }
+.tk-tag[data-tone="violet"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-text); }
+.tk-chip {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; height: 22px; padding: 0 8px 0 4px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--ink);
+  font: 600 var(--fs-tag)/1 var(--sans); text-decoration: none; white-space: nowrap;
+}
+a.tk-chip:hover { border-color: var(--accent); }
+.tk-chip-key { font-family: var(--mono); }
+.tk-chip-sync { color: var(--muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.tk-chip-sync[data-tone="green"] { color: var(--green); }
+.tk-chip-sync[data-tone="amber"] { color: var(--amber); }
+.tk-chip-sync[data-tone="red"] { color: var(--red); }
+
+/* ── the ticket brief card (T3, T4) ─────────────────────────────────────────────── */
+.tk-card {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 14px 16px;
+  border: 1px solid var(--accent-line); border-radius: var(--r-lg); background: var(--surface);
+  box-shadow: var(--shadow-sm); color: var(--ink); font: var(--fs-ui)/1.5 var(--sans);
+}
+.tk-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.tk-key { display: inline-flex; align-items: center; gap: 3px; color: var(--accent-text); font: 700 var(--fs-ui) var(--mono); text-decoration: none; }
+a.tk-key:hover { text-decoration: underline; }
+.tk-title { margin: 0; font: 700 var(--fs-page)/1.3 var(--display); letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.tk-body { margin: 0; color: var(--ink-soft); overflow-wrap: anywhere; }
+.tk-ac { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: var(--r); background: var(--surface-2); }
+.tk-ac ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.tk-ac li { display: flex; gap: 6px; align-items: flex-start; overflow-wrap: anywhere; }
+.tk-ac li svg { flex: none; margin-top: 3px; color: var(--green); }
+.tk-also { margin: 0; }
+.tk-warn { display: flex; gap: 6px; align-items: center; margin: 0; color: var(--amber); font-size: var(--fs-meta); }
+.tk-card-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--border); }
+.tk-card-foot .tk-spacer { min-width: 8px; }
+
+/* ── controls ───────────────────────────────────────────────────────────────────── */
+.tk-pick select {
+  height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--surface-2); color: var(--ink); font: 600 var(--fs-meta) var(--sans); max-width: 100%;
+}
+.tk-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); color: var(--ink);
+  font: 600 var(--fs-ui)/1 var(--sans); cursor: pointer; white-space: nowrap; text-decoration: none;
+}
+.tk-btn:hover:not(:disabled):not([aria-disabled="true"]) { border-color: var(--accent); }
+.tk-btn:disabled, .tk-btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.tk-btn[data-kind="primary"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.tk-btn-sm { height: 26px; padding: 0 9px; font-size: var(--fs-meta); }
+.tk-linkbtn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none;
+  color: var(--accent-text); font: 600 var(--fs-ui) var(--sans); cursor: pointer; text-decoration: none;
+}
+.tk-linkbtn:hover { text-decoration: underline; }
+.tk-linkbtn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.tk-optchip {
+  display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--ink-soft);
+  font: 600 var(--fs-meta)/1 var(--sans); cursor: pointer;
+}
+.tk-optchip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+
+/* ── states ─────────────────────────────────────────────────────────────────────── */
+.tk-error, .tk-denied { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; font-size: var(--fs-ui); }
+.tk-error { color: var(--red); }
+.tk-denied { color: var(--muted); }
+.tk-ok { color: var(--green); }
+.tk-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 18px 12px; text-align: center; color: var(--muted); font-size: var(--fs-ui); }
+.tk-empty b { color: var(--ink); font: 700 var(--fs-title) var(--display); }
+.tk-empty p, .tk-empty-line { margin: 0; max-width: 36ch; }
+.tk-illus { width: 120px; height: 72px; }
+.tk-empty-ico { margin-top: -50px; margin-bottom: 18px; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent-text); }
+
+@media (max-width: 640px) {
+  .tk-hide-phone { display: none; }
+  .tk-card { padding: 12px; }
+  .tk-card-foot > * { flex: 1 1 auto; }
+}
+
+/* ── Setup › Ticket systems (T1) ───────────────────────────────────────────────── */
+.tk-systems { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+.tk-systems-head, .tk-system {
+  display: grid; grid-template-columns: minmax(10rem, 1.3fr) minmax(9rem, 1.4fr) minmax(7rem, 1fr) minmax(8rem, 1.1fr) minmax(6rem, .8fr) 34px;
+  gap: 10px; align-items: center; padding: 10px 12px; min-width: 0;
+}
+.tk-systems-head { background: var(--surface-2); color: var(--muted); font: 700 var(--fs-tag)/1.2 var(--sans); letter-spacing: .04em; text-transform: uppercase; }
+.tk-system + .tk-system, .tk-systems-head + .tk-system { border-top: 1px solid var(--border); }
+.tk-system[data-status="disconnected"] { opacity: .7; }
+.tk-system-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tk-system-name b { font: 700 var(--fs-title)/1.2 var(--display); }
+.tk-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: var(--fs-ui); overflow-wrap: anywhere; }
+.tk-cell-menu { justify-self: end; }
+.tk-status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.tk-status i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.tk-status[data-tone="green"] i { background: var(--green); }
+.tk-status[data-tone="amber"] { color: var(--amber); }
+.tk-status[data-tone="amber"] i { background: var(--amber); }
+.tk-status[data-tone="red"] { color: var(--red); }
+.tk-status[data-tone="red"] i { background: var(--red); }
+.tk-where { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.tk-where-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.tk-where-grid a {
+  display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-2); color: var(--ink); text-decoration: none; min-width: 0;
+}
+.tk-where-grid a:hover { border-color: var(--accent); }
+.tk-where-grid svg { color: var(--accent-text); grid-row: span 2; }
+.tk-where-grid b { font: 700 var(--fs-ui) var(--display); }
+.tk-where-grid span { color: var(--muted); font-size: var(--fs-meta); }
+.tk-vault { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 4px 0 0; }
+.tk-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--red-soft); border-radius: var(--r); background: var(--surface-2); font-size: var(--fs-ui); }
+
+/* ── Add a ticket system (T2) ───────────────────────────────────────────────────── */
+.tk-drawer { display: flex; flex-direction: column; gap: 18px; font: var(--fs-ui)/1.45 var(--sans); color: var(--ink); }
+.tk-drawer section { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.tk-drawer section[data-locked] { opacity: .75; }
+.tk-step { margin: 0; font: 700 var(--fs-title)/1.2 var(--display); }
+.tk-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.tk-tile {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 10px; text-align: left;
+  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-2); color: var(--ink); font: inherit; cursor: pointer; text-decoration: none;
+}
+.tk-tile > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.tk-tile small { color: var(--muted); font-size: var(--fs-tag); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-tile[aria-checked="true"] { border: 2px solid var(--accent); background: var(--accent-soft); padding: 9px; }
+.tk-tile[data-info] { border-style: dashed; }
+.tk-test { display: flex; align-items: center; gap: 6px; margin: 0; }
+.tk-oauth { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tk-maps { display: flex; flex-direction: column; gap: 6px; }
+.tk-map { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.tk-map select, .tk-map input, .tk-pickup select, .tk-inline input {
+  min-height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
+  color: var(--ink); font: inherit; font-size: var(--fs-ui); min-width: 0; max-width: 100%;
+}
+.tk-map-to { padding: 5px 8px; border-radius: var(--r); background: var(--surface-2); overflow-wrap: anywhere; }
+.tk-chips, .tk-pickup { gap: 6px; }
+.tk-chips .tk-lbl, .tk-pickup .tk-lbl { min-width: 6.5rem; }
+.tk-inline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.tk-inline input { width: 8rem; }
+.tk-adv summary { cursor: pointer; color: var(--accent-text); font-weight: 600; }
+.tk-adv[open] summary { margin-bottom: 8px; }
+.tk-hook { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--amber-soft); border-radius: var(--r); background: var(--surface-2); }
+.tk-hook code { font: var(--fs-meta) var(--mono); overflow-wrap: anywhere; min-width: 0; flex: 1 1 12rem; }
+.tk-drawer-foot { display: flex; justify-content: flex-end; gap: 8px; position: sticky; bottom: 0; padding-top: 10px; background: var(--surface); }
+
+@media (max-width: 900px) {
+  .tk-where-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .tk-systems-head { display: none; }
+  .tk-system { grid-template-columns: minmax(0, 1fr) 34px; }
+  .tk-system > .tk-cell { grid-column: 1; }
+  .tk-system > .tk-cell::before { content: attr(data-label); color: var(--faint); font: 700 var(--fs-label)/1.2 var(--sans); text-transform: uppercase; letter-spacing: .04em; }
+  .tk-system > .tk-cell-menu { grid-column: 2; grid-row: 1; }
+  .tk-where-grid, .tk-tiles { grid-template-columns: minmax(0, 1fr); }
+  .tk-map { grid-template-columns: minmax(0, 1fr) auto; }
+  .tk-map > span[aria-hidden] { display: none; }
+  .tk-chips .tk-lbl, .tk-pickup .tk-lbl { min-width: 100%; }
+}
+
+/* Hosted inside the New work modal and the chat, whose own paragraph rules would otherwise win. */
+.tk-card p.tk-body, .tk-card p.tk-also, .tk-card .tk-ac li { font-size: var(--fs-body); line-height: 1.5; }
+.tk-card h3.tk-title { font-size: var(--fs-title); }

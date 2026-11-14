@@ -18,6 +18,7 @@ import { codesOf, type LinkedIdentity, type RecoveryCodes } from "../../lib/iden
 import { webauthnAvailable } from "../../lib/identity/webauthn";
 import { PASSKEY_NEEDS_DOMAIN_WORDS, passkeyBlockWords, passkeyFailureWords, passkeyPlace } from "../../lib/identity/passkey-support";
 import { useGuardedCall, useIdentity } from "../../components/identity/identity-provider";
+import { TicketAccounts } from "./ticket-accounts";
 import { Ago, ErrorLine, Face, Pill, Sheet } from "../../components/identity/kit";
 import type { MyProfile } from "../../lib/identity/types-account";
 import { showToast } from "../client-forms";
@@ -298,6 +299,8 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
           ))}
           <ErrorLine error={linkError} />
         </section>
+        {/* BOSSAPP-1047: your own ticket-system sign-ins ("Connect with Atlassian"). */}
+        <TicketAccounts />
         <section className="idn-card" aria-labelledby="acc-you-h">
           <div className="idn-card-h">
             <h2 id="acc-you-h">Signed in as</h2>

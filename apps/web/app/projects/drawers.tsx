@@ -33,6 +33,7 @@ import { RecDrawer } from "./tab-roadmap";
 import { LOCAL, whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 import { LearnedStrip } from "../knowledge/learned-strip";
+import { LinkedTicket } from "./linked-ticket";
 
 const STEP_WORDS: Record<string, string> = { plan: "Plan", design: "You approved", decide: "You approved", build: "Build", review: "Review & test", pr: "Merge", ship: "Staging" };
 
@@ -188,6 +189,9 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
         <div data-testid="px-drawer-work-why"><WhyLine why={w.why} testId="px-drawer-why" /></div>
       ) : null}
       <DiagnosisFlow d={w.diagnosis} testId="px-drawer-diagnosis" />
+      {/* T6 (BOSSAPP-1047): the ticket this work came from — its status steps, a mid-run change
+          to decide, and what BOSS wrote back. Nothing for work that did not come from a ticket. */}
+      {w.source === "workflow_run" && !ctx.demo ? <LinkedTicket projectId={ctx.projectId} runId={w.id} /> : null}
       <WorkStoryBody ctx={ctx} w={w} story={story} />
       <DrawerAttempts w={w} ctx={ctx} />
       {w.detail && !story ? <p style={{ margin: 0, lineHeight: 1.5 }} className="px-muted">{w.detail}</p> : null}
