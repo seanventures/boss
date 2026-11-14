@@ -524,7 +524,9 @@ def build_identity_auth_router() -> APIRouter:
     def logout(request: Request):
         """Public so an expired session can still clear its cookie; it only ever ends the
         session the cookie names."""
-        return _run(request, lambda db, f: signin.logout(db, f))
+        from boss_engine.identity.authn_support import sso_origin
+
+        return _run(request, lambda db, f: signin.logout(db, f, origin=sso_origin(f.origin, f.request_origin)))
 
     return router
 

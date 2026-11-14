@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  collectorMachinePost, collectorPathOf, localHttp, networkTrustedConsole, sameOriginMutation,
+  collectorMachinePost, collectorPathOf, idpBackchannelPost, localHttp, networkTrustedConsole, sameOriginMutation,
   secureConsoleTransport,
 } from "./lib/console-session";
 import { hasSessionCookie, isPreviewCapabilityPath } from "./lib/identity/forward";
@@ -63,6 +63,9 @@ export async function middleware(request: NextRequest) {
   // Another install's heartbeat to this collector: a machine POST, no session, no Origin
   // (lib/console-session.ts collectorMachinePost). Straight to the /v1 proxy, which adds no key.
   if (collectorMachinePost(request)) return NextResponse.next();
+  // An IdP's back-channel logout (lib/console-session.ts idpBackchannelPost): a machine POST to
+  // exactly that path, forwarded speaking for nobody; the API verifies the signed logout token.
+  if (idpBackchannelPost(request)) return NextResponse.next();
   // Monitoring's machine routes (lib/monitoring-proxy.ts): the plain spellings skip middleware
   // (the matcher below); any that reach here pass to the /v1 route, which adds nothing to them.
   // Any other spelling of the two prefixes is refused.

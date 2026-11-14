@@ -1,7 +1,12 @@
 """BOSS as a SAML 2.0 service provider for CONSOLE sign-in (IDENTITY.md §4.8 "SAML"). Stream S1.
 
-  - SP-initiated only: every Response must answer a stored AuthnRequest (`InResponseTo`), bound
-    to the browser that started it; an unsolicited (IdP-initiated) Response is refused (A68).
+  - SP-initiated by default: every Response must answer a stored AuthnRequest (`InResponseTo`),
+    bound to the browser that started it; an unsolicited (IdP-initiated) Response is refused (A68)
+    — unless the provider opts in with `allow_idp_initiated` (off by default; BOSSAPP-1048, an
+    Okta dashboard tile). Then a Response that answers NO request (no InResponseTo anywhere) is
+    accepted with every other check unchanged (signature, Destination, Recipient, Audience,
+    validity window), plus: its SubjectConfirmationData must carry NotOnOrAfter, its IssueInstant
+    must be recent, and its assertion id is spent once (the replay cache).
   - Parsing: lxml with no DTD, no entities, no network; a DOCTYPE is refused outright.
   - Signature: signxml against the CONFIGURED certificate(s) only (two for rollover). Only the
     element signxml reports as signed is read, and the document must contain exactly one
@@ -35,13 +40,16 @@ from .authn_support import (
     random_token,
     utcnow,
 )
-from .sso_oidc import FederatedIdentity, Provider, SsoError, StartedFlow, provider_from_row, _PROVIDER_COLS
+from .sso_oidc import (FederatedIdentity, Provider, SsoError, StartedFlow, _PROVIDER_COLS, provider_from_row,
+                       safe_next)
 
 SAMLP = "urn:oasis:names:tc:SAML:2.0:protocol"
 SAML = "urn:oasis:names:tc:SAML:2.0:assertion"
 DSIG = "http://www.w3.org/2000/09/xmldsig#"
 NS = {"samlp": SAMLP, "saml": SAML, "ds": DSIG}
 REQUEST_TTL_SECONDS = 600
+#: An IdP-initiated Response must have been issued this recently (it answers no request of ours).
+UNSOLICITED_MAX_AGE = timedelta(minutes=5)
 SKEW = timedelta(seconds=60)
 MAX_RESPONSE_BYTES = 256_000
 EMAIL_ATTRIBUTES = ("email", "mail", "emailaddress",
@@ -84,7 +92,7 @@ def metadata(origin: str, entity_id: Optional[str] = None) -> str:
             f'Location="{acs}" index="0" isDefault="true"/></md:SPSSODescriptor></md:EntityDescriptor>')
 
 
-def start(db: Any, provider: Provider, *, origin: str) -> StartedFlow:
+def start(db: Any, provider: Provider, *, origin: str, next_path: Optional[str] = None) -> StartedFlow:
     from .sessions import set_cookie_header
 
     sso_url = provider.sso_url or ""
@@ -93,7 +101,7 @@ def start(db: Any, provider: Provider, *, origin: str) -> StartedFlow:
     request_id = "_" + random_token(nbytes=20).replace("-", "a").replace("_", "b")
     preauth = random_token("bpa_")
     create_challenge(db, kind="saml_request", binding_secret=preauth, ttl_seconds=REQUEST_TTL_SECONDS,
-                     secret=request_id, payload={"provider_id": provider.id})
+                     secret=request_id, payload={"provider_id": provider.id, "next": safe_next(next_path)})
     instant = utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     xml = (f'<samlp:AuthnRequest xmlns:samlp="{SAMLP}" xmlns:saml="{SAML}" ID="{request_id}" '
            f'Version="2.0" IssueInstant="{instant}" Destination="{escape(sso_url)}" '
@@ -171,9 +179,12 @@ def _verify_signature(root: Any, provider: Provider) -> Any:
 class SamlResult:
     provider: Provider
     identity: FederatedIdentity
+    next_path: Optional[str] = None
+    idp_initiated: bool = False
 
 
-def consume_response(db: Any, *, saml_response: str, preauth: Optional[str], origin: str) -> SamlResult:
+def consume_response(db: Any, *, saml_response: str, preauth: Optional[str], origin: str,
+                     relay_state: Optional[str] = None) -> SamlResult:
     root = _parse(saml_response)
     assertions = root.findall(f".//{{{SAML}}}Assertion")
     if root.findall(f".//{{{SAML}}}EncryptedAssertion") or len(assertions) != 1:
@@ -235,12 +246,23 @@ def consume_response(db: Any, *, saml_response: str, preauth: Optional[str], ori
     if c_noa is not None and now >= c_noa + SKEW:
         raise SsoError("saml_expired")
     in_response_to = confirmation.get("InResponseTo") or ""
-    if not in_response_to or (root.get("InResponseTo") not in (None, in_response_to)):
-        raise SsoError("saml_unsolicited")                    # A68
-    ch = challenge_by_secret(db, kind="saml_request", secret=in_response_to, binding_secret=preauth,
-                             require_binding=True)
-    if ch is None or ch.payload.get("provider_id") != provider.id or not consume_challenge(db, ch.id_hash):
-        raise SsoError("saml_unsolicited")
+    next_path: Optional[str] = None
+    unsolicited = not in_response_to and root.get("InResponseTo") is None
+    if unsolicited and provider.allow_idp_initiated:
+        # IdP-initiated (opt-in): nothing to answer, so nothing binds it to a browser. It must be
+        # fresh and short-lived, and its assertion id is spent below like every other.
+        issued = _time(assertion.get("IssueInstant"))
+        if c_noa is None or issued is None or abs(now - issued) > UNSOLICITED_MAX_AGE + SKEW:
+            raise SsoError("saml_unsolicited")
+        next_path = safe_next(relay_state, origin=origin)
+    else:
+        if not in_response_to or (root.get("InResponseTo") not in (None, in_response_to)):
+            raise SsoError("saml_unsolicited")                # A68
+        ch = challenge_by_secret(db, kind="saml_request", secret=in_response_to, binding_secret=preauth,
+                                 require_binding=True)
+        if ch is None or ch.payload.get("provider_id") != provider.id or not consume_challenge(db, ch.id_hash):
+            raise SsoError("saml_unsolicited")
+        next_path = safe_next(ch.payload.get("next"))
     _spend_assertion_id(db, assertion.get("ID") or "", noa)
     attrs = _attributes(assertion)
     email = next((attrs[k][0] for k in EMAIL_ATTRIBUTES if attrs.get(k)), None)
@@ -257,7 +279,8 @@ def consume_response(db: Any, *, saml_response: str, preauth: Optional[str], ori
     domain = email.rsplit("@", 1)[1].lower() if email and "@" in email else ""
     return SamlResult(provider, FederatedIdentity(
         issuer=provider.issuer or "", subject=name_id.text.strip(), email=email,
-        email_verified=bool(email and domain in trusted), name=name, groups=groups, mfa=mfa))
+        email_verified=bool(email and domain in trusted), name=name, groups=groups, mfa=mfa),
+        next_path=next_path, idp_initiated=unsolicited)
 
 
 def _spend_assertion_id(db: Any, assertion_id: str, expires: datetime) -> None:

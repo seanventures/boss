@@ -69,6 +69,26 @@ export function collectorMachinePost(request: Request): boolean {
   return collectorPathOf(request.url) !== null;
 }
 
+/**
+ * AN IDP'S BACK-CHANNEL LOGOUT (OIDC Back-Channel Logout; BOSSAPP-1048): Okta POSTs a signed
+ * logout token to `/v1/auth/sso/{provider}/backchannel-logout`, server to server. Exactly that
+ * path, POST only, and only WITHOUT an Origin, a cookie or any Sec-Fetch-* header — a browser
+ * marks every request it makes, so no browser write passes this way. It speaks for nobody: the
+ * API verifies the token against that provider's keys, and it can only end sessions.
+ */
+const BACKCHANNEL_LOGOUT = /^\/v1\/auth\/sso\/idp_[a-z2-7]{1,40}\/backchannel-logout\/?$/;
+
+export function idpBackchannelPost(request: Request): boolean {
+  if (request.method.toUpperCase() !== "POST") return false;
+  if (request.headers.get("origin") || request.headers.get("cookie")) return false;
+  for (const h of ["sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user"]) {
+    if (request.headers.get(h)) return false;
+  }
+  let path: string;
+  try { path = new URL(request.url).pathname; } catch { return false; }
+  return BACKCHANNEL_LOGOUT.test(path);
+}
+
 export function sameOriginMutation(request: Request): boolean {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())) return true;
   const origin = request.headers.get("origin");

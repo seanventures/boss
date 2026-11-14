@@ -108,13 +108,14 @@ Watch out: Use your Directory (tenant) ID, not "common": BOSS signs in one tenan
 #### Okta
 
 1. In the Okta Admin Console, go to Applications › Create App Integration › OIDC › Web Application.
-2. Set Sign-in redirect URI to the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`).
-3. Assign the people or groups who may sign in.
-4. Copy your Okta URL (the issuer), the Client ID and Client secret into BOSS, then Add.
+2. Set Sign-in redirect URI to the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`), plus the Sign-out redirect and Initiate login URIs (Login initiated by: Either Okta or App).
+3. On the Sign On tab, edit the Groups claim filter: groups, Matches regex .* (or narrower).
+4. Assign the people or groups who may sign in.
+5. Copy your Okta URL (the issuer), the Client ID and Client secret into BOSS, then Add.
 
 Copy back into BOSS: Issuer URL, Client ID, Client secret.
 
-Watch out: Only people assigned to the app can sign in.
+Watch out: The issuer is https://you.okta.com, never the -admin address; only assigned people can sign in.
 
 #### Keycloak
 
@@ -160,6 +161,40 @@ Copy back into BOSS: Services ID, Client secret.
 Watch out: Apple posts back to BOSS (form_post), and needs a real domain, not an IP address.
 
 <!-- sso-guides:end -->
+
+### Okta in detail
+
+Okta's issuer is your org URL, `https://<org>.okta.com` (the org authorization server), or a custom authorization server such as `https://<org>.okta.com/oauth2/default`. BOSS removes a trailing slash and refuses the Admin Console address (`https://<org>-admin.okta.com`). With the org URL, BOSS asks for the scopes `openid email profile groups`; with a custom server it asks for `openid email profile`, and you add a `groups` claim to that server (**Security › API › Authorization servers › Claims**). Either way the groups claim is `groups`: map Okta groups to BOSS groups under the provider's **Sync** sheet. When Okta leaves groups out of the ID token, BOSS reads them from Okta's userinfo endpoint for the same person.
+
+What to enter in Okta:
+
+| Okta setting | Value |
+| --- | --- |
+| Sign-in redirect URI | `https://boss.example.com/v1/auth/sso/<provider id>/callback` |
+| Sign-out redirect URI | `https://boss.example.com/login` |
+| Initiate login URI, Login initiated by **Either Okta or App** | `https://boss.example.com/v1/auth/sso/<provider id>/start` |
+| Back-channel logout URI (where your Okta org offers it) | `https://boss.example.com/v1/auth/sso/<provider id>/backchannel-logout` |
+| Sign On › OpenID Connect ID Token › Groups claim | type **Filter**, name `groups`, **Matches regex** `.*` |
+| Provisioning › SCIM connector base URL | `https://boss.example.com/scim/v2` |
+| Provisioning › Unique identifier field for users | `userName` |
+| Provisioning › Authentication mode | **HTTP Header**, Bearer: a BOSS SCIM key (shown once) |
+| Provisioning actions | Push New Users, Push Profile Updates, Push Groups (Import is not needed) |
+
+On a laptop with no public address, use `http://localhost:<port>` in place of `https://boss.example.com` (see [Single sign-on on a laptop](CONSOLE_AUTH.md#single-sign-on-on-a-laptop-httplocalhost)).
+
+**Sign-out**: signing out of BOSS after an Okta sign-in also ends the Okta session (RP-initiated logout) and comes back to `/login`. Okta can also end BOSS sessions itself through the back-channel logout URI: BOSS checks the logout token's signature against Okta's keys and ends only the sessions it names.
+
+**Step-up**: an action that needs a fresh second factor can be confirmed by signing in at Okta again (`/v1/auth/sso/<provider id>/start?purpose=reauth`, which asks Okta for a new login). It counts only when **Trust its MFA** is on and Okta reports MFA.
+
+**SCIM with Okta**: BOSS answers `/ServiceProviderConfig`, `/Schemas` and `/ResourceTypes`, stores the name parts and Okta's `externalId`, and accepts a pushed password without storing it (BOSS people sign in through Okta). Roles are never SCIM's to set.
+
+#### Opt-ins (each off by default)
+
+| Setting (console) | API field | What it allows |
+| --- | --- | --- |
+| **Link existing accounts** | `link_verified_domain_accounts` | Someone already in BOSS (say, through Google) whose email Okta reports as **verified**, in one of the provider's email domains, is linked to their Okta identity on their first Okta sign-in, instead of being refused. Every link is an `sso.link.auto` event in the audit log. Their own second factor is still asked for, unless **Trust its MFA** applies. |
+| **Let SCIM manage existing people** | `scim_adopt_existing_by_domain` | Okta's SCIM connection may update, deprovision and push into groups people BOSS already had, when their verified email is in the provider's domains. Never an Owner or an Admin. The first change is a `scim.user.adopted` event. |
+| **Allow sign-in from its dashboard** (SAML only) | `allow_idp_initiated` | A SAML response the identity provider started (a dashboard tile) is accepted. It must still be signed, addressed to BOSS (audience, recipient, destination), recent, and each assertion is used once. OIDC providers use the Initiate login URI instead. |
 
 ### Providers from an older install
 

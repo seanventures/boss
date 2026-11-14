@@ -1,15 +1,24 @@
 """SSO console sign-in and identity-provider administration (IDENTITY.md §4.8, §4.9, §4.15, §10).
 Stream S1.
 
-  GET  /v1/auth/sso/{provider_id}/start        302 to the IdP (state/nonce/PKCE bound to this browser)
+  GET  /v1/auth/sso/{provider_id}/start        302 to the IdP (state/nonce/PKCE bound to this browser);
+                                               also the OIDC "Initiate login URI" (an Okta tile:
+                                               `iss` must name this provider, `target_link_uri`
+                                               a same-origin landing page)
   GET  /v1/auth/sso/{provider_id}/callback     OIDC / GitHub return (code + state)
   POST /v1/auth/sso/{provider_id}/callback     Apple form_post return
+  POST /v1/auth/sso/{provider_id}/backchannel-logout   OIDC Back-Channel Logout (a signed logout token)
   GET  /saml/v2/metadata                       SP metadata
   POST /saml/v2/acs                            SAML POST binding
   /v1/identity/providers[...]                  provider admin, connection test, SCIM keys
 
 Every callback ends in a 303 to the console with the session cookie set; the redirect URL never
-carries a token, code or state (A92) — only `?error=<code>`, `?step=mfa` or `?linked=1`.
+carries a token, code or state (A92) — only `?error=<code>`, `?step=mfa` or `?linked=1`, or the
+SAFE same-origin console path the sign-in started from (`next`, sso_oidc.safe_next).
+
+Origins: redirect URIs are built on the BOUND public origin; before one is bound, on this
+request's own origin ONLY when it is loopback (authn_support.sso_origin) — a laptop console on
+http://localhost:<port>. A remote origin is never taken from Host: 409 public_origin_unset.
 """
 from __future__ import annotations
 
@@ -24,23 +33,25 @@ from starlette.concurrency import run_in_threadpool
 
 from boss_engine.db import begin
 from boss_engine.identity import P, PublicReason, permit, public
-from boss_engine.identity import api_keys, ids, social, sso_oidc, sso_saml, users, vault
+from boss_engine.identity import api_keys, ids, social, sso_logout, sso_oidc, sso_saml, users, vault
 from boss_engine.identity.audit import Outcome
 from boss_engine.identity.authn import AuthnError
-from boss_engine.identity.authn_support import default_org_id, emit, origin_of
+from boss_engine.identity.authn_support import default_org_id, emit, origin_of, sso_origin
 from boss_engine.identity.signin import Answer
 from boss_engine.identity.sso_oidc import SsoError
 
 from .identity_auth import current_context, error, facts, refusal
 
 
-def _redirect(origin: str, answer: Answer) -> Response:
-    """Translate a sign-in Answer into a console redirect. Only fixed, safe query values."""
+def _redirect(origin: str, answer: Answer, next_path: Optional[str] = None) -> Response:
+    """Translate a sign-in Answer into a console redirect. Only fixed, safe query values, and a
+    landing path that sso_oidc.safe_next already reduced to a same-origin console path."""
     nxt = answer.body.get("next") if answer.status == 200 else None
+    landing = sso_oidc.safe_next(next_path)
     if nxt == "done":
-        target = f"{origin}/"
+        target = f"{origin}{landing or '/'}"
     elif nxt == "mfa":
-        target = f"{origin}/signin?step=mfa"
+        target = f"{origin}/signin?step=mfa" + (f"&next={quote(landing, safe='')}" if landing else "")
     elif nxt == "linked":
         target = f"{origin}/account?linked=1"
     elif nxt == "enrol":   # signed in, but an MFA-required role has no factor yet
@@ -72,6 +83,16 @@ def verify_state_bound_callback(request: Request) -> None:
 def verify_saml_assertion(request: Request) -> None:
     """The ACS's proof: a signed assertion answering a request this browser started
     (sso_saml.consume_response)."""
+
+
+def verify_logout_token(request: Request) -> None:
+    """The back-channel logout's proof: a logout token signed by THIS provider's keys, for BOSS's
+    client id, recent, with the back-channel event and no nonce, its jti spent once
+    (sso_oidc.verify_logout_token + sso_logout.spend_jti). It can only END sessions."""
+
+
+def _origin(f: Any) -> str:
+    return sso_origin(f.origin, f.request_origin) or ""
 
 
 class _Rollback(Exception):
@@ -118,6 +139,10 @@ class ProviderBody(_Body):
     client_private_key: Optional[str] = Field(default=None, max_length=8000)   # write-only PEM
     client_key_kid: Optional[str] = Field(default=None, max_length=200)
     client_assertion_issuer: Optional[str] = Field(default=None, max_length=200)
+    # BOSSAPP-1048 opt-ins: each OFF unless an admin turns it on for this provider
+    link_verified_domain_accounts: bool = False
+    allow_idp_initiated: bool = False
+    scim_adopt_existing_by_domain: bool = False
 
 
 class ProviderPatch(_Body):
@@ -140,6 +165,13 @@ class ProviderPatch(_Body):
     client_private_key: Optional[str] = Field(default=None, max_length=8000)
     client_key_kid: Optional[str] = Field(default=None, max_length=200)
     client_assertion_issuer: Optional[str] = Field(default=None, max_length=200)
+    link_verified_domain_accounts: Optional[bool] = None
+    allow_idp_initiated: Optional[bool] = None
+    scim_adopt_existing_by_domain: Optional[bool] = None
+
+
+#: The per-provider opt-ins (BOSSAPP-1048); every one defaults to False.
+OPT_INS = ("link_verified_domain_accounts", "allow_idp_initiated", "scim_adopt_existing_by_domain")
 
 
 class ScimKeyBody(_Body):
@@ -165,7 +197,10 @@ def _public_provider(p: sso_oidc.Provider) -> dict[str, Any]:
             "jit_mode": p.jit_mode, "trust_idp_mfa": p.trust_idp_mfa, "enforce_sso": p.enforce_sso,
             "groups_claim": p.groups_claim, "status": p.status,
             "client_auth": p.client_auth, "has_client_key": bool(p.client_key_vault_item_id),
-            "client_key_kid": p.client_key_kid, "client_assertion_issuer": p.client_assertion_issuer}
+            "client_key_kid": p.client_key_kid, "client_assertion_issuer": p.client_assertion_issuer,
+            "link_verified_domain_accounts": p.link_verified_domain_accounts,
+            "allow_idp_initiated": p.allow_idp_initiated,
+            "scim_adopt_existing_by_domain": p.scim_adopt_existing_by_domain}
 
 
 def _validate_algs(algs: list[str]) -> list[str]:
@@ -185,12 +220,27 @@ def _resolve_issuer(body: ProviderBody) -> Optional[str]:
             if not body.tenant or body.tenant in ("common", "organizations", "consumers"):
                 raise ValueError("the Microsoft preset needs your tenant id (an exact issuer)")
             return preset["issuer_template"].format(tenant=body.tenant)
+        if preset.get("issuer_check") == "okta":
+            return sso_oidc.okta_issuer(body.issuer)
         return preset["issuer"]
     if not body.issuer:
         raise ValueError("issuer is required")
     if body.protocol == "oidc" and not origin_of(body.issuer):
         raise ValueError("issuer must be an absolute URL")
-    return body.issuer
+    # One stored form for every OIDC issuer (no trailing slash); comparisons normalise both sides.
+    return sso_oidc.normalize_issuer(body.issuer) if body.protocol == "oidc" else body.issuer
+
+
+def _preset_defaults(body: ProviderBody, issuer: Optional[str]) -> tuple[list[str], Optional[str]]:
+    """The scopes and groups claim a preset fills in when the admin left them blank (Okta:
+    openid email profile groups on the org server, groups claim `groups`)."""
+    scopes, claim = list(body.scopes), body.groups_claim
+    if body.protocol == "oidc" and body.preset == "okta" and issuer:
+        if not scopes:
+            scopes = sso_oidc.okta_default_scopes(issuer)
+        if not claim:
+            claim = sso_oidc.OKTA_GROUPS_CLAIM
+    return scopes, claim
 
 
 def _store_secret(db: Any, org_id: str, provider_id: str, secret: str) -> str:
@@ -236,34 +286,56 @@ def build_identity_sso_router() -> APIRouter:
 
     @router.get("/v1/auth/sso/{provider_id}/start")
     @public(reason=PublicReason.AUTH_ENDPOINT, verifier=verify_sso_start)
-    def sso_start(provider_id: str, request: Request, purpose: str = "login"):
+    def sso_start(provider_id: str, request: Request, purpose: str = "login", next: Optional[str] = None,  # noqa: A002
+                  iss: Optional[str] = None, target_link_uri: Optional[str] = None,
+                  login_hint: Optional[str] = None, prompt: Optional[str] = None,
+                  max_age: Optional[int] = None):
+        """Sign-in, link (purpose=link) or step-up re-authentication (purpose=reauth). Also the
+        OIDC third-party "Initiate login URI" (an Okta dashboard tile): `iss` must be THIS
+        provider's issuer, and `target_link_uri` / `next` only ever land on a same-origin console
+        path. It starts an ordinary SP-initiated flow: state, nonce and PKCE as always."""
         with begin() as db:
-            origin = facts(request, db).origin or ""
+            origin = _origin(facts(request, db))
             if not origin:
-                # H2: a redirect URI / ACS URL is only ever the BOUND public origin, never Host.
+                # H2: a redirect URI / ACS URL is only ever the BOUND public origin (or this
+                # machine's loopback console before one is bound), never a remote Host.
                 return error(409, "public_origin_unset")
             provider = sso_oidc.load_provider(db, provider_id)
             if provider is None:
                 return error(404, "not_found")
+            if iss is not None and (provider.protocol != "oidc" or not sso_oidc.issuers_match(iss, provider.issuer)):
+                emit(db, org_id=provider.org_id, event_type="auth.login.failed", outcome=Outcome.DENIED,
+                     details={"reason": "initiator_issuer_mismatch", "provider_id": provider.id})
+                return error(400, "issuer_mismatch")
+            landing = sso_oidc.safe_next(next, origin=origin) or sso_oidc.safe_next(target_link_uri, origin=origin)
+            if max_age is not None and not 0 <= max_age <= sso_oidc.MAX_AGE_LIMIT:
+                return error(422, "invalid_max_age")
+            if prompt is not None and prompt not in sso_oidc.PROMPTS:
+                return error(422, "invalid_prompt")
             link_principal: Optional[str] = None
-            if purpose == "link":
+            if purpose in ("link", "reauth"):
                 from .identity_me import is_fresh
 
                 try:
                     ctx = current_context(request, db)
                 except AuthnError as exc:
                     return refusal(exc)
-                if ctx.session is None or not is_fresh(ctx) or provider.protocol == "saml":
+                if ctx.session is None or provider.protocol == "saml":
                     return error(401, "step_up_required")
+                if purpose == "link" and not is_fresh(ctx):
+                    return error(401, "step_up_required")
+                if purpose == "reauth" and provider.protocol != "oidc":
+                    return error(422, "invalid_purpose")
                 link_principal = ctx.principal.id
             elif purpose != "login":
                 return error(422, "invalid_purpose")
             try:
                 if provider.protocol == "saml":
-                    flow = sso_saml.start(db, provider, origin=origin)
+                    flow = sso_saml.start(db, provider, origin=origin, next_path=landing)
                 else:
                     flow = sso_oidc.start(db, provider, origin=origin, purpose=purpose,
-                                          link_principal=link_principal)
+                                          link_principal=link_principal, next_path=landing,
+                                          prompt=prompt, max_age=max_age, login_hint=login_hint)
             except SsoError as exc:
                 return _fail(origin, exc.code)
             response = RedirectResponse(flow.url, status_code=302, headers={"Cache-Control": "no-store"})
@@ -273,7 +345,7 @@ def build_identity_sso_router() -> APIRouter:
     def _oidc_callback(provider_id: str, request: Request, params: dict[str, str]) -> Response:
         with begin() as db:
             f = facts(request, db)
-            origin = f.origin or ""
+            origin = _origin(f)
             provider = sso_oidc.load_provider(db, provider_id)
             if provider is None or provider.protocol == "saml":
                 return _fail(origin, "sso_failed")
@@ -286,7 +358,7 @@ def build_identity_sso_router() -> APIRouter:
                 return _fail(origin, exc.code)
             answer = social.resolve(db, provider, result.identity, f, purpose=result.purpose,
                                     link_principal=result.link_principal)
-            return _redirect(origin, answer)
+            return _redirect(origin, answer, result.next_path)
 
     @router.get("/v1/auth/sso/{provider_id}/callback")
     @public(reason=PublicReason.OAUTH_STATE_BOUND_CALLBACK, verifier=verify_state_bound_callback)
@@ -301,24 +373,59 @@ def build_identity_sso_router() -> APIRouter:
         params = {k: str(v) for k, v in form.items() if k in ("code", "state", "iss", "error")}
         return await run_in_threadpool(_oidc_callback, provider_id, request, params)
 
+    def _backchannel(provider_id: str, logout_token: str) -> Response:
+        headers = {"Cache-Control": "no-store"}
+        with begin() as db:
+            provider = sso_oidc.load_provider(db, provider_id)
+            if provider is None or provider.protocol != "oidc":
+                return JSONResponse(status_code=400, content={"error": "invalid_request"}, headers=headers)
+            try:
+                claims = sso_oidc.verify_logout_token(provider, logout_token)
+            except SsoError as exc:
+                emit(db, org_id=provider.org_id, event_type="sso.logout.backchannel", outcome=Outcome.DENIED,
+                     details={"reason": exc.code, "provider_id": provider.id})
+                return JSONResponse(status_code=400, content={"error": "invalid_request"}, headers=headers)
+            if not sso_logout.spend_jti(db, provider.id, str(claims["jti"])[:200]):
+                emit(db, org_id=provider.org_id, event_type="sso.logout.backchannel", outcome=Outcome.DENIED,
+                     details={"reason": "replay", "provider_id": provider.id})
+                return JSONResponse(status_code=400, content={"error": "invalid_request"}, headers=headers)
+            ended = sso_logout.backchannel(db, provider_id=provider.id, claims=claims)
+            emit(db, org_id=provider.org_id, event_type="sso.logout.backchannel", outcome=Outcome.SUCCESS,
+                 actor_principal_id=f"sso:{provider.id}",
+                 details={"provider_id": provider.id, "sessions_ended": len(ended),
+                          "people": sorted({p for _s, p in ended})})
+        return Response(status_code=200, headers=headers)
+
+    @router.post("/v1/auth/sso/{provider_id}/backchannel-logout")
+    @public(reason=PublicReason.IDP_SIGNED_LOGOUT_TOKEN, verifier=verify_logout_token)
+    async def sso_backchannel_logout(provider_id: str, request: Request):
+        """OIDC Back-Channel Logout 1.0: the IdP POSTs `logout_token` (form). It can only END
+        sessions this provider signed in; anything unverifiable is a 400 and ends nothing."""
+        raw = await request.body()
+        if len(raw) > 32768:
+            return JSONResponse(status_code=400, content={"error": "invalid_request"},
+                                headers={"Cache-Control": "no-store"})
+        form = await request.form()
+        return await run_in_threadpool(_backchannel, provider_id, str(form.get("logout_token") or ""))
+
     @router.get("/saml/v2/metadata")
     @public(reason=PublicReason.SAML_SIGNED_ASSERTION, verifier=verify_saml_assertion)
     def saml_metadata(request: Request, provider_id: Optional[str] = None):
         with begin() as db:
-            origin = facts(request, db).origin or ""
+            origin = _origin(facts(request, db))
             if not origin:
                 return error(409, "public_origin_unset")
             provider = sso_oidc.load_provider(db, provider_id) if provider_id else None
             body = sso_saml.metadata(origin, sso_saml.sp_entity_id(provider, origin))
         return Response(body, media_type="application/samlmetadata+xml")
 
-    def _acs(request: Request, saml_response: str) -> Response:
+    def _acs(request: Request, saml_response: str, relay_state: Optional[str] = None) -> Response:
         with begin() as db:
             f = facts(request, db)
-            origin = f.origin or ""
+            origin = _origin(f)
             try:
                 result = sso_saml.consume_response(db, saml_response=saml_response, preauth=f.preauth,
-                                                   origin=origin)
+                                                   origin=origin, relay_state=relay_state)
             except SsoError as exc:
                 org = default_org_id(db)
                 if org:
@@ -326,13 +433,15 @@ def build_identity_sso_router() -> APIRouter:
                          ip=f.ip, user_agent=f.user_agent, request_id=f.request_id,
                          details={"reason": exc.code, "protocol": "saml"})
                 return _fail(origin, exc.code)
-            return _redirect(origin, social.resolve(db, result.provider, result.identity, f))
+            return _redirect(origin, social.resolve(db, result.provider, result.identity, f), result.next_path)
 
     @router.post("/saml/v2/acs")
     @public(reason=PublicReason.SAML_SIGNED_ASSERTION, verifier=verify_saml_assertion)
     async def saml_acs(request: Request):
         form = await request.form()
-        return await run_in_threadpool(_acs, request, str(form.get("SAMLResponse") or ""))
+        relay = form.get("RelayState")
+        return await run_in_threadpool(_acs, request, str(form.get("SAMLResponse") or ""),
+                                       str(relay)[:600] if relay else None)
 
     # ---- provider admin ----------------------------------------------------------------------------
 
@@ -419,6 +528,10 @@ def build_identity_sso_router() -> APIRouter:
                     algs = _validate_algs(body.allowed_algs)
                 except ValueError as exc:
                     return error(422, "invalid_provider", detail=str(exc))
+                scopes, groups_claim = _preset_defaults(body, issuer)
+                if body.allow_idp_initiated and body.protocol != "saml":
+                    return error(422, "invalid_provider",
+                                 detail="allow_idp_initiated is for SAML; OIDC uses the Initiate login URI")
                 if body.protocol == "saml" and (not (body.saml_sso_url or "").startswith("https://")
                                                 or not body.saml_certificates):
                     return error(422, "invalid_provider", detail="SAML needs an https SSO URL and a certificate")
@@ -428,7 +541,8 @@ def build_identity_sso_router() -> APIRouter:
                                           {"i": body.id}).first() is not None:
                     return error(409, "provider_id_taken")
                 if issuer and db.execute(text(
-                        "SELECT 1 FROM identity_providers WHERE org_id = :o AND lower(issuer) = lower(:i)"),
+                        "SELECT 1 FROM identity_providers WHERE org_id = :o AND "
+                        "rtrim(lower(issuer), '/') = rtrim(lower(:i), '/')"),
                         {"o": org, "i": issuer}).first() is not None:
                     # M1: one provider per issuer, or a second one could answer for the first's people.
                     return error(409, "issuer_in_use")
@@ -437,17 +551,20 @@ def build_identity_sso_router() -> APIRouter:
                     "INSERT INTO identity_providers (id, org_id, protocol, preset, name, issuer, client_id, "
                     "client_secret_vault_item_id, scopes, allowed_algs, saml_sp_entity_id, saml_certificates, "
                     "domains, jit_mode, trust_idp_mfa, enforce_sso, groups_claim, created_by, saml_sso_url, "
-                    "trusted_authn_contexts) VALUES (:id, :o, "
+                    "trusted_authn_contexts, link_verified_domain_accounts, allow_idp_initiated, "
+                    "scim_adopt_existing_by_domain) VALUES (:id, :o, "
                     ":proto, :preset, :name, :iss, :cid, :sec, :scopes, :algs, :spe, :certs, :domains, :jit, "
-                    ":tmfa, :esso, :gc, :by, :sso, :tac)"),
+                    ":tmfa, :esso, :gc, :by, :sso, :tac, :lvda, :aii, :sab)"),
                     {"id": pid, "o": org, "proto": body.protocol, "preset": body.preset, "name": body.name,
                      "iss": issuer, "cid": None if body.protocol == "saml" else body.client_id,
                      "sso": body.saml_sso_url if body.protocol == "saml" else None,
                      "tac": _authn_contexts(body.trusted_authn_contexts) if body.protocol == "saml" else None,
-                     "sec": secret_ref, "scopes": body.scopes, "algs": algs, "spe": body.saml_sp_entity_id,
+                     "sec": secret_ref, "scopes": scopes, "algs": algs, "spe": body.saml_sp_entity_id,
                      "certs": body.saml_certificates, "domains": [d.lower().lstrip("@") for d in body.domains],
                      "jit": body.jit_mode, "tmfa": body.trust_idp_mfa, "esso": body.enforce_sso,
-                     "gc": body.groups_claim, "by": ctx.principal.id})
+                     "gc": groups_claim, "by": ctx.principal.id,
+                     "lvda": body.link_verified_domain_accounts, "aii": body.allow_idp_initiated,
+                     "sab": body.scim_adopt_existing_by_domain})
                 try:
                     _write_mappings(db, pid, body.group_mappings, org)
                     if body.protocol == "oidc" and body.client_auth == "private_key_jwt":
@@ -461,7 +578,8 @@ def build_identity_sso_router() -> APIRouter:
                     raise _Rollback(error(422, "invalid_provider", detail=str(exc))) from None
                 emit(db, org_id=org, event_type="sso.provider.created", outcome=Outcome.SUCCESS, ctx=ctx,
                      target_type="identity_provider", target_id=pid,
-                     details={"protocol": body.protocol, "preset": body.preset})
+                     details={"protocol": body.protocol, "preset": body.preset,
+                              **{k: True for k in OPT_INS if getattr(body, k)}})
                 provider = sso_oidc.load_provider(db, pid, active_only=False)
                 return JSONResponse(status_code=201, content=_public_provider(provider))
         except _Rollback as rb:
@@ -481,9 +599,12 @@ def build_identity_sso_router() -> APIRouter:
                 fields = body.model_dump(exclude_unset=True)
                 changes: dict[str, Any] = {}
                 for key in ("name", "scopes", "jit_mode", "trust_idp_mfa", "enforce_sso", "groups_claim",
-                            "status", "saml_certificates"):
+                            "status", "saml_certificates", *OPT_INS):
                     if fields.get(key) is not None:
                         changes[key] = fields[key]
+                if changes.get("allow_idp_initiated") and provider.protocol != "saml":
+                    return error(422, "invalid_provider",
+                                 detail="allow_idp_initiated is for SAML; OIDC uses the Initiate login URI")
                 if fields.get("domains") is not None:
                     changes["domains"] = [d.lower().lstrip("@") for d in fields["domains"]]
                 if fields.get("allowed_algs") is not None:

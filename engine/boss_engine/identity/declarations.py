@@ -59,6 +59,9 @@ class PublicReason(StrEnum):
                                                             # client auth, PKCE, the app session or an app token
     MCP_GATEWAY_TOKEN = "mcp_gateway_token"                 # /mcp/gw/{id}: that gateway's own hashed, expiring,
                                                             # revocable token (BOSSAPP-851 amendment)
+    IDP_SIGNED_LOGOUT_TOKEN = "idp_signed_logout_token"     # /v1/auth/sso/{id}/backchannel-logout: a logout
+                                                            # token signed by that provider's keys; it can
+                                                            # only END sessions (BOSSAPP-1048 amendment)
 
 
 #: Reasons whose route has nothing to verify, so `verifier` may be None.
