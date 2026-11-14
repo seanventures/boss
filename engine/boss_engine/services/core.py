@@ -98,7 +98,27 @@ def emit_event(
             data,
         )
     _after_event(connection, event_type, entity_type, entity_id, data)
+    _ticket_sync_hook(connection, project_id, event_id, event_type, entity_type, entity_id, data)
     return event_id
+
+
+#: The event families a ticket write-back can follow (services/ticket_sync.HOOKED_EVENTS is
+#: the exact list); checked first so every other event costs one string comparison.
+_TICKET_SYNC_PREFIXES = ("workflow.", "code_task.", "software_factory.", "deployment.")
+
+
+def _ticket_sync_hook(connection: Any, project_id: str, event_id: str, event_type: str,
+                      entity_type: str, entity_id: str, data: dict) -> None:
+    """A run started from a ticket mirrors its lifecycle onto that ticket (BOSSAPP-1047 B2).
+    Queued here and sent after the writer's transaction commits; never raising."""
+    if not event_type.startswith(_TICKET_SYNC_PREFIXES):
+        return
+    try:
+        from .ticket_sync import notify
+
+        notify(connection, project_id, event_id, event_type, entity_type, entity_id, data)
+    except Exception:  # noqa: BLE001 — a ticket system never undoes or fails what it follows
+        logger.warning("ticket sync hook failed for %s", event_type, exc_info=True)
 
 
 def _last_event_data(connection: Any, project_id: str, event_type: str) -> Any:

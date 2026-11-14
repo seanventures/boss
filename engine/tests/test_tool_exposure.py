@@ -178,9 +178,13 @@ class TestStrictDerivation:
 #: registration (which surfaces see it; conservative default Exposure() = chat + mcp, deferred),
 #: then update these counts in the same change — that is the conscious step.
 EXPECTED_PER_SURFACE = {
-    "chat": 185,   # +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
-    "mcp": 185,
-    "agent_step": 1,   # find_tools; agent steps join when K4 moves them onto the kernel
+    # +6 drift already on main at b3363fe9a (191 measured, 185 pinned); +6 the ticket tools
+    # (BOSSAPP-1047 B2: ticket_get/search/browse/import/comment/transition), 2026-11-13.
+    "chat": 197,   # +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
+    "mcp": 197,
+    # find_tools; agent steps join when K4 moves them onto the kernel. +6 the ticket tools,
+    # offered to workflow agents through the tickets.read / tickets.write skills (BOSSAPP-1047 B2).
+    "agent_step": 7,
     "decision": 1,     # find_tools; a decision's read tools stay the caller's (ReadPhase)
     "build": 1,        # find_tools; build stages join at K12
 }

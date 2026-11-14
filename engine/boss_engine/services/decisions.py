@@ -1437,6 +1437,16 @@ class DecisionService:
                 apply_wiki_patch(connection, row, actor)
             except WikiError as stale:
                 raise InvalidDecisionTransitionError(str(stale)) from stale
+        elif action in ("ticket_pickup", "ticket_changed_mid_run"):
+            # A TICKET CARD (ticket_sync, BOSSAPP-1047 B2). "Start it" imports the labelled ticket
+            # and starts its build; "Include it" gives the running build the ticket's new
+            # acceptance criteria. A ticket that can no longer be read refuses the approval.
+            from .ticket_sync import TicketSyncError, on_card_answered
+
+            try:
+                on_card_answered(connection, self.settings, row, approved=True, actor=actor)
+            except TicketSyncError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action == "choose_option":
             # AN OPTION WITH SIGNED EFFECTS (BOSSAPP-879, decision_options): the chosen option's
             # effects run, each recorded in decision_effect_runs; a target that changed since
@@ -1604,6 +1614,14 @@ class DecisionService:
     ) -> None:
         recommendation = row["recommendation"] or {}
         recommendation_action = recommendation.get("action")
+        ticket_card = recommendation.get("action")
+        if action == "reject" and ticket_card in ("ticket_pickup", "ticket_changed_mid_run"):
+            # "Not now" / "Next ticket" (ticket_sync, BOSSAPP-1047 B2): nothing is imported, or
+            # the mid-run change is recorded on the binding for the next ticket.
+            from .ticket_sync import on_card_answered
+
+            on_card_answered(connection, self.settings, row, approved=False, actor=actor)
+            return
         if recommendation_action == "execution_stage":
             # Sent back (reject or request changes): the work returns to its worker with the
             # comment, or — at the stage's max_rounds — escalates to the responsible person.

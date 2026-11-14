@@ -269,8 +269,10 @@ def _baseline_permissions() -> set[str]:
     from boss_engine.identity import catalogue
 
     reg = _registry()
-    perms = {reg.get(t).permission for tools in ab.bundles().values() for t in tools
-             if t in reg.names()}
+    # The BASELINE bundles only: bundles() also holds role-granted ones (tickets.read /
+    # tickets.write, BOSSAPP-1047), which a preset holds only when its roles are granted them.
+    perms = {reg.get(t).permission for skill, tools in ab.bundles().items()
+             if skill in ab.BASELINE_SKILLS for t in tools if t in reg.names()}
     return {p for p in perms if catalogue.meta(p).delegable}
 
 

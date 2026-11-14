@@ -126,10 +126,16 @@ PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",
                                        # diff; the agent never writes a page (BOSSAPP-891)
                                        "wiki_propose")
 
+#: `tickets.read` / `tickets.write` offer the team's ticket system (BOSSAPP-1047 B2). Granted by
+#: role (pm, engineering_captain, the planners; sre writes), never in the baseline.
+TICKET_READ_TOOLS: tuple[str, ...] = ("ticket_get", "ticket_search", "ticket_browse")
+TICKET_WRITE_TOOLS: tuple[str, ...] = ("ticket_import", "ticket_comment", "ticket_transition")
+
 #: Bundles allowed to offer a write tool, and which ones: {bundle: its writes}. Each such tool must
 #: declare reversibility "safe"; any other tool a bundle names must be a read.
 BUNDLE_WRITES: dict[str, tuple[str, ...]] = {"knowledge.propose": PROPOSE_FACT_TOOLS,
-                                             "boss.fundamentals": FUNDAMENTALS_WRITES}
+                                             "boss.fundamentals": FUNDAMENTALS_WRITES,
+                                             "tickets.write": TICKET_WRITE_TOOLS}
 WRITE_BUNDLES: frozenset[str] = frozenset(BUNDLE_WRITES)
 
 
@@ -149,7 +155,8 @@ def bundles() -> dict[str, tuple[str, ...]]:
 
     return {"repo.read": REPO_READ_TOOLS, "boss.fundamentals": FUNDAMENTALS_TOOLS,
             "boss.propose_fix": PROPOSE_TOOLS, "knowledge.read": KNOWLEDGE_TOOLS,
-            "knowledge.propose": PROPOSE_FACT_TOOLS}
+            "knowledge.propose": PROPOSE_FACT_TOOLS, "tickets.read": TICKET_READ_TOOLS,
+            "tickets.write": TICKET_WRITE_TOOLS}
 
 
 def bundle_tool_spec(skill_id: str, tool: str, *, edition: str | None = None) -> Any:

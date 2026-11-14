@@ -35,6 +35,7 @@ auth_kinds:
     per_user: true
     resource_discovery_url: https://api.atlassian.com/oauth/token/accessible-resources
     api_base_template: https://api.atlassian.com/ex/jira/{resource_id}
+    identity_url: https://api.atlassian.com/me   # the signed-in account's email (B2)
 base_url_field: base_url
 guard_provider: jira
 key_refs: true

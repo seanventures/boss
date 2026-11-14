@@ -120,6 +120,8 @@ passport_presets:
   - key: builder
     name: Builder
     agents: [forge, strata, prism, helm]
+    # integration:read + work_tracker:write: the Engineering Captain (helm) reads, imports, comments
+    # on and moves tickets (tickets.read / tickets.write, BOSSAPP-1047).
     permissions: [knowledge:read, code_task:read, code_task:create, code_task:steer, code_task:retry, repository:read,
                   github:read, github:sync, preview:read, preview:manage, artifact:read, artifact:rebuild,
                   workflow:read, workflow_run:read, skill:read, skill:invoke, memory:read, memory:manage,
@@ -141,6 +143,8 @@ passport_presets:
   - key: planner
     name: Planner
     agents: [juno, atlas, keystone, rally, vector, cadence, marshal]
+    # integration:read + work_tracker:write: the PM (juno) and the planners read and file tickets
+    # (tickets.read / tickets.write, BOSSAPP-1047).
     permissions: [knowledge:read, code_task:read, code_task:create, meeting:read, meeting:convene, discovery:read,
                   discovery:create, workflow:read, workflow:create, workflow_run:read, workflow_run:start,
                   work_item:read, work_item:manage, decision:read, memory:read, memory:manage, spend:reserve,
@@ -150,6 +154,7 @@ passport_presets:
   - key: operator_agent
     name: Operator agent
     agents: [harbor, pilot, bedrock, relay, beacon, anchor]
+    # work_tracker:write: the SRE (beacon) comments on and moves tickets (tickets.write, BOSSAPP-1047).
     permissions: [knowledge:read, deployment:read, deployment:create, host:read, infra:read, observability:read,
                   reliability:read, reliability:respond, preview:read, preview:manage, workflow_run:read,
                   workflow_run:control, spend:reserve, secret:lease,
@@ -798,7 +803,7 @@ categories:
         flags: [delegable]
       - key: work_tracker:write
         title: "Work with tickets"
-        description: "Import tickets from a connected ticket system as work items, start work from them, and write back to them."
+        description: "Import tickets from a connected ticket system as work items, start work from them, and write back to them (comment on and move them in Jira, Plane or GitHub Issues)."
         roles: [owner, admin, operator]
         scope: project
         flags: [delegable]

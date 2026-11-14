@@ -623,7 +623,9 @@ def sync_mirrors(db: Connection, app_settings: Any, home: dict[str, Any], *, act
                                              f"{label_of(provider)} connection. Disconnect it "
                                              "there first.", status=409)
         mirrored = {k: v for k, v in config.items()
-                    if k not in ("secret_ref_id", "last4", "fingerprint", "mirror_of")}
+                    if k not in ("secret_ref_id", "last4", "fingerprint", "mirror_of",
+                                  # the inbound webhook is the home's (ticket_sync.home_row)
+                                  "webhook_secret_ref", "webhook")}
         secret_meta = None
         token = ""
         if existing and existing["configuration"].get("mirror_of") == home["id"] and \
@@ -1124,6 +1126,107 @@ FALLBACK_WORKFLOW = "minor_feature"
 
 def default_workflow(ticket_type: str) -> str:
     return DEFAULT_WORKFLOWS.get(str(ticket_type or "other"), FALLBACK_WORKFLOW)
+
+
+def _wanted(item: Any, name: str) -> Any:
+    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+
+def read_for_import(db: Connection, row: dict[str, Any], items: Iterable[Any], *,
+                    person_id: Optional[str] = None) -> list[tuple[Ticket, list[Ticket]]]:
+    """The tickets an import names (``{key, with_children}`` each, a key or a link), read from
+    their system: each ticket and, ``with_children``, its children. The ONE read behind
+    ``POST /v1/projects/{id}/tickets/import`` and the ``ticket_import`` agent tool (B2)."""
+    adapter = adapter_for(str(row["provider_key"]))
+    conn = ticket_connection(db, row, person_id=person_id)
+    out: list[tuple[Ticket, list[Ticket]]] = []
+    for item in list(items)[:50]:
+        key = str(_wanted(item, "key") or "").strip()
+        if not key:
+            continue
+        ticket = adapter.get_ticket(conn, key)
+        children = list(adapter.list_children(conn, ticket.ref)) \
+            if _wanted(item, "with_children") else []
+        out.append((ticket, children))
+    return out
+
+
+def import_by_keys(db: Connection, app_settings: Any, *, project_id: str, row: dict[str, Any],
+                   items: Iterable[Any], actor: str, person_id: Optional[str] = None
+                   ) -> dict[str, Any]:
+    """The import route's logic in one call (read, then :func:`import_tickets`), for a caller
+    already inside a transaction: the ``ticket_import`` tool and the inbound pick-up (B2)."""
+    read = read_for_import(db, row, items, person_id=person_id)
+    return import_tickets(db, app_settings, project_id=project_id, row=row, items=read,
+                          actor=actor)
+
+
+def start_plan(db: Connection, row: dict[str, Any], ticket: Ticket, *, project_id: str,
+               work_item_id: str, workflow_key: Optional[str] = None) -> dict[str, Any]:
+    """What starting work from a ticket means: the workflow its type calls for (or the one
+    named), the run's input and ``input.ticket``. Shared by ``POST /v1/work-items/{id}/
+    start-from-ticket`` and :func:`start_from_ticket` (B2's pick-up and "Start it")."""
+    from . import workflows as workflow_runtime
+
+    info = ticket_input(row, ticket)
+    wanted = (workflow_key or default_workflow(ticket.type)).strip()
+    note = None
+    version = workflow_runtime.running_version(db, project_id, wanted)
+    if not version:
+        if workflow_key:
+            raise TicketApiError("not_found", f"This project has no workflow {wanted!r}.",
+                                 status=404)
+        note = (f"This project has no {wanted} workflow, so the "
+                f"{'bug fix' if ticket.type == 'bug' else 'work'} runs on "
+                f"{FALLBACK_WORKFLOW} with the ticket's framing.")
+        wanted = FALLBACK_WORKFLOW
+        version = workflow_runtime.running_version(db, project_id, wanted)
+    framing = "Fix this bug" if ticket.type == "bug" else (
+        "Deliver this epic" if ticket.type == "epic" else "Do this ticket")
+    run_input: dict[str, Any] = {"title": f"{ticket.key} {ticket.title}"[:80],
+                                 "directive": f"{framing}: {ticket.key} — {ticket.title}"[:8000],
+                                 "work_item_id": work_item_id,
+                                 "work_kind": "bug" if ticket.type == "bug" else "ticket"}
+    if info.get("acceptance_criteria"):
+        run_input["acceptance_criteria"] = list(info["acceptance_criteria"])[:12]
+    return {"workflow_key": wanted, "version_id": (version or {}).get("version_id"),
+            "note": note, "ticket": info, "input": run_input}
+
+
+def start_from_ticket(db: Connection, app_settings: Any, *, project_id: str, work_item_id: str,
+                      actor: str, person_id: Optional[str] = None,
+                      workflow_key: Optional[str] = None, ticket: Optional[Ticket] = None
+                      ) -> dict[str, Any]:
+    """Start the work an imported ticket became, inside the caller's transaction (no HTTP door
+    to go through: the inbound pick-up and the "Start it" card answer run in the engine). The
+    ticket is read fresh unless the caller just read it; the run carries ``input.ticket`` and
+    gains the binding's ``metadata.run_ids`` (:func:`bind_run`)."""
+    from . import workflows as workflow_runtime
+
+    binding = binding_of_item(db, project_id, work_item_id)
+    if binding is None:
+        raise TicketApiError("conflict", "This work item did not come from a ticket.",
+                             status=409)
+    row = get_row(db, str(binding["provider_id"]))
+    if ticket is None:
+        ref = TicketRef(str(row["provider_key"]), key=binding.get("external_key"),
+                        id=binding.get("external_issue_id"), url=binding.get("external_url"))
+        ticket = fetch(db, row, ref, person_id=person_id)
+    plan = start_plan(db, row, ticket, project_id=project_id, work_item_id=work_item_id,
+                      workflow_key=workflow_key)
+    run_input = dict(plan["input"])
+    run = workflow_runtime.start_project_run(
+        db, project_id=project_id, actor=actor, title=str(run_input.pop("title")),
+        directive=str(run_input.pop("directive")), workflow_version_id=plan["version_id"],
+        extra_input={**run_input, "ticket": plan["ticket"]})
+    if run and run.get("id"):
+        db.execute(text("UPDATE workflow_runs SET work_item_id = COALESCE(work_item_id, :w) "
+                        "WHERE id = :id"), {"w": work_item_id, "id": run["id"]})
+        if not run.get("duplicate"):
+            bind_run(db, project_id=project_id, run_id=str(run["id"]), ticket=plan["ticket"],
+                     actor=actor)
+    return {"run": run, "workflow_key": plan["workflow_key"], "note": plan["note"],
+            "ticket": plan["ticket"]}
 
 
 def waiting(db: Connection, project_id: str, *, person_id: Optional[str] = None,

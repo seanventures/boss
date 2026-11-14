@@ -71,6 +71,7 @@ class FakeJira(FakeServer):
         self.refreshes = 0
         self.refresh_delay = 0.0
         self.oauth_lock = threading.Lock()
+        self.me_email = "ada@example.com"      # what /me answers for any signed-in token
         self._routes()
 
     # -- data ---------------------------------------------------------------------------------
@@ -128,8 +129,8 @@ class FakeJira(FakeServer):
     # -- auth -----------------------------------------------------------------------------------
 
     def authorized(self, request: Request) -> bool:
-        if request.path.startswith("/oauth/"):
-            return True
+        if request.path.startswith("/oauth/") or request.path == "/me":
+            return True          # these check their own bearer
         header = request.headers.get("authorization", "")
         if request.path.startswith("/ex/jira/"):
             if not header.startswith("Bearer "):
@@ -194,6 +195,8 @@ class FakeJira(FakeServer):
             self.route("GET", api + r"/project/search", self.project_search)
         self.route("POST", r"/oauth/token", self.token)
         self.route("GET", r"/oauth/token/accessible-resources", self.resources)
+        # api.atlassian.com/me: who the signed-in account is (B2 compares its email).
+        self.route("GET", r"/me", self.me)
 
     def _missing(self, key: str):
         return 404, {"errorMessages": ["Issue does not exist or you do not have permission to "
@@ -362,6 +365,13 @@ class FakeJira(FakeServer):
                       "scopes": ["read:jira-work"], "avatarUrl": ""},
                      {"id": CLOUD_ID, "url": self.base, "name": "fake",
                       "scopes": ["read:jira-work", "write:jira-work"], "avatarUrl": ""}], {}
+
+    def me(self, r: Request):
+        header = r.headers.get("authorization", "")
+        if not header.startswith("Bearer ") or self.access.get(header[7:], 0) < time.time():
+            return 401, {"code": 401, "message": "Unauthorized"}, {}
+        return 200, {"account_id": "ada-lovelace", "email": self.me_email, "name": "Ada Lovelace",
+                     "nickname": "ada"}, {}
 
     def expire_all_access(self) -> None:
         for token in list(self.access):

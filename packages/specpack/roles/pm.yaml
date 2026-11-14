@@ -18,7 +18,7 @@ decision_rights:
   must_escalate:
     - Product scope expansion with budget impact.
 permissions:
-  allowed_skills: [work_tracker.issue.ensure, work_tracker.issue.update, work.priority.update, discovery.research, typed_decision]
+  allowed_skills: [work_tracker.issue.ensure, work_tracker.issue.update, work.priority.update, discovery.research, typed_decision, tickets.read, tickets.write]
   # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
   abilities: [read_repo, web_research, web_search, render_docs, file_tickets]
   recommended_abilities: [email, team_chat]

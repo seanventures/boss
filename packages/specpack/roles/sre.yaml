@@ -23,7 +23,7 @@ decision_rights:
     - Production changes during an incident.
     - Accepting a known reliability risk.
 permissions:
-  allowed_skills: [deployment.health.check, ssh_host.workload.health_check, providerops.drift.report, model.generate_text, tracker.issues.create, work_tracker.issue.ensure, work_tracker.issue.update]
+  allowed_skills: [deployment.health.check, ssh_host.workload.health_check, providerops.drift.report, model.generate_text, tracker.issues.create, work_tracker.issue.ensure, work_tracker.issue.update, tickets.write]
   # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
   abilities: [read_repo, file_tickets, watch_health]
   recommended_abilities: [team_chat, deploy]

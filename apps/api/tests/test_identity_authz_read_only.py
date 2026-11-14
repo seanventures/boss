@@ -38,6 +38,8 @@ GETS_THAT_WRITE = {
     "GET /v1/preview-sandboxes", "GET /v1/preview-sandboxes/", "GET /v1/preview-sandboxes/{preview_id}",
     "GET /v1/ai-sre/runbooks", "GET /v1/workflow-runs/{run_id}/chain", "GET /v1/elastic/status",
     "GET /v1/elastic/instances", "GET /v1/provider-usage", "GET /v1/provider-usage/summary",
+    # "Connect with Atlassian" records a single-use pending sign-in, then redirects (BOSSAPP-1047).
+    "GET /v1/ticket-systems/{connection_id}/oauth/start",
 }
 
 

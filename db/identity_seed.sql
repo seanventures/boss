@@ -103,7 +103,7 @@ INSERT INTO identity_permissions (key, resource, action, title, description, cat
   ('discovery:create', 'discovery', 'create', 'Start research', 'Start, deepen and promote research.', 'Workflows and work', 'project', false, true, false, false, false, 1),
   ('work_item:read', 'work_item', 'read', 'View work items', 'See the task board, work plane, allocation, releases and plans.', 'Workflows and work', 'project', false, true, false, false, false, 1),
   ('work_item:manage', 'work_item', 'manage', 'Manage work items', 'Create and change tasks, initiatives, cycles, releases, quotas and plans.', 'Workflows and work', 'project', false, true, false, false, false, 1),
-  ('work_tracker:write', 'work_tracker', 'write', 'Work with tickets', 'Import tickets from a connected ticket system as work items, start work from them, and write back to them.', 'Workflows and work', 'project', false, true, false, false, false, 1),
+  ('work_tracker:write', 'work_tracker', 'write', 'Work with tickets', 'Import tickets from a connected ticket system as work items, start work from them, and write back to them (comment on and move them in Jira, Plane or GitHub Issues).', 'Workflows and work', 'project', false, true, false, false, false, 1),
   ('job:read', 'job', 'read', 'View jobs', 'See background jobs and the queue.', 'Workflows and work', 'project', false, false, false, false, false, 1),
   ('job:control', 'job', 'control', 'Control jobs', 'Cancel and reprioritise jobs.', 'Workflows and work', 'project', false, false, false, false, false, 1),
   ('deadletter:manage', 'deadletter', 'manage', 'Manage dead letters', 'Retry, requeue and remediate dead letters.', 'Workflows and work', 'project', false, false, false, false, false, 1),

@@ -4,7 +4,7 @@
 // misspelt permission anywhere in apps/web is a type error.
 
 export const CATALOGUE_VERSION = 1 as const;
-export const CATALOGUE_FINGERPRINT = "f9a52b6b742bbde1";
+export const CATALOGUE_FINGERPRINT = "95bd12a40d2f4194";
 
 export const PERMISSIONS = [
   "directory:read",
@@ -332,7 +332,7 @@ export const PERMISSION_META: Readonly<Record<Permission, PermissionMeta>> = {
   "discovery:create": { key: "discovery:create", title: "Start research", description: "Start, deepen and promote research.", category: "Workflows and work", roles: ["owner", "admin", "operator"], scope: "project", stepUp: false, delegable: true, critical: false, systemOnly: false },
   "work_item:read": { key: "work_item:read", title: "View work items", description: "See the task board, work plane, allocation, releases and plans.", category: "Workflows and work", roles: ["owner", "admin", "operator", "viewer", "auditor"], scope: "project", stepUp: false, delegable: true, critical: false, systemOnly: false },
   "work_item:manage": { key: "work_item:manage", title: "Manage work items", description: "Create and change tasks, initiatives, cycles, releases, quotas and plans.", category: "Workflows and work", roles: ["owner", "admin", "operator"], scope: "project", stepUp: false, delegable: true, critical: false, systemOnly: false },
-  "work_tracker:write": { key: "work_tracker:write", title: "Work with tickets", description: "Import tickets from a connected ticket system as work items, start work from them, and write back to them.", category: "Workflows and work", roles: ["owner", "admin", "operator"], scope: "project", stepUp: false, delegable: true, critical: false, systemOnly: false },
+  "work_tracker:write": { key: "work_tracker:write", title: "Work with tickets", description: "Import tickets from a connected ticket system as work items, start work from them, and write back to them (comment on and move them in Jira, Plane or GitHub Issues).", category: "Workflows and work", roles: ["owner", "admin", "operator"], scope: "project", stepUp: false, delegable: true, critical: false, systemOnly: false },
   "job:read": { key: "job:read", title: "View jobs", description: "See background jobs and the queue.", category: "Workflows and work", roles: ["owner", "admin", "operator", "viewer", "auditor"], scope: "project", stepUp: false, delegable: false, critical: false, systemOnly: false },
   "job:control": { key: "job:control", title: "Control jobs", description: "Cancel and reprioritise jobs.", category: "Workflows and work", roles: ["owner", "admin", "operator"], scope: "project", stepUp: false, delegable: false, critical: false, systemOnly: false },
   "deadletter:manage": { key: "deadletter:manage", title: "Manage dead letters", description: "Retry, requeue and remediate dead letters.", category: "Workflows and work", roles: ["owner", "admin"], scope: "project", stepUp: false, delegable: false, critical: false, systemOnly: false },

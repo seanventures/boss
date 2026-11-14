@@ -2565,6 +2565,24 @@ def execute_knowledge_read(context: "SkillExecutorContext", inputs: dict[str, An
     return run_bundled_tool(context, "knowledge.read", inputs)
 
 
+@register_executor("tickets.read")
+def execute_tickets_read(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """The team's tickets, read: ticket_get, ticket_search, ticket_browse (BOSSAPP-1047 B2).
+    See agent_baseline.TICKET_READ_TOOLS."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "tickets.read", inputs)
+
+
+@register_executor("tickets.write")
+def execute_tickets_write(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """The team's tickets, written: ticket_import, ticket_comment, ticket_transition
+    (BOSSAPP-1047 B2). See agent_baseline.TICKET_WRITE_TOOLS."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "tickets.write", inputs)
+
+
 @register_executor("knowledge.propose")
 def execute_knowledge_propose(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
     """kg_propose_fact: the agent's fact, always stored `inferred`. A baseline skill: every

@@ -23,7 +23,7 @@ decision_rights:
   must_escalate:
     - Scope changes, missed dates and risk acceptance.
 permissions:
-  allowed_skills: [coding_pipeline.refine, coding_pipeline.tasks, coding_pipeline.review_plan, coding_pipeline.final_gate, work_tracker.issue.ensure, work_tracker.issue.update, work.priority.update, model.generate_text, typed_decision, tracker.issues.create, meeting.extract_actions]
+  allowed_skills: [coding_pipeline.refine, coding_pipeline.tasks, coding_pipeline.review_plan, coding_pipeline.final_gate, work_tracker.issue.ensure, work_tracker.issue.update, work.priority.update, model.generate_text, typed_decision, tracker.issues.create, meeting.extract_actions, tickets.read, tickets.write]
   # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
   abilities: [read_repo, tests_ci, file_tickets, watch_health]
   recommended_abilities: [team_chat]

@@ -9314,6 +9314,14 @@ def register_find_tools(reg: ToolRegistry) -> None:
         return search_tools(reg, str(args.get("query") or ""), int(args.get("limit") or 5))
 
 
+def _register_ticket_tools(reg: ToolRegistry) -> None:
+    """Ticket systems (BOSSAPP-1047 B2): read, search and browse tickets; import them, comment
+    on them and move them, through the connector contract (tools/ticket_tools.py)."""
+    from .ticket_tools import register_ticket_tools
+
+    register_ticket_tools(reg)
+
+
 def build_default_registry() -> ToolRegistry:
     """The full BOSS engine tool set (read + write)."""
     reg = ToolRegistry()
@@ -9365,6 +9373,8 @@ def build_default_registry() -> ToolRegistry:
     from .knowledge_project_tools import register_knowledge_project_tools
 
     register_knowledge_project_tools(reg)
+    # Ticket systems: Jira, Plane, GitHub Issues through one contract (BOSSAPP-1047 B2).
+    _register_ticket_tools(reg)
     # The tool-search tool (K5): registered last, and it searches at call time, so it sees
     # everything above whatever order they landed in.
     register_find_tools(reg)
@@ -9414,6 +9424,10 @@ def build_default_registry() -> ToolRegistry:
 # owning eighteen tools and being allowed five.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "deploy_app",
+    # Tickets from chat (BOSSAPP-1047 B2): "import KAN-12", "comment on it", "move it to review".
+    # Each writes to the team's own ticket system as the person (or the connection's bot);
+    # a write that would carry flagged ticket text waits for the person (low_trust).
+    "ticket_import", "ticket_comment", "ticket_transition",
     # The work-item graph from chat (BOSSAPP-830/832): plan an item, relate two, and ask the
     # person a typed question (its form is drawn in the answer, turn_cards "ask" citation).
     "create_work_item", "link_work_items", "complete_work_item", "ask_human",

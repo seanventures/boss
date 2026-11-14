@@ -43,7 +43,10 @@ _SKIP_KEYS = frozenset(
 )
 
 #: Tool names whose bytes came from outside the operator's own project.
-_FETCH_TOKENS = ("fetch_page", "study_site", "search_web", "fetch_link", "fetch_image")
+_FETCH_TOKENS = ("fetch_page", "study_site", "search_web", "fetch_link", "fetch_image",
+                 # Ticket text is written outside BOSS (BOSSAPP-1047 B2): the ticket read tools,
+                 # and the tickets.read skill that offers them to workflow agents.
+                 "ticket_get", "ticket_search", "ticket_browse", "tickets.read")
 
 #: Skills that send arguments to something outside BOSS, or that write.
 _EXTERNAL_SKILL = (
@@ -58,6 +61,8 @@ _EXTERNAL_SKILL = (
     "issues.create",
     "issue.ensure",
     "issue.update",
+    # Ticket writes go to the team's own ticket system (BOSSAPP-1047 B2).
+    "tickets.write",
 )
 _WRITE_SKILL = ("code.write", "docs.draft", "knowledge.propose")
 

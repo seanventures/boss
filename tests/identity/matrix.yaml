@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2120 operations.
+# 2129 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/oauth-authorization-server": ["public:oidc_provider_endpoint", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
@@ -1285,6 +1285,7 @@
 "POST /v1/mcp/stdio-templates": ["permit host:exec @ project(body=project_id)", "OA"]
 "DELETE /v1/mcp/stdio-templates/{template_id}": ["permit host:exec @ project(query=project_id)", "OA"]
 "PATCH /v1/mcp/stdio-templates/{template_id}": ["permit host:exec @ project(query=project_id)", "OA"]
+"GET /v1/me/ticket-identities": ["authenticated:self:people", "OAPVU"]
 "GET /v1/meeting-roles": ["permit meeting:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "POST /v1/meeting-roles": ["permit meeting:configure @ project(body=project_id)", "OA"]
 "POST /v1/meeting-roles/load": ["permit meeting:read @ project(query=project_id) +writes_on_get", "OAPVU"]
@@ -1949,8 +1950,12 @@
 "GET /v1/ticket-systems": ["permit integration:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/ticket-systems": ["permit integration:manage @ project(body=project_id)", "OA"]
 "GET /v1/ticket-systems/catalog": ["permit integration:read @ org", "OAPVU"]
+"GET /v1/ticket-systems/oauth/callback": ["public:oauth_state_bound_callback", "OAPVU"]
 "DELETE /v1/ticket-systems/{connection_id}": ["permit integration:manage @ work_tracker_provider(path=connection_id)", "OA"]
 "PATCH /v1/ticket-systems/{connection_id}": ["permit integration:manage @ work_tracker_provider(path=connection_id)", "OA"]
+"DELETE /v1/ticket-systems/{connection_id}/oauth/me": ["permit connection:use_own @ work_tracker_provider(path=connection_id)", "OAP"]
+"GET /v1/ticket-systems/{connection_id}/oauth/start": ["permit connection:use_own @ work_tracker_provider(path=connection_id) +writes_on_get", "OAP"]
+"POST /v1/ticket-systems/{connection_id}/oauth/start/load": ["permit connection:use_own @ work_tracker_provider(path=connection_id) +writes_on_get", "OAP"]
 "GET /v1/ticket-systems/{connection_id}/projects": ["permit integration:read @ work_tracker_provider(path=connection_id)", "OAPVU"]
 "GET /v1/ticket-systems/{connection_id}/projects/{project_key}/epics": ["permit integration:read @ work_tracker_provider(path=connection_id)", "OAPVU"]
 "GET /v1/ticket-systems/{connection_id}/projects/{project_key}/unparented": ["permit integration:read @ work_tracker_provider(path=connection_id)", "OAPVU"]
@@ -1958,6 +1963,7 @@
 "POST /v1/ticket-systems/{connection_id}/test": ["permit integration:manage @ work_tracker_provider(path=connection_id)", "OA"]
 "GET /v1/ticket-systems/{connection_id}/tickets/{key}": ["permit integration:read @ work_tracker_provider(path=connection_id)", "OAPVU"]
 "GET /v1/ticket-systems/{connection_id}/tickets/{key}/children": ["permit integration:read @ work_tracker_provider(path=connection_id)", "OAPVU"]
+"POST /v1/ticket-systems/{connection_id}/webhook": ["permit integration:manage @ work_tracker_provider(path=connection_id)", "OA"]
 "GET /v1/tickets/resolve": ["permit integration:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/token-efficiency/consumption": ["permit budget:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/token-efficiency/estimate": ["permit model_provider:read @ org", "OAPVU"]
@@ -2009,6 +2015,7 @@
 "POST /v1/webhooks/inbound/workflow/{path_token}": ["public:hmac_signed_webhook", "OAPVU"]
 "POST /v1/webhooks/inbound/{source}": ["public:hmac_signed_webhook", "OAPVU"]
 "POST /v1/webhooks/plane": ["public:hmac_signed_webhook", "OAPVU"]
+"POST /v1/webhooks/tickets/{connection_id}": ["public:hmac_signed_webhook", "OAPVU"]
 "POST /v1/wiki/maintain": ["permit knowledge:manage @ project(body=project_id)", "OA"]
 "GET /v1/wiki/pages": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/wiki/pages/{slug}": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
@@ -2041,6 +2048,8 @@
 "POST /v1/work-items/{work_item_id}/relations/remove": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
 "POST /v1/work-items/{work_item_id}/start": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
 "POST /v1/work-items/{work_item_id}/start-from-ticket": ["permit work_tracker:write @ work_item(path=work_item_id)", "OAP"]
+"GET /v1/work-items/{work_item_id}/ticket-sync": ["permit work_item:read @ work_item(path=work_item_id)", "OAPVU"]
+"POST /v1/work-items/{work_item_id}/ticket-sync/retry": ["permit work_tracker:write @ work_item(path=work_item_id)", "OAP"]
 "GET /v1/work-items/{work_item_id}/watchdogs": ["permit work_item:read @ work_item(path=work_item_id)", "OAPVU"]
 "POST /v1/work-items/{work_item_id}/watchdogs": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
 "DELETE /v1/work-items/{work_item_id}/watchdogs/{watchdog_id}": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]

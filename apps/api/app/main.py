@@ -2435,6 +2435,14 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     # Plane's issue webhook is a machine callback that verifies its own X-Plane-Signature HMAC,
     # so it is exempt from transport auth exactly like the GitHub webhook.
     is_plane_webhook = route_path == "/v1/webhooks/plane"
+    # TICKET SYSTEMS (BOSSAPP-1047 B2, routers/ticket_sync.py): a ticket system's webhook is
+    # verified by its own connector under the connection's secret, and the "Connect with
+    # Atlassian" callback is a browser redirect authenticated by its signed, single-use state.
+    is_ticket_public = (
+        (request.method == "POST" and len(_parts) == 5 and _parts[1] == "v1"
+         and _parts[2] == "webhooks" and _parts[3] == "tickets")
+        or (request.method == "GET" and route_path == "/v1/ticket-systems/oauth/callback")
+    )
     is_bitbucket_webhook = route_path == "/v1/webhooks/bitbucket"
     # Alerting tools sign reliability alert deliveries (X-Reliability-Signature HMAC) — same model.
     is_reliability_alert = route_path == "/v1/reliability/alert"
@@ -2500,6 +2508,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or is_github_webhook
         or is_channel_callback
         or is_plane_webhook
+        or is_ticket_public
         or is_bitbucket_webhook
         or is_reliability_alert
         or is_monitoring_ingest
@@ -31996,6 +32005,16 @@ app.include_router(build_mcp_credentials_router(
 from .routers.skill_supply import build_skill_supply_router
 
 app.include_router(build_skill_supply_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
+# TICKET SYSTEMS AFTER THE START (BOSSAPP-1047 B2): the write-back timeline and retry, the inbound
+# webhook, and a person's own ticket-system sign-in (routers/ticket_sync.py).
+from .routers.ticket_sync import build_ticket_sync_router
+
+app.include_router(build_ticket_sync_router(
     engine=engine,
     settings=get_settings,
     require_write_actor=require_project_write_actor,
