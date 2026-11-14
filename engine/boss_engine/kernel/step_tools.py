@@ -94,6 +94,12 @@ def _unknown_outcome(run: Any, call: ToolCall, step: int) -> ToolResult:
     item.decision_id = decision_id
     run.rec.emit("escalation", {"tool": call.name, "why": "unknown_outcome",
                                 "interrupt_id": item.id, "decision_id": decision_id})
+    tracer = run.chain.get("trace") if hasattr(run.chain, "get") else None
+    if tracer is not None and callable(getattr(tracer, "interrupt_opened", None)):
+        # Not a tool call that ran (it is never re-run), so its interrupt is opened here.
+        tracer.interrupt_opened(run, f"unknown_outcome {call.name}", decision_id=decision_id,
+                                attributes={"tool": call.name, "call_id": call.id,
+                                            "interrupt_id": item.id, "on": "unknown_outcome"})
     return ToolResult(call.id, call.name, "deferred",
                       {"status": "unknown_outcome", "interrupt_id": item.id,
                        "decision_id": decision_id,

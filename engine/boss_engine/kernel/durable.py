@@ -248,9 +248,10 @@ class PgCheckpointStore:
         self._queue.put(item)
 
     def _drain_queue(self) -> None:
-        assert self._queue is not None
+        jobs = self._queue  # its own reference: close() lets go of the store's
+        assert jobs is not None
         while True:
-            item = self._queue.get()
+            item = jobs.get()
             try:
                 if item is None:
                     return
@@ -267,7 +268,7 @@ class PgCheckpointStore:
             except BaseException as error:  # noqa: BLE001 — surfaced on flush
                 self._error = error
             finally:
-                self._queue.task_done()
+                jobs.task_done()
 
     def flush(self) -> None:
         """Every queued write is in the database (async), or the exit snapshot is (exit)."""

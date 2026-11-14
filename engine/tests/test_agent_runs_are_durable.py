@@ -76,6 +76,7 @@ def project(eng):
                                         {"p": pid}).all()]
         c.execute(text("DELETE FROM agent_checkpoints WHERE run_id = ANY(:r) OR run_id LIKE :k"),
                   {"r": runs, "k": f"krun_{pid}%"})
+        c.execute(text("DELETE FROM trace_spans WHERE project_id = :p"), {"p": pid})
         for table in ("jobs", "decisions", "events", "agent_runs", "agent_threads",
                       "project_members"):
             with c.begin_nested():
@@ -124,10 +125,12 @@ def test_a_killed_worker_reruns_only_the_unfinished_calls_and_parks_the_irrevers
     assert ledger_lines(ledger) == ["read_a", "charge_card"]
 
     # The worker comes back: the run resumes from its checkpoint.
+    from boss_engine.kernel.ledger import DbSink
+
     ports = MemoryInterrupts()
     resumed = kernel.resume(_spec(project, run_id, [Say("should not be asked yet")],
                                   toolset(ledger), PgCheckpointStore(eng), interrupts=ports,
-                                  parallel_interrupts=True))
+                                  parallel_interrupts=True, sink=DbSink(eng)))
     assert count(ledger, "read_a") == 1, "a finished call is REPLAYED, never re-run"
     assert count(ledger, "charge_card") == 1, "an irreversible call that may have happened is " \
                                               "never fired twice"
@@ -140,7 +143,7 @@ def test_a_killed_worker_reruns_only_the_unfinished_calls_and_parks_the_irrevers
     # A person says it happened: the run finishes, charge_card still ran exactly once.
     done = kernel.resume(_spec(project, run_id, [Say("done: charged once, notified once")],
                                toolset(ledger), PgCheckpointStore(eng), interrupts=ports,
-                               parallel_interrupts=True),
+                               parallel_interrupts=True, sink=DbSink(eng)),
                          answers={parked[0]["id"]: {"decision_id": parked[0]["decision_id"],
                                                     "happened": True}})
     assert done.status == "completed", done.error
@@ -149,6 +152,28 @@ def test_a_killed_worker_reruns_only_the_unfinished_calls_and_parks_the_irrevers
     seen = _tool_messages(final)
     assert set(seen) == {"call_read", "call_charge", "call_notify"}
     assert "120" in seen["call_read"]  # the replayed result is the one the first process got
+
+    # THE TRACE (AP-P4's trace middleware, through the checkpoint): one run, one trace, the
+    # pre-crash step and the post-resume step under it, one interrupt span for the parked call.
+    with eng.begin() as c:
+        spans = [dict(r) for r in c.execute(text(
+            "SELECT span_id, trace_id, parent_span_id, kind, name, status, step, attributes "
+            "FROM trace_spans WHERE run_id = :r ORDER BY started_at"), {"r": run_id}
+        ).mappings().all()]
+    assert len({s["trace_id"] for s in spans}) == 1, "the resumed run continues the same trace"
+    runs = [s for s in spans if s["kind"] == "run"]
+    assert len(runs) == 1 and runs[0]["status"] == "ok"
+    assert runs[0]["attributes"].get("resumed_from_checkpoint"), "the resume is visible"
+    steps = {s["step"]: s for s in spans if s["kind"] == "step"}
+    assert {1, 2} <= set(steps), "the pre-crash step and the post-resume step"
+    assert all(s["parent_span_id"] == runs[0]["span_id"] for s in steps.values())
+    tools = [s["name"] for s in spans if s["kind"] == "tool"]
+    assert tools.count("read_a") == 1 and tools.count("notify_b") == 1, tools
+    assert "charge_card" not in tools, "killed mid-call: it never returned, so no tool span " \
+                                       "claims a result — its interrupt span says so instead"
+    held = [s for s in spans if s["kind"] == "interrupt"]
+    assert [s["name"] for s in held] == ["unknown_outcome charge_card"]
+    assert held[0]["status"] == "ok" and held[0]["attributes"]["interrupt_id"] == parked[0]["id"]
 
 
 # ════ (b) a deploy drains the run; no attempt is spent ═════════════════════════════════════════
@@ -282,13 +307,14 @@ def _two_approvals(ledger: Path):
 
 
 def _suspend_on_two(eng, project, run_id, ledger):
+    from boss_engine.kernel.ledger import DbSink
     from boss_engine.services.interrupts import DecisionInterrupts
 
     with eng.begin() as c:
         result = kernel.run(_spec(
             project, run_id, [Calls(Call("send_invoice", {"x": "INV-1"}, id="s1"),
                                     Call("refund", {"x": "R-9"}, id="r1"))],
-            _two_approvals(ledger), PgCheckpointStore(c),
+            _two_approvals(ledger), PgCheckpointStore(c), sink=DbSink(eng),
             interrupts=DecisionInterrupts(c, project_id=project), parallel_interrupts=True))
     assert result.status == "suspended"
     items = result.pending["interrupts"]
@@ -330,12 +356,23 @@ def test_parallel_interrupts_resume_in_one_decision_batch_whatever_the_order(
     with eng.begin() as c:
         answers = answers_for_run(c, PgCheckpointStore(c).load(run_id).pending)
         reordered = dict(reversed(list(answers.items())))
+        from boss_engine.kernel.ledger import DbSink
+
         done = kernel.resume(_spec(project, run_id, [Say("both done")], _two_approvals(ledger),
-                                   PgCheckpointStore(c), parallel_interrupts=True),
+                                   PgCheckpointStore(c), parallel_interrupts=True,
+                                   sink=DbSink(eng)),
                              answers=reordered)
     assert done.status == "completed", done.error
     assert ledger_lines(ledger) == ["send_invoice:INV-1", "refund:R-9"], \
         "both ran once, in the order the model asked for them"
+    with eng.begin() as c:
+        held = c.execute(text(
+            "SELECT name, status, attributes->>'interrupt_id' FROM trace_spans "
+            "WHERE run_id = :r AND kind = 'interrupt' ORDER BY started_at"), {"r": run_id}).all()
+    assert [(n, st) for n, st, _ in held] == [("approval send_invoice", "ok"),
+                                               ("approval refund", "ok")], \
+        "one interrupt span per interrupt(), each closed by the one resume"
+    assert {i for _, _, i in held} == {i["id"] for i in items}
 
 
 def test_an_argument_changed_after_approval_is_refused_and_nothing_runs(eng, project, tmp_path):

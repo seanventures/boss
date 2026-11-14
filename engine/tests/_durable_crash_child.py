@@ -17,6 +17,7 @@ from sqlalchemy import create_engine  # noqa: E402
 from _durable_support import policies, scripted_batch, toolset  # noqa: E402
 from boss_engine import kernel  # noqa: E402
 from boss_engine.kernel.durable import PgCheckpointStore  # noqa: E402
+from boss_engine.kernel.ledger import DbSink  # noqa: E402
 from boss_engine.kernel.scripted import ScriptedEngine  # noqa: E402
 
 
@@ -28,7 +29,9 @@ def main() -> int:
         engine=ScriptedEngine(scripted_batch()), tools=toolset(Path(ledger), hang=True),
         policies=policies(), project_id=project_id, system="You are a billing agent.",
         messages=[{"role": "user", "content": "charge the card and tell the customer"}],
-        run_id=run_id, persist=True, store=store))
+        run_id=run_id, persist=True, store=store,
+        # the run's ledger and its trace spans (AP-P4's trace middleware) go to the database
+        sink=DbSink(engine)))
     return 0
 
 
