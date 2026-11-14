@@ -237,6 +237,8 @@ KINDS: tuple[ObjectKind, ...] = (
     ObjectKind("workflow_step_run", "workflow_step_runs"),
     ObjectKind("focused_agent", "focused_agents"),
     ObjectKind("agent_act", "agent_acts", id_column="act_id"),
+    # AP-P5: an agent by its stable agent id (agt_…), the A2A endpoint /a2a/{agent_id}.
+    ObjectKind("agent_identity", "roles", id_column="agent_id"),
     ObjectKind("agent_conversation", "agent_conversations", id_column="conversation_id"),
     ObjectKind("agent_conversation_turn", "agent_conversation_turns", id_column="turn_id",
                project="(SELECT c.project_id FROM agent_conversations c "

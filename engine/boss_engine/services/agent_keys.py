@@ -232,6 +232,38 @@ def sign(connection: Connection, project_id: str, role_key: str, payload: bytes 
             "jwks": f"/v1/agents/{row['agent_id']}/jwks"}
 
 
+class _JwsSigner:
+    """Signs JWS signing inputs only (`b64url(header).b64url(payload)`: ASCII, one dot, no
+    newline), so a signature made here can never be replayed as a boss.agent-sig/v1 signature
+    (whose message starts "boss.agent-sig/v1\n"). Holds the key; never hands it out."""
+
+    __slots__ = ("_key",)
+
+    def __init__(self, key: Ed25519PrivateKey):
+        self._key = key
+
+    def sign(self, signing_input: bytes) -> bytes:
+        raw = bytes(signing_input)
+        if b"\n" in raw or raw.count(b".") != 1 or not raw.isascii():
+            raise AgentKeyError("only a JWS signing input may be signed here")
+        return self._key.sign(raw)
+
+
+def jws_signer(connection: Connection, project_id: str, role_key: str
+               ) -> tuple[str, str, "_JwsSigner"]:
+    """(kid, agent_id, signer) of the agent's ACTIVE key, for a JWS the agent publishes — its
+    A2A agent card (AP-P5, protocols/agent_card.sign_card). The private key stays inside the
+    signer; AgentKeyError(409) when the agent holds no key."""
+    row = connection.execute(
+        text("SELECT kid, agent_id, private_vault_item_id FROM agent_keys WHERE project_id = :p "
+             "AND role_key = :r AND status = 'active'"),
+        {"p": project_id, "r": role_key}).mappings().first()
+    if row is None:
+        raise AgentKeyError(f"{role_key} holds no signing key", 409)
+    return (row["kid"], row["agent_id"],
+            _JwsSigner(_private_for(connection, row["kid"], row["private_vault_item_id"])))
+
+
 def verify(public_jwk: dict[str, Any], payload: bytes | str, signature: str, *,
            purpose: str) -> bool:
     """The reference check: the JWKS entry, the payload, the signature, the purpose."""
