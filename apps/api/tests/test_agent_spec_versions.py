@@ -249,3 +249,20 @@ def test_studio_runs_go_through_the_governed_agent_pipeline(client, engine, monk
     assert result["execution"] == "governed_agent_step"
     assert result["summary"] == "A governed answer."
     assert result["agent_step"]["agent"] == "finops_sentinel"
+
+
+def test_the_ceiling_check_fails_closed_when_the_native_tool_map_is_unreadable(client, engine, monkeypatch):
+    """No permission map is never "no permissions needed": a spec naming a native tool is
+    refused, and nothing is written."""
+    from boss_engine.services import agent_loop
+
+    monkeypatch.setattr(agent_loop, "AGENT_TOOL_PERMISSIONS", {})
+    key = _key()
+    refused = _create(client, _doc(key, tools={"native": ["read_repo_file"]}))
+    assert refused.status_code == 503, refused.text
+    assert "cannot check" in refused.json()["detail"]["message"]
+    with engine.begin() as c:
+        assert c.execute(text("SELECT 1 FROM roles WHERE project_id = :p AND role_key = :r"),
+                         {"p": PROJECT, "r": key}).first() is None
+    # A spec with no native tools does not need the map.
+    assert _create(client, _doc(_key())).status_code == 201

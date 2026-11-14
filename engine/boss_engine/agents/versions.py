@@ -179,13 +179,33 @@ def row_document(connection: Connection, project_id: str, key: str,
 
 # ── The Passport ceiling ───────────────────────────────────────────────────────────────────────
 
-def _native_permission(name: str) -> Optional[str]:
-    """The catalogue permission a native loop tool needs (agent_loop.AGENT_TOOL_PERMISSIONS)."""
-    try:
-        from ..services.agent_loop import AGENT_TOOL_PERMISSIONS
-    except Exception:  # noqa: BLE001 — the map moves to the kernel in P1b
-        AGENT_TOOL_PERMISSIONS = {}
-    return AGENT_TOOL_PERMISSIONS.get(name)
+class NativeToolMapUnavailable(VersionError):
+    """The native-tool permission map could not be read: the ceiling cannot be checked."""
+
+
+def native_tool_permissions() -> dict[str, str]:
+    """The catalogue permission each native loop tool needs. FAILS CLOSED: a map that cannot be
+    imported, or is empty, raises instead of letting every native tool through unchecked.
+
+    Read from `agent_loop.AGENT_TOOL_PERMISSIONS`, or from a `native_tool_permissions()` that
+    the kernel (P1b) provides in its place."""
+    found: dict[str, str] = {}
+    for module in ("boss_engine.kernel.toolset", "boss_engine.services.agent_loop"):
+        try:
+            mod = __import__(module, fromlist=["x"])
+        except Exception:  # noqa: BLE001 — try the next source
+            continue
+        provider = getattr(mod, "native_tool_permissions", None)
+        value = provider() if callable(provider) else getattr(mod, "AGENT_TOOL_PERMISSIONS", None)
+        if isinstance(value, dict) and value:
+            found = {str(k): str(v) for k, v in value.items()}
+            break
+    if not found:
+        raise NativeToolMapUnavailable(
+            "BOSS cannot read which permission each native tool needs, so it cannot check this "
+            "agent's native tools against its Passport ceiling. Nothing was published; remove the "
+            "native tools from the spec or report this as a BOSS fault.", status=503)
+    return found
 
 
 def required_permissions(compiled: S.CompiledAgent) -> tuple[set[str], list[str]]:
@@ -196,8 +216,9 @@ def required_permissions(compiled: S.CompiledAgent) -> tuple[set[str], list[str]
     of those needs its catalogue permission inside the agent's ceiling."""
     need: set[str] = set()
     unknown: list[str] = []
+    table = native_tool_permissions() if compiled.native_tools else {}
     for tool in compiled.native_tools:
-        perm = _native_permission(tool)
+        perm = table.get(tool)
         if perm is None:
             unknown.append(tool)
         else:
