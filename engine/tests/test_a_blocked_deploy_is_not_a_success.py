@@ -136,7 +136,7 @@ class TestTheSentenceThatExplainedNothing:
         # In the tick that fails the step: the reason is worked out BEFORE the output is handed
         # to fail_step. (Read in `tick` alone: `output=output,` also appears in other functions
         # of the module, earlier in the file.)
-        body = inspect.getsource(runner.tick)
+        body = "".join(map(inspect.getsource, runner.TICK_PARTS))
         assert "reason = _reason_of_last_resort(output, claimed)" in body
         reason_at = body.index("_reason_of_last_resort(output, claimed)")
         assert reason_at < body.index("output=output,", reason_at)

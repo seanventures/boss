@@ -2624,7 +2624,22 @@ def make_code_agent(
     # turn-cap marker the pipeline recognises. No caller ever holds a raw adapter.
     from .engine_contract import contracted
 
-    return _wrap_paced(contracted(agent), bound)
+    held = contracted(agent)
+    if not callable(getattr(held, "budget_ceiling", None)):
+        # EVERY DELEGATE SESSION IS BOUNDED (AP-P0, AGENT_PLATFORM.md §4.2): a CLI harness that
+        # can stop itself (`--max-budget-usd`) is handed a ceiling on EVERY session, not only a
+        # build's. The governed pipeline replaces this with the run's remaining budget; a
+        # session started anywhere else (a review, a docs update, a verifier debate, setup)
+        # was unbounded. The standing ceiling is the per-task budget: no single session may
+        # spend more than a whole task is allowed to.
+        held.budget_ceiling = _standing_session_ceiling(settings)
+    return _wrap_paced(held, bound)
+
+
+def _standing_session_ceiling(settings: Settings):
+    """The default per-session ceiling in dollars (None when the install sets no task budget)."""
+    micros = int(getattr(settings, "code_task_budget_usd_micros", 0) or 0)
+    return lambda: (micros / 1e6) if micros > 0 else None
 
 
 def _bind_lane_credentials(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from ..identity_guard import writing_get  # noqa: E402  (identity int-b)
+import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -15,6 +16,8 @@ from boss_engine.services.metatron_captain import MetatronCaptain
 
 from ..config import get_settings
 from ..db import begin, get_engine
+
+log = logging.getLogger(__name__)
 
 
 router = APIRouter(tags=["metatron"])
@@ -86,7 +89,34 @@ def captain_session_turn(payload: AgentChatRequest, request: Request) -> AgentCh
     explicit commands (/watch, /overwatch, /drive), never something plain text sets off."""
     from apps.api.app.main import agent_turn
 
-    return agent_turn(payload, request, endpoint="/v1/metatron/session")
+    reply = agent_turn(payload, request, endpoint="/v1/metatron/session")
+    _remember_turn(payload, reply)
+    return reply
+
+
+def _remember_turn(payload: AgentChatRequest, reply: AgentChatResponse) -> None:
+    """METATRON'S MEMORY IS WRITTEN BY ITS CONVERSATIONS (AP-P0, AGENT_PLATFORM.md §2.9).
+
+    `load_session` and the captain tools read `metatron_memories`, but only the watch and
+    overwatch sweeps ever wrote it: what the operator asked Metatron, and what it answered, was
+    never remembered. One short row per answered turn, tied to its thread. Best-effort: the
+    reply has already been given, a memory write never fails it."""
+    asked = (payload.message or "").strip()
+    answered = (getattr(reply, "reply", "") or "").strip()
+    if not asked or not answered:
+        return
+    try:
+        with begin(get_engine()) as connection:
+            _captain().remember(
+                connection, project_id=payload.project_id, thread_id=reply.thread_id,
+                content=f"Asked: {asked[:600]}\nAnswered: {answered[:1200]}",
+                kind="fact", source="chat", salience=0.5,
+                refs=[{"object_type": "agent_thread", "object_id": reply.thread_id}]
+                + ([{"object_type": "agent_act", "object_id": reply.act_id}]
+                   if reply.act_id else []),
+            )
+    except Exception:  # noqa: BLE001
+        log.warning("metatron: turn not remembered for %s", payload.project_id, exc_info=True)
 
 
 @writing_get(router, "/v1/metatron/session")

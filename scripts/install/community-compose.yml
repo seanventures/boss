@@ -443,6 +443,10 @@ services:
       # forward them or the kernel can never turn on (defaults off, matching config.py).
       BOSS_KERNEL_DECISIONS: ${BOSS_KERNEL_DECISIONS:-0}
       BOSS_KERNEL_CHAT: ${BOSS_KERNEL_CHAT:-0}
+      # The run ledger's dual-write (run_events + llm_calls/tool_call_audit run columns): on by
+      # default (AP-P0); 0 turns it off. Retention drops monthly partitions (ledger_retention).
+      BOSS_LEDGER_EVENTS: ${BOSS_LEDGER_EVENTS:-1}
+      BOSS_LEDGER_RETENTION_DAYS: ${BOSS_LEDGER_RETENTION_DAYS:-400}
       BOSS_AUTHZ_ROUTER_MODES: ${BOSS_AUTHZ_ROUTER_MODES:-}
       BOSS_AUTHZ_COVERAGE: ${BOSS_AUTHZ_COVERAGE:-}
       # The sandbox: required (a build never runs as the API's uid), network fenced, and every
@@ -744,6 +748,10 @@ services:
       # forward them or the kernel can never turn on (defaults off, matching config.py).
       BOSS_KERNEL_DECISIONS: ${BOSS_KERNEL_DECISIONS:-0}
       BOSS_KERNEL_CHAT: ${BOSS_KERNEL_CHAT:-0}
+      # The run ledger's dual-write (run_events + llm_calls/tool_call_audit run columns): on by
+      # default (AP-P0); 0 turns it off. Retention drops monthly partitions (ledger_retention).
+      BOSS_LEDGER_EVENTS: ${BOSS_LEDGER_EVENTS:-1}
+      BOSS_LEDGER_RETENTION_DAYS: ${BOSS_LEDGER_RETENTION_DAYS:-400}
       BOSS_AUTHZ_ROUTER_MODES: ${BOSS_AUTHZ_ROUTER_MODES:-}
       BOSS_AUTHZ_COVERAGE: ${BOSS_AUTHZ_COVERAGE:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
