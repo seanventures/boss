@@ -146,7 +146,7 @@ KINDS: tuple[ObjectKind, ...] = (
     ObjectKind("resource_allocation", "resource_allocations"),
     ObjectKind("work_item", "work_items"),
     ObjectKind("work_tracker_binding", "work_tracker_bindings"),
-    #: a ticket-system connection (BOSSAPP-1047): one work_tracker_providers row
+    #: a ticket-system connection (BOSSAPP-1047): one project's tracker row
     ObjectKind("work_tracker_provider", "work_tracker_providers"),
     ObjectKind("workflow_version", "workflow_versions"),
     # F2/M9: every id a route names is confined centrally (ID_PARAM_KINDS below)
@@ -450,6 +450,9 @@ NON_OBJECT_IDS: dict[str, str] = {
                                  "sender_id", "sender_version_id", "subscriber_id", "actor_id",
                                  "row_id")},
     **{n: _CHILD for n in ("step_id", "comment_id", "action_id")},
+    # A ticket-system mapping's TARGET project (BOSSAPP-1047): another project by design; the
+    # handler checks integration:manage AT that project before it maps anything onto it.
+    "boss_project_id": "a mapping's target project, checked by the handler at that project",
     **{n: _PLANNING for n in ("cycle_id", "initiative_id")},
 }
 

@@ -36,6 +36,9 @@ export function providerView(raw: unknown): Provider {
     enforce_sso: Boolean(r.enforce_sso),
     groups_claim: str(r.groups_claim),
     status: r.status === "active" ? "active" : "disabled",
+    link_verified_domain_accounts: r.link_verified_domain_accounts === true,
+    allow_idp_initiated: r.allow_idp_initiated === true,
+    scim_adopt_existing_by_domain: r.scim_adopt_existing_by_domain === true,
   };
 }
 

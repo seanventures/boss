@@ -19,6 +19,7 @@
   "GET /v1/auth/setup/status",
   "POST /v1/auth/signup",
   "POST /v1/auth/signup/verify",
+  "POST /v1/auth/sso/{provider_id}/backchannel-logout",
   "GET /v1/auth/sso/{provider_id}/callback",
   "POST /v1/auth/sso/{provider_id}/callback",
   "GET /v1/auth/sso/{provider_id}/start",
@@ -233,6 +234,7 @@
   "/v1/diag/sandbox-roundtrip",
   "/v1/elastic/instances",
   "/v1/elastic/status",
+  "/v1/environments",
   "/v1/hardware/places",
   "/v1/hardware/resolve",
   "/v1/kit",
@@ -245,9 +247,12 @@
   "/v1/previews",
   "/v1/provider-usage",
   "/v1/provider-usage/summary",
+  "/v1/remote-agents",
   "/v1/status",
   "/v1/telemetry/export",
   "/v1/telemetry/preview",
+  "/v1/ticket-systems/{connection_id}/oauth/start",
+  "/v1/toolchain-images",
   "/v1/workflow-runs/{run_id}/chain"
  ]
 }

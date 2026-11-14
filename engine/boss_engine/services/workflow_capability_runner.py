@@ -3961,6 +3961,11 @@ def _perform_capability(
             existing = _existing_code_note(context.get("input") or {})
         if existing:
             objective = f"{objective}\n\n{existing}".strip()
+        # THE TICKET THIS WORK IS FOR (BOSSAPP-1047): the panel argues from what the ticket
+        # asks, shown as OUTSIDE INPUT (ticket_intake.ticket_block), its criteria the done-when.
+        from . import ticket_intake
+
+        objective = ticket_intake.fold_meeting_objective(objective, context.get("input"))
         if objective:
             inputs = {**inputs, "objective": objective,
                       "workflow_name": str(context.get("workflow_name") or "").strip()}
@@ -3998,6 +4003,13 @@ def _perform_capability(
             fixed_title = str(_from_any_step(context, "title") or "").strip()
             if fixed_title.startswith("Fix "):
                 inputs = {**inputs, "title": fixed_title}
+    if key == "build":
+        # THE TICKET IS THE BUILD'S BRIEF TOO (BOSSAPP-1047), the same way the incident's is:
+        # before the directive, delimited as outside input, its acceptance criteria the build's
+        # done-when list unless a person gave some.
+        from . import ticket_intake
+
+        inputs = ticket_intake.fold_build_inputs(inputs, context.get("input"))
     if key == "build":
         # THE CODER IS TOLD TOO: a repository BOSS did not build is changed, not rebuilt.
         note = _existing_code_note(context.get("input") or {})

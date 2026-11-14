@@ -497,3 +497,9 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(chat_channels_router)
     app.include_router(event_stream_router)
+
+    # Ticket systems (BOSSAPP-1047): connections, browse, import and start-from-a-ticket.
+    # Imported unguarded, like the above: a broken import must fail the boot.
+    from .ticket_systems import router as ticket_systems_router
+
+    app.include_router(ticket_systems_router)

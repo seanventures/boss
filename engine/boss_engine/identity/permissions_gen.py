@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "09226b3df86c1667"
+CATALOGUE_FINGERPRINT = "95bd12a40d2f4194"
 
 
 class Permission(StrEnum):
@@ -110,6 +110,7 @@ class Permission(StrEnum):
     DISCOVERY_CREATE = "discovery:create"
     WORK_ITEM_READ = "work_item:read"
     WORK_ITEM_MANAGE = "work_item:manage"
+    WORK_TRACKER_WRITE = "work_tracker:write"
     JOB_READ = "job:read"
     JOB_CONTROL = "job:control"
     DEADLETTER_MANAGE = "deadletter:manage"
@@ -185,7 +186,6 @@ class Permission(StrEnum):
     APP_LINK_MANAGE = "app_link:manage"
     INTEGRATION_READ = "integration:read"
     INTEGRATION_MANAGE = "integration:manage"
-    WORK_TRACKER_WRITE = "work_tracker:write"
     COMMS_READ = "comms:read"
     COMMS_SEND = "comms:send"
     COMMS_MANAGE = "comms:manage"
@@ -321,6 +321,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "discovery:create": PermissionMeta(key="discovery:create", title="Start research", description="Start, deepen and promote research.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "work_item:read": PermissionMeta(key="work_item:read", title="View work items", description="See the task board, work plane, allocation, releases and plans.", category="Workflows and work", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "work_item:manage": PermissionMeta(key="work_item:manage", title="Manage work items", description="Create and change tasks, initiatives, cycles, releases, quotas and plans.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "work_tracker:write": PermissionMeta(key="work_tracker:write", title="Work with tickets", description="Import tickets from a connected ticket system as work items, start work from them, and write back to them (comment on and move them in Jira, Plane or GitHub Issues).", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "job:read": PermissionMeta(key="job:read", title="View jobs", description="See background jobs and the queue.", category="Workflows and work", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "job:control": PermissionMeta(key="job:control", title="Control jobs", description="Cancel and reprioritise jobs.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "deadletter:manage": PermissionMeta(key="deadletter:manage", title="Manage dead letters", description="Retry, requeue and remediate dead letters.", category="Workflows and work", roles=('owner', 'admin'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
@@ -396,7 +397,6 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "app_link:manage": PermissionMeta(key="app_link:manage", title="Link apps", description="Let one app of a project call another's preview with its test users, and revoke the link.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "integration:read": PermissionMeta(key="integration:read", title="View integrations", description="See integrations, work trackers, channels, webhooks and subscriptions.", category="Secrets and integrations", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "integration:manage": PermissionMeta(key="integration:manage", title="Manage integrations", description="Connect and change integrations, trackers, channels, webhooks and subscriptions.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
-    "work_tracker:write": PermissionMeta(key="work_tracker:write", title="Write to ticket systems", description="Import tickets as work items, comment on tickets and move them in the team's ticket system (Jira, Plane, GitHub Issues).", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "comms:read": PermissionMeta(key="comms:read", title="View comms", description="See the comms inbox, outbox and policies.", category="Secrets and integrations", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "comms:send": PermissionMeta(key="comms:send", title="Send messages", description="Queue and deliver an outbound message.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "comms:manage": PermissionMeta(key="comms:manage", title="Manage comms", description="Change comms policies and email configuration.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
@@ -542,6 +542,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "discovery:create",
         "work_item:read",
         "work_item:manage",
+        "work_tracker:write",
         "job:read",
         "job:control",
         "deadletter:manage",
@@ -615,7 +616,6 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "app_link:manage",
         "integration:read",
         "integration:manage",
-        "work_tracker:write",
         "comms:read",
         "comms:send",
         "comms:manage",
@@ -736,6 +736,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "discovery:create",
         "work_item:read",
         "work_item:manage",
+        "work_tracker:write",
         "job:read",
         "job:control",
         "deadletter:manage",
@@ -807,7 +808,6 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "app_link:manage",
         "integration:read",
         "integration:manage",
-        "work_tracker:write",
         "comms:read",
         "comms:send",
         "comms:manage",
@@ -880,6 +880,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "discovery:create",
         "work_item:read",
         "work_item:manage",
+        "work_tracker:write",
         "job:read",
         "job:control",
         "assistant:chat",
@@ -920,7 +921,6 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "app_secret:write",
         "app_link:manage",
         "integration:read",
-        "work_tracker:write",
         "comms:read",
         "comms:send",
         "system:read",
@@ -1069,10 +1069,10 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 }
 
 PASSPORT_PRESETS: dict[str, PassportPreset] = {
-    "builder": PassportPreset(key="builder", name="Builder", agents=('forge', 'strata', 'prism', 'helm'), permissions=('knowledge:read', 'integration:read', 'work_tracker:write', 'code_task:read', 'code_task:create', 'code_task:steer', 'code_task:retry', 'repository:read', 'github:read', 'github:sync', 'preview:read', 'preview:manage', 'artifact:read', 'artifact:rebuild', 'workflow:read', 'workflow_run:read', 'skill:read', 'skill:invoke', 'memory:read', 'memory:manage', 'spend:reserve', 'secret:lease', 'sandbox:read', 'agent:read', 'decision:read', 'deployment:read', 'host:read', 'meeting:read', 'observability:read', 'project:read', 'system:read'), external_ceiling={"github": {"contents": "write", "pull_requests": "write", "push_refs": "boss/*"}}),
+    "builder": PassportPreset(key="builder", name="Builder", agents=('forge', 'strata', 'prism', 'helm'), permissions=('knowledge:read', 'code_task:read', 'code_task:create', 'code_task:steer', 'code_task:retry', 'repository:read', 'github:read', 'github:sync', 'preview:read', 'preview:manage', 'artifact:read', 'artifact:rebuild', 'workflow:read', 'workflow_run:read', 'skill:read', 'skill:invoke', 'memory:read', 'memory:manage', 'spend:reserve', 'secret:lease', 'sandbox:read', 'agent:read', 'decision:read', 'deployment:read', 'host:read', 'meeting:read', 'observability:read', 'project:read', 'system:read', 'integration:read', 'work_tracker:write'), external_ceiling={"github": {"contents": "write", "pull_requests": "write", "push_refs": "boss/*"}}),
     "reviewer": PassportPreset(key="reviewer", name="Reviewer", agents=('vera', 'rook', 'sentry', 'weave', 'muse', 'plumb', 'mend'), permissions=('knowledge:read', 'code_task:read', 'code_task:steer', 'repository:read', 'github:read', 'preview:read', 'artifact:read', 'assurance:read', 'assurance:run', 'workflow_run:read', 'skill:read', 'skill:invoke', 'memory:read', 'spend:reserve', 'security_scan:run', 'meeting:read', 'meeting:convene', 'agent:read', 'decision:read', 'deployment:read', 'host:read', 'observability:read', 'project:read', 'sandbox:read', 'system:read', 'workflow:read'), external_ceiling={"github": {"contents": "read", "pull_requests": "write"}}),
-    "planner": PassportPreset(key="planner", name="Planner", agents=('juno', 'atlas', 'keystone', 'rally', 'vector', 'cadence', 'marshal'), permissions=('knowledge:read', 'integration:read', 'work_tracker:write', 'code_task:read', 'code_task:create', 'meeting:read', 'meeting:convene', 'discovery:read', 'discovery:create', 'workflow:read', 'workflow:create', 'workflow_run:read', 'workflow_run:start', 'work_item:read', 'work_item:manage', 'decision:read', 'memory:read', 'memory:manage', 'spend:reserve', 'agent:read', 'deployment:read', 'github:read', 'host:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read'), external_ceiling={"github": {"contents": "read", "issues": "write"}}),
-    "operator_agent": PassportPreset(key="operator_agent", name="Operator agent", agents=('harbor', 'pilot', 'bedrock', 'relay', 'beacon', 'anchor'), permissions=('knowledge:read', 'work_tracker:write', 'deployment:read', 'deployment:create', 'host:read', 'infra:read', 'observability:read', 'reliability:read', 'reliability:respond', 'preview:read', 'preview:manage', 'workflow_run:read', 'workflow_run:control', 'spend:reserve', 'secret:lease', 'agent:read', 'code_task:read', 'decision:read', 'github:read', 'meeting:read', 'memory:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),
+    "planner": PassportPreset(key="planner", name="Planner", agents=('juno', 'atlas', 'keystone', 'rally', 'vector', 'cadence', 'marshal'), permissions=('knowledge:read', 'code_task:read', 'code_task:create', 'meeting:read', 'meeting:convene', 'discovery:read', 'discovery:create', 'workflow:read', 'workflow:create', 'workflow_run:read', 'workflow_run:start', 'work_item:read', 'work_item:manage', 'decision:read', 'memory:read', 'memory:manage', 'spend:reserve', 'agent:read', 'deployment:read', 'github:read', 'host:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'integration:read', 'work_tracker:write'), external_ceiling={"github": {"contents": "read", "issues": "write"}}),
+    "operator_agent": PassportPreset(key="operator_agent", name="Operator agent", agents=('harbor', 'pilot', 'bedrock', 'relay', 'beacon', 'anchor'), permissions=('knowledge:read', 'deployment:read', 'deployment:create', 'host:read', 'infra:read', 'observability:read', 'reliability:read', 'reliability:respond', 'preview:read', 'preview:manage', 'workflow_run:read', 'workflow_run:control', 'spend:reserve', 'secret:lease', 'agent:read', 'code_task:read', 'decision:read', 'github:read', 'meeting:read', 'memory:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read', 'integration:read', 'work_tracker:write'), external_ceiling={}),
     "analyst": PassportPreset(key="analyst", name="Analyst", agents=('ledger', 'meter', 'conduit', 'sweep', 'writ', 'tally', 'switch', 'mesh', 'sift', 'rubric', 'watch', 'gather', 'echo', 'probe', 'conductor', 'trace', 'draft', 'remedy', 'seal', 'ladder'), permissions=('knowledge:read', 'budget:read', 'model_provider:read', 'infra:read', 'observability:read', 'activity:read', 'spend:reserve', 'workflow_run:read', 'agent:read', 'code_task:read', 'decision:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'memory:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),
     "writer": PassportPreset(key="writer", name="Writer and publisher", agents=('quill', 'herald', 'splice', 'scribe'), permissions=('knowledge:read', 'artifact:read', 'artifact:rebuild', 'discovery:read', 'comms:read', 'comms:send', 'memory:read', 'spend:reserve', 'workflow_run:read', 'agent:read', 'code_task:read', 'decision:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),
     "guardian": PassportPreset(key="guardian", name="Guardian", agents=('warden', 'vault', 'halo'), permissions=('knowledge:read', 'agent:read', 'agent_passport:read', 'activity:read', 'policy:read', 'secret:read_metadata', 'workflow_run:read', 'code_task:read', 'decision:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'memory:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),

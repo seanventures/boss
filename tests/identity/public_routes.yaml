@@ -186,6 +186,9 @@ POST /v1/auth/signup:
 POST /v1/auth/signup/verify:
   reason: auth_endpoint
   verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/sso/{provider_id}/backchannel-logout:
+  reason: idp_signed_logout_token
+  verifier: apps.api.app.routers.identity_sso:verify_logout_token
 POST /v1/auth/sso/{provider_id}/callback:
   reason: oauth_state_bound_callback
   verifier: apps.api.app.routers.identity_sso:verify_state_bound_callback

@@ -92,6 +92,23 @@ async def _with_body(request: Request, work: Callable[[Any, AuthContext, dict], 
 def build_identity_scim_router() -> APIRouter:
     router = APIRouter(tags=["identity-scim"])
 
+    # Discovery (RFC 7644 §4): what this SCIM server supports. Behind the same SCIM key as every
+    # other route (Okta's connector sends it on these calls too).
+    @router.get("/scim/v2/ServiceProviderConfig")
+    @permit(P.SCIM_PROVISION)
+    def service_provider_config(request: Request):
+        return _handle(request, lambda db, ctx: scim.service_provider_config())
+
+    @router.get("/scim/v2/Schemas")
+    @permit(P.SCIM_PROVISION)
+    def scim_schemas(request: Request):
+        return _handle(request, lambda db, ctx: scim.listed(scim.schemas()))
+
+    @router.get("/scim/v2/ResourceTypes")
+    @permit(P.SCIM_PROVISION)
+    def scim_resource_types(request: Request):
+        return _handle(request, lambda db, ctx: scim.listed(scim.resource_types()))
+
     @router.get("/scim/v2/Users")
     @permit(P.SCIM_PROVISION)
     def list_users(request: Request, filter: Optional[str] = None, startIndex: int = 1,  # noqa: A002,N803

@@ -31501,6 +31501,605 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
 
+  /v1/ticket-systems/catalog:
+    get:
+      tags:
+      - ticket-systems
+      summary: Ticket System Catalog
+      description: 'The connectors BOSS has: label, icon, auth fields, capabilities.'
+      operationId: get_v1_ticket_systems_catalog_29e3e7f5
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Ticket System Catalog V1 Ticket Systems Catalog Get
+  /v1/ticket-systems:
+    get:
+      tags:
+      - ticket-systems
+      summary: List Ticket Systems
+      description: The project's connections, each with its status, mappings and settings.
+      operationId: get_v1_ticket_systems_e520cf91
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Ticket Systems V1 Ticket Systems Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - ticket-systems
+      summary: Connect Ticket System
+      description: 'Connect a ticket system: TEST FIRST (nothing is stored when the test fails), then the
+
+        token goes to the secret backend and the row keeps its reference. Reconnecting without a
+
+        token keeps the stored one.'
+      operationId: post_v1_ticket_systems_4d8ed40c
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketConnectBody'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Connect Ticket System V1 Ticket Systems Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/ticket-systems/{connection_id}/test:
+    post:
+      tags:
+      - ticket-systems
+      summary: Test Ticket System
+      description: 'Re-test: who BOSS is there, and what it can do. Refreshes the known project keys.'
+      operationId: post_v1_ticket_systems_connection_id_test_5ca04bab
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Connection Id
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/TicketActorBody'
+              - type: 'null'
+              title: Payload
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Test Ticket System V1 Ticket Systems  Connection Id  Test Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/ticket-systems/{connection_id}:
+    delete:
+      tags:
+      - ticket-systems
+      summary: Disconnect Ticket System
+      description: Disconnect. Work items keep their bindings, with sync paused.
+      operationId: delete_v1_ticket_systems_connection_id_dc7c1262
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Connection Id
+      - name: actor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Disconnect Ticket System V1 Ticket Systems  Connection Id  Delete
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - ticket-systems
+      summary: Update Ticket System
+      description: 'Change settings. Only what is named changes. A mapping onto another BOSS project needs
+
+        integration:manage there too, and gives that project a mirror of this connection.'
+      operationId: patch_v1_ticket_systems_connection_id_708be342
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Connection Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: 'Any of: mappings [{external_project, boss_project_id, default}], write_back {comment, transition, link_pr}, status_map {todo, doing, review, done}, pickup {label, mode: ask|auto_start}, inbound {mode: webhook|poll|off, poll_minutes}. Merged with what is stored.'
+              title: Payload
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Update Ticket System V1 Ticket Systems  Connection Id  Patch
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/ticket-systems/{connection_id}/projects:
+    get:
+      tags:
+      - ticket-systems
+      summary: Ticket System Projects
+      operationId: get_v1_ticket_systems_connection_id_projects_00c6b52a
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Connection Id
+      - name: q
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Q
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Ticket System Projects V1 Ticket Systems  Connection Id  Projects Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/ticket-systems/{connection_id}/projects/{project_key}/epics:
+    get:
+      tags:
+      - ticket-systems
+      summary: Ticket System Epics
+      operationId: get_v1_ticket_systems_connection_id_projects_project_key_epics_5f1b58c6
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Connection Id
+      - name: project_key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Ticket System Epics V1 Ticket Systems  Connection Id  Projects  Project Key  Epics Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/ticket-systems/{connection_id}/projects/{project_key}/unparented:
+    get:
+      tags:
+      - ticket-systems
+      summary: Ticket System Unparented
+      operationId: get_v1_ticket_systems_connection_id_projects_project_key_unparented_da3ac999
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Connection Id
+      - name: project_key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Ticket System Unparented V1 Ticket Systems  Connection Id  Projects  Project Key  Unparented Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/ticket-systems/{connection_id}/tickets/{key}:
+    get:
+      tags:
+      - ticket-systems
+      summary: Ticket System Ticket
+      operationId: get_v1_ticket_systems_connection_id_tickets_key_2a211b44
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Connection Id
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Ticket System Ticket V1 Ticket Systems  Connection Id  Tickets  Key  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/ticket-systems/{connection_id}/tickets/{key}/children:
+    get:
+      tags:
+      - ticket-systems
+      summary: Ticket System Children
+      operationId: get_v1_ticket_systems_connection_id_tickets_key_children_fa985a92
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Connection Id
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Ticket System Children V1 Ticket Systems  Connection Id  Tickets  Key  Children Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/ticket-systems/{connection_id}/search:
+    get:
+      tags:
+      - ticket-systems
+      summary: Ticket System Search
+      description: 'Search. ``status`` is a category (todo, doing, review, done) or ``open``; ``type`` one of
+
+        bug, story, task, epic. Only these filters reach the connector (never raw query text).'
+      operationId: get_v1_ticket_systems_connection_id_search_18736da5
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Connection Id
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Q
+      - name: project
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      - name: type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Type
+      - name: assignee
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Assignee
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Ticket System Search V1 Ticket Systems  Connection Id  Search Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/tickets/resolve:
+    get:
+      tags:
+      - ticket-systems
+      summary: Resolve Tickets
+      description: 'Ticket keys and links in any text, across the project''s connections → previews. A key is
+
+        recognised only for a project a connection knows (``UTF-8`` is never a ticket).'
+      operationId: get_v1_tickets_resolve_8fb8aa3c
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: text
+        in: query
+        required: true
+        schema:
+          type: string
+          maxLength: 20000
+          title: Text
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Resolve Tickets V1 Tickets Resolve Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/projects/{project_id}/tickets/import:
+    post:
+      tags:
+      - ticket-systems
+      summary: Import Tickets
+      description: 'Tickets → work items + bindings, status Ready (``todo``). An epic ``with_children`` brings
+
+        its children as items under it. A ticket already in BOSS is not imported again.'
+      operationId: post_v1_projects_project_id_tickets_import_65b40d27
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketImportBody'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Import Tickets V1 Projects  Project Id  Tickets Import Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/projects/{project_id}/tickets/waiting:
+    get:
+      tags:
+      - ticket-systems
+      summary: Waiting Tickets
+      description: 'The pick-up inbox: open tickets with the connection''s pickup label, not yet in BOSS.'
+      operationId: get_v1_projects_project_id_tickets_waiting_55469d9d
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Waiting Tickets V1 Projects  Project Id  Tickets Waiting Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/work-items/{work_item_id}/start-from-ticket:
+    post:
+      tags:
+      - ticket-systems
+      summary: Start From Ticket
+      description: 'Start the work an imported ticket became, on the workflow its type calls for (or the one
+
+        named). The ticket is read fresh from its system, so the run starts from what it says NOW,
+
+        and it travels as ``input.ticket``. Also needs workflow_run:start.
+
+
+        (Not ``POST /v1/work-items/{id}/start``: that route already exists — a policy-aware start by
+
+        workflow version, permission work_item:manage — and keeps its contract.)'
+      operationId: post_v1_work_items_work_item_id_start_from_ticket_12b4d3e6
+      parameters:
+      - name: work_item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Work Item Id
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/TicketStartBody'
+              - type: 'null'
+              title: Payload
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Start From Ticket V1 Work Items  Work Item Id  Start From Ticket Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     WebhookDelivery:
@@ -64648,3 +65247,144 @@ components:
       required:
       - code
       title: ChatLinkCodeBody
+    TicketActorBody:
+      properties:
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: false
+      type: object
+      title: TicketActorBody
+    TicketConnectBody:
+      properties:
+        project_id:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Project Id
+        provider:
+          type: string
+          maxLength: 40
+          minLength: 1
+          title: Provider
+        base_url:
+          type: string
+          maxLength: 500
+          title: Base Url
+          default: ''
+        fields:
+          additionalProperties: true
+          type: object
+          title: Fields
+          description: The connector's non-secret auth fields (catalog `auth_fields`), e.g. email, project_key.
+        secrets:
+          additionalProperties:
+            type: string
+          type: object
+          title: Secrets
+          description: 'Write-only: the token. Tested first, then stored in the secret backend; never returned (the response carries last4 and a fingerprint).'
+        settings:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Settings
+          description: Optional initial settings, as PATCH takes them.
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: false
+      type: object
+      required:
+      - project_id
+      - provider
+      title: TicketConnectBody
+    TicketImportBody:
+      properties:
+        connection_id:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Connection Id
+        items:
+          items:
+            $ref: '#/components/schemas/TicketImportItem'
+          type: array
+          maxItems: 50
+          minItems: 1
+          title: Items
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: false
+      type: object
+      required:
+      - connection_id
+      - items
+      title: TicketImportBody
+    TicketImportItem:
+      properties:
+        key:
+          type: string
+          maxLength: 300
+          minLength: 1
+          title: Key
+          description: A key (KAN-12) or the ticket's URL.
+        with_children:
+          type: boolean
+          title: With Children
+          default: false
+      additionalProperties: false
+      type: object
+      required:
+      - key
+      title: TicketImportItem
+    TicketStartBody:
+      properties:
+        project_id:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Project Id
+        workflow_key:
+          anyOf:
+          - type: string
+            maxLength: 120
+          - type: 'null'
+          title: Workflow Key
+          description: 'Default: from the ticket type — epic → major_feature, story/task → minor_feature, bug → fast_fix.'
+        start_anyway:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Start Anyway
+        accept:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Accept
+        dedupe_key:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Dedupe Key
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+      additionalProperties: false
+      type: object
+      title: TicketStartBody

@@ -67,6 +67,9 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "sso.login", "sso.link", "sso.unlink", "sso.provider.created", "sso.provider.updated",
     "sso.provider.deleted", "scim.user.created", "scim.user.updated", "scim.user.deactivated",
     "scim.group.created", "scim.group.updated", "scim.group.deleted",
+    # BOSSAPP-1048: an opt-in auto-link by verified domain email, an IdP's back-channel logout,
+    # a SCIM person adopted by domain, and a pushed password BOSS ignored
+    "sso.link.auto", "sso.logout.backchannel", "scim.user.adopted", "scim.password_ignored",
     # agents (stream = lineage for passport/grant/token events)
     "agent.passport.born", "agent.passport.sealed", "agent.passport.ceiling_changed",
     "agent.passport.sponsor_changed", "agent.passport.suspended", "agent.passport.resumed",
