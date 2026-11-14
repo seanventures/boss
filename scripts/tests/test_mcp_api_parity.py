@@ -147,9 +147,13 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     # DELETE /v1/setup/embedding-model, kept out of MCP on purpose. +1 confirmation-gated is
     # POST /v1/projects: held for a non-human caller like POST /v1/orgs, a person confirms it.
     # +1 is POST /v1/decisions/{id}/settle: the same human step-up as approve.
+    # +5 (AP-P1a) are the boss.agent/v1 roster writes — POST /v1/agent-specs, .../import,
+    # PUT /v1/agents/{role_key}/spec, .../versions/{version}/publish and .../spec/rollback —
+    # held for a non-human caller like POST/PATCH /v1/agents (ROSTER_AUTHORITY_WRITES).
     assert rows[("POST", "/v1/projects")]["mcp_status"] == "human_confirmation_gated"
+    assert rows[("PUT", "/v1/agents/{role_key}/spec")]["mcp_status"] == "human_confirmation_gated"
     assert sum(row["mcp_status"] == "human_confirmation_gated"
-               for row in community["operations"]) == 73
+               for row in community["operations"]) == 78
     # +3 operator-only: Rules review's approve / edit / reject (BOSSAPP-768), a person's step-up.
     for action in ("approve", "edit", "reject"):
         assert rows[("POST", f"/v1/knowledge/view/rules/{{rule_id}}/{action}")]["mcp_status"] == (

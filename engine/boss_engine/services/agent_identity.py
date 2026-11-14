@@ -52,7 +52,7 @@ AGENT_ID = re.compile(r"^agt_[0-9a-hjkmnp-tv-z]{10}$")
 LIFECYCLES = ("active", "paused", "retired")
 #: When several kinds of change land in one sealing batch, the version is labelled with the
 #: most significant one.
-_CHANGE_ORDER = ("born", "persona", "remit", "instructions", "grant", "revoke", "model",
+_CHANGE_ORDER = ("born", "spec", "persona", "remit", "instructions", "grant", "revoke", "model",
                  "lifecycle")
 #: Actors that are BOSS rather than a person: never a sponsor.
 _SYSTEM_ACTORS = {"spec-pack", "system", "bootstrap", "boss", "onboarding", "seed", ""}

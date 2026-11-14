@@ -1305,6 +1305,30 @@ def _mirror_org_models() -> dict:
         return {}
 
 
+def _publish_agent_specs() -> dict:
+    """EVERY AGENT IS A VERSIONED boss.agent/v1 SPEC (AGENT_PLATFORM D2). Each roles row, read
+    with what it holds, becomes its agent's active version when it has none or has drifted;
+    each Studio profile gets its v1 profile version. Idempotent: an unchanged install writes
+    nothing on the next boot. Never blocks boot."""
+    from boss_engine.agents import migration as agent_spec_migration
+
+    try:
+        results = agent_spec_migration.sync_all(engine, actor="boss")
+        versioned = {p: len(r["agents"]["versioned"]) + len(r["profiles"]["versioned"])
+                     for p, r in results.items()
+                     if r["agents"]["versioned"] or r["profiles"]["versioned"]}
+        failed = {p: r["agents"]["failed"] + r["profiles"]["failed"] for p, r in results.items()
+                  if r["agents"]["failed"] or r["profiles"]["failed"]}
+        if versioned:
+            print(f"[lifespan] agent specs versioned: {versioned}")
+        if failed:
+            print(f"[lifespan] agent specs not versioned: {failed}")
+        return results
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] agent spec sync skipped: {exc}")
+        return {}
+
+
 def _install_shipped_cast() -> dict:
     """AN UPGRADE GETS THE CAST, in every project, not only a fresh install's default one.
 
@@ -1487,6 +1511,7 @@ async def lifespan(_: FastAPI):
     _sync_builtin_templates()
     _seed_work_tracker_defaults()
     _backfill_agent_identities()
+    _publish_agent_specs()
     _mirror_org_models()
     # REFUSED DEPLOYMENT PLANS LEFT NOTHING BEHIND ONCE, AND NOW NEVER DID. An unverified host
     # used to raise a pending decision nobody could act on and a failed run that never ran;
@@ -14755,6 +14780,39 @@ def execute_orchestrator_next_move(
                 "retryable": False,
                 "message": str(error),
             }
+
+
+class AgentStudioRunExecuteRequest(BaseModel):
+    project_id: str
+    agent_studio_run_id: str
+    created_by_job_id: str
+    worker_id: str
+    lease_token: str
+
+
+@app.post("/v1/agent-studio/runs/execute")
+@permit(P.WORKER_LEASE)
+def execute_agent_studio_run(payload: AgentStudioRunExecuteRequest) -> dict[str, Any]:
+    """Worker-only boundary for leased agent.studio.execute jobs (AGENT_PLATFORM D13).
+
+    A Studio run used to be answered by a templated brief in the worker (`deterministic_brief`)
+    that called no model. It now runs here, through the governed agent-step pipeline, under the
+    worker's LIVE lease on that very job."""
+    require_worker_principal()
+    with begin(engine) as connection:
+        try:
+            lease = jobs.require_active_lease(connection, payload.worker_id, payload.created_by_job_id,
+                                              payload.lease_token)
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if lease["kind"] != "agent.studio.execute" or lease["project_id"] != payload.project_id:
+            raise HTTPException(status_code=409, detail="lease does not match this Agent Studio run")
+        try:
+            return {"status": "succeeded", **agent_studio.execute_run(
+                connection, project_id=payload.project_id, run_id=payload.agent_studio_run_id,
+                actor="worker")}
+        except ValueError as error:
+            return {"status": "failed", "retryable": False, "message": str(error)}
 
 
 @app.get("/v1/meetings", response_model=MeetingListResponse)
@@ -31959,6 +32017,14 @@ app.include_router(build_agents_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
     actor_can=project_actor_can,
+))
+# boss.agent/v1: versioned agent specs — create, save, publish, roll back, diff, YAML in/out.
+from .routers.agent_specs import build_agent_specs_router
+
+app.include_router(build_agent_specs_router(
+    engine=engine,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
 ))
 # KG P6b: connect a bank's own agent — register/list/get/test/suspend/remove (routers/external_agents.py).
 from .routers.external_agents import build_external_agents_router

@@ -1158,6 +1158,7 @@ def create_agent(
     emit_event(connection, project_id, "agent.created", actor, "role", key,
                {"skills": skill_ids, "mcp_servers": [s["id"] for s in servers],
                 "reports_to": parent, "born_from": origin})
+    _record_version(connection, project_id, key, actor)
     return {**get_agent(connection, project_id, key), "warnings": warnings}
 
 
@@ -1461,7 +1462,18 @@ def update_agent(
                 agent_identity.seal_identity(connection, project_id, key, "persona", actor)
             if {"display_name", "mission", "boundaries", "reports_to"} & changed.keys():
                 agent_identity.seal_identity(connection, project_id, key, "remit", actor)
+    if changed:
+        _record_version(connection, project_id, key, actor)
     return {**get_agent(connection, project_id, key), "warnings": warnings}
+
+
+def _record_version(connection: Connection, project_id: str, key: str, actor: str) -> None:
+    """THE ROW WAS WRITTEN THE OLD WAY: record it as the agent's next boss.agent/v1 version
+    (agents/versions.snapshot), so the version history stays the truth. Never fails the write."""
+    from ..agents import versions
+
+    agent_identity.quietly(connection, versions.snapshot, project_id, key, actor=actor,
+                           source="legacy_edit")
 
 
 def delete_agent(connection: Connection, project_id: str, role_key: str, *,

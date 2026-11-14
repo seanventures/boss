@@ -609,7 +609,8 @@ class AgentStudioService:
             errors.append("a2a_policy.publish and a2a_policy.subscribe must be lists.")
         if execution_mode == "deterministic_brief":
             warnings.append(
-                "This version is side-effect-free and does not call a live model."
+                "execution_mode deterministic_brief is retired: this version runs through the "
+                "governed agent pipeline like every other (a live, budgeted model run)."
             )
 
         validation = {
@@ -906,10 +907,10 @@ class AgentStudioService:
         blocked_reason = None
         if compiled["denied_skills"]:
             blocked_reason = "effective_capability_intersection_denied"
-        elif execution_mode == "live_model" and not budget_reservation_id:
-            blocked_reason = "live_model_requires_budget_reservation"
-        elif execution_mode == "live_model":
-            blocked_reason = "live_model_runtime_not_enabled_for_this_release"
+        # NO MODE IS BLOCKED AND NONE IS TEMPLATED (AGENT_PLATFORM D13). `deterministic_brief`
+        # answered with a canned brief and called no model; `live_model` was refused outright.
+        # Both now run through the governed agent-step pipeline (`execute_run`): the role's own
+        # grant, the budget governor, the ledger and approvals. P1b moves that onto the kernel.
 
         status = "blocked" if blocked_reason else "queued"
         connection.execute(
@@ -1061,6 +1062,64 @@ class AgentStudioService:
             },
         )
         return self.get_agent_run(connection, project_id, run_id)
+
+    def execute_run(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        run_id: str,
+        actor: str = "worker",
+    ) -> dict[str, Any]:
+        """Run one queued Studio run through the GOVERNED agent pipeline.
+
+        The profile's role does the work (agent_steps.run: its held skills only, scoped to the
+        profile's effective skills; budget, permissions, approvals and the ledger as for any
+        agent step), told the profile's compiled prompt and the run's objective. Returns the
+        result `record_job_success` stores. Replaces the retired templated `deterministic_brief`.
+        """
+        from . import agent_steps
+
+        run = self.get_agent_run(connection, project_id, run_id)
+        version = self.get_agent_version(connection, project_id, run["agent_version_id"])
+        compiled = run.get("compiled_context") or self._compile_agent_context(
+            connection, project_id, version)
+        prompt = (compiled.get("agent_runtime") or {}).get("compiled_prompt") or {}
+        input_data = run.get("input") or {}
+        objective = str(input_data.get("objective") or input_data.get("prompt")
+                        or version["agent_name"])
+        instructions = "\n\n".join(part for part in (
+            str(prompt.get("system") or "").strip(),
+            str(prompt.get("job") or "").strip(),
+            f"OBJECTIVE\n{objective}",
+        ) if part)
+        effective = list(compiled.get("effective_skills") or [])
+        limits = version.get("limits") or {}
+        connection.execute(
+            text("UPDATE agent_studio_runs SET status = 'running', updated_at = now() "
+                 "WHERE id = :id AND status IN ('queued', 'leased')"), {"id": run_id})
+        outcome = agent_steps.run(
+            connection, self.settings, project_id,
+            instructions=instructions, role_key=version["role_key"],
+            context={k: v for k, v in input_data.items() if k not in ("objective", "prompt")},
+            actor=actor, max_steps=int(limits.get("max_steps") or 0) or None,
+            skills=effective or None,
+        )
+        output = outcome.get("output") if isinstance(outcome.get("output"), dict) else {}
+        return {
+            "summary": str(outcome.get("summary") or output.get("summary") or objective)[:2000],
+            "strategy_id": "agent.studio.execute",
+            "execution": "governed_agent_step",
+            "agent_module": {"id": f"studio:{version['agent_key']}", "role_key": version["role_key"],
+                             "version": str(version["version"])},
+            "work_product": {
+                "contract": str((version.get("output_contract") or {}).get("artifact_type")
+                                or "AgentStudioWorkProduct"),
+                "sections": list((version.get("output_contract") or {}).get("sections") or []),
+            },
+            "agent_step": {k: v for k, v in outcome.items() if k != "transcript"},
+            "evidence_refs": list(input_data.get("evidence_refs") or []),
+        }
 
     def get_agent_run(
         self, connection: Connection, project_id: str, run_id: str
@@ -2378,6 +2437,12 @@ class AgentStudioService:
         project_skills = self._project_skill_ids(connection, project_id)
         enabled_skills = self._enabled_project_skill_ids(connection, project_id)
         role_allowed = self._role_allowed_skill_ids(role["spec"] or {}, project_skills)
+        # THE GRANT IS THE PERMISSION (as validate_agent_version reads it): what the role holds
+        # in role_skills counts, not only what its spec names.
+        role_allowed |= set(connection.execute(
+            text("SELECT skill_id FROM role_skills WHERE project_id = :p AND role_key = :r"),
+            {"p": project_id, "r": version["role_key"]},
+        ).scalars().all())
         requested: set[str] = set()
         for reference in version["requested_skills"]:
             requested.update(matching_skill_ids(reference, project_skills))

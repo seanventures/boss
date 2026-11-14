@@ -221,17 +221,6 @@ export function validateAgentWizardDraft(
   if (!draft.artifactType.trim()) {
     issues.push({ field: "artifactType", message: "Output artifact type is required." });
   }
-  if (draft.executionMode === "live_model") {
-    // SAID BEFORE PUBLISH, NOT AFTER. Every Studio run of a live_model version is blocked in
-    // this release (agent_studio.start_agent_run: live_model_runtime_not_enabled), so offering
-    // it produced an agent whose every run failed. A workflow step runs the agent on the
-    // project's chat model whatever this says; that is where live work happens.
-    issues.push({
-      field: "runtime",
-      message: "Live-model Studio runs are not available in this release — choose Deterministic "
-        + "brief. Workflow steps given to this agent still run on the project's chat model.",
-    });
-  }
   if (
     draft.executionMode === "live_model" &&
     parseWizardList(draft.preferredCapabilitiesText).length === 0

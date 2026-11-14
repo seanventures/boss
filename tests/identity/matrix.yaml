@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2130 operations.
+# 2142 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/oauth-authorization-server": ["public:oidc_provider_endpoint", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
@@ -117,6 +117,9 @@
 "GET /v1/agent-runs": ["permit workflow_run:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/agent-runs/{run_id}/resume": ["permit worker:lease @ org", "-"]
 "POST /v1/agent-runtime/resolve": ["permit pack:read @ project(body=project_id)", "OAPVU"]
+"POST /v1/agent-specs": ["permit agent:create @ project(body=project_id)", "OAP"]
+"POST /v1/agent-specs/import": ["permit agent:create @ project(body=project_id)", "OAP"]
+"GET /v1/agent-specs/schema": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/agent-studio/agent-versions/{version_id}/publish": ["permit agent:publish @ project(body=project_id)", "OA"]
 "POST /v1/agent-studio/agent-versions/{version_id}/runs": ["permit agent:test @ project(body=project_id)", "OAP"]
 "POST /v1/agent-studio/agent-versions/{version_id}/tests": ["permit agent:test @ project(body=project_id)", "OAP"]
@@ -132,6 +135,7 @@
 "GET /v1/agent-studio/panels": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/agent-studio/panels": ["permit agent:create @ project(body=project_id)", "OAP"]
 "POST /v1/agent-studio/panels/{panel_id}/versions": ["permit agent:create @ project(body=project_id)", "OAP"]
+"POST /v1/agent-studio/runs/execute": ["permit worker:lease @ org", "-"]
 "POST /v1/agent-studio/seed": ["permit agent:publish @ project(body=project_id)", "OA"]
 "GET /v1/agent-studio/templates": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/agent-studio/templates/{template_id}/install": ["permit agent:publish @ project(body=project_id)", "OA"]
@@ -177,6 +181,14 @@
 "GET /v1/agents/{role_key}/signing-keys": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/agents/{role_key}/signing-keys": ["permit agent:lifecycle @ project(body=project_id)", "OA"]
 "POST /v1/agents/{role_key}/signing-keys/{kid}/revoke": ["permit agent:lifecycle @ project(body=project_id)", "OA"]
+"GET /v1/agents/{role_key}/spec": ["permit agent:read @ project(query=project_id)", "OAPVU"]
+"PUT /v1/agents/{role_key}/spec": ["permit agent:update @ project(body=project_id)", "OA"]
+"GET /v1/agents/{role_key}/spec/diff": ["permit agent:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/agents/{role_key}/spec/export": ["permit agent:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/agents/{role_key}/spec/rollback": ["permit agent:update @ project(body=project_id)", "OA"]
+"GET /v1/agents/{role_key}/spec/versions": ["permit agent:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/agents/{role_key}/spec/versions/{version}": ["permit agent:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/agents/{role_key}/spec/versions/{version}/publish": ["permit agent:update @ project(body=project_id)", "OA"]
 "POST /v1/agents/{role_key}/test": ["permit agent:test @ project(body=project_id)", "OAP"]
 "GET /v1/agents/{role_key}/versions/{version}/instructions": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/ai-sre/ask": ["permit reliability:read @ project(body=project_id)", "OAPVU"]

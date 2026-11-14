@@ -43,6 +43,8 @@ WRITERS = {
     # four CVE-squad roles only where the project has none (ON CONFLICT DO NOTHING) and asks
     # seed_exclusions first, so a role an operator removed is never brought back.
     "services/ambient/squad_demo.py::ensure_demo_roles": "seed",
+    # boss.agent/v1 (AP-P1a): a new agent from a spec a person posted or imported.
+    "agents/versions.py::create_from_spec": "operator",
 }
 
 #: Every place one of the writers above is called from, and why that is safe.
@@ -119,6 +121,13 @@ CALLERS = {
     "services/kit.py::_grant_quietly -> grant_mcp": "seed path below",
     "services/kit_connections.py::add_catalogue_server -> register_mcp_server":
         "operator: Add from the MCP catalogue (or Library docs' Save & test)",
+    # boss.agent/v1 (AP-P1a): publishing / rolling back / importing a spec is a person's act
+    # (POST/PUT spec routes, held for non-humans); the boot migration only snapshots, never
+    # projects, so it grants nothing.
+    "agents/versions.py::_project -> assign_skill_to_role": "operator: a published agent spec",
+    "agents/versions.py::_project -> grant_mcp": "operator: a published agent spec",
+    "agents/versions.py::import_yaml -> create_from_spec": "operator: POST /v1/agent-specs/import",
+    "routers/agent_specs.py::* -> create_from_spec": "operator: POST /v1/agent-specs",
 }
 
 #: The seed paths, each of which must consult the exclusions before it writes.
@@ -240,6 +249,9 @@ SPEC_WRITERS = {
     "services/shipped_cast.py::install_or_fill": "seed",
     # Load demo on a demo project: inserts a missing role only, never updates one (see WRITERS).
     "services/ambient/squad_demo.py::ensure_demo_roles": "seed",
+    # boss.agent/v1 (AP-P1a): both record a role_spec exclusion (a person's spec).
+    "agents/versions.py::create_from_spec": "operator",
+    "agents/versions.py::_project": "operator",
 }
 
 
