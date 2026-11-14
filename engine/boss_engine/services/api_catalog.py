@@ -126,7 +126,8 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
     "work": {
         "title": "Work orchestration & trackers",
         "description": "Work items, trackers (Plane/Jira/Linear/GitHub/ADO), allocations.",
-        "prefixes": ["/v1/work-trackers", "/v1/work-orchestration", "/v1/work"],
+        "prefixes": ["/v1/work-trackers", "/v1/work-orchestration", "/v1/work",
+                     "/v1/ticket-systems", "/v1/tickets"],
     },
     "cloud": {
         "title": "Cloud product & editions",

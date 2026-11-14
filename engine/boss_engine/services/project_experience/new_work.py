@@ -48,6 +48,8 @@ _AFTER_THE_PR = ("deploy", "redeploy", "notify", "monitor", "monitoring_pack", "
 _GITHUB_ISSUE = re.compile(r"https?://github\.com/([\w.-]+/[\w.-]+)/(issues|pull)/(\d+)", re.I)
 _PLANE_ISSUE = re.compile(r"https?://[^\s]*plane[^\s]*/[^\s]*?(?:issues|work-items|browse)/"
                           r"([A-Za-z0-9_-]+)", re.I)
+#: A Jira issue link (Cloud or Server): …/browse/KEY-12.
+_JIRA_ISSUE = re.compile(r"https?://[^\s/]+(?:/[^\s]*?)?/browse/([A-Z][A-Z0-9_]+-\d+)\b")
 _URL = re.compile(r"https?://\S+")
 
 
@@ -73,6 +75,10 @@ def issue_of(source_ref: Any = None, source_url: Any = None,
             key = m.group(1)
             return {"provider": "plane", "number": None, "label": key, "kind": "issue",
                     "external_url": _URL.search(candidate).group(0)}
+        m = _JIRA_ISSUE.search(candidate)
+        if m:
+            return {"provider": "jira", "number": None, "label": m.group(1), "kind": "issue",
+                    "external_url": _URL.search(candidate).group(0).rstrip(").,;")}
     m = re.fullmatch(r"(issue|pr):(\d+)", ref)
     if m and repo and str(repo).startswith("local_"):
         # A repository BOSS keeps on this machine (BOSSAPP-918) has change sets, not GitHub
@@ -97,16 +103,40 @@ def issue_of(source_ref: Any = None, source_url: Any = None,
 
 def ticket_link(said: str) -> Optional[str]:
     """The first issue link in what a person pasted as a Ticket."""
-    for pattern in (_GITHUB_ISSUE, _PLANE_ISSUE):
+    for pattern in (_GITHUB_ISSUE, _PLANE_ISSUE, _JIRA_ISSUE):
         m = pattern.search(said or "")
         if m:
             return _URL.search(said[m.start():]).group(0).rstrip(").,;")
     return None
 
 
-def ticket_title(said: str, link: Optional[str]) -> Optional[str]:
-    """A Ticket's name: the words around the link, else "Issue #12" / the Plane key."""
+def ticket_refs(said: str, connections: Any) -> list[Any]:
+    """Every ticket the words name across the project's connected ticket systems — their links,
+    and bare keys (``LEND-12``) of projects a connection knows (``UTF-8`` never is one) —
+    through the connectors' own parser (connectors.tickets.parse_refs)."""
+    from ...connectors.tickets import parse_refs
+
+    return parse_refs(said or "", connections or [])
+
+
+def issue_of_ticket(ticket: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    """The issue chip for a resolved ``input.ticket`` (ticket_intake.ticket_input)."""
+    if not ticket or not ticket.get("key"):
+        return None
+    return {"provider": str(ticket.get("provider") or "link"), "number": None,
+            "label": str(ticket["key"]), "kind": "issue",
+            "external_url": ticket.get("url") or None}
+
+
+def ticket_title(said: str, link: Optional[str],
+                 ticket: Optional[Mapping[str, Any]] = None) -> Optional[str]:
+    """A Ticket's name: the words around the link, else the resolved ticket's own title, else
+    "Issue #12" / the Plane or Jira key."""
+    from ...connectors.tickets.refs import KEY_PATTERN
+
     rest = " ".join(_URL.sub(" ", said or "").split())
+    if ticket and ticket.get("title") and (not rest or KEY_PATTERN.fullmatch(rest)):
+        return " ".join(str(ticket["title"]).split())[:80]
     if rest:
         return None  # the start door names it from the words (titles.shorten)
     found = issue_of(source_url=link)

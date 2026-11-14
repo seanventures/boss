@@ -305,17 +305,27 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
             raise HTTPException(status_code=422, detail={
                 "error": "unknown_workflow", "message": str(error)}) from None
     repo = (page.get("repo") or {}).get("full_name")
+    # A TICKET OF A CONNECTED SYSTEM (BOSSAPP-1047) — a Jira/Plane link, or a bare key like
+    # LEND-12 of a project the connection knows — is read ONCE, here, before anything starts,
+    # and travels as input.ticket (the start door is handed it, so it does not read it again).
+    from apps.api.app.main import _ticket_for_start
+
+    ticket, ticket_note = _ticket_for_start(
+        project_id, {"directive": said, "source_url": payload.source_url or ""})
     # A TICKET pasted as a link keeps the link (the row's #12 chip); so does work started from an
     # issue the onboarding agent found (`issue:12`) or a roadmap item that carries one.
     link = (payload.source_url or "").strip() or (new_work.ticket_link(said) if kind == "ticket"
                                                   else None)
-    issue = new_work.issue_of(payload.source_ref, link, repo)
+    if not link and ticket and kind == "ticket":
+        link = ticket.get("url") or None
+    issue = new_work.issue_of(payload.source_ref, link, repo) or (
+        new_work.issue_of_ticket(ticket) if ticket else None)
     from boss_engine.services.project_experience.titles import strip_label
 
     briefed = _brief_fields(payload, said)
     title = (strip_label(" ".join((payload.title or "").split()))[:80]
              or briefed.pop("title", None)
-             or (new_work.ticket_title(said, link) if kind == "ticket" else None)
+             or (new_work.ticket_title(said, link, ticket) if kind == "ticket" else None)
              or _title_of(said, page["name"]))
     briefed.pop("title", None)
     # THE ISSUE CHIP's "create": the work is filed in the project's tracker first, so the run,
@@ -348,7 +358,7 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
         body["accept"] = list(payload.accept)
     if payload.dedupe_key:
         body["dedupe_key"] = payload.dedupe_key
-    started = start_delivery_workflow(WorkflowStartBody(**body))
+    started = start_delivery_workflow(WorkflowStartBody(**body), ticket=ticket or {})
     run_id = str(((started or {}).get("run") or {}).get("id") or "")
     with begin(_engine) as connection:
         if run_id and payload.source_ref:
@@ -368,6 +378,11 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
         out["issue"] = issue
     if issue_error:
         out["issue_error"] = issue_error
+    if ticket:
+        out["ticket"] = {k: ticket.get(k) for k in ("provider", "connection_id", "key", "url",
+                                                    "title", "untrusted")}
+    if ticket_note:
+        out["ticket_note"] = ticket_note
     return out
 
 

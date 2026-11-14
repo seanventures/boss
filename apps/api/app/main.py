@@ -27570,13 +27570,19 @@ def start_delivery_workflow_endpoint(payload: WorkflowStartBody) -> dict:
     return start_delivery_workflow(payload)
 
 
-def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = None) -> dict:
+def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = None, *,
+                            ticket: Optional[dict] = None) -> dict:
     """THE start path behind POST /v1/delivery-workflows/start: the one door, for HTTP and the
     chat's start card (a route handler is FastAPI's to call: test_no_code_calls_a_route_handler).
 
     `connection_in`: run every read and the start itself in the CALLER's transaction (a
     template apply writes its secret bindings and application row in the same one, so a refusal
-    here — consent, readiness, a 404 — rolls all of it back: a refused apply writes nothing)."""
+    here — consent, readiness, a 404 — rolls all of it back: a refused apply writes nothing).
+
+    `ticket`: an `input.ticket` a server-side caller already resolved (ticket_intake.ticket_input
+    — New work, Start from a ticket). Otherwise the door resolves it itself, ONCE, before its
+    transaction: `input.ticket` names one (a key, a link, {connection_id, key}; its content is
+    never the caller's), else the first ticket reference in the directive (BOSSAPP-1047)."""
     import contextlib as _contextlib
 
     def _tx():
@@ -27781,6 +27787,12 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             raise HTTPException(status_code=404, detail="that preview is not in this project")
         run_input["preview_id"] = preview_id
         extends["preview_id"] = preview_id
+    # THE TICKET THIS WORK IS FOR (BOSSAPP-1047): read from its system here, before the start's
+    # transaction, and attached only AFTER the agreement check below (the agreement binds the
+    # brief the person saw; the ticket is what that brief names).
+    ticket_note = None
+    if ticket is None:
+        ticket, ticket_note = _ticket_for_start(project_id, run_input)
     with _tx() as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
         _authorize_delivery_target_input(connection, project_id, actor, run_input)
@@ -27802,6 +27814,8 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
                 raise HTTPException(409, str(error)) from error
             # A confirmation replay is one intent, independent of its HTTP press key.
             payload["dedupe_key"] = work_agreement.intent_key(agreement_token)
+        if ticket:
+            run_input["ticket"] = ticket
         if workflow_key:
             # THE VERSION THAT RUNS. version DESC is the abandoned spec after a revert:
             # re-saving an earlier configuration reactivates it without a new number, and
@@ -27887,6 +27901,12 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             raise HTTPException(status_code=422, detail=str(error)) from error
         from boss_engine.services.workflow_readiness import record_started_anyway
 
+        if ticket and not run.get("duplicate"):
+            # The binding work item <-> ticket, so the write-back can find this run's ticket.
+            from boss_engine.services import ticket_intake as _tickets
+
+            _tickets.bind_run(connection, project_id=project_id, run_id=str(run.get("id") or ""),
+                              ticket=ticket, actor=actor)
         if not run.get("duplicate"):
             from boss_engine.services.workflow_precheck import record_on_run
 
@@ -27905,10 +27925,30 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         # adoption and did not get it should be able to see that, not wonder why its run
         # behaved differently from the one it copied.
         return {"run": run, **({"ignored_input": dropped} if dropped else {}),
+                **({"ticket": {k: ticket.get(k) for k in ("provider", "connection_id", "key",
+                                                          "url", "title", "untrusted")}}
+                   if ticket else {}),
+                **({"ticket_note": ticket_note} if ticket_note else {}),
                 **({"readiness": readiness} if readiness.get("missing") else {}),
                 **({"precheck": precheck} if precheck else {}),
                 **({"extends": extends} if extends else {}),
                 **({"app_links": requested_links} if requested_links else {})}
+
+
+def _ticket_for_start(project_id: str, run_input: dict) -> tuple:
+    """(input.ticket or None, a note or None) for a start (services.ticket_intake). A ticket the
+    caller NAMED that cannot be read refuses the start with its typed error; one only mentioned
+    in the text never does."""
+    from boss_engine.services import ticket_intake
+
+    who = identity_guard.REQUEST_IDENTITY.get()
+    principal = getattr(who, "principal", None)
+    person = (str(principal.id) if principal is not None
+              and getattr(getattr(principal, "kind", None), "value", None) == "user" else None)
+    try:
+        return ticket_intake.resolve_for_start(engine, project_id, run_input, person_id=person)
+    except ticket_intake.TicketApiError as error:
+        raise HTTPException(status_code=error.status, detail=error.body()) from error
 
 
 def _delivery_readiness_or_409(

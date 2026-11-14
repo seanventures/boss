@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "acacf3702bb4806d"
+CATALOGUE_FINGERPRINT = "f9a52b6b742bbde1"
 
 
 class Permission(StrEnum):
@@ -110,6 +110,7 @@ class Permission(StrEnum):
     DISCOVERY_CREATE = "discovery:create"
     WORK_ITEM_READ = "work_item:read"
     WORK_ITEM_MANAGE = "work_item:manage"
+    WORK_TRACKER_WRITE = "work_tracker:write"
     JOB_READ = "job:read"
     JOB_CONTROL = "job:control"
     DEADLETTER_MANAGE = "deadletter:manage"
@@ -320,6 +321,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "discovery:create": PermissionMeta(key="discovery:create", title="Start research", description="Start, deepen and promote research.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "work_item:read": PermissionMeta(key="work_item:read", title="View work items", description="See the task board, work plane, allocation, releases and plans.", category="Workflows and work", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "work_item:manage": PermissionMeta(key="work_item:manage", title="Manage work items", description="Create and change tasks, initiatives, cycles, releases, quotas and plans.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "work_tracker:write": PermissionMeta(key="work_tracker:write", title="Work with tickets", description="Import tickets from a connected ticket system as work items, start work from them, and write back to them.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "job:read": PermissionMeta(key="job:read", title="View jobs", description="See background jobs and the queue.", category="Workflows and work", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "job:control": PermissionMeta(key="job:control", title="Control jobs", description="Cancel and reprioritise jobs.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "deadletter:manage": PermissionMeta(key="deadletter:manage", title="Manage dead letters", description="Retry, requeue and remediate dead letters.", category="Workflows and work", roles=('owner', 'admin'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
@@ -443,7 +445,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 197
+    "owner": frozenset({  # 198
         "directory:read",
         "user:read",
         "user:invite",
@@ -540,6 +542,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "discovery:create",
         "work_item:read",
         "work_item:manage",
+        "work_tracker:write",
         "job:read",
         "job:control",
         "deadletter:manage",
@@ -642,7 +645,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "admin": frozenset({  # 188
+    "admin": frozenset({  # 189
         "directory:read",
         "user:read",
         "user:invite",
@@ -733,6 +736,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "discovery:create",
         "work_item:read",
         "work_item:manage",
+        "work_tracker:write",
         "job:read",
         "job:control",
         "deadletter:manage",
@@ -832,7 +836,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "operator": frozenset({  # 96
+    "operator": frozenset({  # 97
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
@@ -876,6 +880,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "discovery:create",
         "work_item:read",
         "work_item:manage",
+        "work_tracker:write",
         "job:read",
         "job:control",
         "assistant:chat",
@@ -1064,10 +1069,10 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 }
 
 PASSPORT_PRESETS: dict[str, PassportPreset] = {
-    "builder": PassportPreset(key="builder", name="Builder", agents=('forge', 'strata', 'prism', 'helm'), permissions=('knowledge:read', 'code_task:read', 'code_task:create', 'code_task:steer', 'code_task:retry', 'repository:read', 'github:read', 'github:sync', 'preview:read', 'preview:manage', 'artifact:read', 'artifact:rebuild', 'workflow:read', 'workflow_run:read', 'skill:read', 'skill:invoke', 'memory:read', 'memory:manage', 'spend:reserve', 'secret:lease', 'sandbox:read', 'agent:read', 'decision:read', 'deployment:read', 'host:read', 'meeting:read', 'observability:read', 'project:read', 'system:read'), external_ceiling={"github": {"contents": "write", "pull_requests": "write", "push_refs": "boss/*"}}),
+    "builder": PassportPreset(key="builder", name="Builder", agents=('forge', 'strata', 'prism', 'helm'), permissions=('knowledge:read', 'code_task:read', 'code_task:create', 'code_task:steer', 'code_task:retry', 'repository:read', 'github:read', 'github:sync', 'preview:read', 'preview:manage', 'artifact:read', 'artifact:rebuild', 'workflow:read', 'workflow_run:read', 'skill:read', 'skill:invoke', 'memory:read', 'memory:manage', 'spend:reserve', 'secret:lease', 'sandbox:read', 'agent:read', 'decision:read', 'deployment:read', 'host:read', 'meeting:read', 'observability:read', 'project:read', 'system:read', 'integration:read', 'work_tracker:write'), external_ceiling={"github": {"contents": "write", "pull_requests": "write", "push_refs": "boss/*"}}),
     "reviewer": PassportPreset(key="reviewer", name="Reviewer", agents=('vera', 'rook', 'sentry', 'weave', 'muse', 'plumb', 'mend'), permissions=('knowledge:read', 'code_task:read', 'code_task:steer', 'repository:read', 'github:read', 'preview:read', 'artifact:read', 'assurance:read', 'assurance:run', 'workflow_run:read', 'skill:read', 'skill:invoke', 'memory:read', 'spend:reserve', 'security_scan:run', 'meeting:read', 'meeting:convene', 'agent:read', 'decision:read', 'deployment:read', 'host:read', 'observability:read', 'project:read', 'sandbox:read', 'system:read', 'workflow:read'), external_ceiling={"github": {"contents": "read", "pull_requests": "write"}}),
-    "planner": PassportPreset(key="planner", name="Planner", agents=('juno', 'atlas', 'keystone', 'rally', 'vector', 'cadence', 'marshal'), permissions=('knowledge:read', 'code_task:read', 'code_task:create', 'meeting:read', 'meeting:convene', 'discovery:read', 'discovery:create', 'workflow:read', 'workflow:create', 'workflow_run:read', 'workflow_run:start', 'work_item:read', 'work_item:manage', 'decision:read', 'memory:read', 'memory:manage', 'spend:reserve', 'agent:read', 'deployment:read', 'github:read', 'host:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read'), external_ceiling={"github": {"contents": "read", "issues": "write"}}),
-    "operator_agent": PassportPreset(key="operator_agent", name="Operator agent", agents=('harbor', 'pilot', 'bedrock', 'relay', 'beacon', 'anchor'), permissions=('knowledge:read', 'deployment:read', 'deployment:create', 'host:read', 'infra:read', 'observability:read', 'reliability:read', 'reliability:respond', 'preview:read', 'preview:manage', 'workflow_run:read', 'workflow_run:control', 'spend:reserve', 'secret:lease', 'agent:read', 'code_task:read', 'decision:read', 'github:read', 'meeting:read', 'memory:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),
+    "planner": PassportPreset(key="planner", name="Planner", agents=('juno', 'atlas', 'keystone', 'rally', 'vector', 'cadence', 'marshal'), permissions=('knowledge:read', 'code_task:read', 'code_task:create', 'meeting:read', 'meeting:convene', 'discovery:read', 'discovery:create', 'workflow:read', 'workflow:create', 'workflow_run:read', 'workflow_run:start', 'work_item:read', 'work_item:manage', 'decision:read', 'memory:read', 'memory:manage', 'spend:reserve', 'agent:read', 'deployment:read', 'github:read', 'host:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'integration:read', 'work_tracker:write'), external_ceiling={"github": {"contents": "read", "issues": "write"}}),
+    "operator_agent": PassportPreset(key="operator_agent", name="Operator agent", agents=('harbor', 'pilot', 'bedrock', 'relay', 'beacon', 'anchor'), permissions=('knowledge:read', 'deployment:read', 'deployment:create', 'host:read', 'infra:read', 'observability:read', 'reliability:read', 'reliability:respond', 'preview:read', 'preview:manage', 'workflow_run:read', 'workflow_run:control', 'spend:reserve', 'secret:lease', 'agent:read', 'code_task:read', 'decision:read', 'github:read', 'meeting:read', 'memory:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read', 'integration:read', 'work_tracker:write'), external_ceiling={}),
     "analyst": PassportPreset(key="analyst", name="Analyst", agents=('ledger', 'meter', 'conduit', 'sweep', 'writ', 'tally', 'switch', 'mesh', 'sift', 'rubric', 'watch', 'gather', 'echo', 'probe', 'conductor', 'trace', 'draft', 'remedy', 'seal', 'ladder'), permissions=('knowledge:read', 'budget:read', 'model_provider:read', 'infra:read', 'observability:read', 'activity:read', 'spend:reserve', 'workflow_run:read', 'agent:read', 'code_task:read', 'decision:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'memory:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),
     "writer": PassportPreset(key="writer", name="Writer and publisher", agents=('quill', 'herald', 'splice', 'scribe'), permissions=('knowledge:read', 'artifact:read', 'artifact:rebuild', 'discovery:read', 'comms:read', 'comms:send', 'memory:read', 'spend:reserve', 'workflow_run:read', 'agent:read', 'code_task:read', 'decision:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),
     "guardian": PassportPreset(key="guardian", name="Guardian", agents=('warden', 'vault', 'halo'), permissions=('knowledge:read', 'agent:read', 'agent_passport:read', 'activity:read', 'policy:read', 'secret:read_metadata', 'workflow_run:read', 'code_task:read', 'decision:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'memory:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),
