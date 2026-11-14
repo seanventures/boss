@@ -39,7 +39,7 @@ ACTION = "promote_agent_deployment"
 #: The run statuses that hold a version "in flight" (thread_runs.ACTIVE plus `pending`).
 IN_FLIGHT = ("pending", "queued", "running", "awaiting_approval", "drained", "budget_wait")
 #: Runners a deployment may name (agent_run_worker.RUNNERS); the legacy ones are bots.migrated.
-RUNNERS = ("deployed_agent", "focused_agent", "wakeup", "squad_owner")
+RUNNERS = ("deployed_agent", "focused_agent", "wakeup", "squad_owner", "priors_build")
 
 
 class DeploymentError(ValueError):

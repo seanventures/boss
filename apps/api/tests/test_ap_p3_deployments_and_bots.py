@@ -778,3 +778,21 @@ def test_a1_workers_mcp_and_fork(client, engine, parts):
     fork = forked.json()
     assert fork["parent_run_id"] == run["run_id"] and fork["version"] == 2
     assert fork["forked_from"]["run_id"] == run["run_id"]
+
+
+def test_the_priors_build_is_a_scheduled_bot(engine):
+    from boss_engine.services import bots
+
+    bots.tick(engine, project_id=PROJECT)
+    with engine.connect() as c:
+        trig = c.execute(text("SELECT * FROM agent_triggers WHERE project_id = :p "
+                              "AND legacy_ref LIKE 'priors_build:%'"), {"p": PROJECT}
+                         ).mappings().one()
+    assert trig["kind"] == "cron" and trig["config"]["every_seconds"] == 3600
+    _due_now(engine, trig["id"])
+    fired = bots.tick(engine, project_id=PROJECT)["fired"]
+    assert [f["trigger_id"] for f in fired] == [trig["id"]]
+    _drain(engine, PROJECT)
+    run = _run(engine, fired[0]["run_id"])
+    assert run["status"] == "completed", run["error"]
+    assert json.loads(run["output_text"])["org_id"] == trig["legacy_ref"].split(":", 1)[1]

@@ -13,6 +13,8 @@ THE RUNNERS. A run of a deployment executes on a worker through agent_run_worker
   focused_agent    a focused agent's duty cycle (FocusedAgentService.tick_one)
   wakeup           one wake of a monitor or schedule (agent_wakeups.wake_one)
   squad_owner      one handed-over item's squad turn (ambient/owners)
+  priors_build     the procedural-priors fold (memory_api.build_priors_job), an hourly bot on
+                   the home project (§4.6 "priors build as a scheduled bot")
 
 THE MIGRATION (§5 Phase 3 "Bots"; design risk "migrating ~20 tick functions": one at a time,
 each behind a flag, legacy deleted only after its tests pass on the new primitive). Three of
@@ -58,7 +60,8 @@ DEFAULTS = {BOTS_FOCUSED_AGENTS: False, BOTS_WAKEUPS: False, BOTS_SQUAD_OWNERS: 
 _OFF = ("0", "false", "no", "off")
 
 #: The legacy deployments' keys and names (one per project per source).
-LEGACY_AGENTS = {"focused_agent": ("focused_agents", "Focused agents"),
+LEGACY_AGENTS = {"priors_build": ("priors_build", "Procedural priors build"),
+                 "focused_agent": ("focused_agents", "Focused agents"),
                  "wakeup": ("boss_wakeups", "Watches and schedules"),
                  "squad_owner": ("squad_owners", "Squad owners")}
 
@@ -420,6 +423,42 @@ def _squad_owner_runner(connection: Any, settings: Any, run: dict, *, kind: str)
     return {"status": "completed", "output_text": json.dumps(out, default=str)}
 
 
+# ── The procedural-priors build (AGENT_PLATFORM §4.6: "priors build as a scheduled bot") ──────
+
+#: How often the priors fold runs (it is idempotent: a high-water mark per org).
+PRIORS_EVERY_SECONDS = 3600
+
+
+def ensure_priors_bot(connection: Any, project_id: str) -> Optional[dict]:
+    """The install's priors build as a bot: one hourly trigger on the home project's
+    `priors_build` deployment, folding executed runs into kg_action_priors for its org
+    (memory_api.build_priors_job). Made once; its pause, health and runs are any bot's."""
+    org = connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": project_id}).scalar()
+    if not org:
+        return None
+    return legacy_trigger(connection, project_id, "priors_build", str(org), kind="cron",
+                          config={"every_seconds": PRIORS_EVERY_SECONDS},
+                          name="Fold executed runs into procedural priors")
+
+
+def _priors_runner(connection: Any, settings: Any, run: dict, *, kind: str) -> dict:
+    from .memory_api import build_priors_job
+
+    fctx = dict(run.get("finalize_ctx") or {})
+    ref = connection.execute(text("SELECT legacy_ref FROM agent_triggers WHERE id = :t"),
+                             {"t": fctx.get("trigger_id")}).scalar() or ""
+    org = str(ref).split(":", 1)[-1]
+    connection.commit()
+    try:
+        out = build_priors_job(connection.engine, org_id=org)
+    except Exception as exc:  # noqa: BLE001 — recorded on the run; health shows it
+        return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:500],
+                "clean_failure": True}
+    return {"status": "completed", "output_text": json.dumps(out, default=str)}
+
+
 # ── Deployed agents: the kernel on the pinned version ──────────────────────────────────────────
 
 #: Tests (and a future engine lane) replace how a deployed run gets its engine and tools:
@@ -516,6 +555,12 @@ def _table(connection: Any, name: str) -> bool:
     return bool(connection.execute(text("SELECT to_regclass(:t)"), {"t": name}).scalar())
 
 
+def _settings() -> Any:
+    from ..config import get_settings
+
+    return get_settings()
+
+
 def register_runners() -> None:
     from . import agent_run_worker
 
@@ -523,6 +568,7 @@ def register_runners() -> None:
     agent_run_worker.RUNNERS.setdefault("focused_agent", _focused_runner)
     agent_run_worker.RUNNERS.setdefault("wakeup", _wakeup_runner)
     agent_run_worker.RUNNERS.setdefault("squad_owner", _squad_owner_runner)
+    agent_run_worker.RUNNERS.setdefault("priors_build", _priors_runner)
 
 
 #: Hooks a monitor trigger names in `check_hook`.
@@ -545,11 +591,16 @@ def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
     with engine.begin() as c:
         if project_id and projects_archive.is_archived(c, project_id):
             return {"fired": [], "skipped": [], **projects_archive.skipped(project_id)}
+        home = project_id or str(getattr(settings or _settings(), "default_project_id", "")
+                                 or "")
+        if home and not projects_archive.is_archived(c, home):
+            ensure_priors_bot(c, home)
         if "focused_agent" in sources:
             synced["focused_agent"] = sync_focused_agents(c, project_id)
         if "wakeup" in sources:
             synced["wakeup"] = sync_wakeups(c, project_id)
-        out = agent_triggers.tick(c, limit=limit, project_id=project_id, sources=set(),
+        out = agent_triggers.tick(c, limit=limit, project_id=project_id,
+                                  sources={"priors_build"},
                                   checks=CHECKS)
     system_services.beat(engine, "bot_clock", details={"fired": len(out["fired"])})
     return {**out, "sources": sorted(sources), "synced": synced}
