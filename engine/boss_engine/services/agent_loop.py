@@ -5,6 +5,7 @@ import re
 import time
 from hashlib import sha256
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Callable, Optional
 
 from sqlalchemy import text
@@ -1978,6 +1979,38 @@ def native_tool_registry() -> Any:
                                kind="write", permission=_ASK_HUMAN_PERMISSION))
     _NATIVE_REGISTRY.append(registry)
     return registry
+
+
+def native_tool_permissions() -> dict:
+    """Every native tool an agent can be granted → the catalogue permission it needs, DERIVED
+    from `native_tool_registry()` (ToolSpec.permission). The one reading for every caller —
+    the run's authz, and the agent-version publish check of a spec's `tools.native` against
+    the Passport ceiling (AP-P1a). Never empty: the registry fails to build rather than
+    answer with nothing."""
+    registry = native_tool_registry()
+    return {name: registry.get(name).permission for name in registry.names()}
+
+
+class _DerivedPermissions(Mapping):
+    """`AGENT_TOOL_PERMISSIONS`, kept as a read-only VIEW of the native tool registry for its
+    readers (AP-P1a's ceiling check reads `.get(name)`): derived on first read, never a second
+    hand-kept copy."""
+
+    def _map(self) -> dict:
+        return native_tool_permissions()
+
+    def __getitem__(self, name: str) -> str:
+        return self._map()[name]
+
+    def __iter__(self):
+        return iter(self._map())
+
+    def __len__(self) -> int:
+        return len(self._map())
+
+
+#: Native tool → catalogue permission: a view of `native_tool_registry()` (see above).
+AGENT_TOOL_PERMISSIONS: Mapping = _DerivedPermissions()
 
 
 def _native_permission(name: str) -> Optional[str]:

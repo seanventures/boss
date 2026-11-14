@@ -60,10 +60,21 @@ def test_the_native_registry_declares_exactly_the_permissions_the_deleted_map_di
     assert sorted(registry.names()) == sorted(LEGACY_PERMISSIONS)
 
 
-def test_the_private_permission_map_is_deleted():
-    assert not hasattr(agent_loop, "AGENT_TOOL_PERMISSIONS")
+def test_the_hand_kept_permission_map_is_gone_and_its_name_is_a_view_of_the_registry():
+    """The map AP-P1a's Passport-ceiling check reads (`.get(name)`) is DERIVED from the native
+    tool registry: never a second copy, never empty, and it covers every native tool an agent
+    spec can name — an empty map would let that ceiling check pass vacuously."""
+    import re
+
     source = open(agent_loop.__file__).read()
-    assert "AGENT_TOOL_PERMISSIONS" not in source
+    assert not re.search(r"AGENT_TOOL_PERMISSIONS[^=\n]*=\s*\{", source), "a hand-kept copy"
+    derived = agent_loop.native_tool_permissions()
+    assert derived == LEGACY_PERMISSIONS
+    assert dict(agent_loop.AGENT_TOOL_PERMISSIONS) == derived
+    assert len(agent_loop.AGENT_TOOL_PERMISSIONS) > 0
+    nameable = set(agent_loop.native_tool_registry().names())
+    assert nameable and all(agent_loop.AGENT_TOOL_PERMISSIONS.get(n) for n in nameable)
+    assert agent_loop.AGENT_TOOL_PERMISSIONS.get("made_up_tool") is None
 
 
 def test_both_loops_build_their_tools_in_one_place():
