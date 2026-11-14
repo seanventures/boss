@@ -32046,6 +32046,12 @@ app.include_router(build_agent_platform_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# AP-P5: a deployed agent as an A2A v1.0 server — signed card, JSON-RPC, push notifications;
+# per-deployment opt-in, refused for agents with write tools until strong isolation (D11).
+from .routers.a2a import build_a2a_router
+
+app.include_router(build_a2a_router(engine=engine,
+                                    require_write_actor=require_project_write_actor))
 # KG P6b: connect a bank's own agent — register/list/get/test/suspend/remove (routers/external_agents.py).
 from .routers.external_agents import build_external_agents_router
 

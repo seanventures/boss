@@ -3,9 +3,13 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2195 operations.
+# 2200 operations.
+"GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
+"GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/oauth-authorization-server": ["public:oidc_provider_endpoint", "OAPVU"]
+"POST /a2a/{agent_id}": ["permit agent:invoke @ agent_identity(path=agent_id)", "OAP"]
+"GET /a2a/{agent_id}/.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
 "POST /git/{project_id}.git/git-receive-pack": ["permit repository:push @ project(path=project_id)", "OAP"]
@@ -178,6 +182,7 @@
 "GET /v1/agents/{role_key}/card": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/agents/{role_key}/deployments": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/agents/{role_key}/deployments": ["permit agent:deploy @ project(body=project_id)", "OA"]
+"PUT /v1/agents/{role_key}/deployments/{environment}/a2a": ["permit agent:deploy @ project(body=project_id)", "OA"]
 "POST /v1/agents/{role_key}/deployments/{environment}/pause": ["permit agent:lifecycle @ project(body=project_id)", "OA"]
 "POST /v1/agents/{role_key}/deployments/{environment}/resume": ["permit agent:lifecycle @ project(body=project_id)", "OA"]
 "GET /v1/agents/{role_key}/endpoints": ["permit agent:read @ project(query=project_id)", "OAPVU"]

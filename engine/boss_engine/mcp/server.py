@@ -14,8 +14,15 @@ the pure OSS engine keeps its "no HTTP framework" property. Two transports:
     FastAPI, matching the house style of the servers in `tools/`. Only import
     this if you actually want HTTP; it is never required by the engine.
 
-Implements MCP JSON-RPC 2.0: initialize, notifications/initialized, tools/list,
-tools/call.
+Implements MCP JSON-RPC 2.0 on three revisions (AP-P5, D10; mcp/protocol.py):
+
+  * 2024-11-05 (and 2025-11-25, 2025-06-18, 2025-03-26), legacy: initialize,
+    notifications/initialized, ping, tools/list, tools/call — unchanged for existing clients;
+  * 2026-07-28, stateless: server/discover, every request versioned in `_meta`, resultType on
+    every result, deterministic tools/list with ttlMs/cacheScope, long-running tools as tasks
+    (`io.modelcontextprotocol/tasks`: tasks/get, tasks/update, tasks/cancel — mcp/tasks.py),
+    a person's answer asked for as `input_required` (MRTR) and validated as the caller
+    (services/protocol_answers.py: decision:approve with step-up), `traceparent` from `_meta`.
 """
 # NOTE: deliberately NO `from __future__ import annotations` here. `asgi_app()`
 # lazily imports FastAPI's `Request` inside the function; with postponed
@@ -30,8 +37,11 @@ from typing import Any, Callable, Mapping, Optional
 
 from .. import __version__
 from ..tools import ToolRegistry, build_default_registry
+from . import protocol as _protocol
 
-PROTOCOL_VERSION = "2024-11-05"
+#: The revision an `initialize` that names none gets (unchanged); every revision the server
+#: speaks is `protocol.SUPPORTED` (AP-P5, D10: 2024-11-05, 2025-11-25, 2026-07-28).
+PROTOCOL_VERSION = _protocol.LEGACY_DEFAULT
 SERVER_INFO = {"name": "boss-engine", "version": __version__}
 _UNSCOPED_SQL_TOOLS = frozenset({"query_db", "write_db"})
 #: The run filesystem's tools (AP-P6, kernel/runfs.py) act on a kernel run's own files; an MCP
@@ -252,7 +262,9 @@ class MCPServer:
                     field for field in schema.get("required", []) if field in properties
                 ],
             }
-        return tools
+        # DETERMINISTIC ORDER (2026-07-28: "SHOULD return tools in a deterministic order" for
+        # client caching and prompt-cache hits): by name, in every revision.
+        return sorted(tools, key=lambda tool: str(tool.get("name") or ""))
 
     def _tool_allowed(self, name: str) -> bool:
         try:
@@ -268,15 +280,39 @@ class MCPServer:
     # ---- JSON-RPC dispatch ----------------------------------------------
     def handle(self, request: dict) -> Optional[dict]:
         """Handle one JSON-RPC request. Returns a response dict, or None for
-        notifications (which take no reply)."""
+        notifications (which take no reply).
+
+        AP-P5 (mcp/protocol.py): a request whose `_meta` names a protocol version is MODERN
+        (2026-07-28, stateless); `initialize` selects a legacy revision (2024-11-05 by default,
+        exactly as before). `server/discover` answers in every era."""
         if not isinstance(request, dict):
             return _err(None, -32600, "invalid JSON-RPC request")
         method = request.get("method")
         rid = request.get("id")
+        raw_params = request.get("params")
+        params = raw_params if isinstance(raw_params, dict) else {}
+        version = _protocol.modern_version(params)
+        if version is not None and version not in _protocol.SUPPORTED:
+            return {"jsonrpc": "2.0", "id": rid, "error": _protocol.unsupported_version(version)}
+        modern = version == _protocol.MODERN
+        # TRACE CONTEXT (SEP-414): a caller's `traceparent` in `_meta` makes the runs this call
+        # starts children of the caller's span (kernel/trace.py reads CURRENT; a deployed agent's
+        # run carries it to its worker in finalize_ctx).
+        traceparent = _protocol.traceparent_of(params)
+        trace_token = _trace_current().set(traceparent) if traceparent else None
+        try:
+            return self._dispatch(method, rid, raw_params, params, modern)
+        finally:
+            if trace_token is not None:
+                _trace_current().reset(trace_token)
 
+    def _dispatch(self, method: Any, rid: Any, raw_params: Any, params: dict,
+                  modern: bool) -> Optional[dict]:
+        if method == "server/discover":
+            return _ok(rid, _protocol.discover_result(SERVER_INFO, SERVER_INSTRUCTIONS))
         if method == "initialize":
             return _ok(rid, {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": _protocol.negotiate_initialize(params.get("protocolVersion")),
                 "capabilities": {"tools": {}},
                 "serverInfo": SERVER_INFO,
                 "instructions": SERVER_INSTRUCTIONS,
@@ -286,21 +322,35 @@ class MCPServer:
         if method == "ping":
             return _ok(rid, {})
         if method == "tools/list":
-            return _ok(rid, {"tools": self._tools()})
+            tools = self._tools()
+            if modern:
+                return _ok(rid, _protocol.complete(
+                    {"tools": tools, "ttlMs": _protocol.LIST_TTL_MS, "cacheScope": "private"},
+                    SERVER_INFO))
+            return _ok(rid, {"tools": tools})
         if method == "tools/call":
-            params = request.get("params") or {}
-            if not isinstance(params, dict):
+            if not isinstance(raw_params, dict) and raw_params is not None:
                 return _err(rid, -32602, "tools/call params must be an object")
+            if modern:
+                return self._tools_call_modern(rid, params)
             return self._tools_call(rid, params)
+        if method in ("tasks/get", "tasks/update", "tasks/cancel"):
+            if not modern:
+                return _err(rid, -32601, f"method not found: {method} (the tasks extension "
+                                         f"is offered on protocol {_protocol.MODERN})")
+            return self._tasks(method, rid, params)
         return _err(rid, -32601, f"method not found: {method}")
 
-    def _tools_call(self, rid: Any, params: dict) -> dict:
+    def _call_args(self, rid: Any, params: dict) -> tuple[Optional[str], Optional[dict],
+                                                           Optional[dict]]:
+        """(name, args, refusal): the tool and its arguments with the session's authority fields
+        removed (session project_id is authoritative — never a tool argument's)."""
         name = params.get("name")
         if not isinstance(name, str) or not name:
-            return _err(rid, -32602, "tools/call requires a tool name")
+            return None, None, _err(rid, -32602, "tools/call requires a tool name")
         supplied_args = params.get("arguments") or {}
         if not isinstance(supplied_args, dict):
-            return _err(rid, -32602, "tool arguments must be an object")
+            return None, None, _err(rid, -32602, "tool arguments must be an object")
         # Session project_id is authoritative — never let tool arguments override
         # into another tenant (write tools historically honored args.project_id).
         args = dict(supplied_args)
@@ -312,14 +362,15 @@ class MCPServer:
             reason = ("read-only mode" if self.read_only else
                       "API-backed sessions require API-authorized operations" if self.api_only
                       else "durable workspace required")
-            return _ok(rid, _tool_result(
+            return None, None, _ok(rid, _tool_result(
                 {"ok": False, "error": f"tool '{name}' is not available ({reason})"},
                 is_error=True,
             ))
-        # WHO IS CALLING: the identity the transport authenticated, never a tool argument. Every
-        # tool call is decided as that caller (the registry's identity gate; fail closed under
-        # enforce when there is none), and jobs it enqueues carry it (R8).
-        auth = self._caller()
+        return name, args, None
+
+    def _invoke_tool(self, name: str, args: dict, auth: Any) -> dict:
+        """One registry call as `auth` (the identity the transport verified). Raises what the
+        registry raises (an unknown tool)."""
         from ..tools.registry import CURRENT_TOOL_AUTH
         from .api_surface import CALLER_AUTHORIZATION
 
@@ -330,19 +381,223 @@ class MCPServer:
                 from ..identity import lineage
 
                 with lineage.acting(auth):
-                    result = self.registry.invoke(
+                    return self.registry.invoke(
                         name, self.ctx, project_id=self.project_id, actor=self.actor, args=args, auth=auth)
-            else:
-                result = self.registry.invoke(
-                    name, self.ctx, project_id=self.project_id, actor=self.actor, args=args, auth=None)
+            return self.registry.invoke(
+                name, self.ctx, project_id=self.project_id, actor=self.actor, args=args, auth=None)
+        finally:
+            CALLER_AUTHORIZATION.reset(cred_token)
+            CURRENT_TOOL_AUTH.reset(tool_token)
+
+    def _tools_call(self, rid: Any, params: dict) -> dict:
+        name, args, refused = self._call_args(rid, params)
+        if refused is not None:
+            return refused
+        # WHO IS CALLING: the identity the transport authenticated, never a tool argument. Every
+        # tool call is decided as that caller (the registry's identity gate; fail closed under
+        # enforce when there is none), and jobs it enqueues carry it (R8).
+        auth = self._caller()
+        try:
+            result = self._invoke_tool(name, args, auth)
         except Exception as exc:  # unknown tool etc.
             return _ok(rid, _tool_result(
                 {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, is_error=True
             ))
-        finally:
-            CALLER_AUTHORIZATION.reset(cred_token)
-            CURRENT_TOOL_AUTH.reset(tool_token)
         return _ok(rid, _tool_result(result, is_error=not result.get("ok", True)))
+
+    # ---- 2026-07-28: tasks and multi round-trip requests --------------------------------------
+    def _tools_call_modern(self, rid: Any, params: dict) -> dict:
+        """tools/call, stateless. A long-running tool (a deployed agent, create_code_task)
+        becomes a TASK when the client declared the tasks extension; a person's answer is asked
+        for with `input_required` (and comes back on the retry), never a server request."""
+        from . import tasks as _tasks
+
+        name, args, refused = self._call_args(rid, params)
+        if refused is not None:
+            return _modernise(refused)
+        auth = self._caller()
+        if "requestState" in params or "inputResponses" in params:
+            return self._mrtr_retry(rid, params, name, args, auth)
+        as_task = _protocol.wants_tasks(params) and _tasks.is_task_tool(name)
+        call_args = dict(args)
+        if as_task and name.startswith(_tasks.AGENT_PREFIX):
+            call_args["timeout"] = 0          # start it; the client polls the task
+        try:
+            result = self._invoke_tool(name, call_args, auth)
+        except Exception as exc:  # unknown tool etc.
+            return _ok(rid, _protocol.complete(_tool_result(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, is_error=True),
+                SERVER_INFO))
+        handle = _tasks.handle_for_tool_result(name, result) if _tasks.is_task_tool(name) \
+            else None
+        if handle and as_task:
+            try:
+                state = _tasks.backend_for(self).state(_tasks.parse_handle(handle), auth)
+            except _tasks.TaskError as exc:
+                return {"jsonrpc": "2.0", "id": rid, "error": exc.error()}
+            task = _tasks.task_object(handle, state, elicit=set())
+            created = {k: task[k] for k in ("taskId", "status", "statusMessage", "createdAt",
+                                            "lastUpdatedAt", "ttlMs", "pollIntervalMs")
+                       if k in task}
+            out = _protocol.complete(created, SERVER_INFO)
+            out["resultType"] = "task"
+            return _ok(rid, out)
+        if handle and name.startswith(_tasks.AGENT_PREFIX):
+            answered = self._input_required_for(rid, handle, name, args, auth,
+                                                _protocol.elicitation_modes(params))
+            if answered is not None:
+                return answered
+        return _ok(rid, _protocol.complete(
+            _tool_result(result, is_error=not result.get("ok", True)), SERVER_INFO))
+
+    def _input_required_for(self, rid: Any, handle: str, name: str, args: dict, auth: Any,
+                            elicit: set, refused: Optional[dict] = None) -> Optional[dict]:
+        """The InputRequiredResult for a run waiting on a person, or None when it is not (or the
+        client declared no elicitation: it then gets the run, as before, with its decisions)."""
+        from . import tasks as _tasks
+
+        if not elicit:
+            return None
+        try:
+            state = _tasks.backend_for(self).state(_tasks.parse_handle(handle), auth)
+        except _tasks.TaskError:
+            return None
+        if state["status"] != "input_required":
+            return None
+        refused = {**self._unanswerable(state.get("pending") or [], auth), **(refused or {})}
+        principal = getattr(getattr(auth, "principal", None), "id", None)
+        sealed = _protocol.seal_state({"h": handle}, principal=principal,
+                                      digest=_protocol.request_digest("tools/call", name, args))
+        return _ok(rid, {"resultType": "input_required",
+                         "inputRequests": _tasks.input_requests(state["pending"], elicit=elicit,
+                                                                refused=refused),
+                         "requestState": sealed,
+                         "_meta": {_protocol.META_SERVER_INFO: SERVER_INFO}})
+
+    def _unanswerable(self, pending: list, auth: Any) -> dict:
+        """{decision_id: reason} for the open interrupts THIS caller cannot answer in-band (the
+        PDP's decision:approve with step-up), so it is shown the console link instead of a form
+        it would be refused on. Native only; the API bridge learns it from the route."""
+        if self.api_only or auth is None or not pending:
+            return {}
+        engine = getattr(self.ctx, "engine", None)
+        if engine is None:
+            return {}
+        from ..db import begin
+        from ..identity import authz
+        from ..identity.scope import ResolvedScope
+
+        out = {}
+        try:
+            with begin(engine) as c:
+                for item in pending:
+                    did = str(item["decision_id"])
+                    verdict = authz.check(auth, "decision:approve", ResolvedScope.in_project(
+                        auth.principal.org_id, self.project_id, object_kind="decision",
+                        object_id=did), db=c)
+                    if not verdict.allowed:
+                        out[did] = str(verdict.reason or "missing_permission")
+        except Exception:  # noqa: BLE001 — unknown answerability shows the form
+            return {}
+        return out
+
+    def _apply_answers(self, handle: str, responses: Any, auth: Any) -> dict:
+        """Apply the client's inputResponses to the run's OPEN interrupts only (a key naming any
+        other decision is ignored, per spec), each as the caller. {decision_id: refusal code}."""
+        from ..services import protocol_answers as A
+        from . import tasks as _tasks
+
+        backend = _tasks.backend_for(self)
+        state = backend.state(_tasks.parse_handle(handle), auth)
+        open_ids = {str(p["decision_id"]) for p in state.get("pending") or []}
+        refused: dict = {}
+        for key, value in (responses.items() if isinstance(responses, dict) else ()):
+            did = A.decision_of_key(key)
+            if did is None or did not in open_ids:
+                continue
+            verdict = A.parse_response(value)
+            if verdict is None:
+                continue
+            try:
+                backend.answer(did, verdict, auth)
+            except A.AnswerRefused as exc:
+                refused[did] = exc.code
+        return refused
+
+    def _mrtr_retry(self, rid: Any, params: dict, name: str, args: dict, auth: Any) -> dict:
+        """The client's retry of a tools/call that answered `input_required`: verify the sealed
+        state (this caller, this request, not expired), apply the answers as the caller, then
+        answer the call — again `input_required` while a person is still needed."""
+        import time
+
+        from . import tasks as _tasks
+
+        principal = getattr(getattr(auth, "principal", None), "id", None)
+        state = _protocol.open_state(params.get("requestState"), principal=principal,
+                                     digest=_protocol.request_digest("tools/call", name, args))
+        if state is None or not isinstance(state.get("h"), str):
+            return _err(rid, -32602, "requestState is not valid for this caller and request "
+                                     "(expired, altered, or minted for another call)")
+        handle = state["h"]
+        elicit = _protocol.elicitation_modes(params) or {"form"}
+        try:
+            refused = self._apply_answers(handle, params.get("inputResponses"), auth)
+            if refused:
+                again = self._input_required_for(rid, handle, name, args, auth, elicit, refused)
+                if again is not None:
+                    return again
+            backend = _tasks.backend_for(self)
+            deadline = time.monotonic() + max(0.0, min(float(args.get("timeout") or 120), 600.0))
+            while True:
+                current = backend.state(_tasks.parse_handle(handle), auth)
+                if current["status"] != "working" or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.25)
+        except _tasks.TaskError as exc:
+            return {"jsonrpc": "2.0", "id": rid, "error": exc.error()}
+        if current["status"] == "input_required":
+            again = self._input_required_for(rid, handle, name, args, auth, elicit)
+            if again is not None:
+                return again
+        if current["status"] == "completed":
+            return _ok(rid, _protocol.complete(current["result"], SERVER_INFO))
+        payload = {"ok": current["status"] != "failed", "status": current["status"],
+                   "task": handle, "message": current.get("message"),
+                   "error": current.get("error")}
+        return _ok(rid, _protocol.complete(_tool_result(
+            {k: v for k, v in payload.items() if v is not None},
+            is_error=current["status"] == "failed"), SERVER_INFO))
+
+    def _tasks(self, method: str, rid: Any, params: dict) -> dict:
+        """tasks/get, tasks/update, tasks/cancel of the `io.modelcontextprotocol/tasks`
+        extension, each decided as the caller of THIS request (mcp/tasks.py)."""
+        from ..services import protocol_answers as A
+        from . import tasks as _tasks
+
+        auth = self._caller()
+        try:
+            handle = _tasks.parse_handle(params.get("taskId"))
+            backend = _tasks.backend_for(self)
+            if method == "tasks/get":
+                state = backend.state(handle, auth)
+                elicit = _protocol.elicitation_modes(params) or {"form"}
+                if state["status"] == "input_required":
+                    state = {**state, "refused": self._unanswerable(state["pending"], auth)}
+                return _ok(rid, _protocol.complete(
+                    _tasks.task_object(params["taskId"], state, elicit=elicit), SERVER_INFO))
+            if method == "tasks/cancel":
+                backend.cancel(handle, auth)
+                return _ok(rid, _protocol.complete({}, SERVER_INFO))
+            refused = self._apply_answers(params["taskId"], params.get("inputResponses"), auth)
+        except _tasks.TaskError as exc:
+            return {"jsonrpc": "2.0", "id": rid, "error": exc.error()}
+        if refused:
+            did, code = next(iter(refused.items()))
+            return {"jsonrpc": "2.0", "id": rid, "error": {
+                "code": _protocol.ANSWER_REFUSED,
+                "message": f"answer refused: {code}",
+                "data": {"refused": refused, "approve_url": A.console_url(did)}}}
+        return _ok(rid, _protocol.complete({}, SERVER_INFO))
 
     def _caller_credential(self, auth: Any) -> Optional[str]:
         """The caller's own credential to forward to the API (M8): the HTTP request's bearer when
@@ -607,6 +862,19 @@ class MCPServer:
 # ---------------------------------------------------------------------------
 def _ok(rid: Any, result: dict) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+
+def _modernise(response: dict) -> dict:
+    """A legacy-shaped response, answered to a modern request: its result gains resultType."""
+    if isinstance(response.get("result"), dict):
+        response = {**response, "result": _protocol.complete(response["result"], SERVER_INFO)}
+    return response
+
+
+def _trace_current() -> Any:
+    from ..kernel.trace import CURRENT
+
+    return CURRENT
 
 
 def _err(rid: Any, code: int, message: str) -> dict:
