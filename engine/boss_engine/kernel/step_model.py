@@ -1,5 +1,9 @@
 """One model call of a step, with every recovery the RecoveryPolicy allows.
 
+`complete` is the model node (the innermost handler of the wrap_model_call chain) and `recover`
+is the `recovery` middleware's wrap (kernel/middleware.py): the governance layers sit between
+them, so every attempt `recover` makes is reserved and receipted.
+
 What happens when a call fails used to depend on which loop made it: a 529 was retried only in
 chat, a provider's 400 on a malformed call was fed back only in agent steps, the per-minute
 budget was waited for only in the pre-check. Here the failure is classified once
@@ -16,9 +20,8 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from .engine import ModelRequest
 from .errors import Cancelled, classify
 from .types import ModelTurn
 
@@ -56,7 +59,20 @@ def _inline_pause(retry_after: Optional[float], left: float) -> float:
     return max(0.0, min(wait, left))
 
 
-def call_model(run: Any, req: ModelRequest, *, answering: bool) -> Called:
+def complete(run: Any, call: Any) -> Called:
+    """THE MODEL NODE: one engine round-trip for `call.request`, under the turn's deadline. The
+    innermost handler of the wrap_model_call chain; it raises what the engine raises."""
+    spec = run.spec
+    started = spec.clock()
+    with _deadline_scope(run, call.answering):
+        turn = run.engine.complete(call.request, on_delta=spec.on_delta, cancel=spec.cancel)
+    return Called(turn=turn, latency_ms=int((spec.clock() - started) * 1000))
+
+
+def recover(run: Any, call: Any, handler: Callable[[Any], Called]) -> Called:
+    """The RecoveryPolicy around one model call (the `recovery` middleware's wrap_model_call):
+    each attempt goes through `handler` (the governance layers, then the engine); a failure is
+    classified once and the policy picks the move."""
     state, rec, pol, spec = run.state, run.rec, run.policies, run.spec
     budget = getattr(pol.stop, "turn_budget", None)
     if budget is not None:
@@ -66,12 +82,10 @@ def call_model(run: Any, req: ModelRequest, *, answering: bool) -> Called:
         if run.cancelled():
             return Called(next="end", status="cancelled", stopped="cancelled")
         attempts += 1
-        rec.emit("model.request", {"attempt": attempts, "tools": [t.name for t in req.tools],
-                                   "answering": answering, "messages": len(req.messages)})
+        call.notes["attempt"] = attempts
         started = spec.clock()
         try:
-            with _deadline_scope(run, answering):
-                turn = run.engine.complete(req, on_delta=spec.on_delta, cancel=spec.cancel)
+            return handler(call)
         except Cancelled:
             return Called(next="end", status="cancelled", stopped="cancelled")
         except Exception as exc:  # noqa: BLE001 — sorted by what it is, below
@@ -119,7 +133,6 @@ def call_model(run: Any, req: ModelRequest, *, answering: bool) -> Called:
                               error=error.detail)
             stopped = "budget_wait_limit" if error.kind == "budget_wait" else error.kind
             return Called(next="end", status="failed", stopped=stopped, error=error.detail)
-        return Called(turn=turn, latency_ms=int((spec.clock() - started) * 1000))
 
 
-__all__ = ["Called", "call_model"]
+__all__ = ["Called", "complete", "recover"]

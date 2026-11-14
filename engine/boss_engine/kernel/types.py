@@ -160,6 +160,19 @@ class ToolSchema:
     kind: Literal["read", "write"] = "read"
     reversibility: str = "safe"
     deferred: bool = False
+    #: The catalogue permission a call needs (IDENTITY.md §6.4). The mandatory `authz`
+    #: middleware decides it against the run token inside a delegated run (toolset.UNDECLARED
+    #: is refused there: deny by default; toolset.GATED_BY_REGISTRY hands over to the
+    #: registry's gate; None is a caller's own function, decided by its toolset). Outside a
+    #: delegated run it is not read.
+    permission: Optional[str] = None
+    #: How this tool's result arrives from outside the operator (low_trust.outside_origin), or
+    #: None for the operator's own data. The mandatory `tool_screen` middleware screens, marks
+    #: and remembers a result whose tool names an origin.
+    origin: Optional[str] = None
+    #: The result was screened where it was produced (mcp_registry's receipt door): the
+    #: middleware still marks and remembers it, but never screens it twice.
+    prescreened: bool = False
 
     def as_openai(self, *, strict: bool = False) -> dict:
         fn: dict = {"name": self.name, "description": self.description,
@@ -170,11 +183,13 @@ class ToolSchema:
 
     @classmethod
     def from_openai(cls, schema: Mapping[str, Any], *, kind: str = "read",
-                    reversibility: str = "safe") -> "ToolSchema":
+                    reversibility: str = "safe", permission: Optional[str] = None,
+                    origin: Optional[str] = None, prescreened: bool = False) -> "ToolSchema":
         fn = schema.get("function") if isinstance(schema.get("function"), Mapping) else schema
         return cls(name=str(fn.get("name") or ""), description=str(fn.get("description") or ""),
                    parameters=dict(fn.get("parameters") or {"type": "object", "properties": {}}),
-                   kind="write" if kind == "write" else "read", reversibility=reversibility)
+                   kind="write" if kind == "write" else "read", reversibility=reversibility,
+                   permission=permission, origin=origin, prescreened=prescreened)
 
 
 @dataclass

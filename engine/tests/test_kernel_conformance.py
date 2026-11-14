@@ -13,8 +13,8 @@ wait; cancellation.
 INTENDED DIFFERENCES (design §8.4) are asserted too — each one the stricter or safer behaviour,
 and each one pinned so it cannot silently widen:
 
-  D1 a transient provider error fails agent_loop, decisions and the pre-check today; the kernel
-     retries it (≤3) everywhere, as chat always did;
+  D1 a transient provider error failed agent_loop (it has since gained the retry), decisions and
+     the pre-check; the kernel retries it (≤3) everywhere, as chat always did;
   D2 an empty completion ends an agent_loop run with an empty answer today; the kernel presses
      twice, as chat does;
   D3 a call whose arguments break the tool's schema RUNS today (json errors become `{}`); the
@@ -93,6 +93,9 @@ def drive_agent_loop(monkeypatch, adapter, max_steps, *, write_fns=None, raises=
     drives it: the loop is real; everything around it (store, router, MCP, skills) is stubbed."""
     from boss_engine.services import agent_loop
 
+    # This drives the OLD loop on purpose (the kernel side is `kernel_run`): K4 is on by
+    # default, so it is pinned off here whatever the ambient environment says.
+    monkeypatch.setenv("BOSS_KERNEL_STEPS", "0")
     run = {"project_id": "p", "task_id": None,
            "messages": [{"role": "system", "content": SYSTEM},
                         {"role": "user", "content": ASK}],
@@ -141,7 +144,7 @@ def engine_agent(adapter, monkeypatch):
     from boss_engine.agent import EngineAgent, transient
     from boss_engine.tools.registry import ToolRegistry, ToolSpec
 
-    monkeypatch.setenv("BOSS_KERNEL_CHAT", "")
+    monkeypatch.setenv("BOSS_KERNEL_CHAT", "0")
     monkeypatch.setattr(transient.time, "sleep", lambda s: None)
     reg = ToolRegistry()
     reg.register(ToolSpec("read_logs", "Read a run's logs.", READ_SCHEMA,
@@ -514,13 +517,19 @@ class TestTransientError:
         assert len(old2.requests) == len(new2.requests) == 3
         assert new2_result.status == "failed" and "529" in new2_result.error
 
-    def test_an_agent_step_gains_the_retry_it_never_had(self, monkeypatch):
-        """Intended difference D1: agent_loop dies on a hiccup today; the kernel retries."""
+    def test_an_agent_step_retries_a_hiccup_on_both_loops(self, monkeypatch):
+        """D1, closed: agent_loop died on a hiccup when this suite was written; it has since
+        gained `_with_transient_retry`, and the kernel retries the same call the same way."""
+        from boss_engine.agent import transient
+
+        monkeypatch.setattr(transient.time, "sleep", lambda s: None)
         script = [Fail(RuntimeError("529 overloaded_error")), Say("done")]
         old = ScriptedEngine(list(script))
-        drive_agent_loop(monkeypatch, old, 4, raises=RuntimeError)
-        new_result, _ = kernel_run(script, presets.agent_loop(4))
-        assert new_result.status == "completed" and new_result.text == "done"
+        got, _ = drive_agent_loop(monkeypatch, old, 4)
+        new_result, new = kernel_run(script, presets.agent_loop(4))
+        assert got["status"] == new_result.status == "completed"
+        assert got["output_text"] == new_result.text == "done"
+        assert old.calls == new.calls == 2
 
 
 # ════ Scenario: suspend for approval, and resume ══════════════════════════════════════════════
@@ -788,7 +797,7 @@ class TestSameToolNudge:
         old = ScriptedEngine(list(script))
         from boss_engine.agent import EngineAgent, transient
 
-        monkeypatch.setenv("BOSS_KERNEL_CHAT", "")  # this drives the OLD loop on purpose
+        monkeypatch.setenv("BOSS_KERNEL_CHAT", "0")  # this drives the OLD loop on purpose
         monkeypatch.setattr(transient.time, "sleep", lambda s: None)
         agent = EngineAgent(ctx=object(), registry=reg)
         agent._adapter = old

@@ -5,22 +5,23 @@ In order, for each call the model made:
   1. a stop asked for? the call is answered "skipped" and not run;
   2. an earlier call of this step is waiting (a person or the budget)? "skipped", as agent_loop
      answered them ("a prior action this turn awaits approval");
-  3. not a tool offered this step? refused, naming that;
-  4. arguments that break the tool's schema? refused with the JSON pointer of the fault, and the
-     model may write the call again (`RecoveryPolicy.invalid_repairs`), then the call fails;
-  5. a write whose idempotency key (run:step:call) already ran? "skipped" — resuming twice never
-     runs a write twice;
-  6. otherwise the ToolSet runs it (its gates — identity, holds, deferrals — decide inside).
+  3. otherwise the call goes down the wrap_tool_call chain (kernel/middleware.py): the spec's
+     middleware, then `tool_args` (not a tool offered this step? refused, naming that; arguments
+     that break the tool's schema? refused with the JSON pointer of the fault, and the model may
+     write the call again — `RecoveryPolicy.invalid_repairs` — then the call fails), then the
+     mandatory governance: `authz` (the run token decides the permission; a hold must be a
+     Decision), `tool_screen` (an outside result screened and remembered), `audit` (a write whose
+     idempotency key — run:step:call — already ran is "skipped": resuming twice never runs a
+     write twice), and the ToolSet runs it (its own gates — holds, deferrals — decide inside).
 
 Every call gets a tool message, so the transcript a provider is sent is never malformed. After
-the step: the same-tool nudge, the workspace snapshot, the VerifyPolicy's findings.
+the step: the same-tool nudge (RecoveryPolicy.on_tool_error), the workspace snapshot.
 """
 from __future__ import annotations
 
 from typing import Any, Optional
 
-from .schema_check import check_arguments
-from .toolset import unknown
+from .middleware import ToolRequest
 from .types import ToolCall, ToolResult
 
 AWAITING = "a prior action this turn awaits approval"
@@ -32,7 +33,7 @@ def _skipped(call: ToolCall, note: str) -> ToolResult:
     return ToolResult(call.id, call.name, "skipped", {"status": "skipped", "note": note})
 
 
-def _invalid(call: ToolCall, why: str, *, fail: bool) -> ToolResult:
+def invalid(call: ToolCall, why: str, *, fail: bool) -> ToolResult:
     if fail:
         message = (f"'{call.name}' was NOT run: its arguments broke the tool's parameters again "
                    f"({why}). Do not call it that way again; use what you have, or another tool.")
@@ -69,31 +70,10 @@ def run_calls(run: Any, calls: list, offered: list) -> Optional[dict]:
             result = _skipped(call, AWAITING)
         elif budget is not None:
             result = _skipped(call, BUDGET_BUSY)
-        elif schema is None:
-            result = unknown(call)
         else:
-            why = check_arguments(call.arguments, schema.parameters)
-            if why:
-                state.invalid[call.name] = int(state.invalid.get(call.name) or 0) + 1
-                verdict = pol.recovery.on_invalid(state, why, state.invalid[call.name])
-                rec.emit("schema.invalid", {"by": "kernel", "tool": call.name, "where": why,
-                                            "attempt": state.invalid[call.name],
-                                            "verdict": verdict})
-                result = _invalid(call, why, fail=verdict == "fail")
-            else:
-                if state.invalid.get(call.name):
-                    rec.emit("schema.repaired", {"tool": call.name})
-                    state.invalid[call.name] = 0
-                key = state.idempotency_key(step, call.id)
-                if schema.kind == "write" and key in state.executed:
-                    result = _skipped(call, "this exact call already ran")
-                else:
-                    started = spec.clock()
-                    result = run.toolset.invoke(call, state=state)
-                    if schema.kind == "write" and result.status == "ok":
-                        state.executed.append(key)
-                        wrote = True
-                    state.extra["_last_tool_latency"] = int((spec.clock() - started) * 1000)
+            request = ToolRequest(call=call, schema=schema, step=step)
+            result = run.chain.tool_call(run, request, run.invoke_tool)
+            wrote = wrote or bool(request.notes.get("wrote"))
         _answer(run, call, result, step, write=bool(schema and schema.kind == "write"))
         if result.status == "deferred":
             if result.budget is not None:
@@ -154,4 +134,4 @@ def _answer(run: Any, call: ToolCall, result: ToolResult, step: int, *, write: b
     rec.emit(kind, data, latency_ms=int(state.extra.pop("_last_tool_latency", 0) or 0))
 
 
-__all__ = ["AWAITING", "BUDGET_BUSY", "CANCELLED", "run_calls"]
+__all__ = ["AWAITING", "BUDGET_BUSY", "CANCELLED", "invalid", "run_calls"]

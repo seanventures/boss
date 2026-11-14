@@ -262,6 +262,22 @@ def carried_untrusted(value: Any) -> bool:
     return False
 
 
+def through_receipt_door(result: Any) -> bool:
+    """True when this result came back through mcp_registry.call_tool_with_receipt, which has
+    already screened it (BOSSAPP-822): it, or the invocation wrapped around it, has a receipt.
+    The one test both screening seams use (agent_loop, the kernel's tool_screen middleware)."""
+    if not isinstance(result, dict):
+        return False
+    if "receipt_id" in result or isinstance(result.get("screen"), dict):
+        return True
+    for key in ("result", "output"):
+        inner = result.get(key)
+        if isinstance(inner, dict) and ("receipt_id" in inner
+                                        or isinstance(inner.get("screen"), dict)):
+            return True
+    return False
+
+
 def next_write_must_ask(screened: Any, *, write: bool, policy: str) -> str:
     """After an untrusted result, a write's allow becomes ask. Off and reads stay."""
     if policy == "off" or not write or not carried_untrusted(screened):
