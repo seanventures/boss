@@ -57,3 +57,12 @@ persona:
   phrases: ["Is this already on the board?", "Who owns this kind of problem here?"]
   never: [Raises the same problem twice., Routes work without saying why.]
   avatar: {kit: boss-v1, seed: chief_of_staff}
+# AP-P7: THE CHIEF OF STAFF AS A SUPERVISOR SPEC. It starts read-only investigators in the background
+# (async sub-agents: durable runs on workers, shaped as A2A Tasks) and is told when each finishes.
+# Opt-in like every supervisor: the caps and the budget are set, `enabled` is the operator's switch.
+subagents:
+  - {ref: sre, description: "investigates a failing service, alert or deploy", async: true}
+  - {ref: security_reviewer, description: "investigates a vulnerability or a risky change", async: true}
+  - {ref: finops_sentinel, description: "investigates a cost spike", async: true}
+  - {ref: incident_commander, description: "triages a live incident's blast radius", async: true}
+coordination: {enabled: false, topology: supervisor, max_subagents: 4, max_depth: 1, max_parallel: 2, max_tokens: 120000, general_purpose: false, async: true}

@@ -51,7 +51,7 @@ STATUSES = ("running", "ok", "error", "refused", "held", "cancelled", "skipped")
 #: Tools that start another agent's run (subagents-as-tools, design §4.5) or hand the
 #: conversation over. A tool may also say so itself: ToolSchema.kind "subagent" / "handoff".
 SUBAGENT_TOOLS = frozenset({"task", "run_subagent", "delegate", "delegate_to_agent", "ask_agent",
-                            "consult_agent"})
+                            "consult_agent", "start_subagent"})
 HANDOFF_TOOLS = frozenset({"handoff", "hand_off", "transfer_to_agent"})
 
 #: The traceparent of the span code is running inside (a tool call of a kernel run), or None.
@@ -442,14 +442,27 @@ class Trace:
             self._write(run, span)
 
     # ── tool calls ────────────────────────────────────────────────────────────────────────
+    def reserve(self, run: Any, call_id: str) -> str:
+        """AP-P7: the traceparent the span of tool call `call_id` WILL have — a child sub-agent
+        started beside its siblings (before its call reaches this middleware) joins the trace
+        under its own `task` span, not the step's."""
+        ctx = self.ctx(run)
+        span_id = new_span_id()
+        ctx.setdefault("reserved", {})[str(call_id)] = {"id": span_id, "started": self.clock()}
+        return traceparent(ctx["trace_id"], span_id)
+
     def wrap_tool_call(self, run: Any, request: Any, handler: Callable) -> Any:
         call = request.call
         kind = _tool_kind(call.name, request.schema)
+        reserved = (self.ctx(run).get("reserved") or {}).pop(str(call.id), None)
         span = self._span(run, kind, call.name, parent=self._parent(run),
+                          started=(reserved or {}).get("started"),
                           attributes={"call_id": call.id,
                                       "write": getattr(request.schema, "kind", None) == "write",
                                       "approved": request.approved is not None},
                           input={"arguments": call.arguments})
+        if reserved:
+            span.span_id = str(reserved["id"])
         span.step = int(request.step or run.state.step)
         token = CURRENT.set(span.traceparent)
         try:

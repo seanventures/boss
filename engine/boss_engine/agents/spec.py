@@ -26,7 +26,11 @@ THE SHAPE
       autonomy {level 0-4, approval {action: mode}, escalate [..]}
       memory {read, write}                               namespaces
       context {offload_tokens, summarise_at, keep, clear_at, clear_keep, window_tokens}   P6
-      subagents [..]     P7 placeholder
+      subagents [{ref, description, mode: isolated|fork, report_tokens, forward_verbatim, writes,
+                  branch, budget_share, tools, async}]                       P7
+      coordination {enabled, max_subagents, max_depth, max_parallel, max_tokens, max_usd,
+                    general_purpose, async, topology, rounds}   P7: OFF by default, needs a budget
+      planning {write_todos}  self_check {enabled, max_attempts}               P7: both opt-in
       triggers [..]      P3 placeholder
       evaluators [..]    P4: rubric (a shipped eval rubric), online (sampled, rule|jev|judge, weekly cap)
       output_contract {artifacts, artifact_type, sections, schema, strategy}
@@ -158,12 +162,39 @@ SCHEMA: dict[str, Any] = {
                 "window_tokens": {"type": "integer", "minimum": 1000},
                 "hooks": _strs(pattern=_WORD),
             }),
-            # P7: subagents-as-tools.
+            # P7: subagents-as-tools (kernel/subagents.py). Each entry is a sub-agent this agent
+            # may call through `task` (or start in the background): another agent's key, a
+            # remote A2A agent, or a role of a supervisor template. `writes` marks a writer —
+            # one writer per branch (D12); the rest are read-only and may run in parallel.
             "subagents": {"type": "array", "items": _obj({
-                "ref": _s(minLength=1), "mode": {"enum": ["isolated", "shared"]},
-                "report_tokens": {"type": "integer", "minimum": 0},
+                "ref": _s(minLength=1, maxLength=120), "description": _s(maxLength=2000),
+                "mode": {"enum": ["isolated", "fork"]},
+                "report_tokens": {"type": "integer", "minimum": 50, "maximum": 20000},
+                "forward_verbatim": {"type": "boolean"},
+                "writes": {"type": "boolean"}, "branch": _s(maxLength=255),
                 "budget_share": {"type": "number", "minimum": 0, "maximum": 1},
+                "tools": _strs(), "async": {"type": "boolean"},
             }, required=("ref",))},
+            # P7: whether this agent coordinates sub-agents at all, and how far. OFF unless the
+            # spec opts in; an enabled supervisor must give its sub-agents a budget (a token or
+            # dollar cap) — multi-agent spends about 15x chat (design §1.5). Every cap refuses a
+            # spawn beyond it and records the refusal in the trace.
+            "coordination": _obj({
+                "enabled": {"type": "boolean"},
+                "max_subagents": {"type": "integer", "minimum": 1, "maximum": 50},
+                "max_depth": {"type": "integer", "minimum": 1, "maximum": 4},
+                "max_parallel": {"type": "integer", "minimum": 1, "maximum": 16},
+                "max_tokens": {"type": "integer", "minimum": 1000},
+                "max_usd": {"type": "number", "minimum": 0},
+                "general_purpose": {"type": "boolean"}, "async": {"type": "boolean"},
+                "topology": {"enum": ["supervisor", "producer_reviewer", "fan_out",
+                                      "bounded_debate"]},
+                "rounds": {"type": "integer", "minimum": 1, "maximum": 10},
+            }),
+            # P7: the opt-in write_todos tool; the rubric self-check against output_contract.
+            "planning": _obj({"write_todos": {"type": "boolean"}}),
+            "self_check": _obj({"enabled": {"type": "boolean"},
+                                "max_attempts": {"type": "integer", "minimum": 0, "maximum": 5}}),
             # P3: what makes an agent a bot.
             "triggers": {"type": "array", "items": _obj({
                 "cron": _s(), "event": _ANY_OBJ, "webhook": _ANY_OBJ, "input": _ANY_OBJ,
@@ -333,12 +364,47 @@ def validate(doc: Any) -> list[dict[str, str]]:
         if isinstance(when, dict) and when.get("evaluator") not in names:
             errors.append({"path": f"spec.evaluators[{i}].when.evaluator", "message": (
                 f"{when.get('evaluator')!r} is not an online evaluator of this agent.")})
+    errors.extend(_coordination_errors(spec))
     persona = spec.get("persona")
     if isinstance(persona, dict) and persona:
         from ..services.agent_persona import lint_persona
 
         for problem in lint_persona(persona)[0]:
             errors.append({"path": f"spec.persona.{problem['field']}", "message": problem["message"]})
+    return errors
+
+
+def _coordination_errors(spec: Mapping[str, Any]) -> list[dict[str, str]]:
+    """P7: an enabled supervisor needs a budget; sub-agent names are unique; one writer per
+    branch is a runtime rule, but two writers on one declared branch is refused here already."""
+    errors: list[dict[str, str]] = []
+    co = spec.get("coordination") if isinstance(spec.get("coordination"), dict) else {}
+    subs = spec.get("subagents") if isinstance(spec.get("subagents"), list) else []
+    if co.get("enabled") and not (co.get("max_tokens") or co.get("max_usd")):
+        errors.append({"path": "spec.coordination", "message": (
+            "an agent that coordinates sub-agents needs a budget for them: set max_tokens or "
+            "max_usd (each child runs on a slice of it; multi-agent costs about 15x chat).")})
+    seen: set = set()
+    writers: dict = {}
+    for i, entry in enumerate(subs):
+        if not isinstance(entry, dict):
+            continue
+        ref = entry.get("ref")
+        if ref in seen:
+            errors.append({"path": f"spec.subagents[{i}].ref",
+                           "message": f"{ref!r} is listed twice."})
+        seen.add(ref)
+        if entry.get("writes"):
+            branch = entry.get("branch") or "(the parent's branch)"
+            if branch in writers:
+                errors.append({"path": f"spec.subagents[{i}].branch", "message": (
+                    f"{ref!r} and {writers[branch]!r} would both write {branch}; one writer per "
+                    "branch (D12).")})
+            writers[branch] = ref
+    shares = sum(float(e.get("budget_share") or 0) for e in subs if isinstance(e, dict))
+    if shares > 1.0 + 1e-9:
+        errors.append({"path": "spec.subagents", "message": (
+            f"the sub-agents' budget_share adds up to {shares:.2f}; it may not exceed 1.")})
     return errors
 
 
@@ -423,6 +489,9 @@ class AgentSpec:
     memory: MemoryPolicy = field(default_factory=MemoryPolicy)
     context: Mapping[str, Any] = field(default_factory=dict)
     subagents: tuple[Mapping[str, Any], ...] = ()
+    coordination: Mapping[str, Any] = field(default_factory=dict)
+    planning: Mapping[str, Any] = field(default_factory=dict)
+    self_check: Mapping[str, Any] = field(default_factory=dict)
     triggers: tuple[Mapping[str, Any], ...] = ()
     evaluators: tuple[Mapping[str, Any], ...] = ()
     output_contract: Mapping[str, Any] = field(default_factory=dict)
@@ -465,6 +534,11 @@ class CompiledAgent:
     context: Mapping[str, Any]
     output_contract: Mapping[str, Any]
     reports_to: Optional[str] = None
+    #: P7: who it may call and how far (kernel/subagents.from_spec reads these; empty = never).
+    subagents: tuple = ()
+    coordination: Mapping[str, Any] = field(default_factory=dict)
+    planning: Mapping[str, Any] = field(default_factory=dict)
+    self_check: Mapping[str, Any] = field(default_factory=dict)
     #: Set for a profile: the role whose grants it runs under (it projects onto nothing).
     extends: Optional[str] = None
     #: Implicit and not removable by a spec (AGENT_PLATFORM §4.0 principle 3).
@@ -525,6 +599,8 @@ def load_spec(doc: Any) -> AgentSpec:
         memory=MemoryPolicy(read=_sorted_set(mem.get("read")), write=_sorted_set(mem.get("write"))),
         context=dict(s.get("context") or {}),
         subagents=tuple(dict(x) for x in s.get("subagents") or []),
+        coordination=dict(s.get("coordination") or {}), planning=dict(s.get("planning") or {}),
+        self_check=dict(s.get("self_check") or {}),
         triggers=tuple(dict(x) for x in s.get("triggers") or []),
         evaluators=tuple(dict(x) for x in s.get("evaluators") or []),
         output_contract=dict(s.get("output_contract") or {}),
@@ -577,6 +653,8 @@ def dump_spec(spec: AgentSpec, *, include_version: bool = False) -> dict[str, An
         "autonomy": _autonomy_doc(spec.autonomy),
         "memory": _drop_empty({"read": list(spec.memory.read), "write": list(spec.memory.write)}),
         "context": dict(spec.context), "subagents": [dict(x) for x in spec.subagents],
+        "coordination": dict(spec.coordination), "planning": dict(spec.planning),
+        "self_check": dict(spec.self_check),
         "triggers": [dict(x) for x in spec.triggers], "evaluators": [dict(x) for x in spec.evaluators],
         "output_contract": dict(spec.output_contract), "limits": _limits_doc(spec.limits),
         "cadence": dict(spec.cadence), "comms": dict(spec.comms), "a2a": dict(spec.a2a),
@@ -720,7 +798,8 @@ def doc_from_role(row: Mapping[str, Any], *, skills: Any = (), mcp: Any = (),
                      "description": str(rs.get("description") or ""), "team": team,
                      "reports_to": row.get("reports_to") or None},
         "spec": {
-            **_pick(bspec, ("context", "subagents", "triggers", "a2a", "scopes")),
+            **_pick(bspec, ("context", "subagents", "coordination", "planning", "self_check",
+                            "triggers", "a2a", "scopes")),
             "persona": persona, "mission": str(rs.get("mission") or ""),
             "outcomes": _str_list(rs.get("primary_outcomes")),
             "boundaries": {"must": _str_list(bounds.get("must")), "must_not": _str_list(bounds.get("must_not"))},
@@ -811,7 +890,9 @@ def compile_spec(spec: AgentSpec) -> CompiledAgent:
         mcp=spec.tools.mcp, native_tools=spec.tools.native, exposure=spec.tools.exposure,
         model=spec.model, autonomy=spec.autonomy, limits=spec.limits, memory=spec.memory,
         context=dict(spec.context), output_contract=dict(spec.output_contract), reports_to=spec.reports_to,
-        extends=spec.extends,
+        extends=spec.extends, subagents=tuple(dict(x) for x in spec.subagents),
+        coordination=dict(spec.coordination), planning=dict(spec.planning),
+        self_check=dict(spec.self_check),
     )
 
 

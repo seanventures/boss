@@ -180,13 +180,15 @@ class TestStrictDerivation:
 EXPECTED_PER_SURFACE = {
     # +6 drift already on main at b3363fe9a (191 measured, 185 pinned); +6 the ticket tools
     # (BOSSAPP-1047 B2: ticket_get/search/browse/import/comment/transition), 2026-11-13.
-    "chat": 197,   # +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
+    "chat": 198,   # +1 transfer_to_agent (AP-P7 handoffs); +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
     "mcp": 197,
     # find_tools; agent steps join when K4 moves them onto the kernel. +6 the ticket tools,
     # offered to workflow agents through the tickets.read / tickets.write skills (BOSSAPP-1047 B2).
     # +4 the run filesystem's tools (AP-P6): agent_step only, so chat's and MCP's registry
     # views never list them (the kernel offers them inside every run).
-    "agent_step": 11,
+    # +7 the sub-agent tools and write_todos (AP-P7): agent_step only, offered by the kernel to a
+    # run whose spec opts in (coordination / planning).
+    "agent_step": 18,
     "decision": 1,     # find_tools; a decision's read tools stay the caller's (ReadPhase)
     "build": 1,        # find_tools; build stages join at K12
 }

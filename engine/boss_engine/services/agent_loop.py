@@ -2147,6 +2147,20 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         return {"status": run["status"], "run_id": run_id}
     project_id = run["project_id"]
     pending = run["pending"] or {}
+    if _on_kernel(run) and _waits_on_a_subagent(pending):
+        # AP-P7: A SUB-AGENT'S INTERRUPT, carried by this run's `task` call. Its approval binds
+        # the CHILD's held call (which this run does not hold); the kernel hands every answer —
+        # approved, declined, a typed answer — to the child, whose resume checks the binding.
+        from .interrupts import answers_for_run
+
+        answers = answers_for_run(connection, pending)
+        if not answers:
+            return {"status": "denied", "run_id": run_id,
+                    "reason": "the sub-agent's question is not answered yet"}
+        emit_event(connection, project_id, "agent.run_resumed", "decision_answer", "agent_run",
+                   run_id, {"tool": pending.get("tool"), "subagent": True,
+                            "interrupts": sorted(answers)})
+        return _drive_run_on_kernel(connection, settings, run_id, None, answers=answers)
     from .typed_forms import is_parked_question, resume_with_answer
 
     if is_parked_question(pending):
@@ -2260,6 +2274,14 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
     )
     emit_event(connection, project_id, "agent.run_resumed", "decision_approval", "agent_run", run_id, {"tool": pending.get("tool")})
     return _drive_run(connection, settings, run_id, None)
+
+
+def _waits_on_a_subagent(pending: Any) -> bool:
+    """A suspended run whose interrupt is a sub-agent's, propagated (kernel/subagents.py)."""
+    if not isinstance(pending, dict):
+        return False
+    return bool(pending.get("subagent")) or any(
+        isinstance(i, dict) and i.get("subagent") for i in pending.get("interrupts") or [])
 
 
 def _execute_approved(connection: Connection, settings: Settings, run: dict, run_id: str,
@@ -2764,7 +2786,9 @@ def _drive_run_on_kernel(connection: Connection, settings: Settings, run_id: str
         engine=engine, tools=tools, policies=presets.agent_loop(done + steps_cap),
         project_id=project_id, system=system, messages=messages, run_id=run_id,
         middleware=context_middleware(connection, project_id, role=role, thread_id=thread_id,
-                                      actor=f"agent:{role}"),
+                                      actor=f"agent:{role}")
+        + coordination_middleware(connection, project_id, role=role, run_id=run_id,
+                                  finalize_ctx=finalize_ctx),
         actor=f"agent:{role}", persist=True, store=store, gate=gate, sink=sink,
         resume_note=presets.agent_loop_resume_note, extra=finalize_ctx, db=connection,
         screen=lambda result, ref: screen_result(connection, settings, project_id, result,
@@ -2780,6 +2804,26 @@ def _drive_run_on_kernel(connection: Connection, settings: Settings, run_id: str
     else:
         result = kernel.resume(spec, decision=decision, answers=answers)
     return _kernel_outcome(connection, project_id, run_id, result, mirror, tools)
+
+
+def coordination_middleware(connection: Connection, project_id: str, *, role: str,
+                            run_id: str, finalize_ctx: Optional[dict] = None) -> tuple:
+    """AP-P7 (services/subagent_runs.middleware_for): what the agent's published spec opts into —
+    write_todos, the rubric self-check, sub-agents (OFF unless `coordination.enabled`, and then
+    only with a budget) — and, for a run that is itself a background sub-agent, its budget
+    slice. () for an agent that opts into none of it, which is every shipped agent today."""
+    from .subagent_runs import middleware_for
+
+    fctx = dict(finalize_ctx or {})
+    try:
+        return middleware_for(connection, project_id=project_id, role=role, run_id=run_id,
+                              actor=f"agent:{role}", finalize_ctx=fctx,
+                              branch=fctx.get("branch"), parent_writes=bool(fctx.get("branch")))
+    except Exception as exc:  # noqa: BLE001 — a run without coordination is still a run
+        import logging
+
+        logging.getLogger(__name__).warning("coordination middleware skipped: %s", exc)
+        return ()
 
 
 def context_middleware(connection: Connection, project_id: str, *, role: str,

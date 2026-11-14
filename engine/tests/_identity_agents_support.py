@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, status TEXT NOT N
   blocked_reason TEXT, updated_at TIMESTAMPTZ, policy_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb);
 CREATE TABLE IF NOT EXISTS workflow_schedules (id TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT true,
   input JSONB NOT NULL DEFAULT '{}'::jsonb, last_error TEXT, updated_at TIMESTAMPTZ);
+-- The identity block adds its approval-delegation columns to decisions (BOSSAPP-884).
+CREATE TABLE IF NOT EXISTS decisions (id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, project_id TEXT, kind TEXT, payload JSONB NOT NULL DEFAULT '{}'::jsonb,
   status TEXT NOT NULL DEFAULT 'queued', last_error JSONB, updated_at TIMESTAMPTZ);
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp();

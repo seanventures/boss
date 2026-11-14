@@ -7,7 +7,9 @@ governance.py; docs/design/AGENT_MIDDLEWARE.md), and durable execution (AP-P2: d
 Postgres checkpointer with pending writes and fork; interrupts.py — one interrupt primitive keyed
 by stable ids; idempotency.py — what a resumed call may do twice), and context engineering
 (AP-P6: context_policy.py — offload, clear, summarise, skills on demand — over runfs.py, the
-run filesystem). Surfaces run on it per flag (flags.py), each
+run filesystem), and deepagents-level depth (AP-P7: subagents.py — `task` and async sub-agents
+with exchanged tokens, budget slices, effort caps and one writer per branch; planning.py —
+write_todos and the rubric self-check). Surfaces run on it per flag (flags.py), each
 flipped on after parity: K2 decisions, K6 chat, K4 agent steps and meeting seats are ON by
 default; K3 the pre-check and K11 the coder are still to move. test_kernel_conformance.py holds
 each old loop equal to its preset.
@@ -35,7 +37,9 @@ from .loop import cancel, resume, run
 from .middleware import Jump, Middleware, MiddlewareError
 from .policies import (AcceptAny, Caps, ClipContext, OfferAll, ParsedAnswer, Policies, Recover)
 from .scoped_tools import ScopedTools
+from .planning import Planning, Rubric
 from .spec import RunSpec
+from .subagents import Coordination, LocalTarget, SubagentDef, Subagents
 from .toolset import Composite, FunctionToolSet, ReadOnlyToolSet, RegistryToolSet, Tool
 from .types import (Acceptance, ControllerState, Event, Finding, KernelResult, ModelTurn, Step,
                     StopReason, ToolCall, ToolResult, ToolSchema, Usage)
@@ -45,6 +49,7 @@ __all__ = ["AcceptAny", "Acceptance", "AnthropicMessagesEngine", "Block", "Cance
            "ControllerState", "EngineTraits", "Event", "Finding", "FunctionToolSet",
            "GovernedEngine", "Interrupt", "Jump", "KernelResult", "Middleware", "MiddlewareError",
            "ModelRequest", "ModelTurn", "OfferAll", "OpenAIChatEngine", "ParsedAnswer",
-           "PgCheckpointStore", "Policies", "ReadOnlyToolSet", "Recover", "RegistryToolSet", "RunSpec", "ScopedTools",
+           "PgCheckpointStore", "Planning", "Rubric", "Coordination", "LocalTarget",
+           "SubagentDef", "Subagents", "Policies", "ReadOnlyToolSet", "Recover", "RegistryToolSet", "RunSpec", "ScopedTools",
            "Step", "StopReason", "TextEngine", "Tool", "ToolCall", "ToolResult", "ToolSchema",
            "Usage", "cancel", "fork", "interrupt", "presets", "resume", "run"]

@@ -370,7 +370,10 @@ class Audit:
             result = handler(request)
         state.extra["_last_tool_latency"] = int((run.spec.clock() - started) * 1000)
         if request.approved is not None:
-            state.executed.append(key)
+            if result.status != "deferred":
+                # A resumed call that waits AGAIN (a sub-agent's next interrupt, AP-P7) has not
+                # finished: its next answer must reach it, not be answered "skipped".
+                state.executed.append(key)
         elif write and result.status == "ok":
             state.executed.append(key)
             request.notes["wrote"] = True
