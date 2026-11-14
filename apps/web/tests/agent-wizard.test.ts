@@ -180,17 +180,16 @@ describe("Agent creation (New agent, with the wizard's submission)", () => {
     expect(DIALOG()).toContain("made === key ? adoptCreatedAgent(fresh, made) : fresh");
   });
 
-  it("live-model Studio runs are refused before publish, with what to do instead", () => {
-    // Every Studio run of a live_model version is blocked in this release, so offering it
-    // produced an agent whose every run failed.
+  it("live-model Studio runs are allowed: every Studio run is a governed agent run", () => {
+    // AGENT_PLATFORM D13: the templated deterministic brief is retired and live_model is no
+    // longer blocked, so the wizard no longer refuses it.
     const issues = validateAgentWizardDraft({
       ...createInitialAgentWizardDraft("software_engineer", "ceo"),
       executionMode: "live_model" as const,
       preferredCapabilitiesText: "reasoning",
     });
     const runtime = issues.filter((i) => i.field === "runtime").map((i) => i.message).join(" ");
-    expect(runtime).toContain("not available in this release");
-    expect(runtime).toContain("Deterministic brief");
+    expect(runtime).not.toContain("not available in this release");
   });
 
   it("blocks incomplete and unbounded blueprints before server creation", () => {

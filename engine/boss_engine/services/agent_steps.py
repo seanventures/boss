@@ -420,6 +420,11 @@ def agent_brief(connection: Connection, project_id: str, role_key: str) -> str:
                      + ", ".join(str(c) for c in spec["output_contracts"]))
     if spec.get("knowledge"):
         lines.append(f"\nWHAT YOU KNOW\n{spec['knowledge']}")
+    # THE VERSIONED ROLE PROMPT (boss.agent/v1 prompts + standing instructions), read by the
+    # same function the compiled prompt uses, so a published version is what the step is told.
+    from ..agents.spec import prompt_sections
+
+    lines.extend("\n" + section for section in prompt_sections(spec))
 
     lines.append(
         "\nHOW YOU WORK\n"

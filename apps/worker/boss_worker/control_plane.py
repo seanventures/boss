@@ -665,6 +665,12 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_agent_studio(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Run one leased Agent Studio job through the API's governed agent pipeline."""
+        response = self._client.post("/v1/agent-studio/runs/execute", json=payload)
+        response.raise_for_status()
+        return response.json()
+
     def run_orchestrator_next_move(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post(
             "/v1/orchestration/next-move/execute",

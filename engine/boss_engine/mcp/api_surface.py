@@ -144,6 +144,13 @@ ROSTER_AUTHORITY_WRITES = frozenset({
     # the server itself, so a confirmed skill grant adds no server either.
     ("POST", "/v1/role-skills"),
     ("POST", "/v1/role-skills/sync"),
+    # boss.agent/v1 (AP-P1a): creating, publishing or rolling back a spec writes the role and
+    # its grants exactly as POST/PATCH /v1/agents does, so a non-human caller is held the same.
+    ("POST", "/v1/agent-specs"),
+    ("POST", "/v1/agent-specs/import"),
+    ("PUT", "/v1/agents/{role_key}/spec"),
+    ("POST", "/v1/agents/{role_key}/spec/versions/{version}/publish"),
+    ("POST", "/v1/agents/{role_key}/spec/rollback"),
 })
 _OPERATOR_ONLY_EXACT = frozenset({
     # A new org or project is tenancy, not work: a non-human caller is held like POST /v1/orgs.
