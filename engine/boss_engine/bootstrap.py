@@ -8,7 +8,7 @@ from .config import get_settings
 from .db import ensure_schema, get_engine
 from .services.core import emit_event, make_id
 from .services.agent_studio import AgentStudioService
-from .services.a2a import A2AService
+from .services.agent_bus import A2AService
 from .services.entitlements import EntitlementBrokerService
 from .services.event_subscription_service import seed_default_event_subscriptions
 from .services.feature_catalog import FeatureCatalog

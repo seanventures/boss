@@ -98,8 +98,8 @@ def test_capability_tick_requires_worker_principal(client, engine, monkeypatch):
         )
 
     calls = []
-    monkeypatch.setattr(
-        workflow_capability_runner, "tick",
+    monkeypatch.setattr(   # AP-P0: the endpoint commits per step through tick_per_step
+        workflow_capability_runner, "tick_per_step",
         lambda *args, **kwargs: calls.append("tick") or {"performed": []},
     )
     monkeypatch.setattr(

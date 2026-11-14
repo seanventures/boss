@@ -21,12 +21,16 @@ import re
 from datetime import datetime
 from typing import Any, Mapping, Optional
 
+import logging
+
 from sqlalchemy import text
 
 from .core import create_blocking_decision, emit_event, make_id, now_utc
 from .decision_actions import OPEN_STATUSES
 from .decisions import SYSTEM_ACTOR, DecisionService
 from .jobs import JOB_PRIORITY_INTERACTIVE
+
+_log = logging.getLogger(__name__)
 
 BLOCKER_AUTHORITY_NO_GRANT: str = "authority_no_grant"
 STATUS_WAITING_ON_PERSON: str = "waiting_on_person"
@@ -591,18 +595,26 @@ def record_resolution(
     resolution: str,
     opened_at: Optional[str],
 ) -> None:
-    """One history row: blocker_type, resolution, and time-to-unblock. Also attempts one
-    learning-layer write, swallowed on failure (mirrors `run_supervisor.write_lesson`)."""
+    """One history row: blocker_type, resolution, and time-to-unblock. Also one learning-layer
+    write (a `decision` learning: how this kind of wait was cleared), best-effort but LOGGED.
+
+    AP-P0 (docs/design/AGENT_PLATFORM.md §2.9): the write used to pass detail fields the
+    `decision` kind does not have and no evidence, so `learning_writeback.record` refused every
+    one and the refusal was swallowed silently. It now passes the kind's own fields (question,
+    chosen) and the run as evidence, and resolves the project from the run when not given."""
     resolved_at = now_utc().isoformat()
     entry = {"blocker_type": blocker_type, "resolution": resolution,
              "opened_at": opened_at, "resolved_at": resolved_at}
-    connection.execute(text(
+    owner = connection.execute(text(
         "UPDATE code_task_runs SET finalize_ctx = jsonb_set("
         "COALESCE(finalize_ctx, '{}'::jsonb), '{person_wait_history}', "
         "COALESCE(finalize_ctx->'person_wait_history', '[]'::jsonb) || CAST(:entry AS jsonb)) "
-        "WHERE id = :id"),
+        "WHERE id = :id RETURNING project_id"),
         {"entry": json.dumps([entry]), "id": run_id},
-    )
+    ).scalar()
+    project_id = project_id or (str(owner) if owner else None)
+    if not project_id:
+        return
     try:
         from .knowledge import learning_writeback
 
@@ -611,13 +623,17 @@ def record_resolution(
                 connection, project_id=project_id, learning_kind="decision",
                 title=f"run {run_id}: {blocker_type} resolved by {resolution}",
                 statement=f"blocker {blocker_type} cleared via {resolution}",
-                detail={"blocker_type": blocker_type, "resolution": resolution},
+                detail={"question": f"how is a {blocker_type} wait on a person cleared?",
+                        "chosen": resolution, "reasons": [], "alternatives": []},
                 about={"areas": ["person_wait"], "symbols": [], "rules": []},
-                evidence=[], confidence=0.5,
+                evidence=[{"type": "metric", "ref": f"run:{run_id}", "observed": True,
+                           "excerpt": f"{blocker_type} opened {opened_at or 'unknown'}, "
+                                      f"resolved {resolved_at} by {resolution}"}],
+                confidence=0.5,
                 observed={"run_id": run_id, "opened_at": opened_at, "resolved_at": resolved_at},
             )
     except Exception:  # noqa: BLE001 — learning is best-effort; the resume already happened
-        pass
+        _log.warning("person_wait: learning not recorded for run %s", run_id, exc_info=True)
 
 
 def poll_due(connection: Any, settings: Any, *, now: Optional[Any] = None) -> int:

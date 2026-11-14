@@ -6702,6 +6702,10 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "finished": {"type": "boolean",
                            "description": "true when the work is done or abandoned, so this "
                                           "stops being re-injected into later turns"},
+              "session_id": {"type": "string",
+                             "description": "optional: a stable id for THIS session when it "
+                                            "has no BOSS thread (an MCP client, an agent "
+                                            "step); the same id reads the same ledger back"},
               "project_id": {"type": "string"}}),
         kind="write",
         reversibility="safe", permission="assistant:chat",
@@ -6721,10 +6725,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         )
 
         pid = args.get("project_id") or project_id
-        thread_id = str(args.get("_thread_id") or "").strip()
-        if not thread_id:
-            return {"ok": False,
-                    "error": "no thread on this turn, so there is nothing to keep a ledger for"}
+        thread_id = _ledger_thread(args, project_id=pid, actor=actor)
         try:
             with ctx.begin() as c:
                 if args.get("finished"):
@@ -9320,6 +9321,22 @@ def _register_ticket_tools(reg: ToolRegistry) -> None:
     from .ticket_tools import register_ticket_tools
 
     register_ticket_tools(reg)
+
+
+def _ledger_thread(args: dict, *, project_id: str, actor: str) -> str:
+    """The session `update_ledger` writes for (AP-P0, AGENT_PLATFORM.md §2.9).
+
+    A chat turn injects its thread as `_thread_id`. Over MCP and in an agent step nothing
+    injects one (agent_loop strips every `_` argument), so the tool refused every call there.
+    Now: the injected thread, else the caller's own `session_id`, else one ledger per actor in
+    the project -- always a key, so the tool works on every surface."""
+    injected = str(args.get("_thread_id") or "").strip()
+    if injected:
+        return injected
+    own = str(args.get("session_id") or "").strip()[:120]
+    if own:
+        return f"session:{project_id}:{own}"
+    return f"session:{project_id}:{actor or 'agent'}"
 
 
 def build_default_registry() -> ToolRegistry:

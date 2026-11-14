@@ -22,7 +22,7 @@ from boss_engine.services import workflow_capability_runner as runner
 
 
 def _tick_source() -> str:
-    return inspect.getsource(runner.tick)
+    return "".join(map(inspect.getsource, runner.TICK_PARTS))
 
 
 class TestAClaimedStepIsAlwaysReleased:

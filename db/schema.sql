@@ -5077,6 +5077,15 @@ CREATE TABLE IF NOT EXISTS kg_fact_stats (
   last_used_at TIMESTAMPTZ,
   archived BOOLEAN NOT NULL DEFAULT FALSE
 );
+-- One row per (fact, run) attributed: record_outcome counts a run's verdict once (AP-P0).
+CREATE TABLE IF NOT EXISTS kg_outcome_attributions (
+  fact_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  success BOOLEAN NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (fact_id, run_id)
+);
 CREATE TABLE IF NOT EXISTS kg_audit (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

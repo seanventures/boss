@@ -182,3 +182,29 @@ def test_repair_retries_are_on_by_default():
     from boss_engine.config import Settings
 
     assert Settings(_env_file=None).code_repair_max_retries >= 1
+
+
+def test_every_delegate_session_gets_a_standing_ceiling_outside_a_build(tmp_path, monkeypatch):
+    """AP-P0 (AGENT_PLATFORM.md §4.2, "pass max_budget_usd to Delegate CLI runs"): an agent made
+    by make_code_agent carries the per-task budget as its standing ceiling, so a session run
+    outside the governed pipeline (review, docs, setup, verifier debate) is bounded too; the
+    pipeline's own binding still replaces it."""
+    from boss_engine.config import Settings
+    from boss_engine.services import code_agent
+
+    raw = _Agent()
+    monkeypatch.setattr(code_agent, "_bind_lane_credentials", lambda s, e, **_k: s)
+    monkeypatch.setattr(code_agent, "_build_code_agent", lambda s, e: raw)
+    settings = Settings(_env_file=None, BOSS_CODE_TASK_BUDGET_USD_MICROS=1_250_000)
+    agent = code_agent.make_code_agent(settings, "fake")
+    agent.run_role("p", tmp_path)
+    assert raw.seen["max_budget_usd"] == 1.25
+    agent.budget_ceiling = lambda: 0.4          # what the governed pipeline does
+    agent.run_role("p", tmp_path)
+    assert raw.seen["max_budget_usd"] == 0.4
+    fresh = _Agent()
+    monkeypatch.setattr(code_agent, "_build_code_agent", lambda s, e: fresh)
+    unbounded = code_agent.make_code_agent(
+        Settings(_env_file=None, BOSS_CODE_TASK_BUDGET_USD_MICROS=0), "fake")
+    unbounded.run_role("p", tmp_path)
+    assert fresh.seen["max_budget_usd"] is None

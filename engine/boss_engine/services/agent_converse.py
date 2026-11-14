@@ -902,8 +902,12 @@ def _memory(connection, project_id: str, role_key: str) -> list[dict]:
              "ORDER BY started_at DESC LIMIT 5"),
         {"p": project_id, "k": role_key},
     ).mappings().all()
+    # `text` is what the persona's memory section (agent_persona._l4) renders; without it the
+    # section was always empty (AP-P0, docs/design/AGENT_PLATFORM.md §2.9).
     return [{"act_id": r["act_id"], "label": r["label"], "status": r["status"],
-             "at": _iso(r["started_at"]), "source": f"act:{r['act_id']}"} for r in rows]
+             "at": _iso(r["started_at"]), "source": f"act:{r['act_id']}",
+             "text": f"{r['label'] or 'work'} ({r['status'] or 'unknown'}, "
+                     f"{_iso(r['started_at']) or 'undated'})"} for r in rows]
 
 
 def _about(connection, project_id: str, context: dict) -> str:

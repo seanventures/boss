@@ -368,10 +368,12 @@ class TestTheToolsThemselves:
         assert result["status"] == "proposed"
         assert "does not bind" in result["note"]
 
-    def test_update_ledger_needs_a_thread(self, engine):
+    def test_update_ledger_works_without_a_thread(self, engine):
+        """AP-P0: over MCP and in agent steps nothing injects `_thread_id`, and the tool used to
+        refuse every call there. It now keeps one ledger per actor (or per `session_id`)."""
         result = self._invoke(engine, "update_ledger", {"goal": "x"})
-        assert result["ok"] is False
-        assert "thread" in result["error"]
+        assert result["ok"] is True, result
+        assert result["thread_id"].startswith("session:")
 
     def test_update_ledger_writes_and_recall_reads(self, engine):
         wrote = self._invoke(engine, "update_ledger", {
