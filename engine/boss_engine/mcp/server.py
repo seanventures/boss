@@ -34,6 +34,9 @@ from ..tools import ToolRegistry, build_default_registry
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "boss-engine", "version": __version__}
 _UNSCOPED_SQL_TOOLS = frozenset({"query_db", "write_db"})
+#: The run filesystem's tools (AP-P6, kernel/runfs.py) act on a kernel run's own files; an MCP
+#: client has no run, so they are never listed here.
+from ..kernel.runfs import RUN_FS_TOOLS as _RUN_FS_TOOLS  # noqa: E402
 #: KG P6a: the only WRITE tools `MCPServer.handle_external_agent_call` will ever dispatch to.
 _EXTERNAL_AGENT_WRITE_TOOLS = frozenset({"kg_write_agent_decision", "kg_write_coverage_gap"})
 #: KG P6a: the READ tools an external-agent token may use to read the evidence its contract
@@ -225,6 +228,7 @@ class MCPServer:
         self._sync_agent_tools()
         tools = [spec.mcp() for spec in self.registry.specs() if (
             spec.name not in _UNSCOPED_SQL_TOOLS
+            and spec.name not in _RUN_FS_TOOLS
             and
             (not self.api_only or spec.name in self.api_tool_names)
             and

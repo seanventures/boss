@@ -5,7 +5,9 @@ ledger.py, ledger_read.py, ledger_tool.py, workspace.py) and K1 (the kernel libr
 six-hook middleware contract and governance as mandatory middleware (AP-P1b: middleware.py,
 governance.py; docs/design/AGENT_MIDDLEWARE.md), and durable execution (AP-P2: durable.py — the
 Postgres checkpointer with pending writes and fork; interrupts.py — one interrupt primitive keyed
-by stable ids; idempotency.py — what a resumed call may do twice). Surfaces run on it per flag (flags.py), each
+by stable ids; idempotency.py — what a resumed call may do twice), and context engineering
+(AP-P6: context_policy.py — offload, clear, summarise, skills on demand — over runfs.py, the
+run filesystem). Surfaces run on it per flag (flags.py), each
 flipped on after parity: K2 decisions, K6 chat, K4 agent steps and meeting seats are ON by
 default; K3 the pre-check and K11 the coder are still to move. test_kernel_conformance.py holds
 each old loop equal to its preset.
@@ -25,6 +27,7 @@ from . import presets
 from .anthropic_engine import AnthropicMessagesEngine
 from .engine import (Block, CancelToken, EngineTraits, ModelRequest, OpenAIChatEngine,
                      TextEngine)
+from .context_policy import ContextConfig, ContextPolicyMiddleware
 from .durable import PgCheckpointStore, fork
 from .governance import GovernedEngine
 from .interrupts import Interrupt, interrupt
@@ -38,7 +41,7 @@ from .types import (Acceptance, ControllerState, Event, Finding, KernelResult, M
                     StopReason, ToolCall, ToolResult, ToolSchema, Usage)
 
 __all__ = ["AcceptAny", "Acceptance", "AnthropicMessagesEngine", "Block", "CancelToken", "Caps",
-           "ClipContext", "Composite",
+           "ClipContext", "Composite", "ContextConfig", "ContextPolicyMiddleware",
            "ControllerState", "EngineTraits", "Event", "Finding", "FunctionToolSet",
            "GovernedEngine", "Interrupt", "Jump", "KernelResult", "Middleware", "MiddlewareError",
            "ModelRequest", "ModelTurn", "OfferAll", "OpenAIChatEngine", "ParsedAnswer",

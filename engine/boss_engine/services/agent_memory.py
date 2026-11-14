@@ -247,7 +247,7 @@ def recall(
         text(
             """
             SELECT id, kind, scope, scope_ref, body, status, use_count, last_used_at,
-                   created_at
+                   created_at, reviewed_at
               FROM agent_memory
              WHERE project_id = :p
                AND status = ANY(:statuses)

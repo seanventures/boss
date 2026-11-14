@@ -57,7 +57,8 @@ reaches every caller. Policies stay; the default middleware stack calls them.
 | `budget` | `before_agent`, `wrap_model_call`, `after_agent` | reserve / `GovernedEngine` gate / settle (`svc/budget.py`, `kernel/governance.py`) |
 | `limits` | `before_model` | `Caps.decide` (steps, spend, deadline, turn budget) |
 | `memory` | `before_agent`, `before_model`, `after_agent` | knowledge pack (`kg/runtime.py`), `agent_memory`, learning writeback (`kg/learning_writeback.py`) |
-| `context` | `before_model` | `ClipContext.assemble`, scoped tools (`kernel/scoped_tools.py`); K9 compaction |
+| `context` | `before_model` | `ClipContext.assemble`, scoped tools on every preset (`kernel/scoped_tools.py`) |
+| `context_policy` (AP-P6) | `before_agent`, `before_model`, `wrap_tool_call` | `kernel/context_policy.py` on chat and agent steps: the run filesystem (`kernel/runfs.py`: `/scratch`, `/large_tool_results`, `/memories` → `svc/memory_api.py`, `/skills`); results over min(20k tokens, the preset's clip) offloaded, not cut; old tool results cleared past 50% of the window; summary at 85% keeping 10%, originals archived; SKILL.md bodies on demand. Configured by the agent spec's `context`; `BOSS_CONTEXT_POLICY=0` turns it off |
 | `recovery` | `wrap_model_call` | `Recover.on_model_error` retry / feedback / wait / suspend |
 | `telemetry` | `wrap_model_call` | `llm_calls` row via `record_llm_call` (`svc/llm_telemetry.py`) |
 | `verify` | `after_model`, `after_agent` | `VerifyPolicy.after_step` / `accept_final` / `reask` |

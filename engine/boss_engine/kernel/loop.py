@@ -31,6 +31,7 @@ import uuid
 from typing import Any, Optional
 
 from .checkpoint import DEFAULT_STORE
+from .context_policy import render_for
 from .engine import CancelToken
 from .governance import approval_refusal
 from .ledger import SinkMeta
@@ -64,6 +65,13 @@ class _Run:
         self.last_latency_ms = 0
         self.toolset = (Composite(spec.tools, LedgerTool(spec.ledger_reader))
                         if spec.ledger_reader is not None else spec.tools)
+        context = self.chain.get("context_policy")
+        if context is not None and callable(getattr(context, "toolset", None)):
+            # AP-P6: the run filesystem's tools (ls, read_file, grep, write_file) join every run
+            # whose stack shapes its context, FIRST, so the kernel's own set answers those
+            # names whatever the caller's tools also offer. A constant list: the cached tool
+            # prefix it heads never changes mid-run.
+            self.toolset = Composite(context.toolset(), self.toolset)
         self.store = spec.store if spec.store is not None else DEFAULT_STORE
         self.token = spec.cancel or CancelToken(clock=spec.clock)
         self.rec = Recorder(state, sink=spec.sink, on_event=spec.on_event,
@@ -386,7 +394,7 @@ def _answer_held(drive: _Run, item: dict, content: Any) -> None:
     state = drive.state
     call_id = str(item.get("call_id") or "")
     result = ToolResult(call_id, str(item.get("tool") or ""), "ok", content)
-    body = drive.policies.context.render(result)
+    body = render_for(drive, result)
     for message in reversed(state.messages):
         if message.get("role") == "tool" and str(message.get("tool_call_id")) == call_id:
             message["content"] = body
@@ -436,7 +444,7 @@ def _run_approved(drive: _Run, decision: dict, *, held: Optional[dict] = None) -
                    if s.name == call.name), None)
     result = drive.chain.tool_call(drive, ToolRequest(call=call, schema=schema, step=step,
                                                       approved=decision), drive.invoke_tool)
-    body = drive.policies.context.render(result)
+    body = render_for(drive, result)
     for message in reversed(state.messages):
         if message.get("role") == "tool" and str(message.get("tool_call_id")) == call.id:
             message["content"] = body

@@ -17,6 +17,11 @@ community-compose.yml), so an install that sets nothing runs what this table say
     BOSS_KERNEL_MEETINGS   Meeting seats, the synthesis and the PRD draft. ON.
                            Evidence: test_kernel_meetings, the meeting suites flag-on.
 
+    BOSS_CONTEXT_POLICY    AP-P6: the context policy (kernel/context_policy.py) on chat and agent
+                           steps — the run filesystem, offload instead of the CUT clip,
+                           summarisation at 85%, tool-result clearing, skills on demand. ON.
+                           Evidence: test_ap_p6_context_engineering.
+
 (K3 the pre-check and K11 the native coder are not flipped here.)
 """
 from __future__ import annotations
@@ -29,6 +34,7 @@ KERNEL_DECISIONS = "BOSS_KERNEL_DECISIONS"
 KERNEL_CHAT = "BOSS_KERNEL_CHAT"
 KERNEL_STEPS = "BOSS_KERNEL_STEPS"
 KERNEL_MEETINGS = "BOSS_KERNEL_MEETINGS"
+CONTEXT_POLICY = "BOSS_CONTEXT_POLICY"
 
 #: Each surface's default when its variable is unset. Flipped per surface, each after parity.
 DEFAULTS: dict = {
@@ -36,6 +42,7 @@ DEFAULTS: dict = {
     KERNEL_CHAT: True,
     KERNEL_STEPS: True,
     KERNEL_MEETINGS: True,
+    CONTEXT_POLICY: True,
 }
 
 
@@ -48,5 +55,5 @@ def on(name: str) -> bool:
     return said not in OFF_WORDS
 
 
-__all__ = ["DEFAULTS", "KERNEL_CHAT", "KERNEL_DECISIONS", "KERNEL_MEETINGS", "KERNEL_STEPS",
+__all__ = ["CONTEXT_POLICY", "DEFAULTS", "KERNEL_CHAT", "KERNEL_DECISIONS", "KERNEL_MEETINGS", "KERNEL_STEPS",
            "OFF_WORDS", "on"]

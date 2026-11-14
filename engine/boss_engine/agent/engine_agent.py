@@ -70,6 +70,23 @@ def kernel_chat() -> bool:
     return on(KERNEL_CHAT_FLAG)
 
 
+def bounded_history(history: list[dict], window_tokens: int) -> list[dict]:
+    """The legacy loop's history (AP-P6): all of it while it fits 85% of `window_tokens`;
+    past that, the newest messages within 10% of the window, after one message holding an
+    extractive digest of the rest (kernel/context_policy's, the same rule and the same
+    words). The kernel path never needs this: its context policy summarises and archives."""
+    from ..kernel import context_policy as cp
+
+    history = list(history or [])
+    if cp.message_tokens(history) <= cp.SUMMARISE_AT * window_tokens:
+        return history
+    keep = max(256, int(cp.KEEP * window_tokens))
+    out = cp.compact_messages(history, keep_tokens=keep, archive_path="",
+                              summarise=lambda folded: cp.extractive_summary(
+                                  folded, budget_tokens=keep), pinned=0, head=cp.DIGEST_HEAD)
+    return out["messages"] if out else history
+
+
 def _cli_text_adapter(adapter: Any) -> bool:
     """Whether `adapter` answers over a CLI TEXT protocol (the JSON-in-text contract), under
     any of the router's wrappers. Those are the engines whose every chat round-trip re-renders
@@ -561,8 +578,12 @@ class EngineAgent:
                 system=system, on_step=on_step, budget=budget, focus=focus)
             if on_kernel is not None:
                 return on_kernel
+        from ..kernel.runfs import RUN_FS_TOOLS
+
+        # The run filesystem's tools are the kernel's (AP-P6): this loop has no run to hold them.
         schemas = [schema for schema in self.registry.openai_schema()
-                   if schema["function"]["name"] not in _UNSCOPED_SQL_TOOLS]
+                   if schema["function"]["name"] not in _UNSCOPED_SQL_TOOLS
+                   and schema["function"]["name"] not in RUN_FS_TOOLS]
         # SCOPED TOOLS ON THE CLI TEXT LOOP (BOSSAPP-1006). A CLI text brain re-renders EVERY
         # schema into EVERY prompt (~168 tools ≈ 37k tokens a call, audit BOSSAPP-997 §1a), and
         # its JSON-in-text protocol demonstrably degrades past ~53 tools — so here the turn is
@@ -580,7 +601,10 @@ class EngineAgent:
 
         messages: list[dict] = [{"role": "system", "content": system or _SYSTEM_PROMPT}]
         if history:
-            messages.extend(history)
+            # THIS LOOP HAS NO RUN FILESYSTEM, so a long thread is bounded here (AP-P6): the
+            # newest messages within the chat window, the older ones as a digest — never a
+            # fixed 12-message slice, never the whole thread into a CLI prompt.
+            messages.extend(bounded_history(history, self.CHAT_WINDOW_TOKENS))
         messages.append({"role": "user", "content": message})
 
         trace: list[dict] = []
@@ -1103,6 +1127,7 @@ class EngineAgent:
 
         spec = kernel.RunSpec(
             engine=engine, tools=tools,
+            middleware=self._context_middleware(project_id, actor),
             policies=kernel_presets.engine_agent(max_steps, budget=budget),
             project_id=project_id or "", system=system or _SYSTEM_PROMPT,
             messages=list(history or []) + [{"role": "user", "content": message}],
@@ -1124,6 +1149,41 @@ class EngineAgent:
         return self._turn_from_kernel(result, pending=pending, budget=budget,
                                       project_id=project_id, actor=actor,
                                       allow_writes=allow_writes)
+
+    #: A chat turn's working window (tokens): the conversation is summarised at 85% of this,
+    #: keeping 10% verbatim (AP-P6). Chat re-sends its history every turn, so it works in a
+    #: bounded slice of the model's window rather than filling 200k tokens on each question.
+    CHAT_WINDOW_TOKENS = 48_000
+
+    def _context_middleware(self, project_id: str, actor: str) -> tuple:
+        """THE CONTEXT POLICY FOR A CHAT TURN (AP-P6, kernel/context_policy.py): the whole
+        thread arrives (no 12-message slice); past 85% of the chat window the older part is
+        summarised — once per thread, reused by the next turns — with the originals archived to
+        /scratch/conversation_history, greppable; large results are offloaded, not cut; the
+        run filesystem's tools are offered; /memories is the memory API. () when
+        BOSS_CONTEXT_POLICY is off."""
+        from ..kernel.flags import CONTEXT_POLICY, on
+
+        if not on(CONTEXT_POLICY):
+            return ()
+        from ..kernel.context_policy import ContextConfig, ContextPolicyMiddleware
+
+        ambient = getattr(self, "ambient", None) or {}
+        thread_id = str(ambient.get("_thread_id") or "") or None
+        role = str(ambient.get("_role") or ambient.get("role") or "") or None
+        db = getattr(getattr(self, "ctx", None), "engine", None)
+        memory_for = None
+        if db is not None and callable(getattr(db, "begin", None)):
+            from ..services.memory_api import RunMemory
+
+            def memory_for(state: Any) -> Any:
+                return RunMemory(db.begin, project_id=project_id, actor=actor, role=role,
+                                 thread_id=thread_id, db=db)
+
+        return (ContextPolicyMiddleware(ContextConfig.from_spec(
+            None, window_tokens=self.CHAT_WINDOW_TOKENS,
+            thread_key=f"{project_id}:{thread_id}" if thread_id else None,
+            memory_for=memory_for)),)
 
     def _turn_from_kernel(self, result: Any, *, pending: list[dict], budget: Any,
                           project_id: str, actor: str, allow_writes: bool) -> AgentTurn:
