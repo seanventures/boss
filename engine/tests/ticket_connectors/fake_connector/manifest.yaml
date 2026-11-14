@@ -1,0 +1,27 @@
+# A scripted, in-memory ticket system. It proves the plug-in path: a folder with a manifest and
+# an adapter, loaded by TicketRegistry.add_folder, passing the same conformance suite.
+key: fake_connector
+label: Fake tickets
+icon: ticket
+description: An in-memory ticket system for the conformance suite.
+adapter: FakeTicketAdapter
+order: 99
+auth_fields:
+  - {name: base_url, label: Base URL, placeholder: "https://tickets.fake.example"}
+  - {name: api_token, label: Token, secret: true}
+capabilities:
+  read: true
+  browse: true
+  write_comment: true
+  transition: true
+  link: true
+  create: true
+  webhook: true
+default_hosts: [tickets.fake.example]
+base_url_field: base_url
+key_refs: true
+status_mapping_defaults:
+  review: In Review
+webhook:
+  scheme: hmac-sha256
+  header: X-Fake-Signature

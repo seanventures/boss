@@ -324,6 +324,23 @@ def _official_and_operator_hosts(binding: Binding) -> tuple[str, ...]:
     return tuple(dict.fromkeys(binding.hosts + _operator_hosts(binding.provider)))
 
 
+def register_provider_hosts(provider: str, hosts: Iterable[str] = (), *,
+                            operator_vars: Iterable[str] = ()) -> None:
+    """A plug-in connector (connectors/tickets/<key>/manifest.yaml) declares its official hosts
+    and the host settings an operator points at a self-hosted instance. They are ADDED to the
+    provider's binding — never removing a host BOSS already binds — so a host credential for a
+    new connector goes only to that connector's endpoints, like every built-in one."""
+    key = (provider or "").strip().lower()
+    if not key:
+        return
+    key = _PROVIDER_ALIASES.get(key, key)
+    add = tuple(str(h).strip().lower().rstrip(".") for h in hosts if str(h).strip())
+    PROVIDER_HOSTS[key] = tuple(dict.fromkeys(PROVIDER_HOSTS.get(key, ()) + add))
+    names = tuple(str(v).strip() for v in operator_vars if str(v).strip())
+    if names:
+        OPERATOR_BASE_URLS[key] = tuple(dict.fromkeys(OPERATOR_BASE_URLS.get(key, ()) + names))
+
+
 def provider_binding(provider: Optional[str], extra_hosts: Iterable[str] = ()) -> Binding:
     """The binding of a provider by name (a reference's `provider`), plus hosts an org admin set."""
     key = (provider or "").strip().lower()
