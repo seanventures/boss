@@ -12015,6 +12015,219 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_call_idem ON tool_call_audit (idempote
 CREATE INDEX IF NOT EXISTS idx_tool_call_audit_ledger ON tool_call_audit (run_id, seq)
   WHERE seq IS NOT NULL;
 
+-- ============================ TRACES AND THE EVALUATION LOOP (AP-P4, BOSSAPP-1055) ==========
+-- docs/design/AGENT_PLATFORM.md §4.8-§4.9, Phase 4; D8 (Postgres metadata + object-store
+-- payloads, OTel export optional), D9 (Jev and rule evaluators by default, an LLM judge opt-in
+-- per agent with a weekly spend cap).
+--
+-- A SPAN is one act-parented piece of a run: the run itself, each kernel step, each model call,
+-- tool call, subagent, interrupt and handoff (kernel/trace.py writes them through the mandatory
+-- `trace` middleware). Ids are W3C/OTel shaped (trace 32 hex, span 16 hex), so a span exported
+-- over OTLP keeps its id and its parent, and `traceparent` names the run. A model span names its
+-- llm_calls row by (run_id, seq): its COST IS READ FROM llm_calls, never copied, so the spans of
+-- a run sum to the run's llm_calls total by construction.
+CREATE TABLE IF NOT EXISTS trace_spans (
+  span_id TEXT PRIMARY KEY,                    -- 16 hex
+  trace_id TEXT NOT NULL,                      -- 32 hex: the root run's trace
+  parent_span_id TEXT,                         -- NULL: a root run
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,                        -- the kernel / agent / code task run
+  act_id TEXT,                                 -- agent_acts span the run acted under
+  root_act_id TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('run','step','model','tool','subagent','interrupt','handoff')),
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running'
+    CHECK (status IN ('running','ok','error','refused','held','cancelled','skipped')),
+  step INTEGER NOT NULL DEFAULT 0,
+  seq BIGINT,                                  -- model: = llm_calls.seq of its row
+  child_run_id TEXT,                           -- subagent / handoff: the run it started
+  decision_id TEXT,                            -- interrupt: the Decision it waits on
+  agent_key TEXT,
+  spec_version INTEGER,                        -- agent_spec_versions.version that ran
+  attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
+  input_ref TEXT,                              -- trace_payloads.id
+  output_ref TEXT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at TIMESTAMPTZ,
+  duration_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_trace_spans_run ON trace_spans (run_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_trace_spans_trace ON trace_spans (trace_id);
+CREATE INDEX IF NOT EXISTS idx_trace_spans_parent ON trace_spans (parent_span_id)
+  WHERE parent_span_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_trace_spans_decision ON trace_spans (decision_id)
+  WHERE decision_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_trace_spans_act ON trace_spans (act_id) WHERE act_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_trace_spans_agent ON trace_spans (project_id, agent_key, started_at DESC)
+  WHERE kind = 'run';
+
+-- A span's FULL input or output, REDACTED before it is stored (services/redaction: secrets and
+-- PII; run_secret_redaction: the run's own registered secrets). Tiered: `hot` keeps the body
+-- here; `cold` moved it to the payload backend (the S3 object store when one is configured,
+-- else a local directory) and keeps the key; `expired` is past retain_until and holds nothing.
+-- Base retention 14 days; 180 when the run met an evaluator, feedback or an incident.
+CREATE TABLE IF NOT EXISTS trace_payloads (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  span_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('input','output')),
+  tier TEXT NOT NULL DEFAULT 'hot' CHECK (tier IN ('hot','cold','expired')),
+  body JSONB,
+  object_key TEXT,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  sha256 TEXT NOT NULL,
+  redactions JSONB NOT NULL DEFAULT '{}'::jsonb,   -- {kind: count} the redactor replaced
+  clipped BOOLEAN NOT NULL DEFAULT false,
+  extended BOOLEAN NOT NULL DEFAULT false,
+  retain_until TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  moved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_trace_payloads_run ON trace_payloads (run_id);
+CREATE INDEX IF NOT EXISTS idx_trace_payloads_tier ON trace_payloads (tier, created_at);
+
+-- FEEDBACK ON RUNS: every verdict on a run, a span, an act or a thread, whoever gave it. The
+-- online evaluators write here (source rule / decision_model / judge), a person writes here
+-- (human), an experiment's checks write here. `cost_usd_micros` is what producing the verdict
+-- cost: an evaluator's weekly cap is read from it.
+CREATE TABLE IF NOT EXISTS feedback (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  run_id TEXT,
+  span_id TEXT,
+  act_id TEXT,
+  thread_id TEXT,
+  key TEXT NOT NULL,
+  score NUMERIC,
+  value JSONB,
+  comment TEXT,
+  source TEXT NOT NULL CHECK (source IN ('human','rule','judge','decision_model','pairwise')),
+  evaluator TEXT,
+  evaluator_version TEXT,
+  agent_key TEXT,
+  spec_version INTEGER,
+  cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (run_id IS NOT NULL OR span_id IS NOT NULL OR act_id IS NOT NULL OR thread_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_run ON feedback (run_id) WHERE run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_feedback_evaluator
+  ON feedback (project_id, agent_key, evaluator, created_at DESC) WHERE evaluator IS NOT NULL;
+
+-- DATASETS: versioned sets of examples an agent version is measured on. `kind` says where they
+-- came from: misses (the annotation inbox), battle (tests/agent-battle/battle.yaml), bench, or
+-- by hand. A confirmed example bumps the dataset's version.
+CREATE TABLE IF NOT EXISTS datasets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'custom' CHECK (kind IN ('custom','misses','battle','bench','verifier')),
+  agent_key TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+
+-- One example: an input, the reference (what good looks like: checks and expectations), what
+-- was observed when it was captured, and where it came from. A miss arrives PROPOSED and counts
+-- for nothing until a person confirms it in the annotation inbox.
+CREATE TABLE IF NOT EXISTS dataset_examples (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  dataset_id TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+  split TEXT NOT NULL DEFAULT 'test' CHECK (split IN ('train','dev','test')),
+  status TEXT NOT NULL DEFAULT 'confirmed'
+    CHECK (status IN ('proposed','confirmed','rejected','retired')),
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reference JSONB NOT NULL DEFAULT '{}'::jsonb,
+  observed JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source TEXT NOT NULL CHECK (source IN ('span','gate_waiver','failed_acceptance','battle_yaml',
+    'bench','manual','step_recovery','rejected_decision','negative_feedback')),
+  source_ref TEXT,
+  run_id TEXT,
+  span_id TEXT,
+  agent_key TEXT,
+  spec_version INTEGER,
+  dedupe_key TEXT,
+  proposed_by TEXT NOT NULL,
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  review_note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dataset_examples_dedupe
+  ON dataset_examples (dataset_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dataset_examples_inbox
+  ON dataset_examples (project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dataset_examples_dataset ON dataset_examples (dataset_id, status);
+
+-- AN EXPERIMENT RUN OVER A DATASET: one agent version (or the battle runner's target) run over
+-- every confirmed example, each result checked and kept. (`experiments` above is the A/B knob
+-- experiment over live units, services/experiments.py; this is the offline counterpart the
+-- design's "experiments linked to agent versions" names.) `summary` holds pass rate, cost and
+-- the failing examples.
+CREATE TABLE IF NOT EXISTS dataset_experiments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  dataset_id TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+  dataset_version INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'api' CHECK (source IN ('api','battle','bench','schedule')),
+  agent_key TEXT,
+  spec_version INTEGER,
+  engine TEXT NOT NULL DEFAULT 'scripted',
+  status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','completed','failed')),
+  summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_dataset_experiments_dataset
+  ON dataset_experiments (dataset_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dataset_experiments_agent
+  ON dataset_experiments (project_id, agent_key, spec_version);
+
+CREATE TABLE IF NOT EXISTS dataset_experiment_results (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  experiment_id TEXT NOT NULL REFERENCES dataset_experiments(id) ON DELETE CASCADE,
+  example_id TEXT NOT NULL,
+  run_id TEXT,                                 -- the run that answered it: open its trace
+  passed BOOLEAN NOT NULL,
+  score NUMERIC,
+  failures JSONB NOT NULL DEFAULT '[]'::jsonb,
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  latency_ms INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (experiment_id, example_id)
+);
+
+-- AN ONLINE EVALUATOR'S WEEK: what it sampled, ran and spent in one ISO week (Monday, UTC), and
+-- when it paused at its cap. One row per (agent, evaluator, week); the cap itself is the spec's.
+CREATE TABLE IF NOT EXISTS online_evaluator_weeks (
+  project_id TEXT NOT NULL,
+  agent_key TEXT NOT NULL,
+  evaluator TEXT NOT NULL,
+  week_start DATE NOT NULL,
+  seen INTEGER NOT NULL DEFAULT 0,
+  sampled INTEGER NOT NULL DEFAULT 0,
+  evaluated INTEGER NOT NULL DEFAULT 0,
+  skipped_at_cap INTEGER NOT NULL DEFAULT 0,
+  spent_usd_micros BIGINT NOT NULL DEFAULT 0,
+  cap_usd_micros BIGINT,
+  paused_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, agent_key, evaluator, week_start)
+);
+
 -- llm_calls IS INSERT-ONLY EXCEPT ITS FILL-ONCE COLUMNS. agent_acts back-fills act_id on rebuilt
 -- stages (_backfill_build) and the BOSS-280 backfill above fills role: a NULL may be filled, a
 -- value is never changed, nothing else is ever rewritten. Deletes (retention, a project going

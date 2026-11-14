@@ -1,6 +1,11 @@
-# The Prometheus bundled with BOSS (BOSSAPP-598, spec D1). It scrapes nothing itself: BOSS
+# The Prometheus bundled with BOSS (BOSSAPP-598, spec D1). Apps are not scraped here: BOSS
 # scrapes every app it monitors and forwards the samples here by remote write (and apps may
 # send OTLP or remote write through BOSS's authenticated ingest). Rules are evaluated by BOSS.
+#
+# It DOES scrape BOSS itself (AP-P4): the api and the worker serve their own /metrics on the
+# compose network (BOSS_METRICS_PORT, which install.sh sets to 9464 with the bundled
+# Prometheus): model calls, tokens, cost, tool calls and agent runs (boss_model_*,
+# boss_tool_calls_total, boss_agent_run_*).
 global:
   scrape_interval: 60s
   evaluation_interval: 60s
@@ -10,4 +15,11 @@ storage:
     out_of_order_time_window: 10m
 otlp:
   promote_resource_attributes: [service.name, deployment.environment, deployment.environment.name]
-scrape_configs: []
+scrape_configs:
+  - job_name: boss
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:9464"]
+        labels: {service: api}
+      - targets: ["worker:9464"]
+        labels: {service: worker}

@@ -1,0 +1,409 @@
+{
+ "schema": "boss-harness-bench/1",
+ "run": {
+  "id": "hbr_ddb314bead8b4316b22c",
+  "suite": "boss-harness",
+  "suite_version": "1",
+  "suite_sha256": "711fd0435f6eced602b7cbfae28c82c8a8f90a7d968e5ed4e396d7b33a904f1a",
+  "engine": "claude_code",
+  "model": null,
+  "level": "delegate",
+  "boss_sha": "e3ddf96e39cc021ecdeb967757893b9f46fe7efe",
+  "boss_dirty": false,
+  "config": {
+   "level": "delegate",
+   "model": null,
+   "engine": "claude_code",
+   "profile": "balanced",
+   "settings": {
+    "pipeline_profile": "balanced",
+    "model_routing_mode": "fixed",
+    "code_gate_never_block": true,
+    "code_review_panel_size": 1,
+    "code_repair_max_retries": 1,
+    "governed_coding_pipeline": true,
+    "open_pr_when_checks_fail": 1,
+    "code_review_inrun_max_rounds": 2,
+    "code_review_repair_max_rounds": 2
+   },
+   "overrides": {},
+   "risk_tier": 1
+  },
+  "config_fingerprint": "ebb279d57565d5ae",
+  "rules": {
+   "guards": {
+    "wall_s": {
+     "max_rise_pct": 25
+    },
+    "cost_usd": {
+     "max_rise_pct": 15
+    },
+    "success_rate": {
+     "max_drop": 0.0
+    },
+    "interventions": {
+     "max_rise": 0
+    }
+   },
+   "k_stdev": 2.0,
+   "metrics": {
+    "turns": {
+     "abs_floor": 0
+    },
+    "wall_s": {
+     "abs_floor": 30,
+     "rel_floor": 0.1
+    },
+    "cost_usd": {
+     "abs_floor": 0.05,
+     "rel_floor": 0.05
+    },
+    "tokens_in": {
+     "abs_floor": 2000,
+     "rel_floor": 0.05
+    },
+    "tokens_out": {
+     "abs_floor": 500,
+     "rel_floor": 0.05
+    },
+    "cache_share": {
+     "abs_floor": 0.02
+    },
+    "model_calls": {
+     "abs_floor": 0
+    },
+    "success_rate": {
+     "abs_floor": 0.0
+    },
+    "interventions": {
+     "abs_floor": 0
+    },
+    "repair_rounds": {
+     "abs_floor": 0
+    }
+   }
+  },
+  "task_ids": [
+   "textkit-word-count"
+  ],
+  "repeat": 1,
+  "budget_usd": 3.0,
+  "status": "completed",
+  "baseline_name": null,
+  "compared_to": null,
+  "verdict": null,
+  "started_at": "2026-11-13 08:06:35.408064+00:00",
+  "finished_at": "2026-11-13 08:15:42.724631+00:00"
+ },
+ "results": [
+  {
+   "kind": "fix",
+   "calls": {
+    "models": [
+     "claude-fable-5"
+    ],
+    "routes": [
+     "route_280da1e4c7b243e5",
+     "route_5e83eb61dc434cf9",
+     "route_b7cffaa86d0a4051",
+     "route_bb50f42adf3d4ea2",
+     "route_bf0ee16773ff4f7f",
+     "route_ddb60f29aed641f2",
+     "route_f0158d3e1e3d4065"
+    ],
+    "engines": [
+     "claude_code"
+    ],
+    "by_stage": {
+     "quality": {
+      "calls": 2,
+      "tokens_in": 410527,
+      "tokens_out": 8385,
+      "cost_usd_micros": 1626225
+     },
+     "implement": {
+      "calls": 3,
+      "tokens_in": 619026,
+      "tokens_out": 8524,
+      "cost_usd_micros": 2960330
+     },
+     "model_call": {
+      "calls": 2,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "cost_usd_micros": 0
+     },
+     "review_code": {
+      "calls": 1,
+      "tokens_in": 70778,
+      "tokens_out": 3138,
+      "cost_usd_micros": 933051
+     },
+     "write_tests": {
+      "calls": 2,
+      "tokens_in": 231889,
+      "tokens_out": 1906,
+      "cost_usd_micros": 1459980
+     },
+     "review_panel": {
+      "calls": 2,
+      "tokens_in": 243210,
+      "tokens_out": 9754,
+      "cost_usd_micros": 1529872
+     },
+     "consistency_check": {
+      "calls": 1,
+      "tokens_in": 66718,
+      "tokens_out": 2797,
+      "cost_usd_micros": 860888
+     }
+    },
+    "failed_calls": 2,
+    "included_calls": 11,
+    "price_estimated_calls": 0
+   },
+   "error": null,
+   "gates": {
+    "failed": [],
+    "passed": [
+     "app_serves",
+     "code_review_passed",
+     "code_written",
+     "coder_did_not_edit_tests",
+     "consistent",
+     "existing_tests_intact",
+     "nothing_broke",
+     "security_clean",
+     "tests_written_first",
+     "web_package_honest",
+     "written_tests_pass"
+    ],
+    "review": "passed",
+    "status": "pass",
+    "tests_passed": true,
+    "repair_attempts": 0,
+    "adversarial_verdict": "refuted"
+   },
+   "phase": "done",
+   "events": [
+    "code_task.app_serve_checked",
+    "code_task.auto_preview_skipped",
+    "code_task.base_branch_resolved",
+    "code_task.build_profile",
+    "code_task.ci_waited",
+    "code_task.deferred_findings_task",
+    "code_task.effort_chosen",
+    "code_task.github_mirror",
+    "code_task.github_plane",
+    "code_task.inrun_convergence_pass",
+    "code_task.inrun_convergence_round",
+    "code_task.integration_ref",
+    "code_task.pr_opened",
+    "code_task.precheck_app_env",
+    "code_task.quality_pass",
+    "code_task.repair_review_scope",
+    "code_task.retrospective",
+    "code_task.review_comments_posted",
+    "code_task.review_comments_recorded",
+    "code_task.review_panel_merged",
+    "code_task.risk_tier_decided",
+    "code_task.started",
+    "code_task.streams_chosen",
+    "code_task.test_budget",
+    "code_task.work_checkpointed"
+   ],
+   "status": "completed",
+   "fixture": {
+    "name": "textkit",
+    "commit": "3687e441cbe6b11bdfc8d345397bc4753fbf1359",
+    "sha256": "f63c43bf762a2d2b4d74deac81b2d11ba10703f8430893454acad6ad719a9878"
+   },
+   "lineage": [
+    "crun_67b445088b3c478d88c3",
+    "crun_2fba4bceaa1a41cf81ae"
+   ],
+   "metrics": {
+    "turns": 65,
+    "wall_s": 546.67,
+    "cost_usd": 9.370346,
+    "tokens_in": 1642148,
+    "tokens_out": 34504,
+    "tool_calls": 54,
+    "cache_share": 0.839343,
+    "model_calls": 13,
+    "lineage_runs": 2,
+    "continuations": 0,
+    "interventions": 0,
+    "repair_rounds": 1,
+    "agent_turn_rows": 135,
+    "cache_read_tokens": 1378326,
+    "cache_write_tokens": 263724
+   },
+   "success": true,
+   "task_id": "textkit-word-count",
+   "iteration": 1,
+   "acceptance": {
+    "head": "aec03fd8c38bdd10134024e342a37349487b9358",
+    "checks": [
+     {
+      "ok": true,
+      "check": "the branch carries a change",
+      "detail": "head aec03fd8c3 base 3687e441cb"
+     },
+     {
+      "ok": true,
+      "check": "textkit/words.py changed",
+      "detail": "changed"
+     },
+     {
+      "ok": true,
+      "check": "the task's own tests pass on a clean checkout: python3 -m unittest discover -s tests -t .",
+      "detail": "exit 0 in 0.1s: ......................\n----------------------------------------------------------------------\nRan 22 tests in 0.004s\n\nOK\n"
+     },
+     {
+      "ok": true,
+      "check": "held acceptance tests: python3 -m unittest discover -s bench_acceptance -t .",
+      "detail": "exit 0 in 0.0s: ..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n"
+     }
+    ],
+    "passed": true,
+    "changed_files": [
+     "README.md",
+     "tests/test_cli.py",
+     "tests/test_word_count_whitespace.py",
+     "textkit/__main__.py",
+     "textkit/words.py"
+    ]
+   },
+   "components": {
+    "completed": true,
+    "pr_opened": true,
+    "gates_passed": true,
+    "review_passed": true,
+    "verify_passed": true,
+    "acceptance_passed": true,
+    "no_checks_failing_pr": true
+   },
+   "code_task_run_id": "crun_67b445088b3c478d88c3",
+   "pull_request_url": "https://github.com/bench/bench-textkit-word-count-1-b1ca4e/pull/1",
+   "gate_agent_checks": [
+    {
+     "ok": true,
+     "check": "completed with a PR",
+     "detail": "status=completed pr=https://github.com/bench/bench-textkit-word-count-1-b1ca4e/pull/1"
+    },
+    {
+     "ok": true,
+     "check": "no advisory-failing gates",
+     "detail": "none"
+    },
+    {
+     "ok": true,
+     "check": "no checks failing on the PR",
+     "detail": "none"
+    },
+    {
+     "ok": true,
+     "check": "the app started",
+     "detail": "ok=True"
+    },
+    {
+     "ok": true,
+     "check": "the install works",
+     "detail": "no install failure"
+    },
+    {
+     "ok": true,
+     "check": "test budget not over",
+     "detail": "{\"written\": 0, \"budget\": 12, \"over\": false}"
+    },
+    {
+     "ok": true,
+     "check": "build profile recorded",
+     "detail": "present"
+    }
+   ],
+   "interventions_asked": []
+  }
+ ],
+ "summary": {
+  "tasks": [
+   "textkit-word-count"
+  ],
+  "runs": 1,
+  "skipped": 0,
+  "successes": 1,
+  "metrics": {
+   "success_rate": {
+    "n": 1,
+    "mean": 1.0,
+    "stdev": 0.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "wall_s": {
+    "n": 1,
+    "mean": 546.67,
+    "stdev": 0.0,
+    "min": 546.67,
+    "max": 546.67
+   },
+   "tokens_in": {
+    "n": 1,
+    "mean": 1642148.0,
+    "stdev": 0.0,
+    "min": 1642148.0,
+    "max": 1642148.0
+   },
+   "tokens_out": {
+    "n": 1,
+    "mean": 34504.0,
+    "stdev": 0.0,
+    "min": 34504.0,
+    "max": 34504.0
+   },
+   "cache_share": {
+    "n": 1,
+    "mean": 0.8393433478590236,
+    "stdev": 0.0,
+    "min": 0.8393433478590236,
+    "max": 0.8393433478590236
+   },
+   "cost_usd": {
+    "n": 1,
+    "mean": 9.370346,
+    "stdev": 0.0,
+    "min": 9.370346,
+    "max": 9.370346
+   },
+   "model_calls": {
+    "n": 1,
+    "mean": 13.0,
+    "stdev": 0.0,
+    "min": 13.0,
+    "max": 13.0
+   },
+   "turns": {
+    "n": 1,
+    "mean": 65.0,
+    "stdev": 0.0,
+    "min": 65.0,
+    "max": 65.0
+   },
+   "repair_rounds": {
+    "n": 1,
+    "mean": 1.0,
+    "stdev": 0.0,
+    "min": 1.0,
+    "max": 1.0
+   },
+   "interventions": {
+    "n": 1,
+    "mean": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   }
+  }
+ }
+}

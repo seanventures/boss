@@ -225,6 +225,10 @@ COPY apps/runner ./apps/runner
 COPY api ./api
 COPY db ./db
 COPY engine/boss_engine ./engine/boss_engine
+# AP-P4: the default verifier corpus (verifier_meta_eval.load_corpus reads /app/evals/...) and the
+# recorded harness-bench baselines the governed-vs-bare API serves (harness_bench REPO_ROOT=/app).
+COPY evals/verifier_meta ./evals/verifier_meta
+COPY bench/harness/baselines ./bench/harness/baselines
 # The built-in app templates (F2): boss_engine.templates.service.builtin_dir() finds them at
 # /app/templates/apps; without this the image offers no built-in template at all.
 COPY templates ./templates

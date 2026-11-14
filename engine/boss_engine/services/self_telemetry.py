@@ -21,6 +21,9 @@ no import of an optional package, no thread, no socket, no middleware.
            the exposition format is written here. Counters: model calls, tokens, list-price
            cost, tool calls by outcome, and process start time.
 
+  Run spans  (AP-P4) every kernel run's spans (kernel/trace.py) are exported with their own
+           ids by `export_trace_span` when traces are on, parented to the run (traceparent).
+
 NOT HERE (deferred, said in the ticket): a per-org export destination for agent-run spans.
 """
 from __future__ import annotations
@@ -76,7 +79,8 @@ def init_tracing(settings: Any, *, app: Any = None, engine: Any = None,
     with _LOCK:
         if not _STATE["tracing"]:
             name = _setting(settings, "otel_service_name") or service
-            provider = TracerProvider(resource=Resource.create({"service.name": name}))
+            provider = TracerProvider(resource=Resource.create({"service.name": name}),
+                                      id_generator=_preset_id_generator())
             # The exporter reads OTEL_EXPORTER_OTLP_ENDPOINT / _HEADERS itself; traces go to
             # <endpoint>/v1/traces as the OTLP/HTTP spec says.
             provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
@@ -162,6 +166,90 @@ def record_model_span(*, engine_name: str, model: str, usage: dict, latency_ms: 
         log.debug("self-telemetry: model span not recorded", exc_info=True)
 
 
+# ── run spans (AP-P4): the kernel's own spans, exported with their own ids ───────────────────
+
+#: The (trace id, span id) the next span this thread starts must carry (export_trace_span sets
+#: it), so an exported span keeps the ids BOSS stored and its children's parent links meet.
+_PRESET_SPAN_ID: Any = None
+
+
+def _preset_id_generator() -> Any:
+    """A RandomIdGenerator that hands out a preset span id when export_trace_span asks."""
+    import contextvars
+
+    from opentelemetry.sdk.trace.id_generator import RandomIdGenerator  # type: ignore[import-not-found]
+
+    global _PRESET_SPAN_ID
+    if _PRESET_SPAN_ID is None:
+        _PRESET_SPAN_ID = contextvars.ContextVar("boss_preset_span_id", default=None)
+    preset = _PRESET_SPAN_ID
+
+    class PresetIds(RandomIdGenerator):
+        def generate_span_id(self) -> int:
+            wanted = preset.get()
+            return int(wanted[1]) if wanted else super().generate_span_id()
+
+        def generate_trace_id(self) -> int:
+            wanted = preset.get()
+            return int(wanted[0]) if wanted else super().generate_trace_id()
+
+    return PresetIds()
+
+
+def export_trace_span(span: Any) -> bool:
+    """One finished kernel span (kernel/trace.Span) over OTLP, with BOSS's own trace id, span id
+    and parent — so the run is the exported spans' parent (`traceparent`) and the tree an OTel
+    backend draws is the tree the console draws. A no-op unless BOSS's tracing is on (OTEL_
+    EXPORTER_OTLP_ENDPOINT set and the SDK installed: off by default, D8). Never raises."""
+    tracer = _STATE["tracer"]
+    if tracer is None or _PRESET_SPAN_ID is None or getattr(span, "ended_at", None) is None:
+        return False
+    try:
+        from opentelemetry import trace as otel  # type: ignore[import-not-found]
+        from opentelemetry.trace import (NonRecordingSpan, SpanContext,  # type: ignore[import-not-found]
+                                         TraceFlags)
+
+        trace_id = int(span.trace_id, 16)
+        if span.parent_span_id:
+            parent = otel.set_span_in_context(NonRecordingSpan(SpanContext(
+                trace_id=trace_id, span_id=int(span.parent_span_id, 16), is_remote=True,
+                trace_flags=TraceFlags(TraceFlags.SAMPLED))))
+        else:
+            # A root run: no parent; the id generator hands out the stored trace id.
+            parent = otel.set_span_in_context(otel.INVALID_SPAN)
+        token = _PRESET_SPAN_ID.set((trace_id, int(span.span_id, 16)))
+        try:
+            started = int(float(span.started_at) * 1e9)
+            ended = int(float(span.ended_at) * 1e9)
+            exported = tracer.start_span(f"{span.kind} {span.name}", context=parent,
+                                         start_time=started)
+        finally:
+            _PRESET_SPAN_ID.reset(token)
+        exported.set_attribute("boss.span.kind", str(span.kind))
+        exported.set_attribute("boss.run_id", str(span.run_id))
+        exported.set_attribute("boss.project_id", str(span.project_id))
+        if span.act_id:
+            exported.set_attribute("boss.act_id", str(span.act_id))
+        if span.agent_key:
+            exported.set_attribute("gen_ai.agent.name", str(span.agent_key))
+        if span.kind == "model":
+            exported.set_attribute("gen_ai.operation.name", "chat")
+        elif span.kind in ("tool", "subagent", "handoff"):
+            exported.set_attribute("gen_ai.operation.name", "execute_tool")
+            exported.set_attribute("gen_ai.tool.name", str(span.name))
+        if span.seq is not None:
+            exported.set_attribute("boss.ledger.seq", int(span.seq))
+        if span.status in ("error", "refused"):
+            from opentelemetry.trace import Status, StatusCode  # type: ignore[import-not-found]
+
+            exported.set_status(Status(StatusCode.ERROR, str(span.status)))
+        exported.end(end_time=ended)
+        return True
+    except Exception:  # noqa: BLE001 — telemetry never breaks the call it describes
+        log.debug("self-telemetry: run span not exported", exc_info=True)
+        return False
+
+
 # ── errors ───────────────────────────────────────────────────────────────────────────────────
 
 _DROP_HEADERS = {"authorization", "cookie", "set-cookie", "x-api-key", "x-boss-csrf",
@@ -242,6 +330,8 @@ class Metrics:
             "boss_model_tokens_total": "Model tokens recorded, by engine and direction.",
             "boss_model_cost_usd_micros_total": "List-price cost of model calls, in micro-dollars.",
             "boss_tool_calls_total": "MCP tool calls through the receipt door, by outcome.",
+            "boss_agent_runs_total": "Kernel runs finished, by agent and status (AP-P4 spans).",
+            "boss_agent_run_duration_ms_total": "Wall time of finished kernel runs, by agent.",
         }
         lines = ["# HELP boss_process_start_time_seconds Start time of this BOSS process.",
                  "# TYPE boss_process_start_time_seconds gauge",
@@ -286,6 +376,16 @@ def metrics_count_tool_call(outcome: str) -> None:
     m = _STATE["metrics"]
     if m is not None:
         m.inc("boss_tool_calls_total", outcome=outcome or "unknown")
+
+
+def metrics_count_agent_run(agent: Optional[str], status: str, duration_ms: int) -> None:
+    """A finished kernel run (kernel/trace.py's run span), for boss_agent_run_* (AP-P4)."""
+    m = _STATE["metrics"]
+    if m is None:
+        return
+    who = agent or "unnamed"
+    m.inc("boss_agent_runs_total", agent=who, status=status or "unknown")
+    m.inc("boss_agent_run_duration_ms_total", max(0, int(duration_ms or 0)), agent=who)
 
 
 def start_metrics(settings: Any) -> Optional[int]:
@@ -366,6 +466,8 @@ def install(settings: Any, *, app: Any = None, engine: Any = None,
     return out
 
 
-__all__ = ["Metrics", "before_send", "init_sentry", "init_tracing", "install", "metrics",
-           "metrics_count_model_call", "metrics_count_tool_call", "record_model_span", "scrub",
+__all__ = ["Metrics", "before_send", "export_trace_span", "init_sentry", "init_tracing", "install",
+           "metrics",
+           "metrics_count_agent_run", "metrics_count_model_call", "metrics_count_tool_call",
+           "record_model_span", "scrub",
            "start_metrics", "stop_metrics", "tool_span", "tracing_on"]

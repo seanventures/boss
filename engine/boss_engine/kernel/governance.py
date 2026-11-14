@@ -1,10 +1,12 @@
 """GOVERNANCE AS MANDATORY MIDDLEWARE: every model call reserved, receipted and settled, every
 tool call decided, held on a Decision, screened and audited — by the kernel, for every preset.
 
-The five governance middleware (AP-P1b; docs/design/AGENT_PLATFORM.md §4.10, AGENT_MIDDLEWARE.md)
-are appended to every run's stack by `middleware.build_chain`, last, so they sit nearest the
+The governance middleware (AP-P1b, plus AP-P4's trace; docs/design/AGENT_PLATFORM.md §4.10,
+AGENT_MIDDLEWARE.md) are appended to every run's stack by `middleware.build_chain`, last, so they sit nearest the
 effect; a spec cannot remove, replace or reorder them:
 
+  trace       every hook                     the run's spans (kernel/trace.py, AP-P4): run, step,
+                                             model, tool, subagent, interrupt, handoff
   telemetry   wrap_model_call + after_model  model.request / model.response events: through the
                                              ledger sink these are the run's `llm_calls` rows
                                              (kernel/ledger.DbSink -> record_llm_call)
@@ -375,14 +377,18 @@ class Audit:
         return result
 
 
-#: The mandatory stack, in order (outermost first for the wraps): telemetry outside budget so
-#: a refused reservation is still a requested call on record; authz outside the screen and the
-#: audit so nothing reaches either undecided.
-GOVERNANCE_NAMES = ("telemetry", "budget", "authz", "tool_screen", "audit")
+#: The mandatory stack, in order (outermost first for the wraps): the trace outermost (AP-P4:
+#: a refused, held or screened call is still a span, and its after_model runs after the
+#: receipt's, so the model span names an already-numbered llm_calls row); telemetry outside
+#: budget so a refused reservation is still a requested call on record; authz outside the screen
+#: and the audit so nothing reaches either undecided.
+GOVERNANCE_NAMES = ("trace", "telemetry", "budget", "authz", "tool_screen", "audit")
 
 
 def governance_middleware(spec: Any) -> list:
-    return [Telemetry(), Budget(), Authz(), ToolScreen(), Audit()]
+    from .trace import Trace
+
+    return [Trace(), Telemetry(), Budget(), Authz(), ToolScreen(), Audit()]
 
 
 __all__ = ["AdapterGate", "Audit", "Authz", "Budget", "BudgetGate", "GOVERNANCE_NAMES",

@@ -172,4 +172,11 @@ def record(connection, *, project_id: str, run_id: str, actor: str, snapshot_has
     emit_event(connection, project_id, "code_task.result_reviewed", actor, "code_task_run", run_id,
                {"review_id": review_id, "outcome": outcome, "snapshot_hash": snapshot_hash,
                 "delivered_head": current["snapshot"]["delivered_head"]})
+    if outcome == "changes_requested":
+        # AP-P4: a delivery sent back is a failed acceptance — a miss, PROPOSED to the
+        # annotation inbox for a person to confirm (services/evals; never raises).
+        from .evals import capture_failed_acceptance
+
+        capture_failed_acceptance(connection, project_id, run_id=run_id, review_id=review_id,
+                                  actor=actor, note=note, snapshot=current["snapshot"])
     return {"id": review_id, "outcome": outcome, "reused": False}

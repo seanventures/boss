@@ -315,6 +315,14 @@ class FactoryScaleService:
                 "quality_gate.waived" if override["waived"] else "quality_gate.overridden",
                 actor, "quality_gate", gate_id,
                 {**override, "status": result["status"], "code_task_run_id": code_task_run_id})
+            if override["waived"] and code_task_run_id:
+                # AP-P4: a waived gate is a miss, PROPOSED to the annotation inbox (never raises).
+                from .evals import capture_gate_waiver
+
+                capture_gate_waiver(connection, project_id, {"id": code_task_run_id},
+                                    waived=list(prior["gates_failed"] or []),
+                                    failing=list(prior["gates_failed"] or []), actor=actor,
+                                    reason=reason, quality_gate_id=gate_id)
         emit_event(
             connection, project_id, "quality_gate.recorded", actor, "quality_gate", gate_id,
             {"status": result["status"], "confidence": result["confidence"],
