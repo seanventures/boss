@@ -1,3 +1,8 @@
+"""THE INTERNAL AGENT BUS: channels, subscriptions and messages between BOSS's own agents over
+Redis Streams (formerly `services/a2a.py`; renamed in AP-P0 because this is NOT Google's
+Agent2Agent protocol -- that endpoint is AGENT_PLATFORM.md Phase 5). The `/v1/a2a/*` routes,
+the `a2a.dispatch` job kind and the A2A* class names are unchanged; `services/a2a.py` is a
+compatibility shim resolving to this module."""
 from __future__ import annotations
 
 import json
