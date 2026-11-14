@@ -14512,3 +14512,47 @@ ALTER TABLE worker_registrations ADD COLUMN IF NOT EXISTS slots INTEGER NOT NULL
 ALTER TABLE worker_registrations ADD COLUMN IF NOT EXISTS busy_slots INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE worker_registrations ADD COLUMN IF NOT EXISTS host TEXT;
 -- ================================ end AP-P3 ==
+
+-- ================================ AP-P7: sub-agents, handoffs, the single writer ==
+-- docs/design/AGENT_PLATFORM.md §4.5, §5 Phase 7 (BOSSAPP-1058); kernel/subagents.py,
+-- services/subagent_runs.py, services/handoffs.py.
+
+-- SINGLE WRITER PER BRANCH (D12). The run writing a branch holds its row; a writer sub-agent
+-- on a branch whose holder is still live is refused at spawn. A row whose run has ended is free
+-- to take (the claim overwrites it), so a crashed run never locks a branch for good.
+CREATE TABLE IF NOT EXISTS agent_branch_writers (
+  project_id TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  parent_run_id TEXT,
+  acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, branch)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_branch_writers_run ON agent_branch_writers (run_id);
+
+-- ASYNC SUB-AGENTS TELL THEIR PARENT (event-driven, never polled): when a background child run
+-- ends or waits on a person, its A2A Task lands here for the parent run; the parent reads it at
+-- its next step (a message in its conversation), or — when the parent has already ended — its
+-- thread is woken with it.
+CREATE TABLE IF NOT EXISTS agent_subagent_notifications (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  parent_run_id TEXT NOT NULL,
+  parent_thread_id TEXT,
+  child_run_id TEXT NOT NULL,
+  target TEXT,
+  state TEXT NOT NULL,
+  task JSONB NOT NULL DEFAULT '{}'::jsonb,
+  report TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  delivered_at TIMESTAMPTZ,
+  delivered_to TEXT,
+  UNIQUE (child_run_id, state)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_subagent_notifications_parent
+  ON agent_subagent_notifications (parent_run_id) WHERE delivered_at IS NULL;
+
+-- HANDOFFS (Ask BOSS → a specialist): the agent the thread's NEXT turn is answered by. NULL is
+-- the thread's own agent (agent_role). Every transfer is an agent_acts 'handoff' act.
+ALTER TABLE agent_threads ADD COLUMN IF NOT EXISTS active_agent TEXT;
+-- ================================ end AP-P7 ==

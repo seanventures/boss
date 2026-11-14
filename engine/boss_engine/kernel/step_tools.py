@@ -224,7 +224,8 @@ def _interrupt_item(state: Any, step: int, result: ToolResult, calls: list) -> d
             "kind": declared.get("kind") or (QUESTION if pending.get("question") else APPROVAL),
             "decision_id": result.decision_id, "tool": result.name, "args": args,
             "call_id": result.call_id, "step": step, "binding": binding,
-            "schema": declared.get("schema"), "payload": declared.get("payload")}
+            "schema": declared.get("schema"), "payload": declared.get("payload"),
+            **({"subagent": pending["subagent"]} if pending.get("subagent") else {})}
 
 
 def _answer(run: Any, call: ToolCall, result: ToolResult, step: int, *, write: bool,

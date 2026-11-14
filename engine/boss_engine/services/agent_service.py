@@ -884,6 +884,13 @@ class AgentService:
             agent_role=role or "",
             new_thread=new_thread,
         )
+        # A HANDED-OFF CONVERSATION (AP-P7, services/handoffs.py): once an agent transferred the
+        # thread with transfer_to_agent, its turns are the new agent's until it is handed on or
+        # back — the same thread, the same history, another speaker.
+        handed = self._handed_to(connection, thread["id"])
+        if handed:
+            role = handed
+            speaker = agent_identity.addressed(connection, project_id, handed)
         user_content = message.strip() or f"Confirm plan {confirm_plan_id}"
         if not user_content and attachments:
             # A SCREENSHOT IS A QUESTION. Sending one with no words is the most natural thing an
@@ -1108,6 +1115,18 @@ class AgentService:
                         "UPDATE agent_messages SET proposed_actions = CAST(:p AS JSONB) "
                         "WHERE id = :id"), {"p": json.dumps(kept), "id": r["id"]})
         return card
+
+    @staticmethod
+    def _handed_to(connection: Connection, thread_id: str) -> Optional[str]:
+        """The agent this thread was handed to, or None. A database whose schema predates the
+        column answers None (a savepoint keeps the turn's transaction alive)."""
+        from . import handoffs
+
+        try:
+            with connection.begin_nested():
+                return handoffs.active_agent(connection, thread_id)
+        except Exception:  # noqa: BLE001 — no handoff column: no handoff
+            return None
 
     @staticmethod
     def _open_chat_act(connection: Connection, *, project_id: str, actor: str,

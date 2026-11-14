@@ -220,6 +220,8 @@ def finish(connection: Connection, run_id: str, status: Optional[str] = None) ->
         connection.execute(text(
             "UPDATE agent_runs SET status = :s, updated_at = now() WHERE id = :r"),
             {"s": final, "r": run_id})
+    if final in ENDED or final == "awaiting_approval":
+        _notify_parent(connection, run_id)
     if final not in ENDED:
         state = {"awaiting_approval": "interrupted", "failed": "error"}.get(final, "busy")
         connection.execute(text(
@@ -235,6 +237,21 @@ def finish(connection: Connection, run_id: str, status: Optional[str] = None) ->
                metadata = CAST(:m AS JSONB), updated_at = now() WHERE id = :t"""),
         {"s": "error" if final == "failed" else "idle", "m": json.dumps(meta), "t": thread["id"]})
     return release(connection, thread["id"])
+
+
+def _notify_parent(connection: Connection, run_id: str) -> None:
+    """AP-P7: a background sub-agent tells its parent it finished (or waits on a person) — event
+    driven, in this transaction (services/subagent_runs.notify_parent). Never fails the finish."""
+    import logging
+
+    from .subagent_runs import notify_parent
+
+    try:
+        with connection.begin_nested():
+            notify_parent(connection, run_id)
+    except Exception as exc:  # noqa: BLE001 — a missed note is still read by check_subagent
+        logging.getLogger(__name__).warning("sub-agent notification for %s failed: %s",
+                                            run_id, exc)
 
 
 def release(connection: Connection, thread_id: str) -> Optional[str]:

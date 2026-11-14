@@ -79,7 +79,7 @@ class ScriptedEngine:
 
     def __init__(self, script: list, *, name: str = "scripted", model: str = "scripted-v1",
                  cost_usd_micros: int = 0, after: Any = None,
-                 traits: Optional[EngineTraits] = None):
+                 traits: Optional[EngineTraits] = None, measure: bool = False):
         self.script = list(script)
         self.name = name
         self.model = model
@@ -87,6 +87,9 @@ class ScriptedEngine:
         self.after = after if after is not None else Say("(the script has ended)")
         self.traits = traits or EngineTraits(family="scripted")
         self.requests: list = []
+        #: AP-P7: report the tokens a real call of this size would spend (chars/4 over what was
+        #: sent and what came back) instead of a flat 10 + 5 — what a token multiple measures.
+        self.measure = bool(measure)
         self._lock = threading.Lock()
         self._ids = 0
 
@@ -127,8 +130,16 @@ class ScriptedEngine:
             item = item.fn(copy.deepcopy(list(messages)), tools)
         if isinstance(item, Fail):
             raise item.error
-        usage = {"model": self.model, "prompt_tokens": 10, "completion_tokens": 5,
-                 "total_tokens": 15, "cost_usd_micros": self.cost_usd_micros}
+        prompt, completion = 10, 5
+        if self.measure:
+            sent = json.dumps(messages, default=str) + json.dumps(tools or [], default=str)
+            said = json.dumps([getattr(item, "text", None)] + [
+                [c.name, c.args] for c in (item.calls if isinstance(item, Calls) else
+                                           [item] if isinstance(item, Call) else [])],
+                default=str)
+            prompt, completion = max(1, len(sent) // 4), max(1, len(said) // 4)
+        usage = {"model": self.model, "prompt_tokens": prompt, "completion_tokens": completion,
+                 "total_tokens": prompt + completion, "cost_usd_micros": self.cost_usd_micros}
         if isinstance(item, Say):
             return _message(item.text, []), usage
         if isinstance(item, Empty):

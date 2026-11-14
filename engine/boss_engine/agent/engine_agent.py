@@ -579,11 +579,14 @@ class EngineAgent:
             if on_kernel is not None:
                 return on_kernel
         from ..kernel.runfs import RUN_FS_TOOLS
+        from ..kernel.subagents import RUN_ONLY_TOOLS
 
-        # The run filesystem's tools are the kernel's (AP-P6): this loop has no run to hold them.
+        # The run filesystem's tools are the kernel's (AP-P6), and so are the sub-agent tools
+        # and write_todos (AP-P7): this loop has no run to hold them.
         schemas = [schema for schema in self.registry.openai_schema()
                    if schema["function"]["name"] not in _UNSCOPED_SQL_TOOLS
-                   and schema["function"]["name"] not in RUN_FS_TOOLS]
+                   and schema["function"]["name"] not in RUN_FS_TOOLS
+                   and schema["function"]["name"] not in RUN_ONLY_TOOLS]
         # SCOPED TOOLS ON THE CLI TEXT LOOP (BOSSAPP-1006). A CLI text brain re-renders EVERY
         # schema into EVERY prompt (~168 tools ≈ 37k tokens a call, audit BOSSAPP-997 §1a), and
         # its JSON-in-text protocol demonstrably degrades past ~53 tools — so here the turn is

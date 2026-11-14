@@ -160,6 +160,11 @@ def batch_refusal(pending: Optional[Mapping[str, Any]], answers: Mapping[str, An
             return "that decision is not the one this run waits on"
         if answer.get("rejected") or answer.get("answered"):
             continue  # a person declined it, or answered a question: nothing is executed
+        if item.get("subagent"):
+            # AP-P7: a sub-agent's interrupt, carried by the parent's `task` call. Its binding is
+            # the CHILD's held call; the child checks it when the answer reaches it (and refuses
+            # to run a changed call), so here only "is this the decision it waits on" is asked.
+            continue
         if item.get("kind") == UNKNOWN_OUTCOME:
             if "happened" not in answer:
                 return "say whether the call happened"

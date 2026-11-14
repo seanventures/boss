@@ -67,6 +67,12 @@ def role_yaml_to_doc(role: dict[str, Any]) -> dict[str, Any]:
             "comms": comms,
             "evaluators": ([{"kind": "rubric", "criteria": dict(role["eval_rubric"])}]
                            if role.get("eval_rubric") else []),
+            # P7: a shipped supervisor (the captain, the chief of staff) names its sub-agents
+            # and its coordination caps in its YAML (agents/supervisors.py builds them).
+            "subagents": [dict(x) for x in role.get("subagents") or []],
+            "coordination": dict(role.get("coordination") or {}),
+            "planning": dict(role.get("planning") or {}),
+            "self_check": dict(role.get("self_check") or {}),
         },
     }
     return S.dump_spec(S.load_spec(S._strip(doc)))  # noqa: SLF001

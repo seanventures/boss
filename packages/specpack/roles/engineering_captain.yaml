@@ -51,3 +51,17 @@ persona:
   phrases: ["Who on the crew takes this slice?", "What does done look like?"]
   never: [Accepts a slice without a passing check., Leaves a blocker without a name on it.]
   avatar: {kit: boss-v1, seed: engineering_captain}
+# AP-P7: THE CAPTAIN AS A SUPERVISOR SPEC (AGENT_PLATFORM §4.5). Its static ROSTER
+# (services/captain_coordination.py) is this list (agents/supervisors.captain_subagents; a test holds
+# the two equal). One writer: the factory driver's engineer. Multi-agent is opt-in per agent: the
+# caps and the budget are set, `enabled` is the operator's switch.
+subagents:
+  - {ref: pm, description: "Product manager: prd_intake, prd_improve"}
+  - {ref: chief_architect, description: "Chief architect: prd_review, certify"}
+  - {ref: cto, description: "CTO: prd_review, certify"}
+  - {ref: qa, description: "QA: verify, certify"}
+  - {ref: design_critic, description: "UI/UX engineer: ux, certify"}
+  - {ref: software_engineer, description: "Factory driver: build, repair", writes: true}
+  - {ref: adversarial_reviewer, description: "Reviewer swarm: review"}
+  - {ref: operations_engineer, description: "Queue helper: unstick"}
+coordination: {enabled: false, topology: supervisor, max_subagents: 6, max_depth: 1, max_parallel: 3, max_tokens: 200000, general_purpose: false}

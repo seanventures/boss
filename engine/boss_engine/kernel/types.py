@@ -27,6 +27,10 @@ EventKind = Literal[
     "workspace.snapshot", "workspace.rewind",
     "delegate.turn",
     "outcome",
+    # AP-P7: coordination. A child started / finished (or suspended), a spawn a spec cap refused,
+    # a thread handed to another agent, the run's plan written, the rubric's self-check.
+    "subagent.started", "subagent.finished", "subagent.capped", "handoff", "todos.updated",
+    "rubric.result",
 ]
 
 #: The closed set, for the ledger writer's check: a kind outside it is a bug, not a new kind.

@@ -9259,8 +9259,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
 # Keep direct/admin tools registered separately, but hold raw SQL out of this surface until
 # a database-enforced project boundary exists.
 _DISCUSS_EXCLUDED_READ_TOOLS: frozenset[str] = frozenset({"query_db"}) | frozenset(
-    # the run filesystem's tools come from the kernel inside a run (AP-P6), never from here
-    ("ls", "read_file", "grep", "write_file"))
+    # the run filesystem's tools come from the kernel inside a run (AP-P6), never from here,
+    # and so do the sub-agent tools and write_todos (AP-P7): a question has no run to coordinate
+    ("ls", "read_file", "grep", "write_file", "task", "start_subagent", "check_subagent",
+     "update_subagent", "cancel_subagent", "list_subagents", "write_todos"))
 
 
 def _turn_seconds(default: float) -> float:
@@ -9372,6 +9374,69 @@ def register_run_fs_tools(reg: ToolRegistry) -> None:
             exposure=Exposure(tags=("files", "context"), surfaces=("agent_step",))))
 
 
+def register_coordination_tools(reg: ToolRegistry) -> None:
+    """THE SUB-AGENT AND PLANNING TOOLS (AP-P7, BOSSAPP-1058; kernel/subagents.py,
+    kernel/planning.py): task, start/check/update/cancel/list_subagents and write_todos.
+
+    Catalogued here with their permissions, as the run filesystem's are (AP-P6): spawning a
+    sub-agent is running an agent (`agent:invoke`, delegable, decided against the run token
+    inside a delegated run), writing the run's own to-do list is the run's own state (`system:
+    read`, like ls). The KERNEL serves them — only to a run whose spec opts in (coordination,
+    planning) — so these handlers answer only a call made outside such a run. Hidden from chat
+    and MCP: there is no run there to coordinate."""
+    from ..kernel import planning, subagents
+
+    def outside(name: str):
+        def handler(ctx, *, project_id, actor, args, _name=name):
+            return {"ok": False, "error": "no_coordinating_run",
+                    "message": (f"'{_name}' works inside an agent run whose spec enables it "
+                                "(coordination / planning); there is no such run here.")}
+        return handler
+
+    for schema in subagents.tool_specs([]):
+        reg.register(ToolSpec(
+            schema.name, schema.description, dict(schema.parameters), outside(schema.name),
+            kind="read", permission=subagents.PERMISSION,
+            exposure=Exposure(tags=("agents", "delegate"), surfaces=("agent_step",))))
+    todo = planning.TODO_SCHEMA
+    reg.register(ToolSpec(
+        todo.name, todo.description, dict(todo.parameters), outside(todo.name), kind="read",
+        permission="system:read",
+        exposure=Exposure(tags=("plan", "todos"), surfaces=("agent_step",))))
+
+
+def register_handoff_tools(reg: ToolRegistry) -> None:
+    """THE HANDOFF (AP-P7, services/handoffs.py): Ask BOSS hands the conversation to a
+    specialist. The thread's next turn is answered by that agent; the transfer is an agent_acts
+    handoff. A chat tool: the conversation is the thing handed (`_thread_id`, injected by chat)."""
+    from ..services import handoffs
+
+    @reg.tool(
+        handoffs.TOOL,
+        "Hand THIS conversation to another of the project's agents (e.g. the SRE for a "
+        "failing deploy, QA for a test question) when they should carry it on from here: "
+        "their next turn answers the person. Say why. `agent: boss` hands it back.",
+        _obj({"agent": {"type": "string", "description": "the agent's key or name"},
+              "reason": {"type": "string", "description": "why they should take it"}},
+             required=["agent"]),
+        kind="write", reversibility="safe", idempotency="idempotent",
+        permission="assistant:chat",
+        exposure=Exposure(tags=("agents", "handoff"), surfaces=("chat",)))
+    def transfer_to_agent(ctx, *, project_id, actor, args):
+        thread_id = str(args.get("_thread_id") or "").strip()
+        if not thread_id:
+            return {"ok": False, "error": "no_conversation",
+                    "message": "a handoff passes a conversation on; this call has none."}
+        by = str(args.get("_role") or "").strip() or None
+        try:
+            with ctx.begin() as c:
+                return handoffs.transfer(c, project_id=project_id, thread_id=thread_id,
+                                         to_agent=str(args.get("agent") or ""), actor=actor,
+                                         by_role=by, reason=str(args.get("reason") or ""))
+        except handoffs.HandoffError as error:
+            return {"ok": False, "error": "handoff_refused", "message": str(error)}
+
+
 def _register_ticket_tools(reg: ToolRegistry) -> None:
     """Ticket systems (BOSSAPP-1047 B2): read, search and browse tickets; import them, comment
     on them and move them, through the connector contract (tools/ticket_tools.py)."""
@@ -9452,6 +9517,9 @@ def build_default_registry() -> ToolRegistry:
     # The run filesystem's tools (AP-P6): catalogued here with their permissions, served by the
     # kernel inside a run.
     register_run_fs_tools(reg)
+    # Sub-agents, write_todos (served by the kernel) and the conversation handoff (AP-P7).
+    register_coordination_tools(reg)
+    register_handoff_tools(reg)
     # The tool-search tool (K5): registered last, and it searches at call time, so it sees
     # everything above whatever order they landed in.
     register_find_tools(reg)
@@ -9501,6 +9569,9 @@ def build_default_registry() -> ToolRegistry:
 # owning eighteen tools and being allowed five.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "deploy_app",
+    # "Let the SRE take this" (AP-P7 handoffs): the conversation itself is handed to another
+    # agent, whose turn the next one is. It changes who answers, nothing else; handed back at will.
+    "transfer_to_agent",
     # Tickets from chat (BOSSAPP-1047 B2): "import KAN-12", "comment on it", "move it to review".
     # Each writes to the team's own ticket system as the person (or the connection's bot);
     # a write that would carry flagged ticket text waits for the person (low_trust).

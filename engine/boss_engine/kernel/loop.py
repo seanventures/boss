@@ -65,6 +65,12 @@ class _Run:
         self.last_latency_ms = 0
         self.toolset = (Composite(spec.tools, LedgerTool(spec.ledger_reader))
                         if spec.ledger_reader is not None else spec.tools)
+        for middleware in self.chain.stack:
+            # AP-P7: a middleware that brings tools of its own (the sub-agent tools, write_todos)
+            # serves them INNERMOST, after governance decided the call, like any tool.
+            provide = getattr(middleware, "run_tools", None)
+            if callable(provide):
+                self.toolset = Composite(provide(self), self.toolset)
         context = self.chain.get("context_policy")
         if context is not None and callable(getattr(context, "toolset", None)):
             # AP-P6: the run filesystem's tools (ls, read_file, grep, write_file) join every run
@@ -341,7 +347,7 @@ def _batched(pending: Optional[dict], answers: Optional[dict]) -> bool:
     on more than one interrupt, or on an unknown outcome."""
     items = pending_interrupts(pending)
     return answers is not None or len(items) > 1 or any(
-        i.get("kind") == UNKNOWN_OUTCOME for i in items)
+        i.get("kind") == UNKNOWN_OUTCOME or i.get("subagent") for i in items)
 
 
 def _resume_batch(drive: _Run, decision: Optional[dict],
@@ -356,15 +362,23 @@ def _resume_batch(drive: _Run, decision: Optional[dict],
     if refusal:
         return KernelResult(status="denied", run_id=state.run_id, pending=state.pending,
                             error=refusal, usage=state.usage, steps=state.step)
+    again: list = []
     for item in sorted(pending_interrupts(pending), key=lambda i: _call_order(state, i)):
         answer = given[str(item.get("id") or "")]
         # The held call as the tool set reads it on resume (state.pending): the run's own
         # pending (its kind: mcp / skill / ...) with THIS call's identity.
         held = {**pending, **{k: item[k] for k in ("tool", "args", "call_id", "step",
-                                                    "decision_id") if k in item},
+                                                    "decision_id", "subagent") if k in item},
                 "interrupt_id": item.get("id")}
         state.pending = held
-        if answer.get("rejected"):
+        if item.get("subagent"):
+            # AP-P7: a SUB-AGENT's interrupt, propagated. Whatever the answer (approved, declined,
+            # a typed answer), it goes to the held `task` call, which resumes the CHILD with it —
+            # the child checks the approval against its own held call. It may wait again.
+            result = _run_approved(drive, dict(answer), held=held)
+            if result is not None and result.status == "deferred":
+                again.append(result)
+        elif answer.get("rejected"):
             _answer_held(drive, item, {"status": "declined", "decision_id": item.get(
                 "decision_id"), "note": "a person declined this call; it did not run",
                 "reason": answer.get("reason") or ""})
@@ -378,6 +392,23 @@ def _resume_batch(drive: _Run, decision: Optional[dict],
             # approved (or: an unknown outcome that did NOT happen, which a person released)
             _run_approved(drive, {**answer, "approved": True}, held=held)
     state.pending = None
+    if again:
+        # A resumed sub-agent waits on a person again: the parent suspends again, on it.
+        from .step_tools import _interrupt_item
+
+        first = again[0]
+        step = int(next((i.get("step") for i in pending_interrupts(pending)
+                         if i.get("call_id") == first.call_id), state.step) or state.step)
+        calls = [ToolCall(id=r.call_id, name=r.name, arguments=dict(next(
+            (i.get("args") or {} for i in pending_interrupts(pending)
+             if i.get("call_id") == r.call_id), {})), raw_arguments="") for r in again]
+        items = [_interrupt_item(state, step, r, calls) for r in again]
+        held_args = calls[0].arguments or {}
+        return drive.end("awaiting_approval", stopped="awaiting_approval", pending={
+            **{k: v for k, v in (first.pending or {}).items() if k != "interrupt"},
+            "tool": first.name, "args": held_args, "call_id": first.call_id,
+            "decision_id": first.decision_id, "step": step, "interrupt_id": items[0]["id"],
+            "interrupts": items})
     return None
 
 
@@ -430,7 +461,8 @@ def _finish_batch(drive: _Run) -> Optional[KernelResult]:
     return None
 
 
-def _run_approved(drive: _Run, decision: dict, *, held: Optional[dict] = None) -> None:
+def _run_approved(drive: _Run, decision: dict, *, held: Optional[dict] = None
+                  ) -> Optional[ToolResult]:
     """The held call a person approved, down the same tool chain as any call (authz does not
     ask again, audit never runs it twice, the screen still reads its result)."""
     state, spec = drive.state, drive.spec
@@ -453,12 +485,13 @@ def _run_approved(drive: _Run, decision: dict, *, held: Optional[dict] = None) -
     state.trace.append({"step": step, "tool": call.name, "args": args,
                         "status": result.status, "result": result.content, "call_id": call.id,
                         "resumed": True})
-    if spec.resume_note is not None:
+    if spec.resume_note is not None and not pending.get("subagent"):
         state.messages.append({"role": "user", "content": spec.resume_note(pending, body)})
     drive.rec.emit("tool.result", {"tool": call.name, "call_id": call.id,
                                    "status": result.status, "args": args,
                                    "decision_id": pending.get("decision_id"), "approved": True,
                                    "idempotency_key": key})
+    return result
 
 
 def cancel(run_id: str, *, by: str, reason: str = "cancelled") -> bool:

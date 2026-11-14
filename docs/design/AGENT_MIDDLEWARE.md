@@ -59,6 +59,8 @@ reaches every caller. Policies stay; the default middleware stack calls them.
 | `memory` | `before_agent`, `before_model`, `after_agent` | knowledge pack (`kg/runtime.py`), `agent_memory`, learning writeback (`kg/learning_writeback.py`) |
 | `context` | `before_model` | `ClipContext.assemble`, scoped tools on every preset (`kernel/scoped_tools.py`) |
 | `context_policy` (AP-P6) | `before_agent`, `before_model`, `wrap_tool_call` | `kernel/context_policy.py` on chat and agent steps: the run filesystem (`kernel/runfs.py`: `/scratch`, `/large_tool_results`, `/memories` → `svc/memory_api.py`, `/skills`); results over min(20k tokens, the preset's clip) offloaded, not cut; old tool results cleared past 50% of the window; summary at 85% keeping 10%, originals archived; SKILL.md bodies on demand. Configured by the agent spec's `context`; `BOSS_CONTEXT_POLICY=0` turns it off |
+| `subagents` (AP-P7) | `before_agent`, `before_model`, `after_model`, `after_agent`, `run_tools` | `kernel/subagents.py`: the `task` tool (isolated / fork, capped reports, forward-verbatim) and the async `start/check/update/cancel/list_subagents` (A2A Tasks over durable child runs, `svc/subagent_runs.py`); every child on an exchanged run token, a budget slice (`subagent_slice`) and the parent's interrupt port; effort caps and one writer per branch refuse a spawn, each refusal a `subagent.capped` event on the tool's span. Only when the spec's `coordination.enabled` (off by default, needs a budget) |
+| `planning`, `rubric` (AP-P7) | `run_tools`; `after_model` | `kernel/planning.py`: opt-in `write_todos` (the plan in run state, `todos.updated` events); the self-check against `output_contract` with bounded re-asks (`rubric.result` events) |
 | `recovery` | `wrap_model_call` | `Recover.on_model_error` retry / feedback / wait / suspend |
 | `telemetry` | `wrap_model_call` | `llm_calls` row via `record_llm_call` (`svc/llm_telemetry.py`) |
 | `verify` | `after_model`, `after_agent` | `VerifyPolicy.after_step` / `accept_final` / `reask` |
@@ -71,6 +73,10 @@ A **preset** (`presets.py`) becomes a named stack plus limits: `decision`, `engi
 `agent_loop`, `precheck`, `native_coder`, and later `meeting_seat` and `subagent`. Delegate engines
 (`delegate.py`) are one opaque `wrap_model_call` step: the stack still runs `before_agent` /
 `after_agent` around them, and `budget` passes its remaining cap as `DelegateBrief.max_budget_usd`.
+
+A middleware may also bring TOOLS of its own (`run_tools(run) -> ToolSet`, AP-P7): they are
+served innermost, after governance has decided the call (authz against the run token, the screen,
+the audit), exactly like the kernel's built-in ledger and run-filesystem tools.
 
 ## Compatibility rule
 
