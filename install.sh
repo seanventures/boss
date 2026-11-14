@@ -750,6 +750,11 @@ GRAFANA_PORT="${GRAFANA_PORT:-3300}"
 MON_PROMETHEUS_URL=""
 MON_GRAFANA_URL=""
 MON_GRAFANA_PUBLIC_URL=""
+# BOSS's own /metrics (AP-P4): with the bundled Prometheus, api and worker serve it on the compose
+# network (never published on the host) and Prometheus scrapes it (monitoring/prometheus.yml).
+# An operator's own choice in .env is kept.
+MON_METRICS_PORT="${BOSS_METRICS_PORT:-$(grep -m 1 '^BOSS_METRICS_PORT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)}"
+MON_METRICS_HOST="${BOSS_METRICS_HOST:-$(grep -m 1 '^BOSS_METRICS_HOST=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)}"
 # THE LOCAL TEST INBOX (Mailpit, compose `mail` profile), only with --with-mailpit: the Email
 # (SMTP) connector can then choose it, and mail lands there with nothing leaving the machine.
 MAILPIT_PORT="${BOSS_MAILPIT_PORT:-$(grep -m 1 '^BOSS_MAILPIT_PORT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)}"
@@ -762,6 +767,8 @@ if [[ "$WITH_WEB" -eq 1 ]]; then
   MON_PROMETHEUS_URL="http://prometheus:9090"
   MON_GRAFANA_URL="http://grafana:3000"
   MON_GRAFANA_PUBLIC_URL="http://localhost:${GRAFANA_PORT}"
+  MON_METRICS_PORT="${MON_METRICS_PORT:-9464}"
+  MON_METRICS_HOST="${MON_METRICS_HOST:-0.0.0.0}"
   ui_ok "Monitoring: bundled Prometheus and Grafana (Grafana on port $GRAFANA_PORT)"
   if port_in_use "$GRAFANA_PORT" && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'grafana'; then
     ui_warn "Port $GRAFANA_PORT is already in use — set BOSS_GRAFANA_PORT to another port and re-run if Grafana does not start."
@@ -1245,6 +1252,9 @@ BOSS_GRAFANA_PORT=${GRAFANA_PORT}
 BOSS_MONITORING_PROMETHEUS_URL=${MON_PROMETHEUS_URL}
 BOSS_MONITORING_GRAFANA_URL=${MON_GRAFANA_URL}
 BOSS_MONITORING_GRAFANA_PUBLIC_URL=${MON_GRAFANA_PUBLIC_URL}
+# BOSS's own /metrics for the bundled Prometheus to scrape; empty (off) without it.
+BOSS_METRICS_PORT=${MON_METRICS_PORT}
+BOSS_METRICS_HOST=${MON_METRICS_HOST}
 # The local test inbox (Mailpit): empty unless the operator opted in with --with-mailpit.
 BOSS_MAILPIT_PORT=${MAILPIT_PORT}
 BOSS_EMAIL_DEV_INBOX_OPTED_IN=${WITH_MAILPIT}

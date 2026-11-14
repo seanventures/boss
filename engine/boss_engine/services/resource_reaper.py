@@ -389,6 +389,15 @@ def prune_tables(engine: Any) -> dict[str, int]:
         out["run_events_partitions"] = len(got.get("dropped") or [])
     except Exception:  # noqa: BLE001
         out["run_events_partitions"] = 0
+    # Run traces (AP-P4): span payloads hot → cold → expired, span rows past their window.
+    try:
+        from .trace_payloads import backend_from_settings, sweep as _sweep_payloads
+        got = _sweep_payloads(engine, backend=backend_from_settings())
+        out["trace_payloads_moved"] = int(got.get("moved") or 0)
+        out["trace_payloads_expired"] = int(got.get("expired") or 0)
+        out["trace_spans"] = int(got.get("spans_deleted") or 0)
+    except Exception:  # noqa: BLE001 — a schema without the tables is not an error
+        out["trace_payloads_moved"] = out["trace_payloads_expired"] = out["trace_spans"] = 0
     # The knowledge graph's archival flag: computed by the learning layer, persisted here.
     try:
         from .knowledge.service import KnowledgeService

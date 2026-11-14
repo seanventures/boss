@@ -90,7 +90,7 @@ def test_governance_is_always_last_and_the_policies_sit_between():
     names = build_chain(spec).names()
     assert names == ["verify", "m1", "m2", "limits", "context", "recovery", "tool_args",
                      *GOVERNANCE_NAMES]
-    assert GOVERNANCE_NAMES == ("telemetry", "budget", "authz", "tool_screen", "audit")
+    assert GOVERNANCE_NAMES == ("trace", "telemetry", "budget", "authz", "tool_screen", "audit")
 
 
 def test_node_hooks_run_in_order_before_and_reversed_after_and_wraps_nest_onion_style():

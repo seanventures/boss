@@ -16,7 +16,15 @@ decision-reply reader — on whichever model the install has configured, in a TE
     own prompt (default: a different model from the agent's) grading the reply against what
     good looks like and what must never happen. A case passes when both do.
   * Results go to tests/agent-battle/results/<label>-<utc>.json (per case and per scenario,
-    with cost and time), for the console and nightly jobs to read.
+    with cost and time), for the console and nightly jobs to read — and, since AP-P4, to an
+    EXPERIMENT over the `agent-battle` dataset (services/evals.record_battle_results), so a run
+    is a row an agent version is compared on, not only a gitignored file.
+
+  --dataset NAME runs the SCRIPTED battle instead (services/evals.run_battle: no model spend):
+  every confirmed example of that dataset (default `misses`, the annotation inbox's confirmed
+  misses) is answered by a kernel run on the scripted engine and checked against its reference;
+  the experiment is written, and the exit code is 1 while any example fails. `--fixes` names a
+  JSON file of {example_id: answer} — the answers of the agent version that fixed them.
 
 It refuses to run on a database whose name does not look like a test one.
 
@@ -558,6 +566,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="the judge's model on the Claude CLI (independent of the agent's)")
     ap.add_argument("--no-judge", action="store_true")
     ap.add_argument("--out", default="")
+    ap.add_argument("--dataset", default="",
+                    help="run the SCRIPTED battle over this dataset (e.g. misses) instead")
+    ap.add_argument("--fixes", default="", help="(--dataset) JSON file {example_id: answer}")
+    ap.add_argument("--record-project", default=os.environ.get("BOSS_BATTLE_RECORD_PROJECT",
+                                                               "boss-dogfood"),
+                    help="the project whose datasets and experiments the run is written to")
     args = ap.parse_args(argv)
 
     from boss_engine.config import get_settings
@@ -570,6 +584,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"refusing: database '{dbname}' is not a test database", file=sys.stderr)
         return 2
     engine = get_engine(settings)
+    if args.dataset:
+        return scripted_battle(engine, args.record_project, args.dataset, args.fixes)
     model_settings = json.loads(args.model_settings or "{}")
     _install_interception()
     _install_usage_capture()
@@ -669,7 +685,33 @@ def main(argv: Optional[list[str]] = None) -> int:
           f"agent ${t['agent_cost_usd']} in {t['agent_model_calls']} calls, judge "
           f"${t['judge_cost_usd']} in {t['judge_model_calls']} calls")
     print(f"results: {out}")
+    try:
+        from boss_engine.services.evals import record_battle_results
+
+        xp = record_battle_results(engine, args.record_project, results, label=args.label,
+                                   engine_name=",".join(sorted({m for r in results
+                                                                for m in r["models"]}))
+                                   or "configured")
+        print(f"experiment: {xp['id']} ({xp['summary'].get('passed')}/"
+              f"{xp['summary'].get('total')} on the agent-battle dataset)")
+    except Exception as exc:  # noqa: BLE001 — the JSON report above is already written
+        print(f"experiment not recorded: {type(exc).__name__}: {exc}", file=sys.stderr)
     return 0
+
+
+def scripted_battle(engine, project_id: str, dataset: str, fixes_path: str) -> int:
+    """The scripted battle over a dataset (no model spend): an experiment row, exit 1 while any
+    confirmed example fails."""
+    from boss_engine.services.evals import run_battle
+
+    fixes = json.loads(Path(fixes_path).read_text()) if fixes_path else None
+    xp = run_battle(engine, project_id, dataset=dataset, mode="scripted", fixes=fixes)
+    summary = xp["summary"]
+    print(f"scripted battle over {dataset}: {summary['passed']}/{summary['total']} passed "
+          f"(experiment {xp['id']})")
+    for example_id in summary.get("failing_examples") or []:
+        print(f"  FAIL {example_id}")
+    return 1 if summary.get("failed") else 0
 
 
 if __name__ == "__main__":

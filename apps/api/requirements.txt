@@ -45,3 +45,9 @@ prompt_toolkit==3.0.52
 # The kernel AnthropicMessagesEngine (engine/boss_engine/kernel/anthropic_engine.py, K7):
 # /v1/messages with native tools, caching, count_tokens. Keep in step with engine/requirements.txt.
 anthropic==0.125.0
+# BOSS's own run traces over OTLP (AP-P4, D8; services/self_telemetry.export_trace_span): the SDK
+# and the OTLP/HTTP exporter ship in the image so turning export on is configuration
+# (OTEL_EXPORTER_OTLP_ENDPOINT), not a rebuild. Export stays OFF by default. Pinned to the
+# opentelemetry-api the image already carries (pulled in by mcp and claude-agent-sdk).
+opentelemetry-sdk==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2

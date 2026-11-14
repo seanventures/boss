@@ -28,7 +28,7 @@ THE SHAPE
       context {..}       P6 placeholder (context policy hooks)
       subagents [..]     P7 placeholder
       triggers [..]      P3 placeholder
-      evaluators [..]    P4 placeholder (a shipped eval rubric lands here as kind: rubric)
+      evaluators [..]    P4: rubric (a shipped eval rubric), online (sampled, rule|jev|judge, weekly cap)
       output_contract {artifacts, artifact_type, sections, schema, strategy}
       limits {max_steps, max_calls, timeout_seconds, max_retries, run_usd, thread_usd}
       cadence, comms {tone, required_references}, a2a {publish, subscribe}, scopes
@@ -164,12 +164,23 @@ SCHEMA: dict[str, Any] = {
                 "cron": _s(), "event": _ANY_OBJ, "webhook": _ANY_OBJ, "input": _ANY_OBJ,
                 "concurrency": _s(pattern=_WORD),
             })},
-            # P4: evaluators. A shipped `eval_rubric` arrives as {kind: rubric, criteria}.
+            # P4: evaluators. A shipped `eval_rubric` arrives as {kind: rubric, criteria}. An
+            # `online` evaluator scores a sampled share of live runs (services/online_evaluators):
+            # `by` rule (deterministic, free) or jev (the decision model) by default; `judge`
+            # (an LLM judge) is opt-in and needs a weekly_usd_cap. At the cap it pauses for the
+            # rest of the ISO week. `when` chains it: run only if another scored below a bar.
             "evaluators": {"type": "array", "items": _obj({
-                "kind": {"enum": ["rubric", "online", "dataset"]}, "name": _s(),
+                "kind": {"enum": ["rubric", "online", "dataset"]}, "name": _s(pattern=_WORD),
                 "criteria": _TEXT_MAP, "dataset": _s(),
                 "sample": {"type": "number", "minimum": 0, "maximum": 1},
                 "weekly_usd_cap": {"type": "number", "minimum": 0},
+                "by": {"enum": ["rule", "jev", "judge"]},
+                "rule": _s(pattern=_WORD),
+                "question": _s(),
+                "on_cap": {"enum": ["pause"]},
+                "when": _obj({"evaluator": _s(pattern=_WORD),
+                              "below": {"type": "number", "minimum": 0, "maximum": 1}},
+                             required=("evaluator", "below")),
             }, required=("kind",))},
             "output_contract": _obj({
                 "artifacts": _strs(), "artifact_type": _s(), "sections": _strs(), "schema": _ANY_OBJ,
@@ -284,6 +295,39 @@ def validate(doc: Any) -> list[dict[str, str]]:
             errors.append({"path": f"spec.model.need[{i}]", "message": (
                 f"{need!r} names a model. A spec names a tier (fast, balanced, frontier) and what the work "
                 "needs (reasoning, code, ...), never a model.")})
+    evaluators = spec.get("evaluators") if isinstance(spec.get("evaluators"), list) else []
+    names: set = set()
+    for i, ev in enumerate(evaluators):
+        if not isinstance(ev, dict) or ev.get("kind") != "online":
+            continue
+        path = f"spec.evaluators[{i}]"
+        if not ev.get("name"):
+            errors.append({"path": path, "message": "an online evaluator needs a `name` (its "
+                                                    "feedback key and its weekly budget line)."})
+        elif ev["name"] in names:
+            errors.append({"path": path, "message": f"two online evaluators are named {ev['name']!r}."})
+        names.add(ev.get("name"))
+        by = ev.get("by") or "rule"
+        if by == "judge" and not (isinstance(ev.get("weekly_usd_cap"), (int, float))
+                                  and ev["weekly_usd_cap"] > 0):
+            errors.append({"path": f"{path}.weekly_usd_cap", "message": (
+                "an LLM judge is opt-in and spends money: give it a weekly_usd_cap above 0 (it "
+                "pauses there for the rest of the week).")})
+        if by == "rule" and not ev.get("rule"):
+            errors.append({"path": f"{path}.rule", "message": (
+                "a rule evaluator names its rule (completed, no_failed_tools, no_refusals, "
+                "under_budget, cited_evidence).")})
+        elif by == "rule":
+            from ..services.online_evaluators import RULES
+
+            if ev["rule"] not in RULES:
+                errors.append({"path": f"{path}.rule", "message": (
+                    f"{ev['rule']!r} is not a rule; the rules are {', '.join(sorted(RULES))}.")})
+    for i, ev in enumerate(evaluators):
+        when = ev.get("when") if isinstance(ev, dict) else None
+        if isinstance(when, dict) and when.get("evaluator") not in names:
+            errors.append({"path": f"spec.evaluators[{i}].when.evaluator", "message": (
+                f"{when.get('evaluator')!r} is not an online evaluator of this agent.")})
     persona = spec.get("persona")
     if isinstance(persona, dict) and persona:
         from ..services.agent_persona import lint_persona

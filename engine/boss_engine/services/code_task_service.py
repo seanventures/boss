@@ -2465,6 +2465,11 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
                         files=pending, reason=reason or f"override waived {waive_gates}")
             except Exception:  # noqa: BLE001
                 logger.exception("ratchet capture failed for override %s", run_id)
+            # AP-P4: the waiver is a miss — a PROPOSED example in the annotation inbox, which a
+            # person confirms before it counts (services/evals.capture_gate_waiver; never raises).
+            from .evals import capture_gate_waiver
+            capture_gate_waiver(c, project_id, run, waived=list(waive_gates), failing=list(failing),
+                                actor=actor, reason=reason, quality_gate_id=qg, files=pending)
     return {"status": "completed", "run_id": run_id, "waived_gates": waive_gates,
             "pull_request_url": proposal.get("pull_request_url"),
             "pull_request_number": proposal.get("pull_request_number"),

@@ -32026,6 +32026,17 @@ app.include_router(build_agent_specs_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# AP-P4: run traces (span trees, decision → run, agent health) and the evaluation loop's data
+# (feedback on runs, datasets, the annotation inbox, experiments, governed-vs-bare).
+from .routers.traces import build_traces_router
+from .routers.evals_data import build_evals_router
+
+app.include_router(build_traces_router(engine=engine, require_reader=require_project_reader))
+app.include_router(build_evals_router(
+    engine=engine,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
 # KG P6b: connect a bank's own agent — register/list/get/test/suspend/remove (routers/external_agents.py).
 from .routers.external_agents import build_external_agents_router
 
