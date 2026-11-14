@@ -2331,7 +2331,7 @@ class JobLeaseService:
                 actor=actor,
             )
         elif job_row["kind"] == "a2a.dispatch":
-            from .a2a import A2AService
+            from .agent_bus import A2AService
 
             A2AService(self.settings).mark_dispatch_failure(
                 connection,

@@ -791,6 +791,24 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 raise RetryableJobError(error)
             raise RuntimeError(error)
         return result
+    if job.kind == "agent.studio.execute":
+        # RETIRED: the templated `deterministic_brief` answer. A Studio run is a governed agent
+        # run in the API (AGENT_PLATFORM D13); its result is what the agent actually did.
+        result = client.run_agent_studio(
+            {
+                "project_id": job.project_id,
+                "agent_studio_run_id": job.payload.get("agent_studio_run_id"),
+                "created_by_job_id": job.id,
+                "worker_id": client.worker_id,
+                "lease_token": job.lease_token,
+            }
+        )
+        if result.get("status") == "failed":
+            error = result.get("message") or "Agent Studio run failed."
+            if result.get("retryable"):
+                raise RetryableJobError(error)
+            raise RuntimeError(error)
+        return result
     if job.kind.startswith("agent.") and job.kind != "agent.resume":
         return build_agent_brief_result(job)
     if job.kind == "enterprise.marketplace.validate":

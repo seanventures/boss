@@ -11,7 +11,8 @@ of a native CLI loop.
 Rules this module keeps:
 
   * BEST-EFFORT ON THE LEGACY PATHS. llm_telemetry, the tool-call audit and agent_turns call in
-    here behind BOSS_LEDGER_EVENTS (default off). A ledger failure never fails the call it
+    here behind BOSS_LEDGER_EVENTS (default ON since AP-P0; set it to 0 to stop the
+    dual-write). A ledger failure never fails the call it
     describes: they write in a savepoint and swallow, as the telemetry around them already does.
   * REDACTED AND CLIPPED ON THE WAY IN. Every string in `data` passes the secret redactor
     (redaction.redact_secrets, the one `_ask_reading` uses) before it is stored; `data` is at
@@ -44,10 +45,16 @@ MAX_DATA_BYTES = 8_192
 MAX_STRING_CHARS = 2_000
 
 
+#: Words that switch the dual-write off. Anything else, unset included, leaves it on.
+_OFF_WORDS = ("0", "false", "no", "off")
+
+
 def enabled() -> bool:
-    """BOSS_LEDGER_EVENTS: off unless set to a true word. The legacy writers dual-write only
-    while it is on; the kernel's own sink writes whenever a caller hands it one."""
-    return (os.environ.get(FLAG) or "").strip().lower() in ("1", "true", "yes", "on")
+    """BOSS_LEDGER_EVENTS: ON unless set to a false word (AP-P0, docs/design/AGENT_PLATFORM.md
+    §5 Phase 0: a ledger only a test turned on traced nothing). The legacy writers dual-write
+    while it is on; the kernel's own sink writes whenever a caller hands it one. Retention is
+    services/ledger_retention.py (monthly partitions dropped, never rows rewritten)."""
+    return (os.environ.get(FLAG) or "").strip().lower() not in _OFF_WORDS
 
 
 def new_event_id() -> str:

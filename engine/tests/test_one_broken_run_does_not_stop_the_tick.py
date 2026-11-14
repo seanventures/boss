@@ -82,7 +82,7 @@ def test_the_runner_wraps_each_run_in_a_savepoint():
 
     from boss_engine.services import workflow_capability_runner as runner
 
-    source = inspect.getsource(runner.tick)
+    source = "".join(map(inspect.getsource, runner.TICK_PARTS))
     # FOUR, and each one earns its place:
     #   the revival loop  — a revival must not break the tick
     #   the run loop      — one run must not stop the rest
@@ -101,7 +101,7 @@ def test_a_failure_says_which_phase_of_the_run_it_was_in():
 
     from boss_engine.services import workflow_capability_runner as runner
 
-    source = inspect.getsource(runner.tick)
+    source = "".join(map(inspect.getsource, runner.TICK_PARTS))
     for label in ('phase = "read the spec"',
                   'phase = "resume awaited work"',
                   'phase = "resume answered gates"',
@@ -129,7 +129,7 @@ def test_a_step_that_aborts_the_transaction_can_still_be_recorded_as_failed():
 
     from boss_engine.services import workflow_capability_runner as runner
 
-    source = inspect.getsource(runner.tick)
+    source = "".join(map(inspect.getsource, runner.TICK_PARTS))
     assert "step_point = connection.begin_nested()" in source
     # BaseException, not Exception: a step killed by a timeout or a cancellation leaves the
     # connection just as unusable, and its failure is just as worth recording.

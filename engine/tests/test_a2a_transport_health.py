@@ -1,5 +1,5 @@
 """A2A transport health is honest: unconfigured is not degraded."""
-from boss_engine.services.a2a import RedisStreamsTransport
+from boss_engine.services.agent_bus import RedisStreamsTransport
 
 
 def test_missing_redis_url_is_not_configured_not_degraded():

@@ -176,6 +176,15 @@ CREATE TABLE IF NOT EXISTS kg_fact_stats (
   last_used_at TIMESTAMPTZ,
   archived BOOLEAN NOT NULL DEFAULT FALSE
 );
+-- One row per (fact, run) attributed: record_outcome counts a run's verdict once (AP-P0).
+CREATE TABLE IF NOT EXISTS kg_outcome_attributions (
+  fact_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  success BOOLEAN NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (fact_id, run_id)
+);
 CREATE TABLE IF NOT EXISTS kg_audit (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -1722,8 +1731,24 @@ class PostgresKnowledgeStore:
             ),
             {"project_id": project_id, "run_id": run_id},
         ).scalars().all()
+        # IDEMPOTENT (AP-P0): a (fact, run) pair is counted once. A replay, or a run that turns
+        # terminal again, keeps its first verdict and leaves the counters as they were.
         column = "success_count" if success else "failure_count"
         for fact_id in rows:
+            first = connection.execute(
+                text(
+                    """
+                    INSERT INTO kg_outcome_attributions (fact_id, run_id, project_id, success)
+                    VALUES (:fact_id, :run_id, :project_id, :success)
+                    ON CONFLICT (fact_id, run_id) DO NOTHING
+                    RETURNING fact_id
+                    """
+                ),
+                {"fact_id": fact_id, "run_id": run_id, "project_id": project_id,
+                 "success": bool(success)},
+            ).scalar()
+            if first is None:
+                continue
             connection.execute(
                 text(
                     f"""

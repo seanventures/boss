@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import text
 
 from apps.api.app.config import get_settings
-from apps.api.app.services.a2a import A2AService, A2AStateError
+from apps.api.app.services.agent_bus import A2AService, A2AStateError
 from apps.api.app.services.agent_studio import AgentStudioService
 from apps.api.app.services.jobs import JobLeaseService
 from apps.worker.boss_worker.control_plane import LeasedJob

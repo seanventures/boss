@@ -5077,6 +5077,15 @@ CREATE TABLE IF NOT EXISTS kg_fact_stats (
   last_used_at TIMESTAMPTZ,
   archived BOOLEAN NOT NULL DEFAULT FALSE
 );
+-- One row per (fact, run) attributed: record_outcome counts a run's verdict once (AP-P0).
+CREATE TABLE IF NOT EXISTS kg_outcome_attributions (
+  fact_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  success BOOLEAN NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (fact_id, run_id)
+);
 CREATE TABLE IF NOT EXISTS kg_audit (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -14002,3 +14011,37 @@ CREATE INDEX IF NOT EXISTS idx_run_hold_members_member
 -- names the account it was given for; a sign-in as another account is not confirmed by it.
 ALTER TABLE connection_credentials ADD COLUMN IF NOT EXISTS confirmed_as TEXT;
 ALTER TABLE connection_credentials ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
+-- ================================ AP-P1a: boss.agent/v1 (docs/design/AGENT_PLATFORM.md §4.1) ==
+-- ONE VERSIONED DEFINITION PER AGENT. Each row is an immutable `boss.agent/v1` document, its
+-- content hash and what it compiles to (the work prompt, byte for byte, and the grants). The
+-- active row of an agent (kind 'agent') is projected onto `roles`, `role_skills` and
+-- `role_mcp_servers` in the same transaction that activates it; rollback re-activates an older
+-- row. A 'profile' (a shipped Studio agent such as `cfo`) extends a role and projects onto
+-- nothing. Keyed by role_key, not by agent_definitions: Studio profile keys collide with role
+-- keys (backend_engineer, chief_architect, ...) and panels pin Studio agent_versions rows.
+CREATE TABLE IF NOT EXISTS agent_spec_versions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_key TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'agent' CHECK (kind IN ('agent', 'profile')),
+  version INTEGER NOT NULL CHECK (version > 0),
+  api_version TEXT NOT NULL DEFAULT 'boss.agent/v1',
+  spec JSONB NOT NULL,
+  content_hash TEXT NOT NULL,
+  compiled_prompt TEXT NOT NULL DEFAULT '',
+  compiled JSONB NOT NULL DEFAULT '{}'::jsonb,
+  report JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source TEXT NOT NULL DEFAULT 'operator',
+  provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+  active BOOLEAN NOT NULL DEFAULT false,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ,
+  UNIQUE(project_id, kind, agent_key, version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_spec_versions_active
+  ON agent_spec_versions(project_id, kind, agent_key) WHERE active;
+CREATE INDEX IF NOT EXISTS idx_agent_spec_versions_hash
+  ON agent_spec_versions(project_id, kind, agent_key, content_hash);
+-- Which version the roles row is a projection of (NULL: never published as a spec yet).
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS spec_version INTEGER;

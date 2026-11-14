@@ -1,8 +1,8 @@
 """GUARD: the capability tick stays inside the transaction Postgres will let it hold.
 
-POST /v1/delivery-workflows/run-capabilities runs `workflow_capability_runner.tick` for each
-project inside ONE transaction; the tick claims and executes up to MAX_STEPS_PER_TICK steps
-inline (savepoints), and commits at the end. The API's engine ends any session idle inside a
+POST /v1/delivery-workflows/run-capabilities used to run `workflow_capability_runner.tick` for
+each project inside ONE transaction; since AP-P0 it runs `tick_per_step`, one transaction per
+run's step. The API's engine ends any session idle inside a
 transaction for longer than BOSS_API_DB_IDLE_IN_TRANSACTION_SECONDS (300 s). A step that waits
 longer than that between two statements rolls back every step the tick ran for that project,
 and the next tick runs them again — a duplicate wherever the step's effect was not keyed. The
@@ -32,16 +32,20 @@ def _endpoint_source() -> str:
     return MAIN[start:end]
 
 
-def test_each_project_ticks_in_its_own_transaction():
+def test_each_step_ticks_in_its_own_transaction():
+    """AP-P0: the hazard is removed, not just kept rare. The endpoint hands the ENGINE to
+    `tick_per_step`, which opens one transaction per run's step (engine/tests/
+    test_ap_p0_commit_per_step.py drives a real idle kill through it)."""
     body = _endpoint_source()
     loop = body.index("for pid in projects:")
     after = body[loop:]
-    # The transaction opens INSIDE the per-project loop, around the tick.
-    assert re.search(r"for pid in projects:.*?with begin\(engine\) as connection:\s*\n\s*result = "
-                     r"workflow_capability_runner\.tick\(", after, re.S), \
-        "the tick must run in one transaction PER PROJECT, opened inside the loop"
-    # And the hazard is written where the next person will look.
-    assert "KNOWN HAZARD — ONE TRANSACTION PER PROJECT, NOT PER STEP" in body
+    assert re.search(r"for pid in projects:.*?workflow_capability_runner\.tick_per_step\(\s*"
+                     r"engine,", after, re.S), "the tick must commit per step"
+    assert "workflow_capability_runner.tick(" not in body
+    src = inspect.getsource(workflow_capability_runner.tick_per_step)
+    per_run = src.index("for run in runs:")
+    assert "with open_tx() as connection:" in src[per_run:]
+    assert "_advance_one_run(connection" in src[per_run:]
 
 
 def test_every_inline_call_wall_is_well_under_the_idle_limit():

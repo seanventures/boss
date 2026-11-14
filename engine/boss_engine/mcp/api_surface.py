@@ -78,6 +78,9 @@ _EXCLUDED_EXACT = {
     # not an operator action. Held as `execute`, it answered the worker 409 and every Community
     # discovery sat queued until its job deadlettered.
     "/v1/discoveries/{run_id}/execute": "discovery_worker_lease_protocol",
+    # AP-P1a: the worker hands its leased agent.studio.execute job to the API, which runs it
+    # through the governed agent-step pipeline under that job's live lease.
+    "/v1/agent-studio/runs/execute": "agent_studio_worker_lease_protocol",
     # The worker hands its leased repo.push_pending job to the API, which holds the
     # GitHub credential and pushes when GitHub answers (services/github_outage.py).
     # Held as `execute`, it answered the worker 409 and the waiting push never ran.
@@ -144,6 +147,13 @@ ROSTER_AUTHORITY_WRITES = frozenset({
     # the server itself, so a confirmed skill grant adds no server either.
     ("POST", "/v1/role-skills"),
     ("POST", "/v1/role-skills/sync"),
+    # boss.agent/v1 (AP-P1a): creating, publishing or rolling back a spec writes the role and
+    # its grants exactly as POST/PATCH /v1/agents does, so a non-human caller is held the same.
+    ("POST", "/v1/agent-specs"),
+    ("POST", "/v1/agent-specs/import"),
+    ("PUT", "/v1/agents/{role_key}/spec"),
+    ("POST", "/v1/agents/{role_key}/spec/versions/{version}/publish"),
+    ("POST", "/v1/agents/{role_key}/spec/rollback"),
 })
 _OPERATOR_ONLY_EXACT = frozenset({
     # A new org or project is tenancy, not work: a non-human caller is held like POST /v1/orgs.

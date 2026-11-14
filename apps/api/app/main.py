@@ -715,7 +715,7 @@ from .request_bodies import (
     WorkflowScheduleEnabledBody,
     WorkflowStartBody,
 )
-from .services.a2a import (
+from .services.agent_bus import (
     A2ANotFoundError,
     A2AService,
     A2AStateError,
@@ -1305,6 +1305,30 @@ def _mirror_org_models() -> dict:
         return {}
 
 
+def _publish_agent_specs() -> dict:
+    """EVERY AGENT IS A VERSIONED boss.agent/v1 SPEC (AGENT_PLATFORM D2). Each roles row, read
+    with what it holds, becomes its agent's active version when it has none or has drifted;
+    each Studio profile gets its v1 profile version. Idempotent: an unchanged install writes
+    nothing on the next boot. Never blocks boot."""
+    from boss_engine.agents import migration as agent_spec_migration
+
+    try:
+        results = agent_spec_migration.sync_all(engine, actor="boss")
+        versioned = {p: len(r["agents"]["versioned"]) + len(r["profiles"]["versioned"])
+                     for p, r in results.items()
+                     if r["agents"]["versioned"] or r["profiles"]["versioned"]}
+        failed = {p: r["agents"]["failed"] + r["profiles"]["failed"] for p, r in results.items()
+                  if r["agents"]["failed"] or r["profiles"]["failed"]}
+        if versioned:
+            print(f"[lifespan] agent specs versioned: {versioned}")
+        if failed:
+            print(f"[lifespan] agent specs not versioned: {failed}")
+        return results
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] agent spec sync skipped: {exc}")
+        return {}
+
+
 def _install_shipped_cast() -> dict:
     """AN UPGRADE GETS THE CAST, in every project, not only a fresh install's default one.
 
@@ -1487,6 +1511,7 @@ async def lifespan(_: FastAPI):
     _sync_builtin_templates()
     _seed_work_tracker_defaults()
     _backfill_agent_identities()
+    _publish_agent_specs()
     _mirror_org_models()
     # REFUSED DEPLOYMENT PLANS LEFT NOTHING BEHIND ONCE, AND NOW NEVER DID. An unverified host
     # used to raise a pending decision nobody could act on and a failed run that never ran;
@@ -14755,6 +14780,39 @@ def execute_orchestrator_next_move(
                 "retryable": False,
                 "message": str(error),
             }
+
+
+class AgentStudioRunExecuteRequest(BaseModel):
+    project_id: str
+    agent_studio_run_id: str
+    created_by_job_id: str
+    worker_id: str
+    lease_token: str
+
+
+@app.post("/v1/agent-studio/runs/execute")
+@permit(P.WORKER_LEASE)
+def execute_agent_studio_run(payload: AgentStudioRunExecuteRequest) -> dict[str, Any]:
+    """Worker-only boundary for leased agent.studio.execute jobs (AGENT_PLATFORM D13).
+
+    A Studio run used to be answered by a templated brief in the worker (`deterministic_brief`)
+    that called no model. It now runs here, through the governed agent-step pipeline, under the
+    worker's LIVE lease on that very job."""
+    require_worker_principal()
+    with begin(engine) as connection:
+        try:
+            lease = jobs.require_active_lease(connection, payload.worker_id, payload.created_by_job_id,
+                                              payload.lease_token)
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if lease["kind"] != "agent.studio.execute" or lease["project_id"] != payload.project_id:
+            raise HTTPException(status_code=409, detail="lease does not match this Agent Studio run")
+        try:
+            return {"status": "succeeded", **agent_studio.execute_run(
+                connection, project_id=payload.project_id, run_id=payload.agent_studio_run_id,
+                actor="worker")}
+        except ValueError as error:
+            return {"status": "failed", "retryable": False, "message": str(error)}
 
 
 @app.get("/v1/meetings", response_model=MeetingListResponse)
@@ -28186,34 +28244,22 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
     # lab project is a project of its own, and its build sat `ready` for ever. Each project in
     # its own transaction, so one that cannot advance never stops the rest.
     #
-    # KNOWN HAZARD — ONE TRANSACTION PER PROJECT, NOT PER STEP (pre-mortem 2026-10-13).
-    # `tick` claims and EXECUTES up to MAX_STEPS_PER_TICK (10) steps inline, each in a SAVEPOINT
-    # of this one transaction, and nothing commits until the project's last step and
-    # sweep_gate_timeouts are done. Consequences, precisely:
-    #   1. A step that spends longer than BOSS_API_DB_IDLE_IN_TRANSACTION_SECONDS (300) between
-    #      two statements — a model call, an HTTP probe, a subprocess — gets this session ended
-    #      by Postgres. The WHOLE project's tick rolls back: every step it claimed, ran and
-    #      recorded goes back to `ready`.
-    #   2. What those steps did OUTSIDE this transaction stays done. A build or panel is created
-    #      by its tool in its own transaction; a message, a PR, a model call happened. The next
-    #      tick claims the same steps and does it again — a duplicate wherever the effect is not
-    #      keyed (start_code_task dedupes builds by its same-work rule; typed decisions carry a
-    #      dedupe key; anything else does not).
-    #   3. While it runs, the run rows it locked are held to the end, so every writer to those
-    #      runs (an approval, a retry, the console) waits behind the slowest step, and the worker's
-    #      request is blocked for the whole sweep.
-    # The guard (apps/api/tests/test_the_tick_stays_inside_its_transaction_limit.py) pins what
-    # keeps this rare: every per-call wall the tick runs inline is under the idle limit with
-    # margin, and each project has its own transaction. NOT CHANGED HERE: commit-per-step means
-    # `tick` takes the engine and, per step, commits the claim, runs the step with no
-    # transaction open, and records the outcome in a fresh transaction keyed by the claim (a
-    # stale claim is reclaimed by its lease). That lives in workflow_capability_runner.tick,
-    # which another change is rewriting; it is the follow-up, not a one-line change.
+    # COMMITTED PER STEP (AP-P0, BOSSAPP-1051) — the former KNOWN HAZARD (pre-mortem
+    # 2026-10-13) was one transaction per project: `tick` claimed and executed up to
+    # MAX_STEPS_PER_TICK steps in savepoints of it, so a step idle past
+    # BOSS_API_DB_IDLE_IN_TRANSACTION_SECONDS (300) got the session ended and rolled back EVERY
+    # step of the project; each went back to `ready` and ran again, repeating any unkeyed side
+    # effect (a message, a PR). `tick_per_step` gives every run's step — the claim, the
+    # execution and the recorded outcome — a transaction of its own, committed before the next
+    # run is touched: a step that dies rolls back alone, its siblings stay done and are never
+    # re-run. Gate timeouts are swept after, in their own transaction.
+    # Guard: apps/api/tests/test_the_tick_stays_inside_its_transaction_limit.py.
     for pid in projects:
         try:
+            result = workflow_capability_runner.tick_per_step(
+                engine, ctx, project_id=pid, worker_id=worker_id,
+                begin=lambda: begin(engine))
             with begin(engine) as connection:
-                result = workflow_capability_runner.tick(connection, ctx, project_id=pid,
-                                                         worker_id=worker_id)
                 # Same tick: a gate whose SLA has run out is as much "work that is ready" as a
                 # step waiting to execute, and running it on a separate schedule would mean two
                 # places to look when a workflow is not moving.
@@ -31971,6 +32017,14 @@ app.include_router(build_agents_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
     actor_can=project_actor_can,
+))
+# boss.agent/v1: versioned agent specs — create, save, publish, roll back, diff, YAML in/out.
+from .routers.agent_specs import build_agent_specs_router
+
+app.include_router(build_agent_specs_router(
+    engine=engine,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
 ))
 # KG P6b: connect a bank's own agent — register/list/get/test/suspend/remove (routers/external_agents.py).
 from .routers.external_agents import build_external_agents_router
