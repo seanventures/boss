@@ -380,6 +380,23 @@ def prune_tables(engine: Any) -> dict[str, int]:
         out["activity_log"] = int((got or {}).get("deleted") or 0) if isinstance(got, dict) else 0
     except Exception:  # noqa: BLE001
         out["activity_log"] = 0
+    # The run ledger (on by default since AP-P0): monthly partitions made ahead and dropped
+    # past the window, never a row rewritten.
+    try:
+        from .ledger_retention import prune as _prune_ledger
+        with engine.begin() as c:
+            got = _prune_ledger(c)
+        out["run_events_partitions"] = len(got.get("dropped") or [])
+    except Exception:  # noqa: BLE001
+        out["run_events_partitions"] = 0
+    # The knowledge graph's archival flag: computed by the learning layer, persisted here.
+    try:
+        from .knowledge.service import KnowledgeService
+        with engine.begin() as c:
+            if c.execute(text("SELECT to_regclass('kg_fact_stats')")).scalar() is not None:
+                out["kg_facts_archived"] = int(KnowledgeService().archive_sweep(c)["archived"])
+    except Exception:  # noqa: BLE001
+        out["kg_facts_archived"] = 0
     for table, stmt in statements.items():
         try:
             with engine.begin() as c:

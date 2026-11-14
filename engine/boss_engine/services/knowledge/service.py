@@ -248,6 +248,43 @@ class KnowledgeService:
             connection, project_id=project_id, run_id=run_id, success=success
         )
 
+    def archive_sweep(
+        self, connection: Connection, *, project_id: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, int]:
+        """Persist the archival the learning layer computes (AP-P0, AGENT_PLATFORM.md §2.9).
+
+        `learning.apply_learning` judges a fact archived when it has gone unused for 180 days
+        at low weight, but nothing ever called `store.set_archived`, so `kg_fact_stats.archived`
+        stayed FALSE for every fact. This writes the flag (and the decayed weight) whenever the
+        computed state differs from the stored one -- both ways, so a fact used again is
+        un-archived. Run hourly by the resource reaper."""
+        now = now or datetime.now(timezone.utc)
+        rows = connection.execute(
+            text(
+                """
+                SELECT s.fact_id, s.project_id, s.success_count, s.failure_count,
+                       s.last_used_at, s.archived, n.trust_tier, n.weight
+                FROM kg_fact_stats s
+                JOIN kg_nodes n ON n.id = s.fact_id AND n.project_id = s.project_id
+                WHERE CAST(:p AS TEXT) IS NULL OR s.project_id = :p
+                """
+            ),
+            {"p": project_id},
+        ).mappings().all()
+        changed = archived = 0
+        for row in rows:
+            learned = apply_learning(dict(row), now=now)
+            if bool(learned["archived"]) == bool(row["archived"]):
+                continue
+            self.store.set_archived(
+                connection, project_id=row["project_id"], fact_id=row["fact_id"],
+                archived=bool(learned["archived"]), weight=float(learned["weight"]),
+            )
+            changed += 1
+            archived += int(bool(learned["archived"]))
+        return {"checked": len(rows), "changed": changed, "archived": archived}
+
     def propose_fact(
         self,
         connection: Connection,
