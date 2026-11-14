@@ -9134,6 +9134,31 @@ ALTER TABLE identity_webauthn_credentials ADD COLUMN IF NOT EXISTS counter_regre
 -- `bootstrap.claimed` impossible even if a code path forgets the lock.
 CREATE UNIQUE INDEX IF NOT EXISTS identity_one_claim_per_org ON identity_security_events (org_id)
   WHERE event_type = 'bootstrap.claimed';
+-- OKTA AS A FIRST-CLASS SSO PROVIDER (BOSSAPP-1048). Every relaxation is per provider and OFF:
+--   link_verified_domain_accounts  an existing person with the same VERIFIED email, in one of the
+--                                  provider's domains, is linked on first sign-in (audited);
+--   allow_idp_initiated            SAML: an unsolicited (IdP-initiated) Response is accepted
+--                                  (signed, audience-checked, assertion id spent once);
+--   scim_adopt_existing_by_domain  SCIM may manage (and so deprovision) an existing person whose
+--                                  verified email is in the provider's domains.
+ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS link_verified_domain_accounts BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS allow_idp_initiated BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS scim_adopt_existing_by_domain BOOLEAN NOT NULL DEFAULT false;
+-- SCIM's externalId for a person (the IdP's own id for them) and the name parts Okta pushes.
+ALTER TABLE identity_users ADD COLUMN IF NOT EXISTS scim_external_id TEXT;
+ALTER TABLE identity_users ADD COLUMN IF NOT EXISTS given_name TEXT;
+ALTER TABLE identity_users ADD COLUMN IF NOT EXISTS family_name TEXT;
+-- The SCIM connection (sys_scim_<provider>) that ADOPTED an existing person (scim_adopt_existing_by_domain).
+ALTER TABLE identity_users ADD COLUMN IF NOT EXISTS scim_adopted_by TEXT;
+-- An SSO session remembers which provider signed it in, so sign-out can end the IdP session too
+-- (RP-initiated logout: the id_token hint, SEALED under a key derived from the session token, so a
+-- database dump cannot read it) and an IdP's back-channel logout can find it (subject, sid).
+ALTER TABLE identity_sessions ADD COLUMN IF NOT EXISTS sso_provider_id TEXT;
+ALTER TABLE identity_sessions ADD COLUMN IF NOT EXISTS sso_subject TEXT;
+ALTER TABLE identity_sessions ADD COLUMN IF NOT EXISTS sso_sid TEXT;
+ALTER TABLE identity_sessions ADD COLUMN IF NOT EXISTS sso_id_token_sealed BYTEA;
+CREATE INDEX IF NOT EXISTS identity_sessions_sso ON identity_sessions (sso_provider_id, sso_subject)
+  WHERE sso_provider_id IS NOT NULL AND revoked_at IS NULL;
 -- ================================ end BOSS IDENTITY ===============================================
 
 -- ============================================================================================

@@ -12,7 +12,7 @@ export type ProviderKind = "google" | "microsoft" | "okta" | "keycloak" | "githu
 export const KINDS: { kind: ProviderKind; label: string; tip: string }[] = [
   { kind: "google", label: "Google", tip: "Google Workspace accounts" },
   { kind: "microsoft", label: "Microsoft", tip: "Microsoft Entra ID (Azure AD): needs your tenant id" },
-  { kind: "okta", label: "Okta", tip: "Your Okta org's sign-in URL" },
+  { kind: "okta", label: "Okta", tip: "Your Okta org URL, or an authorization server" },
   { kind: "keycloak", label: "Keycloak", tip: "A Keycloak realm's URL" },
   { kind: "github", label: "GitHub", tip: "GitHub accounts (an OAuth app)" },
   { kind: "saml", label: "SAML", tip: "Any SAML 2.0 identity provider" },
@@ -38,6 +38,12 @@ export type ProviderForm = {
   /** A new signing certificate (PEM). Blank on edit keeps the stored ones. */
   saml_certificate: string;
   saml_sp_entity_id: string;
+  /** Link an existing person with the same verified email in `domains` (off by default). */
+  link_verified: boolean;
+  /** SAML: accept sign-ins the IdP starts (a dashboard tile; off by default). */
+  idp_initiated: boolean;
+  /** SCIM may manage, and deprovision, people BOSS already has in `domains` (off by default). */
+  scim_adopt: boolean;
 };
 
 export function kindOf(p: Pick<Provider, "protocol" | "preset">): ProviderKind {
@@ -60,12 +66,37 @@ const DEFAULT_NAME: Record<ProviderKind, string> = {
   google: "Google", microsoft: "Microsoft", okta: "Okta", keycloak: "Keycloak", github: "GitHub", saml: "Company SSO", generic: "Company SSO",
 };
 
+/**
+ * OKTA'S DEFAULTS (identity_sso.py _preset_defaults, sso_oidc.okta_default_scopes): the org
+ * authorization server sends groups for the `groups` scope; a custom one (/oauth2/{id}) refuses an
+ * unknown scope, so it asks for none and the admin adds a `groups` claim there instead.
+ */
+export function oktaScopes(issuer: string): string {
+  return /^https:\/\/[^/]+\/oauth2\/[A-Za-z0-9]+\/?$/.test(issuer.trim()) ? "openid email profile" : "openid email profile groups";
+}
+
 export function emptyForm(kind: ProviderKind): ProviderForm {
   return {
     kind, name: DEFAULT_NAME[kind], issuer: "", tenant: "", client_id: "", client_secret: "", client_auth: "client_secret",
-    scopes: protocolOf(kind) === "oidc" ? "openid email profile" : "", domains: "", jit: false, trust_mfa: false, enforce_sso: false,
-    groups_claim: "", saml_sso_url: "", saml_certificate: "", saml_sp_entity_id: "",
+    scopes: kind === "okta" ? oktaScopes("") : protocolOf(kind) === "oidc" ? "openid email profile" : "", domains: "", jit: false, trust_mfa: false, enforce_sso: false,
+    groups_claim: kind === "okta" ? "groups" : "", saml_sso_url: "", saml_certificate: "", saml_sp_entity_id: "",
+    link_verified: false, idp_initiated: false, scim_adopt: false,
   };
+}
+
+/** The issuer as typed, and Okta's scopes following it while the admin has not changed them. */
+export function withIssuer(f: ProviderForm, issuer: string): ProviderForm {
+  if (f.kind !== "okta" || f.scopes !== oktaScopes(f.issuer)) return { ...f, issuer };
+  return { ...f, issuer, scopes: oktaScopes(issuer) };
+}
+
+/** Okta's issuer, checked the way the API checks it ("" when fine). */
+export function oktaIssuerProblem(issuer: string): string {
+  const v = issuer.trim();
+  if (!v) return "";
+  if (/^https:\/\/[^/.]+-admin\./i.test(v)) return "Use your Okta URL without -admin";
+  if (!/^https:\/\/[^/?#]+(\/oauth2\/[A-Za-z0-9]+)?\/?$/.test(v)) return "Use https://you.okta.com or …/oauth2/default";
+  return "";
 }
 
 export function formOf(p: ProviderDetail): ProviderForm {
@@ -74,6 +105,8 @@ export function formOf(p: ProviderDetail): ProviderForm {
     client_auth: p.client_auth ?? "client_secret", scopes: p.scopes.join(" "), domains: p.domains.join(", "),
     jit: p.jit_mode === "domain", trust_mfa: p.trust_idp_mfa, enforce_sso: p.enforce_sso, groups_claim: p.groups_claim ?? "",
     saml_sso_url: p.saml_sso_url ?? "", saml_certificate: "", saml_sp_entity_id: p.saml_sp_entity_id ?? "",
+    link_verified: p.link_verified_domain_accounts === true, idp_initiated: p.allow_idp_initiated === true,
+    scim_adopt: p.scim_adopt_existing_by_domain === true,
   };
 }
 
@@ -86,6 +119,7 @@ export function missing(f: ProviderForm, editing = false): string {
   if (!editing && f.kind === "microsoft" && !f.tenant.trim()) return "Add your tenant id";
   if (!editing && needsIssuer(f.kind) && !/^https?:\/\/\S+$/.test(f.issuer.trim()) && f.kind !== "saml") return "Add the issuer URL";
   if (!editing && f.kind === "saml" && !f.issuer.trim()) return "Add the IdP entity ID";
+  if (!editing && f.kind === "okta" && oktaIssuerProblem(f.issuer)) return oktaIssuerProblem(f.issuer);
   if (f.kind === "saml") {
     if (!/^https:\/\/\S+$/.test(f.saml_sso_url.trim())) return "Add the https sign-in URL";
     if (!editing && !f.saml_certificate.trim()) return "Paste the signing certificate";
@@ -94,6 +128,7 @@ export function missing(f: ProviderForm, editing = false): string {
     if (!editing && f.client_auth === "client_secret" && !f.client_secret) return "Add the client secret";
   }
   if (f.enforce_sso && !domainList(f.domains).length) return "Requiring SSO needs a domain";
+  if ((f.link_verified || f.scim_adopt) && !domainList(f.domains).length) return "Linking existing people needs a domain";
   return "";
 }
 
@@ -117,6 +152,10 @@ export function createBody(f: ProviderForm, reservedId?: string | null): Record<
     domains: domainList(f.domains), jit_mode: f.jit ? "domain" : "off", trust_idp_mfa: f.trust_mfa, enforce_sso: f.enforce_sso,
   };
   if (f.groups_claim.trim()) body.groups_claim = f.groups_claim.trim();
+  // The opt-ins are sent only when on, so an older API never sees the fields.
+  if (f.link_verified) body.link_verified_domain_accounts = true;
+  if (f.scim_adopt) body.scim_adopt_existing_by_domain = true;
+  if (f.idp_initiated && protocol === "saml") body.allow_idp_initiated = true;
   if (needsIssuer(f.kind)) body.issuer = f.issuer.trim();
   if (f.kind === "microsoft") body.tenant = f.tenant.trim();
   if (protocol === "saml") {
@@ -144,6 +183,9 @@ export function patchBody(p: ProviderDetail, f: ProviderForm): Record<string, un
   if (f.trust_mfa !== was.trust_mfa) out.trust_idp_mfa = f.trust_mfa;
   if (f.enforce_sso !== was.enforce_sso) out.enforce_sso = f.enforce_sso;
   if (f.groups_claim.trim() !== was.groups_claim) out.groups_claim = f.groups_claim.trim();
+  if (f.link_verified !== was.link_verified) out.link_verified_domain_accounts = f.link_verified;
+  if (f.scim_adopt !== was.scim_adopt) out.scim_adopt_existing_by_domain = f.scim_adopt;
+  if (p.protocol === "saml" && f.idp_initiated !== was.idp_initiated) out.allow_idp_initiated = f.idp_initiated;
   if (p.protocol === "saml") {
     if (f.saml_sso_url.trim() !== was.saml_sso_url) out.saml_sso_url = f.saml_sso_url.trim();
     if (f.saml_certificate.trim()) out.saml_certificates = [f.saml_certificate.trim()];
@@ -163,6 +205,8 @@ export function providerRefusal(code: string, detail: string | null): string {
   if (code === "invalid_provider") {
     const d = (detail ?? "").toLowerCase();
     if (d.includes("tenant")) return "Add your Microsoft tenant id";
+    if (d.includes("-admin")) return "Use your Okta URL without -admin";
+    if (d.includes("okta")) return "Use https://you.okta.com or …/oauth2/default";
     if (d.includes("saml")) return "SAML needs an https sign-in URL and a certificate";
     if (d.includes("issuer")) return "Check the issuer URL";
     if (d.includes("group")) return "A mapped group no longer exists";
@@ -186,8 +230,11 @@ export function testFailureWords(code: string | null | undefined): string {
   }
 }
 
+/** OIDC kinds whose app registration also takes a sign-in tile, sign-out and back-channel URL. */
+const FULL_OIDC = new Set<string>(["okta", "keycloak", "generic"]);
+
 /** Where the admin's IdP sends people back, and what it calls BOSS. Null without a public URL. */
-export function idpUrls(origin: string | null | undefined, p: { id: string | null; protocol: Provider["protocol"]; saml_sp_entity_id?: string | null; saved?: boolean }):
+export function idpUrls(origin: string | null | undefined, p: { id: string | null; protocol: Provider["protocol"]; saml_sp_entity_id?: string | null; saved?: boolean; kind?: string }):
   { label: string; value: string; tip: string }[] | null {
   if (!origin) return null;
   const o = origin.replace(/\/+$/, "");
@@ -199,5 +246,14 @@ export function idpUrls(origin: string | null | undefined, p: { id: string | nul
     ];
   }
   if (!p.id) return null;
-  return [{ label: "Redirect URL", value: `${o}/v1/auth/sso/${encodeURIComponent(p.id)}/callback`, tip: "Paste into your IdP's allowed redirect URLs" }];
+  const base = `${o}/v1/auth/sso/${encodeURIComponent(p.id)}`;
+  const urls = [{ label: "Redirect URL", value: `${base}/callback`, tip: "Paste into your IdP's allowed redirect URLs" }];
+  if (p.protocol === "oidc" && p.kind && FULL_OIDC.has(p.kind)) {
+    urls.push(
+      { label: "Initiate login URI", value: `${base}/start`, tip: "Lets the IdP's dashboard tile start a sign-in" },
+      { label: "Sign-out redirect URI", value: `${o}/login`, tip: "Where the IdP returns people after signing out" },
+      { label: "Back-channel logout URI", value: `${base}/backchannel-logout`, tip: "The IdP ends BOSS sessions here when people sign out" },
+    );
+  }
+  return urls;
 }

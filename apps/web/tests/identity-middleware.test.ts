@@ -178,3 +178,27 @@ describe("the content security policy (A10)", () => {
     expect(contentSecurityPolicy("abc", true)).toContain("unsafe-eval");
   });
 });
+
+describe("an IdP's back-channel logout (BOSSAPP-1048)", () => {
+  const path = "/v1/auth/sso/idp_abcdefghijklmnopqrstuvwxyz/backchannel-logout";
+  it("a machine POST to exactly that path reaches the API, speaking for nobody", async () => {
+    const r = await middleware(remote(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" } }));
+    expect(r.status).toBe(200);
+    expect(r.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it.each([
+    ["a browser's cross-site form", { origin: "https://evil.test", "sec-fetch-site": "cross-site" }],
+    ["a request with a cookie", { cookie: SESSION }],
+    ["a no-cors fetch", { "sec-fetch-mode": "no-cors" }],
+  ])("%s is refused", async (_what, headers) => {
+    const r = await middleware(remote(path, { method: "POST", headers: headers as Record<string, string> }));
+    expect(r.status).not.toBe(200);
+  });
+
+  it("no other path or method rides it", async () => {
+    expect((await middleware(remote("/v1/auth/sso/idp_abc/backchannel-logout/x", { method: "POST" }))).status).toBe(401);
+    expect((await middleware(remote("/v1/identity/me", { method: "POST" }))).status).toBe(401);
+    expect((await middleware(remote(path, { method: "GET" }))).status).toBe(401);
+  });
+});

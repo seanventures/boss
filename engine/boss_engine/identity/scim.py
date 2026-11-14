@@ -8,6 +8,14 @@
     who has signed in before; otherwise back to pending).
   - Groups land read-only in BOSS (`source=scim`). SCIM can NEVER assign access roles: a request
     carrying `roles`/`entitlements` is refused (400), never silently ignored.
+  - A pushed `password` (Okta's "Sync password") is IGNORED, never stored: BOSS people sign in
+    through the IdP. No 400 (Okta would stop provisioning); a `scim.password_ignored` event says so.
+  - A person BOSS already had is SCIM's to change only with the provider's opt-in
+    `scim_adopt_existing_by_domain` (off by default; BOSSAPP-1048): their email is verified and in
+    the provider's `domains`, and they are not an Owner or Admin. The first such write is a
+    `scim.user.adopted` event; from then on SCIM may update and deprovision them and push them
+    into groups, like the people it created.
+  - Discovery: /ServiceProviderConfig, /Schemas and /ResourceTypes describe exactly this subset.
   - Nothing is ever hard-deleted: DELETE of a user disables; DELETE of a group removes the group,
     its memberships and the role bindings that pointed at it (a binding to nothing grants nothing).
 """
@@ -28,7 +36,9 @@ GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group"
 LIST_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
 ERROR_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:Error"
 PATCH_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
-FORBIDDEN_ATTRIBUTES = frozenset({"roles", "entitlements", "x509certificates", "password"})
+FORBIDDEN_ATTRIBUTES = frozenset({"roles", "entitlements", "x509certificates"})
+#: Accepted and dropped (never stored, never a 400): BOSS people sign in through the IdP.
+IGNORED_ATTRIBUTES = frozenset({"password"})
 MAX_COUNT = 200
 
 
@@ -77,6 +87,19 @@ def _refuse_role_attributes(payload: dict[str, Any]) -> None:
                             "invalidValue")
 
 
+def _drop_ignored(db: Any, ctx: AuthContext, payload: dict[str, Any], target: Optional[str] = None) -> dict[str, Any]:
+    """The payload without a pushed password; the event records THAT one was ignored, never it."""
+    dropped = [k for k in payload if k.lower() in IGNORED_ATTRIBUTES]
+    if not dropped:
+        return payload
+    import logging
+
+    logging.getLogger("boss.identity.scim").info("scim: ignored a pushed password (BOSS stores none)")
+    emit(db, org_id=ctx.principal.org_id, event_type="scim.password_ignored", outcome=Outcome.INFO, ctx=ctx,
+         target_type="user" if target else None, target_id=target, details={"attribute": "password"})
+    return {k: v for k, v in payload.items() if k.lower() not in IGNORED_ATTRIBUTES}
+
+
 def _email_of(payload: dict[str, Any]) -> str:
     emails = payload.get("emails") or []
     if isinstance(emails, list):
@@ -120,30 +143,80 @@ def provisioning_principal(provider_id: str) -> str:
 PROTECTED_ROLES = frozenset({"owner", "admin"})
 
 
+def provider_of(db: Any, ctx: AuthContext) -> Any:
+    """The identity provider whose SCIM connection this caller is (sys_scim_<x> ↔ idp_<x>)."""
+    from .sso_oidc import load_provider
+
+    pid = ctx.principal.id
+    if not pid.startswith("sys_scim_"):
+        return None
+    provider = load_provider(db, "idp_" + pid[len("sys_scim_"):], active_only=False)
+    return provider if provider and provider.org_id == ctx.principal.org_id else None
+
+
+def _adoptable(db: Any, ctx: AuthContext, user: users.UserRow) -> bool:
+    """scim_adopt_existing_by_domain (off by default): a VERIFIED email in a domain the admin
+    listed on this connection's provider. Owners and Admins are checked by the caller."""
+    provider = provider_of(db, ctx)
+    if provider is None or not provider.scim_adopt_existing_by_domain or user.email_verified_at is None:
+        return False
+    domain = user.email.rsplit("@", 1)[1].lower() if "@" in user.email else ""
+    return bool(domain) and domain in {d.lower().lstrip("@") for d in (provider.domains or ())}
+
+
 def _writable_user(db: Any, ctx: AuthContext, user_id: str) -> users.UserRow:
-    """The person a SCIM WRITE may change (M2): one THIS provisioning principal created, and never
-    an Owner or Admin. Anyone else — people invited in BOSS, the claimant, another provider's —
-    is refused, so a SCIM key cannot rewrite an Owner's email and reset their password."""
+    """The person a SCIM WRITE may change (M2): one THIS provisioning principal created (or, with
+    the provider's opt-in, adopted by verified domain), and never an Owner or Admin. Anyone else —
+    people invited in BOSS, the claimant, another provider's — is refused, so a SCIM key cannot
+    rewrite an Owner's email and reset their password."""
     user = _user_row(db, ctx.principal.org_id, user_id)
     if user is None:
         raise ScimError(404, "not found")
     created_by = db.execute(text("SELECT created_by FROM identity_principals WHERE id = :id"),
                             {"id": user.principal_id}).scalar()
-    if created_by != ctx.principal.id:
+    adopting = created_by != ctx.principal.id and _adoptable(db, ctx, user)
+    if created_by != ctx.principal.id and not adopting:
         raise ScimError(403, "this person was not provisioned by this SCIM connection; change them in BOSS")
     if PROTECTED_ROLES.intersection(users.role_keys(db, user.principal_id)):
         raise ScimError(403, "SCIM cannot change an Owner or an Admin; change them in BOSS")
+    if adopting:
+        adopted = db.execute(text("UPDATE identity_users SET scim_adopted_by = :by WHERE principal_id = :p "
+                                  "AND scim_adopted_by IS DISTINCT FROM :by"),
+                             {"by": ctx.principal.id, "p": user.principal_id}).rowcount
+        if adopted:
+            emit(db, org_id=ctx.principal.org_id, event_type="scim.user.adopted", outcome=Outcome.SUCCESS,
+                 ctx=ctx, target_type="user", target_id=user.principal_id,
+                 details={"rule": "scim_adopt_existing_by_domain"})
     return user
 
 
-def user_resource(user: users.UserRow, *, base: str = "") -> dict[str, Any]:
-    return {
+def user_resource(user: users.UserRow, *, base: str = "", given: Optional[str] = None,
+                  family: Optional[str] = None, external_id: Optional[str] = None) -> dict[str, Any]:
+    name: dict[str, Any] = {"formatted": user.display_name}
+    if given:
+        name["givenName"] = given
+    if family:
+        name["familyName"] = family
+    out = {
         "schemas": [USER_SCHEMA], "id": user.principal_id, "userName": user.email,
-        "displayName": user.display_name, "name": {"formatted": user.display_name},
-        "emails": [{"value": user.email, "primary": True}],
+        "displayName": user.display_name, "name": name,
+        "emails": [{"value": user.email, "primary": True, "type": "work"}],
         "active": user.status in ("active", "pending"),
         "meta": {"resourceType": "User", "location": f"{base}/scim/v2/Users/{user.principal_id}"},
     }
+    if external_id:
+        out["externalId"] = external_id
+    return out
+
+
+def _resource(db: Any, user: Optional[users.UserRow]) -> dict[str, Any]:
+    """The User resource with the SCIM-only fields (name parts, externalId) BOSS stores."""
+    if user is None:
+        raise ScimError(404, "not found")
+    r = db.execute(text("SELECT given_name, family_name, scim_external_id FROM identity_users "
+                        "WHERE principal_id = :p"), {"p": user.principal_id}).first()
+    return user_resource(user, given=r.given_name if r else None, family=r.family_name if r else None,
+                         external_id=r.scim_external_id if r else None)
 
 
 def list_users(db: Any, ctx: AuthContext, *, filter_: Optional[str], start: int, count: int
@@ -153,15 +226,17 @@ def list_users(db: Any, ctx: AuthContext, *, filter_: Optional[str], start: int,
            "WHERE p.org_id = :o AND p.kind = 'user' AND NOT p.network_bound")
     params: dict[str, Any] = {"o": org}
     if filter_:
-        attr, value = _parse_eq_filter(filter_, {"username", "emails.value", "emails"})
-        sql += " AND lower(u.email) = lower(:v)"
+        attr, value = _parse_eq_filter(filter_, {"username", "emails.value", "emails", "externalid"})
+        if attr == "externalid":
+            sql += " AND u.scim_external_id = :v"
+        else:
+            sql += " AND lower(u.email) = lower(:v)"
         params["v"] = value
-        del attr
     ids_ = [r[0] for r in db.execute(text(sql + " ORDER BY p.created_at, p.id"), params)]
     start = max(1, start)
     count = max(0, min(count, MAX_COUNT))
     page = ids_[start - 1:start - 1 + count]
-    resources = [user_resource(u) for u in (users.by_id(db, i) for i in page) if u]
+    resources = [_resource(db, u) for u in (users.by_id(db, i) for i in page) if u]
     return {"schemas": [LIST_SCHEMA], "totalResults": len(ids_), "startIndex": start,
             "itemsPerPage": len(resources), "Resources": resources}
 
@@ -178,26 +253,52 @@ def _parse_eq_filter(filter_: str, allowed: set[str]) -> tuple[str, str]:
 
 def create_user(db: Any, ctx: AuthContext, payload: dict[str, Any]) -> dict[str, Any]:
     _refuse_role_attributes(payload)
+    payload = _drop_ignored(db, ctx, payload)
     email = _email_of(payload)
     if "@" not in email or len(email) > 320:
         raise ScimError(400, "userName or a primary email address is required", "invalidValue")
-    if users.by_email(db, email):
+    existing = users.by_email(db, email)
+    if existing is not None:
+        if existing.org_id == ctx.principal.org_id and not existing.network_bound and _adoptable(db, ctx, existing):
+            # Opt-in adoption: the person BOSS already had becomes this connection's to manage
+            # (an Owner or Admin never: _writable_user refuses them with words).
+            user = _writable_user(db, ctx, existing.principal_id)
+            _apply_user_fields(db, ctx, user, payload)
+            return _resource(db, users.by_id(db, user.principal_id))
         raise ScimError(409, "a person with this email already exists", "uniqueness")
     pid = users.create_user(db, org_id=ctx.principal.org_id, email=email,
                             display_name=_display_name(payload, email), password_hash=None,
                             status="pending", created_by=ctx.principal.id)
+    _store_scim_fields(db, pid, payload)
     emit(db, org_id=ctx.principal.org_id, event_type="scim.user.created", outcome=Outcome.SUCCESS, ctx=ctx,
          target_type="user", target_id=pid)
     if payload.get("active") is False:
         _set_active(db, ctx, users.by_id(db, pid), False)
-    return user_resource(users.by_id(db, pid))
+    return _resource(db, users.by_id(db, pid))
+
+
+def _store_scim_fields(db: Any, principal_id: str, payload: dict[str, Any]) -> list[str]:
+    """externalId and the name parts, as given (only the keys the payload carries)."""
+    sets: dict[str, Any] = {}
+    if "externalId" in payload:
+        value = payload.get("externalId")
+        sets["scim_external_id"] = str(value)[:300] if value not in (None, "") else None
+    name = payload.get("name")
+    if isinstance(name, dict):
+        for key, column in (("givenName", "given_name"), ("familyName", "family_name")):
+            if key in name:
+                sets[column] = str(name[key])[:200] if name[key] not in (None, "") else None
+    for column, value in sets.items():     # columns come from the fixed lists above only
+        db.execute(text(f"UPDATE identity_users SET {column} = :v WHERE principal_id = :p"),
+                   {"v": value, "p": principal_id})
+    return sorted(sets)
 
 
 def get_user(db: Any, ctx: AuthContext, user_id: str) -> dict[str, Any]:
     user = _user_row(db, ctx.principal.org_id, user_id)
     if user is None:
         raise ScimError(404, "not found")
-    return user_resource(user)
+    return _resource(db, user)
 
 
 def _set_active(db: Any, ctx: AuthContext, user: Optional[users.UserRow], active: bool) -> None:
@@ -252,7 +353,14 @@ def _bump(db: Any, org: str) -> None:
 
 
 def _apply_user_fields(db: Any, ctx: AuthContext, user: users.UserRow, payload: dict[str, Any]) -> None:
-    changed = []
+    changed: list[str] = []
+    if isinstance(payload.get("name"), dict) and not payload.get("displayName") and not payload["name"].get("formatted"):
+        # A partial name (one part patched) keeps the other stored part for the display name.
+        r = db.execute(text("SELECT given_name, family_name FROM identity_users WHERE principal_id = :p"),
+                       {"p": user.principal_id}).first()
+        stored = {"givenName": r.given_name, "familyName": r.family_name} if r else {}
+        payload = {**payload, "name": {**{k: v for k, v in stored.items() if v}, **payload["name"]}}
+    changed += _store_scim_fields(db, user.principal_id, payload)
     name = _display_name(payload, user.display_name) if ("displayName" in payload or "name" in payload) else None
     if name and name != user.display_name:
         db.execute(text("UPDATE identity_principals SET display_name = :n, updated_at = now() WHERE id = :id"),
@@ -280,11 +388,15 @@ def _apply_user_fields(db: Any, ctx: AuthContext, user: users.UserRow, payload: 
 def replace_user(db: Any, ctx: AuthContext, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     _refuse_role_attributes(payload)
     user = _writable_user(db, ctx, user_id)
+    payload = _drop_ignored(db, ctx, payload, user.principal_id)
     _apply_user_fields(db, ctx, user, payload)
-    return user_resource(users.by_id(db, user_id))
+    return _resource(db, users.by_id(db, user_id))
 
 
 def patch_user(db: Any, ctx: AuthContext, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """PATCH replace / add, with or without a path (Okta's and Entra's shapes): `active`,
+    `userName`, `displayName`, `name` or `name.givenName` / `name.familyName`, `emails` or
+    `emails[type eq "work"].value`, `externalId`. A pushed password is ignored."""
     user = _writable_user(db, ctx, user_id)
     fields: dict[str, Any] = {}
     for op in _operations(payload):
@@ -293,25 +405,53 @@ def patch_user(db: Any, ctx: AuthContext, user_id: str, payload: dict[str, Any])
             raise ScimError(400, f"op {kind!r} is not supported on users", "invalidSyntax")
         path, value = op.get("path"), op.get("value")
         if path:
-            if path.split(".", 1)[0].split("[", 1)[0].lower() in FORBIDDEN_ATTRIBUTES:
+            if str(path).split(".", 1)[0].split("[", 1)[0].lower() in FORBIDDEN_ATTRIBUTES:
                 _refuse_role_attributes({path: value})
-            fields[_canonical_user_attr(path)] = value
+            _set_user_attr(fields, str(path), value)
         elif isinstance(value, dict):
             _refuse_role_attributes(value)
-            fields.update({_canonical_user_attr(k): v for k, v in value.items()})
+            for key, item in value.items():
+                _set_user_attr(fields, str(key), item)
         else:
             raise ScimError(400, "a patch op needs a path or an object value", "invalidSyntax")
     _refuse_role_attributes(fields)
+    fields = _drop_ignored(db, ctx, fields, user.principal_id)
     if "active" in fields and isinstance(fields["active"], str):
         fields["active"] = fields["active"].strip().lower() == "true"
     _apply_user_fields(db, ctx, user, fields)
-    return user_resource(users.by_id(db, user_id))
+    return _resource(db, users.by_id(db, user_id))
+
+
+def _set_user_attr(fields: dict[str, Any], path: str, value: Any) -> None:
+    """One patched attribute into the fields `_apply_user_fields` reads."""
+    if path.startswith(USER_SCHEMA + ":"):           # a fully qualified path
+        path = path[len(USER_SCHEMA) + 1:]
+    root, _, sub = path.partition(".")
+    key = root.split("[", 1)[0].lower()
+    if key == "name" and sub:
+        part = {"givenname": "givenName", "familyname": "familyName", "formatted": "formatted"}.get(sub.lower())
+        if part:
+            fields.setdefault("name", {})[part] = value
+        return
+    if key == "name" and isinstance(value, dict):
+        fields.setdefault("name", {}).update(value)
+        return
+    if key == "emails":
+        if isinstance(value, str):
+            fields["emails"] = [{"value": value, "primary": True}]
+        elif isinstance(value, list):
+            fields["emails"] = value
+        elif isinstance(value, dict) and value.get("value"):
+            fields["emails"] = [value]
+        return
+    fields[_canonical_user_attr(root)] = value
 
 
 def _canonical_user_attr(path: str) -> str:
     lowered = path.lower()
     return {"active": "active", "username": "userName", "displayname": "displayName",
-            "name": "name", "emails": "emails"}.get(lowered, path)
+            "name": "name", "emails": "emails", "externalid": "externalId",
+            "password": "password"}.get(lowered, path)
 
 
 def _operations(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -525,3 +665,79 @@ def delete_group(db: Any, ctx: AuthContext, group_id: str) -> None:
     emit(db, org_id=org, event_type="scim.group.deleted", outcome=Outcome.SUCCESS, ctx=ctx,
          target_type="group", target_id=group_id)
     _bump(db, org)
+
+
+# ---- discovery (RFC 7643 §5-§7; what Okta's SCIM test suite reads first) -------------------------
+
+SPC_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"
+RESOURCE_TYPE_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:ResourceType"
+SCHEMA_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Schema"
+
+
+def service_provider_config() -> dict[str, Any]:
+    """Exactly the subset served: PATCH yes; `eq` filters on userName / emails / externalId
+    (users) and displayName / externalId (groups); no bulk, sort, ETags or password change."""
+    return {
+        "schemas": [SPC_SCHEMA],
+        "documentationUri": "https://boss.sean.network/docs/SIGN_IN_SETUP/#okta",
+        "patch": {"supported": True},
+        "bulk": {"supported": False, "maxOperations": 0, "maxPayloadSize": 0},
+        "filter": {"supported": True, "maxResults": MAX_COUNT},
+        "changePassword": {"supported": False},
+        "sort": {"supported": False},
+        "etag": {"supported": False},
+        "authenticationSchemes": [{
+            "type": "oauthbearertoken", "name": "OAuth Bearer Token", "primary": True,
+            "description": "A BOSS SCIM key (boss_scim_…) from Identity › Sign-in & SSO › the provider › SCIM",
+        }],
+        "meta": {"resourceType": "ServiceProviderConfig", "location": "/scim/v2/ServiceProviderConfig"},
+    }
+
+
+def _attr(name: str, type_: str = "string", *, multi: bool = False, required: bool = False,
+          mutability: str = "readWrite", uniqueness: str = "none", sub: Optional[list] = None,
+          returned: str = "default") -> dict[str, Any]:
+    out: dict[str, Any] = {"name": name, "type": type_, "multiValued": multi, "required": required,
+                           "caseExact": False, "mutability": mutability, "returned": returned,
+                           "uniqueness": uniqueness}
+    if sub:
+        out["subAttributes"] = sub
+    return out
+
+
+def schemas() -> list[dict[str, Any]]:
+    user = {"schemas": [SCHEMA_SCHEMA], "id": USER_SCHEMA, "name": "User", "description": "A BOSS person",
+            "attributes": [
+                _attr("userName", required=True, uniqueness="server"),
+                _attr("name", "complex", sub=[_attr("formatted"), _attr("givenName"), _attr("familyName")]),
+                _attr("displayName"),
+                _attr("emails", "complex", multi=True, sub=[_attr("value"), _attr("type"), _attr("primary", "boolean")]),
+                _attr("active", "boolean"),
+                _attr("externalId"),
+                # Accepted and ignored: BOSS people sign in through the IdP.
+                _attr("password", mutability="writeOnly", returned="never"),
+            ],
+            "meta": {"resourceType": "Schema", "location": f"/scim/v2/Schemas/{USER_SCHEMA}"}}
+    group = {"schemas": [SCHEMA_SCHEMA], "id": GROUP_SCHEMA, "name": "Group", "description": "A BOSS group",
+             "attributes": [
+                 _attr("displayName", required=True),
+                 _attr("externalId"),
+                 _attr("members", "complex", multi=True, sub=[_attr("value", mutability="immutable"),
+                                                             _attr("display", mutability="readOnly")]),
+             ],
+             "meta": {"resourceType": "Schema", "location": f"/scim/v2/Schemas/{GROUP_SCHEMA}"}}
+    return [user, group]
+
+
+def resource_types() -> list[dict[str, Any]]:
+    return [
+        {"schemas": [RESOURCE_TYPE_SCHEMA], "id": "User", "name": "User", "endpoint": "/Users",
+         "schema": USER_SCHEMA, "meta": {"resourceType": "ResourceType", "location": "/scim/v2/ResourceTypes/User"}},
+        {"schemas": [RESOURCE_TYPE_SCHEMA], "id": "Group", "name": "Group", "endpoint": "/Groups",
+         "schema": GROUP_SCHEMA, "meta": {"resourceType": "ResourceType", "location": "/scim/v2/ResourceTypes/Group"}},
+    ]
+
+
+def listed(resources: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"schemas": [LIST_SCHEMA], "totalResults": len(resources), "startIndex": 1,
+            "itemsPerPage": len(resources), "Resources": resources}

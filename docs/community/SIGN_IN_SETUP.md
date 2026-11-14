@@ -108,13 +108,14 @@ Watch out: Use your Directory (tenant) ID, not "common": BOSS signs in one tenan
 #### Okta
 
 1. In the Okta Admin Console, go to Applications › Create App Integration › OIDC › Web Application.
-2. Set Sign-in redirect URI to the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`).
-3. Assign the people or groups who may sign in.
-4. Copy your Okta URL (the issuer), the Client ID and Client secret into BOSS, then Add.
+2. Set Sign-in redirect URI to the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`), plus the Sign-out redirect and Initiate login URIs (Login initiated by: Either Okta or App).
+3. On the Sign On tab, edit the Groups claim filter: groups, Matches regex .* (or narrower).
+4. Assign the people or groups who may sign in.
+5. Copy your Okta URL (the issuer), the Client ID and Client secret into BOSS, then Add.
 
 Copy back into BOSS: Issuer URL, Client ID, Client secret.
 
-Watch out: Only people assigned to the app can sign in.
+Watch out: The issuer is https://you.okta.com, never the -admin address; only assigned people can sign in.
 
 #### Keycloak
 

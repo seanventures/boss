@@ -67,6 +67,9 @@ class RequestFacts:
     #: This request's own origin (Host, or X-Forwarded-Host from a trusted proxy). Used ONLY to
     #: decide whether a Secure session cookie may be set before an origin is bound; never a link.
     request_origin: Optional[str] = None
+    #: An SSO sign-in's provider, subject, sid and id_token (sso_logout.federation_of): the session
+    #: `finish` issues remembers them for sign-out. Carries the id_token: never logged.
+    federation: Optional[dict[str, Any]] = field(default=None, repr=False)
 
 
 @dataclass
@@ -119,12 +122,23 @@ def _new_preauth() -> tuple[str, str]:
 def begin_mfa(db: Any, user: users.UserRow, facts: RequestFacts, *, first: str) -> Answer:
     """The pre-auth step: a challenge bound to a NEW pre-auth cookie. No session yet."""
     secret, cookie = _new_preauth()
+    payload: dict[str, Any] = {"first": first}
+    if facts.federation:
+        payload["federation"] = facts.federation       # sealed under the new pre-auth cookie
     create_challenge(db, kind="mfa", binding_secret=secret, ttl_seconds=MFA_CHALLENGE_TTL_SECONDS,
-                     principal_id=user.principal_id, payload={"first": first})
+                     principal_id=user.principal_id, payload=payload)
     f = users.factors(db, user.principal_id)
     methods = (["passkey"] if f.passkeys else []) + (["totp"] if f.totp else []) + (
         ["recovery"] if f.recovery_codes_remaining else [])
     return Answer(200, {"next": "mfa", "methods": methods, "who": who_of(user)}, cookies=[cookie])
+
+
+def _with_federation(facts: RequestFacts, payload: dict[str, Any]) -> RequestFacts:
+    """The MFA step's facts, carrying the SSO sign-in it completes (from the sealed challenge)."""
+    fed = payload.get("federation")
+    if isinstance(fed, dict):
+        facts.federation = fed
+    return facts
 
 
 def who_of(user: users.UserRow) -> dict[str, Any]:
@@ -159,6 +173,10 @@ def finish(db: Any, user: users.UserRow, facts: RequestFacts, *, methods: list[s
                             mfa_at=now if mfa else None, ip=facts.ip, user_agent=facts.user_agent,
                             device_id_hash=sha256_hex(device), replaces=replaces,
                             enrol_grant_until=grant)
+    if facts.federation:
+        from . import sso_logout
+
+        sso_logout.record(db, session_id=issued.session_id, token=issued.token, federation=facts.federation)
     users.mark_login(db, user.principal_id)
     ratelimit.reset("signin.account", user.email, db=db)
     for bucket, ident in _source_keys(user.email, facts):
@@ -651,7 +669,7 @@ def mfa_totp(db: Any, facts: RequestFacts, *, code: str) -> Answer:
         return Answer(401, {"error": "mfa_challenge_invalid"})
     emit(db, org_id=user.org_id, event_type="auth.mfa.succeeded", outcome=Outcome.SUCCESS,
          ctx=_ctx_for(user, facts), details={"method": "totp"})
-    return finish(db, user, facts, methods=[ch.payload["first"], "totp"], mfa=True)
+    return finish(db, user, _with_federation(facts, ch.payload), methods=[ch.payload["first"], "totp"], mfa=True)
 
 
 def mfa_recovery(db: Any, facts: RequestFacts, *, code: str) -> Answer:
@@ -677,7 +695,7 @@ def mfa_recovery(db: Any, facts: RequestFacts, *, code: str) -> Answer:
     notify(user.email, "A BOSS recovery code was used",
            "One of your BOSS recovery codes was just used to sign in. If this was not you, "
            "contact an administrator now.")
-    return finish(db, user, facts, methods=[ch.payload["first"], "recovery_code"], mfa=True,
+    return finish(db, user, _with_federation(facts, ch.payload), methods=[ch.payload["first"], "recovery_code"], mfa=True,
                   extra={"recovery_codes_remaining": remaining,
                          "must_regenerate_recovery_codes": remaining < recovery.FORCE_REGENERATE_BELOW})
 
@@ -767,7 +785,7 @@ def passkey_verify(db: Any, facts: RequestFacts, *, credential: Any, purpose: st
             return Answer(401, {"error": "mfa_challenge_invalid"})
         emit(db, org_id=user.org_id, event_type="auth.mfa.succeeded", outcome=Outcome.SUCCESS,
              ctx=ctx, details={"method": "passkey"})
-        return finish(db, user, facts, methods=[ch.payload["first"], "passkey"], mfa=True)
+        return finish(db, user, _with_federation(facts, ch.payload), methods=[ch.payload["first"], "passkey"], mfa=True)
     return step_up_finish(db, user, facts, method="passkey")
 
 
@@ -810,6 +828,10 @@ def step_up_finish(db: Any, user: users.UserRow, facts: RequestFacts, *, method:
                             methods=[*row.auth_methods, method], mfa_at=utcnow(), ip=facts.ip,
                             user_agent=facts.user_agent, device_id_hash=row.device_id_hash,
                             replaces=row.id, absolute_expires_at=row.absolute_expires_at)
+    from . import sso_logout
+
+    sso_logout.carry(db, old_session_id=row.id, old_token=facts.session, new_session_id=issued.session_id,
+                     new_token=issued.token)
     ctx = _ctx_for(user, facts, row.ref())
     emit(db, org_id=user.org_id, event_type="auth.step_up", outcome=Outcome.SUCCESS, ctx=ctx,
          details={"method": method})
@@ -822,15 +844,24 @@ def step_up_finish(db: Any, user: users.UserRow, facts: RequestFacts, *, method:
                   cookies=[sessions.set_cookie_header(SESSION_COOKIE, issued.token, max_age=max_age)])
 
 
-def logout(db: Any, facts: RequestFacts) -> Answer:
+def logout(db: Any, facts: RequestFacts, *, origin: Optional[str] = None) -> Answer:
+    """End the session the cookie names. An SSO session also answers `end_session_url`: the IdP's
+    sign-out (RP-initiated logout, with the id_token hint) that the console sends the browser to,
+    which comes back to `{origin}/login`."""
     row = sessions.lookup(db, facts.session)
+    body: dict[str, Any] = {"signed_out": True}
     if row is not None:
+        from . import sso_logout
+
+        url = sso_logout.logout_url(db, session_id=row.id, token=facts.session, origin=origin)
         sessions.revoke(db, row.id, by=row.principal_id, reason="logout")
         user = users.by_id(db, row.principal_id)
         if user:
             emit(db, org_id=user.org_id, event_type="auth.logout", outcome=Outcome.SUCCESS,
-                 ctx=_ctx_for(user, facts, row.ref()))
-    return Answer(200, {"signed_out": True}, cookies=[sessions.clear_cookie_header(SESSION_COOKIE)])
+                 ctx=_ctx_for(user, facts, row.ref()), details={"idp_logout": bool(url)})
+        if url:
+            body["end_session_url"] = url
+    return Answer(200, body, cookies=[sessions.clear_cookie_header(SESSION_COOKIE)])
 
 
 def recently_authenticated(row: sessions.SessionRow, *, seconds: int = 600) -> bool:

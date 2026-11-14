@@ -18,8 +18,19 @@ import { useDetailsDismiss } from "../../lib/details-dismiss";
 
 
 
+/**
+ * The IdP's own sign-out, when BOSS answered one (an SSO session: RP-initiated logout with the
+ * id_token hint, coming back to /login). An https URL only; anything else is ignored.
+ */
+export function idpSignOutUrl(body: unknown): string | null {
+  const url = body && typeof body === "object" ? (body as { end_session_url?: unknown }).end_session_url : null;
+  return typeof url === "string" && /^https:\/\/[^\s]+$/.test(url) ? url : null;
+}
+
 export async function signOut(): Promise<void> {
-  try { await idPost("/v1/auth/logout"); } catch { /* signed out either way */ }
+  let idp: string | null = null;
+  try { idp = idpSignOutUrl(await idPost("/v1/auth/logout")); } catch { /* signed out either way */ }
+  if (idp) { window.location.assign(idp); return; }
   window.location.assign("/login");
 }
 
