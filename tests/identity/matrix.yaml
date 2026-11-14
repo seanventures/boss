@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2116 operations.
+# 2120 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/oauth-authorization-server": ["public:oidc_provider_endpoint", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
@@ -43,6 +43,9 @@
 "GET /scim/v2/Groups/{group_id}": ["permit scim:provision @ org", "-"]
 "PATCH /scim/v2/Groups/{group_id}": ["permit scim:provision @ org", "-"]
 "PUT /scim/v2/Groups/{group_id}": ["permit scim:provision @ org", "-"]
+"GET /scim/v2/ResourceTypes": ["permit scim:provision @ org", "-"]
+"GET /scim/v2/Schemas": ["permit scim:provision @ org", "-"]
+"GET /scim/v2/ServiceProviderConfig": ["permit scim:provision @ org", "-"]
 "GET /scim/v2/Users": ["permit scim:provision @ org", "-"]
 "POST /scim/v2/Users": ["permit scim:provision @ org", "-"]
 "DELETE /scim/v2/Users/{user_id}": ["permit scim:provision @ org", "-"]
@@ -328,6 +331,7 @@
 "GET /v1/auth/setup/status": ["public:auth_endpoint", "OAPVU"]
 "POST /v1/auth/signup": ["public:auth_endpoint", "OAPVU"]
 "POST /v1/auth/signup/verify": ["public:auth_endpoint", "OAPVU"]
+"POST /v1/auth/sso/{provider_id}/backchannel-logout": ["public:idp_signed_logout_token", "OAPVU"]
 "GET /v1/auth/sso/{provider_id}/callback": ["public:oauth_state_bound_callback", "OAPVU"]
 "POST /v1/auth/sso/{provider_id}/callback": ["public:oauth_state_bound_callback", "OAPVU"]
 "GET /v1/auth/sso/{provider_id}/start": ["public:auth_endpoint", "OAPVU"]

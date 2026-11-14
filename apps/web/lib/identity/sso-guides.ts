@@ -59,12 +59,13 @@ export const GUIDES: Record<GuideKind, Guide> = {
     title: "Okta", anchor: "okta",
     steps: [
       { text: "In the Okta Admin Console, go to Applications › Create App Integration › OIDC › Web Application." },
-      { text: "Set Sign-in redirect URI to {redirect}." },
+      { text: "Set Sign-in redirect URI to {redirect}, plus the Sign-out redirect and Initiate login URIs (Login initiated by: Either Okta or App)." },
+      { text: "On the Sign On tab, edit the Groups claim filter: groups, Matches regex .* (or narrower)." },
       { text: "Assign the people or groups who may sign in." },
       { text: "Copy your Okta URL (the issuer), the Client ID and Client secret into BOSS, then Add." },
     ],
     copyBack: ["Issuer URL", "Client ID", "Client secret"],
-    gotcha: "Only people assigned to the app can sign in.",
+    gotcha: "The issuer is https://you.okta.com, never the -admin address; only assigned people can sign in.",
   },
   keycloak: {
     title: "Keycloak", anchor: "keycloak",

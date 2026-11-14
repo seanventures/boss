@@ -9,7 +9,12 @@ never sign in as the first one's people; issuers are also unique per org). In or
   4. the provider's JIT domain rule -> create the person with NO access roles, link;
   5. self sign-up on and the domain allowed -> create a self-signed-up person, no roles, link;
   otherwise refused: "Ask an admin to invite you." An email that already belongs to a BOSS account
-  is NEVER linked or signed in by email, whatever `email_verified` says (A61, A89, A90).
+  is NEVER linked or signed in by email, whatever `email_verified` says (A61, A89, A90) — with ONE
+  opt-in exception, per provider and off by default (BOSSAPP-1048): `link_verified_domain_accounts`
+  links an existing person when the IdP says the email is VERIFIED and its domain is one the admin
+  listed on the provider (`domains`: the provider is authoritative there). Every such link is an
+  `sso.link.auto` security event. The person's own second factor (or the provider's trusted MFA)
+  is still required after the link, as on every sign-in.
 """
 from __future__ import annotations
 
@@ -177,6 +182,8 @@ def resolve(db: Any, provider: Provider, ident: FederatedIdentity, facts: Reques
         # The subject is linked through ANOTHER provider with the same issuer: never this one's.
         _refuse(db, provider, facts, ident, "issuer_collision")
         return Answer(403, dict(NOT_INVITED))
+    if purpose == "reauth":
+        return _reauthenticate(db, provider, ident, facts, existing=existing, principal_id=link_principal)
     if purpose == "link":
         from . import sessions
 
@@ -229,6 +236,23 @@ def resolve(db: Any, provider: Provider, ident: FederatedIdentity, facts: Reques
         if user is None or user.status != "active":
             return Answer(401, {"error": "sso_failed"})
         return _sign_in(db, provider, ident, user, facts)
+    if holder is not None and may_auto_link(db, provider, ident, holder):
+        if holder.status == "disabled":
+            _refuse(db, provider, facts, ident, "disabled")
+            return Answer(403, {"error": "account_disabled", "message": "This account is disabled. Ask an admin."})
+        lid = link(db, principal_id=holder.principal_id, provider=provider, ident=ident)
+        emit(db, org_id=provider.org_id, event_type="sso.link.auto", outcome=Outcome.SUCCESS,
+             actor_principal_id=f"sso:{provider.id}", target_type="user", target_id=holder.principal_id,
+             ip=facts.ip, user_agent=facts.user_agent, request_id=facts.request_id,
+             details={"provider_id": provider.id, "issuer": ident.issuer, "identity": lid,
+                      "domain": _domain(email), "rule": "link_verified_domain_accounts"})
+        user = users.by_id(db, holder.principal_id)
+        if user is not None and user.status == "pending":
+            users.set_status(db, user.principal_id, "active", by=f"sso:{provider.id}", reason="first SSO sign-in (auto-linked)")
+            user = users.by_id(db, holder.principal_id)
+        if user is None or user.status != "active":
+            return Answer(401, {"error": "sso_failed"})
+        return _sign_in(db, provider, ident, user, facts)
     if holder is not None:
         _refuse(db, provider, facts, ident, "email_belongs_to_unlinked_account")
         return Answer(403, dict(NOT_INVITED))
@@ -262,9 +286,51 @@ def resolve(db: Any, provider: Provider, ident: FederatedIdentity, facts: Reques
     return _sign_in(db, provider, ident, user, facts)
 
 
+def _reauthenticate(db: Any, provider: Provider, ident: FederatedIdentity, facts: RequestFacts, *,
+                    existing: Optional[str], principal_id: Optional[str]) -> Answer:
+    """Step-up through the IdP (purpose=reauth: prompt=login, max_age=0, auth_time checked by the
+    protocol layer). Only the signed-in person's OWN identity at this provider, and only when the
+    provider is trusted for MFA and the IdP vouched for it: BOSS's step-up means fresh MFA."""
+    from . import sessions
+    from .signin import step_up_finish
+
+    row = sessions.lookup(db, facts.session)
+    if not principal_id or row is None or row.principal_id != principal_id or existing != principal_id:
+        _refuse(db, provider, facts, ident, "reauth_mismatch")
+        return Answer(401, {"error": "reauth_invalid"})
+    if not ident.mfa:
+        _refuse(db, provider, facts, ident, "reauth_without_idp_mfa")
+        return Answer(403, {"error": "idp_mfa_required"})
+    user = users.by_id(db, principal_id)
+    if user is None or user.status != "active":
+        return Answer(401, {"error": "sso_failed"})
+    return step_up_finish(db, user, facts, method=f"sso:{provider.id}")
+
+
+def may_auto_link(db: Any, provider: Provider, ident: FederatedIdentity, holder: users.UserRow) -> bool:
+    """`link_verified_domain_accounts` (off by default): the IdP's VERIFIED email, in a domain the
+    admin LISTED on this provider (never Google's consumer rule), names an existing person who has
+    no identity at this provider yet."""
+    if not provider.link_verified_domain_accounts or not ident.email_verified:
+        return False
+    domain = _domain(ident.email)
+    if not domain or domain not in {d.lower().lstrip("@") for d in (provider.domains or ())}:
+        return False
+    if holder.org_id != provider.org_id or holder.network_bound:
+        return False
+    if db.execute(text("SELECT 1 FROM identity_user_identities WHERE principal_id = :p AND provider_id = :pr"),
+                  {"p": holder.principal_id, "pr": provider.id}).first() is not None:
+        return False                 # already linked to another subject here: never a second
+    return True
+
+
 def _sign_in(db: Any, provider: Provider, ident: FederatedIdentity, user: users.UserRow,
              facts: RequestFacts) -> Answer:
+    from .sso_logout import federation_of
+
     sync_groups(db, principal_id=user.principal_id, provider=provider, ident=ident)
+    if provider.protocol == "oidc":
+        facts.federation = federation_of(provider.id, ident)
     emit(db, org_id=provider.org_id, event_type="sso.login", outcome=Outcome.SUCCESS,
          actor_principal_id=user.principal_id, actor_kind="user", ip=facts.ip,
          user_agent=facts.user_agent, request_id=facts.request_id,

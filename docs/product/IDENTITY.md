@@ -921,7 +921,7 @@ Writes to this log are **not best-effort**. A security event is written in the s
 | Credentials | `password.changed`, `password.reset_requested`, `password.reset_completed`, `mfa.enrolled`, `mfa.removed`, `recovery_codes.generated`, `recovery_code.used`, `passkey.added`, `passkey.removed`, `passkey.counter_regressed` |
 | Admin | `user.invited`, `user.updated`, `user.disabled`, `user.enabled`, `user.deleted`, `user.mfa_reset`, `group.*`, `group.member_added`/`removed`, `access_role.created`/`updated` (diff)/`deleted`, `role_binding.added`/`removed`, `owner.added`/`removed` |
 | Keys | `api_key.created`/`rotated`/`revoked`/`expired`, `api_key.first_used`, `api_key.used_from_new_ip` |
-| SSO and SCIM | `sso.login`, `sso.link`, `sso.unlink`, `sso.provider.created`/`updated`, `scim.user.*`, `scim.group.*` |
+| SSO and SCIM | `sso.login`, `sso.link`, `sso.link.auto`, `sso.unlink`, `sso.logout.backchannel`, `sso.provider.created`/`updated`, `scim.user.*` (incl. `scim.user.adopted`), `scim.password_ignored`, `scim.group.*` |
 | Agents | `agent.passport.*`, `delegation.*`, `token.issued`, `token.exchanged`, `token.denied`, `credential.handed_out` |
 | Vault | `vault.connection.linked`/`refreshed`/`needs_reauth`/`revoked`, `vault.decrypt_failed`, `vault.master_key_rotated` |
 | Authorization | `authz.denied`, `authz.shadow_deny`, `authz.allowed_critical` |

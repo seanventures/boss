@@ -19,7 +19,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IdentityProvider } from "../components/identity/identity-provider";
 import { NowProvider } from "../components/identity/kit";
 import { SignInSettings } from "../app/identity/sign-in/sign-in-settings";
-import { createBody, emptyForm, idpUrls, missing, patchBody, testFailureWords } from "../app/identity/sign-in/provider-form";
+import { createBody, emptyForm, idpUrls, missing, oktaIssuerProblem, patchBody, testFailureWords, withIssuer } from "../app/identity/sign-in/provider-form";
+import { idpSignOutUrl } from "../components/identity/account-menu";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
 import { resetStub, stubHandle } from "../lib/identity/stub/server";
 import type { Provider, SecurityPolicy } from "../lib/identity/types";
@@ -112,8 +113,9 @@ describe("the provider form's model", () => {
   it("sends only allowlisted fields, per kind", () => {
     const okta = { ...emptyForm("okta"), issuer: "https://acme.okta.com", client_id: "abc", client_secret: "s3", domains: "@Acme.dev, acme.io" };
     expect(missing(okta)).toBe("");
+    // Okta pre-fills its groups scope and claim (BOSSAPP-1048); the opt-ins are sent only when on.
     expect(createBody(okta)).toEqual({ protocol: "oidc", preset: "okta", name: "Okta", issuer: "https://acme.okta.com", client_id: "abc", client_secret: "s3",
-      scopes: ["openid", "email", "profile"], domains: ["acme.dev", "acme.io"], jit_mode: "off", trust_idp_mfa: false, enforce_sso: false });
+      scopes: ["openid", "email", "profile", "groups"], groups_claim: "groups", domains: ["acme.dev", "acme.io"], jit_mode: "off", trust_idp_mfa: false, enforce_sso: false });
     const ms = { ...emptyForm("microsoft"), client_id: "c", client_secret: "s" };
     expect(missing(ms)).toBe("Add your tenant id");
     expect(createBody({ ...ms, tenant: "contoso" })).toMatchObject({ preset: "microsoft", tenant: "contoso" });
@@ -131,6 +133,45 @@ describe("the provider form's model", () => {
       jit: true, trust_mfa: true, groups_claim: "groups" };
     expect(patchBody(okta, f)).toEqual({});
     expect(patchBody(okta, { ...f, name: "Okta", client_secret: "new" })).toEqual({ name: "Okta", client_secret: "new" });
+  });
+
+  it("Okta: defaults follow the authorization server, the -admin URL is refused, opt-ins are off", () => {
+    const f = emptyForm("okta");
+    expect(f.scopes).toBe("openid email profile groups");
+    expect(f.groups_claim).toBe("groups");
+    expect([f.link_verified, f.idp_initiated, f.scim_adopt]).toEqual([false, false, false]);
+    // A custom authorization server refuses an unknown scope: groups come from its claim instead.
+    expect(withIssuer(f, "https://acme.okta.com/oauth2/default").scopes).toBe("openid email profile");
+    expect(withIssuer(withIssuer(f, "https://acme.okta.com/oauth2/default"), "https://acme.okta.com").scopes).toBe("openid email profile groups");
+    expect(withIssuer({ ...f, scopes: "openid email" }, "https://acme.okta.com/oauth2/default").scopes).toBe("openid email");
+    expect(oktaIssuerProblem("https://acme-admin.okta.com")).toBe("Use your Okta URL without -admin");
+    expect(oktaIssuerProblem("https://acme.okta.com/app/x")).not.toBe("");
+    expect(oktaIssuerProblem("https://acme.okta.com/")).toBe("");
+    const ready = { ...f, issuer: "https://acme-admin.okta.com", client_id: "c", client_secret: "s" };
+    expect(missing(ready)).toBe("Use your Okta URL without -admin");
+    const on = { ...ready, issuer: "https://acme.okta.com", link_verified: true, scim_adopt: true, idp_initiated: true };
+    expect(missing(on)).toBe("Linking existing people needs a domain");
+    const body = createBody({ ...on, domains: "acme.dev" });
+    expect(body).toMatchObject({ link_verified_domain_accounts: true, scim_adopt_existing_by_domain: true });
+    expect(body).not.toHaveProperty("allow_idp_initiated");            // SAML only
+    expect(createBody({ ...emptyForm("saml"), issuer: "urn:i", saml_sso_url: "https://i/sso", saml_certificate: "P", idp_initiated: true }))
+      .toMatchObject({ allow_idp_initiated: true });
+    expect(idpUrls(ORIGIN, { id: "idp_1", protocol: "oidc", kind: "okta" })!.map((u) => [u.label, u.value])).toEqual([
+      ["Redirect URL", `${ORIGIN}/v1/auth/sso/idp_1/callback`],
+      ["Initiate login URI", `${ORIGIN}/v1/auth/sso/idp_1/start`],
+      ["Sign-out redirect URI", `${ORIGIN}/login`],
+      ["Back-channel logout URI", `${ORIGIN}/v1/auth/sso/idp_1/backchannel-logout`],
+    ]);
+    expect(idpUrls(ORIGIN, { id: "idp_1", protocol: "oidc", kind: "google" })).toHaveLength(1);
+  });
+
+  it("sign-out follows the IdP's sign-out only when BOSS names an https one", () => {
+    expect(idpSignOutUrl({ signed_out: true, end_session_url: "https://acme.okta.com/oauth2/v1/logout?id_token_hint=x" }))
+      .toBe("https://acme.okta.com/oauth2/v1/logout?id_token_hint=x");
+    expect(idpSignOutUrl({ signed_out: true })).toBeNull();
+    expect(idpSignOutUrl({ end_session_url: "javascript:alert(1)" })).toBeNull();
+    expect(idpSignOutUrl({ end_session_url: "http://evil.test/" })).toBeNull();
+    expect(idpSignOutUrl(null)).toBeNull();
   });
 
   it("names the URLs for the IdP, and test failures in words", () => {
@@ -190,13 +231,39 @@ describe("Sign-in providers", () => {
     expectClean(q("[data-testid='provider-sheet']")!);
     await click(q("[data-testid='provider-save']"));
     const post = calls.find((c) => c.method === "POST" && c.path === "/v1/identity/providers")!;
-    expect(Object.keys(post.body as object).sort()).toEqual(["client_id", "client_secret", "domains", "enforce_sso", "id", "issuer", "jit_mode", "name", "preset", "protocol", "scopes", "trust_idp_mfa"]);
+    expect(Object.keys(post.body as object).sort()).toEqual(["client_id", "client_secret", "domains", "enforce_sso", "groups_claim", "id", "issuer", "jit_mode", "name", "preset", "protocol", "scopes", "trust_idp_mfa"]);
     expect((post.body as { id: string }).id).toBe(redirect![1]);
     const added = q("[data-testid='provider-added']")!;
     // The URL pasted into the IdP before saving is the one the saved provider answers on.
     expect(added.textContent).toContain(`${ORIGIN}/v1/auth/sso/${redirect![1]}/callback`);
     await click(q("[data-testid='provider-done']"));
     expect(document.querySelector("[data-testid^='provider-idp_']")?.textContent).toContain("Okta");
+  });
+
+  it("Okta: the tile, sign-out and back-channel URLs come first; linking is an explained opt-in", async () => {
+    const owner = as("param@example.com");
+    await mount(owner, settings(owner, []));
+    await click(q("[data-testid='provider-add']"));
+    await click(q("[data-testid='kind-okta']"));
+    const first = q("[data-testid='provider-first']")!.textContent ?? "";
+    expect(first).toMatch(/\/v1\/auth\/sso\/idp_[a-z2-7]{26}\/start/);
+    expect(first).toContain(`${ORIGIN}/login`);
+    expect(first).toMatch(/\/v1\/auth\/sso\/idp_[a-z2-7]{26}\/backchannel-logout/);
+    expect(q("[data-testid='setup-guide']")?.textContent).toContain("Groups claim filter");
+    expect(q("[data-testid='provider-link-note']")).toBeNull();
+    const link = [...document.querySelectorAll("label.idn-check")].find((l) => l.textContent?.includes("Link existing accounts"))!;
+    await click(link.querySelector("input"));
+    expect(q("[data-testid='provider-link-note']")?.textContent).toContain("same verified email");
+    await type(q("#pv-issuer"), "https://acme3.okta.com");
+    await type(q("#pv-cid"), "0oa3");
+    await type(q("#pv-secret"), "secret-value");
+    expect(q("[data-testid='provider-save']")?.getAttribute("title")).toBe("Linking existing people needs a domain");
+    await type(q("#pv-domains"), "acme.dev");
+    expectClean(q("[data-testid='provider-sheet']")!);
+    await click(q("[data-testid='provider-save']"));
+    const post = calls.find((c) => c.method === "POST" && c.path === "/v1/identity/providers")!;
+    expect(post.body).toMatchObject({ preset: "okta", link_verified_domain_accounts: true, groups_claim: "groups",
+      scopes: ["openid", "email", "profile", "groups"] });
   });
 
   it("Google says to add yourself as a Test user; SAML shows its ACS and entity ID first", async () => {

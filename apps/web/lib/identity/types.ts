@@ -399,6 +399,10 @@ export interface Provider {
   enforce_sso: boolean;
   groups_claim: string | null;
   status: "active" | "disabled";
+  /** BOSSAPP-1048 opt-ins, each off unless an admin turned it on (absent on an older API). */
+  link_verified_domain_accounts?: boolean;
+  allow_idp_initiated?: boolean;
+  scim_adopt_existing_by_domain?: boolean;
 }
 
 export interface SecurityPolicy {

@@ -251,6 +251,20 @@ def public_origin(db: Any, org_id: Optional[str] = None) -> Optional[str]:
     return origin_of(get_policy(org, db=db).public_origin or "")
 
 
+def sso_origin(bound: Optional[str], request_origin: Optional[str]) -> Optional[str]:
+    """The origin SSO redirect URIs, ACS URLs and sign-out return URLs are built on: the BOUND
+    public origin (H2), else — only before one is bound — this request's own origin when it is
+    LOOPBACK (a console on http://localhost:<port> or 127.0.0.1: IdPs such as Okta allow
+    http://localhost redirect URIs, and a loopback origin reaches only this machine's browser).
+    A remote origin (plain http or https) is never derived from Host: None."""
+    if bound:
+        return bound
+    candidate = origin_of(request_origin or "")
+    if candidate and is_loopback_origin(candidate):
+        return candidate
+    return None
+
+
 def secure_origin_ok(origin: Optional[str]) -> bool:
     """A20: a session cookie is only ever set for an https origin, or plain http on loopback."""
     if not origin:

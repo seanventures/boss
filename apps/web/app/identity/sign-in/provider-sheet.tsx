@@ -18,7 +18,7 @@ import type { ProviderDetail } from "../../../lib/identity/types-sso";
 import { showToast } from "../../client-forms";
 import {
   KINDS, createBody, emptyForm, formOf, idpUrls, missing, needsIssuer, patchBody, protocolOf, providerRefusal, reserveProviderId,
-  type ProviderForm, type ProviderKind,
+  withIssuer, type ProviderForm, type ProviderKind,
 } from "./provider-form";
 import { GUIDES, SIGN_IN_DOC, type Guide } from "../../../lib/identity/sso-guides";
 
@@ -42,7 +42,7 @@ export function CopyRow({ label, value, tip }: { label: string; value: string; t
 }
 
 /** The URLs for the IdP, or why they cannot be shown yet. */
-export function IdpUrls({ origin, provider }: { origin: string | null | undefined; provider: { id: string | null; protocol: Provider["protocol"]; saml_sp_entity_id?: string | null; saved?: boolean } }) {
+export function IdpUrls({ origin, provider }: { origin: string | null | undefined; provider: { id: string | null; protocol: Provider["protocol"]; saml_sp_entity_id?: string | null; saved?: boolean; kind?: string } }) {
   const urls = idpUrls(origin, provider);
   if (!origin) {
     return <p className="idn-note" data-copy="prose">Set the public URL (below) first: your IdP sends people back to it.</p>;
@@ -88,7 +88,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
     return (
       <Sheet title={`${added.name} added`} icon={<Check size={18} aria-hidden />} onClose={onClose} wide testId="provider-added">
         <p className="idn-lede2" data-copy="prose">Finish in your IdP: register BOSS with these values, then press Test sign-in on its card.</p>
-        <IdpUrls origin={origin} provider={added} />
+        <IdpUrls origin={origin} provider={{ ...added, kind: added.protocol === "saml" ? "saml" : added.preset }} />
         <div className="idn-mf"><span className="idn-spacer" /><button type="button" className="idn-btn primary" onClick={onClose} data-testid="provider-done">Done</button></div>
       </Sheet>
     );
@@ -147,7 +147,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
       {!editing ? (
         <section className="idn-sso-first" data-testid="provider-first">
           <b>1. Paste this into {kindLabel}</b>
-          <IdpUrls origin={origin} provider={{ id: reserved, protocol, saved: false }} />
+          <IdpUrls origin={origin} provider={{ id: reserved, protocol, saved: false, kind }} />
           <SetupGuide kind={kind} />
         </section>
       ) : null}
@@ -164,7 +164,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
         {needsIssuer(kind) ? (
           <Field id="pv-issuer" label={kind === "saml" ? "IdP entity ID" : "Issuer URL"} tip={editing ? "Fixed once added: add a new provider to change it" : kind === "saml" ? "From your IdP's SAML metadata" : "Your provider's base URL"}>
             <input id="pv-issuer" className="idn-input" value={form.issuer} readOnly={editing} placeholder={kind === "okta" ? "https://acme.okta.com" : kind === "keycloak" ? "https://sso.acme.dev/realms/acme" : "https://"}
-              onChange={(e) => set({ issuer: e.target.value })} />
+              onChange={(e) => setForm((f) => (f ? withIssuer(f, e.target.value) : f))} />
           </Field>
         ) : null}
         {protocol === "saml" ? (
@@ -197,7 +197,22 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
           <Check2 on={form.jit} label="Create people on first sign-in" tip="Only for the email domains above" onChange={(v) => set({ jit: v })} />
           <Check2 on={form.trust_mfa} label="Trust its MFA" tip="Skip BOSS's second factor when the IdP did one" onChange={(v) => set({ trust_mfa: v })} />
           <Check2 on={form.enforce_sso} label="Require it for these domains" tip="People on these domains can only sign in here" onChange={(v) => set({ enforce_sso: v })} />
+          <Check2 on={form.link_verified} label="Link existing accounts" tip="Off by default; each link is in the audit log" onChange={(v) => set({ link_verified: v })} />
+          {protocol === "saml" ? (
+            <Check2 on={form.idp_initiated} label="Allow sign-in from its dashboard" tip="Accepts signed sign-ins the IdP starts, each used once" onChange={(v) => set({ idp_initiated: v })} />
+          ) : null}
+          <Check2 on={form.scim_adopt} label="Let SCIM manage existing people" tip="Never Owners or Admins; off by default" onChange={(v) => set({ scim_adopt: v })} />
         </div>
+        {form.link_verified ? (
+          <p className="idn-small idn-dim idn-full" data-testid="provider-link-note" data-copy="prose">
+            Someone already in BOSS with the same verified email in these domains signs in here as themselves.
+          </p>
+        ) : null}
+        {form.scim_adopt ? (
+          <p className="idn-small idn-dim idn-full" data-testid="provider-adopt-note" data-copy="prose">
+            SCIM can update and deprovision people already in these domains.
+          </p>
+        ) : null}
         <div className="idn-full">
           <button type="button" className="idn-link" aria-expanded={advanced} onClick={() => setAdvanced((a) => !a)}>{advanced ? "Hide advanced" : "Advanced"}</button>
         </div>
@@ -234,7 +249,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
       {editing ? <>
         <div className="idn-hr" />
         <span className="idn-label">For your IdP</span>
-        <IdpUrls origin={origin} provider={{ id: initial?.id ?? null, protocol, saml_sp_entity_id: form.saml_sp_entity_id || null }} />
+        <IdpUrls origin={origin} provider={{ id: initial?.id ?? null, protocol, saml_sp_entity_id: form.saml_sp_entity_id || null, kind }} />
       </> : null}
       {initial && origin && form.client_auth === "private_key_jwt" && initial.client_auth === "private_key_jwt" ? (
         <CopyRow label="BOSS public key" value={`${origin.replace(/\/+$/, "")}/v1/identity/providers/${encodeURIComponent(initial.id)}/jwks`} tip="Register this key URL in your IdP" />

@@ -5,7 +5,7 @@ import {
 } from "../../../lib/identity/forward";
 import { identityStubEnabled, isIdentityPath } from "../../../lib/identity/stub/enabled";
 import { answerFromStub } from "../../../lib/identity/server-fetch";
-import { collectorMachinePost, collectorPathOf } from "../../../lib/console-session";
+import { collectorMachinePost, collectorPathOf, idpBackchannelPost } from "../../../lib/console-session";
 import { COLLECTOR_BODY_CAP, readCapped } from "../../../lib/read-capped";
 import { noReuse } from "../../../lib/feed-cache";
 import { clientHop, proxyHops } from "../../../lib/client-hop";
@@ -179,7 +179,8 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
   try {
     // The browser's own call: never answered from the feed cache (lib/feed-cache.ts): a request
     // sent after a revocation is decided by the API, never by an answer from before it.
-    const outbound = forwardHeaders(req, speaksFor(req, incoming.pathname, collector !== null));
+    // An IdP's back-channel logout (lib/console-session.ts idpBackchannelPost) speaks for nobody too.
+    const outbound = forwardHeaders(req, idpBackchannelPost(req) ? "machine" : speaksFor(req, incoming.pathname, collector !== null));
     upstream = await fetch(target, noReuse({
       method,
       headers: outbound,
