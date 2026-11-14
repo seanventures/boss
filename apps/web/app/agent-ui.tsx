@@ -27,6 +27,7 @@ import { useIdentityVersion } from "../lib/use-agent-identities";
 import { leadingFlow } from "../lib/answer-flow";
 import { AnswerFlow, CitationChips, ProposalCard, citationsOf, proposalOf } from "./answer-cards";
 import { AskedQuestion } from "./typed-form-ui";
+import { TicketBrief } from "./tickets/ticket-brief";
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
  *  that is sometimes absent reach the render. */
@@ -1533,6 +1534,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               operator's only options were to believe it or redo the work by hand. Collapsed by
               default: it is evidence, not narrative, and it should be there when you doubt the
               answer without shouting over it when you do not. */}
+          {/* T4 (BOSSAPP-1047): the answer read a ticket (ticket_get): its brief, with one Start. */}
+          {trail.some((c) => c.tool === "ticket_get" && c.ok !== false) ? <TicketBrief projectId={projectId} calls={trail} /> : null}
           {trail.length > 0 ? (
             <details className="agent-trail" data-testid="agent-trail">
               <summary className="detail">

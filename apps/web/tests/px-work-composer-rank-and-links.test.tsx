@@ -146,7 +146,7 @@ describe("New work (05-01..07, 05-31)", () => {
     expect(tid("px-compose-workflow")!.textContent).toContain("Fast Fix / Hotfix");
     // Ticket: the box asks for a link.
     await press(tid("px-compose-ticket"));
-    expect((tid("px-compose-text") as HTMLInputElement).placeholder).toBe("Paste a GitHub or Plane issue link");
+    expect((tid("px-compose-text") as HTMLInputElement).placeholder).toBe("Paste a Jira key (LEND-142) or a Jira, Plane or GitHub issue link");
   });
 
   it("'change' picks another workflow, the plan redraws, and Start sends kind, words and the workflow", async () => {

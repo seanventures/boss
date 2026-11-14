@@ -48,6 +48,8 @@ import { BriefCard, Marked, type BriefRow } from "./brief-card";
 import { Face, Flow, Said } from "./kit";
 import type { PxCtx } from "./project-page";
 import { changeWords, projectIsLocal } from "../../lib/repo-links";
+import { importAndStart } from "../../lib/tickets";
+import { NewWorkTicket, RecognisesLine, useResolvedTicket } from "./new-work-ticket";
 import "./new-work.css";
 
 export type Kind = WorkKind;
@@ -58,7 +60,7 @@ export type Prefill = { text?: string; kind?: Kind; fromBar?: boolean } | null;
 const KINDS: { key: Kind; label: string; icon: typeof Sparkle; ph: string }[] = [
   { key: "feature", label: "Feature", icon: Sparkle, ph: "Describe it — e.g. \"let agents tag tickets by product\"" },
   { key: "bug", label: "Bug", icon: Bug, ph: "What's wrong — e.g. \"SLA timer ignores weekends\"" },
-  { key: "ticket", label: "Ticket or link", icon: LinkIcon, ph: "Paste a GitHub or Plane issue link" },
+  { key: "ticket", label: "Ticket or link", icon: LinkIcon, ph: "Paste a Jira key (LEND-142) or a Jira, Plane or GitHub issue link" },
 ];
 /** What a person may ask Helm before it asks anything (they send, Helm answers). */
 const SUGGEST: Record<Kind, string[]> = {
@@ -156,6 +158,13 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   const turn = useRef(0);
   const lastRead = useRef(restored?.brief ? `${restored.kind}|${restored.text}` : "");
   const titleId = useId();
+  // T3 (BOSSAPP-1047): a ticket key or link in the words is read from the connected ticket
+  // system; Start then imports it and starts it from the ticket, on the workflow its type picks.
+  const resolved = useResolvedTicket(pid, text, !ctx.demo);
+  const [tkWorkflow, setTkWorkflow] = useState("");
+  const tkGate = useGate("work_tracker:write", pid);
+  const tk = resolved.state === "ready" ? resolved.ticket : null;
+  useEffect(() => { setTkWorkflow(""); }, [tk?.key]);
 
   // ── Helm's plan for this kind (and the picked workflow), with the chips' defaults ──────────
   // A Ticket whose issue is labelled a bug runs the project's bug workflow (its default).
@@ -334,6 +343,17 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
     const t = words();
     if (!text.trim() || busy || locked) return;
     setBusy("start"); setSaid({ text: "" });
+    if (tk) {
+      // FROM A TICKET: one press imports it (unless BOSS has it) and starts it from the ticket.
+      try {
+        if (!tkGate.allowed) { setSaid({ text: tkGate.reason, tone: "red" }); return; }
+        const r = await importAndStart(pid, tk, tkWorkflow || undefined);
+        if (!r.ok) { setSaid({ text: r.error ?? "It didn't start.", tone: "red" }); return; }
+        writeDraft(pid, null);
+        onDone({ runId: r.runId || undefined, said: `Started from ${tk.key}.${r.note ? ` ${r.note}` : ""}`, tab: "work" });
+      } finally { setBusy(""); }
+      return;
+    }
     try {
       let r = await startNewWork(pid, kind, t, fields(startAnyway));
       // NOT READY (409 from THE start door): the project's checklist, and Start anyway with ticks.
@@ -705,6 +725,10 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
           <div className="px-nw-main px-nw-top">
             {kinds}
             {showWords || wordsOpen ? box_ : folded}
+            <NewWorkTicket resolved={resolved} workflow={tkWorkflow} onWorkflow={setTkWorkflow} />
+            {kind === "ticket" && !tk ? (
+              <RecognisesLine onBrowse={() => { onClose(); ctx.tab("work", { tickets: "import" }); }} />
+            ) : null}
             {briefState ? (
               <BriefCard state={briefState} agent={helm} heading="Task" rows={rows} editing={editing} confirmed={confirmed}
                          title={b?.title ?? ""} chips={foldChips}

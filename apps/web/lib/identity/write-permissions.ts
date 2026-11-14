@@ -161,6 +161,20 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/subscription-pools.ts#removePoolMember": "entitlement:manage",  // DELETE …/members/{id}
   "lib/subscription-pools.ts#setPoolStatus": "entitlement:manage",     // PATCH /v1/subscription-pools/{id}
   "lib/subscription-pools.ts#deletePool": "entitlement:manage",        // DELETE /v1/subscription-pools/{id} (empty only)
+  // lib/tickets.ts — ticket systems (BOSSAPP-1047 Phase C): Setup › Ticket systems, import, start, sync
+  "lib/tickets.ts#connectTicketSystem": "integration:manage",     // POST /v1/ticket-systems (tests first; token to the vault)
+  "lib/tickets.ts#testTicketSystem": "integration:manage",        // POST /v1/ticket-systems/{id}/test
+  "lib/tickets.ts#saveTicketSettings": "integration:manage",      // PATCH /v1/ticket-systems/{id}
+  "lib/tickets.ts#disconnectTicketSystem": "integration:manage",  // DELETE /v1/ticket-systems/{id}
+  "lib/tickets.ts#rotateTicketWebhook": "integration:manage",     // POST /v1/ticket-systems/{id}/webhook
+  "lib/tickets.ts#startTicketOauth": "connection:use_own",        // POST /v1/ticket-systems/{id}/oauth/start/load
+  "lib/tickets.ts#disconnectTicketOauth": "connection:use_own",   // DELETE /v1/ticket-systems/{id}/oauth/me
+  "lib/tickets.ts#importTickets": "work_tracker:write",           // POST /v1/projects/{id}/tickets/import
+  "lib/tickets.ts#startFromTicket": ["work_tracker:write", "workflow_run:start"], // POST /v1/work-items/{id}/start-from-ticket
+  "lib/tickets.ts#importAndStart": ["work_tracker:write", "workflow_run:start"],  // import, then start-from-ticket
+  "lib/tickets.ts#retryTicketSync": "work_tracker:write",         // POST /v1/work-items/{id}/ticket-sync/retry
+  "lib/tickets.ts#answerTicketChanged": "decision:approve",       // POST /v1/decisions/{id}/{approve|reject}
+
   // lib/llm-gateways.ts — Setup › Advanced › Gateways (BOSSAPP-887)
   "lib/llm-gateways.ts#createGateway": "model_provider:manage",   // POST /v1/llm-gateways
   "lib/llm-gateways.ts#updateGateway": "model_provider:manage",   // PATCH /v1/llm-gateways/{id}
@@ -308,6 +322,10 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     "/v1/skill-policies": "skill:manage",
     // Setup › Advanced › Several accounts per provider (lib/subscription-pools.ts, BOSSAPP-886).
     "/v1/subscription-pools": "entitlement:manage",
+    // Ticket systems (lib/tickets.ts, BOSSAPP-1047): connect/test/settings/webhook; a person's own
+    // sign-in (oauth/start/load, oauth/me) is connection:use_own, checked by the helper's gate.
+    "/v1/ticket-systems": "integration:manage",
+    "/v1/ticket-systems/": "integration:manage",
     // Setup › Advanced › Gateways (lib/llm-gateways.ts, BOSSAPP-887).
     "/v1/llm-gateways": "model_provider:manage",
     // Activity › Feedback › Reflection (lib/reflection.ts, BOSSAPP-888).
