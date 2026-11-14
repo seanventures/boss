@@ -1,0 +1,50 @@
+# Jira Cloud (REST v3). See docs/infra/TICKET_CONNECTORS.md for every field.
+key: jira
+label: Jira
+icon: jira
+description: Atlassian Jira Cloud — issues, bugs, and epics.
+docs_url: https://developer.atlassian.com/cloud/jira/platform/rest/v3/
+adapter: JiraTicketAdapter
+order: 3
+auth_fields:
+  - {name: base_url, label: Site URL, placeholder: "https://your-domain.atlassian.net"}
+  - {name: email, label: Atlassian account email}
+  - {name: project_key, label: Project key, placeholder: BOSS}
+  - {name: api_token, label: API token, secret: true, help: "Create at id.atlassian.com → Security → API tokens"}
+  - {name: issue_type, label: Default issue type, required: false, placeholder: Task}
+capabilities:
+  read: true
+  browse: true
+  write_comment: true
+  transition: true
+  link: true
+  create: true
+  webhook: true
+default_hosts: ["*.atlassian.net", api.atlassian.com, auth.atlassian.com]
+# Two ways to sign in; a connection may hold both. Per call: the acting person's own sign-in when
+# they have one, else the API token (the connection's bot), else needs_person_sign_in.
+auth_kinds:
+  - kind: api_token
+    fields: [email, api_token]
+  - kind: oauth2               # Atlassian OAuth 2.0 (3LO), one sign-in per person
+    authorize_url: https://auth.atlassian.com/authorize
+    token_url: https://auth.atlassian.com/oauth/token
+    audience: api.atlassian.com
+    scopes: [read:jira-work, write:jira-work, read:jira-user, offline_access]
+    pkce: false                # Atlassian 3LO is a confidential client (client secret)
+    per_user: true
+    resource_discovery_url: https://api.atlassian.com/oauth/token/accessible-resources
+    api_base_template: https://api.atlassian.com/ex/jira/{resource_id}
+base_url_field: base_url
+guard_provider: jira
+key_refs: true
+# category -> Jira status NAME. Empty = use Jira's own statusCategory (new / indeterminate /
+# done). Jira has no "review" category, so review maps to a status by name.
+status_mapping_defaults:
+  review: In Review
+# Jira admin webhooks with a secret send X-Hub-Signature: sha256=<HMAC of the body>. A webhook
+# without one carries ?token=<secret> on its URL, which the route passes as X-Boss-Webhook-Token.
+webhook:
+  scheme: hmac-sha256-or-shared-token
+  header: X-Hub-Signature
+  token_header: X-Boss-Webhook-Token

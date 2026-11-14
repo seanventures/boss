@@ -16,6 +16,7 @@ import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from collections.abc import Iterator, MutableMapping
 from typing import Any, Optional, Protocol
 from urllib.parse import quote
 
@@ -928,20 +929,45 @@ class AzureDevOpsWorkTrackerAdapter:
 # Registry
 # ---------------------------------------------------------------------------
 
-TRACKER_ADAPTERS: dict[str, WorkTrackerAdapter] = {
-    "plane": PlaneWorkTrackerAdapter(),
-    "jira": JiraWorkTrackerAdapter(),
-    "linear": LinearWorkTrackerAdapter(),
-    "github_issues": GitHubIssuesWorkTrackerAdapter(),
-    "azure_devops": AzureDevOpsWorkTrackerAdapter(),
-}
+class _TrackerRegistryView(MutableMapping):
+    """``TRACKER_ADAPTERS`` as it always was (a dict of provider key -> adapter), read from the
+    ticket-connector registry (connectors/tickets/<key>/manifest.yaml + adapter.py), which loads
+    on first use. Each registered adapter IS-A the class defined above (Plane, Jira, ...), so
+    every caller, isinstance check and class-level patch keeps working."""
+
+    def _adapters(self) -> dict[str, Any]:
+        from ..connectors.tickets.registry import REGISTRY
+
+        return REGISTRY.adapters
+
+    def __getitem__(self, key: str) -> WorkTrackerAdapter:
+        return self._adapters()[key]
+
+    def __setitem__(self, key: str, value: WorkTrackerAdapter) -> None:
+        self._adapters()[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self._adapters()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(list(self._adapters()))
+
+    def __len__(self) -> int:
+        return len(self._adapters())
+
+    def __repr__(self) -> str:
+        return f"TRACKER_ADAPTERS({list(self._adapters())})"
+
+
+TRACKER_ADAPTERS: "MutableMapping[str, WorkTrackerAdapter]" = _TrackerRegistryView()
 
 
 def list_catalog() -> list[dict[str, Any]]:
+    """Every connector, in its manifest's order (GitHub Issues first: the default option)."""
     entries = []
-    for key in ("github_issues", "linear", "jira", "plane", "azure_devops"):
-        adapter = TRACKER_ADAPTERS[key]
+    for key, adapter in TRACKER_ADAPTERS.items():
         entry = adapter.catalog_entry()
+        manifest = getattr(adapter, "manifest", None)
         entries.append(
             {
                 "provider_key": entry.provider_key,
@@ -961,6 +987,11 @@ def list_catalog() -> list[dict[str, Any]]:
                     }
                     for f in entry.connection_fields
                 ],
+                # The ticket contract v2 (connectors/tickets): what this connector can do.
+                "icon": getattr(manifest, "icon", None),
+                "ticket_capabilities": dict(getattr(adapter, "ticket_capabilities", {}) or {}),
+                "auth_kinds": [str(k.get("kind")) for k in
+                               (getattr(manifest, "auth_kinds", ()) or ())],
             }
         )
     return entries

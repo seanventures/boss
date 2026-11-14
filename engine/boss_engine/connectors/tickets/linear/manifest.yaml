@@ -1,0 +1,22 @@
+key: linear
+label: Linear
+icon: linear
+description: Linear — modern issue tracking for product teams.
+docs_url: https://developers.linear.app/docs/graphql/working-with-the-graphql-api
+adapter: LinearTicketAdapter
+order: 2
+auth_fields:
+  - {name: api_token, label: API key, secret: true, help: "Linear Settings → API → Personal API keys"}
+  - {name: team_id, label: Team ID, placeholder: uuid, help: "GraphQL team id (or team key via team_key)"}
+  - {name: team_key, label: Team key (optional if team_id set), required: false, placeholder: ENG}
+capabilities:
+  read: false
+  browse: false
+  write_comment: false
+  transition: false
+  link: false
+  create: true
+  webhook: false
+default_hosts: [api.linear.app]
+default_base_url: https://api.linear.app
+guard_provider: linear

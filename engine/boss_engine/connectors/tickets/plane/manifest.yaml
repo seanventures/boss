@@ -1,0 +1,35 @@
+# Plane (cloud or self-hosted), REST /api/v1. See docs/infra/TICKET_CONNECTORS.md.
+key: plane
+label: Plane
+icon: plane
+description: Plane — an open-source system of record for issues and PRDs.
+docs_url: https://developers.plane.so/api-reference/introduction
+adapter: PlaneTicketAdapter
+order: 4
+auth_fields:
+  - {name: api_base_url, label: API / web base URL, placeholder: "https://plane.example.com"}
+  - {name: workspace_slug, label: Workspace slug, placeholder: your-workspace}
+  - {name: project_id, label: Project ID (UUID), placeholder: "3f2a9c1e-…"}
+  - {name: api_token, label: API key, secret: true, help: X-API-Key value}
+capabilities:
+  read: true
+  browse: true
+  write_comment: true
+  transition: true
+  link: true
+  create: true
+  webhook: true
+default_hosts: [api.plane.so, app.plane.so]
+default_base_url: https://api.plane.so
+base_url_field: api_base_url
+base_url_fields: [api_base_url, web_base_url]
+guard_provider: plane
+operator_base_url_env: [PLANE_BASE_URL, PLANE_API_URL, PLANE_PROJECT_URL]
+key_refs: true
+# category -> Plane state NAME. Empty = Plane's state group (backlog/unstarted -> todo,
+# started -> doing, completed/cancelled -> done). Plane has no review group.
+status_mapping_defaults:
+  review: In Review
+webhook:
+  scheme: hmac-sha256
+  header: X-Plane-Signature

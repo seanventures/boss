@@ -1,0 +1,23 @@
+key: azure_devops
+label: Azure DevOps
+icon: azure
+description: Azure DevOps Boards — work items for enterprise teams.
+docs_url: https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/
+adapter: AzureDevOpsTicketAdapter
+order: 5
+auth_fields:
+  - {name: organization, label: Organization, placeholder: my-org}
+  - {name: project, label: Project name, placeholder: Product}
+  - {name: api_token, label: Personal access token, secret: true, help: PAT with Work Items read/write}
+  - {name: work_item_type, label: Work item type, required: false, placeholder: Task}
+capabilities:
+  read: false
+  browse: false
+  write_comment: false
+  transition: false
+  link: false
+  create: true
+  webhook: false
+default_hosts: [dev.azure.com, "*.dev.azure.com", "*.visualstudio.com"]
+default_base_url: https://dev.azure.com
+guard_provider: azure_devops

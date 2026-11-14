@@ -1,0 +1,24 @@
+key: github_issues
+label: GitHub Issues
+icon: github
+description: GitHub Issues — track work next to the code.
+docs_url: https://docs.github.com/en/rest/issues
+adapter: GitHubIssuesTicketAdapter
+order: 1
+auth_fields:
+  - {name: owner, label: Repository owner, placeholder: acme}
+  - {name: repo, label: Repository name, placeholder: product}
+  - {name: api_token, label: Personal access token, secret: true, help: "repo scope (classic) or Issues permissions (fine-grained)"}
+  - {name: api_base_url, label: API base (GitHub Enterprise), required: false, placeholder: "https://api.github.com"}
+capabilities:
+  read: true
+  browse: false
+  write_comment: true
+  transition: false
+  link: false
+  create: true
+  webhook: false
+default_hosts: [api.github.com, github.com]
+default_base_url: https://api.github.com
+base_url_field: api_base_url
+guard_provider: github
