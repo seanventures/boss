@@ -434,15 +434,8 @@ def import_tickets(project_id: str, payload: TicketImportBody) -> dict:
             row = intake.get_row(connection, payload.connection_id, project_id=project_id)
         except intake.TicketApiError as error:
             raise _refuse(error) from None
-        adapter = intake.adapter_for(str(row["provider_key"]))
-        conn = _call(row, lambda: intake.ticket_connection(connection, row, person_id=_person()))
-        items = []
-        for wanted in payload.items:
-            ticket = _call(row, lambda: adapter.get_ticket(conn, wanted.key))
-            children = []
-            if wanted.with_children:
-                children = _call(row, lambda: adapter.list_children(conn, ticket.ref))
-            items.append((ticket, children))
+        items = _call(row, lambda: intake.read_for_import(connection, row, payload.items,
+                                                          person_id=_person()))
     with begin(_engine()) as connection:
         done = intake.import_tickets(connection, settings, project_id=project_id, row=row,
                                      items=items, actor=actor)
@@ -471,8 +464,6 @@ def start_from_ticket(work_item_id: str, payload: Optional[TicketStartBody] = No
 
     from apps.api.app.main import start_delivery_workflow
     from apps.api.app.request_bodies import WorkflowStartBody
-    from boss_engine.services import workflows as workflow_runtime
-
     body = payload or TicketStartBody()
     with begin(_engine()) as connection:
         item = connection.execute(text(
@@ -495,25 +486,13 @@ def start_from_ticket(work_item_id: str, payload: Optional[TicketStartBody] = No
             ticket = intake.fetch(connection, row, ref, person_id=_person())
         except intake.TicketApiError as error:
             raise _refuse(error, row) from None
-        info = intake.ticket_input(row, ticket)
-        wanted = (body.workflow_key or intake.default_workflow(ticket.type)).strip()
-        note = None
-        if not workflow_runtime.running_version(connection, project_id, wanted):
-            if body.workflow_key:
-                raise HTTPException(status_code=404, detail={
-                    "error": "not_found", "message": f"This project has no workflow {wanted!r}."})
-            note = (f"This project has no {wanted} workflow, so the "
-                    f"{'bug fix' if ticket.type == 'bug' else 'work'} runs on "
-                    f"{intake.FALLBACK_WORKFLOW} with the ticket's framing.")
-            wanted = intake.FALLBACK_WORKFLOW
-    framing = "Fix this bug" if ticket.type == "bug" else (
-        "Deliver this epic" if ticket.type == "epic" else "Do this ticket")
-    run_input = {"title": f"{ticket.key} {ticket.title}"[:80],
-                 "directive": f"{framing}: {ticket.key} — {ticket.title}"[:8000],
-                 "work_item_id": work_item_id,
-                 "work_kind": "bug" if ticket.type == "bug" else "ticket"}
-    if info.get("acceptance_criteria"):
-        run_input["acceptance_criteria"] = list(info["acceptance_criteria"])[:12]
+        try:
+            plan = intake.start_plan(connection, row, ticket, project_id=project_id,
+                                     work_item_id=work_item_id, workflow_key=body.workflow_key)
+        except intake.TicketApiError as error:
+            raise _refuse(error, row) from None
+        info, wanted, note = plan["ticket"], plan["workflow_key"], plan["note"]
+    run_input = dict(plan["input"])
     start: dict[str, Any] = {"project_id": project_id, "workflow_key": wanted,
                              "input": run_input, "actor": actor}
     for name in ("start_anyway", "accept", "dedupe_key"):

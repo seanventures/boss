@@ -54,7 +54,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from sqlalchemy import text
 
@@ -182,42 +182,22 @@ def _plain_error(error: BaseException) -> str:
 
 
 # ---------------------------------------------------------------------------------------------
-# settings: the API's shape (write_back, status_map, pickup, inbound), with Phase A's flat keys
-# (status_mapping, pickup_label, auto_start, poll_interval_s) read as the fallback
+# settings: the API's shape (write_back, status_map, pickup, inbound), read from what B1 stores
+# (ticket_intake.public_settings over settings.write_back / status_mapping / pickup_label /
+# auto_start / inbound_mode / poll_interval_s)
 # ---------------------------------------------------------------------------------------------
 
 
 def sync_settings(configuration: Optional[Mapping[str, Any]]) -> dict[str, Any]:
-    from ..connectors.tickets import connection_settings
+    """The write-back and pick-up settings of one stored configuration, read through B1's
+    ``ticket_intake.public_settings`` (the API's shape, drawn from the contract's stored keys):
+    ``write_back``, ``status_map``, ``pickup`` and ``inbound``. One reader, so what the
+    Settings page saves is exactly what the write-back, the webhook and the poller obey."""
+    from .ticket_intake import public_settings
 
-    base = connection_settings(dict(configuration or {}))
-    saved = (configuration or {}).get("settings")
-    saved = saved if isinstance(saved, dict) else {}
-    write_back = dict(WRITE_BACK_DEFAULTS)
-    raw = saved.get("write_back")
-    if isinstance(raw, dict):
-        write_back.update({k: raw[k] for k in WRITE_BACK_DEFAULTS if isinstance(raw.get(k), bool)})
-    status_map = dict(base.get("status_mapping") or {})
-    raw = saved.get("status_map")
-    if isinstance(raw, dict):
-        status_map.update({k: str(v).strip() for k, v in raw.items()
-                           if k in ("todo", "doing", "review", "done") and isinstance(v, str)
-                           and v.strip()})
-    pickup_raw = saved.get("pickup") if isinstance(saved.get("pickup"), dict) else {}
-    label = pickup_raw.get("label")
-    label = label.strip() if isinstance(label, str) else str(base.get("pickup_label") or "")
-    mode = pickup_raw.get("mode")
-    if mode not in PICKUP_MODES:
-        mode = "auto_start" if base.get("auto_start") is True else "ask"
-    inbound_raw = saved.get("inbound") if isinstance(saved.get("inbound"), dict) else {}
-    inbound_mode = inbound_raw.get("mode") if inbound_raw.get("mode") in INBOUND_MODES \
-        else "webhook"
-    minutes = inbound_raw.get("poll_minutes")
-    if not (isinstance(minutes, int) and not isinstance(minutes, bool) and minutes >= 1):
-        minutes = max(1, int(base.get("poll_interval_s") or 300) // 60)
-    return {"write_back": write_back, "status_map": status_map,
-            "pickup": {"label": label, "mode": mode},
-            "inbound": {"mode": inbound_mode, "poll_minutes": int(minutes)}}
+    shown = public_settings(dict(configuration or {}))
+    return {"write_back": dict(shown["write_back"]), "status_map": dict(shown["status_map"]),
+            "pickup": dict(shown["pickup"]), "inbound": dict(shown["inbound"])}
 
 
 def _apply_status_map(conn: Any) -> None:
@@ -245,6 +225,26 @@ def provider_row(db: Any, row_id: str) -> Optional[dict[str, Any]]:
     return out
 
 
+def home_row(db: Any, row: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    """The HOME connection of a row. B1 maps one ticket-system connection onto many BOSS
+    projects by MIRROR rows (``configuration.mirror_of = <home row id>``); settings are edited
+    on the home row and its secrets (the token, the webhook secret) are the home row's. So
+    write-back, the webhook and the poller read settings and secrets from the home, and a
+    mirror never acts as a second connection to the same site. A home that is gone or
+    disconnected leaves the row as it is."""
+    if row is None:
+        return None
+    home_id = str((row.get("configuration") or {}).get("mirror_of") or "")
+    if not home_id or home_id == str(row["id"]):
+        return dict(row)
+    home = provider_row(db, home_id)
+    return home if home is not None and home["status"] == "active" else dict(row)
+
+
+def is_mirror(row: Mapping[str, Any]) -> bool:
+    return bool((row.get("configuration") or {}).get("mirror_of"))
+
+
 def connection_from_row(db: Any, row: Mapping[str, Any], *, person_id: Optional[str] = None,
                         app_settings: Any = None) -> Any:
     from ..connectors.tickets import TicketConnection
@@ -269,11 +269,17 @@ def open_connection(db: Any, project_id: str, *, connection_id: Optional[str] = 
         row = provider_row(db, cid)
         if row is not None and str(row["project_id"]) == str(project_id) \
                 and row["status"] == "active":
-            return connection_from_row(db, row, person_id=person_id, app_settings=app_settings)
+            # A mirror's settings and token are its home's (home_row).
+            return connection_from_row(db, home_row(db, row), person_id=person_id,
+                                       app_settings=app_settings)
         if not wanted:
             return None
     if not wanted:
         return None
+    own = provider_row(db, _provider_row_id(db, project_id, wanted) or "")
+    if own is not None and own["status"] == "active" and is_mirror(own):
+        return connection_from_row(db, home_row(db, own), person_id=person_id,
+                                   app_settings=app_settings)
     return connection_for(db, project_id, wanted, person_id=_person(person_id),
                           app_settings=app_settings)
 
@@ -322,6 +328,25 @@ def _ticket_of(value: Any) -> Optional[dict[str, Any]]:
     return None
 
 
+def _ticket_of_bound_run(db: Any, project_id: str, run_id: str, root_run_id: str
+                         ) -> Optional[dict[str, Any]]:
+    """The ticket a run is bound to by B1's convention: the binding whose ``metadata.run_ids``
+    names the run (or its root). For a run whose input carries no ticket of its own."""
+    row = db.execute(text(
+        "SELECT b.provider_id, b.work_item_id, b.external_key, b.external_issue_id, "
+        "b.external_url, p.provider_key FROM work_tracker_bindings b "
+        "JOIN work_tracker_providers p ON p.id = b.provider_id "
+        "WHERE b.project_id = :p AND (COALESCE(b.metadata->'run_ids', '[]'::jsonb) ? :r "
+        "OR COALESCE(b.metadata->'run_ids', '[]'::jsonb) ? :root) "
+        "ORDER BY b.updated_at DESC LIMIT 1"),
+        {"p": project_id, "r": run_id, "root": root_run_id}).mappings().first()
+    if row is None or not (row["external_key"] or row["external_issue_id"]):
+        return None
+    return {"provider": row["provider_key"], "connection_id": row["provider_id"],
+            "key": row["external_key"], "id": row["external_issue_id"],
+            "url": row["external_url"], "work_item_id": row["work_item_id"]}
+
+
 def _workflow_subject(db: Any, run_id: str) -> Optional[Subject]:
     row = db.execute(text(
         "SELECT id, project_id, actor, input, root_run_id, work_item_id FROM workflow_runs "
@@ -335,6 +360,8 @@ def _workflow_subject(db: Any, run_id: str) -> Optional[Subject]:
         parent = db.execute(text("SELECT input FROM workflow_runs WHERE id = :id"),
                             {"id": root}).scalar()
         ticket = _ticket_of((_json(parent, {}) or {}).get("ticket"))
+    if ticket is None:
+        ticket = _ticket_of_bound_run(db, str(row["project_id"]), str(row["id"]), root)
     if ticket is None:
         return None
     return Subject(project_id=str(row["project_id"]), entity_type="workflow_run",
@@ -823,9 +850,13 @@ def _receipts_of_item(db: Any, project_id: str, work_item_id: str,
         "SELECT id, effect_kind, effect_scope, status, result, error, created_at, updated_at "
         "FROM receipts WHERE project_id = :p AND dedupe_key LIKE :prefix AND ("
         "  effect_scope->>'work_item_id' = :wi OR (:key <> '' AND "
-        "  effect_scope->>'provider' = :prov AND effect_scope->'ticket'->>'key' = :key)) "
+        "  effect_scope->>'provider' = :prov AND effect_scope->'ticket'->>'key' = :key) "
+        "  OR effect_scope->>'root_run_id' = ANY(:runs)) "
         "ORDER BY created_at, id"),
         {"p": project_id, "prefix": f"{PREFIX}:{project_id}:%", "wi": work_item_id,
+         # the runs B1 recorded on the binding (metadata.run_ids)
+         "runs": [str(r) for r in ((_json((binding or {}).get("metadata"), {}) or {})
+                                   .get("run_ids") or []) if r],
          "key": str((binding or {}).get("external_key") or ""),
          "prov": str((binding or {}).get("provider_key") or "")}).mappings().all()
     return [dict(r) for r in rows]
@@ -979,99 +1010,46 @@ def check_ticket_changed(engine: Any, settings: Any, subject: Subject) -> dict[s
 
 
 # ---------------------------------------------------------------------------------------------
-# import (the door ticket_import uses; B1's import route may supersede it at merge)
+# import: B1's (ticket_intake.import_by_keys, the logic of POST /v1/projects/{id}/tickets/import)
 # ---------------------------------------------------------------------------------------------
 
 
-def _import_tickets(db: Any, settings: Any, conn: Any, tickets: Iterable[Any], *,
-                    actor: str, connection_id: Optional[str],
-                    parents: Optional[dict[str, str]] = None) -> dict[str, Any]:
-    from . import work_items as wi
-    from .work_orchestration import WorkOrchestrationService
+def _intake_row(db: Any, project_id: str, *, connection_id: Optional[str] = None,
+                provider: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """The project's ticket-system row a tool names: its id (B1's connection id), a Kit id
+    (``kit:tickets:<provider>``), a provider, or none (the project's default connection)."""
+    from . import ticket_intake as intake
 
-    service = WorkOrchestrationService(settings)
-    parents = dict(parents or {})
-    created, existing = [], []
-    for ticket in tickets:
-        found = binding_for(db, str(conn.project_id), conn.provider, ticket.key,
-                            external_id=str(ticket.id or ""))
-        if found is not None:
-            parents.setdefault(ticket.key, str(found["work_item_id"]))
-            existing.append({"key": ticket.key, "work_item_id": found["work_item_id"],
-                             "binding_id": found["id"]})
-            continue
-        item = wi.create_item(
-            db, settings, project_id=str(conn.project_id),
-            title=_short(f"{ticket.key} {ticket.title}", 300),
-            description=str(ticket.body_markdown or "")[:8000],
-            parent_id=parents.get(ticket.parent_key or ""), status="todo",
-            subject_type="ticket", subject_id=f"{conn.provider}:{ticket.key}", actor=actor)
-        bound = service.bind_tracker(
-            db, project_id=str(conn.project_id), work_item_id=item["id"],
-            provider_key=conn.provider, external_project_id=(ticket.key.split("-")[0]
-                                                             if "-" in ticket.key else None),
-            external_issue_id=str(ticket.id or "") or None, external_key=ticket.key,
-            external_url=ticket.url, external_state=ticket.status,
-            metadata={"source": "ticket_import", "type": ticket.type,
-                      "updated_at": ticket.updated_at, "screen": dict(ticket.screen or {}),
-                      "connection_id": connection_id, "snapshot": snapshot(ticket,
-                                                                          connection_id)},
-            actor=actor)
-        parents[ticket.key] = item["id"]
-        created.append({"key": ticket.key, "work_item_id": item["id"],
-                        "binding_id": bound.get("id"), "title": ticket.title,
-                        "untrusted": ticket.untrusted})
-    return {"created": created, "existing": existing}
+    cid = str(connection_id or "").strip()
+    wanted = str(provider or "").strip().lower()
+    if cid.startswith("kit:tickets:"):
+        wanted, cid = wanted or cid.rsplit(":", 1)[-1], ""
+    if cid:
+        try:
+            return intake.get_row(db, cid, project_id=project_id)
+        except intake.TicketApiError:
+            return None
+    rows = [r for r in intake.project_rows(db, project_id)
+            if r.get("status") == "active" and (not wanted or r["provider_key"] == wanted)]
+    rows.sort(key=lambda r: not r.get("is_default"))
+    return rows[0] if rows else None
 
 
 def ticket_import_items(db: Any, settings: Any, *, project_id: str, items: list[dict[str, Any]],
                         actor: str, connection_id: Optional[str] = None,
                         provider: Optional[str] = None) -> dict[str, Any]:
-    """Import tickets as work items + bindings (status todo), deduped on the binding. Each item
-    is ``{key, with_children?}``; an epic with children imports them under it."""
-    from ..connectors.tickets import TicketRef, get_ticket_adapter
+    """The ``ticket_import`` tool's door: a thin wrapper over B1's import
+    (``ticket_intake.import_by_keys``): work items + bindings (status todo), deduped on the
+    binding; an epic ``with_children`` brings its children under it."""
+    from . import ticket_intake as intake
 
-    conn = open_connection(db, project_id, connection_id=connection_id, provider=provider,
-                           person_id=actor, app_settings=settings)
-    if conn is None:
+    row = _intake_row(db, project_id, connection_id=connection_id, provider=provider)
+    if row is None:
         raise TicketSyncError("No ticket system is connected to this project.", status=409,
                               code="not_connected")
-    row_id = connection_id if connection_id and not str(connection_id).startswith("kit:") \
-        else _provider_row_id(db, project_id, conn.provider)
-    adapter = get_ticket_adapter(conn.provider)
-    tickets = []
-    for item in items[:50]:
-        key = str((item or {}).get("key") or "").strip()
-        if not key:
-            continue
-        ticket = adapter.get_ticket(conn, TicketRef(conn.provider, key=key))
-        tickets.append(ticket)
-        if item.get("with_children"):
-            tickets.extend(adapter.list_children(conn, ticket.ref))
-    out = _import_tickets(db, settings, conn, tickets, actor=actor, connection_id=row_id)
-    return {"connection_id": row_id, "provider": conn.provider, **out}
-
-
-def _start_for_ticket(db: Any, *, project_id: str, ticket_snapshot: dict[str, Any],
-                      work_item_id: str, actor: str) -> Optional[dict[str, Any]]:
-    """Start the project's build workflow for one imported ticket. B1's start route (which picks
-    the workflow from the ticket type) supersedes this at merge."""
-    from . import workflows as wf
-
-    body = str(ticket_snapshot.get("body") or "")
-    criteria = ticket_snapshot.get("acceptance_criteria") or []
-    directive = (f"{ticket_snapshot.get('key')}: {ticket_snapshot.get('title')}\n\n{body}"
-                 + ("\n\nAcceptance criteria:\n" + "\n".join(f"- {c}" for c in criteria)
-                    if criteria else ""))
-    run = wf.start_project_run(
-        db, project_id=project_id, actor=actor,
-        title=_short(f"{ticket_snapshot.get('key')} {ticket_snapshot.get('title')}", 200),
-        directive=directive[:12000],
-        extra_input={"ticket": ticket_snapshot, "work_item_id": work_item_id})
-    if run and run.get("id"):
-        db.execute(text("UPDATE workflow_runs SET work_item_id = COALESCE(work_item_id, :w) "
-                        "WHERE id = :id"), {"w": work_item_id, "id": run["id"]})
-    return run
+    done = intake.import_by_keys(db, settings, project_id=project_id, row=row, items=items,
+                                 actor=actor, person_id=_person(actor))
+    return {"connection_id": str(row["id"]), "provider": str(row["provider_key"]), **done}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1080,8 +1058,10 @@ def _start_for_ticket(db: Any, *, project_id: str, ticket_snapshot: dict[str, An
 
 
 def webhook_secret(db: Any, settings: Any, row: Mapping[str, Any]) -> str:
-    """The connection's inbound secret: a stored secret reference (B1 writes it when the webhook
-    is created or rotated), else the operator's BOSS_<PROVIDER>_WEBHOOK_SECRET."""
+    """The connection's inbound secret: the stored secret reference
+    (``configuration.webhook_secret_ref``, written by ``POST /v1/ticket-systems/{id}/webhook``
+    when the webhook is created or rotated), else the operator's BOSS_<PROVIDER>_WEBHOOK_SECRET.
+    Pass the HOME row (home_row): a mirror carries no secret of its own."""
     config = row.get("configuration") or {}
     hook = config.get("webhook") if isinstance(config.get("webhook"), dict) else {}
     ref = str(config.get("webhook_secret_ref") or hook.get("secret_ref") or "").strip()
@@ -1098,6 +1078,56 @@ def webhook_secret(db: Any, settings: Any, row: Mapping[str, Any]) -> str:
     return str(os.environ.get(f"BOSS_{str(row['provider_key']).upper()}_WEBHOOK_SECRET") or "")
 
 
+WEBHOOK_PATH = "/v1/webhooks/tickets/{connection_id}"
+
+
+def create_webhook(db: Any, settings: Any, connection_id: str, *, actor: str,
+                   public_base: str) -> dict[str, Any]:
+    """``POST /v1/ticket-systems/{id}/webhook``: mint the connection's inbound secret (create or
+    rotate), write it THROUGH to the secret store and keep only its reference
+    (``configuration.webhook_secret_ref``). The URL and the secret are returned ONCE; the old
+    secret stops verifying the moment the new one is stored. Only a HOME row has one (a mirror's
+    deliveries are its home's — home_row)."""
+    import secrets as _secrets
+
+    from .core import emit_event
+    from .secret_backends import default_secret_backend
+    from .secrets_service import put_secret
+
+    row = provider_row(db, connection_id)
+    if row is None or row["status"] != "active":
+        raise TicketSyncError("No such ticket-system connection.", status=404, code="not_found")
+    if is_mirror(row):
+        raise TicketSyncError("This connection is managed from the project it was connected "
+                              "in. Create its webhook there.", status=409, code="conflict")
+    from ..connectors.tickets import get_ticket_adapter
+
+    if not get_ticket_adapter(str(row["provider_key"])).can("webhook"):
+        raise TicketSyncError(f"{row['display_name'] or row['provider_key']} does not send "
+                              "webhooks; set inbound to poll instead.", status=422,
+                              code="capability_not_supported")
+    rotated = bool((row["configuration"] or {}).get("webhook_secret_ref"))
+    secret = "whsec_" + _secrets.token_urlsafe(32)
+    stored = put_secret(db, settings, project_id=str(row["project_id"]),
+                        name=f"ticket_webhook_{row['id']}", value=secret,
+                        secret_kind="api_token", backend=default_secret_backend(settings),
+                        actor=actor)
+    db.execute(text(
+        "UPDATE work_tracker_providers SET configuration = COALESCE(configuration, '{}'::jsonb) "
+        "|| jsonb_build_object('webhook_secret_ref', CAST(:ref AS TEXT), 'webhook', "
+        "jsonb_build_object('last4', CAST(:last4 AS TEXT), 'rotated_at', now()::text)), "
+        "updated_at = now() WHERE id = :id"),
+        {"ref": stored["secret_ref_id"], "last4": secret[-4:], "id": row["id"]})
+    emit_event(db, str(row["project_id"]),
+               "ticket_system.webhook_rotated" if rotated else "ticket_system.webhook_created",
+               actor, "work_tracker_provider", str(row["id"]), {"provider": row["provider_key"]})
+    return {"connection_id": str(row["id"]), "provider": str(row["provider_key"]),
+            "url": public_base.rstrip("/") + WEBHOOK_PATH.format(connection_id=row["id"]),
+            "secret": secret, "last4": secret[-4:], "rotated": rotated,
+            "note": "Shown once. Paste the URL and the secret into the ticket system's webhook "
+                    "settings; rotating makes the old secret stop working at once."}
+
+
 def verify_inbound_webhook(db: Any, settings: Any, connection_id: str,
                            headers: Mapping[str, str], body: bytes
                            ) -> tuple[Optional[dict[str, Any]], bool]:
@@ -1109,6 +1139,9 @@ def verify_inbound_webhook(db: Any, settings: Any, connection_id: str,
     row = provider_row(db, connection_id)
     if row is None or row["status"] != "active":
         return None, False
+    # A mirror's delivery is its home's: verified under the home's secret, read through the
+    # home, routed by the home's mappings (pickup) — one site, one connection, never twice.
+    row = home_row(db, row)
     try:
         adapter = get_ticket_adapter(str(row["provider_key"]))
     except Exception:  # noqa: BLE001
@@ -1135,12 +1168,15 @@ def pickup(engine: Any, settings: Any, row: Mapping[str, Any], ticket: Any, *,
     (auto_start). Deduped on the binding (already in BOSS) and on an earlier card for it."""
     from .core import create_blocking_decision, emit_event
 
-    options = sync_settings(row["configuration"])
+    with engine.begin() as db:
+        home = home_row(db, row) or dict(row)
+    options = sync_settings(home["configuration"])          # the HOME's settings, never a mirror's
     label = options["pickup"]["label"].lower()
     if not label or label not in {str(lb).lower() for lb in ticket.labels}:
         return {"status": "ignored", "reason": "no pick-up label", "key": ticket.key}
-    project_id, provider = str(row["project_id"]), str(row["provider_key"])
     with engine.begin() as db:
+        row = _target_row(db, home, ticket)                  # the mapped project's row
+        project_id, provider = str(row["project_id"]), str(row["provider_key"])
         found = binding_for(db, project_id, provider, ticket.key, external_id=str(ticket.id or ""))
         if found is not None:
             return {"status": "already_in_boss", "key": ticket.key,
@@ -1164,26 +1200,56 @@ def pickup(engine: Any, settings: Any, row: Mapping[str, Any], ticket: Any, *,
         return _import_and_start(db, settings, row, ticket, source=source)
 
 
+def _target_row(db: Any, home: Mapping[str, Any], ticket: Any) -> dict[str, Any]:
+    """Where a picked-up ticket lands: the BOSS project the home connection's ``mappings`` give
+    the ticket's external project (else the default mapping), as that family's row in it (the
+    home itself or its mirror). One site is read once, by its home; the mappings fan it out."""
+    from . import ticket_intake as intake
+
+    home = dict(home)
+    mappings = (intake.public_settings(dict(home.get("configuration") or {})).get("mappings")
+                or [])
+    key = str(getattr(ticket, "key", "") or "")
+    external = key.rsplit("-", 1)[0].upper() if "-" in key else ""
+    chosen = next((m for m in mappings if str(m.get("external_project") or "").upper()
+                   == external), None) or next((m for m in mappings if m.get("default")), None)
+    target = str((chosen or {}).get("boss_project_id") or "")
+    if not target or target == str(home["project_id"]):
+        return home
+    for rid in intake.family_ids(db, {"id": home["id"], "configuration": {}}):
+        candidate = provider_row(db, rid)
+        if candidate is not None and str(candidate["project_id"]) == target \
+                and candidate["status"] == "active":
+            return candidate
+    return home
+
+
 def _import_and_start(db: Any, settings: Any, row: Mapping[str, Any], ticket: Any, *,
                       source: str, decision_id: Optional[str] = None) -> dict[str, Any]:
+    """Import the ticket and start its work through B1: ``ticket_intake.import_tickets`` (the
+    import route's logic) and ``ticket_intake.start_from_ticket`` (the start-from-a-ticket
+    logic: the workflow its type calls for, ``input.ticket``, the binding's ``run_ids``)."""
+    from . import ticket_intake as intake
     from .core import emit_event
 
     actor = str(row.get("created_by") or "system")
-    conn = connection_from_row(db, row, app_settings=settings)
-    imported = _import_tickets(db, settings, conn, [ticket], actor=actor,
-                               connection_id=str(row["id"]))
-    entry = (imported["created"] or imported["existing"])[0]
-    snap = snapshot(ticket, str(row["id"]))
-    snap["work_item_id"] = entry["work_item_id"]
+    project_id = str(row["project_id"])
+    irow = intake.get_row(db, str(row["id"]))
+    imported = intake.import_tickets(db, settings, project_id=project_id, row=irow,
+                                     items=[(ticket, [])], actor=actor)
+    entry = (imported["imported"] or imported["already_in_boss"])[0]
     run, why = None, None
     try:
         with db.begin_nested():
-            run = _start_for_ticket(db, project_id=str(row["project_id"]), ticket_snapshot=snap,
-                                    work_item_id=entry["work_item_id"], actor=actor)
+            started = intake.start_from_ticket(db, settings, project_id=project_id,
+                                               work_item_id=str(entry["work_item_id"]),
+                                               actor=actor, person_id=_person(actor),
+                                               ticket=ticket)
+            run = started.get("run")
     except Exception as error:  # noqa: BLE001 — the import stands; a person starts it
         why = _short(str(error), 200) or type(error).__name__
         logger.warning("ticket %s imported but not started: %s", ticket.key, why)
-    emit_event(db, str(row["project_id"]), "ticket_sync.pickup_started", "ticket_sync",
+    emit_event(db, project_id, "ticket_sync.pickup_started", "ticket_sync",
                "work_item", entry["work_item_id"],
                {"key": ticket.key, "provider": row["provider_key"], "source": source,
                 "run_id": (run or {}).get("id"), "decision_id": decision_id})
@@ -1253,7 +1319,8 @@ def on_card_answered(connection: Any, settings: Any, row: Mapping[str, Any], *, 
                                   "ticket from Tickets.", status=409, code="not_connected")
         if _person(actor):
             prow = {**prow, "created_by": actor}
-        conn = connection_from_row(connection, prow, person_id=actor, app_settings=settings)
+        conn = connection_from_row(connection, home_row(connection, prow), person_id=actor,
+                                   app_settings=settings)
         try:
             ticket = get_ticket_adapter(conn.provider).get_ticket(
                 conn, TicketRef(conn.provider, key=rec.get("key") or None,
@@ -1327,6 +1394,8 @@ def poll_connection(engine: Any, settings: Any, row: Mapping[str, Any]) -> list[
     """One poll: open tickets carrying the label, each through pickup (deduped on the binding)."""
     from ..connectors.tickets import get_ticket_adapter
 
+    with engine.begin() as db:
+        row = home_row(db, row) or dict(row)      # a mirror is polled once, by its home
     options = sync_settings(row["configuration"])
     label = options["pickup"]["label"]
     if not label:
@@ -1387,6 +1456,8 @@ def tick(engine: Any, settings: Any, *, holder: str = HOLDER,
     for raw in rows:
         row = dict(raw)
         row["configuration"] = dict(_json(row.get("configuration"), {}) or {})
+        if is_mirror(row):
+            continue        # its home polls the site once; pickup routes by the mappings
         options = sync_settings(row["configuration"])
         if options["inbound"]["mode"] != "poll":
             continue
@@ -1513,5 +1584,5 @@ __all__ = [
     "pickup", "poll_connection", "provider_identity", "provider_row", "record_effect",
     "remember_identity", "resolve", "retry_failed", "run_job", "snapshot", "start", "sweep",
     "sync_settings", "tick", "ticket_import_items", "timeline", "verify_inbound_webhook",
-    "write_back",
+    "write_back", "create_webhook", "home_row",
 ]

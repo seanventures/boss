@@ -71,7 +71,8 @@ def world(engine, fake):
     world.bind(world.viewer, "viewer", project=world.project_a)
     world.conn_id = f"trk_{uuid.uuid4().hex[:12]}"
     config = {"base_url": fake.base, "email": EMAIL, "project_key": "KAN", "api_token": TOKEN,
-              "oauth_client_id": CLIENT_ID, "oauth_client_secret": CLIENT_SECRET, "settings": {}}
+              "oauth_client_id": CLIENT_ID, "oauth_client_secret": CLIENT_SECRET, "settings": {},
+              "ticket_system": True}
     with engine.begin() as c:
         c.execute(text(
             "INSERT INTO work_tracker_providers (id, project_id, provider_key, display_name, "
@@ -164,6 +165,48 @@ def test_the_ticket_webhook_is_public_and_verified_by_its_connector(client, fake
         assert again.status_code == 200 and again.json()["status"] == "already_asked"
 
 
+def test_the_webhook_route_mints_a_secret_shows_it_once_and_rotates_it(
+        client, fake, world, engine, monkeypatch):
+    """POST /v1/ticket-systems/{id}/webhook (integration:manage): a new secret, minted into the
+    secret store (the row keeps only its reference), and the URL, shown once. The public webhook
+    verifies with it; rotating stops the old one at once."""
+    monkeypatch.delenv("BOSS_JIRA_WEBHOOK_SECRET", raising=False)
+    world.owner = world.person("own")
+    world.bind(world.owner, "owner", project=world.project_a)
+    path = f"/v1/ticket-systems/{world.conn_id}/webhook"
+    with world.acting_as(world.ctx(world.operator)):
+        assert client.post(path, json={}).status_code in (403, 404)   # operator: no manage
+    with world.acting_as(world.ctx(world.owner)):
+        made = client.post(path, json={})
+    assert made.status_code == 200, made.text
+    first = made.json()
+    assert first["url"] == f"https://boss.example.test/v1/webhooks/tickets/{world.conn_id}"
+    assert first["secret"].startswith("whsec_") and first["rotated"] is False
+    with engine.begin() as c:
+        stored = c.execute(text("SELECT configuration::text FROM work_tracker_providers "
+                                "WHERE id = :i"), {"i": world.conn_id}).scalar()
+    assert "webhook_secret_ref" in stored and first["secret"] not in stored
+
+    body = _delivery()
+
+    def signed(secret):
+        return {"X-Hub-Signature": "sha256=" + hmac.new(secret.encode(), body,
+                                                        hashlib.sha256).hexdigest()}
+
+    hook = f"/v1/webhooks/tickets/{world.conn_id}"
+    with world.acting_as(None, mode="shadow"):
+        accepted = client.post(hook, content=body, headers=signed(first["secret"]))
+        assert accepted.status_code == 202, accepted.text
+    with world.acting_as(world.ctx(world.owner)):
+        second = client.post(path, json={}).json()
+    assert second["rotated"] is True and second["secret"] != first["secret"]
+    with world.acting_as(None, mode="shadow"):
+        assert client.post(hook, content=body, headers=signed(first["secret"])).status_code \
+            == 401
+        assert client.post(hook, content=body, headers=signed(second["secret"])).status_code \
+            == 200                                        # verified; already asked
+
+
 def test_the_timeline_reads_with_work_item_read_and_retry_needs_work_tracker_write(
         client, fake, world, engine):
     from boss_engine.services import ticket_sync
@@ -174,7 +217,7 @@ def test_the_timeline_reads_with_work_item_read_and_retry_needs_work_tracker_wri
     with engine.begin() as c:
         item = ticket_sync.ticket_import_items(
             c, _S(), project_id=world.project_a, items=[{"key": STORY}],
-            actor=world.operator.id, connection_id=world.conn_id)["created"][0]["work_item_id"]
+            actor=world.operator.id, connection_id=world.conn_id)["imported"][0]["work_item_id"]
     path = f"/v1/work-items/{item}/ticket-sync"
     with world.acting_as(world.ctx(world.viewer)):
         seen = client.get(path)

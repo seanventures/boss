@@ -86,7 +86,7 @@ def fake(monkeypatch):
 def _config(fake, **settings):
     return {"base_url": fake.base, "email": EMAIL, "project_key": "KAN", "api_token": TOKEN,
             "oauth_client_id": CLIENT_ID, "oauth_client_secret": CLIENT_SECRET,
-            "settings": settings}
+            "settings": settings, "ticket_system": True}
 
 
 @pytest.fixture()
@@ -148,10 +148,15 @@ def world(eng, fake):
 
 
 def _settings(eng, world, **settings):
+    """Settings as the API takes them (PATCH /v1/ticket-systems/{id}), stored the way B1 stores
+    them (ticket_intake.merge_settings): write-back reads them back through public_settings."""
+    from boss_engine.services import ticket_intake
+
     with eng.begin() as c:
-        c.execute(text("UPDATE work_tracker_providers SET configuration = jsonb_set(configuration, "
-                       "'{settings}', CAST(:s AS JSONB)) WHERE id = :id"),
-                  {"s": json.dumps(settings), "id": world["conn_id"]})
+        row = ticket_intake.get_row(c, world["conn_id"])
+        ticket_intake.update_settings_row(c, world["conn_id"],
+                                          ticket_intake.merge_settings(row["configuration"],
+                                                                       settings))
 
 
 def _import(eng, world, key=STORY):
@@ -212,7 +217,7 @@ def _comments(fake, key=STORY):
 
 
 def test_the_run_moves_its_ticket_through_every_event_once(eng, fake, world):
-    item = _import(eng, world)["created"][0]["work_item_id"]
+    item = _import(eng, world)["imported"][0]["work_item_id"]
     ticket = {**_snapshot(eng, world), "work_item_id": item}
     run = _workflow_run(eng, world, ticket, item)
     before = _comments(fake)
@@ -287,7 +292,7 @@ def test_a_code_task_inside_a_workflow_does_not_say_started_twice(eng, fake, wor
 
 
 def test_a_failed_effect_never_fails_the_run_and_retry_sends_it_once(eng, fake, world):
-    item = _import(eng, world)["created"][0]["work_item_id"]
+    item = _import(eng, world)["imported"][0]["work_item_id"]
     run = _workflow_run(eng, world, {**_snapshot(eng, world), "work_item_id": item}, item)
     before = _comments(fake)
     fake.fail_next(403, times=2)          # the transition and the comment are refused
@@ -482,6 +487,61 @@ def test_two_pollers_one_firing(eng, fake, world):
                          {"p": world["pid"]}).scalar() == cards
 
 
+def test_a_mirror_reads_its_homes_settings_and_is_never_a_second_connection(
+        eng, fake, world, monkeypatch):
+    """B1 maps one connection onto many projects by MIRROR rows (configuration.mirror_of).
+    Write-back reads the HOME's settings; the poller polls the site once (the home); a delivery
+    to a mirror's URL is the home's (its secret, its mappings), so one ticket asks once."""
+    monkeypatch.setenv("BOSS_JIRA_WEBHOOK_SECRET", SECRET)
+    _settings(eng, world, inbound={"mode": "poll", "poll_minutes": 5},
+              pickup={"label": "boss", "mode": "ask"}, status_map={"doing": "In Review"})
+    pid2 = f"p_tsm_{uuid.uuid4().hex[:8]}"
+    mirror_id = f"trk_{uuid.uuid4().hex[:12]}"
+    stale = {**_config(fake, inbound_mode="poll", pickup_label="other",
+                       status_mapping={"doing": "Nope"}), "mirror_of": world["conn_id"]}
+    with eng.begin() as c:
+        wid = c.execute(text("SELECT workspace_id FROM projects WHERE id = :p"),
+                        {"p": world["pid"]}).scalar()
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES "
+                       "(:i, :w, 'ticket mirror', :i)"), {"i": pid2, "w": wid})
+        c.execute(text(
+            "INSERT INTO work_tracker_providers (id, project_id, provider_key, display_name, "
+            "status, is_default, configuration, created_by) VALUES (:id, :p, 'jira', 'Jira', "
+            "'active', true, CAST(:c AS JSONB), :u)"),
+            {"id": mirror_id, "p": pid2, "c": json.dumps(stale), "u": world["person"]})
+    try:
+        with eng.begin() as c:
+            mirror = ticket_sync.provider_row(c, mirror_id)
+            assert ticket_sync.home_row(c, mirror)["id"] == world["conn_id"]
+            conn = ticket_sync.open_connection(c, pid2, connection_id=mirror_id)
+            assert ticket_sync.sync_settings(conn.configuration)["status_map"]["doing"] == \
+                "In Review"
+            by_provider = ticket_sync.open_connection(c, pid2, provider="jira")
+            assert ticket_sync.sync_settings(by_provider.configuration)["pickup"]["label"] == \
+                "boss"
+        ran = ticket_sync.tick(eng, SETTINGS, holder="holder-mirror",
+                               now=datetime.now(timezone.utc))
+        assert f"poll:{mirror_id}" not in {r["job"] for r in ran}
+        body = _delivery()
+        asked = ticket_sync.ingest_webhook(eng, SETTINGS, mirror_id, _signed(body), body)
+        assert asked["status"] in ("waiting", "already_asked"), asked
+        again = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body), body)
+        assert again["status"] == "already_asked"
+        with eng.begin() as c:
+            assert c.execute(text("SELECT count(*) FROM decisions WHERE project_id = :p"),
+                             {"p": pid2}).scalar() == 0
+    finally:
+        with eng.begin() as c:
+            for sql in ("DELETE FROM extension_job_leases WHERE extension_id = 'boss.tickets' "
+                        "AND job = 'poll:' || :m",
+                        "DELETE FROM decisions WHERE project_id = :p",
+                        "DELETE FROM work_tracker_providers WHERE id = :m",
+                        "DELETE FROM events WHERE project_id = :p",
+                        "DELETE FROM projects WHERE id = :p"):
+                with c.begin_nested():
+                    c.execute(text(sql), {"p": pid2, "m": mirror_id})
+
+
 # ── the tools: permissions and screening ───────────────────────────────────────────────────
 
 
@@ -592,8 +652,11 @@ def test_sync_settings_read_both_vocabularies():
     assert old["pickup"] == {"label": "ai", "mode": "auto_start"}
     assert old["inbound"] == {"mode": "webhook", "poll_minutes": 10}
     assert old["status_map"]["review"] == "QA"
-    new = ticket_sync.sync_settings({"settings": {
+    from boss_engine.services import ticket_intake
+
+    # What PATCH stores (B1's merge_settings), read back through B1's public_settings.
+    new = ticket_sync.sync_settings({"settings": ticket_intake.merge_settings({}, {
         "pickup": {"label": "boss", "mode": "ask"}, "inbound": {"mode": "poll", "poll_minutes": 2},
-        "write_back": {"link_pr": False}, "status_map": {"done": "Shipped"}}})
+        "write_back": {"link_pr": False}, "status_map": {"done": "Shipped"}})})
     assert new["write_back"] == {"comment": True, "transition": True, "link_pr": False}
     assert new["status_map"]["done"] == "Shipped" and new["inbound"]["mode"] == "poll"

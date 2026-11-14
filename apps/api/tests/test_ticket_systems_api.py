@@ -253,6 +253,26 @@ def test_connect_browse_import_and_start_from_a_ticket(world, client, engine, pr
     assert ticket_intake.fold_build_inputs(build, run_input)["instructions"].count(
         ticket_intake.BLOCK_START) == 1
 
+    # THE ENGINE'S START (B2's "Start it" card and auto_start pick-up): the same plan as the
+    # route (ticket_intake.start_plan), started in the caller's transaction, run on the binding.
+    from boss_engine.config import get_settings
+
+    other = next(i for i in got[1:] if i["key"] != f"KAN-{D.STORY}")
+    with engine.begin() as db:
+        by_engine = ticket_intake.start_from_ticket(
+            db, get_settings(), project_id=project, work_item_id=other["work_item_id"],
+            actor=world.owner.id)
+    assert by_engine["workflow_key"] in ("minor_feature", "fast_fix", "major_feature")
+    assert by_engine["run"] and by_engine["run"]["id"], by_engine
+    engine_input = _run_input(engine, by_engine["run"]["id"])
+    assert engine_input["ticket"]["key"] == other["key"]
+    assert engine_input["work_item_id"] == other["work_item_id"]
+    with engine.connect() as db:
+        meta = db.execute(text(
+            "SELECT metadata FROM work_tracker_bindings WHERE work_item_id = :w"),
+            {"w": other["work_item_id"]}).scalar()
+    assert by_engine["run"]["id"] in meta["run_ids"]
+
 
 def test_the_runner_folds_the_ticket_into_meeting_and_build():
     """The meeting objective and the build instructions are built in one place each."""

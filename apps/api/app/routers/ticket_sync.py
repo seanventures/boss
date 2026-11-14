@@ -2,7 +2,9 @@
 
 * WRITE-BACK (T6): GET /v1/work-items/{id}/ticket-sync is the timeline of what BOSS wrote to the
   ticket (each effect a receipt); POST .../ticket-sync/retry sends the failed ones again.
-* INBOUND: POST /v1/webhooks/tickets/{connection_id} is public — the connector's own
+* INBOUND: POST /v1/ticket-systems/{id}/webhook (integration:manage) creates or rotates the
+  connection's webhook secret and shows the URL + secret once.
+  POST /v1/webhooks/tickets/{connection_id} is public — the connector's own
   verify_webhook, under the connection's secret, is what authenticates it — and a ticket that
   gained the pick-up label is offered (a card) or imported and started (services/ticket_sync).
 * A PERSON'S OWN ACCOUNT ("Connect with Atlassian"): /v1/ticket-systems/{id}/oauth/start sends
@@ -32,6 +34,11 @@ from ..identity_guard import writing_get
 
 
 class RetryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    actor: Optional[str] = Field(default=None, max_length=200)
+
+
+class WebhookBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     actor: Optional[str] = Field(default=None, max_length=200)
 
@@ -68,6 +75,12 @@ def _callback_url(request: Request) -> str:
     the origin bound at the network claim), else — for a console on this machine — the loopback
     address the request came in on. Never an arbitrary Host header."""
     from boss_engine.connectors.tickets.auth import CALLBACK_PATH
+
+    return _public_base(request, "so Atlassian can send you back to BOSS") + CALLBACK_PATH
+
+
+def _public_base(request: Request, why: str) -> str:
+    """The install's public origin (see _callback_url), without a trailing slash."""
     from boss_engine.db import get_engine
     from boss_engine.identity.authn_support import origin_of, public_origin
 
@@ -80,9 +93,8 @@ def _callback_url(request: Request) -> str:
     if not base:
         raise HTTPException(status_code=409, detail={
             "error": "no_public_origin",
-            "message": "Set BOSS_PUBLIC_URL (the address people open BOSS at) so Atlassian can "
-                       "send you back to BOSS."})
-    return base.rstrip("/") + CALLBACK_PATH
+            "message": f"Set BOSS_PUBLIC_URL (the address people open BOSS at) {why}."})
+    return base.rstrip("/")
 
 
 def _page(title: str, body: str, ok: bool) -> Response:
@@ -186,6 +198,27 @@ def build_ticket_sync_router(
         if status in ("ignored", "already_in_boss", "already_asked", "unreadable"):
             return JSONResponse(status_code=200, content=result)
         return JSONResponse(status_code=202, content=result)
+
+    @router.post("/v1/ticket-systems/{connection_id}/webhook")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("work_tracker_provider", path="connection_id"))
+    def create_ticket_webhook(connection_id: str, request: Request,
+                              payload: Optional[WebhookBody] = None) -> dict:
+        """Create or rotate this connection's inbound webhook: a new secret, minted into the
+        secret store (the connection keeps only its reference), and the URL to paste into the
+        ticket system. Both are shown ONCE; rotating stops the old secret at once."""
+        base = _public_base(request, "so the ticket system can reach BOSS")
+        with begin(engine) as db:
+            row = ticket_sync.provider_row(db, connection_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="Ticket connection not found.")
+            actor = require_write_actor(db, str(row["project_id"]),
+                                        (payload or WebhookBody()).actor, "integration_manage")
+            try:
+                return ticket_sync.create_webhook(db, settings(), connection_id, actor=actor,
+                                                  public_base=base)
+            except ticket_sync.TicketSyncError as error:
+                raise HTTPException(status_code=error.status, detail={
+                    "error": error.code, "message": str(error)}) from error
 
     # ------------------------------------------------------------------ a person's own account
     def _start(connection_id: str, request: Request) -> dict[str, Any]:
