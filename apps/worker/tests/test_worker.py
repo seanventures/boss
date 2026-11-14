@@ -695,6 +695,8 @@ def test_agent_work_product_strategies_cover_initial_agent_capabilities():
     # brief producers, so they have no AGENT_WORK_PRODUCT_STRATEGIES entry.
     control_agent_kinds = {
         "agent.resume",
+        # An agent run the worker executes itself (AP-P2): a run, not a brief.
+        "agent.run",
         "agent.orchestrator.next_move",
     }
     agent_capabilities = [

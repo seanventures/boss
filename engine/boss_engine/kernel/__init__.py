@@ -3,7 +3,9 @@
 docs/architecture/HARNESS_KERNEL_DESIGN.md is the design; this package is steps K0 (the ledger:
 ledger.py, ledger_read.py, ledger_tool.py, workspace.py) and K1 (the kernel library), with the
 six-hook middleware contract and governance as mandatory middleware (AP-P1b: middleware.py,
-governance.py; docs/design/AGENT_MIDDLEWARE.md). Surfaces run on it per flag (flags.py), each
+governance.py; docs/design/AGENT_MIDDLEWARE.md), and durable execution (AP-P2: durable.py — the
+Postgres checkpointer with pending writes and fork; interrupts.py — one interrupt primitive keyed
+by stable ids; idempotency.py — what a resumed call may do twice). Surfaces run on it per flag (flags.py), each
 flipped on after parity: K2 decisions, K6 chat, K4 agent steps and meeting seats are ON by
 default; K3 the pre-check and K11 the coder are still to move. test_kernel_conformance.py holds
 each old loop equal to its preset.
@@ -23,7 +25,9 @@ from . import presets
 from .anthropic_engine import AnthropicMessagesEngine
 from .engine import (Block, CancelToken, EngineTraits, ModelRequest, OpenAIChatEngine,
                      TextEngine)
+from .durable import PgCheckpointStore, fork
 from .governance import GovernedEngine
+from .interrupts import Interrupt, interrupt
 from .loop import cancel, resume, run
 from .middleware import Jump, Middleware, MiddlewareError
 from .policies import (AcceptAny, Caps, ClipContext, OfferAll, ParsedAnswer, Policies, Recover)
@@ -36,8 +40,8 @@ from .types import (Acceptance, ControllerState, Event, Finding, KernelResult, M
 __all__ = ["AcceptAny", "Acceptance", "AnthropicMessagesEngine", "Block", "CancelToken", "Caps",
            "ClipContext", "Composite",
            "ControllerState", "EngineTraits", "Event", "Finding", "FunctionToolSet",
-           "GovernedEngine", "Jump", "KernelResult", "Middleware", "MiddlewareError",
+           "GovernedEngine", "Interrupt", "Jump", "KernelResult", "Middleware", "MiddlewareError",
            "ModelRequest", "ModelTurn", "OfferAll", "OpenAIChatEngine", "ParsedAnswer",
-           "Policies", "ReadOnlyToolSet", "Recover", "RegistryToolSet", "RunSpec", "ScopedTools",
+           "PgCheckpointStore", "Policies", "ReadOnlyToolSet", "Recover", "RegistryToolSet", "RunSpec", "ScopedTools",
            "Step", "StopReason", "TextEngine", "Tool", "ToolCall", "ToolResult", "ToolSchema",
-           "Usage", "cancel", "presets", "resume", "run"]
+           "Usage", "cancel", "fork", "interrupt", "presets", "resume", "run"]

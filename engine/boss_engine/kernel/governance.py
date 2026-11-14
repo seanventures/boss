@@ -227,6 +227,10 @@ class Authz:
                                                 "permission": refusal.get("permission")})
                     return ToolResult(call.id, call.name, "refused", refusal)
         result = handler(request)
+        if result.status == "deferred" and result.budget is None and not result.decision_id \
+                and (result.pending or {}).get("interrupt") is not None \
+                and getattr(run.spec, "interrupts", None) is not None:
+            result = self._open_interrupt(run, request, result)
         if result.status == "deferred" and result.budget is None:
             if not result.decision_id:
                 return ToolResult(call.id, call.name, "refused", {
@@ -240,6 +244,42 @@ class Authz:
             pending.setdefault("args_sha256", args_sha256(call.name, args))
             result.pending = pending
         return result
+
+
+    @staticmethod
+    def _open_interrupt(run: Any, request: Any, result: Any) -> Any:
+        """A tool's `interrupt(...)` made a Decision (kernel/interrupts.py): its stable id is
+        the call's own (run, step, call) unless the tool named one, and an approval is bound to
+        the call's exact arguments (argument_binding v2) — what a resume must still match."""
+        import dataclasses
+
+        from ..services.argument_binding import bind_held_call
+        from .interrupts import APPROVAL, Interrupt, call_interrupt_id
+
+        call = request.call
+        declared = dict((result.pending or {}).get("interrupt") or {})
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        kind = str(declared.get("kind") or APPROVAL)
+        binding = dict(declared.get("binding") or {})
+        if kind == APPROVAL:
+            binding = {**binding, **bind_held_call(call.name, args)}
+        item = Interrupt(id=str(declared.get("id") or call_interrupt_id(
+                             run.state.run_id, int(request.step), call.id)),
+                         kind=kind, payload=dict(declared.get("payload") or {}),
+                         schema=declared.get("schema"), binding=binding or None,
+                         tool=call.name, args=args, call_id=call.id, step=int(request.step))
+        item.decision_id = run.spec.interrupts.open(run.state, item)
+        run.rec.emit("decision", {"tool": call.name, "interrupt_id": item.id,
+                                  "decision_id": item.decision_id, "kind": kind})
+        content = {**(result.content if isinstance(result.content, dict) else {}),
+                   "status": "deferred_for_approval", "decision_id": item.decision_id,
+                   "interrupt_id": item.id}
+        pending = {"interrupt": item.as_pending(),
+                   **({"question": True} if kind == "question" else {})}
+        if binding.get("args_sha256"):
+            pending["args_sha256"] = binding["args_sha256"]
+        return dataclasses.replace(result, content=content, decision_id=item.decision_id,
+                                   pending=pending)
 
 
 class ToolScreen:
@@ -322,7 +362,12 @@ class Audit:
             return ToolResult(call.id, call.name, "skipped",
                               {"status": "skipped", "note": "this exact call already ran"})
         started = run.spec.clock()
-        result = handler(request)
+        from .idempotency import keyed
+
+        # A `keyed` tool dedupes on this key (kernel/idempotency.py): run:step:call, the same on
+        # every re-run of the call after a crash.
+        with keyed(key):
+            result = handler(request)
         state.extra["_last_tool_latency"] = int((run.spec.clock() - started) * 1000)
         if request.approved is not None:
             state.executed.append(key)

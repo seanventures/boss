@@ -637,6 +637,7 @@ def scripted_target(engine: Any, project_id: str, *, fixes: Optional[Mapping] = 
     that fixed it). So a confirmed miss FAILS every battle run until it is fixed."""
     from .. import kernel
     from ..kernel import presets
+    from ..kernel.durable import store_for
     from ..kernel.ledger import DbSink
     from ..kernel.scripted import Say, ScriptedEngine
 
@@ -650,7 +651,9 @@ def scripted_target(engine: Any, project_id: str, *, fixes: Optional[Mapping] = 
             system="Answer the case with your verdict as a JSON object.",
             messages=[{"role": "user", "content": json.dumps(example.get("input") or {},
                                                              default=str)[:20_000]}],
-            sink=DbSink(engine)))
+            sink=DbSink(engine),
+            # a suspension lives in Postgres, never only in this process (AP-P2)
+            store=store_for(engine)))
         try:
             output = json.loads(result.text or "null")
         except ValueError:

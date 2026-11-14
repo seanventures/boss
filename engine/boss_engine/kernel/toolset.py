@@ -48,6 +48,11 @@ def result_from(call: ToolCall, value: Any) -> ToolResult:
     if not isinstance(value, Mapping):
         return ToolResult(call.id, call.name, "ok", value)
     status = str(value.get("status") or "")
+    if status == "interrupt" and isinstance(value.get("interrupt"), Mapping):
+        # kernel.interrupts.interrupt(...): the run waits on a person. The governance's authz
+        # makes it a hash-bound Decision through the run's interrupt port.
+        return ToolResult(call.id, call.name, "deferred", dict(value),
+                          pending={"interrupt": dict(value["interrupt"])})
     if status in _DEFERRED and value.get("decision_id"):
         return ToolResult(call.id, call.name, "deferred", dict(value),
                           untrusted=bool(value.get("untrusted")),
@@ -189,7 +194,8 @@ class RegistryToolSet:
                                   # registry.invoke's identity_gate decides these calls (the
                                   # permission for these arguments, org scope, confinement):
                                   # the mandatory authz middleware hands over to it.
-                                  permission=GATED_BY_REGISTRY))
+                                  permission=GATED_BY_REGISTRY,
+                                  idempotency=getattr(s, "idempotency", None)))
         return out
 
     def policy(self, call: ToolCall, args: dict, state: RunState) -> Optional[dict]:

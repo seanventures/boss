@@ -4258,11 +4258,18 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
         )
     else:
         question = f"Approve the technical plan for “{(title or 'this task')[:70]}” before BOSS writes code?"
+    # THE PLAN GATE IS AN INTERRUPT (AP-P2, services/interrupts.py): a stable id per (build,
+    # plan), bound to the plan's text — the resume re-checks that the plan it reuses is the plan
+    # a person approved (a redesign after sign-off is asked again, never shipped on an old Yes).
+    from .interrupts import open_interrupt, plan_interrupt
+
+    gate = plan_interrupt(run_id, design)
     with _transaction(engine) as c:
         c.execute(
             sql("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) || CAST(:s AS JSONB), "
                  "updated_at=now() WHERE id=:id"),
-            {"s": json.dumps({"design": design, "awaiting_plan_approval": True}), "id": run_id})
+            {"s": json.dumps({"design": design, "awaiting_plan_approval": True,
+                              "plan_interrupt_id": gate.id}), "id": run_id})
         _release(
             budget,
             c,
@@ -4271,10 +4278,9 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
             "Paused for human plan approval (Wire-Phase 2b).",
             run_id=run_id,
         )
-        dec_id = create_blocking_decision(
-            c, project_id, task_id,
-            question,
-            {
+        dec_id = open_interrupt(
+            c, project_id=project_id, task_id=task_id, item=gate, question=question,
+            recommendation={
                 "action": "resume_code_task",
                 "run_id": run_id,
                 "why": why,
@@ -4283,9 +4289,9 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
                 "plan": (design.get("plan") or "")[:4000],
                 "plan_review": (design.get("plan_review") or "")[:2000],
             },
-            {"phase": "plan", "risk_tier": risk_tier},
-            why,
-            risk_tier=risk_tier)
+            cost_summary={"phase": "plan", "risk_tier": risk_tier},
+            reason=why,
+            risk_tier=risk_tier, create=create_blocking_decision)
         # A PLAN GATE HOLDS ITS BUILD; IT DOES NOT TIME OUT. Every blocking decision gets a 24h
         # hold deadline, and an expired plan question dropped out of "Needs you" while the build
         # sat at "Needs you · plan" for weeks on an existing install. No deadline: it waits for
@@ -4689,6 +4695,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # persisted — reuse it and skip the design phase + the gate.
     prior_state = run.get("state") or {}
     resume_design = prior_state.get("design") if prior_state.get("awaiting_plan_approval") else None
+    if resume_design is not None and prior_state.get("plan_interrupt_id"):
+        # RESUMED BY THE INTERRUPT'S ID, BOUND TO THE PLAN (AP-P2): the design reused must be
+        # the one the approval was given for. Anything else designs and asks again.
+        from .interrupts import binding_refusal, plan_interrupt
+
+        with _transaction(engine) as c:
+            refused = binding_refusal(c, str(prior_state["plan_interrupt_id"]),
+                                      binding=plan_interrupt(run_id, resume_design).binding or {})
+        if refused:
+            logger.warning("plan gate of %s not released: %s", run_id, refused)
+            resume_design = None
     if resume_design is None:
         # RESUME ACROSS ATTEMPTS. A repair re-ran standards+spec+plan+review_plan every time —
         # four agent sessions (~10 min, ~$5 on the strong lane) re-deriving a plan for a task

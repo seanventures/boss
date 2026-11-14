@@ -505,6 +505,10 @@ def _create_blocking_decision_postgres(
     # ("Deploy HelpDesk to 192.0.2.202 · staging"), and merging them handed both runs one
     # decision: the approval queued one, and the other sat at "Needs you" forever.
     subject_run = str(rec_in.get("deployment_run_id") or "").strip() or None
+    # AN INTERRUPT IS ITS OWN CAUSE (AP-P2, kernel/interrupts.py): two tools of one step that
+    # each wait on a person ask two questions, answered one by one and resumed together. Merged
+    # on their words, one Approve would answer both, bound to only one of their arguments.
+    interrupt = str(rec_in.get("interrupt_id") or "").strip() or None
     existing = connection.execute(
         sql(
             """
@@ -517,12 +521,14 @@ def _create_blocking_decision_postgres(
               AND (CAST(:gate_run AS TEXT) IS NULL
                    OR recommendation->>'step_id' IS NOT DISTINCT FROM :gate_step)
               AND recommendation->>'deployment_run_id' IS NOT DISTINCT FROM :subject_run
+              AND recommendation->>'interrupt_id' IS NOT DISTINCT FROM :interrupt
             ORDER BY created_at DESC
             LIMIT 1
             """
         ),
         {"project_id": project_id, "question": question, "task_id": task_id,
-         "gate_run": gate_run, "gate_step": gate_step, "subject_run": subject_run},
+         "gate_run": gate_run, "gate_step": gate_step, "subject_run": subject_run,
+         "interrupt": interrupt},
     ).mappings().first()
     if existing:
         prior = existing["recommendation"] or {}

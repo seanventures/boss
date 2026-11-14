@@ -65,6 +65,20 @@ class RunSpec:
     #: tool_result_screen.screen_result bound to the project (its mode, the model check). None:
     #: the deterministic pattern screen.
     screen: Optional[Callable[[Any, str], Any]] = None
+    #: AP-P2. The thread the run belongs to (agent_threads), carried in every checkpoint.
+    thread_id: Optional[str] = None
+    #: Where a tool's interrupt becomes a Decision (services/interrupts.DecisionInterrupts, or
+    #: interrupts' in-memory port in tests): `open(state, interrupt) -> decision_id`. None: a
+    #: tool that interrupts without raising its own Decision is refused (authz), as before.
+    interrupts: Any = None
+    #: Several tools of one step may each wait on a person; the run suspends once, on all of
+    #: them, and resumes once with every answer, matched by interrupt id (kernel/interrupts.py).
+    #: False keeps the first hold's "a prior action this turn awaits approval" for the rest.
+    parallel_interrupts: bool = False
+    #: Asked at every step boundary: True when the process is draining (a deploy's SIGTERM).
+    #: The run checkpoints and ends `drained`; its job is handed back without spending an
+    #: attempt, and the next worker resumes it from that checkpoint.
+    drain: Optional[Callable[[], bool]] = None
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
 

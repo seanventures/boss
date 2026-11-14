@@ -58,6 +58,13 @@ class RunState:
     seq: int = 0
     #: The caller's own fields (agent_loop's finalize_ctx rides here, untouched by the kernel).
     extra: dict = field(default_factory=dict)
+    #: AP-P2: the thread this run belongs to, the checkpoint this state was last written as (the
+    #: parent of the next), and the tool batch in flight — {"step", "calls": [call ids]} while a
+    #: model turn's tool calls run, None between steps. A run resumed with a batch in flight
+    #: replays its recorded writes and re-runs only the calls that did not finish.
+    thread_id: Optional[str] = None
+    checkpoint_id: Optional[str] = None
+    batch: Optional[dict] = None
 
     def idempotency_key(self, step: int, call_id: str) -> str:
         return f"{self.run_id}:{step}:{call_id}"

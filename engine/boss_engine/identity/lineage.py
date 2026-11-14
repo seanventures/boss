@@ -322,7 +322,8 @@ SYSTEM_ACTING = Acting(principal_id=SYSTEM_PRINCIPAL, org_id="", system=True)
 #: (#8). Other kinds (sweeps, deliveries) are BOSS's own work.
 DELEGATED_JOB_KINDS = frozenset({"code.task", "software_factory.propose_pr", "github.pull_request.merge",
                                  "change_set.merge",
-                                 "github.repository.reconcile", "agent.resume", "agent.studio.execute",
+                                 "github.repository.reconcile", "agent.resume", "agent.run",
+                                 "agent.studio.execute",
                                  "agent.orchestrator.next_move", "skill.execute"})
 
 

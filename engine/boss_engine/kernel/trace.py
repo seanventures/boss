@@ -317,16 +317,24 @@ class Trace:
         freed), and the run span is running again."""
         ctx = self.ctx(run)
         held = ctx.pop("interrupt", None)
+        # AP-P2: every interrupt the run waited on (parallel holds, an unknown outcome) ends.
+        others = [i for i in ctx.pop("interrupts", None) or []
+                  if isinstance(i, dict) and i.get("id") != (held or {}).get("id")]
         now = self.clock()
-        if isinstance(held, dict):
-            span = self._restore(run, held, kind="interrupt")
+        for saved in ([held] if isinstance(held, dict) else []) + others:
+            span = self._restore(run, saved, kind="interrupt")
             span.status, span.ended_at = "ok", now
             span.attributes = {**span.attributes, "resumed": True}
             self._write(run, span)
         ctx.pop("step", None)
         run_span = self._run_span(run)
         run_span.status = "running"
-        run_span.attributes = {**run_span.attributes, "resumed_at": _iso(now)}
+        # AP-P2: which checkpoint the run went on from, and a crashed batch it finished first.
+        run_span.attributes = {**run_span.attributes, "resumed_at": _iso(now),
+                               "resumed_from_checkpoint": getattr(run.state, "checkpoint_id",
+                                                                  None),
+                               **({"resumed_batch": run.resumed_batch}
+                                  if getattr(run, "resumed_batch", None) else {})}
         self._write(run, run_span)
 
     def _restore(self, run: Any, saved: dict, *, kind: str) -> Span:
@@ -468,18 +476,30 @@ class Trace:
 
     def _interrupt(self, run: Any, tool: Span, result: Any) -> None:
         """A held call is an interrupt: a span that stays open until the run resumes."""
-        ctx = self.ctx(run)
         budget = getattr(result, "budget", None)
-        span = self._span(run, "interrupt",
-                          "budget" if budget else f"approval {tool.name}",
-                          parent=self._parent(run), decision_id=getattr(result, "decision_id",
-                                                                        None),
-                          attributes={"tool": tool.name, "tool_span": tool.span_id,
-                                      "budget": budget, "on": "budget" if budget else "decision"})
+        pending = getattr(result, "pending", None) or {}
+        declared = pending.get("interrupt") if isinstance(pending.get("interrupt"), dict) else {}
+        self.interrupt_opened(
+            run, "budget" if budget else f"{declared.get('kind') or 'approval'} {tool.name}",
+            decision_id=getattr(result, "decision_id", None),
+            attributes={"tool": tool.name, "tool_span": tool.span_id, "budget": budget,
+                        "on": "budget" if budget else "decision",
+                        "interrupt_id": declared.get("id") or pending.get("interrupt_id")})
+
+    def interrupt_opened(self, run: Any, name: str, *, decision_id: Optional[str] = None,
+                         attributes: Optional[dict] = None) -> None:
+        """ONE SPAN PER INTERRUPT (AP-P2, kernel/interrupts.py): open until the run resumes.
+        Parallel holds in one step are each their own span; the first is also `interrupt`."""
+        ctx = self.ctx(run)
+        span = self._span(run, "interrupt", name, parent=self._parent(run),
+                          decision_id=decision_id, attributes=dict(attributes or {}))
         span.status = "held"
-        ctx["interrupt"] = {"id": span.span_id, "parent": span.parent_span_id,
-                            "name": span.name, "started": span.started_at, "step": span.step,
-                            "decision_id": span.decision_id, "attributes": span.attributes}
+        saved = {"id": span.span_id, "parent": span.parent_span_id, "name": span.name,
+                 "started": span.started_at, "step": span.step,
+                 "decision_id": span.decision_id, "attributes": span.attributes}
+        if not isinstance(ctx.get("interrupt"), dict):
+            ctx["interrupt"] = saved
+        ctx.setdefault("interrupts", []).append(saved)
         self._write(run, span)
 
     # ── after_agent: the run span closes (or waits) ──────────────────────────────────────

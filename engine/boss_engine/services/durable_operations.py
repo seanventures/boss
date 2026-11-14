@@ -77,6 +77,9 @@ JOB_KIND_CLASSES: dict[str, str] = {
     "plan.generate": PURE,
     "plan.command": PURE,
     "meeting.step": PURE,
+    # An agent run resumes from its last checkpoint; each TOOL it calls declares its own class
+    # and an irreversible one that may have happened parks (kernel/idempotency.py).
+    "agent.run": IDEMPOTENT,
     "openai.plan": PURE,
 }
 

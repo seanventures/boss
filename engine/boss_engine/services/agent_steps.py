@@ -572,8 +572,14 @@ def run(
     mcp: Optional[list[str]] = None,
     chosen: Optional[dict[str, Any]] = None,
     route_ref: Optional[dict[str, str]] = None,
+    on_worker: bool = False,
 ) -> dict[str, Any]:
     """Hand one instruction to one agent and let it work.
+
+    `on_worker` (AP-P2, D5): the run is ADMITTED to execute on a worker — its row and its
+    `agent.run` job in this transaction, on the step's own thread — instead of being driven
+    here; the answer is `status: queued` with the run to wait on (`agent_run_id`), and the
+    workflow judges the run when it ends (workflow_capability_runner._finished_agent_step).
 
     `role_key` names the agent. Left out, BOSS picks one — which is the difference between "I
     know who should do this" and "you work it out", and both are things an operator says.
@@ -683,9 +689,17 @@ def run(
                  + "\n".join(f"  {k}: {json.dumps(v) if not isinstance(v, str) else v}"
                              for k, v in context.items() if v not in (None, "", {}, [])))
 
-    from .agent_loop import load_agent_run, run_agent_loop
+    from .agent_loop import admit_agent_run, load_agent_run, run_agent_loop
 
-    result = run_agent_loop(
+    route = {k: v for k, v in (route_ref or {}).items() if v}
+    start = run_agent_loop
+    if on_worker:
+        thread_ref = (f"workflow_step:{route.get('workflow_run_id')}:{route.get('step_id')}"
+                      if route.get("workflow_run_id") and route.get("step_id") else None)
+
+        def start(*args: Any, **kwargs: Any) -> dict[str, Any]:  # noqa: F811
+            return admit_agent_run(*args, **kwargs, thread_ref=thread_ref, actor=actor)
+    result = start(
         connection,
         settings,
         project_id,

@@ -173,6 +173,9 @@ class ToolSchema:
     #: The result was screened where it was produced (mcp_registry's receipt door): the
     #: middleware still marks and remembers it, but never screens it twice.
     prescreened: bool = False
+    #: A write's idempotency class (kernel/idempotency.py): what a resumed run may do with a
+    #: call of it whose outcome was never recorded. None on a write reads as irreversible.
+    idempotency: Optional[str] = None
 
     def as_openai(self, *, strict: bool = False) -> dict:
         fn: dict = {"name": self.name, "description": self.description,
@@ -184,12 +187,14 @@ class ToolSchema:
     @classmethod
     def from_openai(cls, schema: Mapping[str, Any], *, kind: str = "read",
                     reversibility: str = "safe", permission: Optional[str] = None,
-                    origin: Optional[str] = None, prescreened: bool = False) -> "ToolSchema":
+                    origin: Optional[str] = None, prescreened: bool = False,
+                    idempotency: Optional[str] = None) -> "ToolSchema":
         fn = schema.get("function") if isinstance(schema.get("function"), Mapping) else schema
         return cls(name=str(fn.get("name") or ""), description=str(fn.get("description") or ""),
                    parameters=dict(fn.get("parameters") or {"type": "object", "properties": {}}),
                    kind="write" if kind == "write" else "read", reversibility=reversibility,
-                   permission=permission, origin=origin, prescreened=prescreened)
+                   permission=permission, origin=origin, prescreened=prescreened,
+                   idempotency=idempotency)
 
 
 @dataclass

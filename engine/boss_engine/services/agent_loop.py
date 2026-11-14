@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import json
 import re
 import time
@@ -1939,6 +1940,67 @@ def run_agent_loop(
         return _drive_run(connection, settings, run_id, max_steps)
 
 
+def admit_agent_run(
+    connection: Connection,
+    settings: Settings,
+    project_id: str,
+    system_prompt: Optional[str],
+    user_prompt: str,
+    *,
+    task_id: Optional[str] = None,
+    max_steps: Optional[int] = None,
+    finalize_ctx: Optional[dict] = None,
+    thread_ref: Optional[str] = None,
+    actor: str = "workflow",
+    trigger: str = "workflow_step",
+) -> dict:
+    """ADMIT an agent run to EXECUTE ON A WORKER (AP-P2, agent_run_worker): the same run
+    `run_agent_loop` starts — the knowledge pack, the flagged-ticket hold, the kernel stamp —
+    written with its `agent.run` job in the caller's transaction (thread_runs.admit) on the
+    thread `thread_ref` names (a workflow step's own thread), and NOT driven here. The caller
+    waits on it (`await: agent_run`). Returns {"status": "queued" | "pending", "run_id", ...}."""
+    from . import thread_runs
+
+    run_id = make_id("arun")
+    try:
+        from .knowledge.runtime import append_quoted_pack, quoted_pack_for_turn
+
+        system_prompt = append_quoted_pack(
+            system_prompt,
+            quoted_pack_for_turn(connection, project_id=project_id, query=user_prompt,
+                                 run_id=run_id),
+        ) or None
+    except Exception:
+        pass
+    messages: list[dict] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_prompt})
+    from .ticket_intake import hold_writes_if_untrusted
+
+    fctx = hold_writes_if_untrusted(connection, finalize_ctx)
+    fctx = {**(fctx or {}), "max_steps": int(max_steps) if max_steps else None}
+    role = str((fctx.get("agent_step") or {}).get("role_key") or fctx.get("role_key") or "")
+    thread_id = thread_runs.ensure_thread(connection, project_id=project_id, actor=actor,
+                                          external_ref=thread_ref, agent_id=role or None)
+    admitted = thread_runs.admit(connection, project_id=project_id, thread_id=thread_id,
+                                 messages=messages, finalize_ctx=fctx, task_id=task_id,
+                                 trigger=trigger, run_id=run_id)
+    emit_event(connection, project_id, "agent.run_started", "agent_loop", "agent_run", run_id,
+               {"task_id": task_id, "executes_on": "worker", "job_id": admitted.get("job_id"),
+                "thread_id": thread_id})
+    return admitted
+
+
+def agent_runs_on_workers() -> bool:
+    """D5 (AP-P2): workflow agent steps execute on workers. ON by default;
+    BOSS_AGENT_RUNS_ON_WORKERS=0 drives them inside the tick, as before."""
+    import os
+
+    return os.environ.get("BOSS_AGENT_RUNS_ON_WORKERS", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
 #: The native typed-question tool (typed_forms.ASK_HUMAN_SCHEMA); offered to unbounded runs.
 _ASK_HUMAN = "ask_human"
 #: A typed question to a person (typed_forms, BOSSAPP-832); its answer may create work items.
@@ -2139,10 +2201,19 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         # K4: a run the kernel drove resumes on the kernel — the held call runs down the same
         # governed tool chain, bound again to the approval's argument digest
         # (kernel/governance.approval_refusal), and its result replaces the deferral.
+        #
+        # AP-P2: RESUMED BY ID. Every interrupt the run waits on is answered from the decision
+        # that carries its stable id (services/interrupts.answers_for_run), never by order; the
+        # kernel checks each against its binding before anything runs.
+        from .interrupts import answers_for_run
+
+        answers = answers_for_run(connection, pending)
         emit_event(connection, project_id, "agent.run_resumed", "decision_approval",
-                   "agent_run", run_id, {"tool": pending.get("tool")})
+                   "agent_run", run_id, {"tool": pending.get("tool"),
+                                         "interrupts": sorted(answers)})
         return _drive_run_on_kernel(connection, settings, run_id, None, decision={
-            **recommendation, "approved": True, "decision_id": decision_id})
+            **recommendation, "approved": True, "decision_id": decision_id},
+            answers=answers or None)
     result = _execute_approved(connection, settings, run, run_id, pending, decision_id)
     messages = run["messages"]
     # THE DEFERRED TOOL PAYLOAD IS NOT THE RESULT.
@@ -2394,7 +2465,7 @@ def _hold_for_untrusted_content(
         }
     else:
         pending = {"tool": name, "args": args}
-    decision_id = create_blocking_decision(
+    decision_id = _open_hold_interrupt(
         connection, project_id, task_id, question, recommendation, {},
         "untrusted_content_requires_approval",
     )
@@ -2410,6 +2481,44 @@ def _hold_for_untrusted_content(
         "sent": False,
         "message": hold.get("message") or question,
     }, pending
+
+
+def _open_hold_interrupt(connection: Connection, project_id: str, task_id: Optional[str],
+                   question: str, recommendation: dict, cost_summary: dict, reason: str,
+                   **kwargs: Any) -> str:
+    """EVERY HELD CALL OF AN AGENT RUN IS AN INTERRUPT (AP-P2, services/interrupts.py): the
+    same Decision `create_blocking_decision` made, opened through the one door, carrying a
+    stable interrupt id derived from what waits — the run, the tool and its exact arguments —
+    and bound to those arguments. The resume finds it by that id (resume_agent_run)."""
+    from ..kernel.interrupts import APPROVAL, Interrupt, content_hash, interrupt_id
+    from .interrupts import open_interrupt
+
+    args = recommendation.get("args") if isinstance(recommendation.get("args"), dict) else {}
+    digest = str(recommendation.get("args_sha256")
+                 or content_hash({"tool": recommendation.get("tool"), "args": args}))
+    item = Interrupt(id=interrupt_id(recommendation.get("run_id") or "",
+                                     recommendation.get("tool") or "", digest),
+                     kind=APPROVAL, binding={"args_sha256": digest},
+                     tool=recommendation.get("tool"), args=args)
+    return open_interrupt(connection, project_id=project_id, task_id=task_id, item=item,
+                          question=question, recommendation=recommendation, reason=reason,
+                          cost_summary=cost_summary, risk_tier=int(kwargs.get("risk_tier", 2)),
+                          default_action=str(kwargs.get("default_action", "hold")),
+                          # this module's own name for it, so a caller that replaced it here
+                          # (a test's in-memory decisions) is the one used
+                          create=create_blocking_decision)
+
+
+def _interrupt_of(connection: Connection, decision_id: Optional[str]) -> Optional[str]:
+    from .interrupts import _on_postgres
+
+    if not decision_id or not _on_postgres(connection):
+        return None
+    try:
+        return connection.execute(text("SELECT interrupt_id FROM decisions WHERE id = :d"),
+                                  {"d": decision_id}).scalar()
+    except Exception:  # noqa: BLE001 — a store with no such column: no id to carry
+        return None
 
 
 def kernel_steps() -> bool:
@@ -2554,8 +2663,16 @@ def _kernel_engine_for(raw: Any) -> Any:
     return kernel.OpenAIChatEngine(raw, name=str(getattr(choice, "engine", "") or "openai"))
 
 
+#: How THIS drive is hosted (AP-P2): set by the worker that executes a run
+#: (agent_run_worker.execute) — {"commit": the run's connection commits at every checkpoint,
+#: "fence": the lease check before each write, "drain": the deploy's drain flag, "should_stop":
+#: a double-text interrupt}. Unset inside an HTTP request: the caller's transaction, as before.
+_DRIVE: contextvars.ContextVar = contextvars.ContextVar("boss_agent_drive", default=None)
+
+
 def _drive_run_on_kernel(connection: Connection, settings: Settings, run_id: str,
-                         max_steps: Optional[int], *, decision: Optional[dict] = None) -> dict:
+                         max_steps: Optional[int], *, decision: Optional[dict] = None,
+                         answers: Optional[dict] = None) -> dict:
     """THE AGENT RUN ON THE HARNESS KERNEL (K4, AP-P1b, BOSS_KERNEL_STEPS).
 
     `kernel.run` with presets.agent_loop over AgentStepToolSet: the same model (routed once for
@@ -2616,8 +2733,18 @@ def _drive_run_on_kernel(connection: Connection, settings: Settings, run_id: str
         sink = None
 
     tools = AgentStepToolSet(connection, settings, run, run_id)
-    store = _KernelRunStore(connection, project_id=project_id, task_id=task_id,
-                            finalize_ctx=finalize_ctx)
+    mirror = _KernelRunStore(connection, project_id=project_id, task_id=task_id,
+                             finalize_ctx=finalize_ctx)
+    # THE CHECKPOINT IS POSTGRES (AP-P2): agent_checkpoints per super-step with the batch's
+    # pending writes, the agent_runs row kept in step as its mirror. On a worker the run's
+    # connection commits at every checkpoint, fenced by the job's lease (agent_run_worker).
+    from ..kernel.durable import store_for
+    from .interrupts import DecisionInterrupts
+
+    opts = _DRIVE.get() or {}
+    store = store_for(connection, writes=True, mirror=mirror,
+                      thread_id=run.get("thread_id") or finalize_ctx.get("thread_id"),
+                      commit=bool(opts.get("commit")), fence=opts.get("fence")) or mirror
     # Each drive gets the old loop's step budget: a resumed run continues with `steps_cap`
     # more steps, as the old loop's resume did.
     steps_cap = int(max_steps or settings.agent_max_steps)
@@ -2631,12 +2758,17 @@ def _drive_run_on_kernel(connection: Connection, settings: Settings, run_id: str
         resume_note=presets.agent_loop_resume_note, extra=finalize_ctx, db=connection,
         screen=lambda result, ref: screen_result(connection, settings, project_id, result,
                                                  ref=ref),
-        sleep=lambda seconds: _transient.time.sleep(seconds))
+        sleep=lambda seconds: _transient.time.sleep(seconds),
+        thread_id=run.get("thread_id") or finalize_ctx.get("thread_id"),
+        interrupts=DecisionInterrupts(connection, project_id=project_id, task_id=task_id),
+        drain=opts.get("drain"),
+        cancel=kernel.CancelToken(should_stop=opts["should_stop"])
+        if opts.get("should_stop") else None)
     if blob is None:
         result = kernel.run(spec)
     else:
-        result = kernel.resume(spec, decision=decision)
-    return _kernel_outcome(connection, project_id, run_id, result, store, tools)
+        result = kernel.resume(spec, decision=decision, answers=answers)
+    return _kernel_outcome(connection, project_id, run_id, result, mirror, tools)
 
 
 def _kernel_outcome(connection: Connection, project_id: str, run_id: str, result: Any,
@@ -2675,6 +2807,11 @@ def _kernel_outcome(connection: Connection, project_id: str, run_id: str, result
                 "message": BUDGET_BUSY_MESSAGE}
     if result.status == "denied":
         return {"status": "denied", "run_id": run_id, "reason": result.error}
+    if result.status == "drained":
+        # Stopped at a step boundary by a deploy's drain: checkpointed, resumed by the next
+        # worker from exactly there (agent_run_worker hands the job back, no attempt spent).
+        return {"status": "drained", "run_id": run_id, "output_text": "", "usage": usage,
+                "transcript": transcript}
     if result.status == "cancelled":
         return {"status": "cancelled", "run_id": run_id, "output_text": result.text,
                 "usage": usage, "transcript": transcript}
@@ -3115,6 +3252,22 @@ class AgentStepToolSet:
     def origin_of(self, name: str) -> Optional[str]:
         return _origin_for_call(name, self.mcp_map, self.skill_map)
 
+    def idempotency_of(self, name: str) -> Optional[str]:
+        from ..kernel import idempotency
+
+        if name in _WRITE_FNS:
+            try:
+                return native_tool_registry().get(name).idempotency
+            except Exception:  # noqa: BLE001 — undeclared reads as irreversible
+                return None
+        if name in self.mcp_map:
+            server, tool = self.mcp_map[name][:2] if isinstance(self.mcp_map[name], (tuple, list)) \
+                else (None, None)
+            if isinstance(server, dict) and isinstance(tool, dict) \
+                    and _mcp_tool_risk(server, tool) > self.threshold:
+                return idempotency.IRREVERSIBLE
+        return None
+
     # ── the kernel's ToolSet ──────────────────────────────────────────────────────────────
     def schemas(self, *, step: int, state: Any) -> list:
         from ..kernel.types import ToolSchema
@@ -3126,7 +3279,11 @@ class AgentStepToolSet:
                 schema, kind="write" if name in _WRITE_FNS else "read",
                 permission=self.permission_of(name), origin=self.origin_of(name),
                 # An MCP result comes through the receipt door, which screened it already.
-                prescreened=name in self.mcp_map))
+                prescreened=name in self.mcp_map,
+                # What a resumed run may do with this call if its outcome was never recorded
+                # (kernel/idempotency.py): a native write's declared class; a skill or MCP tool
+                # above the autonomous risk floor acts on the world — irreversible.
+                idempotency=self.idempotency_of(name)))
         return out
 
     def invoke(self, call: Any, *, state: Any, approved: Optional[dict] = None) -> Any:
@@ -3144,10 +3301,12 @@ class AgentStepToolSet:
         result, held, waited = self.dispatch(call.name, args, step=max(0, state.step - 1),
                                              flags=state.extra, ledger=ledger)
         if held is not None:
+            iid = _interrupt_of(self.connection, held.get("decision_id"))
             return ToolResult(call.id, call.name, "deferred", result,
                               decision_id=str(held.get("decision_id") or ""),
                               pending={**held, **({"question": True}
-                                                  if held.get("kind") == _ASK_HUMAN else {})})
+                                                  if held.get("kind") == _ASK_HUMAN else {}),
+                                       **({"interrupt_id": iid} if iid else {})})
         if waited is not None:
             return ToolResult(call.id, call.name, "deferred", result, budget=dict(waited))
         return result_from(call, result)
@@ -3260,7 +3419,9 @@ class AgentStepToolSet:
                           "message": "Your question is with a person; the run resumes with "
                                      "their typed answer."}
                 deferred = {"tool": name, "args": args, "decision_id": asked["decision_id"],
-                            "kind": "ask_human"}
+                            "kind": "ask_human",
+                            **({"interrupt_id": asked["interrupt_id"]}
+                               if asked.get("interrupt_id") else {})}
         elif name in mcp_map:
             server, tool = mcp_map[name]
             tool_name = str(tool.get("name") or "tool")
@@ -3280,7 +3441,7 @@ class AgentStepToolSet:
             )
             asks = policy == "ask"
             if risk > threshold or unreviewed or asks:
-                decision_id = create_blocking_decision(
+                decision_id = _open_hold_interrupt(
                     connection,
                     project_id,
                     task_id,
@@ -3459,7 +3620,7 @@ class AgentStepToolSet:
                 person_reason = ("An earlier tool result in this run was screened as "
                                  "untrusted, so this write waits for a person.")
             if risk > threshold or person_reason:
-                decision_id = create_blocking_decision(
+                decision_id = _open_hold_interrupt(
                     connection,
                     project_id,
                     task_id,
@@ -3540,7 +3701,7 @@ class AgentStepToolSet:
                 policy="ask" if risk > threshold else "allow",
             )
             if policy == "ask":
-                decision_id = create_blocking_decision(
+                decision_id = _open_hold_interrupt(
                     connection, project_id, task_id,
                     f"Approve agent action: {name}",
                     {"action": "resume_agent_run", "run_id": run_id, "tool": name,

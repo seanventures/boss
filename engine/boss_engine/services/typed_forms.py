@@ -225,16 +225,22 @@ def ask_human(connection: Connection, *, project_id: str, question: str, form: A
                     or f"{asker} asks: answer the form to let it continue"),
         "fields": [f["key"] for f in schema["fields"]],
     }
-    decision_id = create_blocking_decision(
-        connection, project_id, task_id, question[:500], recommendation, {},
-        "agent_asked_a_typed_question", risk_tier=1, default_action="hold")
+    # ONE INTERRUPT PRIMITIVE (AP-P2, services/interrupts.py): the question is an interrupt
+    # with a stable id, bound to the form it asked; the run resumes by that id.
+    from .interrupts import open_interrupt, question_interrupt
+
+    item = question_interrupt(run_id, question, schema)
+    decision_id = open_interrupt(
+        connection, project_id=project_id, task_id=task_id, item=item, question=question,
+        recommendation=recommendation, reason="agent_asked_a_typed_question", risk_tier=1,
+        default_action="hold", create=create_blocking_decision)
     connection.execute(text(
         "UPDATE decisions SET form_schema = CAST(:f AS JSONB) WHERE id = :id"),
         {"f": json.dumps(schema), "id": decision_id})
     emit_event(connection, project_id, "decision.form_asked", asker, "decision", decision_id,
                {"run_id": run_id, "work_item_id": work_item_id,
                 "field_types": [f["type"] for f in schema["fields"]]})
-    return {"decision_id": decision_id, "form": schema}
+    return {"decision_id": decision_id, "form": schema, "interrupt_id": item.id}
 
 
 # ── answering (DecisionService.transition) ───────────────────────────────────────────────────
@@ -349,12 +355,24 @@ def resume_with_answer(connection: Connection, settings: Any, run: Mapping[str, 
     from . import agent_loop
 
     pending = run.get("pending") or {}
+    # RESUMED BY ID (AP-P2): the answer is the one to THIS interrupt — found by its stable id
+    # when the question carries one, by its decision otherwise (a question asked before).
+    interrupt = str(pending.get("interrupt_id") or "")
     decision = connection.execute(text(
-        "SELECT id, question, status, answer, answered_by, approved_by, resolution_note "
-        "FROM decisions WHERE id = :id AND project_id = :p"),
-        {"id": str(pending.get("decision_id") or ""), "p": run["project_id"]}).mappings().first()
+        "SELECT id, question, status, answer, answered_by, approved_by, resolution_note, "
+        "form_schema, recommendation FROM decisions WHERE project_id = :p AND "
+        + ("interrupt_id = :i ORDER BY created_at DESC LIMIT 1" if interrupt else "id = :id")),
+        {"id": str(pending.get("decision_id") or ""), "i": interrupt,
+         "p": run["project_id"]}).mappings().first()
     if decision is None:
         return {"status": "denied", "run_id": run["id"], "reason": "the question was not found"}
+    bound = (_json(decision.get("recommendation"), {}) or {}).get("interrupt_binding") or {}
+    if bound.get("form_sha256"):
+        from ..kernel.interrupts import content_hash
+
+        if content_hash(_json(decision.get("form_schema"), {}) or {}) != bound["form_sha256"]:
+            return {"status": "denied", "run_id": run["id"],
+                    "reason": "the form was changed after it was asked"}
     if decision["status"] not in ("approved", "rejected"):
         return {"status": "denied", "run_id": run["id"], "decision_status": decision["status"],
                 "reason": "the question is not answered yet"}

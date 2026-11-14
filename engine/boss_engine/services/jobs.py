@@ -73,6 +73,8 @@ _RUN_TABLE_FOR_KIND: dict[str, str] = {
     "code.task": "code_task_runs",
     "discovery.step": "discovery_runs",
     "discovery.run": "discovery_runs",
+    # An agent run on a worker (AP-P2): a cancelled or finished run gets no new job.
+    "agent.run": "agent_runs",
 }
 
 #: A run in one of these can never advance, so nothing should be queued on its behalf.

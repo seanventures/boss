@@ -2637,6 +2637,9 @@ def _execute_step(
                     # Where "Why this model" finds the route (model router): the run and the step.
                     route_ref={"workflow_run_id": str(context.get("run_id") or ""),
                                "step_id": str(step.get("id") or "")},
+                    # D5 (AP-P2): the agent's run EXECUTES ON A WORKER. Admitted here with its
+                    # job in this step's transaction; the step waits on it like a build.
+                    on_worker=_agent_runs_on_workers(),
                 )
         except (agent_steps.AgentStepError, step_agents.StepAgentError) as error:
             raise CapabilityExecutionError(str(error)) from error
@@ -2668,6 +2671,13 @@ def _execute_step(
         # went green, the next step ran on whatever the agent had produced *before*
         # the approval, and approving the decision later executed the skill anyway,
         # after the workflow had moved on.
+        if str(outcome.get("status") or "") in ("queued", "pending"):
+            # ADMITTED, NOT DONE: the run executes on a worker (agent_run_worker) and this step
+            # waits on it — `agent_run` reaches `completed` or a failed state, and the result is
+            # judged then (_finished_agent_step), exactly as a run that stopped for approval.
+            waited = str(outcome.get("agent_run_id") or "").strip()
+            return {"kind": "agent_work", **outcome, "status": "awaiting",
+                    "await": {"kind": "agent_run", "id": waited}}
         if str(outcome.get("status") or "") == "suspended":
             waited = str(outcome.get("agent_run_id") or "").strip()
             if not waited:
@@ -5249,7 +5259,7 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     # either as finished is the bug: the step went green and the next step ran.
     "agent_run": ("agent_runs",
                   frozenset({"completed"}),
-                  frozenset({"failed", "cancelled", "denied", "error"})),
+                  frozenset({"failed", "cancelled", "denied", "error", "rolled_back"})),
     # A deployment has SUCCEEDED when its health check passed (`succeeded`, or `healthy` from
     # Resource Plane's verify). `deployed` is not here: it means the release was placed and has
     # not been health-checked yet. `blocked` is a policy or preflight refusal.
@@ -6302,6 +6312,12 @@ def _hold_for_spec(connection: Connection, *, project_id: str, run_id: str,
     return {"run_id": run_id, "step_id": step["step_id"], "outcome": "holding_for_spec",
             "awaited": SPEC_DECISION_KIND, "decision_id": decision_id,
             "meeting_run_id": meeting_run_id}
+
+
+def _agent_runs_on_workers() -> bool:
+    from .agent_loop import agent_runs_on_workers
+
+    return agent_runs_on_workers()
 
 
 def _finished_agent_step(connection: Connection, project_id: str, run_id: str, step_id: str,
