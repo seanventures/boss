@@ -466,63 +466,75 @@ def run_due(
     sweep. A sweep that dies halfway leaves the rest of the loops silently un-run, which is
     indistinguishable from them being stopped.
     """
-    from .agent_service import AgentService
+    # AP-P3: behind BOSS_BOTS_WAKEUPS each wake is a bot run instead — fired through its
+    # trigger, admitted on a thread, executed and recorded like every agent run (bots.py).
+    from . import bots
 
+    if bots.flag_on(bots.BOTS_WAKEUPS):
+        return bots.run_wakeups(settings, engine, limit=limit, project_id=project_id)
     with engine.begin() as connection:
         # Retire what is already spent before looking for work, so an expired loop is closed
         # by bookkeeping rather than by paying for one last turn.
         close_spent(connection, project_id=project_id)
         pending = due(connection, limit=limit, project_id=project_id)
 
-    ran: list[dict[str, Any]] = []
-    for row in pending:
-        brief = (
-            MONITOR_BRIEF.format(
-                cycle=int(row["cycle"]) + 1,
-                of_cap=(f" of {row['max_cycles']}" if row.get("max_cycles") else ""),
-                prompt=row["prompt"], exit_condition=row["exit_condition"] or "")
-            if row["kind"] == "monitor"
-            else SCHEDULE_BRIEF.format(prompt=row["prompt"])
-        )
-        try:
-            # THE CONNECTION IS THE FIRST POSITIONAL ARGUMENT, and omitting it meant every
-            # single wake raised TypeError before any model call — the feature was 100%
-            # non-functional while its tests passed, because those tests replaced
-            # AgentService with a stub whose `chat(**kwargs)` accepted anything. A stub that
-            # cannot fail is not a test. `test_the_sweep_binds_the_real_signature` now checks
-            # the call against the real method.
-            #
-            # Its OWN transaction, deliberately: a turn that fails must not roll back the
-            # bookkeeping for the wake that ran it, and a turn that succeeds must be durable
-            # before this loop moves to the next wakeup.
-            with engine.begin() as connection:
-                result = AgentService(settings).chat(
-                    connection,
-                    project_id=row["project_id"], actor=row["actor"], message=brief,
-                    # A MONITOR CONTINUES ITS OWN CONVERSATION; a schedule starts a fresh one,
-                    # so a daily briefing does not grow one thread forever.
-                    thread_id=row["thread_id"] if row["kind"] == "monitor" else None,
-                    # 'chat', NOT 'wakeup'. `agent_threads.surface` is CHECK-constrained to
-                    # ('chat','github'), so a schedule — which has no thread and therefore
-                    # creates one — failed on the constraint. An unattended turn IS a chat
-                    # turn; what makes it unattended is the wakeup row, not a surface label.
-                    surface="chat",
-                )
-            reply = str((result or {}).get("reply") or "")
-            # The agent ends a monitor by calling `stop_watching`, which flips the row itself.
-            # Re-reading is how this loop learns that happened rather than rescheduling a
-            # loop that has already finished.
-            with engine.begin() as connection:
-                still = describe(connection, wakeup_id=row["id"])
-                if still["status"] != "active":
-                    ran.append({"project_id": row["project_id"], "outcome": still["status"]})
-                    continue
-                outcome = advance(connection, wakeup_id=row["id"], ok=True, result=reply)
-            ran.append({"project_id": row["project_id"], "kind": row["kind"], **outcome})
-        except Exception as error:  # noqa: BLE001 — one bad loop must not stop the sweep
-            with engine.begin() as connection:
-                outcome = advance(connection, wakeup_id=row["id"], ok=False,
-                                  result=f"{type(error).__name__}: {str(error)[:400]}")
-            ran.append({"project_id": row["project_id"], "kind": row["kind"],
-                        "error": type(error).__name__, **outcome})
+    ran: list[dict[str, Any]] = [wake_one(settings, engine, row) for row in pending]
     return {"due": len(pending), "ran": ran}
+
+
+def wake_one(settings: Any, engine: Any, row: Any) -> dict[str, Any]:
+    """ONE WAKE: the brief, the agent's turn in its own transaction, then the row advanced (or
+    found already ended by the turn). Never raises: a failure is recorded against the wakeup
+    and returned as `error`. The legacy sweep and the wakeup bot's runner (bots.py) both call
+    this, so the two paths cannot drift."""
+    from .agent_service import AgentService
+
+    brief = (
+        MONITOR_BRIEF.format(
+            cycle=int(row["cycle"]) + 1,
+            of_cap=(f" of {row['max_cycles']}" if row.get("max_cycles") else ""),
+            prompt=row["prompt"], exit_condition=row["exit_condition"] or "")
+        if row["kind"] == "monitor"
+        else SCHEDULE_BRIEF.format(prompt=row["prompt"])
+    )
+    try:
+        # THE CONNECTION IS THE FIRST POSITIONAL ARGUMENT, and omitting it meant every
+        # single wake raised TypeError before any model call — the feature was 100%
+        # non-functional while its tests passed, because those tests replaced
+        # AgentService with a stub whose `chat(**kwargs)` accepted anything. A stub that
+        # cannot fail is not a test. `test_the_sweep_binds_the_real_signature` now checks
+        # the call against the real method.
+        #
+        # Its OWN transaction, deliberately: a turn that fails must not roll back the
+        # bookkeeping for the wake that ran it, and a turn that succeeds must be durable
+        # before this loop moves to the next wakeup.
+        with engine.begin() as connection:
+            result = AgentService(settings).chat(
+                connection,
+                project_id=row["project_id"], actor=row["actor"], message=brief,
+                # A MONITOR CONTINUES ITS OWN CONVERSATION; a schedule starts a fresh one,
+                # so a daily briefing does not grow one thread forever.
+                thread_id=row["thread_id"] if row["kind"] == "monitor" else None,
+                # 'chat', NOT 'wakeup'. `agent_threads.surface` is CHECK-constrained to
+                # ('chat','github'), so a schedule — which has no thread and therefore
+                # creates one — failed on the constraint. An unattended turn IS a chat
+                # turn; what makes it unattended is the wakeup row, not a surface label.
+                surface="chat",
+            )
+        reply = str((result or {}).get("reply") or "")
+        # The agent ends a monitor by calling `stop_watching`, which flips the row itself.
+        # Re-reading is how this loop learns that happened rather than rescheduling a
+        # loop that has already finished.
+        with engine.begin() as connection:
+            still = describe(connection, wakeup_id=row["id"])
+            if still["status"] != "active":
+                return ({"project_id": row["project_id"], "outcome": still["status"]})
+            outcome = advance(connection, wakeup_id=row["id"], ok=True, result=reply)
+        return ({"project_id": row["project_id"], "kind": row["kind"], **outcome})
+    except Exception as error:  # noqa: BLE001 — one bad loop must not stop the sweep
+        with engine.begin() as connection:
+            outcome = advance(connection, wakeup_id=row["id"], ok=False,
+                              result=f"{type(error).__name__}: {str(error)[:400]}")
+        return ({"project_id": row["project_id"], "kind": row["kind"],
+                 "error": type(error).__name__, **outcome})
+

@@ -88,16 +88,18 @@ def execute(engine: Any, settings: Any, *, kind: str, job_id: str, run_id: str, 
             # past the last checkpoint we were entitled to; the holder goes on from there.
             connection.rollback()
             raise
-        except Exception:
+        except Exception as exc:
             # A fatal model failure: the run is recorded failed (the old contract) and the job
             # fails with it; the thread moves on.
             connection.rollback()
             with engine.begin() as c:
                 if (c.execute(text("SELECT status FROM agent_runs WHERE id = :r"),
                               {"r": run_id}).scalar() or "") in ("running", "queued"):
-                    c.execute(text("UPDATE agent_runs SET status = 'failed', updated_at = now() "
-                                   "WHERE id = :r"), {"r": run_id})
+                    c.execute(text("UPDATE agent_runs SET status = 'failed', error = :e, "
+                                   "updated_at = now() WHERE id = :r"),
+                              {"r": run_id, "e": f"{type(exc).__name__}: {exc}"[:2000]})
                 thread_runs.finish(c, run_id, "failed")
+                _settled_hooks(c, run_id)
             raise
         finally:
             agent_loop._DRIVE.reset(token)
@@ -134,6 +136,12 @@ def _drive(connection: Any, settings: Any, run: dict, *, kind: str) -> dict:
         connection.commit()
         run = agent_loop.load_agent_run(connection, run_id) or run
     runner = RUNNERS.get(str(fctx.get("runner") or "agent_loop"))
+    if runner is None:
+        # AP-P3: the deployment runners (deployed agents, migrated bots) register on import.
+        from . import bots
+
+        bots.register_runners()
+        runner = RUNNERS.get(str(fctx.get("runner") or "agent_loop"))
     if runner is None:
         raise RuntimeError(f"no runner {fctx.get('runner')!r} for agent run {run_id}")
     return runner(connection, settings, run, kind=kind)
@@ -279,9 +287,35 @@ def _settle(connection: Any, jobs: Any, lease: Lease, run_id: str, outcome: dict
             return {"job_deferred": True, "status": "unknown_outcome", "run_id": run_id}
         return {"status": "suspended", "run_id": run_id,
                 "decision_id": outcome.get("decision_id")}
+    if outcome.get("error") or outcome.get("output_text"):
+        # AP-P3: why it failed (the health view's plain cause reads it) and, for a runner that
+        # answers in data (a migrated bot), what it produced.
+        connection.execute(text(
+            "UPDATE agent_runs SET error = COALESCE(:e, error), "
+            "output_text = COALESCE(output_text, :o) WHERE id = :r"),
+            {"e": str(outcome.get("error"))[:2000] if outcome.get("error") else None,
+             "o": outcome.get("output_text"), "r": run_id})
     thread_runs.finish(connection, run_id, status if status in thread_runs.ENDED else None)
-    return {"status": status or "completed", "run_id": run_id,
-            "output_text": str(outcome.get("output_text") or "")[:2000]}
+    _settled_hooks(connection, run_id)
+    out = {"status": status or "completed", "run_id": run_id,
+           "output_text": str(outcome.get("output_text") or "")[:2000]}
+    if outcome.get("clean_failure"):
+        # The run recorded its own failure (a bot's turn that failed): the JOB did its work and
+        # is not retried — a retry would only repeat the same failure, and the trigger's
+        # failure streak (and the doctor) handle a bot that keeps failing.
+        out["clean_failure"] = True
+    return out
+
+
+def _settled_hooks(connection: Any, run_id: str) -> None:
+    """A run ended or stopped: the trigger that started it learns how (AP-P3 health)."""
+    try:
+        from . import agent_triggers
+
+        with connection.begin_nested():
+            agent_triggers.on_run_settled(connection, run_id)
+    except Exception:  # noqa: BLE001 — bookkeeping never fails the run's settlement
+        log.debug("trigger bookkeeping for %s failed", run_id, exc_info=True)
 
 
 __all__ = ["AgentRunRow", "KINDS", "Lease", "RUNNERS", "drive_options", "execute",

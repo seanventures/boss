@@ -449,6 +449,15 @@ class FocusedAgentService:
 
         if projects_archive.is_archived(connection, project_id):
             return {"ran": [], "skipped": [], "active": 0, **projects_archive.skipped(project_id)}
+        # AP-P3: behind BOSS_BOTS_FOCUSED_AGENTS each due agent's duty cycle is a bot run —
+        # fired through its trigger, admitted on a thread, recorded like every agent run. It
+        # works in transactions of its own (the duty cycle executes as a run), so this request's
+        # transaction must take no lock on the focused-agent tables first.
+        from . import bots
+
+        if bots.flag_on(bots.BOTS_FOCUSED_AGENTS):
+            return bots.tick_focused_agents(self, connection.engine, project_id=project_id,
+                                            actor=actor)
         self.ensure_schema(connection)
         agents = [
             agent for agent in self.list_agents(connection, project_id)

@@ -423,6 +423,24 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def tick_bots(self, project_id: str | None = None) -> dict[str, Any]:
+        """The bot clock (AP-P3, services/bots.py): fire every due bot trigger; the runs it
+        admits come back to this worker's slots as `agent.run` jobs."""
+        response = self._client.post("/v1/bots/tick", json={"project_id": project_id})
+        response.raise_for_status()
+        return response.json()
+
+    def register_worker(self, project_id: str, worker_id: str, capabilities: list[str], *,
+                        slots: int, busy_slots: int, host: str) -> dict[str, Any]:
+        """Advertise this worker and its lease slots (AP-P3 §4.4 "Scaling"); re-sent every
+        minute, so a worker that stops re-registering drops out of the live count."""
+        response = self._client.post("/v1/workers/register", json={
+            "project_id": project_id, "worker_id": worker_id, "capabilities": capabilities,
+            "metadata": {"slots": slots, "busy_slots": busy_slots, "host": host},
+            "actor": "system"})
+        response.raise_for_status()
+        return response.json()
+
     def ambient_tick(self) -> dict[str, Any]:
         """Autonomous agents' tick (services/ambient/chief_of_staff.py): expire leases, sweep the
         signal adapters, and let the Chief of Staff triage what is new. The API owns all of it

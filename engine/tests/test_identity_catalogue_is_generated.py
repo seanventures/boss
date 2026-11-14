@@ -55,9 +55,12 @@ def test_the_built_in_roles_are_the_reviewed_sizes():
     # +1 work_tracker:write (BOSSAPP-1047): import tickets as work items, start work from them and
     # write back to them. Owner, admin and operator; delegable (the planner, builder and operator
     # agent presets hold it).
-    assert len(Permission) == 205
+    # +2 agent:invoke and agent:deploy (AP-P3, BOSSAPP-1054): run a deployed agent over its API
+    # or MCP tool (owner, admin and operator; delegable — what a service account is given), and
+    # deploy/promote/roll back an agent version and set its triggers (owner and admin, step-up).
+    assert len(Permission) == 207
     sizes = {role: len(perms) for role, perms in ROLE_PERMISSIONS.items()}
-    assert sizes == {"owner": 198, "admin": 189, "operator": 97, "viewer": 49, "auditor": 63,
+    assert sizes == {"owner": 200, "admin": 191, "operator": 98, "viewer": 49, "auditor": 63,
                      "system_worker": 3, "system_collector": 1, "system_scim": 1,
                      "system_self_installer": 2}
 
@@ -122,4 +125,4 @@ def test_a_catalogue_that_breaks_a_rule_is_refused(mutate, message):
 
 
 def test_the_source_loads():
-    assert len(load().permissions) == 205
+    assert len(load().permissions) == 207

@@ -21,6 +21,8 @@ GET_NOT_READ = {
     "activity:export": "export downloads are gated on the export permission",
     "feedback:submit": "the caller's own feedback prompts",
     "telemetry:share": "the outbound share bundle (it is what leaves the install)",
+    "agent:invoke": "a deployed agent's threads and runs are read by whoever may run it (the Agent "
+                    "Protocol; a runs-only service account holds agent:invoke alone, AP-P3)",
     "role_binding:assign": "a project's bindings, for the Admin who manages that project's access "
                            "(role_binding:read is org-only)",
 }

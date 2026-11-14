@@ -187,6 +187,7 @@ class MCPServer:
         # Native reads as well as writes could otherwise use raw DATABASE_URL
         # under actor "mcp" and bypass that member's API permissions.
         self.api_only = api_surface is not None
+        self.api_surface = api_surface
         self.api_tool_names: set[str] = set()
         self.read_only = read_only
         self.catalog_only = not getattr(ctx, "durable_workspace_configured", True)
@@ -204,7 +205,24 @@ class MCPServer:
             self.api_tool_names = set(self.registry.names()) - existing
 
     # ---- schema ----------------------------------------------------------
+    def _sync_agent_tools(self) -> None:
+        """AP-P3: one `agent_<key>` tool per agent deployed to prod with MCP exposure
+        (mcp/agent_tools.py), refreshed on every list. Never raises."""
+        if self.read_only:
+            return
+        try:
+            from .agent_tools import sync
+
+            names = sync(self.registry, project_id=self.project_id,
+                         engine=None if self.api_only else getattr(self.ctx, "engine", None),
+                         surface=self.api_surface if self.api_only else None)
+            if self.api_only:
+                self.api_tool_names |= names
+        except Exception:  # noqa: BLE001 — no agent tools is better than no tools
+            pass
+
     def _tools(self) -> list[dict]:
+        self._sync_agent_tools()
         tools = [spec.mcp() for spec in self.registry.specs() if (
             spec.name not in _UNSCOPED_SQL_TOOLS
             and
@@ -281,6 +299,8 @@ class MCPServer:
         args = dict(supplied_args)
         for reserved in ("project_id", "_operator_confirmed", "_writes_allowed"):
             args.pop(reserved, None)
+        if name.startswith("agent_") and name not in self.registry.names():
+            self._sync_agent_tools()
         if not self._tool_allowed(name):
             reason = ("read-only mode" if self.read_only else
                       "API-backed sessions require API-authorized operations" if self.api_only

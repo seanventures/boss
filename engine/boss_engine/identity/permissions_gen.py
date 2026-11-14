@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "95bd12a40d2f4194"
+CATALOGUE_FINGERPRINT = "07c451e975199c8c"
 
 
 class Permission(StrEnum):
@@ -132,6 +132,8 @@ class Permission(StrEnum):
     AGENT_PUBLISH = "agent:publish"
     AGENT_LIFECYCLE = "agent:lifecycle"
     AGENT_TEST = "agent:test"
+    AGENT_INVOKE = "agent:invoke"
+    AGENT_DEPLOY = "agent:deploy"
     AGENT_ABILITY_ASSIGN = "agent_ability:assign"
     AUTONOMY_READ = "autonomy:read"
     AUTONOMY_MANAGE = "autonomy:manage"
@@ -343,6 +345,8 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "agent:publish": PermissionMeta(key="agent:publish", title="Publish agents", description="Publish an agent or panel version so it can take work.", category="Agents", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "agent:lifecycle": PermissionMeta(key="agent:lifecycle", title="Manage agent lifecycle", description="Pause, retire and re-seal agents.", category="Agents", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "agent:test": PermissionMeta(key="agent:test", title="Test agents", description="Run an agent's tests or a sandboxed trial.", category="Agents", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "agent:invoke": PermissionMeta(key="agent:invoke", title="Run deployed agents", description="Start threads and runs with a deployed agent over its API or MCP tool, stream, wait on and cancel them.", category="Agents", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "agent:deploy": PermissionMeta(key="agent:deploy", title="Deploy agents", description="Deploy an agent version to an environment, promote it, roll it back, and add or change its triggers.", category="Agents", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "agent_ability:assign": PermissionMeta(key="agent_ability:assign", title="Give agents skills and MCP servers", description="Give an agent a skill or an MCP server (grants authority).", category="Agents", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "autonomy:read": PermissionMeta(key="autonomy:read", title="View agent autonomy", description="See earned-autonomy scores and trust evidence.", category="Agents", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "autonomy:manage": PermissionMeta(key="autonomy:manage", title="Manage agent autonomy", description="Raise or lower an agent's autonomy; record trust evidence.", category="Agents", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
@@ -445,7 +449,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 198
+    "owner": frozenset({  # 200
         "directory:read",
         "user:read",
         "user:invite",
@@ -564,6 +568,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "agent:publish",
         "agent:lifecycle",
         "agent:test",
+        "agent:invoke",
+        "agent:deploy",
         "agent_ability:assign",
         "autonomy:read",
         "autonomy:manage",
@@ -645,7 +651,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "admin": frozenset({  # 189
+    "admin": frozenset({  # 191
         "directory:read",
         "user:read",
         "user:invite",
@@ -757,6 +763,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "agent:publish",
         "agent:lifecycle",
         "agent:test",
+        "agent:invoke",
+        "agent:deploy",
         "agent_ability:assign",
         "autonomy:read",
         "autonomy:manage",
@@ -836,7 +844,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "operator": frozenset({  # 97
+    "operator": frozenset({  # 98
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
@@ -895,6 +903,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "agent:read",
         "agent:create",
         "agent:test",
+        "agent:invoke",
         "autonomy:read",
         "skill:read",
         "skill:invoke",

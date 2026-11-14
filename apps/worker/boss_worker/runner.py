@@ -1160,7 +1160,8 @@ def _execute_agent_run_here(job: LeasedJob, client: ControlPlaneClient) -> dict[
             drain=SHUTDOWN.is_set, handed_back=flag.is_set)
     finally:
         HANDED_BACK.pop(job.id, None)
-    if result.get("status") == "failed" and not result.get("job_deferred"):
+    if result.get("status") == "failed" and not (result.get("job_deferred")
+                                                  or result.get("clean_failure")):
         raise RuntimeError(result.get("message") or "Agent run failed.")
     return result
 

@@ -14348,3 +14348,167 @@ CREATE INDEX IF NOT EXISTS idx_agent_spec_versions_hash
   ON agent_spec_versions(project_id, kind, agent_key, content_hash);
 -- Which version the roles row is a projection of (NULL: never published as a spec yet).
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS spec_version INTEGER;
+-- ================================ AP-P3: deployments, triggers, bots, health (§4.4, BOSSAPP-1054) ==
+-- A DEPLOYMENT is an agent spec version live in one of a project's environments (D6: dev,
+-- staging, prod per project; the host is an attribute). Promotion moves an environment to
+-- another version, rollback re-points it to an earlier one. A RUN IS PINNED to the version it
+-- started on (agent_runs.agent_version + agent_version_hash): promoting v8 never touches a v7
+-- run in flight, its resumes included. `runner` names how a run of this deployment executes on a
+-- worker (agent_run_worker.RUNNERS): `deployed_agent` compiles the pinned spec version; a
+-- migrated legacy bot (a focused agent, a wakeup, the squad owners) names its own.
+CREATE TABLE IF NOT EXISTS agent_deployments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_key TEXT NOT NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  environment TEXT NOT NULL CHECK (environment IN ('dev', 'staging', 'prod')),
+  version INTEGER,
+  content_hash TEXT,
+  previous_version INTEGER,
+  runner TEXT NOT NULL DEFAULT 'deployed_agent',
+  source TEXT NOT NULL DEFAULT 'operator',
+  host_id TEXT,
+  host_label TEXT,
+  status TEXT NOT NULL DEFAULT 'live' CHECK (status IN ('live', 'retired')),
+  expose JSONB NOT NULL DEFAULT '{"rest": true, "mcp": true, "a2a": false}'::jsonb,
+  double_text TEXT NOT NULL DEFAULT 'enqueue'
+    CHECK (double_text IN ('enqueue', 'reject', 'interrupt', 'rollback')),
+  max_concurrent INTEGER,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  promoted_by TEXT,
+  promoted_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, agent_key, environment)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_deployments_project
+  ON agent_deployments (project_id, environment, status);
+
+-- Every deploy, promotion (asked, approved, applied, refused) and rollback, with the checks the
+-- promotion screen showed and the Decision that approved it.
+CREATE TABLE IF NOT EXISTS agent_deployment_history (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_key TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('deploy', 'promote', 'rollback', 'host')),
+  status TEXT NOT NULL DEFAULT 'applied'
+    CHECK (status IN ('applied', 'awaiting_approval', 'rejected', 'refused')),
+  from_version INTEGER,
+  to_version INTEGER,
+  checks JSONB NOT NULL DEFAULT '{}'::jsonb,
+  decision_id TEXT,
+  actor TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  applied_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_agent_deployment_history_agent
+  ON agent_deployment_history (project_id, agent_key, created_at DESC);
+
+-- ONE TRIGGER TABLE (§4.4 "Triggers"): what starts a deployment's runs. Every kind compiles to
+-- "admit a run on a thread" (thread_runs.admit), each on the machinery BOSS already runs:
+--   cron     workflow_schedules' cron reader (or a plain `every_seconds`), next_fire_at here
+--   event    an event_subscriptions row with sink_kind 'agent_run' (event_dispatch)
+--   webhook  workflow_webhooks' HMAC signing; the secret in the secret backend, shown once
+--   monitor  a polled check with a cycle cap (agent_wakeups' semantics)
+-- `concurrency` is workflow_schedules.CONCURRENCY_POLICIES; a paused trigger never fires.
+CREATE TABLE IF NOT EXISTS agent_triggers (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  deployment_id TEXT NOT NULL REFERENCES agent_deployments(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('cron', 'event', 'webhook', 'monitor')),
+  name TEXT NOT NULL DEFAULT '',
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  concurrency TEXT NOT NULL DEFAULT 'skip_if_active'
+    CHECK (concurrency IN ('always_enqueue', 'skip_if_active', 'coalesce')),
+  status TEXT NOT NULL DEFAULT 'on' CHECK (status IN ('on', 'paused')),
+  paused_reason TEXT,
+  paused_by TEXT,
+  paused_at TIMESTAMPTZ,
+  auto_pause BOOLEAN NOT NULL DEFAULT true,
+  thread_id TEXT,
+  next_fire_at TIMESTAMPTZ,
+  last_fired_at TIMESTAMPTZ,
+  last_run_id TEXT,
+  last_outcome TEXT,
+  fires INTEGER NOT NULL DEFAULT 0,
+  skips INTEGER NOT NULL DEFAULT 0,
+  failure_streak INTEGER NOT NULL DEFAULT 0,
+  cycle INTEGER NOT NULL DEFAULT 0,
+  backing_ref TEXT,
+  path_token TEXT,
+  secret_ref_id TEXT,
+  legacy_ref TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_triggers_due
+  ON agent_triggers (next_fire_at) WHERE status = 'on' AND kind IN ('cron', 'monitor');
+CREATE INDEX IF NOT EXISTS idx_agent_triggers_deployment ON agent_triggers (deployment_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_triggers_legacy
+  ON agent_triggers (project_id, legacy_ref) WHERE legacy_ref IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_triggers_path_token
+  ON agent_triggers (path_token) WHERE path_token IS NOT NULL;
+
+-- WHOSE AUTHORITY A FIRING RUNS ON (the rule a workflow schedule follows): the standing grant of
+-- the person who made the trigger, linked at creation and re-checked at EVERY firing; a grant
+-- that ended pauses the trigger ("Renew authority"). Unlinked, a firing runs as the caller of the
+-- clock (the worker) and, under enforce, an unattended one holds no grant.
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS on_behalf_of TEXT;
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS grant_id TEXT;
+
+-- Each firing: admitted (with its run), skipped (skip_if_active / coalesce), refused, failed.
+-- `dedupe_key` makes a re-delivered event or webhook one firing.
+CREATE TABLE IF NOT EXISTS agent_trigger_fires (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  trigger_id TEXT NOT NULL REFERENCES agent_triggers(id) ON DELETE CASCADE,
+  scheduled_for TIMESTAMPTZ,
+  fired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  outcome TEXT NOT NULL CHECK (outcome IN ('admitted', 'skipped', 'refused', 'failed')),
+  reason TEXT,
+  run_id TEXT,
+  dedupe_key TEXT,
+  UNIQUE (trigger_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_trigger_fires_trigger
+  ON agent_trigger_fires (trigger_id, fired_at DESC);
+
+-- A run of a deployment says which (agent, version, environment, trigger) it is, and why it
+-- failed in words the health view can show.
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS deployment_id TEXT;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS trigger_id TEXT;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS agent_key TEXT;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS agent_version INTEGER;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS environment TEXT;
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS error TEXT;
+CREATE INDEX IF NOT EXISTS idx_agent_runs_deployment
+  ON agent_runs (deployment_id, created_at DESC) WHERE deployment_id IS NOT NULL;
+
+-- D7: THE DETERMINISTIC DAEMONS ARE NOT AGENTS. One registry of the always-on services that
+-- are code, not models (the system doctor, the reaper, stop_watch, the schedulers, the worker's
+-- sweeps), each beating here so "always-on" has one list and one health view.
+CREATE TABLE IF NOT EXISTS system_services (
+  key TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'thread' CHECK (kind IN ('thread', 'worker_tick', 'scheduler')),
+  runs_in TEXT NOT NULL DEFAULT 'api',
+  interval_seconds INTEGER,
+  status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'stopped', 'failing', 'off')),
+  started_at TIMESTAMPTZ,
+  last_beat_at TIMESTAMPTZ,
+  last_ok_at TIMESTAMPTZ,
+  last_error TEXT,
+  details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  host TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Workers advertise their slots (§4.4 "Scaling"); pending agent runs per live slot is the signal.
+ALTER TABLE worker_registrations ADD COLUMN IF NOT EXISTS slots INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE worker_registrations ADD COLUMN IF NOT EXISTS busy_slots INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE worker_registrations ADD COLUMN IF NOT EXISTS host TEXT;
+-- ================================ end AP-P3 ==

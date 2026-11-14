@@ -61,6 +61,9 @@ AUTO_ACTIONS = frozenset({
     "reap_previews", "end_orphaned_processes", "remove_orphan_containers", "sweep_temp_dirs",
     "prune_boss_disk", "set_degradation_level", "stop_idle_previews",
     "close_idle_transactions",
+    # AP-P3: a bot whose trigger failed three times in a row is paused (its trigger — never a
+    # run in flight), the circuit breaker the design names for "deployment unhealthy".
+    "pause_failing_bot",
 })
 #: Every option a card may offer. Destructive ones (stop, cancel) must never be automatic.
 OFFERED_OPTIONS = frozenset({
@@ -105,6 +108,8 @@ class Signals:
     codex_login: dict[str, Any] = field(default_factory=dict)
     #: backup_scheduler.health(): the scheduled self-backups' state (BOSSAPP-838).
     backup: dict[str, Any] = field(default_factory=dict)
+    #: agent_health.failing_bots(): triggers whose runs failed three times in a row (AP-P3).
+    failing_bots: list[dict[str, Any]] = field(default_factory=list)
 
 
 _VM_LAST: dict[str, Any] = {}
@@ -240,6 +245,13 @@ def collect(engine: Any) -> Signals:
                 sig.backup = backup_scheduler.health(c)
         except Exception:  # noqa: BLE001 — an install before BOSSAPP-838 has no backups table
             sig.backup = {}
+        try:
+            from . import agent_health
+
+            with c.begin_nested():
+                sig.failing_bots = agent_health.failing_bots(c)
+        except Exception:  # noqa: BLE001 — an install before AP-P3 has no triggers table
+            sig.failing_bots = []
     from .resource_reaper import docker_available
 
     sig.docker = docker_available()
@@ -542,6 +554,20 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
                     "detail": f"{sig.db.get('conns')} of {sig.db.get('max_conns')} in use.",
                     "evidence": dict(sig.db), "options": [], "needs_choice": False,
                     "auto": ["close_idle_transactions"]})
+    for bot in sig.failing_bots:
+        # "DEPLOYMENT UNHEALTHY" (AP-P3, AGENT_PLATFORM §4.4): one finding per failing bot
+        # trigger; the breaker pauses it on its own unless the trigger opted out of auto-pause.
+        name = bot.get("display_name") or bot.get("agent_key")
+        out.append({"kind": f"bot_failing:{bot['trigger_id']}", "severity": "warn",
+                    "title": f"{name} failed {bot['failure_streak']} times in a row",
+                    "detail": (f"Same cause: {bot['cause']}. " if bot.get("cause") else "")
+                    + ("BOSS pauses its trigger; resume it when the cause is fixed."
+                       if bot.get("auto_pause") else "Its trigger is still on."),
+                    "evidence": {k: bot.get(k) for k in ("trigger_id", "deployment_id",
+                                                         "agent_key", "environment",
+                                                         "failure_streak", "last_run_id")},
+                    "options": [], "needs_choice": False, "target": bot["trigger_id"],
+                    "auto": ["pause_failing_bot"] if bot.get("auto_pause") else []})
     return out
 
 
@@ -707,8 +733,17 @@ def verify_actions(connection: Any, sig: Signals) -> int:
 # automatic remedies
 # ------------------------------------------------------------------------------------------ #
 
-def _auto(engine: Any, settings: Any, action: str, sig: Signals) -> str:
+def _auto(engine: Any, settings: Any, action: str, sig: Signals, target: str = "") -> str:
     from . import preview_service, resource_reaper
+
+    if action == "pause_failing_bot":
+        from . import agent_health
+
+        bot = next((b for b in sig.failing_bots if b.get("trigger_id") == target), None)
+        if bot is None:
+            return "no such failing bot"
+        with engine.begin() as c:
+            return agent_health.pause_failing(c, bot)
 
     if action == "reap_previews":
         return json.dumps(preview_service.reap_previews(engine, settings))
@@ -780,7 +815,7 @@ def tick(engine: Any, settings: Any = None, *, sig: Optional[Signals] = None) ->
             if not ok:
                 continue
             try:
-                outcome = _auto(engine, settings, action, sig)
+                outcome = _auto(engine, settings, action, sig, target)
             except Exception as exc:  # noqa: BLE001 — one remedy failing never stops the tick
                 outcome = f"failed: {type(exc).__name__}: {exc}"
             with engine.begin() as c:
@@ -790,6 +825,9 @@ def tick(engine: Any, settings: Any = None, *, sig: Optional[Signals] = None) ->
             acted.append({"action": action, "outcome": outcome[:200]})
     report = {"at": now.isoformat(), "level": level["level"],
               "findings": [f["kind"] for f in found], "acted": acted}
+    from . import system_services
+
+    system_services.beat(engine, "system_doctor", details={"findings": len(found)})
     _LAST.clear()
     _LAST.update(report)
     return report
