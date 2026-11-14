@@ -105,13 +105,13 @@ def build_agent_specs_router(
 
     @router.post("/v1/agent-specs", status_code=201)
     @permit(P.AGENT_CREATE, scope=Scope.project(body="project_id"))
-    def create_from_spec(body: SpecCreateBody) -> dict[str, Any]:
+    def post_agent_spec(body: SpecCreateBody) -> dict[str, Any]:
         """A new agent from a spec: the role, its identity and version 1, published, at once."""
         doc = _doc(body)
         with begin(engine) as connection:
             actor = _writer(connection, body.project_id, body.actor, _grants(doc))
             try:
-                return versions.create(connection, body.project_id, doc, actor=actor)
+                return versions.create_from_spec(connection, body.project_id, doc, actor=actor)
             except Exception as error:  # noqa: BLE001 — typed mapping in _fail
                 _fail(error)
 

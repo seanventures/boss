@@ -702,11 +702,13 @@ def doc_from_role(row: Mapping[str, Any], *, skills: Any = (), mcp: Any = (),
                       "required_references": _str_list(comms.get("required_references"))},
         },
     }
-    # The canonical shape: what a stored version's document looks like.
+    # The canonical shape: what a stored version's document looks like. A bare row (no remit
+    # at all) is still an agent: an empty `spec`, not a missing one.
+    stripped = {**_strip(doc), "spec": _strip(doc["spec"])}
     try:
-        return dump_spec(load_spec(_strip(doc)))
+        return dump_spec(load_spec(stripped))
     except SpecError:
-        return _strip(doc)
+        return stripped
 
 
 def _strip(doc: Any) -> Any:

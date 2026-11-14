@@ -369,6 +369,11 @@ def _project(connection: Connection, project_id: str, version: dict[str, Any], *
     row = _role_row(connection, project_id, key)
     parent = agent_svc._check_reports_to(connection, project_id, key, spec.reports_to)  # noqa: SLF001
     new_spec = _merged_role_spec(row["spec"] if row else {}, dict(compiled.role_spec), int(version["version"]))
+    # A PERSON'S DECISION (publish, roll back, import): the seed must never revert it.
+    from ..services import seed_exclusions
+
+    seed_exclusions.exclude(connection, project_id, "role_spec", key, actor=actor,
+                            reason=f"agent spec v{int(version['version'])} published")
     connection.execute(
         text("UPDATE roles SET display_name = :n, reports_to = :rt, spec = CAST(:s AS JSONB), spec_version = :v "
              "WHERE project_id = :p AND role_key = :r"),
@@ -463,7 +468,7 @@ def rollback(connection: Connection, project_id: str, key: str, to_version: int,
     return publish(connection, project_id, key, to_version, actor=actor, kind=kind, reason="rollback")
 
 
-def create(connection: Connection, project_id: str, doc: Any, *, actor: str,
+def create_from_spec(connection: Connection, project_id: str, doc: Any, *, actor: str,
            source: str = "operator") -> dict[str, Any]:
     """A NEW agent from a document: the roles row, its identity (born, sponsored, sealed) and
     version 1, published, in one transaction. An existing key is refused (creating is never
@@ -574,11 +579,11 @@ def import_yaml(connection: Connection, project_id: str, document: str, *, actor
         active(connection, project_id, spec.key, kind="profile") is not None)
     doc = S.dump_spec(spec)
     if not exists and publish_now:
-        return {**create(connection, project_id, doc, actor=actor, source="import"), "created": True}
+        return {**create_from_spec(connection, project_id, doc, actor=actor, source="import"), "created": True}
     return {**save_and_publish(connection, project_id, doc, actor=actor, key=spec.key, source="import",
                                publish_now=publish_now), "created": False}
 
 
-__all__ = ["VersionError", "active", "check_ceiling", "create", "diff", "export_yaml", "get_version", "holdings",
+__all__ = ["VersionError", "active", "check_ceiling", "create_from_spec", "diff", "export_yaml", "get_version", "holdings",
            "import_yaml", "list_versions", "publish", "required_permissions", "rollback", "row_document", "save",
            "save_and_publish", "snapshot"]

@@ -98,5 +98,8 @@ def test_every_composer_passes_them():
         source = path.read_text(encoding="utf-8")
         if "identity_and_voice(" in source or "compose_agent_prompt(" in source:
             composers.append(str(path.relative_to(ROOT)))
-    allowed = set(wired) | {"engine/boss_engine/services/agent_voice.py"}
+    # agents/spec.py compiles a VERSION's stored prompt (pure, no database): the operator's
+    # instructions are a live addition, which agent_steps.agent_brief puts in at run time.
+    allowed = set(wired) | {"engine/boss_engine/services/agent_voice.py",
+                            "engine/boss_engine/agents/spec.py"}
     assert set(composers) <= allowed, sorted(set(composers) - allowed)

@@ -78,6 +78,9 @@ _EXCLUDED_EXACT = {
     # not an operator action. Held as `execute`, it answered the worker 409 and every Community
     # discovery sat queued until its job deadlettered.
     "/v1/discoveries/{run_id}/execute": "discovery_worker_lease_protocol",
+    # AP-P1a: the worker hands its leased agent.studio.execute job to the API, which runs it
+    # through the governed agent-step pipeline under that job's live lease.
+    "/v1/agent-studio/runs/execute": "agent_studio_worker_lease_protocol",
     # The worker hands its leased repo.push_pending job to the API, which holds the
     # GitHub credential and pushes when GitHub answers (services/github_outage.py).
     # Held as `execute`, it answered the worker 409 and the waiting push never ran.
