@@ -144,7 +144,7 @@ def test_llm_calls_fill_their_ledger_columns_once_and_change_nothing_else(eng, p
 # ── Dual-write ────────────────────────────────────────────────────────────────────────────────
 
 def test_with_the_flag_off_nothing_is_added(eng, project, monkeypatch, llm_ctx):  # noqa: F811
-    monkeypatch.delenv("BOSS_LEDGER_EVENTS", raising=False)
+    monkeypatch.setenv("BOSS_LEDGER_EVENTS", "0")
     from boss_engine.services.llm_telemetry import record_llm_call
 
     with eng.begin() as c:
