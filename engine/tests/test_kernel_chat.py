@@ -75,7 +75,7 @@ def one_turn(monkeypatch, script, *, flag: str, written=None, **chat_kw):
 
 
 def both(monkeypatch, script, **chat_kw):
-    old_turn, old = one_turn(monkeypatch, script, flag="", **chat_kw)
+    old_turn, old = one_turn(monkeypatch, script, flag="0", **chat_kw)
     new_turn, new = one_turn(monkeypatch, script, flag="1", **chat_kw)
     same_requests(old, new)
     assert old_turn.reply == new_turn.reply
@@ -107,7 +107,7 @@ class TestChatConformance:
     def test_a_hiccup_that_will_not_pass_raises_on_both_paths(self, monkeypatch):
         exhausted = [Fail(RuntimeError("529 overloaded_error")) for _ in range(3)]
         with pytest.raises(RuntimeError, match="529"):
-            one_turn(monkeypatch, exhausted, flag="")
+            one_turn(monkeypatch, exhausted, flag="0")
         with pytest.raises(RuntimeError, match="529"):
             one_turn(monkeypatch, exhausted, flag="1")
 
@@ -142,7 +142,7 @@ class TestChatConformance:
             agent._adapter = engine
             return agent.chat(project_id="p", message=ASK, system=SYSTEM, max_steps=8), engine
 
-        old_turn, old = agent_with("")
+        old_turn, old = agent_with("0")
         new_turn, new = agent_with("1")
         same_requests(old, new)
         assert old_turn.reply == new_turn.reply == "I stopped retrying."
@@ -156,7 +156,7 @@ class TestChatConformance:
         script = [Call("read_logs", {"run": "r1"}),
                   Say("The fix is to restart; offering it.")]
         turns = []
-        for flag in ("", "1"):
+        for flag in ("0", "1"):
             budget = TurnBudget(seconds=10_000, model_calls=2)
             turn, engine = one_turn(monkeypatch, script, flag=flag, max_steps=8, budget=budget)
             turns.append((turn, engine))
@@ -193,7 +193,7 @@ class TestChatConformance:
         script = [Call("redeploy", {"app": "x", "force": True}), Say("done")]
         ran_old: list = []
         ran_new: list = []
-        one_turn(monkeypatch, script, flag="", written=ran_old, max_steps=4, allow_writes=True)
+        one_turn(monkeypatch, script, flag="0", written=ran_old, max_steps=4, allow_writes=True)
         one_turn(monkeypatch, script, flag="1", written=ran_new, max_steps=4, allow_writes=True)
         assert ran_old == ran_new == [{"app": "x"}], "force survived without the operator's words"
 
@@ -202,12 +202,12 @@ class TestChatConformance:
         loop's phase and tool labels (design §2.8 'Streaming')."""
         script = [Call("read_logs", {"run": "r1"}), Say("r1 is clean.")]
         seen: dict = {}
-        for flag in ("", "1"):
+        for flag in ("0", "1"):
             labels: list = []
             one_turn(monkeypatch, script, flag=flag, max_steps=4,
                      focus="workflow step wfr_1/preview", on_step=labels.append)
             seen[flag] = labels
-        assert seen[""] == seen["1"], seen
+        assert seen["0"] == seen["1"], seen
         assert seen["1"][0].startswith("reading workflow step wfr_1/preview")
         assert "reading the service logs" in seen["1"][1]
 
@@ -227,7 +227,7 @@ PROTOCOL_CALLS_ONLY = json.dumps({"thought": "look", "tool_calls": [
 
 class TestProtocolReplyIsResidue:
     def test_a_structures_prose_is_kept_without_another_model_call(self, monkeypatch):
-        old_turn, old = one_turn(monkeypatch, [Say(PROTOCOL_WITH_PROSE)], flag="", max_steps=4)
+        old_turn, old = one_turn(monkeypatch, [Say(PROTOCOL_WITH_PROSE)], flag="0", max_steps=4)
         new_turn, new = one_turn(monkeypatch, [Say(PROTOCOL_WITH_PROSE)], flag="1", max_steps=4)
         assert old_turn.reply == new_turn.reply == "All three projects exist."
         assert old.calls == new.calls == 1
@@ -236,7 +236,7 @@ class TestProtocolReplyIsResidue:
         """The old loop runs the calls a structure meant; the kernel path does not (its engines
         call tools natively) and never asks again — pinned so the difference stays deliberate."""
         script = [Say(PROTOCOL_CALLS_ONLY), Say("after the meant call")]
-        old_turn, old = one_turn(monkeypatch, list(script), flag="", max_steps=4)
+        old_turn, old = one_turn(monkeypatch, list(script), flag="0", max_steps=4)
         assert [t["tool"] for t in old_turn.trace] == ["read_logs"], "the old loop runs it"
         assert old_turn.reply == "after the meant call"
         new_turn, new = one_turn(monkeypatch, list(script), flag="1", max_steps=4)
@@ -324,10 +324,10 @@ class TestEngineClose:
 def test_flag_off_never_touches_the_kernel(monkeypatch):
     import boss_engine.kernel.loop as kernel_loop
 
-    monkeypatch.setenv("BOSS_KERNEL_CHAT", "")
+    monkeypatch.setenv("BOSS_KERNEL_CHAT", "0")
     monkeypatch.setattr(kernel_loop, "run",
                         lambda spec: pytest.fail("kernel.run reached with the flag off"))
-    turn, _ = one_turn(monkeypatch, [Say("plain")], flag="", max_steps=4)
+    turn, _ = one_turn(monkeypatch, [Say("plain")], flag="0", max_steps=4)
     assert turn.reply == "plain"
 
 

@@ -1,7 +1,7 @@
 """K2 (BOSSAPP-961): a decision's READ PHASE and final choice run on the harness kernel.
 
-Behind BOSS_KERNEL_DECISIONS (default off): `agent_decision.decide` with a ReadPhase runs
-`kernel.run` with presets.decision, a ReadOnlyToolSet over the caller's read tools, and the
+Behind BOSS_KERNEL_DECISIONS (default ON since AP-P1b; "0" turns it off): `agent_decision.
+decide` with a ReadPhase runs `kernel.run` with presets.decision, a ReadOnlyToolSet over the caller's read tools, and the
 evidence/citation acceptance (`_accept` + the caller's check) as the VerifyPolicy — one re-ask,
 exactly as today. Flag off is byte-identical to `_ask_reading`; flag on is held equal by
 test_kernel_conformance.py plus the checks here at the `decide` seam:
@@ -53,10 +53,7 @@ def read_phase(max_turns=4, **kw):
 
 
 def flag(monkeypatch, on: bool) -> None:
-    if on:
-        monkeypatch.setenv(ad.KERNEL_FLAG, "1")
-    else:
-        monkeypatch.delenv(ad.KERNEL_FLAG, raising=False)
+    monkeypatch.setenv(ad.KERNEL_FLAG, "1" if on else "0")
 
 
 def decide(adapter, *, read=None, check=None, **kw):
@@ -92,9 +89,16 @@ class TestTheFlag:
         assert after.action == "fix" and after.turns == 2
         assert after.evidence == ["run r1: 3 errors"]
 
-    def test_the_default_is_off(self, monkeypatch):
+    def test_the_default_is_on_and_an_off_word_turns_it_off(self, monkeypatch):
+        # AP-P1b (D3): decisions flipped on after parity; "0" is the escape hatch, and a blank
+        # value in an .env is the default, never a silent switch back to the old loop.
         monkeypatch.delenv(ad.KERNEL_FLAG, raising=False)
-        assert not ad.kernel_decisions()
+        assert ad.kernel_decisions()
+        monkeypatch.setenv(ad.KERNEL_FLAG, "")
+        assert ad.kernel_decisions()
+        for word in ("0", "false", "no", "off", "OFF"):
+            monkeypatch.setenv(ad.KERNEL_FLAG, word)
+            assert not ad.kernel_decisions(), word
         monkeypatch.setenv(ad.KERNEL_FLAG, "1")
         assert ad.kernel_decisions()
 

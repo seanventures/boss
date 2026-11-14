@@ -115,9 +115,12 @@ def test_the_message_handed_back_says_nothing_ran():
 
     from boss_engine.services import agent_loop
 
-    source = inspect.getsource(agent_loop._drive_run)
-    assert "nothing happened" in source
-    assert "do " in source and "not repeat it" in source
+    from boss_engine.kernel.policies import REFUSED_CALL_PROMPT
+
+    # BOTH LOOPS (K4): the old loop's words, and the kernel's RecoveryPolicy an agent run uses.
+    for source in (inspect.getsource(agent_loop._drive_run_legacy), REFUSED_CALL_PROMPT):
+        assert "nothing happened" in source
+        assert "do " in source and "not repeat it" in source
 
 
 # --------------------------------------------------------------------------- #

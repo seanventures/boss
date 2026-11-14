@@ -66,11 +66,14 @@ def test_a_lookup_failure_leaves_the_turn_alone():
 
 
 def test_the_pull_request_and_the_agent_loop_call_the_knowledge_runtime():
-    from boss_engine.services.agent_loop import _drive_run, run_agent_loop
+    from boss_engine.services.agent_loop import (_drive_run_legacy, _kernel_outcome,
+                                                 run_agent_loop)
     from boss_engine.services.software_factory import SoftwareFactoryService
 
     proposal = inspect.getsource(SoftwareFactoryService.propose_pull_request)
     assert "remember_written_files" in proposal
     assert "\"cited_fact_ids\": citations" in proposal   # a literal key: the decision-producer scan reads the dict
     assert "quoted_pack_for_turn" in inspect.getsource(run_agent_loop)
-    assert "attribute_shown_facts" in inspect.getsource(_drive_run)
+    # Both loops (K4): the old one, and the kernel run's outcome.
+    assert "attribute_shown_facts" in inspect.getsource(_drive_run_legacy)
+    assert "attribute_shown_facts" in inspect.getsource(_kernel_outcome)

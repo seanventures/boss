@@ -6,6 +6,7 @@ with no digest still resumes.
 """
 from __future__ import annotations
 
+from boss_engine.services import agent_loop
 from boss_engine.services.agent_loop import resume_agent_run
 from boss_engine.services.argument_binding import held_call_matches
 
@@ -43,4 +44,9 @@ def test_resume_selects_the_recommendation_and_checks_the_held_call_once():
     columns = source[source.index("SELECT"):source.index("FROM decisions")]
     assert "recommendation" in columns
     assert source.count("binding_holds(") == 1
-    assert source.index("binding_holds(") < source.index('pending.get("kind")')
+    # The held call runs only after its binding holds: on the old loop through
+    # _execute_approved (which branches on the held kind), on the kernel through
+    # kernel.resume, whose authz governance checks the same binding again (approval_refusal).
+    assert source.index("binding_holds(") < source.index("_execute_approved(")
+    assert source.index("binding_holds(") < source.index("_drive_run_on_kernel(")
+    assert 'pending.get("kind")' in code_only(agent_loop._execute_approved)

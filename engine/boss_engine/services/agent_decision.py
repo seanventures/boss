@@ -80,15 +80,18 @@ ROUTE_STEP = "agent_decision"
 
 #: K2 (BOSSAPP-961, HARNESS_KERNEL_DESIGN.md §8.1): with this set, the READ PHASE and its final
 #: choice run on the harness kernel (`kernel.run` with presets.decision) instead of
-#: `_ask_reading`'s own loop. Off (the default) is byte-identical to today. Jev, the candidates,
-#: the no-model answer and the confidence bar stay caller-side either way.
+#: `_ask_reading`'s own loop. ON BY DEFAULT since AP-P1b (kernel/flags.py); an off word ("0") is
+#: byte-identical to the old loop. Jev, the candidates, the no-model answer and the confidence
+#: bar stay caller-side either way.
 KERNEL_FLAG = "BOSS_KERNEL_DECISIONS"
 
 
 def kernel_decisions() -> bool:
-    import os
+    """K2 is ON by default (AP-P1b, kernel/flags.py); BOSS_KERNEL_DECISIONS=0 is the escape
+    hatch back to `_ask_reading`."""
+    from ..kernel.flags import on
 
-    return (os.environ.get(KERNEL_FLAG) or "").strip().lower() in ("1", "true", "yes", "on")
+    return on(KERNEL_FLAG)
 
 DECIDED = "decided"
 CLARIFY = "clarify"
