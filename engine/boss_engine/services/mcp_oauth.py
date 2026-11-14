@@ -14,9 +14,13 @@ THE FLOW (one door per step, network never inside a transaction)
    path is tried. That names the authorization server, whose metadata (RFC 8414, then OpenID
    discovery) gives the endpoints. A server with no resource metadata (the 2025-03-26 spec) is its
    own authorization server.
-2. REGISTER (:func:`prepare`). Dynamic client registration (RFC 7591) when the server offers it;
-   otherwise the client id (and secret) an operator typed in the console; otherwise
-   :class:`NeedsClient`, which the console turns into those two fields.
+2. REGISTER (:func:`prepare`), in the MCP 2026-07-28 order: the client id (and secret) an
+   operator typed in the console (pre-registration); else a CLIENT ID METADATA DOCUMENT when the
+   authorization server advertises `client_id_metadata_document_supported` and the install has
+   an https home for BOSS's document (:func:`client_metadata_url`) — the URL IS the client id,
+   nothing is registered; else dynamic client registration (RFC 7591, deprecated in 2026-07-28,
+   kept for older servers); otherwise :class:`NeedsClient`, which the console turns into those
+   two fields.
 3. AUTHORIZE (:func:`start`). PKCE S256: the verifier and the HASH of `state` are kept here
    (mcp_oauth_pending, ten minutes, single use); the browser goes to the provider with the
    challenge and comes back to BOSS's callback route.
@@ -62,6 +66,9 @@ CALLBACK_PATH = "/v1/mcp/oauth/callback"
 CLIENT_NAME = "BOSS"
 #: The protocol BOSS speaks on the unauthenticated discovery probe (mcp_client's first choice).
 PROBE_PROTOCOL_VERSION = "2025-06-18"
+#: Where BOSS serves its OAuth Client ID Metadata Document (MCP 2026-07-28 client registration),
+#: under the install's public origin unless BOSS_MCP_OAUTH_CLIENT_METADATA_URL names the URL.
+CIMD_PATH = "/.well-known/boss-mcp-client.json"
 
 Begin = Callable[[], ContextManager[Connection]]
 
@@ -303,6 +310,8 @@ def discover(server_url: str) -> dict[str, Any]:
     if meta.get("registration_endpoint"):
         out["registration_endpoint"] = guard_url(meta["registration_endpoint"],
                                                  what="registration endpoint")
+    if meta.get("client_id_metadata_document_supported") is True:
+        out["client_id_metadata_document_supported"] = True
     scope = challenge.get("scope") or (" ".join(str(s) for s in scopes)
                                        if isinstance(scopes, list) and scopes else "")
     if scope:
@@ -313,6 +322,33 @@ def discover(server_url: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Client registration                                                           #
 # --------------------------------------------------------------------------- #
+
+def client_metadata_url(redirect_uri: str) -> Optional[str]:
+    """BOSS's Client ID Metadata Document URL — its OAuth client id wherever an authorization
+    server accepts one: BOSS_MCP_OAUTH_CLIENT_METADATA_URL, else CIMD_PATH on the origin the
+    callback lives on. None unless it is an https URL with a path (the spec's requirement), so an
+    http-only install falls back to registration."""
+    import os
+
+    raw = (os.environ.get("BOSS_MCP_OAUTH_CLIENT_METADATA_URL") or "").strip()
+    if not raw:
+        origin = _origin(redirect_uri) if redirect_uri else ""
+        raw = f"{origin}{CIMD_PATH}" if origin else ""
+    parts = urlsplit(raw)
+    if parts.scheme != "https" or not parts.netloc or parts.path in ("", "/") \
+            or parts.username or parts.password or parts.fragment:
+        return None
+    return raw
+
+
+def client_metadata_document(client_id_url: str, redirect_uris: list[str]) -> dict[str, Any]:
+    """The JSON BOSS serves at its client id URL (draft-ietf-oauth-client-id-metadata-document;
+    MCP 2026-07-28): `client_id` is exactly the URL it is served at; a public client using PKCE."""
+    return {"client_id": client_id_url, "client_name": CLIENT_NAME,
+            "redirect_uris": [str(u) for u in redirect_uris],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"], "token_endpoint_auth_method": "none"}
+
 
 def register_client(meta: dict[str, Any], redirect_uri: str) -> dict[str, Any]:
     """RFC 7591 dynamic registration: a public client using PKCE. {client_id, client_secret?,
@@ -392,7 +428,16 @@ def prepare(begin: Begin, settings: Any, project_id: str, server_id: str, *, red
     reusable = (current.get("client_source") == "dynamic" and current.get("client_id") and same_as
                 and current.get("client_redirect_uri") == redirect_uri)
     secret_ref: Optional[dict[str, Any]] = None
-    if not manual and not reusable:
+    cimd = (client_metadata_url(redirect_uri)
+            if meta.get("client_id_metadata_document_supported") else None)
+    if not manual and cimd:
+        # CLIENT ID METADATA DOCUMENT: the URL is the client id; the authorization server fetches
+        # BOSS's document from it. Nothing is registered and no secret exists.
+        oauth.update(client_id=cimd, client_source="cimd", client_redirect_uri=redirect_uri,
+                     token_endpoint_auth_method="none")
+        if current.get("client_source") == "dynamic":
+            secret_ref = {"secret_ref_id": None, "last4": None}
+    elif not manual and not reusable:
         client = register_client(meta, redirect_uri)
         oauth.update(client_id=client["client_id"], client_source="dynamic",
                      client_redirect_uri=redirect_uri,

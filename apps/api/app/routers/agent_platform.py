@@ -112,6 +112,17 @@ class BotsTickBody(BaseModel):
     limit: int = Field(default=50, ge=1, le=500)
 
 
+def _traceparent(request: Optional[Request]) -> Optional[str]:
+    """The caller's W3C trace context (AP-P5): a run started over REST, or by the MCP bridge
+    forwarding its caller's `_meta.traceparent`, joins the caller's trace."""
+    if request is None:
+        return None
+    from boss_engine.kernel.trace import parse_traceparent
+
+    value = request.headers.get("traceparent")
+    return value.strip().lower() if parse_traceparent(value) else None
+
+
 def build_agent_platform_router(*, engine, require_write_actor: Callable[..., str],
                                 require_reader: Callable[..., None]) -> APIRouter:
     from boss_engine.services import (agent_deployments, agent_health, agent_protocol,
@@ -441,13 +452,15 @@ def build_agent_platform_router(*, engine, require_write_actor: Callable[..., st
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 
-    def _start(thread_id: str, body: RunBody) -> dict[str, Any]:
+    def _start(thread_id: str, body: RunBody, request: Optional[Request] = None
+               ) -> dict[str, Any]:
         with begin(engine) as connection:
             actor = _invoker(connection, body)
             try:
                 return agent_protocol.start_run(connection, project_id=body.project_id,
                                                 thread_id=thread_id, actor=actor,
-                                                input=body.input, double_text=body.double_text)
+                                                input=body.input, double_text=body.double_text,
+                                                traceparent=_traceparent(request))
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 
@@ -459,25 +472,26 @@ def build_agent_platform_router(*, engine, require_write_actor: Callable[..., st
 
     @router.post("/v1/threads/{thread_id}/runs", status_code=201)
     @permit(P.AGENT_INVOKE, scope=Scope.project(body="project_id"))
-    def start_run(thread_id: str, body: RunBody) -> dict[str, Any]:
+    def start_run(thread_id: str, body: RunBody, request: Request) -> dict[str, Any]:
         """Admit a run (it executes on a worker); poll it, join it, or stream it."""
-        return _start(thread_id, body)
+        return _start(thread_id, body, request)
 
     @router.post("/v1/threads/{thread_id}/runs/stream")
     @permit(P.AGENT_INVOKE, scope=Scope.project(body="project_id"))
-    def start_run_streaming(thread_id: str, body: RunBody):
+    def start_run_streaming(thread_id: str, body: RunBody, request: Request):
         """Admit a run and stream its typed events (SSE: metadata, updates, messages, custom,
         values, end) until it ends or stops for a person."""
-        run = _start(thread_id, body)
+        run = _start(thread_id, body, request)
         return _sse(body.project_id, run["run_id"], body.timeout)
 
     @router.post("/v1/threads/{thread_id}/runs/wait")
     @permit(P.AGENT_INVOKE, scope=Scope.project(body="project_id"))
-    def start_run_waiting(thread_id: str, body: RunBody) -> dict[str, Any]:
-        run = _start(thread_id, body)
+    def start_run_waiting(thread_id: str, body: RunBody, request: Request) -> dict[str, Any]:
+        run = _start(thread_id, body, request)
         return agent_protocol.join(engine, body.project_id, run["run_id"], timeout=body.timeout)
 
-    def _stateless(role_key: str, body: StatelessRunBody) -> dict[str, Any]:
+    def _stateless(role_key: str, body: StatelessRunBody,
+                   request: Optional[Request] = None) -> dict[str, Any]:
         with begin(engine) as connection:
             actor = _invoker(connection, body)
             try:
@@ -486,23 +500,25 @@ def build_agent_platform_router(*, engine, require_write_actor: Callable[..., st
                     environment=body.environment)
                 return agent_protocol.start_run(connection, project_id=body.project_id,
                                                 thread_id=thread["thread_id"], actor=actor,
-                                                input=body.input)
+                                                input=body.input,
+                                                traceparent=_traceparent(request))
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 
     @router.post("/v1/agents/{role_key}/runs/stream")
     @permit(P.AGENT_INVOKE, scope=Scope.project(body="project_id"))
-    def stateless_stream(role_key: str, body: StatelessRunBody):
+    def stateless_stream(role_key: str, body: StatelessRunBody, request: Request):
         """A run on a new thread, streamed (the A7 "Try it")."""
-        run = _stateless(role_key, body)
+        run = _stateless(role_key, body, request)
         return _sse(body.project_id, run["run_id"], body.timeout)
 
     @router.post("/v1/agents/{role_key}/runs/wait")
     @permit(P.AGENT_INVOKE, scope=Scope.project(body="project_id"))
-    def stateless_wait(role_key: str, body: StatelessRunBody) -> dict[str, Any]:
+    def stateless_wait(role_key: str, body: StatelessRunBody, request: Request
+                       ) -> dict[str, Any]:
         """A run on a new thread, answered when it ends or stops for a person (the MCP tool
         `agent_<key>` calls this)."""
-        run = _stateless(role_key, body)
+        run = _stateless(role_key, body, request)
         return agent_protocol.join(engine, body.project_id, run["run_id"], timeout=body.timeout)
 
     @router.get("/v1/threads/{thread_id}/runs/{run_id}")
