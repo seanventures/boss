@@ -117,7 +117,9 @@ passport_presets:
   - key: builder
     name: Builder
     agents: [forge, strata, prism, helm]
-    permissions: [knowledge:read, code_task:read, code_task:create, code_task:steer, code_task:retry, repository:read,
+    # integration:read + work_tracker:write: the Engineering Captain (helm) reads, imports, comments
+    # on and moves tickets (tickets.read / tickets.write, BOSSAPP-1047).
+    permissions: [knowledge:read, integration:read, work_tracker:write, code_task:read, code_task:create, code_task:steer, code_task:retry, repository:read,
                   github:read, github:sync, preview:read, preview:manage, artifact:read, artifact:rebuild,
                   workflow:read, workflow_run:read, skill:read, skill:invoke, memory:read, memory:manage,
                   spend:reserve, secret:lease, sandbox:read,
@@ -137,7 +139,9 @@ passport_presets:
   - key: planner
     name: Planner
     agents: [juno, atlas, keystone, rally, vector, cadence, marshal]
-    permissions: [knowledge:read, code_task:read, code_task:create, meeting:read, meeting:convene, discovery:read,
+    # integration:read + work_tracker:write: the PM (juno) and the planners read and file tickets
+    # (tickets.read / tickets.write, BOSSAPP-1047).
+    permissions: [knowledge:read, integration:read, work_tracker:write, code_task:read, code_task:create, meeting:read, meeting:convene, discovery:read,
                   discovery:create, workflow:read, workflow:create, workflow_run:read, workflow_run:start,
                   work_item:read, work_item:manage, decision:read, memory:read, memory:manage, spend:reserve,
                   agent:read, deployment:read, github:read, host:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read]
@@ -145,7 +149,8 @@ passport_presets:
   - key: operator_agent
     name: Operator agent
     agents: [harbor, pilot, bedrock, relay, beacon, anchor]
-    permissions: [knowledge:read, deployment:read, deployment:create, host:read, infra:read, observability:read,
+    # work_tracker:write: the SRE (beacon) comments on and moves tickets (tickets.write, BOSSAPP-1047).
+    permissions: [knowledge:read, work_tracker:write, deployment:read, deployment:create, host:read, infra:read, observability:read,
                   reliability:read, reliability:respond, preview:read, preview:manage, workflow_run:read,
                   workflow_run:control, spend:reserve, secret:lease,
                   agent:read, code_task:read, decision:read, github:read, meeting:read, memory:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
@@ -1263,6 +1268,14 @@ categories:
         roles: [owner, admin]
         scope: project
         flags: [step_up, critical]
+      # BOSSAPP-1047 (ticket systems): B1 (routes) and B2 (agent tools, write-back) both add this
+      # key; the merge keeps one entry.
+      - key: work_tracker:write
+        title: "Write to ticket systems"
+        description: "Import tickets as work items, comment on tickets and move them in the team's ticket system (Jira, Plane, GitHub Issues)."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
       - key: comms:read
         title: "View comms"
         description: "See the comms inbox, outbox and policies."

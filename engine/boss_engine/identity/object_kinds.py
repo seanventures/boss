@@ -146,6 +146,8 @@ KINDS: tuple[ObjectKind, ...] = (
     ObjectKind("resource_allocation", "resource_allocations"),
     ObjectKind("work_item", "work_items"),
     ObjectKind("work_tracker_binding", "work_tracker_bindings"),
+    #: a ticket-system connection (BOSSAPP-1047): one work_tracker_providers row
+    ObjectKind("work_tracker_provider", "work_tracker_providers"),
     ObjectKind("workflow_version", "workflow_versions"),
     # F2/M9: every id a route names is confined centrally (ID_PARAM_KINDS below)
     ObjectKind("a2a_channel", "a2a_channels"),
@@ -344,7 +346,7 @@ ID_PARAM_KINDS: dict[str, tuple[str, ...]] = {
     "resolution_plan_id": ("github_resolution_plan",),
     "confirmation_id": ("mcp_confirmation",),
     "conflict_set_id": ("github_conflict_set",),
-    "connection_id": ("github_connection", "integration_connection"),
+    "connection_id": ("github_connection", "integration_connection", "work_tracker_provider"),
     "conversation_id": ("agent_conversation",), "turn_id": ("agent_conversation_turn",),
     "created_by_job_id": ("job",), "job_id": ("job",), "evaluator_job_id": ("job",),
     "credential_secret_ref_id": ("secret_ref",), "secret_ref_id": ("secret_ref",),

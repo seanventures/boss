@@ -148,6 +148,11 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving an agent's proposed secret writes the value the person typed on the card
     # through put_secret and binds it (secret_proposals.on_approved, BOSSAPP-871).
     "store_proposed_secret",
+    # TICKET SYSTEMS (ticket_sync.on_card_answered, BOSSAPP-1047 B2): "Start it" imports a ticket
+    # carrying the pick-up label and starts its build; "Include it" gives a running build the
+    # ticket's changed acceptance criteria.
+    "ticket_pickup",
+    "ticket_changed_mid_run",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -734,6 +739,28 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
             *offered,
             _action("reject", "None of these", "reject",
                     "Declines every option; nothing is carried out."),
+            _delegate(),
+        ]
+    if _action_of(decision) == "ticket_pickup":
+        # A TICKET LABELLED FOR BOSS (ticket_sync.pickup, BOSSAPP-1047): nothing is imported
+        # until Start it.
+        key = str(_rec(decision).get("key") or "the ticket")
+        return [
+            _action("approve", "Start it", "approve",
+                    f"Imports {key} as a work item and starts its build; BOSS posts progress on "
+                    "the ticket."),
+            _action("reject", "Not now", "reject",
+                    f"Nothing is imported. {key} stays where it is; import it later from Tickets."),
+            _delegate(),
+        ]
+    if _action_of(decision) == "ticket_changed_mid_run":
+        # A TICKET THAT CHANGED WHILE BOSS WAS BUILDING IT (ticket_sync.check_ticket_changed).
+        return [
+            _action("approve", "Include it", "approve",
+                    "The run takes the ticket's new acceptance criteria from its next step on."),
+            _action("reject", "Next ticket", "reject",
+                    "This build finishes as it was asked; the change is left for the next "
+                    "ticket."),
             _delegate(),
         ]
     if _action_of(decision) == "role.hire":

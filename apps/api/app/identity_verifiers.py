@@ -20,6 +20,8 @@ from boss_engine.services import (
     mcp_oauth,
     preview_service,
 )
+from boss_engine.connectors.tickets import auth as ticket_auth
+from boss_engine.services import ticket_sync
 from boss_engine.services.plane_webhooks import PlaneWebhookService
 from boss_engine.services.reliability import ReliabilityService
 from boss_engine.services.saml import SamlAuthenticator
@@ -29,6 +31,12 @@ from boss_engine.services.webhooks import InboundWebhookService
 inbound_webhook_hmac = InboundWebhookService.ingest
 #: Plane: X-Plane-Signature HMAC-SHA256 over the raw body.
 plane_webhook_hmac = PlaneWebhookService.verify_signature
+#: Ticket systems (BOSSAPP-1047): the connector's own verify_webhook under the connection's secret
+#: (Jira X-Hub-Signature HMAC or its URL token, Plane X-Plane-Signature).
+ticket_webhook_signature = ticket_sync.verify_inbound_webhook
+#: "Connect with Atlassian" callbacks: an HMAC-signed state bound to project, connection and person,
+#: kept single-use (only its hash) for ten minutes.
+ticket_oauth_state = ticket_auth.complete_oauth
 #: Alertmanager / Grafana alerts: the configured alert HMAC.
 reliability_alert_hmac = ReliabilityService.verify_alert_signature
 #: SAML ACS (signed assertion) and the SP metadata it is verified against.

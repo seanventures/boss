@@ -52,9 +52,12 @@ def test_the_built_in_roles_are_the_reviewed_sizes():
     # +2 instance:read and instance:manage (BOSSAPP-872): running the install, apart from any
     # org's data. Owner and admin until the first instance admin is named
     # (identity/instance_admin.py); then only instance admins. Manage is step-up and critical.
-    assert len(Permission) == 204
+    # +1 work_tracker:write (BOSSAPP-1047, 2026-11-13): importing tickets, commenting on and
+    # moving them in the team's ticket system. Owner, admin and operator; delegable (the PM, the
+    # Engineering Captain and the SRE agents act with it). B1 adds the same key; one entry.
+    assert len(Permission) == 205
     sizes = {role: len(perms) for role, perms in ROLE_PERMISSIONS.items()}
-    assert sizes == {"owner": 197, "admin": 188, "operator": 96, "viewer": 49, "auditor": 63,
+    assert sizes == {"owner": 198, "admin": 189, "operator": 97, "viewer": 49, "auditor": 63,
                      "system_worker": 3, "system_collector": 1, "system_scim": 1,
                      "system_self_installer": 2}
 
@@ -119,4 +122,4 @@ def test_a_catalogue_that_breaks_a_rule_is_refused(mutate, message):
 
 
 def test_the_source_loads():
-    assert len(load().permissions) == 204
+    assert len(load().permissions) == 205   # + work_tracker:write (BOSSAPP-1047)

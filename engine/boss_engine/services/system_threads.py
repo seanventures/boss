@@ -122,6 +122,19 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
         _log.warning("extension scheduler not started", exc_info=True)
         started["extension_scheduler"] = False
     try:
+        # Ticket systems (BOSSAPP-1047 B2): the inbound poller, answered pick-up/change cards and
+        # the write-back catch-up; every API process ticks, the DB lease fires each job once.
+        from . import ticket_sync
+
+        if getattr(settings, "ticket_sync_scheduler_enabled", True):
+            ticket_sync.start(engine, settings)
+            started["ticket_sync"] = True
+        else:
+            started["ticket_sync"] = False
+    except Exception:  # noqa: BLE001
+        _log.warning("ticket sync scheduler not started", exc_info=True)
+        started["ticket_sync"] = False
+    try:
         # The reflection agent's schedule (BOSSAPP-888): paused by default — a tick does work
         # only for a project that turned reflection on, and it only ever proposes.
         from . import reflection

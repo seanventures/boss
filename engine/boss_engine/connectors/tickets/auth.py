@@ -47,11 +47,14 @@ from .contract import (
 
 STATE_KEY_LABEL = "tickets.oauth.state"
 STATE_TTL_SECONDS = 600
-CALLBACK_PATH = "/v1/tickets/oauth/callback"
+CALLBACK_PATH = "/v1/ticket-systems/oauth/callback"   # apps/api/app/routers/ticket_sync.py
 
 AUTH_KIND_NAMES = ("api_token", "oauth2")
 OAUTH_FIELDS = {"kind", "authorize_url", "token_url", "scopes", "audience", "pkce", "per_user",
-                "resource_discovery_url", "api_base_template", "extra_authorize_params"}
+                "resource_discovery_url", "api_base_template", "extra_authorize_params",
+                # who the person's own sign-in is (Atlassian /me): its email is compared with the
+                # person's verified BOSS email (Phase B2, GET /v1/me/ticket-identities)
+                "identity_url"}
 
 
 class OAuthError(TicketSystemError):

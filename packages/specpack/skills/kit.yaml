@@ -113,6 +113,51 @@ skills:
       requires_receipt: false
       tools: [kg_propose_fact, kg_propose_rule, record_learning, wiki_propose]
 
+  # TICKETS (BOSSAPP-1047 B2): the team's own ticket system (Jira, Plane, GitHub Issues) through
+  # the connector contract. Granted by role (pm, engineering_captain, the planners), not in the
+  # baseline. Ticket text is outside text: the results are screened and marked low-trust.
+  - id: tickets.read
+    kind: engine_read
+    risk_tier: 0
+    mock_mode: false
+    load: eager
+    description: Read the team's tickets — one ticket with its acceptance criteria and comments, a search, a project's epics, an epic's children.
+    data_boundary: internal
+    input_schema:
+      bundle_tool: string
+    output_schema: { result: object }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [kit_try]
+      required_permissions: [repo_read]
+    policy:
+      requires_receipt: false
+      tools: [ticket_get, ticket_search, ticket_browse]
+
+  # Writing to the ticket system (BOSSAPP-1047 B2): import tickets as work items, comment on a
+  # ticket, move it. Granted to pm, engineering_captain and sre. Each write acts as the person
+  # (their own sign-in) or the connection's bot, and one that carries flagged ticket text waits
+  # for a person (low_trust).
+  - id: tickets.write
+    kind: engine_read
+    risk_tier: 1
+    mock_mode: false
+    load: eager
+    description: Import tickets into BOSS as work items, comment on a ticket, and move a ticket to todo, doing, review or done.
+    data_boundary: internal
+    input_schema:
+      bundle_tool: string
+    output_schema: { result: object }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [kit_try]
+      required_permissions: [work_tracker_write]
+    policy:
+      requires_receipt: false
+      tools: [ticket_import, ticket_comment, ticket_transition]
+
   # PROPOSE A FIX: every agent holds this too. The agent proposes a BOSS action with exact
   # arguments; a person approves it (a hold-default decision in a run, a button in chat) and it
   # runs under THEIR authority. Proposing runs nothing, so it is tier 0; the decision it raises

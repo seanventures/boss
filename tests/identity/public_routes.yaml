@@ -96,6 +96,9 @@ GET /v1/previews/{preview_id}/web:
 GET /v1/previews/{preview_id}/web/{path:path}:
   reason: preview_capability_url
   verifier: boss_engine.services.preview_service:proxy_preview
+GET /v1/ticket-systems/oauth/callback:
+  reason: oauth_state_bound_callback
+  verifier: boss_engine.connectors.tickets.auth:complete_oauth
 PATCH /v1/previews/{preview_id}/web:
   reason: preview_capability_url
   verifier: boss_engine.services.preview_service:proxy_preview
@@ -279,6 +282,9 @@ POST /v1/webhooks/inbound/{source}:
 POST /v1/webhooks/plane:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.plane_webhooks:PlaneWebhookService.verify_signature
+POST /v1/webhooks/tickets/{connection_id}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.ticket_sync:verify_inbound_webhook
 PUT /v1/previews/{preview_id}/web:
   reason: preview_capability_url
   verifier: boss_engine.services.preview_service:proxy_preview
