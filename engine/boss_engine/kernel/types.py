@@ -211,6 +211,10 @@ class ToolResult:
     decision_id: Optional[str] = None
     budget: Optional[dict] = None
     pending: Optional[dict] = None
+    #: The tool message the model reads, when a context policy wrote it instead of the preset's
+    #: rendering (AP-P6: an offloaded result's path, size and preview). `content` stays whole:
+    #: the trace and the ledger keep what the tool returned.
+    rendered: Optional[str] = None
 
 
 @dataclass(frozen=True)

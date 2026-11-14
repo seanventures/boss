@@ -6590,26 +6590,38 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         next thread started cold and they had to say it again. This is the gap the Kiro Crew
         analysis put first, on their own evidence that it is the step that pays.
         """
-        from ..services.agent_memory import MemoryError_, remember as _remember
+        from ..services import memory_api
 
         pid = args.get("project_id") or project_id
+        # ONE MEMORY API (AP-P6): the tool's scope is a namespace of memory_api.write, which
+        # keeps the trust tiers (a lesson arrives proposed) and the dedupe of agent_memory.
+        scope = str(args.get("scope") or "project").strip()
+        scope_ref = str(args.get("scope_ref") or "").strip()
+        namespace = {"project": "project", "org": "org", "actor": f"user:{scope_ref}",
+                     "role": f"agent:{scope_ref}"}.get(scope, scope)
+        kind = str(args.get("kind") or "").strip()
         try:
+            if scope not in ("org", "project", "actor", "role"):
+                raise memory_api.MemoryAPIError("scope must be one of: org, project, actor, role")
+            if scope in ("actor", "role") and not scope_ref:
+                raise memory_api.MemoryAPIError(
+                    f"scope '{scope}' needs scope_ref (the actor id or role key)")
+            if kind not in ("preference", "project", "lesson"):
+                raise memory_api.MemoryAPIError(
+                    "kind must be one of: preference, project, lesson")
             with ctx.begin() as c:
-                row = _remember(
-                    c, project_id=pid, actor=actor,
-                    kind=str(args.get("kind") or "").strip(),
-                    body=str(args.get("body") or ""),
-                    scope=str(args.get("scope") or "project").strip(),
-                    scope_ref=str(args.get("scope_ref") or "").strip() or None,
+                row = memory_api.write(
+                    c, namespace, str(args.get("body") or ""), project_id=pid, actor=actor,
+                    kind=kind,
                     # THE AGENT'S AMBIENT VALUES ARRIVE IN `args`, NOT ON `ctx`.
                     # `engine_agent` merges them into the argument dict before invoking
                     # (`args={**self.ambient, **args, ...}`); reading `ctx.ambient` raised
                     # AttributeError on every call. Found in production by the agent itself,
                     # which traced it to this line and declined to guess a workaround.
-                    source_thread_id=args.get("_thread_id"),
-                )
-        except MemoryError_ as error:
+                    source_thread_id=args.get("_thread_id"))
+        except memory_api.MemoryAPIError as error:
             return {"ok": False, "error": str(error)}
+        row.pop("namespace", None)
         note = ("Recorded and in force from now on."
                 if row["status"] == "active" else
                 "Recorded as PROPOSED. It does not bind anything until a human reviews it — "
@@ -6633,19 +6645,31 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         kind="read", permission="memory:read",
         exposure=Exposure(tags=("memory",), core_for=("chat",)))
     def recall(ctx, *, project_id, actor, args):
-        from ..services.agent_memory import recall as _recall
+        from ..services import memory_api
 
         pid = args.get("project_id") or project_id
         kinds = tuple(str(k) for k in (args.get("kinds") or []) if str(k).strip())
+        query = str(args.get("query") or "").strip()
+        # ONE MEMORY API (AP-P6): each row carries its decay weight (kg/learning.py's rule); a
+        # rule marked `dropped` has gone unused long enough that it is no longer injected.
         with ctx.begin() as c:
-            rows = _recall(c, project_id=pid, actor=actor,
-                           role=str(args.get("role") or "").strip() or None,
-                           kinds=kinds or None,
-                           include_proposed=bool(args.get("include_proposed")),
-                           query=str(args.get("query") or "").strip() or None)
+            rows = memory_api.recall(c, project_id=pid, actor=actor,
+                                     role=str(args.get("role") or "").strip() or None,
+                                     kinds=kinds or None,
+                                     include_proposed=bool(args.get("include_proposed")),
+                                     query=query or None)
+            # THE KNOWLEDGE GRAPH ANSWERS TOO (AP-P6: KG learnings reach chat): its quoted
+            # pack for the query — approved rules and inferred learnings, each in its tier.
+            kg = memory_api.kg_pack(c, project_id=pid, query=query, step="chat") \
+                if query else ""
         out = {"ok": True, "count": len(rows), "memories": [_json_safe(r) for r in rows],
                "note": ("nothing recorded yet for this project" if not rows else
                         "these are already in your prompt; do not read them back verbatim")}
+        if kg:
+            out["knowledge"] = kg
+            out["knowledge_note"] = ("from the knowledge graph: rules a person approved bind; "
+                                     "learnings agents inferred are to be checked before you "
+                                     "rely on one")
         # AN EXTERNAL MEMORY BACKEND (BOSSAPP-892) answers a query too, when the project turned
         # its reading on: outside context, marked with its source, never a RULE. Absent unless a
         # backend returned something, so a project without one sees the same answer as before.
@@ -9234,7 +9258,9 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
 # The SQL handlers have no project predicate or tenant row policy, even in paid editions.
 # Keep direct/admin tools registered separately, but hold raw SQL out of this surface until
 # a database-enforced project boundary exists.
-_DISCUSS_EXCLUDED_READ_TOOLS: frozenset[str] = frozenset({"query_db"})
+_DISCUSS_EXCLUDED_READ_TOOLS: frozenset[str] = frozenset({"query_db"}) | frozenset(
+    # the run filesystem's tools come from the kernel inside a run (AP-P6), never from here
+    ("ls", "read_file", "grep", "write_file"))
 
 
 def _turn_seconds(default: float) -> float:
@@ -9315,6 +9341,37 @@ def register_find_tools(reg: ToolRegistry) -> None:
         return search_tools(reg, str(args.get("query") or ""), int(args.get("limit") or 5))
 
 
+def register_run_fs_tools(reg: ToolRegistry) -> None:
+    """THE RUN FILESYSTEM'S TOOLS (AP-P6, BOSSAPP-1057; kernel/runfs.py): ls, read_file, grep
+    and write_file over a kernel run's /scratch, /large_tool_results, /memories and /skills.
+
+    Registered so the catalogue, the identity matrices and the pins know them, with their
+    permissions: reading the run's own files is `system:read`, writing its scratch notes is a
+    session write like update_ledger (`assistant:chat`, safe, idempotent — the same content
+    written twice is the same file). The KERNEL serves them (kernel.runfs.RunFSToolSet joins
+    every run that carries the context policy, ahead of the caller's tools), so these handlers
+    run only when something outside a kernel run calls the name — and then say so. The
+    descriptions and parameters are the kernel's own (runfs.SPECS): one definition."""
+    from ..kernel import runfs
+
+    permissions = {runfs.LS: "system:read", runfs.READ_FILE: "system:read",
+                   runfs.GREP: "system:read", runfs.WRITE_FILE: "assistant:chat"}
+    for name, description, parameters, kind in runfs.SPECS:
+        def handler(ctx, *, project_id, actor, args, _name=name):
+            return {"ok": False, "error": "no_run_filesystem",
+                    "message": (f"'{_name}' works on the files of a running agent's own run "
+                                "(/scratch, /large_tool_results, /memories, /skills); there is "
+                                "no run here. Use the tool inside an agent run.")}
+
+        reg.register(ToolSpec(
+            name, description, dict(parameters), handler, kind=kind,
+            reversibility="safe", permission=permissions[name],
+            idempotency="idempotent" if kind == "write" else None,
+            # Offered by the kernel to every run (not through the registry's surfaces): hidden
+            # from chat's and MCP's registry view, where there is no run to hold the files.
+            exposure=Exposure(tags=("files", "context"), surfaces=("agent_step",))))
+
+
 def _register_ticket_tools(reg: ToolRegistry) -> None:
     """Ticket systems (BOSSAPP-1047 B2): read, search and browse tickets; import them, comment
     on them and move them, through the connector contract (tools/ticket_tools.py)."""
@@ -9392,6 +9449,9 @@ def build_default_registry() -> ToolRegistry:
     register_knowledge_project_tools(reg)
     # Ticket systems: Jira, Plane, GitHub Issues through one contract (BOSSAPP-1047 B2).
     _register_ticket_tools(reg)
+    # The run filesystem's tools (AP-P6): catalogued here with their permissions, served by the
+    # kernel inside a run.
+    register_run_fs_tools(reg)
     # The tool-search tool (K5): registered last, and it searches at call time, so it sees
     # everything above whatever order they landed in.
     register_find_tools(reg)

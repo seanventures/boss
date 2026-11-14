@@ -86,7 +86,9 @@ class ClipContext:
     secret redactor first, as the decision and pre-check loops did; a string result is shown
     as it is when `raw_strings` (the native coder's sandbox tools return text).
 
-    Compaction is K9: until then nothing is compacted and the window is only reported."""
+    On a kernel run that carries the context-policy middleware (AP-P6, kernel/context_policy),
+    a result over the clip is OFFLOADED to the run filesystem instead of cut, and compaction
+    happens there; `compact` below is the extractive fallback for a caller without it."""
 
     clip: Optional[int] = 16_000
     redact: bool = False
@@ -118,9 +120,21 @@ class ClipContext:
         return body
 
     def needs_compaction(self, state: RunState, window: int) -> bool:
-        return False
+        """AP-P6: past 85% of `window` (context_policy.SUMMARISE_AT). The context-policy
+        middleware does the governed, model-summarised compaction on every run that carries
+        it; this is the protocol's own answer for a caller without it."""
+        from .context_policy import SUMMARISE_AT, state_tokens
+
+        return state_tokens(state) > SUMMARISE_AT * int(window)
 
     def compact(self, state: RunState, engine: Any) -> RunState:
+        """The extractive compaction (no model call: this protocol holds no governed path to
+        one): the older conversation folded into a digest, the originals archived to the run
+        filesystem (/scratch/conversation_history), the newest 10% kept verbatim."""
+        from .context_policy import compact_state, window_of, ContextConfig
+
+        config = ContextConfig(summariser="extractive")
+        compact_state(state, window=window_of(engine, config), config=config)
         return state
 
 

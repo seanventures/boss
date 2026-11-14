@@ -25,7 +25,7 @@ THE SHAPE
              recommended_abilities, integrations}
       autonomy {level 0-4, approval {action: mode}, escalate [..]}
       memory {read, write}                               namespaces
-      context {..}       P6 placeholder (context policy hooks)
+      context {offload_tokens, summarise_at, keep, clear_at, clear_keep, window_tokens}   P6
       subagents [..]     P7 placeholder
       triggers [..]      P3 placeholder
       evaluators [..]    P4: rubric (a shipped eval rubric), online (sampled, rule|jev|judge, weekly cap)
@@ -146,11 +146,16 @@ SCHEMA: dict[str, Any] = {
                 "downgrade_triggers": _strs(),
             }),
             "memory": _obj({"read": _strs(pattern=_NAMESPACE), "write": _strs(pattern=_NAMESPACE)}),
-            # P6: context policy hooks. The keys are named now so a spec written today still loads.
+            # P6: the context policy (kernel/context_policy.ContextConfig.from_spec reads these;
+            # each defaults to deepagents' measured value: offload above 20k tokens, summarise
+            # at 85% keeping 10%, clear old tool results past 50% keeping the newest 4).
             "context": _obj({
                 "offload_tokens": {"type": "integer", "minimum": 0},
                 "summarise_at": {"type": "number", "minimum": 0, "maximum": 1},
                 "keep": {"type": "number", "minimum": 0, "maximum": 1},
+                "clear_at": {"type": "number", "minimum": 0, "maximum": 1},
+                "clear_keep": {"type": "integer", "minimum": 0},
+                "window_tokens": {"type": "integer", "minimum": 1000},
                 "hooks": _strs(pattern=_WORD),
             }),
             # P7: subagents-as-tools.

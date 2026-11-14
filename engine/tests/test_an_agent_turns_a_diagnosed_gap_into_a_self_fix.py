@@ -73,7 +73,12 @@ def _call(name: str, args: dict, cid: str = "call_1") -> dict:
                 {"id": cid, "type": "function", "function": {"name": name, "arguments": body}}]}}
 
 
-def test_an_agent_files_a_gap_a_person_presses_and_the_self_fix_investigates(harness):
+def test_an_agent_files_a_gap_a_person_presses_and_the_self_fix_investigates(harness,
+                                                                              monkeypatch):
+    # The scripted model calls file_platform_gap straight away. Since AP-P6 chat is scoped by
+    # default (core + find_tools) and that tool is found, not core; this test is about the
+    # self-fix path, so it runs with the full set the script assumes.
+    monkeypatch.setenv("BOSS_SCOPED_TOOLS", "0")
     h = harness
     h.script("good_fix")
     ctx = Worker(h.eng, h.settings)

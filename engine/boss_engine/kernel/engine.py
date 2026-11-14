@@ -156,6 +156,10 @@ class OpenAIChatEngine:
         self.traits = traits or EngineTraits()
         self.model = model
 
+    def model_name(self) -> str:
+        return str(self.model or getattr(getattr(self.adapter, "settings", None),
+                                         "openai_model", "") or "")
+
     def complete(self, req: ModelRequest, *, on_delta: Optional[Callable[[str], None]] = None,
                  cancel: Optional[CancelToken] = None) -> ModelTurn:
         tools = [t.as_openai(strict=self.traits.strict_tools) for t in req.tools] or None
@@ -164,7 +168,12 @@ class OpenAIChatEngine:
             kwargs["tool_choice"] = req.tool_choice
         if self.model:
             kwargs["model_override"] = self.model
-        message, usage = self.adapter.create_chat_completion(req.openai_messages(), **kwargs)
+        messages = req.openai_messages()
+        if is_claude_model(self.model_name()):
+            # A CLAUDE MODEL BEHIND AN OPENAI-COMPATIBLE GATEWAY (OpenRouter, a proxy) caches
+            # only where it is told to (AP-P6: explicit markers on every Anthropic path).
+            messages = claude_cache_markers(req)
+        message, usage = self.adapter.create_chat_completion(messages, **kwargs)
         message = message if isinstance(message, Mapping) else {"content": str(message or "")}
         calls = parse_tool_calls(message.get("tool_calls"))
         text = message.get("content")
@@ -227,6 +236,45 @@ class TextEngine:
         return estimate_tokens(req)
 
 
+def is_claude_model(model: str) -> bool:
+    """A Claude model by its id as BOSS's lanes spell it ("claude-…", "anthropic/claude-…",
+    "us.anthropic.claude-…")."""
+    name = str(model or "").strip().lower()
+    return "claude" in name or name.startswith("anthropic/")
+
+
+def claude_cache_markers(req: ModelRequest) -> list:
+    """The chat-completions messages with Anthropic's `cache_control` where the request marks
+    its stable prefix: each cached system Block becomes a text part with a breakpoint (at most
+    two, the last ones), and the last user message carries the rolling conversation breakpoint.
+    The OpenAI-compatible gateways that front Claude (OpenRouter) pass these through; without
+    them a Claude call on those lanes cached nothing."""
+    parts: list = []
+    for block in req.system:
+        if not isinstance(block, Block) or not block.text:
+            continue
+        part: dict = {"type": "text", "text": block.text}
+        if block.cache:
+            part["cache_control"] = {"type": "ephemeral"}
+        parts.append(part)
+    marked = [i for i, p in enumerate(parts) if "cache_control" in p]
+    for i in marked[:-2]:
+        del parts[i]["cache_control"]
+    messages: list = [{"role": "system", "content": parts}] if parts else []
+    messages += [dict(m) for m in req.messages]
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") == "user" and isinstance(message.get("content"), str) \
+                and message["content"]:
+            messages[index] = {**message, "content": [{
+                "type": "text", "text": message["content"],
+                "cache_control": {"type": "ephemeral"}}]}
+            break
+        if message.get("role") == "user":
+            break
+    return messages
+
+
 def _usage_of(usage: Any) -> Usage:
     """The adapter's usage dict, priced the way every loop priced it (estimate_cost_usd_micros
     honours an exact cost the backend reported)."""
@@ -254,4 +302,5 @@ REGISTERED_ENGINES: dict = {
 
 
 __all__ = ["Block", "CancelToken", "Engine", "EngineTraits", "ModelRequest", "OpenAIChatEngine",
-           "REGISTERED_ENGINES", "TextEngine", "estimate_tokens", "parse_tool_calls"]
+           "REGISTERED_ENGINES", "TextEngine", "claude_cache_markers", "estimate_tokens",
+           "is_claude_model", "parse_tool_calls"]

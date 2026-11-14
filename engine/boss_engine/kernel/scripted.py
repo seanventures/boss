@@ -18,6 +18,9 @@ Script items, one per model call:
     Calls(Call(..), ..)      several calls in one turn
     Empty()                  no text and no tool call (a provider hiccup)
     Fail(exception)          the call raises (a 529, a budget deferral, a provider's 400)
+    Reply(fn)                fn(messages, tools) -> one of the above: a model that READS what
+                             it was sent (AP-P6: a needle answered from a grep it ran, a
+                             summary written from the transcript it was handed)
 
 Every request is recorded (`requests`): the messages and the tool names offered (None when the
 call offered no tools), so a test can assert what the loop asked as well as what it did.
@@ -59,6 +62,14 @@ class Empty:
 @dataclass(frozen=True)
 class Fail:
     error: BaseException
+
+
+@dataclass(frozen=True)
+class Reply:
+    """A scripted turn decided from the request: `fn(messages, tools)` returns the item to
+    play (Say, Call, Calls, Empty or Fail). `tools` is the offered names, or None."""
+
+    fn: Callable[[list, Optional[list]], Any]
 
 
 class ScriptedEngine:
@@ -112,6 +123,8 @@ class ScriptedEngine:
         with self._lock:
             self.requests.append({"messages": copy.deepcopy(list(messages)), "tools": tools})
             item = self.script.pop(0) if self.script else self.after
+        if isinstance(item, Reply):
+            item = item.fn(copy.deepcopy(list(messages)), tools)
         if isinstance(item, Fail):
             raise item.error
         usage = {"model": self.model, "prompt_tokens": 10, "completion_tokens": 5,
@@ -141,4 +154,4 @@ def _message(text: Optional[str], calls: list) -> dict:
     return {"content": text, "tool_calls": calls or None, "raw": raw}
 
 
-__all__ = ["Call", "Calls", "Empty", "Fail", "Say", "ScriptedEngine"]
+__all__ = ["Call", "Calls", "Empty", "Fail", "Reply", "Say", "ScriptedEngine"]

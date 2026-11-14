@@ -116,13 +116,45 @@ def _system_param(blocks: Iterable[Any]) -> list:
     return _capped_breakpoints(out)
 
 
+#: Breakpoints the system may use: the tool list takes one and the conversation's rolling
+#: breakpoint one (AP-P6), so the system keeps the other two.
+SYSTEM_BREAKPOINTS = MAX_CACHE_BREAKPOINTS - 2
+
+
 def _capped_breakpoints(blocks: list) -> list:
-    """At most 3 system breakpoints (the 4th is the tool list's), keeping the LAST marked blocks:
-    the longest prefixes are the ones worth a breakpoint."""
+    """At most 2 system breakpoints (the 3rd is the tool list's, the 4th the conversation's),
+    keeping the LAST marked blocks: the longest prefixes are the ones worth a breakpoint."""
     marked = [i for i, b in enumerate(blocks) if "cache_control" in b]
-    for i in marked[: max(0, len(marked) - (MAX_CACHE_BREAKPOINTS - 1))]:
+    for i in marked[: max(0, len(marked) - SYSTEM_BREAKPOINTS)]:
         del blocks[i]["cache_control"]
     return blocks
+
+
+def _mark_conversation(messages: list) -> list:
+    """THE ROLLING CONVERSATION BREAKPOINT (AP-P6, AGENT_PLATFORM.md §4.7 "cache explicitly"):
+    `cache_control` on the last block of the last message, so the next step of the run reads
+    everything before its own new turn from the cache instead of paying for it again — the
+    conversation is append-only between compactions, so each step's prefix is the previous
+    step's request. A string content becomes one text block to carry the marker."""
+    if not messages:
+        return messages
+    last = dict(messages[-1])
+    content = last.get("content")
+    if isinstance(content, str):
+        if not content:
+            return messages
+        last["content"] = [{"type": "text", "text": content,
+                            "cache_control": {"type": "ephemeral"}}]
+    elif isinstance(content, list) and content:
+        blocks = [dict(b) for b in content]
+        kind = str(blocks[-1].get("type") or "")
+        if kind in ("thinking", "redacted_thinking"):
+            return messages  # the API refuses cache_control on thinking blocks
+        blocks[-1]["cache_control"] = {"type": "ephemeral"}
+        last["content"] = blocks
+    else:
+        return messages
+    return list(messages[:-1]) + [last]
 
 
 def _strict_ok(parameters: Mapping[str, Any]) -> bool:
@@ -365,13 +397,16 @@ class AnthropicMessagesEngine:
     # ── the request ───────────────────────────────────────────────────────────────────────
     def _request_kwargs(self, req: ModelRequest) -> dict:
         system, messages = _messages_param(req)
+        explicit = self.traits.prompt_cache == "explicit"
+        if explicit:
+            messages = _mark_conversation(messages)
         kwargs: dict = {"model": self.model, "messages": messages,
                         "max_tokens": int(req.max_output_tokens or self.max_output_tokens)}
         if system:
             kwargs["system"] = system
-        tools = _tools_param(req, strict=self.traits.strict_tools,
-                             cache=self.traits.prompt_cache == "explicit"
-                             and any(getattr(b, "cache", False) for b in req.system))
+        # The tool list is the request's first and most stable prefix: always a breakpoint on
+        # an explicit-cache engine (AP-P6), not only when the system has a cached block.
+        tools = _tools_param(req, strict=self.traits.strict_tools, cache=explicit)
         if tools:
             kwargs["tools"] = tools
             choice = _tool_choice(req)

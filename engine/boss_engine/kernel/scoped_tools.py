@@ -8,6 +8,10 @@ marked by RegistryToolSet from each ToolSpec's `Exposure`) and joins the run's t
 step after `find_tools` returns it. With the flag off, nothing is deferred and `ScopedTools`
 offers exactly what `OfferAll` would: today's full set.
 
+AP-P6 (BOSSAPP-1057) made it the DEFAULT on every kernel preset: `enabled()` is on unless
+BOSS_SCOPED_TOOLS is an off word, and agent_loop, decisions, the pre-check, the coder and the
+meeting seats all carry ScopedTools (a tool set that marks nothing deferred is offered whole).
+
 The kernel reads this policy through `ScopedTools`; since BOSSAPP-1006 the OLD chat loop
 (EngineAgent on a CLI text brain, which the kernel cannot serve — engine_agent._CLI_TEXT_BRAINS)
 scopes with the SAME derivation (`surface_view` + `found_in_trace`), under `cli_text_default`
@@ -35,8 +39,9 @@ _OFF_WORDS = ("0", "false", "no", "off")
 
 
 def enabled() -> bool:
-    """BOSS_SCOPED_TOOLS: off unless set to a true word. Off = today's full set."""
-    return (os.environ.get(FLAG) or "").strip().lower() in ("1", "true", "yes", "on")
+    """BOSS_SCOPED_TOOLS: ON unless set to an off word (AP-P6, AGENT_PLATFORM.md §4.7: "scoped
+    tools plus find_tools become the default on every preset"). Off = the full set, as before."""
+    return (os.environ.get(FLAG) or "").strip().lower() not in _OFF_WORDS
 
 
 def cli_text_default() -> bool:

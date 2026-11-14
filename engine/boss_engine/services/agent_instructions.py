@@ -405,11 +405,40 @@ def fingerprint_entries(connection: Connection, project_id: str,
 
 
 def for_prompt(connection: Any, project_id: Optional[str], role_key: Optional[str],
-               mode: str) -> list[dict[str, Any]]:
+               mode: str, *, skills: str = "inline") -> list[dict[str, Any]]:
     """[{name, sha256, body}] for one mode, in position order, re-linted with today's rules and
     within the budget. A document that fails the lint is LEFT OUT (and logged); the Passport
     shows it as `Not used`. Never raises: a prompt must still compose.
+
+    `skills="on_demand"` (AP-P6, progressive disclosure on a kernel run): a document written as
+    a SKILL.md (frontmatter with a name and a description) is LEFT OUT here — the run lists its
+    name and description and the body is read from /skills/<name>/SKILL.md when the agent needs
+    it (`skills_for`). Everything else is inlined as before.
     """
+    docs = _for_prompt(connection, project_id, role_key, mode)
+    if skills == "on_demand":
+        return [d for d in docs if not looks_like_skill(d["body"])]
+    return docs
+
+
+def skills_for(connection: Any, project_id: Optional[str], role_key: Optional[str],
+               mode: str = "work") -> list[dict[str, str]]:
+    """The agent's SKILL.md-shaped instructions for one mode, for progressive disclosure:
+    [{name, description, body}] — the frontmatter's name (snake_cased: it is a path segment)
+    and description, and the body after it. The same lint and budget as `for_prompt`."""
+    out: list[dict[str, str]] = []
+    for doc in _for_prompt(connection, project_id, role_key, mode):
+        if not looks_like_skill(doc["body"]):
+            continue
+        head, rest = parse_frontmatter(doc["body"])
+        name = _snake(head.get("name") or doc["name"]) or _snake(doc["name"])
+        out.append({"name": name, "description": str(head.get("description") or "")[:SUMMARY_MAX],
+                    "body": rest.strip()})
+    return out
+
+
+def _for_prompt(connection: Any, project_id: Optional[str], role_key: Optional[str],
+                mode: str) -> list[dict[str, Any]]:
     if connection is None or not project_id or not role_key or mode not in MODES:
         return []
     try:

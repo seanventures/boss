@@ -178,6 +178,9 @@ _EXPECTED_TOOLS: set[str] = {
     # The tool-search tool (K5, BOSSAPP-961): the scoped chat core plus this; everything else
     # is found by name/description/tags and offered from the next step on.
     "find_tools",
+    # The run filesystem (AP-P6, BOSSAPP-1057): a kernel run's /scratch, /large_tool_results,
+    # /memories and /skills. Served by the kernel; catalogued here with their permissions.
+    "ls", "read_file", "grep", "write_file",
     "create_discovery",
     "decide",
     "describe_schema",
@@ -283,15 +286,15 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 197, (  # + 6 ticket tools (BOSSAPP-1047 B2, 2026-11-13)
+    assert len(reg.names()) == 201, (  # + 6 ticket tools (BOSSAPP-1047 B2, 2026-11-13) + 4 run FS tools (AP-P6)
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 106  # + ticket_get, ticket_search, ticket_browse (BOSSAPP-1047 B2) + wiki_read (BOSSAPP-891) + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
+    assert len(read) == 109  # + ls, read_file, grep (AP-P6 run FS) + ticket_get, ticket_search, ticket_browse (BOSSAPP-1047 B2) + wiki_read (BOSSAPP-891) + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
     # + list_platform_gaps (BOSSAPP-571's doorway) + kg_rules (the approved business rules, BOSSAPP-768)
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 91  # + ticket_import, ticket_comment, ticket_transition (BOSSAPP-1047 B2) + offer_options (BOSSAPP-879), watch_work_item (880), propose_hire, request_budget_override (884), + propose_secret (BOSSAPP-871), + report_friction (BOSSAPP-889), + wiki_propose (BOSSAPP-891), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
+    assert len(write) == 92  # + write_file (AP-P6 run FS) + ticket_import, ticket_comment, ticket_transition (BOSSAPP-1047 B2) + offer_options (BOSSAPP-879), watch_work_item (880), propose_hire, request_budget_override (884), + propose_secret (BOSSAPP-871), + report_friction (BOSSAPP-889), + wiki_propose (BOSSAPP-891), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
     # + file_platform_gap, request_self_fix (BOSSAPP-571's doorway) + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
@@ -394,7 +397,9 @@ def test_discuss_read_registry_exposes_scoped_reads_and_hides_project_override()
     # Every other read tool remains available to the conversation.
     default_reads = {s.name for s in build_default_registry().specs(kind="read")}
     discuss_reads = {s.name for s in reg.specs(kind="read")}
-    assert default_reads - discuss_reads == {"query_db"}, (
+    # The run filesystem's reads are the kernel's inside a run (AP-P6), never the chat
+    # registry's: a question has no run whose files they could read.
+    assert default_reads - discuss_reads == {"query_db", "ls", "read_file", "grep"}, (
         f"these read tools cannot be reached from a question: "
         f"{sorted(default_reads - discuss_reads)}")
     assert "inspect_self" in discuss_reads
@@ -478,6 +483,9 @@ def test_every_write_declares_what_pressing_it_costs():
 #: Writes whose effect can be undone or simply redone. These are what "fix it" legitimately
 #: means, and they stay one-shot when the operator asks for them.
 _SAFE_WRITES = [
+    # A RUN'S OWN SCRATCH NOTE (AP-P6): a file in the run's checkpointed state; writing the same
+    # content again is the same file.
+    "write_file",
     # A GAP IN BOSS ITSELF, FILED (BOSSAPP-571): one recommendation row a person reviews; it changes
     # nothing else, and filing it again counts the same cause again (queues_for_review).
     "file_platform_gap",

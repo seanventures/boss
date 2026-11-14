@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import logging
 import re
 import time
 from hashlib import sha256
@@ -1877,6 +1878,33 @@ def _invoke_agent_skill(
     )
 
 
+def _run_role(finalize_ctx: Optional[dict]) -> str:
+    ctx = finalize_ctx or {}
+    return str((ctx.get("agent_step") or {}).get("role_key") or ctx.get("role_key") or "")
+
+
+def _with_memory(connection: Connection, project_id: str, system_prompt: Optional[str],
+                 user_prompt: str, run_id: str, finalize_ctx: Optional[dict]) -> Optional[str]:
+    """The run's system prompt with its memory (AP-P6, services/memory_api): what this AGENT
+    learned in earlier runs (its reviewed lessons — a proposed one is never injected — decayed
+    per kg/learning.py), the project's memory, and the knowledge graph's quoted pack for the
+    task. Appended after the agent's brief, so the stable prefix before it is untouched. Never
+    fatal: a run without its memory is still a run."""
+    try:
+        from . import memory_api
+
+        role = _run_role(finalize_ctx)
+        namespaces = ["project"] + ([f"agent:{role}"] if role else [])
+        with connection.begin_nested():
+            text = memory_api.read(connection, namespaces, project_id=project_id, role=role,
+                                   query=user_prompt, run_id=run_id, step="agent")["text"]
+        if text.strip():
+            return (system_prompt or "").rstrip() + "\n\n" + text.strip()
+    except Exception:  # noqa: BLE001 — memory is an aid, never a dependency
+        logging.getLogger(__name__).warning("agent run memory skipped", exc_info=True)
+    return system_prompt or None
+
+
 def run_agent_loop(
     connection: Connection,
     settings: Settings,
@@ -1892,20 +1920,8 @@ def run_agent_loop(
     a human approval. State is persisted to agent_runs after every step so the
     run survives a crash and can be resumed."""
     run_id = make_id("arun")
-    try:
-        from .knowledge.runtime import append_quoted_pack, quoted_pack_for_turn
-
-        system_prompt = append_quoted_pack(
-            system_prompt,
-            quoted_pack_for_turn(
-                connection,
-                project_id=project_id,
-                query=user_prompt,
-                run_id=run_id,
-            ),
-        ) or None
-    except Exception:
-        pass
+    system_prompt = _with_memory(connection, project_id, system_prompt, user_prompt, run_id,
+                                 finalize_ctx)
     messages: list[dict] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -1962,16 +1978,8 @@ def admit_agent_run(
     from . import thread_runs
 
     run_id = make_id("arun")
-    try:
-        from .knowledge.runtime import append_quoted_pack, quoted_pack_for_turn
-
-        system_prompt = append_quoted_pack(
-            system_prompt,
-            quoted_pack_for_turn(connection, project_id=project_id, query=user_prompt,
-                                 run_id=run_id),
-        ) or None
-    except Exception:
-        pass
+    system_prompt = _with_memory(connection, project_id, system_prompt, user_prompt, run_id,
+                                 finalize_ctx)
     messages: list[dict] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -2751,15 +2759,18 @@ def _drive_run_on_kernel(connection: Connection, settings: Settings, run_id: str
     done = int((blob or {}).get("step") or 0)
     role = str((finalize_ctx.get("agent_step") or {}).get("role_key")
                or finalize_ctx.get("role_key") or "agent_loop")
+    thread_id = run.get("thread_id") or finalize_ctx.get("thread_id")
     spec = kernel.RunSpec(
         engine=engine, tools=tools, policies=presets.agent_loop(done + steps_cap),
         project_id=project_id, system=system, messages=messages, run_id=run_id,
+        middleware=context_middleware(connection, project_id, role=role, thread_id=thread_id,
+                                      actor=f"agent:{role}"),
         actor=f"agent:{role}", persist=True, store=store, gate=gate, sink=sink,
         resume_note=presets.agent_loop_resume_note, extra=finalize_ctx, db=connection,
         screen=lambda result, ref: screen_result(connection, settings, project_id, result,
                                                  ref=ref),
         sleep=lambda seconds: _transient.time.sleep(seconds),
-        thread_id=run.get("thread_id") or finalize_ctx.get("thread_id"),
+        thread_id=thread_id,
         interrupts=DecisionInterrupts(connection, project_id=project_id, task_id=task_id),
         drain=opts.get("drain"),
         cancel=kernel.CancelToken(should_stop=opts["should_stop"])
@@ -2769,6 +2780,56 @@ def _drive_run_on_kernel(connection: Connection, settings: Settings, run_id: str
     else:
         result = kernel.resume(spec, decision=decision, answers=answers)
     return _kernel_outcome(connection, project_id, run_id, result, mirror, tools)
+
+
+def context_middleware(connection: Connection, project_id: str, *, role: str,
+                       thread_id: Optional[str] = None, actor: str = "agent") -> tuple:
+    """THE CONTEXT POLICY FOR AN AGENT RUN (AP-P6, kernel/context_policy.py): configured from the
+    agent's published spec (`spec.context`, `spec.memory`), with the deepagents defaults where
+    it says nothing; its SKILL.md instructions disclosed on demand; /memories routed to the
+    memory API over the run's own connection. () when BOSS_CONTEXT_POLICY is off."""
+    from ..kernel.flags import CONTEXT_POLICY, on
+
+    if not on(CONTEXT_POLICY):
+        return ()
+    import contextlib
+
+    from ..kernel.context_policy import ContextConfig, ContextPolicyMiddleware
+    from .agent_instructions import skills_for
+    from .memory_api import RunMemory
+
+    spec_context: dict = {}
+    memory: dict = {}
+    if role:
+        try:
+            from ..agents.versions import active
+
+            with connection.begin_nested():
+                version = active(connection, project_id, role)
+            doc = (version or {}).get("spec") or {}
+            body = doc.get("spec") if isinstance(doc, dict) else None
+            spec_context = dict((body or {}).get("context") or {})
+            memory = dict((body or {}).get("memory") or {})
+        except Exception:  # noqa: BLE001 — an agent without a published spec gets the defaults
+            spec_context, memory = {}, {}
+    skills = skills_for(connection, project_id, role, "work") if role else []
+
+    @contextlib.contextmanager
+    def within():
+        with connection.begin_nested():
+            yield connection
+
+    def memory_for(state: Any) -> Any:
+        try:
+            return RunMemory(within, project_id=project_id, actor=actor, role=role or None,
+                             thread_id=thread_id, reads=memory.get("read") or (),
+                             writes=memory.get("write") or (), db=connection)
+        except Exception:  # noqa: BLE001 — a spec naming a namespace this API lacks
+            return RunMemory(within, project_id=project_id, actor=actor, role=role or None,
+                             thread_id=thread_id, db=connection)
+
+    return (ContextPolicyMiddleware(ContextConfig.from_spec(
+        spec_context, skills=skills, memory_for=memory_for)),)
 
 
 def _kernel_outcome(connection: Connection, project_id: str, run_id: str, result: Any,

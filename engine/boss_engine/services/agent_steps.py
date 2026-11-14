@@ -400,9 +400,15 @@ def agent_brief(connection: Connection, project_id: str, role_key: str) -> str:
 
     # HOW BOSS WORKS FIRST: the same bytes for every agent, so it is the cached prefix every
     # agent step shares (agent_baseline.PRIMER); who the agent is follows it.
+    # SKILLS ON DEMAND (AP-P6): on the kernel, an instruction written as a SKILL.md is listed by
+    # name and description and its body read from /skills when needed (the context policy);
+    # the old loop has no run filesystem, so it keeps every body inline.
+    from .agent_loop import kernel_steps
+
     lines = [PRIMER,
              _agent_voice(dict(row) if row else {"role_key": role, "spec": spec},
-                          for_prompt(connection, project_id, role, "work"))
+                          for_prompt(connection, project_id, role, "work",
+                                     skills="on_demand" if kernel_steps() else "inline"))
              or f"You are {name}, an AI agent in BOSS."]
     if spec.get("mission"):
         lines.append(f"\nYOUR MISSION\n  {spec['mission']}")

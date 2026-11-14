@@ -1,6 +1,7 @@
 """Build procedural action priors (BOSSAPP-1031) from a database's agent_turns and print JSON.
 
-Offline and replay-first: point DATABASE_URL (or --database-url) at any database that holds
+The fold itself is `memory_api.build_priors_job` (AP-P6), the callable job a scheduler runs;
+this script is its replay-database caller. Offline and replay-first: point DATABASE_URL (or --database-url) at any database that holds
 transcripts — a bench database, a replica — and the fold upserts kg_action_priors for the org.
 Idempotent: a high-water mark per org means a re-run never double-counts; --since overrides it
 for a deliberate re-fold.
@@ -22,7 +23,7 @@ sys.path.insert(0, str(ROOT / "engine"))
 from sqlalchemy import create_engine  # noqa: E402
 
 from boss_engine.db import ensure_schema  # noqa: E402
-from boss_engine.services.knowledge.procedural_priors import build_priors  # noqa: E402
+from boss_engine.services.memory_api import build_priors_job  # noqa: E402
 
 
 def main() -> None:
@@ -44,7 +45,10 @@ def main() -> None:
             since = since.replace(tzinfo=timezone.utc)
     engine = create_engine(url, future=True)
     ensure_schema(engine)  # idempotent: the deploy's own migration path
-    print(json.dumps(build_priors(engine, org_id=args.org, since=since), indent=2))
+    # The same callable job a scheduler runs (memory_api.build_priors_job, AP-P6): this script
+    # is one more caller of it, for a replay database.
+    print(json.dumps(build_priors_job(engine, org_id=args.org, since=since)["result"], indent=2,
+                     default=str))
 
 
 if __name__ == "__main__":

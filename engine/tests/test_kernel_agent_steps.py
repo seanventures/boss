@@ -287,7 +287,11 @@ def play(monkeypatch, script, *, loop, bounded=False, approve=False, **kw):
 
 
 def requests(engine):
-    return [{"tools": r["tools"],
+    """What the model was sent. The kernel side's run filesystem tools (D8, AP-P6: offered
+    first on every call that offers tools) are stripped, so every other difference fails."""
+    from .test_kernel_conformance import without_run_fs
+
+    return [{"tools": without_run_fs(r["tools"]),
              "messages": [(m.get("role"), m.get("content")) for m in r["messages"]]}
             for r in engine.requests]
 

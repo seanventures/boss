@@ -1500,14 +1500,30 @@ def _with_attachments(
     return body, [{"type": "text", "text": body}, *blocks]
 
 
+def conversation_history(messages: Optional[list]) -> list[dict[str, Any]]:
+    """Every user/assistant message of the thread with content, in order — the history a chat
+    turn is given (AP-P6: never a fixed-size slice; the context policy bounds it)."""
+    return [
+        {"role": m["role"], "content": m["content"]}
+        for m in (messages or [])
+        if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")
+    ]
+
+
 def _remembered_context(
     connection,
     project_id: str,
     actor: Optional[str],
     role: Optional[str],
     thread_id: Optional[str],
+    query: str = "",
 ) -> str:
     """Memory and the session ledger, rendered into the system prompt.
+
+    ONE MEMORY API (AP-P6, services/memory_api): the project's, this agent's and this person's
+    memory (decayed per kg/learning.py), the session ledger, and — new to chat — the knowledge
+    graph's quoted pack for the question (approved rules; inferred learnings, quoted as such).
+    The pack depends on the question, so it is rendered LAST.
 
     Two stores, one seam. `pack_for_turn` returns the rules, context and preferences recorded
     in earlier SESSIONS; `pack_ledger` returns what THIS session was doing. Both are read from
@@ -1518,16 +1534,17 @@ def _remembered_context(
     than one that answers without memory, so any failure here degrades to no block at all.
     """
     try:
-        from .agent_memory import pack_for_turn, pack_ledger
+        from . import memory_api
 
-        # THE TURN'S OWN TRANSACTION, not a second connection. `pack_for_turn` writes
-        # `use_count`/`last_used_at` — the signal the pruner reads — and that write belongs in
-        # the same transaction as the turn that used it. A separate connection would also be
-        # one more handle held for the length of every turn, which is how a pool runs dry.
-        blocks = [pack_for_turn(connection, project_id=project_id, actor=actor, role=role)]
-        if thread_id:
-            blocks.append(pack_ledger(connection, thread_id=thread_id))
-        return "".join(b for b in blocks if b)
+        # THE TURN'S OWN TRANSACTION, not a second connection. The read writes
+        # `injected_count` — the signal the pruner reads — and that write belongs in the same
+        # transaction as the turn that used it. A separate connection would also be one more
+        # handle held for the length of every turn, which is how a pool runs dry.
+        namespaces = ["project"] + ([f"agent:{role}"] if role else []) + (
+            [f"user:{actor}"] if actor else []) + ([f"thread:{thread_id}"] if thread_id else [])
+        return memory_api.read(connection, namespaces, project_id=project_id, actor=actor,
+                               role=role, thread_id=thread_id, query=query,
+                               step="chat")["text"]
     except Exception:  # noqa: BLE001 — see the docstring; memory is an aid, not a dependency
         _log.warning("memory injection failed; answering without it", exc_info=True)
         return ""
@@ -2620,7 +2637,12 @@ class IntentRouter:
             # which is the whole point — they survive compaction, restarts, and a new thread.
             #
             # Budgeted, and silent when empty: a project with nothing recorded pays nothing.
-            + _remembered_context(connection, project_id, actor, role, thread_id)
+            + _remembered_context(connection, project_id, actor, role, thread_id,
+                                  query=next((str(m.get("content") or "")
+                                              for m in reversed(messages or [])
+                                              if isinstance(m, dict)
+                                              and m.get("role") == "user"
+                                              and isinstance(m.get("content"), str)), ""))
             # THE GENERAL CONVERSATION, AND ONLY IT. A run-scoped thread is about that run and a
             # role thread is about that role's remit — neither is where somebody arrives with a
             # product idea, and both depend on the operating behaviour above being unqualified.
@@ -2681,12 +2703,12 @@ class IntentRouter:
         decided = _decision_note(getattr(self, "_turn_verdict", None))
         if decided:
             system = decided + "\n\n" + system
-        # last 12 user/assistant turns as history; newest user message drives the turn
-        convo = [
-            {"role": m["role"], "content": m["content"]}
-            for m in messages[-12:]
-            if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")
-        ]
+        # THE WHOLE THREAD as history (AP-P6): no 12-message slice. The chat turn's context
+        # policy keeps it inside the window — past 85% the older part is summarised, the
+        # originals archived to the run's /scratch where the agent can grep them — so a decision
+        # from message 5 of a 300-message thread is still reachable. The newest user message
+        # drives the turn.
+        convo = conversation_history(messages)
         latest = convo[-1]["content"] if convo and convo[-1]["role"] == "user" else (
             convo[-1]["content"] if convo else "")
         history = convo[:-1] if convo else []

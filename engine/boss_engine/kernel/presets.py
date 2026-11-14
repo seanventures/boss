@@ -14,7 +14,10 @@ docs/architecture/HARNESS_KERNEL_DESIGN.md §8.4:
     the pre-check (chat had it; the coder keeps iterating, as test runs fail until they pass);
   * an agent step whose MODEL call the budget defers parks (budget_wait) instead of failing;
   * every call of a step is answered, the coder's held call's siblings included;
-  * every preset honours a CancelToken before each model and tool call.
+  * every preset honours a CancelToken before each model and tool call;
+  * AP-P6: every preset scopes its tools (ScopedTools: core + find_tools, the rest deferred
+    until found). A tool set that marks nothing deferred (a FunctionToolSet, the agent-step
+    grants, a decision's read tools) is offered exactly as OfferAll offered it.
 
 The answer-now texts of agent_loop and EngineAgent were inline literals; they are copied here
 VERBATIM and the conformance suite compares the requests, so the copies cannot drift. The old
@@ -25,7 +28,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from .policies import (AcceptAny, Caps, ClipContext, OfferAll, ParsedAnswer, Policies, Recover)
+from .policies import (AcceptAny, Caps, ClipContext, ParsedAnswer, Policies, Recover)
+from .scoped_tools import ScopedTools
 from .state import RunState
 from .types import Acceptance, StopReason
 
@@ -57,7 +61,7 @@ def agent_loop(max_steps: int) -> Policies:
         stop=Caps(max_steps=int(max_steps), answer="extra", answer_prompt_text=AGENT_LOOP_ANSWER,
                   fallback_text=AGENT_LOOP_FALLBACK, version="stop.agent_loop@1"),
         context=ClipContext(clip=16_000, version="ctx.agent_loop@1"),
-        tools=OfferAll(version="tools.agent_loop@1"),
+        tools=ScopedTools(version="tools.agent_loop.scoped@1"),
         verify=AcceptAny(),
         recovery=Recover(wait_mode="durable", version="recover.agent_loop@1"))
 
@@ -113,7 +117,6 @@ def engine_agent(max_steps: int = 6, *, budget: Any = None,
         offering = out_of_turn and bool(offer) and not state.extra.get("_offer_spent")
         return head + _ENGINE_AGENT_ANSWER_BODY + (_ENGINE_AGENT_OFFER if offering else "")
 
-    from .scoped_tools import ScopedTools
     # EngineAgent's own JSON encoding of tool results (Decimal -> float, datetime -> isoformat):
     # the model must see the number a spend question reads, not a quoted string. Imported at
     # call time: the kernel stays a leaf package.
@@ -123,9 +126,9 @@ def engine_agent(max_steps: int = 6, *, budget: Any = None,
         stop=Caps(max_steps=int(max_steps), answer="within", turn_budget=budget,
                   answer_prompt_text=answer_prompt, version="stop.engine_agent@1"),
         context=ClipContext(clip=16_000, json_default=_jsonable, version="ctx.engine_agent@1"),
-        # K5: chat is the surface scoped tools exist for. With BOSS_SCOPED_TOOLS off this is
-        # OfferAll's behaviour exactly; on, a kernel chat run sees its core + find_tools and
-        # finds the rest (RegistryToolSet marks the deferred ones from each tool's Exposure).
+        # K5, made the default on every preset by AP-P6: a kernel chat run sees its core +
+        # find_tools and finds the rest (RegistryToolSet marks the deferred ones from each
+        # tool's Exposure). BOSS_SCOPED_TOOLS=0 is OfferAll's behaviour exactly.
         tools=ScopedTools(answer_offer=tuple(offer), version="tools.engine_agent.scoped@1"),
         verify=AcceptAny(),
         recovery=Recover(nudge=ENGINE_AGENT_NUDGE, version="recover.engine_agent@1"))
@@ -145,7 +148,7 @@ def decision(*, max_turns: int = 4, max_usd_micros: int = 300_000, result_chars:
                   on_cost="answer", answer_prompt_text=ANSWER_NOW,
                   answer_prompt_when="after_tool", version="stop.decision@1"),
         context=ClipContext(clip=int(result_chars), redact=True, version="ctx.decision@1"),
-        tools=OfferAll(version="tools.decision@1"),
+        tools=ScopedTools(version="tools.decision.scoped@1"),
         verify=ParsedAnswer(parse=parse, accept=accept, reask_text=_refused_again, max_reasks=1,
                             version="verify.decision@1"),
         recovery=Recover(empty_retries=0, wait_mode="fail", version="recover.decision@1"))
@@ -168,7 +171,7 @@ def precheck(*, max_turns: int = 8, max_usd_micros: int = 500_000,
                   answer_prompt_when="after_tool", version="stop.precheck@1"),
         context=ClipContext(clip=pre.MAX_TOOL_RESULT_CHARS, redact=True,
                             version="ctx.precheck@1"),
-        tools=OfferAll(version="tools.precheck@1"),
+        tools=ScopedTools(version="tools.precheck.scoped@1"),
         verify=ParsedAnswer(parse=pre.parse_answer, accept=accept, reask_text=pre.FORMAT_AGAIN,
                             max_reasks=pre.FORMAT_RETRIES, version="verify.precheck@1"),
         recovery=Recover(empty_retries=0, wait_mode="inline",
@@ -183,7 +186,7 @@ def native_coder(max_turns: int = 40, *, deadline: Optional[float] = None) -> Po
     return Policies(
         stop=Caps(max_steps=int(max_turns), answer="none", version="stop.native_coder@1"),
         context=ClipContext(clip=None, raw_strings=True, version="ctx.native_coder@1"),
-        tools=OfferAll(version="tools.native_coder@1"),
+        tools=ScopedTools(version="tools.native_coder.scoped@1"),
         verify=AcceptAny(),
         recovery=Recover(empty_retries=0, same_tool_failures=0,
                          version="recover.native_coder@1"))
@@ -201,7 +204,7 @@ def meeting_seat(*, max_wait_seconds: float = 120.0) -> Policies:
     return Policies(
         stop=Caps(max_steps=1, answer="none", version="stop.meeting_seat@1"),
         context=ClipContext(clip=None, version="ctx.meeting_seat@1"),
-        tools=OfferAll(version="tools.meeting_seat@1"),
+        tools=ScopedTools(version="tools.meeting_seat.scoped@1"),
         verify=AcceptAny(),
         recovery=Recover(empty_retries=0, same_tool_failures=0, wait_mode="inline",
                          max_wait_seconds=float(max_wait_seconds),
