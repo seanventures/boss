@@ -207,8 +207,18 @@ def apply(connection: Any, settings: Any, policy: Mapping, headers: Mapping[str,
 
 
 def current_traceparent() -> Optional[str]:
-    """The W3C traceparent of the span this code runs in, or None when BOSS's tracing is off
-    (no OpenTelemetry, or no recording span) — never an invented one."""
+    """The W3C traceparent of the span this code runs in, or None — never an invented one.
+    Inside a kernel run's tool call that is the tool span BOSS stored (kernel/trace.CURRENT,
+    AP-P4: it names the run, whether or not OTel export is on); otherwise the current OTel span
+    when BOSS's own tracing is on."""
+    try:
+        from ..kernel.trace import CURRENT
+
+        kernel_span = CURRENT.get()
+    except Exception:  # noqa: BLE001
+        kernel_span = None
+    if isinstance(kernel_span, str) and kernel_span:
+        return kernel_span
     try:
         from opentelemetry import propagate  # type: ignore[import-not-found]
     except Exception:  # noqa: BLE001 — tracing is optional (BOSSAPP-867)

@@ -1,6 +1,7 @@
 # OPTIONAL: BOSS's own traces and error reports (BOSSAPP-867, engine/boss_engine/services/
-# self_telemetry.py, docs/community/SELF_TELEMETRY.md). NOT part of the default image: BOSS runs
-# the same without these, and only the features you configure need them.
+# self_telemetry.py, docs/community/SELF_TELEMETRY.md). Since AP-P4 the SDK and the OTLP/HTTP
+# exporter are in the default image (apps/api/requirements.txt); the auto-instrumentation and
+# Sentry below are still NOT: BOSS runs the same without them.
 #
 #   pip install -r apps/api/requirements-observability.txt
 #
