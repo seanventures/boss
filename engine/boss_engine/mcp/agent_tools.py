@@ -36,6 +36,20 @@ PARAMETERS = {
 }
 
 
+def _timeout(args: dict) -> float:
+    """Seconds to wait (default 120). 0 is honoured: start the run and answer at once (the MCP
+    tasks extension starts agent runs this way and the client polls the task)."""
+    value = args.get("timeout")
+    return 120.0 if value is None or value == "" else max(0.0, min(float(value), 600.0))
+
+
+def _caller_traceparent() -> "str | None":
+    """The MCP caller's trace context (mcp/server.py sets it from `_meta.traceparent`)."""
+    from ..kernel.trace import CURRENT
+
+    return CURRENT.get()
+
+
 def _describe(agent: dict) -> str:
     return (f"Run the deployed BOSS agent '{agent.get('name') or agent['agent_key']}' "
             f"(v{agent.get('version')}, prod). Answers when the run ends, or with the decisions "
@@ -55,11 +69,12 @@ def _native_handler(agent_key: str) -> Callable[..., dict]:
                 thread_id = args.get("thread_id") or agent_protocol.create_thread(
                     c, project_id=project_id, agent_key=agent_key, actor=actor)["thread_id"]
                 run = agent_protocol.start_run(c, project_id=project_id, thread_id=thread_id,
-                                               actor=actor, input=args.get("input"))
+                                               actor=actor, input=args.get("input"),
+                                               traceparent=_caller_traceparent())
         except agent_protocol.ProtocolError as exc:
             return {"ok": False, "error": str(exc)}
         out = agent_protocol.join(engine, project_id, run["run_id"],
-                                  timeout=float(args.get("timeout") or 120))
+                                  timeout=_timeout(args))
         return {"ok": out["status"] != "error", **out}
 
     return handler
@@ -76,10 +91,10 @@ def _api_handler(surface: Any, agent_key: str) -> Callable[..., dict]:
             return surface.invoke(wait, project_id=project_id,
                                   path={"thread_id": str(args["thread_id"])},
                                   body={"input": args.get("input"),
-                                        "timeout": float(args.get("timeout") or 120)})
+                                        "timeout": _timeout(args)})
         return surface.invoke(alias, project_id=project_id, path={"role_key": agent_key},
                               body={"input": args.get("input"),
-                                    "timeout": float(args.get("timeout") or 120)})
+                                    "timeout": _timeout(args)})
 
     return handler
 

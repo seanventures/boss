@@ -171,6 +171,26 @@ def build_mcp_credentials_router(
         return _start(server_id, SignInBody(project_id=body.project_id, actor=body.actor,
                                             subject="me"), request)
 
+    @router.get("/.well-known/boss-mcp-client.json")
+    @public(reason=PublicReason.JWKS)
+    def client_metadata_document():
+        """BOSS's OAuth Client ID Metadata Document (MCP 2026-07-28 authorization, AP-P5): an
+        authorization server that supports CIMD fetches this URL as BOSS's client id instead of
+        registering BOSS (Dynamic Client Registration is deprecated). Public: it holds no secret
+        — the client name and the callback, as any CIMD does. 404 on an install with no https
+        public origin (CIMD then is not offered; registration is the fallback)."""
+        from fastapi.responses import JSONResponse
+
+        try:
+            redirect = mcp_oauth.callback_url(_public_origin())
+        except HTTPException:
+            raise HTTPException(status_code=404, detail="Not Found") from None
+        client_id = mcp_oauth.client_metadata_url(redirect)
+        if client_id is None:
+            raise HTTPException(status_code=404, detail="Not Found")
+        return JSONResponse(mcp_oauth.client_metadata_document(client_id, [redirect]),
+                            headers={"Cache-Control": "public, max-age=3600"})
+
     @router.get("/v1/mcp/oauth/callback")
     @public(reason=PublicReason.OAUTH_STATE_BOUND_CALLBACK,
             verifier=identity_verifiers.mcp_oauth_state)

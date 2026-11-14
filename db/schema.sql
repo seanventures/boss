@@ -14512,3 +14512,28 @@ ALTER TABLE worker_registrations ADD COLUMN IF NOT EXISTS slots INTEGER NOT NULL
 ALTER TABLE worker_registrations ADD COLUMN IF NOT EXISTS busy_slots INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE worker_registrations ADD COLUMN IF NOT EXISTS host TEXT;
 -- ================================ end AP-P3 ==
+-- ================================ AP-P5: A2A push notifications (§4.5, BOSSAPP-1056) ==
+-- An A2A client's webhook for one task (= one agent run): BOSS POSTs the Task to `url` when the
+-- run stops for a person or ends (services/a2a_server.notify). The client's token and
+-- credentials are vault items (never stored or returned in clear); `last_state` makes each
+-- state change one delivery, retried on the next settlement when it failed.
+CREATE TABLE IF NOT EXISTS a2a_push_configs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  token_vault_item_id TEXT,
+  auth_scheme TEXT,
+  credentials_vault_item_id TEXT,
+  created_by TEXT NOT NULL,
+  last_state TEXT,
+  last_status TEXT,
+  last_error TEXT,
+  deliveries INTEGER NOT NULL DEFAULT 0,
+  last_delivered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_push_configs_run ON a2a_push_configs (run_id);
+-- ================================ end AP-P5 ==

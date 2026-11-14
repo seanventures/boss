@@ -521,7 +521,10 @@ def _build_deployed(connection: Any, settings: Any, run: dict) -> Any:
         store=None, persist=True,
         extra={**fields["extra"], "agent_version": version,
                "deployment_id": fctx.get("deployment_id"),
-               "environment": fctx.get("environment")})
+               "environment": fctx.get("environment"),
+               # AP-P5: the protocol caller's trace context (MCP `_meta`, A2A / REST header):
+               # the run's root span joins the caller's trace (kernel/trace.py).
+               **({"traceparent": fctx["traceparent"]} if fctx.get("traceparent") else {})})
 
 
 def _deployed_runner(connection: Any, settings: Any, run: dict, *, kind: str) -> dict:

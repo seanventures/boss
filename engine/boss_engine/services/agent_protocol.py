@@ -171,9 +171,13 @@ def get_run(connection: Connection, project_id: str, run_id: str,
 
 
 def start_run(connection: Connection, *, project_id: str, thread_id: str, actor: str,
-              input: Any, double_text: Optional[str] = None) -> dict:
+              input: Any, double_text: Optional[str] = None,
+              traceparent: Optional[str] = None, trigger: str = "api",
+              extra: Optional[dict] = None) -> dict:
     """A run on the thread, admitted with its job in one transaction and pinned to the version
-    the thread's deployment runs now."""
+    the thread's deployment runs now. `traceparent` (AP-P5: an MCP caller's `_meta`, an A2A or
+    REST caller's header) makes the run's root span a child of the caller's span — the worker
+    reads it from finalize_ctx."""
     from . import thread_runs
 
     thread = _thread_row(connection, project_id, thread_id)
@@ -188,10 +192,15 @@ def start_run(connection: Connection, *, project_id: str, thread_id: str, actor:
     if not str(content).strip():
         raise ProtocolError("say what the run should do (`input`).")
     try:
+        from ..kernel.trace import parse_traceparent
+
+        fctx_extra = dict(extra or {})
+        if parse_traceparent(traceparent):
+            fctx_extra["traceparent"] = str(traceparent).strip().lower()
         admitted = agent_deployments.admit_run(
             connection, dep, thread_id=thread_id,
-            messages=[{"role": "user", "content": str(content)}], trigger="api",
-            policy=double_text, actor=actor)
+            messages=[{"role": "user", "content": str(content)}], trigger=trigger,
+            policy=double_text, actor=actor, extra=fctx_extra or None)
     except thread_runs.ThreadBusy as exc:
         raise ProtocolError(f"the thread is busy with {exc.active_run_id} and its double-text "
                             "policy is reject.", status=409) from exc
@@ -385,13 +394,40 @@ def endpoints_card(connection: Connection, project_id: str, agent_key: str, *,
                  "permission": "agent:invoke"},
         "mcp": {"enabled": bool(expose.get("mcp", True)), "tool": mcp_tool_name(agent_key),
                 "note": "Claude Code, Codex or any MCP client can call it."},
-        "a2a": {"enabled": False, "card_path": f"/a2a/{agent_key}/.well-known/agent-card.json",
-                "note": "Off: read-only agents only until sandbox isolation lands (D11)."},
+        "a2a": _a2a_card(connection, project_id, agent_key, environment, expose),
         "callers": callers,
         "try_it": (f"curl -N $BOSS{base}/runs/stream \\\n"
                    "  -H \"Authorization: Bearer $BOSS_SERVICE_KEY\" \\\n"
                    f"  -d '{{\"project_id\": \"{project_id}\", \"input\": \"...\"}}'"),
     }
+
+
+def _a2a_card(connection: Connection, project_id: str, agent_key: str, environment: str,
+              expose: dict) -> dict:
+    """A7's A2A row (AP-P5): on only when this deployment opted in and the agent may be exposed
+    (D11: read-only agents only until strong isolation; a signing key for the card)."""
+    agent_id = connection.execute(text(
+        "SELECT agent_id FROM roles WHERE project_id = :p AND role_key = :r"),
+        {"p": project_id, "r": agent_key}).scalar()
+    card = f"/a2a/{agent_id}/.well-known/agent-card.json" if agent_id else None
+    if environment != "prod":
+        return {"enabled": False, "card_path": card, "note": "A2A serves prod deployments."}
+    from . import a2a_server
+
+    blocked = None
+    try:
+        blocked = a2a_server.exposure_refusal(
+            connection, {"project_id": project_id, "agent_key": agent_key, "agent_id": agent_id,
+                         "deployment": agent_deployments.get(connection, project_id, agent_key,
+                                                             environment) or {}},
+            require_enabled=False)
+    except Exception as exc:  # noqa: BLE001 — the card is a view; never fail the page
+        blocked = f"could not check: {type(exc).__name__}"
+    on = bool(expose.get("a2a")) and not blocked
+    note = ("On." if on else blocked if blocked else
+            "Off: turn it on per deployment (PUT …/deployments/prod/a2a).")
+    return {"enabled": on, "card_path": card, "endpoint": f"/a2a/{agent_id}" if agent_id else None,
+            "may_enable": blocked is None, "note": note}
 
 
 def _has_identity(connection: Connection) -> bool:

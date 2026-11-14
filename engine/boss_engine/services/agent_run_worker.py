@@ -100,12 +100,26 @@ def execute(engine: Any, settings: Any, *, kind: str, job_id: str, run_id: str, 
                               {"r": run_id, "e": f"{type(exc).__name__}: {exc}"[:2000]})
                 thread_runs.finish(c, run_id, "failed")
                 _settled_hooks(c, run_id)
+            _after_commit(engine, run_id)
             raise
         finally:
             agent_loop._DRIVE.reset(token)
         result = _settle(connection, jobs, lease, run_id, outcome, handed_back=handed_back)
         connection.commit()
-        return result
+    _after_commit(engine, run_id)
+    return result
+
+
+def _after_commit(engine: Any, run_id: str) -> None:
+    """A run's settlement is committed: protocol clients waiting on it are told (AP-P5: A2A push
+    notifications, services/a2a_server.notify — only for runs a client registered a webhook
+    for; outside any transaction, never failing the job)."""
+    try:
+        from . import a2a_server
+
+        a2a_server.notify(engine, run_id)
+    except Exception:  # noqa: BLE001
+        log.debug("a2a push for %s failed", run_id, exc_info=True)
 
 
 def _stop_requested(engine: Any, run_id: str) -> bool:

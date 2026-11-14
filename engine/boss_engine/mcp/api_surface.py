@@ -782,6 +782,12 @@ class ApiSurface:
                     "reason": "this agent run cannot call the API from here (only a run's first hop "
                               "is bridged)"}
         headers = {"X-BOSS-MCP-Operation": alias, **auth_headers}
+        # AP-P5: the MCP caller's trace context (`_meta.traceparent`) travels to the route, so a
+        # run it starts joins the caller's trace.
+        from ..kernel.trace import CURRENT as _TRACE_CURRENT
+
+        if _TRACE_CURRENT.get():
+            headers["traceparent"] = str(_TRACE_CURRENT.get())
         if confirmation_id:
             headers.update({
                 "X-BOSS-MCP-Confirmation": confirmation_id,
