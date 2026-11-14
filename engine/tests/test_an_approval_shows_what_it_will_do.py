@@ -225,6 +225,6 @@ class TestAStaleApprovalCannotSendOtherContent:
             _Connection({}), "p", NOTIFY_STEP, context) is None
 
     def test_a_stale_refusal_clears_the_decision_so_retry_asks_again(self):
-        source = inspect.getsource(runner.tick)
+        source = "".join(map(inspect.getsource, runner.TICK_PARTS))
         assert "isinstance(error, StaleApprovalError)" in source
         assert "SET decision_id = NULL" in source

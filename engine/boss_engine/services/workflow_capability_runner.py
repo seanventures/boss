@@ -8202,3 +8202,8 @@ def sweep_gate_timeouts(
             log.warning("gate timeout sweep skipped %s (non-fatal): %s", row["id"], error)
 
     return {"project_id": project_id, "applied": applied, "count": len(applied)}
+
+
+#: What one tick is made of, for the guards that read its source (AP-P0 split the per-run body
+#: out of `tick` so `tick_per_step` can give it a transaction of its own).
+TICK_PARTS = (tick, _live_runs, _revivable_runs, _advance_one_run, tick_per_step)
