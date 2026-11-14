@@ -179,7 +179,8 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
   try {
     // The browser's own call: never answered from the feed cache (lib/feed-cache.ts): a request
     // sent after a revocation is decided by the API, never by an answer from before it.
-    const outbound = forwardHeaders(req, speaksFor(req, incoming.pathname, collector !== null || idpBackchannelPost(req)));
+    // An IdP's back-channel logout (lib/console-session.ts idpBackchannelPost) speaks for nobody too.
+    const outbound = forwardHeaders(req, idpBackchannelPost(req) ? "machine" : speaksFor(req, incoming.pathname, collector !== null));
     upstream = await fetch(target, noReuse({
       method,
       headers: outbound,

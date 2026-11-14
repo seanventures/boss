@@ -54,6 +54,29 @@ An Owner can extend the 30 days once, by at most 30 more. Rotate the password wi
 !!! note "Safari and plain http://localhost"
     Sign-in cookies are always `Secure`. Chrome, Edge and Firefox accept them on `http://localhost` and `http://127.0.0.1`; Safari does not, so signing in on a plain-HTTP laptop install seems to do nothing in Safari. Use another browser there, or put the console behind HTTPS.
 
+## Single sign-on on a laptop (`http://localhost`)
+
+Single sign-on needs an address the identity provider can send people back to. On a server that is BOSS's public address (`BOSS_PUBLIC_URL`, or the one bound when an Owner claimed BOSS). On a laptop that was never given one, BOSS uses the address the console is open on, **but only when it is loopback**: `http://localhost:<port>` or `http://127.0.0.1:<port>`. Okta, Keycloak and most OIDC providers accept `http://localhost` redirect URIs, so you can try SSO before the install has a hostname.
+
+- Register the redirect URI exactly as BOSS shows it, for example `http://localhost:3000/v1/auth/sso/<provider id>/callback`. Open the console on the same address (`localhost` and `127.0.0.1` are different addresses to the provider).
+- A plain-HTTP address that is not loopback (`http://boss.lan:3000`, `http://192.168.1.20:3000`) is refused with **Set the public URL first** (`public_origin_unset`). So is any https hostname BOSS was not configured with: BOSS never builds a redirect URI from a remote `Host` header.
+- Once a public address is set, it is always used, on every machine.
+
+## One Okta sign-in for BOSS and your other apps
+
+With Okta as BOSS's sign-in provider, people use the same Okta login (and the same Okta dashboard) for BOSS, Jira and your other apps. Add Okta in **Identity › Sign-in & SSO › Add provider › Okta**; the sheet shows every value Okta asks for, ready to copy. [Sign-in setup](SIGN_IN_SETUP.md#okta) has the full Okta guide, including SCIM.
+
+| In Okta (OIDC Web app) | Value |
+| --- | --- |
+| Sign-in redirect URI | `https://<your BOSS>/v1/auth/sso/<provider id>/callback` |
+| Sign-out redirect URI | `https://<your BOSS>/login` |
+| Initiate login URI (Login initiated by: Either Okta or App) | `https://<your BOSS>/v1/auth/sso/<provider id>/start` |
+| Back-channel logout URI, where your Okta org offers it | `https://<your BOSS>/v1/auth/sso/<provider id>/backchannel-logout` |
+| Sign On › Groups claim filter | `groups`, Matches regex, `.*` (or a narrower filter) |
+
+- **Sign out** in BOSS also signs you out of Okta when you signed in through it, and comes back to BOSS's sign-in page.
+- A dashboard tile starts an ordinary sign-in: BOSS checks that the tile names this Okta, and lands only on a page of this console.
+
 ## Reach the console
 
 The installer binds the web listener to `127.0.0.1`. On the install machine, open `http://127.0.0.1:3000`.
