@@ -24,7 +24,7 @@ import contextvars
 import json
 import logging
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -7469,24 +7469,9 @@ def projects_with_work(connection: Connection, asked: str) -> list[str]:
     return projects_archive.live_ids(connection, [asked, *others])
 
 
-def tick(
-    connection: Connection,
-    ctx: Any,
-    *,
-    project_id: str,
-    worker_id: str = "capability-runner",
-    limit: int = MAX_STEPS_PER_TICK,
-) -> dict[str, Any]:
-    """Advance every product workflow run that has work ready.
-
-    Returns what it did, per step, so a caller can log something more useful than a count.
-    Never raises for a step-level failure: one broken workflow must not stop the others.
-    """
-    from . import projects_archive
-
-    if projects_archive.is_archived(connection, project_id):
-        return {"performed": [], "count": 0, **projects_archive.skipped(project_id)}
-    runs = connection.execute(
+def _live_runs(connection: Connection, project_id: str) -> list:
+    """The product runs a tick does work for: running or waiting, oldest-touched first."""
+    return connection.execute(
         text(
             """
             SELECT r.id, r.actor, r.status, d.workflow_key, d.namespace
@@ -7502,6 +7487,9 @@ def tick(
         {"project_id": project_id},
     ).mappings().all()
 
+
+def _revivable_runs(connection: Connection, project_id: str) -> list:
+    """Failed runs a tick may revive (and do nothing else with)."""
     # A FAILED RUN IS NEVER TICKED, SO IT COULD NEVER RECOVER.
     #
     # The scan above takes `running` and `waiting` only, which is right for doing work. But a
@@ -7513,7 +7501,7 @@ def tick(
     # failed steps one question — is there a live later attempt at this work — and reopens only
     # those. No claiming, no gates, no new work: reviving a run is not the same as running it,
     # and once revived it is `waiting` and the ordinary loop takes it from there.
-    revivable = connection.execute(
+    return connection.execute(
         text(
             """
             SELECT r.id, r.actor, r.status, d.workflow_key, d.namespace
@@ -7536,6 +7524,28 @@ def tick(
         ),
         {"project_id": project_id},
     ).mappings().all()
+
+
+def tick(
+    connection: Connection,
+    ctx: Any,
+    *,
+    project_id: str,
+    worker_id: str = "capability-runner",
+    limit: int = MAX_STEPS_PER_TICK,
+) -> dict[str, Any]:
+    """Advance every product workflow run that has work ready.
+
+    Returns what it did, per step, so a caller can log something more useful than a count.
+    Never raises for a step-level failure: one broken workflow must not stop the others.
+    """
+    from . import projects_archive
+
+    if projects_archive.is_archived(connection, project_id):
+        return {"performed": [], "count": 0, **projects_archive.skipped(project_id)}
+    runs = _live_runs(connection, project_id)
+    # A FAILED RUN IS NEVER TICKED, SO IT COULD NEVER RECOVER: see _revivable_runs.
+    revivable = _revivable_runs(connection, project_id)
 
     performed: list[dict[str, Any]] = []
     for run in revivable:
@@ -7562,404 +7572,472 @@ def tick(
     for run in runs:
         if len(performed) >= limit:
             break
-        run_id = run["id"]
-        # ONE RUN MUST NOT STOP THE REST, AND CATCHING THE EXCEPTION IS NOT ENOUGH.
-        #
-        # That is what the handler below was written to do, and against a DATABASE error it
-        # cannot. Postgres aborts the whole transaction on the first failed statement; every
-        # statement after it raises InFailedSqlTransaction regardless of what Python caught. So
-        # one bad run poisoned the connection and every later run in the same tick "failed" on a
-        # query that was fine — and the caller saw the innocent query named in the error.
-        #
-        # Observed on 2026-09-27: every tick returned HTTP 500 naming a SELECT in
-        # sweep_gate_timeouts, no delivery workflow advanced at all, and the runs sat at `ready`
-        # for ever with nothing recorded against them. A SAVEPOINT per run makes the isolation
-        # real: a failure rolls back that run's work and leaves the connection usable.
-        savepoint = connection.begin_nested()
-        # WHICH PHASE FAILED, NOT JUST THAT ONE DID.
-        #
-        # A run does four distinct things per tick, and a database error in any of them leaves
-        # every statement afterwards raising InFailedSqlTransaction — so the exception that
-        # escapes names whichever query happened to come next, not the one that broke. Chasing
-        # the live failure meant reading a poisoned-transaction message about a SELECT that was
-        # perfectly correct, twice. The label travels with the error so the report says where.
-        phase = "read the spec"
+        _advance_one_run(connection, ctx, run, project_id=project_id, worker_id=worker_id,
+                         performed=performed)
+
+    return {"project_id": project_id, "performed": performed, "count": len(performed)}
+
+
+def tick_per_step(
+    engine: Any,
+    ctx: Any,
+    *,
+    project_id: str,
+    worker_id: str = "capability-runner",
+    limit: int = MAX_STEPS_PER_TICK,
+    begin: Optional[Callable[[], Any]] = None,
+) -> dict[str, Any]:
+    """`tick`, COMMITTED PER STEP (AP-P0; the KNOWN HAZARD at the run-capabilities endpoint).
+
+    `tick` runs every run's step in savepoints of ONE transaction per project, so a step that
+    sat idle past Postgres's idle-in-transaction limit (300 s) ended the session and rolled back
+    every sibling step of the project: each went back to `ready` and ran again, repeating its
+    messages, builds and PRs wherever they were not keyed. Here every run's share of the tick
+    -- at most one claimed step and its recorded outcome -- is its own transaction, committed
+    before the next run is touched. A step that dies rolls back alone; the steps before it
+    stay done and are never re-run. `begin` opens a transaction (default `engine.begin`)."""
+    from . import projects_archive
+
+    open_tx = begin or engine.begin
+    with open_tx() as connection:
+        if projects_archive.is_archived(connection, project_id):
+            return {"performed": [], "count": 0, **projects_archive.skipped(project_id)}
+        runs = [dict(r) for r in _live_runs(connection, project_id)]
+        revivable = [dict(r) for r in _revivable_runs(connection, project_id)]
+    performed: list[dict[str, Any]] = []
+    for run in revivable:
         try:
-            spec = workflows._run_spec(connection, run_id)
-            spec_steps = {s["id"]: s for s in spec.get("steps", [])}
+            with open_tx() as connection:
+                revived = resume_awaited(connection, project_id=project_id, run_id=run["id"],
+                                         worker_id=worker_id)
+        except Exception as error:  # noqa: BLE001 — a revival must never break the tick
+            log.warning("could not revive %s: %s", run["id"], error)
+        else:
+            performed.extend(revived)
+    try:
+        with open_tx() as connection:
+            agent_acts.quietly(connection, "close finished work", agent_acts.reconcile,
+                               project_id)
+    except Exception:  # noqa: BLE001
+        log.debug("close finished work failed", exc_info=True)
+    for run in runs:
+        if len(performed) >= limit:
+            break
+        mine: list[dict[str, Any]] = []
+        try:
+            with open_tx() as connection:
+                _advance_one_run(connection, ctx, run, project_id=project_id,
+                                 worker_id=worker_id, performed=mine)
+        except Exception as error:  # noqa: BLE001 — this run's step rolls back, alone
+            log.warning("capability runner rolled back run %s (its step only): %s: %s",
+                        run["id"], type(error).__name__, error)
+            mine = [{"run_id": run["id"], "outcome": "rolled_back",
+                     "error": f"{type(error).__name__}: {error}"}]
+        performed.extend(mine)
+    return {"project_id": project_id, "performed": performed, "count": len(performed)}
 
-            # Work that FINISHED while we were away, first of all: a build that completed a
-            # moment ago should release the next step in this pass rather than a tick later.
-            # AN ARCHITECTURE SENT BACK IS REWRITTEN NOW, before its step is looked at: the
-            # architect writes the version the person asked for and a fresh approval opens.
-            phase = "revise architectures sent back"
-            from . import architecture_docs
 
-            performed.extend(architecture_docs.revise_sent_back(
-                connection, getattr(ctx, "settings", None), project_id=project_id,
-                run_id=run_id))
+def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: str,
+                     worker_id: str, performed: list) -> None:
+    """One run's share of a tick: resume finished work, release waits, open gates, then claim
+    and execute at most ONE step and record its outcome. Its work is a SAVEPOINT of
+    `connection`; `tick_per_step` gives each call a transaction of its own (AP-P0)."""
+    run_id = run["id"]
+    # ONE RUN MUST NOT STOP THE REST, AND CATCHING THE EXCEPTION IS NOT ENOUGH.
+    #
+    # That is what the handler below was written to do, and against a DATABASE error it
+    # cannot. Postgres aborts the whole transaction on the first failed statement; every
+    # statement after it raises InFailedSqlTransaction regardless of what Python caught. So
+    # one bad run poisoned the connection and every later run in the same tick "failed" on a
+    # query that was fine — and the caller saw the innocent query named in the error.
+    #
+    # Observed on 2026-09-27: every tick returned HTTP 500 naming a SELECT in
+    # sweep_gate_timeouts, no delivery workflow advanced at all, and the runs sat at `ready`
+    # for ever with nothing recorded against them. A SAVEPOINT per run makes the isolation
+    # real: a failure rolls back that run's work and leaves the connection usable.
+    savepoint = connection.begin_nested()
+    # WHICH PHASE FAILED, NOT JUST THAT ONE DID.
+    #
+    # A run does four distinct things per tick, and a database error in any of them leaves
+    # every statement afterwards raising InFailedSqlTransaction — so the exception that
+    # escapes names whichever query happened to come next, not the one that broke. Chasing
+    # the live failure meant reading a poisoned-transaction message about a SELECT that was
+    # perfectly correct, twice. The label travels with the error so the report says where.
+    phase = "read the spec"
+    try:
+        spec = workflows._run_spec(connection, run_id)
+        spec_steps = {s["id"]: s for s in spec.get("steps", [])}
 
-            phase = "resume awaited work"
-            performed.extend(resume_awaited(
-                connection, project_id=project_id, run_id=run_id, worker_id=worker_id,
-                ctx=ctx,
-            ))
+        # Work that FINISHED while we were away, first of all: a build that completed a
+        # moment ago should release the next step in this pass rather than a tick later.
+        # AN ARCHITECTURE SENT BACK IS REWRITTEN NOW, before its step is looked at: the
+        # architect writes the version the person asked for and a fresh approval opens.
+        phase = "revise architectures sent back"
+        from . import architecture_docs
 
-            # A WAIT THAT IS OVER, ENDED — whatever kind of wait it was. Timers, approval gates
-            # (`decision` steps) and "Run another workflow" steps are released by `advance_run`
-            # alone, and for a product run nothing called it but this tick. It used to ask about
-            # timers only (Deprecation / Sunset's grace period never ended), so an Approval gate
-            # placed from the editor's palette sat `waiting` after a person approved it, and a
-            # parent never left a child run that had finished. `workflows.a_wait_is_over` asks
-            # `workflows._wait_outcome`, the same rule `advance_run` acts on.
-            phase = "release waits that are over"
-            if workflows.a_wait_is_over(connection, run_id):
-                workflows.advance_run(connection, project_id, run_id)
+        performed.extend(architecture_docs.revise_sent_back(
+            connection, getattr(ctx, "settings", None), project_id=project_id,
+            run_id=run_id))
 
-            # Answered gates next, so a step approved a moment ago is released in the same
-            # tick rather than waiting for the next one.
-            # An open gate's preview follows its content, so nobody approves a stale one.
-            phase = "refresh waiting previews"
-            _refresh_waiting_previews(connection, project_id, run_id, spec_steps)
+        phase = "resume awaited work"
+        performed.extend(resume_awaited(
+            connection, project_id=project_id, run_id=run_id, worker_id=worker_id,
+            ctx=ctx,
+        ))
 
-            phase = "resume answered gates"
-            performed.extend(_resume_answered_gates(
-                connection, project_id, {**dict(run), "id": run_id}
-            ))
-            phase = "open gates and claim work"
+        # A WAIT THAT IS OVER, ENDED — whatever kind of wait it was. Timers, approval gates
+        # (`decision` steps) and "Run another workflow" steps are released by `advance_run`
+        # alone, and for a product run nothing called it but this tick. It used to ask about
+        # timers only (Deprecation / Sunset's grace period never ended), so an Approval gate
+        # placed from the editor's palette sat `waiting` after a person approved it, and a
+        # parent never left a child run that had finished. `workflows.a_wait_is_over` asks
+        # `workflows._wait_outcome`, the same rule `advance_run` acts on.
+        phase = "release waits that are over"
+        if workflows.a_wait_is_over(connection, run_id):
+            workflows.advance_run(connection, project_id, run_id)
 
-            # Then gates to open: they are not claimable work, and leaving them until after the
-            # claim would let the runner treat a waiting approval as an idle step forever.
-            gates = connection.execute(
-                text(
-                    """
-                    SELECT * FROM workflow_step_runs
-                    WHERE workflow_run_id=:run_id AND status='ready' AND step_kind='capability'
-                      AND decision_id IS NULL
-                    """
-                ),
-                {"run_id": run_id},
-            ).mappings().all()
-            for row in gates:
-                spec_step = spec_steps.get(row["step_id"]) or {}
-                # PER GATE, so the one that breaks is named and the others still open. Deciding
-                # a gate reads the step definition and the run's context; opening one WRITES a
-                # decision. Both can fail, they fail differently, and without this the error
-                # surfaced later as a poisoned transaction on somebody else's SELECT.
-                phase = f"decide whether {row['step_id']} needs approval"
-                gate_point = connection.begin_nested()
-                try:
-                    waived: dict[str, Any] = {}
-                    subject = _gate_subject(
-                        connection, project_id, spec_step, _run_context(connection, run_id),
-                        default_owner=_github_owner(ctx), waived=waived,
-                    )
-                    if subject is None and (
-                            (spec_step.get("binding") or {}).get("capability") == "deploy"):
-                        # WHAT THE GATE WAS WAIVED FOR, written where execution reads it: the
-                        # step may ship to this stack target without a gate, and nowhere else.
-                        # Cleared when no gate was waived, so a stale pin cannot linger.
-                        connection.execute(
-                            text("UPDATE workflow_step_runs SET binding_snapshot = "
-                                 "(COALESCE(binding_snapshot, '{}'::jsonb) - :k) "
-                                 "|| CAST(:patch AS JSONB), updated_at = now() WHERE id = :i"),
-                            {"i": row["id"], "k": STACK_GATE_TARGET,
-                             "patch": json.dumps(waived)},
-                        )
-                    if subject is not None:
-                        phase = f"open the approval gate for {row['step_id']}"
-                        _open_gate(
-                            connection, project_id, {**dict(run), "id": run_id},
-                            {**dict(row), "_spec": spec_step, "_subject": subject},
-                        )
-                        performed.append(
-                            {"run_id": run_id, "step_id": row["step_id"],
-                             "capability": subject["key"], "outcome": "gate_opened"}
-                        )
-                except Exception as error:  # noqa: BLE001 — one gate must not stop the run
-                    try:
-                        gate_point.rollback()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    log.warning("could not %s: %s: %s",
-                                phase, type(error).__name__, error)
-                    performed.append({
-                        "run_id": run_id, "step_id": row["step_id"],
-                        "outcome": "gate_failed", "phase": phase,
-                        "error": f"{type(error).__name__}: {error}",
-                    })
-                else:
-                    gate_point.commit()
+        # Answered gates next, so a step approved a moment ago is released in the same
+        # tick rather than waiting for the next one.
+        # An open gate's preview follows its content, so nobody approves a stale one.
+        phase = "refresh waiting previews"
+        _refresh_waiting_previews(connection, project_id, run_id, spec_steps)
 
-            # SIGNED AS IT MOVES. Gates opened, work resumed, answers given since the last tick
-            # all show in the run's chain before the next step is claimed. Never waits: a run
-            # another tick holds is that tick's to sign, and its lock would be held to the end
-            # of this one — through every step it runs.
-            phase = "sign the run's work"
-            agent_acts.quietly(connection, "sign a run's work", agent_acts.sync_run, run_id,
-                               wait=False)
+        phase = "resume answered gates"
+        performed.extend(_resume_answered_gates(
+            connection, project_id, {**dict(run), "id": run_id}
+        ))
+        phase = "open gates and claim work"
 
-            phase = "claim a step to run"
-            claimed = workflows.claim_step(
-                connection, project_id=project_id, run_id=run_id,
-                worker_id=worker_id, lease_seconds=LEASE_SECONDS,
-            )
-            if claimed is None:
-                continue
-            # `external_agent` (KG P6a) too: a bank's agent's step is an outbound call this
-            # runner makes. Left out, it was leased, skipped "for another claimant" that does not
-            # exist, and timed out on every run (2026-10-31).
-            if claimed.get("step_kind") not in ("capability", "deterministic", "external_agent"):
-                # Somebody else's step kind. Release it by letting the lease lapse rather than
-                # failing it — this runner is not the only possible claimant. `deterministic`
-                # (KG P5a) runs a fixed $0 graph query and is claimed here like `capability`:
-                # it has no agent turn to wait for, so there is no other claimant for it.
-                continue
-
-            spec_step = spec_steps.get(claimed["step_id"]) or {}
-            # A STEP THAT THINKS IN THE CALL HOLDS ITS LEASE FOR AS LONG AS IT THINKS. Set up
-            # monitoring asks a model, previews every rule and may retune: minutes, in the
-            # call. With the two-minute lease its completion was refused ("lease has expired")
-            # and it ran again from the start, three times (Order API, 2026-10-19).
-            lease = lease_for(spec_step)
-            if lease > LEASE_SECONDS:
-                phase = f"hold the lease for {claimed['step_id']}"
-                claimed = {**claimed, **workflows.heartbeat_step(
-                    connection, project_id=project_id, step_run_id=claimed["id"],
-                    worker_id=worker_id, lease_seconds=lease)}
-            phase = f"execute {claimed['step_id']}"
-            # A FAILED STEP MUST LEAVE THE CONNECTION USABLE, OR ITS FAILURE CANNOT BE RECORDED.
-            #
-            # `fail_step` below opens with SELECT ... FOR UPDATE. When a step's own work aborts
-            # the transaction — a constraint violation anywhere inside a skill invocation, an
-            # artifact insert, a receipt — that SELECT raises InFailedSqlTransaction and takes
-            # the real exception with it. The step is then left `running` with no error against
-            # it, the tick reports a message about a query that was fine, and the operator sees
-            # a run that has simply stopped. That is precisely how the video workflow sat at
-            # step one for half an hour saying nothing at all.
-            #
-            # Rolling back to the savepoint first restores a working connection, so the handlers
-            # below record the ORIGINAL failure instead of dying on the attempt.
-            step_point = connection.begin_nested()
-            step_agents.forget_resolved()
-            # WHO STARTED WHAT THIS STEP STARTS. A build or a panel is created by a tool in its
-            # own transaction, before this step's act is committed; this is how it records the
-            # step (and the run's person) as its origin, so its stages and seats are signed
-            # under this step rather than a root of their own. The step, not its run: a run id
-            # in a build's origin would mark the build as governed by this run.
+        # Then gates to open: they are not claimable work, and leaving them until after the
+        # claim would let the runner treat a waiting approval as an idle step forever.
+        gates = connection.execute(
+            text(
+                """
+                SELECT * FROM workflow_step_runs
+                WHERE workflow_run_id=:run_id AND status='ready' AND step_kind='capability'
+                  AND decision_id IS NULL
+                """
+            ),
+            {"run_id": run_id},
+        ).mappings().all()
+        for row in gates:
+            spec_step = spec_steps.get(row["step_id"]) or {}
+            # PER GATE, so the one that breaks is named and the others still open. Deciding
+            # a gate reads the step definition and the run's context; opening one WRITES a
+            # decision. Both can fail, they fail differently, and without this the error
+            # surfaced later as a poisoned transaction on somebody else's SELECT.
+            phase = f"decide whether {row['step_id']} needs approval"
+            gate_point = connection.begin_nested()
             try:
-                try:
-                    with agent_acts.origin(step_run_id=claimed["id"],
-                                           actor=run.get("actor") or None):
-                        output = execute_step(
-                            connection, ctx, project_id=project_id,
-                            actor=run.get("actor") or "workflow",
-                            step=spec_step,
-                            spec_steps=spec_steps,
-                            context={
-                                **_run_context(connection, run_id),
-                                # The item, when a for_each started this step run.
-                                **item_context(claimed),
-                                "step_attempt": int(claimed.get("attempt") or 1),
-                                "worker_id": worker_id,
-                                # Set only on a step a gate released (_resume_answered_gates
-                                # keeps decision_id on the row); read by a custom step's MCP
-                                # effect.
-                                "approval_decision_id": claimed.get("decision_id"),
-                                # The stack target this step's gate was waived for, if any.
-                                STACK_GATE_TARGET: (claimed.get("binding_snapshot") or {}).get(
-                                    STACK_GATE_TARGET),
-                            },
-                        )
-                except BaseException:
-                    try:
-                        step_point.rollback()
-                    except Exception:  # noqa: BLE001 — already gone; the raise below matters
-                        pass
-                    raise
-                else:
-                    step_point.commit()
-                if str(output.get("status") or "") in _DID_NOT_SHIP:
-                    # A FAILURE THAT IS RETURNED IS STILL A FAILURE.
-                    #
-                    # The runner failed a step only when execute_step RAISED. A capability that
-                    # returned {"status": "failed", "error": ...} was recorded as succeeded —
-                    # so every guard written as a `return` silently passed.
-                    #
-                    # Observed on five runs at once: the preview gate correctly refused
-                    # ("the preview at http://127.0.0.1:39917 does not answer, so it cannot have
-                    # been reviewed"), the step was marked succeeded, the console showed the
-                    # work as deployed, and Infra showed nothing — because nothing had been
-                    # deployed and nothing said so. That is the exact failure mode the gate was
-                    # written to prevent, reintroduced one layer up.
-                    # `problems` is where the deploy connector puts the ACTUAL cause, and it
-                    # was going nowhere: the step rendered the dict's shape — literally
-                    # "{status, problems}" — as its detail, so the one sentence that explains
-                    # the failure ("no ssh_key bound to this target and no global ssh key
-                    # configured") never reached the person who had to act on it.
-                    problems = output.get("problems")
-                    if isinstance(problems, (list, tuple)) and problems:
-                        detail = "; ".join(
-                            str(p.get("detail") or p.get("message") or p.get("reason") or p)
-                            if isinstance(p, dict) else str(p)
-                            for p in problems)
-                    else:
-                        detail = ""
-                    reason = str(output.get("error") or detail or output.get("note") or "")
-                    if not reason.strip():
-                        # "the capability reported failure without a reason" is what an operator
-                        # actually saw on a deploy gate, and it is not an error message — it is
-                        # the absence of one. It told them nothing, and it told the next engineer
-                        # less, because the step's stored output was `{}` as well.
-                        #
-                        # A failure with nothing to say should be impossible: whatever the
-                        # capability DID return is evidence, so it is reported rather than
-                        # summarised away. Where it returned nothing at all, say that plainly and
-                        # name the thing to look at next.
-                        reason = _reason_of_last_resort(output, claimed)
-                    workflows.fail_step(
-                        connection, project_id=project_id, step_run_id=claimed["id"],
-                        worker_id=worker_id, error=reason[:500],
-                        # A SETTLED failure stops once, for Retry / Skip: an agent that said it
-                        # could not do the work would say so again, at the price of a whole run.
-                        retryable=not output.get(SETTLED_FAILURE),
-                        # THE OUTPUT SURVIVES THE FAILURE. It was dropped, so a step that failed
-                        # stored `{}` and the only record of what happened was the one sentence
-                        # above — which in this case said nothing.
-                        output=output,
-                    )
-                    performed.append({
-                        "run_id": run_id, "step_id": claimed["step_id"],
-                        "capability": output.get("capability"),
-                        "outcome": "failed", "error": reason,
-                    })
-                elif output.get("status") == "needs_decision":
-                    # A finding that is meant to stop the line asks the operator, in place,
-                    # rather than deadlettering the run and answering for them.
-                    decision_id = _park_for_decision(
-                        connection, project_id, {**dict(run), "id": run_id},
-                        claimed, output,
-                    )
-                    performed.append({
-                        "run_id": run_id, "step_id": claimed["step_id"],
-                        "capability": output.get("capability"), "outcome": "needs_decision",
-                        "decision_id": decision_id,
-                    })
-                elif output.get("status") == "awaiting":
-                    # Started, not finished. Park it against the id it is waiting on;
-                    # `resume_awaited` finishes it when that work reaches a terminal state.
-                    workflows.park_step_awaiting(
-                        connection, project_id=project_id, step_run_id=claimed["id"],
-                        worker_id=worker_id, output=output,
-                    )
-                    performed.append({
-                        "run_id": run_id, "step_id": claimed["step_id"],
-                        "capability": output.get("capability"), "outcome": "awaiting",
-                        "await": output.get("await"),
-                    })
-                else:
-                    workflows.complete_step(
-                        connection, project_id=project_id, step_run_id=claimed["id"],
-                        worker_id=worker_id, output=output,
-                        evidence=[{
-                            "kind": "capability",
-                            "capability": output.get("capability"),
-                            "tool": output.get("tool"),
-                        }],
-                    )
-                    performed.append({
-                        "run_id": run_id, "step_id": claimed["step_id"],
-                        "capability": output.get("capability"), "outcome": "succeeded",
-                    })
-            except CapabilityExecutionError as error:
-                agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
-                wait = _as_wait(error)
-                if wait is not None:
-                    # NOT YET, NOT FAILED. No `continue` here: it would skip the run's savepoint
-                    # commit in the `else` below.
-                    waited = workflows.wait_step(
-                        connection, project_id=project_id, step_run_id=claimed["id"],
-                        worker_id=worker_id, reason=str(wait),
-                        wait_seconds=wait.wait_seconds, kind=wait.kind,
-                    )
-                    performed.append({
-                        "run_id": run_id, "step_id": claimed["step_id"],
-                        "outcome": "waiting" if waited["status"] == "ready" else "failed",
-                        "waiting_for": wait.kind, "error": str(wait),
-                    })
-                else:
-                    error = _as_settled(error)
-                    workflows.fail_step(
-                        connection, project_id=project_id, step_run_id=claimed["id"],
-                        worker_id=worker_id, error=str(error),
-                        # A settled verdict fails once and says so. Retrying it spends ticks and
-                        # minutes to arrive at the same sentence.
-                        retryable=not isinstance(error, SettledCapabilityError),
-                    )
-                    if isinstance(error, StaleApprovalError):
-                        # The approval covered other content, so it no longer releases this
-                        # step: Retry opens a fresh gate showing what would be sent now.
-                        connection.execute(
-                            text("UPDATE workflow_step_runs SET decision_id = NULL, "
-                                 "updated_at = now() WHERE id = :i"),
-                            {"i": claimed["id"]},
-                        )
-                    performed.append({
-                        "run_id": run_id, "step_id": claimed["step_id"],
-                        "outcome": "failed", "error": str(error),
-                    })
-            except Exception as error:  # noqa: BLE001
-                # A CLAIMED STEP MUST NOT BE STRANDED BY A SURPRISE.
-                #
-                # Only CapabilityExecutionError released the lease. Anything else — a KeyError,
-                # a bad row, a library raising something new — escaped to the handler below,
-                # which logs and moves on while the step stays `leased` with nobody serving it.
-                # Five deploy steps sat exactly like that for fifteen hours, showing a running
-                # timer, and the log said `(non-fatal): 'deploy'` — a stringified KeyError,
-                # which names neither the type nor where it came from.
-                #
-                # Failing it retryably is strictly better: the lease is released, the reason is
-                # on the step where the operator is looking, and the runtime can try again.
-                log.exception(
-                    "capability step %s of run %s raised %s",
-                    claimed["step_id"], run_id, type(error).__name__,
+                waived: dict[str, Any] = {}
+                subject = _gate_subject(
+                    connection, project_id, spec_step, _run_context(connection, run_id),
+                    default_owner=_github_owner(ctx), waived=waived,
                 )
-                agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
+                if subject is None and (
+                        (spec_step.get("binding") or {}).get("capability") == "deploy"):
+                    # WHAT THE GATE WAS WAIVED FOR, written where execution reads it: the
+                    # step may ship to this stack target without a gate, and nowhere else.
+                    # Cleared when no gate was waived, so a stale pin cannot linger.
+                    connection.execute(
+                        text("UPDATE workflow_step_runs SET binding_snapshot = "
+                             "(COALESCE(binding_snapshot, '{}'::jsonb) - :k) "
+                             "|| CAST(:patch AS JSONB), updated_at = now() WHERE id = :i"),
+                        {"i": row["id"], "k": STACK_GATE_TARGET,
+                         "patch": json.dumps(waived)},
+                    )
+                if subject is not None:
+                    phase = f"open the approval gate for {row['step_id']}"
+                    _open_gate(
+                        connection, project_id, {**dict(run), "id": run_id},
+                        {**dict(row), "_spec": spec_step, "_subject": subject},
+                    )
+                    performed.append(
+                        {"run_id": run_id, "step_id": row["step_id"],
+                         "capability": subject["key"], "outcome": "gate_opened"}
+                    )
+            except Exception as error:  # noqa: BLE001 — one gate must not stop the run
+                try:
+                    gate_point.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                log.warning("could not %s: %s: %s",
+                            phase, type(error).__name__, error)
+                performed.append({
+                    "run_id": run_id, "step_id": row["step_id"],
+                    "outcome": "gate_failed", "phase": phase,
+                    "error": f"{type(error).__name__}: {error}",
+                })
+            else:
+                gate_point.commit()
+
+        # SIGNED AS IT MOVES. Gates opened, work resumed, answers given since the last tick
+        # all show in the run's chain before the next step is claimed. Never waits: a run
+        # another tick holds is that tick's to sign, and its lock would be held to the end
+        # of this one — through every step it runs.
+        phase = "sign the run's work"
+        agent_acts.quietly(connection, "sign a run's work", agent_acts.sync_run, run_id,
+                           wait=False)
+
+        phase = "claim a step to run"
+        claimed = workflows.claim_step(
+            connection, project_id=project_id, run_id=run_id,
+            worker_id=worker_id, lease_seconds=LEASE_SECONDS,
+        )
+        if claimed is None:
+            return
+        # `external_agent` (KG P6a) too: a bank's agent's step is an outbound call this
+        # runner makes. Left out, it was leased, skipped "for another claimant" that does not
+        # exist, and timed out on every run (2026-10-31).
+        if claimed.get("step_kind") not in ("capability", "deterministic", "external_agent"):
+            # Somebody else's step kind. Release it by letting the lease lapse rather than
+            # failing it — this runner is not the only possible claimant. `deterministic`
+            # (KG P5a) runs a fixed $0 graph query and is claimed here like `capability`:
+            # it has no agent turn to wait for, so there is no other claimant for it.
+            return
+
+        spec_step = spec_steps.get(claimed["step_id"]) or {}
+        # A STEP THAT THINKS IN THE CALL HOLDS ITS LEASE FOR AS LONG AS IT THINKS. Set up
+        # monitoring asks a model, previews every rule and may retune: minutes, in the
+        # call. With the two-minute lease its completion was refused ("lease has expired")
+        # and it ran again from the start, three times (Order API, 2026-10-19).
+        lease = lease_for(spec_step)
+        if lease > LEASE_SECONDS:
+            phase = f"hold the lease for {claimed['step_id']}"
+            claimed = {**claimed, **workflows.heartbeat_step(
+                connection, project_id=project_id, step_run_id=claimed["id"],
+                worker_id=worker_id, lease_seconds=lease)}
+        phase = f"execute {claimed['step_id']}"
+        # A FAILED STEP MUST LEAVE THE CONNECTION USABLE, OR ITS FAILURE CANNOT BE RECORDED.
+        #
+        # `fail_step` below opens with SELECT ... FOR UPDATE. When a step's own work aborts
+        # the transaction — a constraint violation anywhere inside a skill invocation, an
+        # artifact insert, a receipt — that SELECT raises InFailedSqlTransaction and takes
+        # the real exception with it. The step is then left `running` with no error against
+        # it, the tick reports a message about a query that was fine, and the operator sees
+        # a run that has simply stopped. That is precisely how the video workflow sat at
+        # step one for half an hour saying nothing at all.
+        #
+        # Rolling back to the savepoint first restores a working connection, so the handlers
+        # below record the ORIGINAL failure instead of dying on the attempt.
+        step_point = connection.begin_nested()
+        step_agents.forget_resolved()
+        # WHO STARTED WHAT THIS STEP STARTS. A build or a panel is created by a tool in its
+        # own transaction, before this step's act is committed; this is how it records the
+        # step (and the run's person) as its origin, so its stages and seats are signed
+        # under this step rather than a root of their own. The step, not its run: a run id
+        # in a build's origin would mark the build as governed by this run.
+        try:
+            try:
+                with agent_acts.origin(step_run_id=claimed["id"],
+                                       actor=run.get("actor") or None):
+                    output = execute_step(
+                        connection, ctx, project_id=project_id,
+                        actor=run.get("actor") or "workflow",
+                        step=spec_step,
+                        spec_steps=spec_steps,
+                        context={
+                            **_run_context(connection, run_id),
+                            # The item, when a for_each started this step run.
+                            **item_context(claimed),
+                            "step_attempt": int(claimed.get("attempt") or 1),
+                            "worker_id": worker_id,
+                            # Set only on a step a gate released (_resume_answered_gates
+                            # keeps decision_id on the row); read by a custom step's MCP
+                            # effect.
+                            "approval_decision_id": claimed.get("decision_id"),
+                            # The stack target this step's gate was waived for, if any.
+                            STACK_GATE_TARGET: (claimed.get("binding_snapshot") or {}).get(
+                                STACK_GATE_TARGET),
+                        },
+                    )
+            except BaseException:
+                try:
+                    step_point.rollback()
+                except Exception:  # noqa: BLE001 — already gone; the raise below matters
+                    pass
+                raise
+            else:
+                step_point.commit()
+            if str(output.get("status") or "") in _DID_NOT_SHIP:
+                # A FAILURE THAT IS RETURNED IS STILL A FAILURE.
+                #
+                # The runner failed a step only when execute_step RAISED. A capability that
+                # returned {"status": "failed", "error": ...} was recorded as succeeded —
+                # so every guard written as a `return` silently passed.
+                #
+                # Observed on five runs at once: the preview gate correctly refused
+                # ("the preview at http://127.0.0.1:39917 does not answer, so it cannot have
+                # been reviewed"), the step was marked succeeded, the console showed the
+                # work as deployed, and Infra showed nothing — because nothing had been
+                # deployed and nothing said so. That is the exact failure mode the gate was
+                # written to prevent, reintroduced one layer up.
+                # `problems` is where the deploy connector puts the ACTUAL cause, and it
+                # was going nowhere: the step rendered the dict's shape — literally
+                # "{status, problems}" — as its detail, so the one sentence that explains
+                # the failure ("no ssh_key bound to this target and no global ssh key
+                # configured") never reached the person who had to act on it.
+                problems = output.get("problems")
+                if isinstance(problems, (list, tuple)) and problems:
+                    detail = "; ".join(
+                        str(p.get("detail") or p.get("message") or p.get("reason") or p)
+                        if isinstance(p, dict) else str(p)
+                        for p in problems)
+                else:
+                    detail = ""
+                reason = str(output.get("error") or detail or output.get("note") or "")
+                if not reason.strip():
+                    # "the capability reported failure without a reason" is what an operator
+                    # actually saw on a deploy gate, and it is not an error message — it is
+                    # the absence of one. It told them nothing, and it told the next engineer
+                    # less, because the step's stored output was `{}` as well.
+                    #
+                    # A failure with nothing to say should be impossible: whatever the
+                    # capability DID return is evidence, so it is reported rather than
+                    # summarised away. Where it returned nothing at all, say that plainly and
+                    # name the thing to look at next.
+                    reason = _reason_of_last_resort(output, claimed)
                 workflows.fail_step(
                     connection, project_id=project_id, step_run_id=claimed["id"],
-                    worker_id=worker_id,
-                    error=f"{type(error).__name__}: {error}"[:500],
-                    retryable=True,
+                    worker_id=worker_id, error=reason[:500],
+                    # A SETTLED failure stops once, for Retry / Skip: an agent that said it
+                    # could not do the work would say so again, at the price of a whole run.
+                    retryable=not output.get(SETTLED_FAILURE),
+                    # THE OUTPUT SURVIVES THE FAILURE. It was dropped, so a step that failed
+                    # stored `{}` and the only record of what happened was the one sentence
+                    # above — which in this case said nothing.
+                    output=output,
                 )
                 performed.append({
                     "run_id": run_id, "step_id": claimed["step_id"],
-                    "outcome": "failed", "error": f"{type(error).__name__}: {error}",
+                    "capability": output.get("capability"),
+                    "outcome": "failed", "error": reason,
                 })
-            # The step just settled (succeeded, failed, parked, waiting on a person): signed now.
-            agent_acts.quietly(connection, "sign a step", agent_acts.sync_run, run_id,
-                               wait=False)
-        except Exception as error:                 # noqa: BLE001 - one run must not stop the rest
-            # ROLL BACK TO THE SAVEPOINT FIRST. Until that happens the connection is unusable,
-            # so even the logging below would fail if it touched the database.
-            try:
-                savepoint.rollback()
-            except Exception:  # noqa: BLE001 — already rolled back, or the connection is gone
-                pass
-            # The TYPE, always. `(non-fatal): 'deploy'` is a KeyError wearing a disguise: it
-            # names neither what went wrong nor where, and it cost a day of guessing.
-            log.warning(
-                "capability runner skipped run %s while it tried to %s (non-fatal): %s: %s",
-                run_id, phase, type(error).__name__, error,
+            elif output.get("status") == "needs_decision":
+                # A finding that is meant to stop the line asks the operator, in place,
+                # rather than deadlettering the run and answering for them.
+                decision_id = _park_for_decision(
+                    connection, project_id, {**dict(run), "id": run_id},
+                    claimed, output,
+                )
+                performed.append({
+                    "run_id": run_id, "step_id": claimed["step_id"],
+                    "capability": output.get("capability"), "outcome": "needs_decision",
+                    "decision_id": decision_id,
+                })
+            elif output.get("status") == "awaiting":
+                # Started, not finished. Park it against the id it is waiting on;
+                # `resume_awaited` finishes it when that work reaches a terminal state.
+                workflows.park_step_awaiting(
+                    connection, project_id=project_id, step_run_id=claimed["id"],
+                    worker_id=worker_id, output=output,
+                )
+                performed.append({
+                    "run_id": run_id, "step_id": claimed["step_id"],
+                    "capability": output.get("capability"), "outcome": "awaiting",
+                    "await": output.get("await"),
+                })
+            else:
+                workflows.complete_step(
+                    connection, project_id=project_id, step_run_id=claimed["id"],
+                    worker_id=worker_id, output=output,
+                    evidence=[{
+                        "kind": "capability",
+                        "capability": output.get("capability"),
+                        "tool": output.get("tool"),
+                    }],
+                )
+                performed.append({
+                    "run_id": run_id, "step_id": claimed["step_id"],
+                    "capability": output.get("capability"), "outcome": "succeeded",
+                })
+        except CapabilityExecutionError as error:
+            agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
+            wait = _as_wait(error)
+            if wait is not None:
+                # NOT YET, NOT FAILED. No `continue` here: it would skip the run's savepoint
+                # commit in the `else` below.
+                waited = workflows.wait_step(
+                    connection, project_id=project_id, step_run_id=claimed["id"],
+                    worker_id=worker_id, reason=str(wait),
+                    wait_seconds=wait.wait_seconds, kind=wait.kind,
+                )
+                performed.append({
+                    "run_id": run_id, "step_id": claimed["step_id"],
+                    "outcome": "waiting" if waited["status"] == "ready" else "failed",
+                    "waiting_for": wait.kind, "error": str(wait),
+                })
+            else:
+                error = _as_settled(error)
+                workflows.fail_step(
+                    connection, project_id=project_id, step_run_id=claimed["id"],
+                    worker_id=worker_id, error=str(error),
+                    # A settled verdict fails once and says so. Retrying it spends ticks and
+                    # minutes to arrive at the same sentence.
+                    retryable=not isinstance(error, SettledCapabilityError),
+                )
+                if isinstance(error, StaleApprovalError):
+                    # The approval covered other content, so it no longer releases this
+                    # step: Retry opens a fresh gate showing what would be sent now.
+                    connection.execute(
+                        text("UPDATE workflow_step_runs SET decision_id = NULL, "
+                             "updated_at = now() WHERE id = :i"),
+                        {"i": claimed["id"]},
+                    )
+                performed.append({
+                    "run_id": run_id, "step_id": claimed["step_id"],
+                    "outcome": "failed", "error": str(error),
+                })
+        except Exception as error:  # noqa: BLE001
+            # A CLAIMED STEP MUST NOT BE STRANDED BY A SURPRISE.
+            #
+            # Only CapabilityExecutionError released the lease. Anything else — a KeyError,
+            # a bad row, a library raising something new — escaped to the handler below,
+            # which logs and moves on while the step stays `leased` with nobody serving it.
+            # Five deploy steps sat exactly like that for fifteen hours, showing a running
+            # timer, and the log said `(non-fatal): 'deploy'` — a stringified KeyError,
+            # which names neither the type nor where it came from.
+            #
+            # Failing it retryably is strictly better: the lease is released, the reason is
+            # on the step where the operator is looking, and the runtime can try again.
+            log.exception(
+                "capability step %s of run %s raised %s",
+                claimed["step_id"], run_id, type(error).__name__,
+            )
+            agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
+            workflows.fail_step(
+                connection, project_id=project_id, step_run_id=claimed["id"],
+                worker_id=worker_id,
+                error=f"{type(error).__name__}: {error}"[:500],
+                retryable=True,
             )
             performed.append({
-                "run_id": run_id, "outcome": "skipped",
-                "phase": phase,
-                "error": f"{type(error).__name__}: {error}",
+                "run_id": run_id, "step_id": claimed["step_id"],
+                "outcome": "failed", "error": f"{type(error).__name__}: {error}",
             })
-        else:
-            savepoint.commit()
-
-    return {"project_id": project_id, "performed": performed, "count": len(performed)}
+        # The step just settled (succeeded, failed, parked, waiting on a person): signed now.
+        agent_acts.quietly(connection, "sign a step", agent_acts.sync_run, run_id,
+                           wait=False)
+    except Exception as error:                 # noqa: BLE001 - one run must not stop the rest
+        # ROLL BACK TO THE SAVEPOINT FIRST. Until that happens the connection is unusable,
+        # so even the logging below would fail if it touched the database.
+        try:
+            savepoint.rollback()
+        except Exception:  # noqa: BLE001 — already rolled back, or the connection is gone
+            pass
+        # The TYPE, always. `(non-fatal): 'deploy'` is a KeyError wearing a disguise: it
+        # names neither what went wrong nor where, and it cost a day of guessing.
+        log.warning(
+            "capability runner skipped run %s while it tried to %s (non-fatal): %s: %s",
+            run_id, phase, type(error).__name__, error,
+        )
+        performed.append({
+            "run_id": run_id, "outcome": "skipped",
+            "phase": phase,
+            "error": f"{type(error).__name__}: {error}",
+        })
+    else:
+        savepoint.commit()
 
 
 def sweep_gate_timeouts(

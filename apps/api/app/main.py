@@ -715,7 +715,7 @@ from .request_bodies import (
     WorkflowScheduleEnabledBody,
     WorkflowStartBody,
 )
-from .services.a2a import (
+from .services.agent_bus import (
     A2ANotFoundError,
     A2AService,
     A2AStateError,
@@ -28186,34 +28186,22 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
     # lab project is a project of its own, and its build sat `ready` for ever. Each project in
     # its own transaction, so one that cannot advance never stops the rest.
     #
-    # KNOWN HAZARD — ONE TRANSACTION PER PROJECT, NOT PER STEP (pre-mortem 2026-10-13).
-    # `tick` claims and EXECUTES up to MAX_STEPS_PER_TICK (10) steps inline, each in a SAVEPOINT
-    # of this one transaction, and nothing commits until the project's last step and
-    # sweep_gate_timeouts are done. Consequences, precisely:
-    #   1. A step that spends longer than BOSS_API_DB_IDLE_IN_TRANSACTION_SECONDS (300) between
-    #      two statements — a model call, an HTTP probe, a subprocess — gets this session ended
-    #      by Postgres. The WHOLE project's tick rolls back: every step it claimed, ran and
-    #      recorded goes back to `ready`.
-    #   2. What those steps did OUTSIDE this transaction stays done. A build or panel is created
-    #      by its tool in its own transaction; a message, a PR, a model call happened. The next
-    #      tick claims the same steps and does it again — a duplicate wherever the effect is not
-    #      keyed (start_code_task dedupes builds by its same-work rule; typed decisions carry a
-    #      dedupe key; anything else does not).
-    #   3. While it runs, the run rows it locked are held to the end, so every writer to those
-    #      runs (an approval, a retry, the console) waits behind the slowest step, and the worker's
-    #      request is blocked for the whole sweep.
-    # The guard (apps/api/tests/test_the_tick_stays_inside_its_transaction_limit.py) pins what
-    # keeps this rare: every per-call wall the tick runs inline is under the idle limit with
-    # margin, and each project has its own transaction. NOT CHANGED HERE: commit-per-step means
-    # `tick` takes the engine and, per step, commits the claim, runs the step with no
-    # transaction open, and records the outcome in a fresh transaction keyed by the claim (a
-    # stale claim is reclaimed by its lease). That lives in workflow_capability_runner.tick,
-    # which another change is rewriting; it is the follow-up, not a one-line change.
+    # COMMITTED PER STEP (AP-P0, BOSSAPP-1051) — the former KNOWN HAZARD (pre-mortem
+    # 2026-10-13) was one transaction per project: `tick` claimed and executed up to
+    # MAX_STEPS_PER_TICK steps in savepoints of it, so a step idle past
+    # BOSS_API_DB_IDLE_IN_TRANSACTION_SECONDS (300) got the session ended and rolled back EVERY
+    # step of the project; each went back to `ready` and ran again, repeating any unkeyed side
+    # effect (a message, a PR). `tick_per_step` gives every run's step — the claim, the
+    # execution and the recorded outcome — a transaction of its own, committed before the next
+    # run is touched: a step that dies rolls back alone, its siblings stay done and are never
+    # re-run. Gate timeouts are swept after, in their own transaction.
+    # Guard: apps/api/tests/test_the_tick_stays_inside_its_transaction_limit.py.
     for pid in projects:
         try:
+            result = workflow_capability_runner.tick_per_step(
+                engine, ctx, project_id=pid, worker_id=worker_id,
+                begin=lambda: begin(engine))
             with begin(engine) as connection:
-                result = workflow_capability_runner.tick(connection, ctx, project_id=pid,
-                                                         worker_id=worker_id)
                 # Same tick: a gate whose SLA has run out is as much "work that is ready" as a
                 # step waiting to execute, and running it on a separate schedule would mean two
                 # places to look when a workflow is not moving.
