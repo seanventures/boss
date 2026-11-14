@@ -52,8 +52,11 @@ def test_metatron_and_the_console_call_the_same_agent_turn():
     metatron = _calls(_undecorated(captain_router.captain_session_turn))
     assert "agent_turn" in console and "agent_turn" in alias
     assert "agent_turn" in metatron
-    # The adapter is only that: nothing else that could decide, route or answer.
-    assert metatron <= {"agent_turn"}, metatron
+    # The adapter is only that: nothing else that could decide, route or answer. The one
+    # addition (AP-P0) is `_remember_turn`, which writes the answered turn to Metatron's memory
+    # AFTER the reply exists; it decides nothing (pinned below).
+    assert metatron <= {"agent_turn", "_remember_turn"}, metatron
+    assert not (_calls(captain_router._remember_turn) & _SECOND_PATH)
     # And the one turn is the one brain.
     assert "orchestration_agent.chat" in _calls(api_main.agent_turn)
 
