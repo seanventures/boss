@@ -341,12 +341,24 @@ def _usage_from_response(response, model: str) -> dict:
         getattr(u, "completion_tokens", None) or getattr(u, "output_tokens", None) or 0
     )
     total = getattr(u, "total_tokens", None) or (int(prompt) + int(completion))
-    return {
+    out = {
         "model": model,
         "prompt_tokens": int(prompt),
         "completion_tokens": int(completion),
         "total_tokens": int(total),
     }
+    # A CLAUDE MODEL BEHIND AN OPENAI-COMPATIBLE GATEWAY reports its cache reads in
+    # prompt_tokens_details (AP-P6): recorded as cache_read_tokens, so llm_calls' cache-read
+    # share is measurable on that lane too, and priced at the cached rate. `prompt_tokens` stays
+    # the uncached input, as the kernel's Usage defines it. Only for Claude: other providers'
+    # cached-input prices differ from the Anthropic multiplier estimate_cost applies.
+    details = getattr(u, "prompt_tokens_details", None)
+    cached = int(getattr(details, "cached_tokens", 0) or 0) if details is not None else 0
+    if cached and ("claude" in str(model or "").lower()
+                   or str(model or "").lower().startswith("anthropic/")):
+        out["cache_read_tokens"] = cached
+        out["prompt_tokens"] = max(0, int(prompt) - cached)
+    return out
 
 
 #: Providers this adapter reaches that run on the operator's own hardware: no per-call money.

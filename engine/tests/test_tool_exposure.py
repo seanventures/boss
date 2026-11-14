@@ -184,7 +184,9 @@ EXPECTED_PER_SURFACE = {
     "mcp": 197,
     # find_tools; agent steps join when K4 moves them onto the kernel. +6 the ticket tools,
     # offered to workflow agents through the tickets.read / tickets.write skills (BOSSAPP-1047 B2).
-    "agent_step": 7,
+    # +4 the run filesystem's tools (AP-P6): agent_step only, so chat's and MCP's registry
+    # views never list them (the kernel offers them inside every run).
+    "agent_step": 11,
     "decision": 1,     # find_tools; a decision's read tools stay the caller's (ReadPhase)
     "build": 1,        # find_tools; build stages join at K12
 }

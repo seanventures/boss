@@ -73,7 +73,11 @@ def _from_record(call: ToolCall, record: dict) -> ToolResult:
     return ToolResult(call.id, call.name, str(record.get("status") or "ok"),
                       saved.get("content"), untrusted=bool(saved.get("untrusted")),
                       decision_id=saved.get("decision_id"), budget=saved.get("budget"),
-                      pending=saved.get("pending"))
+                      pending=saved.get("pending"),
+                      # what the model was shown (an offloaded result's stub) is replayed as
+                      # it was shown, never re-rendered into something it did not read
+                      rendered=saved.get("rendered") if saved.get("rendered") is not None
+                      else None)
 
 
 def _unknown_outcome(run: Any, call: ToolCall, step: int) -> ToolResult:
@@ -228,12 +232,16 @@ def _answer(run: Any, call: ToolCall, result: ToolResult, step: int, *, write: b
     """The tool message the model reads, the trace entry, the ledger event — and, on a durable
     run, the call's pending write."""
     state, rec = run.state, run.rec
-    body = run.policies.context.render(result)
+    from .context_policy import render_for
+
+    body = render_for(run, result)
     if store is not None:
         store.put_write(state, call=call, idx=idx, status=result.status,
                         result={"content": result.content, "untrusted": result.untrusted,
                                 "decision_id": result.decision_id, "budget": result.budget,
-                                "pending": result.pending},
+                                "pending": result.pending,
+                                **({"rendered": result.rendered}
+                                   if result.rendered is not None else {})},
                         rendered=body, idempotency=idempotency.class_of(schema)
                         if schema is not None else None,
                         key=state.idempotency_key(step, call.id))

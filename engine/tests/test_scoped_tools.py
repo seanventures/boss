@@ -57,8 +57,16 @@ def chat_run(registry, script, run_id=None):
 
 
 class TestTheFlag:
-    def test_off_is_todays_full_set(self, registry, monkeypatch):
+    def test_unset_is_on_since_ap_p6(self, monkeypatch):
+        """AGENT_PLATFORM.md §4.7: scoped tools are the default on every preset."""
         monkeypatch.delenv(FLAG, raising=False)
+        assert enabled()
+        for word in ("0", "false", "no", "off"):
+            monkeypatch.setenv(FLAG, word)
+            assert not enabled()
+
+    def test_off_is_todays_full_set(self, registry, monkeypatch):
+        monkeypatch.setenv(FLAG, "0")
         assert not enabled()
         _result, engine = chat_run(registry, [Say("hello")])
         offered = engine.requests[0]["tools"]
@@ -98,7 +106,7 @@ class TestTheFlag:
         from boss_engine.kernel.state import RunState
         from boss_engine.kernel.types import ToolSchema
 
-        monkeypatch.delenv(FLAG, raising=False)
+        monkeypatch.setenv(FLAG, "0")
         available = [ToolSchema("a", "", {}, deferred=True), ToolSchema("b", "", {})]
         state = RunState(run_id="r", project_id="p", lineage_id="r", system=[], messages=[])
         assert ScopedTools().select(state, available) == \
@@ -114,7 +122,7 @@ class TestTheMeasure:
         turn."""
         script = [Call(FIND_TOOLS, {"query": "deploy an app"}), Say("deploys go via deploy_app")]
 
-        monkeypatch.delenv(FLAG, raising=False)
+        monkeypatch.setenv(FLAG, "0")
         _r, engine_off = chat_run(registry, list(script))
         off_tokens = sum(engine_off.schema_chars) // 4
 

@@ -124,8 +124,11 @@ class TestScopedSchemas:
                     if s["function"]["name"] not in ("query_db", "write_db")]
         assert sorted(offered) == sorted(expected)
 
-    def test_a_native_adapter_keeps_todays_full_set(self, registry, monkeypatch):
-        monkeypatch.delenv(FLAG, raising=False)
+    def test_a_native_adapter_keeps_the_full_set_only_with_the_flag_off(self, registry,
+                                                                         monkeypatch):
+        """AP-P6 made scoped tools the default on every preset (the kernel chat a native
+        adapter runs on included); BOSS_SCOPED_TOOLS=0 is the full set, as before."""
+        monkeypatch.setenv(FLAG, "0")
         seen = {}
 
         class Native:   # not a CliChatBrain: a native function-calling backend
@@ -135,9 +138,27 @@ class TestScopedSchemas:
                          "raw": {"role": "assistant", "content": "done"}}, {})
 
         _agent(registry, Native()).chat(project_id="p", actor="operator", message="hi")
+        from boss_engine.kernel.runfs import RUN_FS_TOOLS
+
         expected = [s["function"]["name"] for s in registry.openai_schema()
                     if s["function"]["name"] not in ("query_db", "write_db")]
-        assert len(seen["tools"]) == len(expected)
+        names = [str((t.get("function") or t).get("name")) for t in seen["tools"]]
+        assert sorted(n for n in names if n not in RUN_FS_TOOLS) == sorted(
+            n for n in expected if n not in RUN_FS_TOOLS)
+
+    def test_a_native_adapter_is_scoped_by_default(self, registry, monkeypatch):
+        monkeypatch.delenv(FLAG, raising=False)
+        seen = {}
+
+        class Native:
+            def create_chat_completion(self, messages, tools=None, tool_choice="auto"):
+                seen.setdefault("tools", tools)
+                return ({"content": "done", "tool_calls": None,
+                         "raw": {"role": "assistant", "content": "done"}}, {})
+
+        _agent(registry, Native()).chat(project_id="p", actor="operator", message="hi")
+        names = [str((t.get("function") or t).get("name")) for t in seen["tools"]]
+        assert "find_tools" in names and len(names) <= 20 + 4  # chat core + the run FS
 
 
 # ── One CLI session per turn (BOSSAPP-1007), decision merged in (BOSSAPP-1006) ────────────────

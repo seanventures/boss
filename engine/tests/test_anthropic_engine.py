@@ -145,6 +145,18 @@ def request_tools(body):
     return [t.get("name") for t in body.get("tools") or []]
 
 
+#: The conversation's rolling cache breakpoint (AP-P6) turns the last message's string content
+#: into one text block carrying `cache_control`.
+MARKED = {"type": "ephemeral"}
+
+
+def last_text(body):
+    content = body["messages"][-1]["content"]
+    if isinstance(content, list):
+        return "".join(str(b.get("text") or "") for b in content if b.get("type") == "text")
+    return content
+
+
 # ════ The round trip ══════════════════════════════════════════════════════════════════════════
 
 class TestToolCallRoundTrip:
@@ -162,7 +174,9 @@ class TestToolCallRoundTrip:
         # The system prompt went as a cached text block, before the conversation.
         assert first["system"][0]["text"] == SYSTEM
         assert first["system"][0]["cache_control"] == {"type": "ephemeral"}
-        assert first["messages"][0] == {"role": "user", "content": ASK}
+        # The conversation carries the rolling breakpoint on its last block (AP-P6).
+        assert first["messages"][0] == {"role": "user", "content": [
+            {"type": "text", "text": ASK, "cache_control": MARKED}]}
         # The strict tool schema went up natively, with the tool-prefix breakpoint.
         tool = first["tools"][0]
         assert tool["name"] == "read_logs" and tool["input_schema"] == READ_SCHEMA
@@ -178,6 +192,7 @@ class TestToolCallRoundTrip:
         assert results["content"][0]["type"] == "tool_result"
         assert results["content"][0]["tool_use_id"] == "toolu_1"
         assert "3 errors" in results["content"][0]["content"]
+        assert results["content"][-1]["cache_control"] == MARKED
 
     def test_usage_and_cost_map_into_the_ledgers_fields(self):
         """input/output/cache_read/cache_write and USD, priced as openai_adapter prices every
@@ -238,8 +253,33 @@ class TestRequestShape:
         assert body["system"][-1]["text"].startswith("changing state")
         assert "cache_control" in body["tools"][-1]
         # tools -> system -> messages is the wire's own order; the changing block is the last
-        # system block and the new user message is the last message.
-        assert body["messages"][-1] == {"role": "user", "content": ASK}
+        # system block and the new user message is the last message, carrying the
+        # conversation's rolling breakpoint (AP-P6).
+        assert body["messages"][-1] == {"role": "user", "content": [
+            {"type": "text", "text": ASK, "cache_control": MARKED}]}
+
+    def test_never_more_than_four_breakpoints_and_the_conversation_keeps_one(self):
+        fake = FakeMessagesAPI([say("ok")])
+        fake.engine().complete(ModelRequest(
+            system=[Block("a", cache=True), Block("b", cache=True), Block("c", cache=True),
+                    Block("changing")],
+            messages=[{"role": "user", "content": ASK}],
+            tools=[ToolSchema("read_logs", "Read.", READ_SCHEMA)]))
+        body = fake.requests[0]
+        system_marks = sum("cache_control" in b for b in body["system"])
+        tool_marks = sum("cache_control" in t for t in body["tools"])
+        message_marks = sum("cache_control" in b for m in body["messages"]
+                            for b in (m["content"] if isinstance(m["content"], list) else []))
+        assert (system_marks, tool_marks, message_marks) == (2, 1, 1)
+        # the LAST two marked system blocks keep theirs: the longest prefixes
+        assert [("cache_control" in b) for b in body["system"]] == [False, True, True, False]
+
+    def test_the_tool_prefix_is_cached_even_when_the_system_is_not(self):
+        fake = FakeMessagesAPI([say("ok")])
+        fake.engine().complete(ModelRequest(
+            system=[Block("changing only")], messages=[{"role": "user", "content": ASK}],
+            tools=[ToolSchema("read_logs", "Read.", READ_SCHEMA)]))
+        assert fake.requests[0]["tools"][-1]["cache_control"] == MARKED
 
     def test_a_cached_block_after_changing_state_is_refused_loudly(self):
         fake = FakeMessagesAPI([])
@@ -432,7 +472,7 @@ class TestConformanceScenarios:
         assert result.status == "completed" and result.exhausted == "steps"
         assert [request_tools(r) for r in fake.requests] == [
             ["read_logs"], ["read_logs"], []]
-        assert fake.requests[-1]["messages"][-1]["content"].startswith(
+        assert last_text(fake.requests[-1]).startswith(
             "You are out of tool budget for this turn.")
 
     def test_the_providers_refusal_of_a_malformed_call_is_fed_back(self):
@@ -442,7 +482,7 @@ class TestConformanceScenarios:
         ])
         result, _ = kernel_run(fake, presets.agent_loop(4))
         assert result.status == "completed" and result.text == "rewrote the call; done"
-        feedback = fake.requests[1]["messages"][-1]["content"]
+        feedback = last_text(fake.requests[1])
         assert feedback.startswith("YOUR LAST TOOL CALL WAS REFUSED BEFORE IT RAN")
         assert "did not match" in feedback
 
@@ -471,7 +511,7 @@ class TestConformanceScenarios:
         fake = FakeMessagesAPI([say(None), say(None), say("third time lucky")])
         result, _ = kernel_run(fake, presets.engine_agent(6))
         assert result.status == "completed" and result.text == "third time lucky"
-        assert fake.requests[1]["messages"][-1]["content"].startswith(
+        assert last_text(fake.requests[1]).startswith(
             "Your last message was empty.")
 
     def test_a_transient_run_out_of_retries_fails_with_the_last_words(self):

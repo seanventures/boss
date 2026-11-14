@@ -446,6 +446,7 @@ services:
       BOSS_KERNEL_CHAT: ${BOSS_KERNEL_CHAT:-1}
       BOSS_KERNEL_STEPS: ${BOSS_KERNEL_STEPS:-1}
       BOSS_KERNEL_MEETINGS: ${BOSS_KERNEL_MEETINGS:-1}
+      BOSS_CONTEXT_POLICY: ${BOSS_CONTEXT_POLICY:-1}
       # AP-P2 (decision D5): workflow agent steps EXECUTE ON THE WORKER (agent_run_worker), not
       # inside the API's tick; 0 drives them in the tick as before. Both services read it.
       BOSS_AGENT_RUNS_ON_WORKERS: ${BOSS_AGENT_RUNS_ON_WORKERS:-1}
@@ -757,6 +758,7 @@ services:
       BOSS_KERNEL_CHAT: ${BOSS_KERNEL_CHAT:-1}
       BOSS_KERNEL_STEPS: ${BOSS_KERNEL_STEPS:-1}
       BOSS_KERNEL_MEETINGS: ${BOSS_KERNEL_MEETINGS:-1}
+      BOSS_CONTEXT_POLICY: ${BOSS_CONTEXT_POLICY:-1}
       # AP-P2 (decision D5): this worker executes agent runs itself (agent.run / agent.resume),
       # so it needs what an agent's tools reach: the egress (MCP and GitHub calls) and the
       # default org/workspace/project an agent run falls back to, exactly as the API has them.

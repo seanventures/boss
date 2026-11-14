@@ -28,6 +28,9 @@ and each one pinned so it cannot silently widen:
      the CALLER's summary decoration, not the loop's: the kernel reports stopped="steps" and the
      K11 ScaffoldCodeAgent writes the marker;
   D7 cancellation: no old loop can be stopped between calls; every kernel run can.
+  D8 (AP-P6) a kernel run carrying the context policy (chat, agent steps) is offered the run
+     filesystem's tools (ls, read_file, grep, write_file) first, and a result over the clip is
+     offloaded to it instead of cut (`without_run_fs`; test_ap_p6_context_engineering.py).
 """
 from __future__ import annotations
 
@@ -71,12 +74,34 @@ def kernel_run(script, policies, *, tools=None, messages=None, system=SYSTEM, sl
     return result, eng
 
 
-def same_requests(old: ScriptedEngine, new: ScriptedEngine):
+def without_run_fs(tools):
+    """INTENDED DIFFERENCE D8 (AP-P6): a kernel run whose stack carries the context policy (chat
+    and agent steps, BOSS_CONTEXT_POLICY) is offered the run filesystem's four tools AHEAD of
+    its own — always all four, always first (a stable cached prefix). Stripped here, and only
+    here, so every other difference still fails the comparison."""
+    from boss_engine.kernel.runfs import RUN_FS_TOOLS
+
+    if tools and list(tools[:len(RUN_FS_TOOLS)]) == list(RUN_FS_TOOLS):
+        rest = list(tools[len(RUN_FS_TOOLS):])
+        return rest or None
+    return tools
+
+
+def same_requests(old: ScriptedEngine, new: ScriptedEngine, *, run_fs: bool = False):
     """The two engines saw the same conversation: same tool names offered per call, same
-    message roles and contents (assistant turns byte-equal; tool and user turns byte-equal)."""
+    message roles and contents (assistant turns byte-equal; tool and user turns byte-equal).
+    `run_fs`: the kernel side carries the context policy, so it offers the run filesystem's
+    tools first (D8) on every call that offers its tools (an answer call offers only its
+    closing button, as before)."""
     assert len(old.requests) == len(new.requests), (len(old.requests), len(new.requests))
     for n, (a, b) in enumerate(zip(old.requests, new.requests)):
-        assert a["tools"] == b["tools"], (n, a["tools"], b["tools"])
+        tools = b["tools"]
+        if run_fs and tools and a["tools"] != tools:
+            from boss_engine.kernel.runfs import RUN_FS_TOOLS
+
+            assert list(tools[:len(RUN_FS_TOOLS)]) == list(RUN_FS_TOOLS), (n, tools)
+            tools = without_run_fs(tools)
+        assert a["tools"] == tools, (n, a["tools"], tools)
         assert len(a["messages"]) == len(b["messages"]), (
             n, [m.get("role") for m in a["messages"]], [m.get("role") for m in b["messages"]])
         for i, (ma, mb) in enumerate(zip(a["messages"], b["messages"])):

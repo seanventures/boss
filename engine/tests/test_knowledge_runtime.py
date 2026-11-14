@@ -73,7 +73,14 @@ def test_the_pull_request_and_the_agent_loop_call_the_knowledge_runtime():
     proposal = inspect.getsource(SoftwareFactoryService.propose_pull_request)
     assert "remember_written_files" in proposal
     assert "\"cited_fact_ids\": citations" in proposal   # a literal key: the decision-producer scan reads the dict
-    assert "quoted_pack_for_turn" in inspect.getsource(run_agent_loop)
+    # AP-P6: the agent loop reads its memory through the memory API, whose project namespace
+    # is the knowledge runtime's quoted pack.
+    from boss_engine.services import memory_api
+    from boss_engine.services.agent_loop import _with_memory
+
+    assert "_with_memory" in inspect.getsource(run_agent_loop)
+    assert "memory_api.read" in inspect.getsource(_with_memory)
+    assert "quoted_pack_for_turn" in inspect.getsource(memory_api.kg_pack)
     # Both loops (K4): the old one, and the kernel run's outcome.
     assert "attribute_shown_facts" in inspect.getsource(_drive_run_legacy)
     assert "attribute_shown_facts" in inspect.getsource(_kernel_outcome)

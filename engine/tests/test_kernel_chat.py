@@ -77,7 +77,7 @@ def one_turn(monkeypatch, script, *, flag: str, written=None, **chat_kw):
 def both(monkeypatch, script, **chat_kw):
     old_turn, old = one_turn(monkeypatch, script, flag="0", **chat_kw)
     new_turn, new = one_turn(monkeypatch, script, flag="1", **chat_kw)
-    same_requests(old, new)
+    same_requests(old, new, run_fs=True)  # D8: the kernel turn also has the run filesystem
     assert old_turn.reply == new_turn.reply
     assert old_turn.steps == new_turn.steps
     assert old_turn.exhausted == new_turn.exhausted
@@ -144,7 +144,7 @@ class TestChatConformance:
 
         old_turn, old = agent_with("0")
         new_turn, new = agent_with("1")
-        same_requests(old, new)
+        same_requests(old, new, run_fs=True)
         assert old_turn.reply == new_turn.reply == "I stopped retrying."
         nudge = new.requests[3]["messages"][-1]["content"]
         assert nudge.startswith("SYSTEM: `read_logs` has now failed 3 times")
@@ -161,7 +161,7 @@ class TestChatConformance:
             turn, engine = one_turn(monkeypatch, script, flag=flag, max_steps=8, budget=budget)
             turns.append((turn, engine))
         (old_turn, old), (new_turn, new) = turns
-        same_requests(old, new)
+        same_requests(old, new, run_fs=True)
         assert old_turn.reply == new_turn.reply
         assert old_turn.exhausted == new_turn.exhausted == "budget"
         assert "propose_action ONCE in this same message" in \
