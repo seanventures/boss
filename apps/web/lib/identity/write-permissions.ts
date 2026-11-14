@@ -169,6 +169,7 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/tickets.ts#rotateTicketWebhook": "integration:manage",     // POST /v1/ticket-systems/{id}/webhook
   "lib/tickets.ts#startTicketOauth": "connection:use_own",        // POST /v1/ticket-systems/{id}/oauth/start/load
   "lib/tickets.ts#disconnectTicketOauth": "connection:use_own",   // DELETE /v1/ticket-systems/{id}/oauth/me
+  "lib/tickets.ts#confirmTicketIdentity": "self",                 // POST /v1/me/ticket-identities/{id}/confirm (your own account)
   "lib/tickets.ts#importTickets": "work_tracker:write",           // POST /v1/projects/{id}/tickets/import
   "lib/tickets.ts#startFromTicket": ["work_tracker:write", "workflow_run:start"], // POST /v1/work-items/{id}/start-from-ticket
   "lib/tickets.ts#importAndStart": ["work_tracker:write", "workflow_run:start"],  // import, then start-from-ticket

@@ -193,6 +193,15 @@ export type WorkItem = {
   start: Accept | null; move: { href: string; method: string } | null;
   /** The onboarding row: its mini flow (Discover → Ready → Backlog), what waits on you, its drawer. */
   flow: { key: string; label: string; state: StepState }[]; waiting: { key: string; label: string }[]; onboarding: string;
+  /** The ticket it came from or works on (BOSSAPP-1047): the binding's provider, key, link,
+   *  status and sync state; null when it is no ticket's. */
+  ticket?: WorkTicket | null;
+  /** An imported ticket not started yet (`origin: "ticket_import"`): its work item, the epic's
+   *  work item it sits under, and the ticket's type (epic | story | task | bug | other). */
+  work_item_id?: string; parent_work_item_id?: string | null; ticket_type?: string;
+};
+export type WorkTicket = {
+  provider: string; key: string; url: string; status: string; status_category: string; sync_status: string; connection_id: string;
 };
 export type WorkIssue = { provider: string; number: number | null; label: string; kind: string; external_url: string };
 /** One attempt of a piece of work: the build, a retry, or a follow-up (§3 `attempts[]`). */
@@ -531,7 +540,16 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     flow: a(x.flow).map((f) => ({ key: s(o(f).key), label: s(o(f).label), state: oneOf(o(f).state, STEP_STATES, "todo") })),
     waiting: a(x.waiting).map((z) => ({ key: s(o(z).key), label: s(o(z).label) })).filter((z) => z.label),
     onboarding: s(l.onboarding),
+    ticket: parseWorkTicket(x.ticket),
+    ...(s(x.work_item_id) ? { work_item_id: s(x.work_item_id) } : {}),
+    ...(x.origin === "ticket_import" ? { parent_work_item_id: s(x.parent_work_item_id) || null, ticket_type: s(x.ticket_type, "other") } : {}),
   };
+};
+const parseWorkTicket = (v: unknown): WorkTicket | null => {
+  const x = o(v);
+  if (!s(x.key) && !s(x.url)) return null;
+  return { provider: s(x.provider), key: s(x.key), url: s(x.url), status: s(x.status), status_category: s(x.status_category),
+           sync_status: s(x.sync_status), connection_id: s(x.connection_id) };
 };
 /** The fields only some work carries (planned, from an issue, the onboarding row), empty. */
 export const WORK_EXTRA: Pick<WorkItem, "issue" | "origin" | "origin_label" | "next_up" | "lane" | "rank" | "where" | "start" | "move" | "flow" | "waiting" | "onboarding"> = {

@@ -249,8 +249,16 @@ describe("Account › Ticket accounts", () => {
   const MINE = { credential_id: "cc_1", project_id: P, provider: "jira", connection_id: "tc_1", display_name: "Jira", account: "param@gmail.com",
                  email: "param@gmail.com", email_matches: false, needs_confirmation: true, status: "active", linked_at: "2026-11-10T00:00:00Z" };
   function engine(identities: unknown[] = [MINE], connections: unknown[] = [CONNECTION, { ...CONNECTION, id: "tc_2", label: "Jira (Cards)" }]) {
+    let confirmed = false;
     return stubFetch((c) => {
-      if (c.path === "/v1/me/ticket-identities") return { body: { identities } };
+      // "It's mine" is the API's record: after the confirm, the read says so.
+      if (c.path === "/v1/me/ticket-identities/tc_1/confirm" && c.method === "POST") {
+        confirmed = true;
+        return { body: { identity: { ...MINE, confirmed_by_person: true, needs_confirmation: false } } };
+      }
+      if (c.path === "/v1/me/ticket-identities") {
+        return { body: { identities: confirmed ? identities.map((i) => ({ ...(i as object), confirmed_by_person: true, needs_confirmation: false })) : identities } };
+      }
       if (c.path === "/v1/ticket-systems") return { body: { connections } };
       if (c.path === "/v1/ticket-systems/catalog") return { body: { items: [{ provider: "jira", label: "Jira", auth_kinds: [{ kind: "api_token" }, { kind: "oauth2" }] }] } };
       if (c.path === "/v1/ticket-systems/tc_2/oauth/start/load") return { body: { authorize_url: "https://auth.atlassian.com/authorize?x=1" } };
@@ -274,11 +282,14 @@ describe("Account › Ticket accounts", () => {
 
     expect(tid("ticket-account-mismatch-cc_1")!.textContent).toContain("not your BOSS email");
     await click(tid("ticket-account-mine-cc_1"));
+    await settle();
+    expect(posts(calls)[1]).toMatchObject({ method: "POST", path: "/v1/me/ticket-identities/tc_1/confirm" });
     expect(tid("ticket-account-mismatch-cc_1")).toBeNull();
-    expect(window.localStorage.getItem("boss.ticketAccounts.confirmed")).toContain("cc_1");
+    // Never browser storage: the confirmation is the API's.
+    expect(Object.keys(window.localStorage)).toEqual([]);
 
     await click(tid("ticket-account-off-cc_1"));
-    expect(posts(calls)[1]).toMatchObject({ method: "DELETE", path: "/v1/ticket-systems/tc_1/oauth/me" });
+    expect(posts(calls)[2]).toMatchObject({ method: "DELETE", path: "/v1/ticket-systems/tc_1/oauth/me" });
     expect(tid("ticket-accounts-said")!.textContent).toContain("Disconnected");
   });
 

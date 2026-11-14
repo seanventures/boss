@@ -405,6 +405,31 @@ def _code_task_subject(db: Any, run_id: str) -> Optional[Subject]:
     return subject
 
 
+def ticket_of_code_task(db: Any, run_id: str) -> Optional[dict[str, Any]]:
+    """The ticket a build (code-task run) works on, for its cockpit's badge: the build's own
+    ``finalize_ctx.ticket``, its workflow run's ticket, or the binding whose ``metadata.run_ids``
+    names it. With the binding's sync state when there is one. None for a build not from a
+    ticket (BOSSAPP-1047 Phase C)."""
+    subject = _code_task_subject(db, run_id)
+    if subject is None or not subject.ticket:
+        return None
+    t = subject.ticket
+    binding = db.execute(text(
+        "SELECT b.sync_status, b.external_state, b.work_item_id FROM work_tracker_bindings b "
+        "WHERE b.project_id = :p AND ((:k <> '' AND b.external_key = :k) "
+        "OR (:w <> '' AND b.work_item_id = :w)) ORDER BY b.updated_at DESC LIMIT 1"),
+        {"p": subject.project_id, "k": str(t.get("key") or ""),
+         "w": str(subject.work_item_id or "")}).mappings().first()
+    from .ticket_intake import category_of_state
+
+    state = (binding or {}).get("external_state") or t.get("status")
+    return {"provider": t.get("provider"), "key": t.get("key"), "url": t.get("url"),
+            "connection_id": t.get("connection_id"), "status": state,
+            "status_category": category_of_state(state),
+            "sync_status": (binding or {}).get("sync_status"),
+            "work_item_id": subject.work_item_id or (binding or {}).get("work_item_id")}
+
+
 def resolve(db: Any, entity_type: str, entity_id: str,
             data: Optional[Mapping[str, Any]] = None) -> Optional[Subject]:
     """The ticket this event is about, or None (a run not started from a ticket)."""
@@ -1544,6 +1569,32 @@ def remember_identity(db: Any, project_id: str, connection_kit_id: str, person: 
         {"a": str(shown)[:300], "p": project_id, "c": connection_kit_id, "s": person})
 
 
+def confirm_identity(db: Any, person: str, connection_id: str) -> Optional[dict[str, Any]]:
+    """The person says the ticket-system account they signed in as is theirs (the console asks
+    when its email is not their verified BOSS email). Kept on their own credential row, naming
+    the account confirmed, with an audit event. ``email_matches`` stays false; the identity reads
+    ``confirmed_by_person: true``. None when the person has no sign-in on that connection."""
+    from .core import emit_event
+
+    row = db.execute(text(
+        "SELECT c.id, c.project_id, c.connected_as FROM connection_credentials c "
+        "JOIN work_tracker_providers p ON p.project_id = c.project_id "
+        "AND 'kit:tickets:' || p.provider_key = c.connection_id "
+        "WHERE p.id = :cid AND c.subject_kind = 'user' AND c.subject_id = :s "
+        "AND c.status = 'active'"), {"cid": connection_id, "s": person}).mappings().first()
+    if row is None:
+        return None
+    db.execute(text(
+        "UPDATE connection_credentials SET confirmed_as = connected_as, confirmed_at = now(), "
+        "updated_at = now() WHERE id = :id"), {"id": row["id"]})
+    emit_event(db, str(row["project_id"]), "ticket_identity.confirmed", person,
+               "connection_credential", str(row["id"]),
+               {"connection_id": connection_id, "account": row["connected_as"]})
+    mine = [i for i in my_identities(db, person, str(row["project_id"]))
+            if i["credential_id"] == row["id"]]
+    return mine[0] if mine else None
+
+
 def my_identities(db: Any, person: str, project_id: Optional[str] = None) -> list[dict[str, Any]]:
     """The person's linked ticket accounts, each with ``email_matches``: the provider's email
     equals the person's VERIFIED BOSS email (when they differ, the console asks them to confirm
@@ -1554,7 +1605,8 @@ def my_identities(db: Any, person: str, project_id: Optional[str] = None) -> lis
     verified = str(me["email"]) if me and me["email_verified_at"] is not None else ""
     rows = db.execute(text(
         "SELECT c.id, c.project_id, c.connection_id, c.connected_as, c.status, c.scopes, "
-        "c.created_at, c.updated_at, p.id AS ticket_connection_id, p.display_name "
+        "c.created_at, c.updated_at, c.confirmed_as, c.confirmed_at, "
+        "p.id AS ticket_connection_id, p.display_name "
         "FROM connection_credentials c LEFT JOIN work_tracker_providers p "
         "ON p.project_id = c.project_id AND 'kit:tickets:' || p.provider_key = c.connection_id "
         "WHERE c.subject_kind = 'user' AND c.subject_id = :s "
@@ -1565,12 +1617,16 @@ def my_identities(db: Any, person: str, project_id: Optional[str] = None) -> lis
         shown = str(row["connected_as"] or "")
         email = shown.lower() if "@" in shown else None
         matches = bool(email and verified and email == verified)
+        # A person's own word that the account is theirs, for the account shown NOW only.
+        confirmed = bool(shown and row["confirmed_as"] and row["confirmed_as"] == shown)
         out.append({"credential_id": row["id"], "project_id": row["project_id"],
                     "provider": str(row["connection_id"]).rsplit(":", 1)[-1],
                     "connection_id": row["ticket_connection_id"],
                     "display_name": row["display_name"], "account": shown or None,
                     "email": email, "email_matches": matches,
-                    "needs_confirmation": not matches, "status": row["status"],
+                    "confirmed_by_person": confirmed, "confirmed_at": _iso(row["confirmed_at"])
+                    if confirmed else None,
+                    "needs_confirmation": not matches and not confirmed, "status": row["status"],
                     "scopes": list(row["scopes"] or []), "linked_at": _iso(row["created_at"]),
                     "updated_at": _iso(row["updated_at"])})
     return out
@@ -1579,7 +1635,7 @@ def my_identities(db: Any, person: str, project_id: Optional[str] = None) -> lis
 __all__ = [
     "ACTION_EFFECTS", "CHANGED_ACTION", "EVENT_ACTIONS", "HOOKED_EVENTS", "PICKUP_ACTION",
     "Subject", "TicketSyncError", "apply_answers", "binding_for", "check_ticket_changed",
-    "comment_for", "ingest_webhook", "my_identities", "notify", "on_card_answered", "on_event",
+    "comment_for", "confirm_identity", "ticket_of_code_task", "ingest_webhook", "my_identities", "notify", "on_card_answered", "on_event",
     "open_connection",
     "pickup", "poll_connection", "provider_identity", "provider_row", "record_effect",
     "remember_identity", "resolve", "retry_failed", "run_job", "snapshot", "start", "sweep",

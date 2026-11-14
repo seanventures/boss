@@ -97,7 +97,8 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const [view, setView] = useState<"list" | "board" | "tree" | "mine">("list");
   // The row a Start just made (the New work modal's): it slides in (150 ms) once the list has it.
   const fresh = ctx.freshWork ?? "";
-  const raw = ctx.work?.items ?? [];
+  // Imported tickets not started yet are drawn once, as T9's "Ready to start" cards (ticket-work).
+  const raw = useMemo(() => (ctx.work?.items ?? []).filter((w) => w.origin !== "ticket_import"), [ctx.work]);
   // DRAG TO RE-RANK (05-23): the order a person just set shows at once; a refusal puts it back.
   const [order, setOrder] = useState<string[] | null>(null);
   const [rankSaid, setRankSaid] = useState<{ text: string; tone?: "red" | "green" }>({ text: "" });

@@ -826,7 +826,8 @@ def _build_items(connection: Connection, project_id: str,
 _REC_WORK_KIND = {"hardening": "bug", "design_fix": "bug", "refactor": "chore", "cost": "chore",
                   "process": "chore", "test_gap": "chore"}
 #: The tile and tag a planned row shows for where it came from (05-19..05-22).
-ORIGIN_TAGS = {"ci": "CI", "bug": "Bug", "ticket": "Ticket", "roadmap": "from Roadmap"}
+ORIGIN_TAGS = {"ci": "CI", "bug": "Bug", "ticket": "Ticket", "roadmap": "from Roadmap",
+               "ticket_import": "Ticket"}
 
 
 def _planned_items(connection: Connection, project_id: str, now: datetime,
@@ -884,6 +885,69 @@ def _planned_items(connection: Connection, project_id: str, now: datetime,
         out[0]["next_up"] = True
         out[0]["agents"] = [planner] if planner else []
     return out
+
+
+def _ticket_ready_items(connection: Connection, project_id: str, now: datetime,
+                        tickets: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """IMPORTED TICKETS NOT STARTED YET (BOSSAPP-1047 T9): work items an import made (status
+    ``todo``, a ticket binding) that no workflow run or build has picked up. Each is a planned
+    row with ``origin: "ticket_import"`` and its ``ticket``; an epic's tickets name the epic's
+    work item in ``parent_work_item_id`` so the Work tab draws them on the epic's card. The
+    import never makes a second item for a ticket (ticket_intake._binding_for), so a re-import
+    adds no row here either."""
+    if not tickets:
+        return []
+    rows = connection.execute(text(
+        "SELECT w.id, w.title, w.parent_id, w.human_key, w.created_at, w.updated_at "
+        "FROM work_items w WHERE w.project_id = :p AND w.status = 'todo' AND w.id = ANY(:ids) "
+        "AND NOT EXISTS (SELECT 1 FROM workflow_runs r WHERE r.work_item_id = w.id) "
+        "AND NOT EXISTS (SELECT 1 FROM code_task_runs c WHERE c.work_item_id = w.id) "
+        "ORDER BY w.created_at, w.id"),
+        {"p": project_id, "ids": [k for k in tickets if not k.startswith("run:")]}).mappings().all()
+    out = []
+    for r in rows:
+        t = dict(tickets[str(r["id"])])
+        if t.get("origin") not in (None, "import"):
+            continue                       # a binding a run made: that work shows as its run
+        kind = "bug" if t.get("type") == "bug" else "ticket"
+        title = str(r["title"] or t.get("key") or "")
+        out.append({
+            "id": str(r["id"]), "work_item_id": str(r["id"]),
+            "parent_work_item_id": r["parent_id"], "source": "ticket", "source_label": "Ticket",
+            "origin": "ticket_import", "origin_label": ORIGIN_TAGS["ticket_import"],
+            "label": short_title(title) or title, "title": title, "kind": kind, "state": "planned",
+            "status": "todo", "lane": "", "rank": None, "next_up": False, "where": None,
+            "age": age(r["created_at"], now), "created_at": iso(r["created_at"]),
+            "updated_at": iso(r["updated_at"]),
+            "stages": [{"key": k, "label": letter, "name": STATION_LABELS[k], "state": "todo"}
+                       for k, letter, _ in STATIONS],
+            "agents": [], "cost_usd": 0.0,
+            "links": {"workflow_run": None, "build": None, "pr": None, "deploy": None,
+                      "preview": None, "decision": None, "issue": None},
+            "decision_ids": [], "action_label": None, "attempts": [], "attempt_count": 0,
+            "followups": 0, "retries": 0, "stalled_since": None,
+            "last_attempt_at": iso(r["created_at"]), "detail": title,
+            "start": None, "move": None, "href": None,
+            "ticket_type": t.get("type") or "other",
+            "ticket": {k: t.get(k) for k in TICKET_FIELDS},
+        })
+    return out
+
+
+#: What a row says about the ticket it came from (the Work tab's chip, T9's cards).
+TICKET_FIELDS = ("provider", "key", "url", "status", "status_category", "sync_status",
+                 "connection_id")
+
+
+def _with_tickets(found: list[dict[str, Any]], tickets: Mapping[str, Mapping[str, Any]]) -> None:
+    """Every row gets ``ticket`` (or None): a run row by the binding that names the run, any
+    row that carries a work item by that item's binding."""
+    for w in found:
+        if w.get("ticket") is not None:
+            continue
+        hit = tickets.get(f"run:{w.get('id')}") or (
+            tickets.get(str(w["work_item_id"])) if w.get("work_item_id") else None)
+        w["ticket"] = {k: hit.get(k) for k in TICKET_FIELDS} if hit else None
 
 
 #: The onboarding agent's run as a piece of work (05-27): its state in the shared enum.
@@ -1014,7 +1078,12 @@ def everything(connection: Connection, project_id: str, *, limit: int = 60,
     found.sort(key=lambda w: w.get("last_attempt_at") or w.get("created_at") or "", reverse=True)
     # Planned work keeps Marshal's rank (never re-sorted by date): the order a drag saves.
     planned = _planned_items(connection, project_id, now, moving=found)
-    out = found[:limit] + planned
+    from ..ticket_intake import tickets_by_item
+
+    tickets = tickets_by_item(connection, project_id)
+    ready = _ticket_ready_items(connection, project_id, now, tickets)
+    out = found[:limit] + planned + ready
+    _with_tickets(out, tickets)
     if is_local_project(connection, project_id):
         _in_local_words(out)
     return out

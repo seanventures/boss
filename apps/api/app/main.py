@@ -31595,6 +31595,11 @@ def code_task_cockpit_endpoint(run_id: str, request: Request, response: Response
             raise HTTPException(status_code=404, detail="code task not found")
         body = factory_view.cockpit(connection, settings, owner, run_id,
                                     viewer=_acts_viewer(viewer))
+        if body is not None:
+            # BOSSAPP-1047: the ticket this build works on (its badge), or None.
+            from boss_engine.services import ticket_sync
+
+            body = {**body, "ticket": ticket_sync.ticket_of_code_task(connection, run_id)}
     if body is None:
         raise HTTPException(status_code=404, detail="code task not found")
     return _etagged(request, response, jsonable_encoder(body))

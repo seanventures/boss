@@ -17,7 +17,7 @@ import {
   type Connection, type ExternalProject, type Read, type Ticket, type TicketType,
 } from "../../lib/tickets";
 import { ProviderMono, TkEmpty, TkReadState, TkTag } from "../tickets/ticket-parts";
-import { NoTicketSystem, browsable, closeImport, writeImported } from "./ticket-work";
+import { NoTicketSystem, browsable, closeImport } from "./ticket-work";
 import type { PxCtx } from "./project-page";
 import "../tickets/ticket-import.css";
 
@@ -119,8 +119,9 @@ function ImportBody({ ctx, conn, conns, crumb, onConn, label, project, pid }: {
     try {
       const r = await importTickets(pid, conn.id, picks.map((p) => ({ key: p.ticket.key, with_children: p.with_children })));
       if (!r.ok) { setErr(r.error ?? "Nothing was imported."); return; }
-      const done = parseImport(r.body);
-      writeImported(pid, { at: Date.now(), connection_id: conn.id, label, projects: picked ? [picked] : [], items: done.imported });
+      // The imported items come back on the work list itself (origin "ticket_import"), so the
+      // Work tab's Ready to start (T9) is drawn from the API, on any browser, after any reload.
+      parseImport(r.body);
       setSel({});
       closeImport();
       ctx.refreshWork();

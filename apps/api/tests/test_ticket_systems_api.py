@@ -274,6 +274,58 @@ def test_connect_browse_import_and_start_from_a_ticket(world, client, engine, pr
     assert by_engine["run"]["id"] in meta["run_ids"]
 
 
+def test_imported_tickets_show_on_the_work_list_with_their_ticket_once(world, client, engine,
+                                                                       project, jira,
+                                                                       monkeypatch):
+    """T9 from the API (Phase C): imported Ready items are work-list rows with origin
+    ticket_import and their ticket; a re-import adds none; a started one leaves the Ready set
+    and its run row carries the same ticket."""
+    from boss_engine.identity import grants
+
+    monkeypatch.setattr(grants, "repo_guard_active", lambda *a, **k: False)
+    with world.acting_as(world.ctx(world.owner)):
+        cid = _connect(client, project, jira).json()["connection"]["id"]
+
+        def ready() -> list[dict]:
+            got = client.get(f"/v1/projects/{project}/work")
+            assert got.status_code == 200, got.text
+            return [w for w in got.json()["items"] if w.get("origin") == "ticket_import"]
+
+        assert ready() == []
+        body = {"connection_id": cid, "items": [{"key": f"KAN-{D.EPIC}", "with_children": True}]}
+        got = client.post(f"/v1/projects/{project}/tickets/import", json=body).json()["imported"]
+        epic_item = got[0]["work_item_id"]
+        rows = ready()
+        assert sorted(r["work_item_id"] for r in rows) == sorted(i["work_item_id"] for i in got)
+        by_key = {r["ticket"]["key"]: r for r in rows}
+        assert set(by_key) == {i["key"] for i in got}
+        epic = by_key[f"KAN-{D.EPIC}"]
+        assert epic["state"] == "planned" and epic["ticket_type"] == "epic"
+        assert epic["parent_work_item_id"] is None
+        assert epic["ticket"]["provider"] == "jira" and epic["ticket"]["connection_id"] == cid
+        assert epic["ticket"]["url"] and epic["ticket"]["sync_status"] == "synced"
+        assert epic["ticket"]["status_category"] in ("todo", "doing", "review", "done")
+        story = by_key[f"KAN-{D.STORY}"]
+        assert story["parent_work_item_id"] == epic_item and story["ticket_type"] == "story"
+
+        # A RE-IMPORT DUPLICATES NOTHING: the same rows, no more.
+        again = client.post(f"/v1/projects/{project}/tickets/import", json=body)
+        assert again.json()["imported"] == []
+        assert sorted(r["id"] for r in ready()) == sorted(r["id"] for r in rows)
+
+        # STARTED: the story leaves the Ready set; its run row carries the ticket.
+        started = _until_started(
+            client, lambda b: client.post(f"/v1/work-items/{story['work_item_id']}"
+                                          "/start-from-ticket", json=b), {})
+        assert started.status_code == 200, started.text
+        run_id = started.json()["run"]["id"]
+        assert story["work_item_id"] not in {r["work_item_id"] for r in ready()}
+        items = client.get(f"/v1/projects/{project}/work").json()["items"]
+        run_row = next(w for w in items if w["id"] == run_id)
+        assert run_row["ticket"]["key"] == f"KAN-{D.STORY}"
+        assert all("ticket" in w for w in items)
+
+
 def test_the_runner_folds_the_ticket_into_meeting_and_build():
     """The meeting objective and the build instructions are built in one place each."""
     import inspect

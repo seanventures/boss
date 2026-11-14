@@ -316,4 +316,19 @@ def build_ticket_sync_router(
         with begin(engine) as db:
             return {"identities": ticket_sync.my_identities(db, person, project_id)}
 
+    @router.post("/v1/me/ticket-identities/{connection_id}/confirm")
+    @authenticated(self_only=True, people_only=True)
+    def confirm_my_ticket_identity(connection_id: str, request: Request) -> dict:
+        """"It's mine": you confirm the ticket-system account you signed in as is yours, though
+        its email is not your BOSS email. Kept on your own sign-in (for that account only) and
+        audited; `email_matches` stays false and `confirmed_by_person` becomes true."""
+        person = _person(request)
+        with begin(engine) as db:
+            found = ticket_sync.confirm_identity(db, person, connection_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail={
+                "error": "not_found",
+                "message": "You have no sign-in on that ticket system to confirm."})
+        return {"identity": found}
+
     return router

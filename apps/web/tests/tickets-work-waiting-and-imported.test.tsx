@@ -9,7 +9,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  ImportAction, ImportedSection, RowChipsProvider, RowTicket, WaitingSection, connectionForKey, ticketKeyOf, useRowChips, writeImported,
+  ImportAction, ImportedSection, RowChipsProvider, RowTicket, WaitingSection, connectionForKey, ticketKeyOf, useRowChips,
 } from "../app/projects/ticket-work";
 import type { PxCtx } from "../app/projects/project-page";
 import { parseConnection, type Connection } from "../lib/tickets";
@@ -113,45 +113,51 @@ describe("Waiting for BOSS", () => {
 });
 
 describe("row ticket chips", () => {
-  it("reads each ticket row's status and sync state, at most once per row", async () => {
-    const calls = stub((url) => (url.includes("/tickets/LEND-142")
-      ? json({ ticket: tk("LEND-142", "story", { status: "In Progress", url: "https://j/LEND-142", in_boss: { work_item_id: "wi", sync_status: "synced" } }) }) : null));
-    const items = [{ id: "run_1", label: "LEND-142 Second reviewer", state: "running" }, { id: "run_2", label: "Plain work", state: "running" }] as WorkItem[];
+  it("come from the work list's own ticket field: no ticket read per row", async () => {
+    const calls = stub(() => null);
+    const items = [
+      { id: "run_1", label: "LEND-142 Second reviewer", state: "running",
+        ticket: { provider: "jira", key: "LEND-142", url: "https://j/LEND-142", status: "In Progress", status_category: "doing", sync_status: "synced", connection_id: "wtp_1" } },
+      { id: "run_3", label: "LEND-150 Broken write", state: "running",
+        ticket: { provider: "jira", key: "LEND-150", url: "", status: "To Do", status_category: "todo", sync_status: "failed", connection_id: "wtp_1" } },
+      { id: "run_2", label: "Plain work", state: "running", ticket: null },
+    ] as WorkItem[];
     function Rows() {
       const chips = useRowChips(items, [CONN]);
       return <RowChipsProvider chips={chips}>{items.map((w) => <RowTicket key={w.id} w={w} />)}</RowChipsProvider>;
     }
     await mount(<Rows />);
     expect($('[data-testid="tk-row-chip-run_1"]')?.textContent).toContain("Jira: In Progress ✓");
+    expect($('[data-testid="tk-row-chip-run_1"]')?.getAttribute("href")).toBe("https://j/LEND-142");
+    expect($('[data-testid="tk-row-chip-run_3"]')?.textContent).toContain("write-back failed");
     expect($('[data-testid="tk-row-chip-run_2"]')).toBeNull();
-    expect(calls.filter((c) => c.url.includes("/tickets/"))).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
 });
 
-describe("Ready to start (after an import)", () => {
-  it("starts the epic as a major feature and a single on the workflow picked", async () => {
-    writeImported("p1", { at: 1, connection_id: "wtp_1", label: "Jira", projects: ["LEND"], items: [
-      { key: "LEND-120", work_item_id: "wi_e", parent_work_item_id: null },
-      { key: "LEND-142", work_item_id: "wi_c", parent_work_item_id: "wi_e" },
-      { key: "LEND-149", work_item_id: "wi_b", parent_work_item_id: null },
-    ] });
-    const calls = stub((url, method) => {
-      if (method === "GET") {
-        const key = /tickets\/([A-Z]+-\d+)/.exec(url)?.[1] ?? "";
-        return json({ ticket: tk(key, key === "LEND-120" ? "epic" : key === "LEND-149" ? "bug" : "story") });
-      }
-      return json({ run_id: "r" });
-    });
-    await mount(<ImportedSection ctx={ctx()} />);
-    expect($('[data-testid="tk-imported-banner"]')?.textContent).toContain("Imported 1 epic and 1 ticket from Jira LEND");
+const ready = (id: string, key: string, type: string, parent: string | null = null) => ({
+  id, work_item_id: id, parent_work_item_id: parent, origin: "ticket_import", ticket_type: type, state: "planned",
+  label: `${key} Title of ${key}`,
+  ticket: { provider: "jira", key, url: `https://j/${key}`, status: "To Do", status_category: "todo", sync_status: "synced", connection_id: "wtp_1" },
+}) as unknown as WorkItem;
+const withWork = (items: WorkItem[], refreshWork = vi.fn()) =>
+  ({ ...ctx(refreshWork), work: { items } } as unknown as PxCtx);
+
+describe("Ready to start (from the work list, origin ticket_import)", () => {
+  it("draws the epic with its tickets and the singles, and starts each on its workflow", async () => {
+    const calls = stub(() => json({ run_id: "r" }));
+    const refresh = vi.fn();
+    await mount(<ImportedSection ctx={withWork([ready("wi_e", "LEND-120", "epic"), ready("wi_c", "LEND-142", "story", "wi_e"), ready("wi_b", "LEND-149", "bug")], refresh)} />);
+    expect($('[data-testid="tk-imported-banner"]')?.textContent).toContain("1 epic and 1 ticket imported");
     expect($('[data-testid="tk-imported-LEND-120"]')?.textContent).toContain("LEND-142");
+    expect($('[data-testid="tk-imported-LEND-120"]')?.textContent).toContain("Title of LEND-142");
     expect($('[data-testid="tk-imported-LEND-142"]')).toBeNull();
     expect(($('[data-testid="tk-imported-wf-LEND-149"]') as HTMLSelectElement).value).toBe("fast_fix");
 
     click('[data-testid="tk-imported-start-LEND-120"]');
     await settle();
     expect(calls.find((c) => c.url === "/v1/work-items/wi_e/start-from-ticket")?.body).toEqual({ project_id: "p1", workflow_key: "major_feature" });
-    expect($('[data-testid="tk-imported-LEND-120"]')).toBeNull();
+    expect(refresh).toHaveBeenCalled();
 
     const pick = $('[data-testid="tk-imported-wf-LEND-149"]') as HTMLSelectElement;
     const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
@@ -161,16 +167,20 @@ describe("Ready to start (after an import)", () => {
     click('[data-testid="tk-imported-start-LEND-149"]');
     await settle();
     expect(calls.find((c) => c.url === "/v1/work-items/wi_b/start-from-ticket")?.body).toEqual({ project_id: "p1", workflow_key: "minor_feature" });
-    expect($('[data-testid="tk-imported"]')).toBeNull();
+    // Never browser storage: the cards are the API's rows.
+    expect(Object.keys(window.sessionStorage).filter((k) => k.includes("tickets"))).toEqual([]);
   });
 
-  it("Dismiss clears the cards", async () => {
-    writeImported("p1", { at: 1, connection_id: "wtp_1", label: "Jira", projects: [], items: [{ key: "LEND-9", work_item_id: "w9", parent_work_item_id: null }] });
-    stub(() => json({ ticket: tk("LEND-9", "task") }));
-    await mount(<ImportedSection ctx={ctx()} />);
-    expect($$('[data-testid^="tk-imported-start-"]')).toHaveLength(1);
-    click('[data-testid="tk-imported-dismiss"]');
-    await settle();
+  it("shows nothing without imported rows, and a refused start says why", async () => {
+    stub(() => null);
+    await mount(<ImportedSection ctx={withWork([])} />);
     expect($('[data-testid="tk-imported"]')).toBeNull();
+    unmount();
+    stub(() => json({ detail: { error: "conflict", message: "This work item did not come from a ticket." } }, 409));
+    await mount(<ImportedSection ctx={withWork([ready("wi_9", "LEND-9", "task")])} />);
+    expect($$('[data-testid^="tk-imported-start-"]')).toHaveLength(1);
+    click('[data-testid="tk-imported-start-LEND-9"]');
+    await settle();
+    expect($('[data-testid="tk-imported-said"]')?.textContent).toBe("This work item did not come from a ticket.");
   });
 });

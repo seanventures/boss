@@ -13997,3 +13997,8 @@ CREATE TABLE IF NOT EXISTS run_hold_members (
 CREATE INDEX IF NOT EXISTS idx_run_hold_members_member
   ON run_hold_members (member_kind, member_id);
 -- ================================ end BOSSAPP-w4-work-ux1 ==
+-- BOSSAPP-1047 Phase C: a person confirms that a ticket-system account whose email is not their
+-- BOSS email is theirs (POST /v1/me/ticket-identities/{connection_id}/confirm). The confirmation
+-- names the account it was given for; a sign-in as another account is not confirmed by it.
+ALTER TABLE connection_credentials ADD COLUMN IF NOT EXISTS confirmed_as TEXT;
+ALTER TABLE connection_credentials ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;

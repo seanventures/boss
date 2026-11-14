@@ -9,9 +9,11 @@
  *   POST   /v1/ticket-systems/{id}/oauth/start/load       {authorize_url}: the console opens it
  *   DELETE /v1/ticket-systems/{id}/oauth/me               disconnect (the vault item is shredded)
  *
- * An account whose email is not your verified BOSS email asks you to confirm it is yours. There is
- * no server-side "confirm" route yet: "It's mine" is remembered in this browser only (and the
- * amber line stays for the API's own `needs_confirmation`); "Not mine" disconnects it.
+ *   POST   /v1/me/ticket-identities/{id}/confirm          "It's mine" (kept by the API, audited)
+ *
+ * An account whose email is not your verified BOSS email asks you to confirm it is yours: "It's
+ * mine" is the API's record (`confirmed_by_person`, for that account only); "Not mine"
+ * disconnects it.
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { LinkSimple, Warning } from "@phosphor-icons/react";
@@ -19,20 +21,12 @@ import { LinkSimple, Warning } from "@phosphor-icons/react";
 import { GatedButton } from "../../components/gated";
 import { useIdentity } from "../../components/identity/identity-provider";
 import {
-  disconnectTicketOauth, readCatalog, readConnections, readIdentities, startTicketOauth,
+  confirmTicketIdentity, disconnectTicketOauth, readCatalog, readConnections, readIdentities, startTicketOauth,
   type CatalogItem, type Connection, type Identity, type Read,
 } from "../../lib/tickets";
 import { ProviderMono, TkEmpty, TkReadState } from "../tickets/ticket-parts";
 import { providerLabel } from "../projects/linked-ticket";
 import "../tickets/ticket-run.css";
-
-const ACK_KEY = "boss.ticketAccounts.confirmed";
-function acked(): string[] {
-  try { const v = JSON.parse(window.localStorage.getItem(ACK_KEY) || "[]"); return Array.isArray(v) ? v.map(String) : []; } catch { return []; }
-}
-function ack(id: string): void {
-  try { window.localStorage.setItem(ACK_KEY, JSON.stringify([...new Set([...acked(), id])])); } catch { /* private window */ }
-}
 
 function urlProject(): string | null {
   try { return new URLSearchParams(window.location.search).get("project_id"); } catch { return null; }
@@ -43,11 +37,10 @@ export function TicketAccounts({ projectId: given = null }: { projectId?: string
   const projectId = given ?? identity.projectId ?? urlProject();
   const [read, setRead] = useState<Read<Identity[]> | null>(null);
   const [connectable, setConnectable] = useState<Connection[]>([]);
-  const [confirmed, setConfirmed] = useState<string[]>([]);
   const [said, setSaid] = useState<{ text: string; tone?: "red" | "green" }>({ text: "" });
   const [busy, setBusy] = useState("");
   const load = useCallback(() => { void readIdentities().then(setRead); }, []);
-  useEffect(() => { load(); setConfirmed(acked()); }, [load]);
+  useEffect(() => { load(); }, [load]);
   useEffect(() => {
     if (!projectId) return;
     let live = true;
@@ -68,6 +61,14 @@ export function TicketAccounts({ projectId: given = null }: { projectId?: string
     if (!r.ok || !url) { setSaid({ text: r.error ?? "Atlassian did not give BOSS a sign-in page.", tone: "red" }); return; }
     try { window.open(url, "_blank", "noopener"); } catch { /* blocked: the line says what to do */ }
     setSaid({ text: `Finish signing in to ${c.label} in the new tab, then come back.`, tone: "green" });
+  };
+  const confirm = async (i: Identity) => {
+    if (!i.connection_id) return;
+    setBusy(`m:${i.credential_id}`); setSaid({ text: "" });
+    const r = await confirmTicketIdentity(i.connection_id);
+    setBusy("");
+    setSaid(r.ok ? { text: `Confirmed: ${i.account || "this account"} is yours.`, tone: "green" } : { text: r.error ?? "Not confirmed.", tone: "red" });
+    if (r.ok) load();
   };
   const disconnect = async (i: Identity) => {
     if (!i.connection_id) return;
@@ -90,7 +91,7 @@ export function TicketAccounts({ projectId: given = null }: { projectId?: string
         ) : (
           <ul className="tk-list">
             {mine.map((i) => {
-              const ask = i.needs_confirmation && !confirmed.includes(i.credential_id);
+              const ask = i.needs_confirmation && !i.confirmed_by_person;
               return (
                 <li key={i.credential_id} data-testid={`ticket-account-${i.credential_id}`}>
                   <ProviderMono provider={i.provider} size={26} />
@@ -103,8 +104,8 @@ export function TicketAccounts({ projectId: given = null }: { projectId?: string
                   {ask ? (
                     <span className="tk-amber" role="note" data-testid={`ticket-account-mismatch-${i.credential_id}`}>
                       <Warning size={13} aria-hidden /> This account&apos;s email is not your BOSS email. Is it yours?
-                      <button type="button" className="tk-linkbtn" data-testid={`ticket-account-mine-${i.credential_id}`}
-                              title="Remembered in this browser" onClick={() => { ack(i.credential_id); setConfirmed((c) => [...c, i.credential_id]); }}>It&apos;s mine</button>
+                      <button type="button" className="tk-linkbtn" data-testid={`ticket-account-mine-${i.credential_id}`} disabled={Boolean(busy) || !i.connection_id}
+                              title="BOSS records that this account is yours" onClick={() => void confirm(i)}>It&apos;s mine</button>
                       <GatedButton permission="connection:use_own" projectId={i.project_id} className="tk-linkbtn" disabled={Boolean(busy) || !i.connection_id}
                                    onClick={() => void disconnect(i)} data-testid={`ticket-account-notmine-${i.credential_id}`}>Not mine, disconnect</GatedButton>
                     </span>

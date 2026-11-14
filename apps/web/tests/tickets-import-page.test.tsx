@@ -9,7 +9,6 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TicketImportPage } from "../app/projects/ticket-import";
-import { readImported } from "../app/projects/ticket-work";
 import type { PxCtx } from "../app/projects/project-page";
 import { parseConnection, type Read, type Connection } from "../lib/tickets";
 import { $, $$, mount, settle, unmount } from "./_helpers/live-render";
@@ -104,7 +103,8 @@ describe("Import page", () => {
     expect(posts[0].url).toBe("/v1/projects/p1/tickets/import");
     expect(posts[0].body).toEqual({ connection_id: "wtp_1", items: [{ key: "LEND-120", with_children: true }, { key: "LEND-149", with_children: false }] });
     expect(new URLSearchParams(window.location.search).get("tickets")).toBeNull();
-    expect(readImported("p1")?.items.map((i) => i.key)).toEqual(["LEND-120", "LEND-142", "LEND-149"]);
+    // Nothing is kept in the browser: the Work tab re-reads the list, which carries the imports.
+    expect(Object.keys(window.sessionStorage).filter((k) => k.includes("tickets"))).toEqual([]);
     expect(refresh).toHaveBeenCalled();
   });
 

@@ -70,6 +70,8 @@ export type SyncTimeline = {
 export type Identity = {
   credential_id: string; project_id: string; provider: string; connection_id: string; display_name: string;
   account: string; email: string; email_matches: boolean; needs_confirmation: boolean; status: string; linked_at: string;
+  /** The person said this account is theirs (POST …/confirm), for the account shown now. */
+  confirmed_by_person: boolean;
 };
 export type WebhookSecret = { url: string; secret: string; last4: string; rotated: boolean; note: string };
 
@@ -172,7 +174,8 @@ export const parseIdentities = (v: unknown): Identity[] => a(o(v).identities).ma
   const y = o(i);
   return { credential_id: s(y.credential_id), project_id: s(y.project_id), provider: s(y.provider), connection_id: s(y.connection_id),
            display_name: s(y.display_name), account: s(y.account), email: s(y.email), email_matches: y.email_matches === true,
-           needs_confirmation: y.needs_confirmation === true, status: s(y.status), linked_at: s(y.linked_at) };
+           needs_confirmation: y.needs_confirmation === true, status: s(y.status), linked_at: s(y.linked_at),
+           confirmed_by_person: y.confirmed_by_person === true };
 });
 
 // ── words ────────────────────────────────────────────────────────────────────────────────────
@@ -314,6 +317,10 @@ export const rotateTicketWebhook = (id: string): Promise<WriteResult> => obsWrit
 /** "Connect with Atlassian": the POST twin answers {authorize_url} for a tab the console opens. */
 export const startTicketOauth = (id: string): Promise<WriteResult> => obsWrite(`${conn(id)}/oauth/start/load`, {}, press(`${id}:oauth`, "Connect with Atlassian"));
 export const disconnectTicketOauth = (id: string): Promise<WriteResult> => obsWrite(`${conn(id)}/oauth/me`, {}, press(`${id}:oauth-off`, "Disconnect"), "DELETE");
+/** "It's mine": you confirm the ticket account you signed in as is yours (its email is not your
+ *  BOSS email). Kept by the API on your own sign-in, audited; yours only. */
+export const confirmTicketIdentity = (connectionId: string): Promise<WriteResult> =>
+  obsWrite(`/v1/me/ticket-identities/${enc(connectionId)}/confirm`, {}, press(`confirm:${connectionId}`, "It's mine"));
 export const importTickets = (projectId: string, connectionId: string, items: { key: string; with_children?: boolean }[]): Promise<WriteResult> =>
   obsWrite(`/v1/projects/${enc(projectId)}/tickets/import`, { connection_id: connectionId, items: items.map((i) => ({ key: i.key, with_children: Boolean(i.with_children) })) },
            press(`import:${projectId}`, "Import to Work"));

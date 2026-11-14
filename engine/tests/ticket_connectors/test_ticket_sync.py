@@ -344,6 +344,24 @@ def test_a_run_not_started_from_a_ticket_is_left_alone(eng, fake, world):
         {"synced": False, "reason": "not a ticket run"}
 
 
+def test_a_builds_cockpit_names_its_ticket(eng, fake, world):
+    """Phase C: the cockpit's ticket badge. A build carrying its own ticket, a build inside a
+    ticket's workflow run, and a build from nothing (None)."""
+    snap = _snapshot(eng, world)
+    own = _code_task(eng, world, ticket=snap)
+    inside = _code_task(eng, world, workflow_run_id=_workflow_run(eng, world, snap))
+    plain = _code_task(eng, world)
+    with eng.connect() as c:
+        mine = ticket_sync.ticket_of_code_task(c, own)
+        via = ticket_sync.ticket_of_code_task(c, inside)
+        nothing = ticket_sync.ticket_of_code_task(c, plain)
+    for got in (mine, via):
+        assert got["key"] == STORY and got["provider"] == "jira"
+        assert got["connection_id"] == world["conn_id"] and got["url"]
+        assert got["status_category"] in ("todo", "doing", "review", "done")
+    assert nothing is None
+
+
 def test_the_hook_writes_after_the_transaction_commits_and_never_for_a_rollback(
         eng, fake, world, monkeypatch):
     from boss_engine.services.core import emit_event
@@ -660,3 +678,16 @@ def test_sync_settings_read_both_vocabularies():
         "write_back": {"link_pr": False}, "status_map": {"done": "Shipped"}})})
     assert new["write_back"] == {"comment": True, "transition": True, "link_pr": False}
     assert new["status_map"]["done"] == "Shipped" and new["inbound"]["mode"] == "poll"
+
+
+def test_a_stored_status_name_reads_as_its_category():
+    """The work list's chip (Phase C): the connection's own status names first, then the common
+    words; nothing stored is None."""
+    from boss_engine.services.ticket_intake import category_of_state
+
+    assert category_of_state("Building", {"doing": "Building"}) == "doing"
+    assert category_of_state("In Progress") == "doing"
+    assert category_of_state("In Review") == "review"
+    assert category_of_state("Done") == "done" and category_of_state("closed") == "done"
+    assert category_of_state("To Do") == "todo" and category_of_state("Backlog") == "todo"
+    assert category_of_state("") is None and category_of_state(None) is None

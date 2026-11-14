@@ -4,9 +4,9 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 2123,
+  "operation_count": 2124,
   "counts": {
-    "api_policy_gated": 1819,
+    "api_policy_gated": 1820,
     "excluded": 121,
     "human_confirmation_gated": 73,
     "operator_only_unavailable": 110
@@ -23015,6 +23015,24 @@
       "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/me/ticket-identities/{connection_id}/confirm",
+      "alias": "post_v1_me_ticket_identities_connection_id_confirm_68c930a7",
+      "domain": "other",
+      "summary": "Confirm My Ticket Identity",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
     },
     {
       "method": "GET",

@@ -13,12 +13,12 @@
  * The import page itself (T8) is ticket-import.tsx, shown by the Work tab while `tickets=import`.
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { ArrowRight, DownloadSimple, Kanban, X } from "@phosphor-icons/react";
+import { ArrowRight, DownloadSimple, Kanban } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
 import { writePxUrl, type WorkItem } from "../../lib/project-experience";
 import {
-  TYPE_WORDS, codeWords, importAndStart, readConnections, readTicket, readWaiting, startFromTicket, syncWords, workflowFor, workflowWords,
+  TYPE_WORDS, codeWords, importAndStart, readConnections, readWaiting, startFromTicket, syncWords, workflowFor, workflowWords,
   type Connection, type Read, type Ticket, type TypedError,
 } from "../../lib/tickets";
 import { ProviderMono, TicketChip, TkEmpty, TkReadState, TkTag, WorkflowPick } from "../tickets/ticket-parts";
@@ -77,36 +77,22 @@ export type RowChip = { provider: string; key: string; url: string; sync: string
 const ChipsCtx = createContext<Record<string, RowChip>>({});
 const ROW_LIMIT = 12;
 
-/** Reads, for at most 12 rows in view (running, needs you, planned) named after a ticket, the
- *  ticket's status and the binding's sync state: one read per row, lazily. */
+/** Each row's ticket chip, from the work list itself: the API hangs the binding on every row it
+ *  knows as `ticket` (provider, key, link, status, sync state), so no row costs a ticket read. */
 export function useRowChips(items: WorkItem[], cs: Connection[]): Record<string, RowChip> {
-  const wanted = useMemo(() => items
-    .filter((w) => w.state === "running" || w.state === "needs_you" || w.state === "planned" || w.state === "stalled")
-    .map((w) => ({ id: w.id, key: ticketKeyOf(w.label) }))
-    .filter((x) => x.key)
-    .map((x) => ({ ...x, conn: connectionForKey(x.key, cs) }))
-    .filter((x): x is { id: string; key: string; conn: Connection } => Boolean(x.conn))
-    .slice(0, ROW_LIMIT), [items, cs]);
-  const sig = wanted.map((x) => `${x.id}:${x.key}`).join(",");
-  const [chips, setChips] = useState<Record<string, RowChip>>({});
-  useEffect(() => {
-    let live = true;
-    for (const x of wanted) {
-      void readTicket(x.conn.id, x.key).then((r) => {
-        if (!live) return;
-        const chip: RowChip = r.ok
-          ? { provider: x.conn.provider, key: x.key, url: r.data.url,
-              sync: syncWords(x.conn.label, r.data.status, r.data.in_boss?.sync_status ?? ""),
-              tone: r.data.in_boss?.sync_status === "failed" ? "red" : r.data.in_boss?.sync_status === "paused" ? "amber" : "green" }
-          : { provider: x.conn.provider, key: x.key, url: "", sync: `${x.conn.label}: not read`, tone: "amber" };
-        setChips((c) => ({ ...c, [x.id]: chip }));
-      });
+  return useMemo(() => {
+    const out: Record<string, RowChip> = {};
+    for (const w of items) {
+      const t = w.ticket;
+      if (!t || w.origin === "ticket_import") continue;
+      const label = cs.find((c) => c.id === t.connection_id)?.label ?? providerWords(t.provider);
+      out[w.id] = { provider: t.provider, key: t.key, url: t.url, sync: syncWords(label, t.status, t.sync_status),
+                    tone: t.sync_status === "failed" ? "red" : t.sync_status === "paused" ? "amber" : "green" };
     }
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig]);
-  return chips;
+    return out;
+  }, [items, cs]);
 }
+const providerWords = (p: string) => (p === "github_issues" ? "GitHub" : p === "azure_devops" ? "Azure DevOps" : p ? p[0].toUpperCase() + p.slice(1) : "Ticket");
 
 export function RowChipsProvider({ chips, children }: { chips: Record<string, RowChip>; children: React.ReactNode }) {
   return <ChipsCtx.Provider value={chips}>{children}</ChipsCtx.Provider>;
@@ -193,65 +179,28 @@ export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[]
   );
 }
 
-// ── T9: what was just imported ─────────────────────────────────────────────────────────────────
-export type ImportedRecord = {
-  at: number; connection_id: string; label: string; projects: string[];
-  items: { key: string; work_item_id: string; parent_work_item_id: string | null }[];
+// ── T9: imported tickets, ready to start (from the work list: origin "ticket_import") ─────────
+/** "LEND-142 Second reviewer…" → "Second reviewer…" (the import titles an item "KEY title"). */
+const titleOf = (w: WorkItem) => {
+  const key = w.ticket?.key ?? "";
+  const t = w.label || "";
+  return key && t.startsWith(key) ? t.slice(key.length).trim() : t;
 };
-const STORE = (pid: string) => `boss.tickets.imported.${pid}`;
-export function readImported(pid: string): ImportedRecord | null {
-  try {
-    const raw = window.sessionStorage.getItem(STORE(pid));
-    if (!raw) return null;
-    const x = JSON.parse(raw) as ImportedRecord;
-    return x && Array.isArray(x.items) && x.items.length ? x : null;
-  } catch { return null; }
-}
-export function writeImported(pid: string, rec: ImportedRecord | null): void {
-  try {
-    if (!rec || !rec.items.length) window.sessionStorage.removeItem(STORE(pid));
-    else window.sessionStorage.setItem(STORE(pid), JSON.stringify(rec));
-  } catch { /* private window: the cards live as long as the page */ }
-  try { window.dispatchEvent(new Event("boss:tickets-imported")); } catch { /* non-browser */ }
-}
-
-const READ_LIMIT = 12;
+export const readyTickets = (items: WorkItem[]) => items.filter((w) => w.origin === "ticket_import" && w.work_item_id);
 
 export function ImportedSection({ ctx }: { ctx: PxCtx }) {
   const pid = ctx.projectId;
-  const [rec, setRec] = useState<ImportedRecord | null>(null);
-  const [info, setInfo] = useState<Record<string, Ticket | null>>({});
   const [busy, setBusy] = useState("");
   const [said, setSaid] = useState<{ text: string; tone: "red" | "green" } | null>(null);
   const [picks, setPicks] = useState<Record<string, string>>({});
   const startGate = useGate("workflow_run:start", pid);
-  useEffect(() => {
-    const read = () => setRec(readImported(pid));
-    read();
-    window.addEventListener("boss:tickets-imported", read);
-    return () => window.removeEventListener("boss:tickets-imported", read);
-  }, [pid]);
-  const sig = rec ? rec.items.map((i) => i.key).join(",") : "";
-  useEffect(() => {
-    if (!rec) return;
-    let live = true;
-    for (const it of rec.items.slice(0, READ_LIMIT)) {
-      void readTicket(rec.connection_id, it.key).then((r) => { if (live) setInfo((m) => ({ ...m, [it.key]: r.ok ? r.data : null })); });
-    }
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig]);
-  if (!rec) return null;
+  const rows = readyTickets(ctx.work?.items ?? []);
+  if (!rows.length) return said ? <p className={said.tone === "red" ? "tk-error" : "tk-ok"} role="status" data-testid="tk-imported-said">{said.text}</p> : null;
 
-  const byWi = new Map(rec.items.map((i) => [i.work_item_id, i]));
-  const epics = rec.items.filter((i) => info[i.key]?.type === "epic" || rec.items.some((c) => c.parent_work_item_id === i.work_item_id));
+  const ids = new Set(rows.map((w) => w.work_item_id));
+  const epics = rows.filter((w) => w.ticket_type === "epic" || rows.some((c) => c.parent_work_item_id === w.work_item_id));
   const epicIds = new Set(epics.map((e) => e.work_item_id));
-  const singles = rec.items.filter((i) => !epicIds.has(i.work_item_id) && !(i.parent_work_item_id && byWi.has(i.parent_work_item_id)));
-  const ready = epics.length + singles.length;
-  const drop = (ids: string[]) => {
-    const next = { ...rec, items: rec.items.filter((i) => !ids.includes(i.work_item_id) && !ids.includes(i.parent_work_item_id ?? "")) };
-    writeImported(pid, next.items.length ? next : null);
-  };
+  const singles = rows.filter((w) => !epicIds.has(w.work_item_id) && !(w.parent_work_item_id && ids.has(w.parent_work_item_id)));
   const start = async (workItemId: string, key: string, workflow: string) => {
     if (!startGate.allowed) return;
     setBusy(workItemId); setSaid(null);
@@ -260,51 +209,50 @@ export function ImportedSection({ ctx }: { ctx: PxCtx }) {
       if (!r.ok) { setSaid({ text: r.error ?? `${key} did not start.`, tone: "red" }); return; }
       const note = typeof (r.body as Record<string, unknown> | null)?.note === "string" ? ` ${(r.body as Record<string, string>).note}` : "";
       setSaid({ text: `Started ${key} as ${workflowWords(workflow).toLowerCase()}.${note}`, tone: "green" });
-      drop([workItemId]);
       ctx.refreshWork();
     } finally { setBusy(""); }
   };
   // "1 epic and 2 tickets": an epic's own tickets come with it, so they are not counted again (T9).
   const nEpics = epics.length, nTickets = singles.length;
   const head = [nEpics ? `${nEpics} epic${nEpics === 1 ? "" : "s"}` : "", nTickets ? `${nTickets} ticket${nTickets === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
-  const title = (k: string) => info[k]?.title ?? (k in info ? "" : "Reading…");
+  const keyOf = (w: WorkItem) => w.ticket?.key ?? w.label;
+  const type = (w: WorkItem) => ((w.ticket_type ?? "other") as keyof typeof TYPE_WORDS);
   return (
     <section className="tk-sec" data-testid="tk-imported" aria-labelledby="tk-ready-h">
-      <p className="tk-banner" role="status" data-testid="tk-imported-banner">
-        ✓ Imported {head} from {rec.label}{rec.projects.length ? ` ${rec.projects.join(", ")}` : ""}. Pick what to start.
-        <span className="tk-spacer" />
-        <button type="button" className="tk-linkbtn" onClick={() => writeImported(pid, null)} data-testid="tk-imported-dismiss" aria-label="Dismiss"><X size={12} aria-hidden /> Dismiss</button>
-      </p>
-      <h2 id="tk-ready-h" className="tk-h2">Ready to start · {ready}</h2>
+      <p className="tk-banner" role="status" data-testid="tk-imported-banner">✓ {head} imported from tickets. Pick what to start.</p>
+      <h2 id="tk-ready-h" className="tk-h2">Ready to start · {epics.length + singles.length}</h2>
       <div className="tk-cards">
         {epics.map((e) => {
-          const kids = rec.items.filter((c) => c.parent_work_item_id === e.work_item_id);
+          const kids = rows.filter((c) => c.parent_work_item_id === e.work_item_id);
+          const key = keyOf(e);
           return (
-            <article key={e.work_item_id} className="tk-icard" data-epic="" data-testid={`tk-imported-${e.key}`} aria-labelledby={`tk-e-${e.work_item_id}`}>
-              <div className="tk-row"><span className="tk-key">{e.key}</span><TkTag tone="violet">Epic</TkTag><span className="tk-spacer" /><TkTag tone="blue">Major feature</TkTag></div>
-              <h3 id={`tk-e-${e.work_item_id}`} className="tk-ititle" data-user-text>{title(e.key)}</h3>
-              {kids.length ? <ul className="tk-kids">{kids.map((k) => <li key={k.work_item_id}><b className="tk-mono-text">{k.key}</b> <span data-user-text>{title(k.key)}</span></li>)}</ul> : null}
-              <p className="tk-faint">Plan first: BOSS writes one plan for {kids.length ? `the ${kids.length} ticket${kids.length === 1 ? "" : "s"}` : "the epic"}, you approve, then one PR per ticket.</p>
-              <GatedButton permission="work_tracker:write" projectId={pid} className="tk-btn" data-kind="primary" data-testid={`tk-imported-start-${e.key}`}
+            <article key={e.id} className="tk-icard" data-epic="" data-testid={`tk-imported-${key}`} aria-labelledby={`tk-e-${e.id}`}>
+              <div className="tk-row">{e.ticket?.url ? <a className="tk-key" href={e.ticket.url} target="_blank" rel="noreferrer noopener">{key}</a> : <span className="tk-key">{key}</span>}
+                <TkTag tone="violet">Epic</TkTag><span className="tk-spacer" /><TkTag tone="blue">Major feature</TkTag></div>
+              <h3 id={`tk-e-${e.id}`} className="tk-ititle" data-user-text>{titleOf(e)}</h3>
+              {kids.length ? <ul className="tk-kids">{kids.map((k) => <li key={k.id}><b className="tk-mono-text">{keyOf(k)}</b> <span data-user-text>{titleOf(k)}</span></li>)}</ul> : null}
+              <p className="tk-faint" title="BOSS writes one plan for the epic's tickets, you approve it, then one pull request per ticket">Plan first, then one PR per ticket</p>
+              <GatedButton permission="work_tracker:write" projectId={pid} className="tk-btn" data-kind="primary" data-testid={`tk-imported-start-${key}`}
                            disabled={Boolean(busy) || !startGate.allowed} title={startGate.allowed ? undefined : startGate.reason}
-                           onClick={() => void start(e.work_item_id, e.key, "major_feature")}>
+                           onClick={() => void start(e.work_item_id!, key, "major_feature")}>
                 {busy === e.work_item_id ? "Starting…" : "Start major feature"}<ArrowRight size={12} aria-hidden /></GatedButton>
             </article>
           );
         })}
-        {singles.map((s) => {
-          const t = info[s.key];
-          const wf = picks[s.key] ?? workflowFor(t?.type ?? "other");
+        {singles.map((w) => {
+          const key = keyOf(w);
+          const wf = picks[w.id] ?? workflowFor(type(w));
           return (
-            <article key={s.work_item_id} className="tk-icard" data-testid={`tk-imported-${s.key}`}>
-              <div className="tk-row"><span className="tk-key">{s.key}</span>{t ? <TkTag tone={t.type === "bug" ? "red" : "blue"}>{TYPE_WORDS[t.type]}</TkTag> : null}</div>
-              <h3 className="tk-ititle" data-user-text>{title(s.key)}</h3>
+            <article key={w.id} className="tk-icard" data-testid={`tk-imported-${key}`}>
+              <div className="tk-row">{w.ticket?.url ? <a className="tk-key" href={w.ticket.url} target="_blank" rel="noreferrer noopener">{key}</a> : <span className="tk-key">{key}</span>}
+                <TkTag tone={type(w) === "bug" ? "red" : "blue"}>{TYPE_WORDS[type(w)] ?? "Ticket"}</TkTag></div>
+              <h3 className="tk-ititle" data-user-text>{titleOf(w)}</h3>
               <div className="tk-row">
-                <WorkflowPick value={wf} onChange={(v) => setPicks((p) => ({ ...p, [s.key]: v }))} testid={`tk-imported-wf-${s.key}`} />
+                <WorkflowPick value={wf} onChange={(v) => setPicks((p) => ({ ...p, [w.id]: v }))} testid={`tk-imported-wf-${key}`} />
                 <span className="tk-spacer" />
-                <GatedButton permission="work_tracker:write" projectId={pid} className="tk-btn" data-kind="primary" data-testid={`tk-imported-start-${s.key}`}
+                <GatedButton permission="work_tracker:write" projectId={pid} className="tk-btn" data-kind="primary" data-testid={`tk-imported-start-${key}`}
                              disabled={Boolean(busy) || !startGate.allowed} title={startGate.allowed ? undefined : startGate.reason}
-                             onClick={() => void start(s.work_item_id, s.key, wf)}>{busy === s.work_item_id ? "Starting…" : "Start"}</GatedButton>
+                             onClick={() => void start(w.work_item_id!, key, wf)}>{busy === w.work_item_id ? "Starting…" : "Start"}</GatedButton>
               </div>
             </article>
           );
