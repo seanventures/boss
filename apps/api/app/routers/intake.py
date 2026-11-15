@@ -117,6 +117,25 @@ def _fail(error: Exception):
     raise error
 
 
+def people_visible(request: Request, db: Any = None) -> bool:
+    """Does the caller hold user:read (the directory permission GET /v1/identity/users needs:
+    Owner, Admin, Auditor)? Asked without recording a denial: a missing one withholds the BOSS
+    person behind each chat link, it refuses nothing. No identity on the request: withheld."""
+    try:
+        from .. import identity_guard
+        from boss_engine.identity import authz
+        from boss_engine.identity.scope import ResolvedScope
+
+        ctx = identity_guard.request_auth(request)
+        if ctx is None:
+            return False
+        held = authz.effective_permissions(
+            ctx, ResolvedScope.org_level(ctx.principal.org_id), db=db).permissions
+        return "user:read" in held
+    except Exception:  # noqa: BLE001 — fail closed: the names stay withheld
+        return False
+
+
 def build_intake_router(*, engine, settings: Callable[[], Any],
                         require_write_actor: Callable[..., str],
                         require_reader: Callable[..., None]) -> APIRouter:
@@ -296,16 +315,19 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
 
     @router.get("/v1/intake/connections/{connection_id}/people")
     @permit(P.INTEGRATION_READ, scope=Scope.of("intake_connection", path="connection_id"))
-    def intake_connection_people(connection_id: str) -> dict:
-        """Who each chat user of this connection is in BOSS: linked (method, when, the person),
-        revoked in the last 30 days, and the chat users heard from who are not linked (guests
-        flagged); plus the SSO attestation. Never a link code."""
+    def intake_connection_people(connection_id: str, request: Request, limit: int = 200,
+                                 offset: int = 0) -> dict:
+        """Who each chat user of this connection is in BOSS: linked (method, when), revoked in
+        the last 30 days, and the chat users heard from who are not linked (guests flagged);
+        plus the SSO attestation. Never a link code. WHO the BOSS person is (name, email) is
+        directory data: only a caller holding user:read sees it (people_visible)."""
         with begin(engine) as db:
             project_id = _connection_project(db, connection_id)
             require_reader(db, project_id)
             try:
-                return event_intake.connection_people(db, project_id=project_id,
-                                                      connection_id=connection_id)
+                return event_intake.connection_people(
+                    db, project_id=project_id, connection_id=connection_id,
+                    reveal=people_visible(request, db), limit=limit, offset=offset)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 

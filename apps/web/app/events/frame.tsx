@@ -13,6 +13,8 @@ import { goEvents, type EvTab } from "./parts";
 
 export type EvShared = {
   projectId: string;
+  /** The signed-in member the console acts as (agent writes carry it). */
+  actor: string;
   conns: Read<Connection[]> | null;
   reloadConns: () => void;
   agents: Read<Agent[]> | null;
@@ -22,7 +24,7 @@ export type EvShared = {
   ev: string;
   kind: string;
 };
-export const EvCtx = createContext<EvShared>({ projectId: "", conns: null, reloadConns: () => {}, agents: null, dead: 0, conn: "", ev: "", kind: "" });
+export const EvCtx = createContext<EvShared>({ projectId: "", actor: "", conns: null, reloadConns: () => {}, agents: null, dead: 0, conn: "", ev: "", kind: "" });
 export const useEv = () => useContext(EvCtx);
 
 /** The connections a screen can pick from, and the one picked (the URL's, else the first chat one, else the first). */

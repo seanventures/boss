@@ -1702,20 +1702,34 @@ def _display_of(envelope: Any) -> str:
     return str((env.get("bossactor") or {}).get("display") or "")
 
 
-def connection_people(connection: Connection, *, project_id: str, connection_id: str) -> dict:
+#: At most this many chat users on one page of the People screen (`offset` pages on).
+PEOPLE_PAGE = 200
+PEOPLE_PAGE_MAX = 1000
+
+
+def connection_people(connection: Connection, *, project_id: str, connection_id: str,
+                      reveal: bool = False, limit: int = PEOPLE_PAGE, offset: int = 0) -> dict:
     """E7: who each chat user of this connection is in BOSS. Linked people (method code /
-    sso_email / aad_oid, when, the BOSS person), links revoked in the last 30 days, and the chat
-    users BOSS has heard from who are not linked (guests flagged: never auto-linked), with when a
-    link prompt last went to them. Plus the connection's SSO attestation. Never a link code."""
+    sso_email / aad_oid, when), links revoked in the last 30 days, and the chat users BOSS has
+    heard from who are not linked (guests flagged: never auto-linked), with when a link prompt
+    really went to them (the outbox's own `link_dm` row). Plus the connection's SSO attestation.
+    Never a link code.
+
+    WHO THE BOSS PERSON IS (name, email, principal) and the chat user's email are directory
+    data: only a caller holding `user:read` gets them (`reveal`); everyone else sees the link,
+    its method and when, with `person` withheld (`people_redacted: true`)."""
     row = get_connection(connection, connection_id, project_id=project_id)
     if row is None:
         raise IntakeServiceError("no such connection in this project.", status=404, code="not_found")
+    limit = max(1, min(int(limit or PEOPLE_PAGE), PEOPLE_PAGE_MAX))
+    offset = max(0, int(offset or 0))
     cfg = _json(row.get("config"), {}) or {}
     endpoint_id = row.get("chat_endpoint_id")
     counts = {"linked": 0, "not_linked": 0, "guests": 0, "revoked": 0}
     out: dict[str, Any] = {"connection_id": connection_id, "kind": row["kind"],
                            "endpoint_id": endpoint_id, "attestation": cfg.get(ATTESTATION_KEY),
-                           "people": [], "counts": counts}
+                           "people": [], "counts": counts, "people_redacted": not reveal,
+                           "limit": limit, "offset": offset, "next_offset": None}
     if not endpoint_id:
         return out
     links = connection.execute(text("""
@@ -1729,15 +1743,22 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
            AND (l.revoked_at IS NULL OR l.revoked_at > now() - make_interval(days => :d))
          ORDER BY l.revoked_at NULLS FIRST, l.verified_at DESC"""),
         {"e": endpoint_id, "d": REVOKED_SHOWN_DAYS}).mappings().all()
+    # The chat users heard from, newest first (idx_intake_events_connection_actor).
     last_seen = {str(r["actor_external_id"]): r for r in connection.execute(text("""
-        SELECT DISTINCT ON (actor_external_id) actor_external_id, envelope, received_at
-          FROM intake_events
-         WHERE connection_id = :c AND actor_kind = 'user' AND COALESCE(actor_external_id, '') <> ''
-         ORDER BY actor_external_id, received_at DESC"""), {"c": connection_id}).mappings().all()}
-    prompted = {str(r["actor_external_id"]): r["at"] for r in connection.execute(text("""
-        SELECT actor_external_id, max(received_at) AS at FROM intake_events
-         WHERE connection_id = :c AND status = 'refused' AND actor_external_id IS NOT NULL
-         GROUP BY actor_external_id"""), {"c": connection_id}).mappings().all()}
+        SELECT * FROM (
+          SELECT DISTINCT ON (actor_external_id) actor_external_id, envelope, received_at
+            FROM intake_events
+           WHERE connection_id = :c AND actor_kind = 'user' AND actor_external_id IS NOT NULL
+             AND actor_external_id <> ''
+           ORDER BY actor_external_id, received_at DESC) seen
+         ORDER BY received_at DESC LIMIT :n"""),
+        {"c": connection_id, "n": PEOPLE_PAGE_MAX * 5}).mappings().all()}
+    # A link prompt is the outbox's `link_dm:intake:<endpoint>:<user>:<hour>` row, nothing else
+    # (a refused event may have been refused for a budget, a grant, a stop).
+    prompted = {str(r["user_id"]): r["at"] for r in connection.execute(text("""
+        SELECT split_part(dedupe_key, ':', 4) AS user_id, max(created_at) AS at
+          FROM chat_outbox WHERE endpoint_id = :e AND dedupe_key LIKE :k
+         GROUP BY 1"""), {"e": endpoint_id, "k": f"link_dm:intake:{endpoint_id}:%"}).mappings().all()}
     listed: set[str] = set()
     people: list[dict] = []
     for r in links:
@@ -1753,7 +1774,7 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
             "state": state, "link_id": r["id"], "method": r["method"] or "code",
             "person": ({"principal_id": r["principal_id"], "name": r["person_name"] or "",
                         "email": r["person_email"] or r["external_email"] or ""}
-                       if r["principal_id"] else None),
+                       if r["principal_id"] and reveal else None),
             "linked_at": _iso(r["verified_at"]), "revoked_at": _iso(r["revoked_at"]),
             "last_seen_at": _iso(heard["received_at"]) if heard else None,
             "guest": False, "prompted_at": None})
@@ -1767,9 +1788,10 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
             "state": "guest" if guest else "not_linked", "link_id": None, "method": None,
             "person": None, "linked_at": None, "revoked_at": None,
             "last_seen_at": _iso(r["received_at"]), "guest": guest,
-            "prompted_at": _iso(prompted.get(uid))})
+            "prompted_at": None if guest else _iso(prompted.get(uid))})
         counts["guests" if guest else "not_linked"] += 1
-    out["people"] = people
+    out["people"] = people[offset:offset + limit]
+    out["next_offset"] = offset + limit if len(people) > offset + limit else None
     return out
 
 

@@ -365,6 +365,8 @@ export type Person = {
   person: { principal_id: string; name: string; email: string } | null; linked_at: string; revoked_at: string; last_seen_at: string; prompted_at: string;
 };
 export type People = { connection_id: string; kind: string; endpoint_id: string; attestation: Attestation | null; people: Person[];
+  /** The caller lacks user:read: who each linked person is was withheld by the API. */
+  people_redacted: boolean;
   counts: { linked: number; not_linked: number; guests: number; revoked: number } };
 export function parsePeople(v: unknown): People {
   const x = o(v);
@@ -372,6 +374,7 @@ export function parsePeople(v: unknown): People {
   const states: PersonState[] = ["linked", "not_linked", "guest", "revoked"];
   return {
     connection_id: s(x.connection_id), kind: s(x.kind), endpoint_id: s(x.endpoint_id), attestation: parseAttestation(x.attestation),
+    people_redacted: x.people_redacted === true,
     people: a(x.people).map((p) => {
       const y = o(p);
       const st = s(y.state) as PersonState;
@@ -451,20 +454,21 @@ export const createSlackEndpoint = (projectId: string, input: { name: string; ch
 export const replayEvents = (projectId: string, ids: string[], mode: "reprocess" | "force", reason = ""): Promise<WriteResult> =>
   obsWrite("/v1/intake/events/replay", { project_id: projectId, intake_event_ids: ids, mode, reason }, press(`replay:${mode}`, mode === "force" ? "Force run" : "Reprocess"));
 /** "Would match": a read-only dry run over the connection's last 50 events (integration:read). */
-export const previewMatch = (projectId: string, agentKey: string, connectionId: string, match: unknown): Promise<WriteResult> =>
-  obsWrite(`/v1/agents/${enc(agentKey || "any")}/triggers/preview-match`, { project_id: projectId, connection_id: connectionId, match, limit: 50 }, press("preview", "Would match"));
+export const previewMatch = (projectId: string, actor: string, agentKey: string, connectionId: string, match: unknown): Promise<WriteResult> =>
+  obsWrite(`/v1/agents/${enc(agentKey || "any")}/triggers/preview-match`, { project_id: projectId, actor, connection_id: connectionId, match, limit: 50 }, press("preview", "Would match"));
 export type RuleBody = {
   name: string; connection_id?: string; priority: number; identity_mode: string; config: R;
   limits: Record<string, number>; quiet_hours: Partial<QuietHours>;
 };
-export const createRule = (projectId: string, agentKey: string, environment: string, body: RuleBody): Promise<WriteResult> =>
-  obsWrite(`/v1/agents/${enc(agentKey)}/triggers`, { project_id: projectId, environment, kind: "intake", ...body }, press("rule:new", "Save rule"));
-export const updateRule = (projectId: string, ruleId: string, patch: Partial<RuleBody>): Promise<WriteResult> =>
-  obsWrite(`/v1/agent-triggers/${enc(ruleId)}`, { project_id: projectId, ...patch }, press(`rule:${ruleId}`, "Save rule"), "PATCH");
-export const setRulePaused = (projectId: string, ruleId: string, paused: boolean): Promise<WriteResult> =>
-  obsWrite(`/v1/agent-triggers/${enc(ruleId)}/${paused ? "pause" : "resume"}`, { project_id: projectId }, press(`rule:${ruleId}:on`, paused ? "Pause" : "Resume"));
-export const deleteRule = (projectId: string, ruleId: string): Promise<WriteResult> =>
-  obsWrite(`/v1/agent-triggers/${enc(ruleId)}?project_id=${enc(projectId)}`, {}, press(`rule:${ruleId}:rm`, "Remove"), "DELETE");
+// Agent writes carry the signed-in actor the page hands them (tests/agent-writes-carry-the-signed-in-actor).
+export const createRule = (projectId: string, actor: string, agentKey: string, environment: string, body: RuleBody): Promise<WriteResult> =>
+  obsWrite(`/v1/agents/${enc(agentKey)}/triggers`, { project_id: projectId, actor, environment, kind: "intake", ...body }, press("rule:new", "Save rule"));
+export const updateRule = (projectId: string, actor: string, ruleId: string, patch: Partial<RuleBody>): Promise<WriteResult> =>
+  obsWrite(`/v1/agent-triggers/${enc(ruleId)}`, { project_id: projectId, actor, ...patch }, press(`rule:${ruleId}`, "Save rule"), "PATCH");
+export const setRulePaused = (projectId: string, actor: string, ruleId: string, paused: boolean): Promise<WriteResult> =>
+  obsWrite(`/v1/agent-triggers/${enc(ruleId)}/${paused ? "pause" : "resume"}`, { project_id: projectId, actor }, press(`rule:${ruleId}:on`, paused ? "Pause" : "Resume"));
+export const deleteRule = (projectId: string, actor: string, ruleId: string): Promise<WriteResult> =>
+  obsWrite(`/v1/agent-triggers/${enc(ruleId)}?project_id=${enc(projectId)}${actor ? `&actor=${enc(actor)}` : ""}`, {}, press(`rule:${ruleId}:rm`, "Remove"), "DELETE");
 export const setRuleBudget = (projectId: string, ruleId: string, usdPerDay: number): Promise<WriteResult> =>
   obsWrite("/v1/budget-policies/scoped", { project_id: projectId, scope_type: "trigger", scope_id: ruleId,
     cap_usd_micros: Math.round(usdPerDay * 1_000_000), period: "day", hard_stop: true }, press(`budget:${ruleId}`, "Daily budget"));

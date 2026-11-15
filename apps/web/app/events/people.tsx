@@ -20,6 +20,7 @@ import { Chip, Empty, Face, ReadState, Said, SourceMark, goEvents, useRead } fro
 
 const FILTERS: { key: "all" | PersonState; word: string }[] = [
   { key: "all", word: "All" }, { key: "linked", word: "Linked" }, { key: "not_linked", word: "Not linked" }, { key: "guest", word: "Guests" },
+  { key: "revoked", word: "Revoked" },
 ];
 const METHOD_TIPS: Record<string, string> = {
   sso_email: "Matched by the sign-in provider's email on an attested workspace",
@@ -83,7 +84,7 @@ export function PeopleTab() {
                 : "People link with a one-time code the first time they talk to BOSS."}</span>
             </div>
             {att && admin.allowed ? <GatedButton permission="identity_provider:manage" projectId={projectId} className="ev-btn" data-size="sm" onClick={() => void attestOff()} data-testid="ev-att-off">Turn off</GatedButton> : null}
-            {!att && admin.allowed ? <button type="button" className="ev-btn" data-size="sm" onClick={() => goEvents({ events: "connect", kind: "slack" })} data-testid="ev-att-on">Turn on</button> : null}
+            {!att && admin.allowed && picked ? <button type="button" className="ev-btn" data-size="sm" onClick={() => goEvents({ events: "connect", kind: picked.kind })} data-testid="ev-att-on">Turn on</button> : null}
           </section>
           <div className="ev-tiles">
             <div className="ev-tile" data-tone="green"><span className="ev-tile-label">Linked</span><b className="ev-tile-num" data-testid="ev-count-linked">{data.counts.linked}</b></div>
@@ -107,6 +108,8 @@ export function PeopleTab() {
                     <span className="ev-row-main"><b>@{p.display || p.external_user_id}</b>{p.display ? <span className="ev-faint">{p.external_user_id}</span> : null}</span></span>
                   <span className="ev-person-boss ev-row-main">
                     {p.person ? <><b>{p.person.name || p.person.principal_id}</b><span className="ev-faint">{p.person.email}</span></>
+                      : (p.state === "linked" || p.state === "revoked") && data.people_redacted
+                        ? <span className="ev-faint" title="Who each person is needs “View people” (Owner, Admin or Auditor)" data-testid={`ev-person-hidden-${p.external_user_id}`}>A BOSS person · name hidden</span>
                       : p.state === "guest" ? <Chip tone="grey" tip="Guests and people from other companies can only link with a code, if an admin allows it">Guest · never auto-linked</Chip>
                       : <Chip tone="amber" tip="Their messages don't run an agent until they link">Not linked</Chip>}
                   </span>

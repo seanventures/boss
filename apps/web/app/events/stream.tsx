@@ -81,7 +81,7 @@ export function StreamTab() {
         {chips.map((c) => (
           <button key={c.status} type="button" className="ev-chip" data-tone={c.tone} title={c.tip} aria-pressed={status.includes(c.status)}
                   onClick={() => toggle(c.status)} data-testid={`ev-chip-${c.status}`}>
-            {c.word} · {(list?.counts[c.status] ?? 0).toLocaleString()}
+            {c.word} · {(list?.counts[c.status] ?? 0).toLocaleString("en-US")}
           </button>
         ))}
       </div>

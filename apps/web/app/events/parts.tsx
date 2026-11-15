@@ -63,7 +63,7 @@ export function SourceMark({ kind, size }: { kind: string; size?: "sm" }) {
 
 export function StatusChip({ status, count, testId }: { status: string; count?: number; testId?: string }) {
   const c = chipOf(status);
-  return <span className="ev-chip" data-tone={c.tone} title={c.tip} data-testid={testId}>{c.word}{count !== undefined ? ` · ${count.toLocaleString()}` : ""}</span>;
+  return <span className="ev-chip" data-tone={c.tone} title={c.tip} data-testid={testId}>{c.word}{count !== undefined ? ` · ${count.toLocaleString("en-US")}` : ""}</span>;
 }
 
 export function Chip({ tone, tip, children, testId }: { tone: string; tip?: string; children: ReactNode; testId?: string }) {

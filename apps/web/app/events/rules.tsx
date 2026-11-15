@@ -52,7 +52,7 @@ function editingOf(rule: Rule | null, chat: boolean, agents: Agent[], budget: nu
 function browserZone(): string { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } }
 
 export function RulesTab() {
-  const { projectId, conns, agents } = useEv();
+  const { projectId, actor, conns, agents } = useEv();
   const { list, picked } = useConnPick();
   const deploy = useGate("agent:deploy", projectId);
   const lifecycle = useGate("agent:lifecycle", projectId);
@@ -87,13 +87,13 @@ export function RulesTab() {
     if (!other) return;
     const a = other.priority === r.priority ? r.priority + dir : other.priority;
     const b = r.priority;
-    const one = await updateRule(projectId, r.id, { priority: Math.max(0, a) });
-    const two = one.ok ? await updateRule(projectId, other.id, { priority: Math.max(0, b === a ? b - dir : b) }) : one;
+    const one = await updateRule(projectId, actor, r.id, { priority: Math.max(0, a) });
+    const two = one.ok ? await updateRule(projectId, actor, other.id, { priority: Math.max(0, b === a ? b - dir : b) }) : one;
     setSaid(one.ok && two.ok ? null : { text: (two.error || one.error) || "Not moved.", tone: "red" });
     rules.reload();
   };
   const flip = async (r: Rule) => {
-    const res = await setRulePaused(projectId, r.id, r.on);
+    const res = await setRulePaused(projectId, actor, r.id, r.on);
     setSaid(res.ok ? { text: `${r.name || "The rule"} is ${r.on ? "off" : "on"}.`, tone: "green" } : { text: res.error || "Not changed.", tone: "red" });
     rules.reload();
   };
@@ -143,7 +143,7 @@ export function RulesTab() {
                         {!r.match_ok ? <Chip tone="red" tip={r.match_error}>Filter broken</Chip> : null}</span>
                     </button>
                     <button type="button" role="switch" className="ev-switch" aria-checked={r.on} aria-label={r.name || words} data-testid={`ev-rule-switch-${r.id}`}
-                            {...lifecycle.props} onClick={lifecycle.guard(() => void flip(r))} title={lifecycle.allowed ? (r.paused_reason || (r.on ? "On" : "Off")) : lifecycle.reason} />
+                            title={r.paused_reason || (r.on ? "On" : "Off")} {...lifecycle.props} onClick={lifecycle.guard(() => void flip(r))} />
                   </div>
                 );
               })}
@@ -153,7 +153,7 @@ export function RulesTab() {
             <RuleEditor key={editing.rule?.id || "new"} start={editing} conn={picked} chat={chat} agents={agentList} rules={items}
                         eventTypes={source?.event_types ?? []} canEdit={deploy.allowed} budgetId={editing.rule ? budgetOf(editing.rule.id)?.id || "" : ""}
                         said={said}
-                        onSaved={(words, rule, budget) => { setSaid({ text: words, tone: "green" }); rules.reload(); budgets.reload(); if (rule) setEditing(editingOf(rule, chat, agentList, budget)); }}
+                        onSaved={(words, rule, budget, partly) => { setSaid({ text: words, tone: partly ? "red" : "green" }); rules.reload(); budgets.reload(); if (rule) setEditing(editingOf(rule, chat, agentList, budget)); }}
                         onRemoved={(words) => { setSaid({ text: words, tone: "green" }); setEditing(null); rules.reload(); }}
                         onError={(t) => setSaid({ text: t, tone: "red" })} />
           ) : <aside className="ev-card ev-faint">Open a rule, or press New rule.</aside>}
@@ -167,9 +167,9 @@ function SourceMarkIcon() { return <ShieldCheck size={30} aria-hidden />; }
 function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, budgetId, said, onSaved, onRemoved, onError }: {
   start: Editing; conn: Connection; chat: boolean; agents: Agent[]; rules: Rule[]; eventTypes: string[]; canEdit: boolean; budgetId: string;
   said: { text: string; tone: "green" | "red" | "amber" } | null;
-  onSaved: (words: string, rule: Rule | null, budget: number | null) => void; onRemoved: (words: string) => void; onError: (t: string) => void;
+  onSaved: (words: string, rule: Rule | null, budget: number | null, partly: boolean) => void; onRemoved: (words: string) => void; onError: (t: string) => void;
 }) {
-  const { projectId } = useEv();
+  const { projectId, actor } = useEv();
   const preview = useGate("integration:read", projectId);
   const budgetGate = useGate("budget:manage", projectId);
   const [e, setE] = useState<Editing>(start);
@@ -197,7 +197,7 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
     if (!preview.allowed || jsonError) return;
     const n = ++seq.current;
     const t = window.setTimeout(() => {
-      void previewMatch(projectId, e.agent || agents[0]?.key || "", conn.id, match).then((r) => {
+      void previewMatch(projectId, actor, e.agent || agents[0]?.key || "", conn.id, match).then((r) => {
         if (n !== seq.current) return;
         setShown(r.ok ? parsePreview(r.body) : { ok: false, error: r.error || "The preview failed.", matched: 0, considered: 0, events: [] });
       });
@@ -226,28 +226,35 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
       identity_mode: e.identity, config, limits,
       quiet_hours: e.quiet === "answer" ? {} : { start: e.qStart, end: e.qEnd, timezone: e.qTz, mode: e.quiet },
     };
-    const r = rule ? await updateRule(projectId, rule.id, body) : await createRule(projectId, e.agent, envOf(agent), { ...body, connection_id: conn.id });
+    const r = rule ? await updateRule(projectId, actor, rule.id, body) : await createRule(projectId, actor, e.agent, envOf(agent), { ...body, connection_id: conn.id });
     if (!r.ok) { setBusy(false); setError(r.error || "Not saved."); return; }
     const saved = parseRule(r.body);
     const id = saved.id || rule?.id || "";
+    // Every step after the rule itself says when it failed: the rule is saved, the rest is not.
+    const problems: string[] = [];
     if (!rule && e.triage && id) {
       // Triage may pick this rule too: its own id exists only now.
-      await updateRule(projectId, id, { config: { ...config, triage: { ...(config.triage as Record<string, unknown>), candidates: [id, ...others, "none"] } } });
+      const t = await updateRule(projectId, actor, id, { config: { ...config, triage: { ...(config.triage as Record<string, unknown>), candidates: [id, ...others, "none"] } } });
+      if (!t.ok) problems.push(`triage cannot pick this rule yet (${t.error || "not saved"})`);
     }
     const want = Number(e.budget);
+    let budget: number | null = start.budget.trim() ? Number(start.budget) : null;    // what is stored now
     if (budgetGate.allowed && id) {
       if (e.budget.trim() && want > 0) {
         const b = await setRuleBudget(projectId, id, want);
-        if (!b.ok) onError(`Saved, but the budget was not: ${b.error}`);
-      } else if (!e.budget.trim() && budgetId) await removeRuleBudget(projectId, budgetId);
+        if (b.ok) budget = want; else problems.push(`the daily budget was not set (${b.error || "refused"})`);
+      } else if (!e.budget.trim() && budgetId) {
+        const b = await removeRuleBudget(projectId, budgetId);
+        if (b.ok) budget = null; else problems.push(`the daily budget was not removed (${b.error || "refused"})`);
+      }
     }
     setBusy(false);
-    onSaved(`${body.name} saved${rule ? "" : ` as rule ${index}`}.`, saved.id ? saved : null, e.budget.trim() && want > 0 ? want : null);
+    onSaved(`${body.name} saved${rule ? "" : ` as rule ${index}`}${problems.length ? `, but ${problems.join("; ")}` : ""}.`, saved.id ? saved : null, budget, problems.length > 0);
   };
   const remove = async () => {
     if (!rule) return;
     setConfirm(false);
-    const r = await deleteRule(projectId, rule.id);
+    const r = await deleteRule(projectId, actor, rule.id);
     if (r.ok) onRemoved(`${rule.name || "The rule"} removed.`); else onError(r.error || "Not removed.");
   };
 

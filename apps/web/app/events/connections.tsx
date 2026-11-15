@@ -69,7 +69,7 @@ export function hourStats(list: EventList | null, nowMs: number) {
   return out;
 }
 const lagWords = (s: number | null) => (s === null ? "lag —" : s < 10 ? `lag ${s.toFixed(1)} s` : s < 120 ? `lag ${Math.round(s)} s` : `lag ${Math.round(s / 60)} min`);
-const perMin = (n: number) => (n === 0 ? "0/min" : n / 60 < 0.1 ? "<0.1/min" : n / 60 >= 10 ? `${Math.round(n / 60).toLocaleString()}/min` : `${(n / 60).toFixed(1)}/min`);
+const perMin = (n: number) => (n === 0 ? "0/min" : n / 60 < 0.1 ? "<0.1/min" : n / 60 >= 10 ? `${Math.round(n / 60).toLocaleString("en-US")}/min` : `${(n / 60).toFixed(1)}/min`);
 const copy = (t: string) => { try { void navigator.clipboard?.writeText(t); } catch { /* no clipboard */ } };
 
 export function ConnectionsTab() {
@@ -213,7 +213,7 @@ function Tile({ icon, label, value, tone, onClick, testId }: { icon: React.React
   return (
     <button type="button" className="ev-tile" data-tone={tone} onClick={onClick} data-testid={testId}>
       <span className="ev-tile-label">{icon}{label}</span>
-      <b className="ev-tile-num">{value === undefined ? "—" : value.toLocaleString()}</b>
+      <b className="ev-tile-num">{value === undefined ? "—" : value.toLocaleString("en-US")}</b>
     </button>
   );
 }

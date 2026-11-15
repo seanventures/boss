@@ -783,23 +783,40 @@ def test_people_lists_linked_unlinked_and_guests_and_an_admin_revoke_sticks(worl
     _receive(engine, slack, guest)
     while _process(engine)["claimed"]:
         pass
+    # A refusal that is not a link prompt (here: a budget stop) must not read as "Link sent".
+    _receive(engine, slack, mention("budget?", user="U0QUIET"))
+    while _process(engine)["claimed"]:
+        pass
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM chat_outbox WHERE dedupe_key LIKE :k"),
+                  {"k": f"link_dm:intake:{slack['endpoint']['id']}:U0QUIET:%"})
     cid = slack["connection"]["id"]
     with engine.begin() as c:
-        got = event_intake.connection_people(c, project_id=pid, connection_id=cid)
+        got = event_intake.connection_people(c, project_id=pid, connection_id=cid, reveal=True)
+        hidden = event_intake.connection_people(c, project_id=pid, connection_id=cid)
+        page = event_intake.connection_people(c, project_id=pid, connection_id=cid, reveal=True,
+                                              limit=2, offset=0)
     by = {p["external_user_id"]: p for p in got["people"]}
     assert by["U0PRIYA"]["state"] == "linked" and by["U0PRIYA"]["method"] == "code"
-    assert by["U0PRIYA"]["person"]["principal_id"]
+    assert by["U0PRIYA"]["person"]["principal_id"] and "@" in by["U0PRIYA"]["person"]["email"]
     assert by["U0STRANGER"]["state"] == "not_linked" and by["U0STRANGER"]["prompted_at"]
+    assert by["U0QUIET"]["state"] == "not_linked" and by["U0QUIET"]["prompted_at"] is None
     assert by["U0VENDOR"]["state"] == "guest" and by["U0VENDOR"]["guest"] is True
-    assert got["counts"] == {"linked": 1, "not_linked": 1, "guests": 1, "revoked": 0}
+    assert by["U0VENDOR"]["prompted_at"] is None
+    assert got["counts"] == {"linked": 1, "not_linked": 2, "guests": 1, "revoked": 0}
     assert "link_code_hash" not in json.dumps(got, default=str)
+    # Without user:read: the link and its method, never who it is.
+    assert hidden["people_redacted"] is True and got["people_redacted"] is False
+    assert all(p["person"] is None for p in hidden["people"])
+    assert "intake.test" not in json.dumps(hidden, default=str)
+    assert len(page["people"]) == 2 and page["next_offset"] == 2
 
     link_id = by["U0PRIYA"]["link_id"]
     with engine.begin() as c:
         event_intake.revoke_person_link(c, project_id=pid, connection_id=cid, link_id=link_id,
                                         actor="ceo")
     with engine.begin() as c:
-        again = event_intake.connection_people(c, project_id=pid, connection_id=cid)
+        again = event_intake.connection_people(c, project_id=pid, connection_id=cid, reveal=True)
         with pytest.raises(event_intake.IntakeServiceError):
             event_intake.revoke_person_link(c, project_id=pid, connection_id=cid,
                                             link_id=link_id, actor="ceo")

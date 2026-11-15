@@ -317,6 +317,20 @@ describe("E4 Rules", () => {
     expect(post.body).toMatchObject({ kind: "intake", environment: "prod", connection_id: "icn_s", priority: 40, identity_mode: "person" });
     expect((post.body.config as { triage: Record<string, unknown> }).triage).toMatchObject({ mode: "model", daily_usd_cap: 5, max_usd_per_event: 0.002 });
   });
+  it("a failed budget, budget removal or triage step is said in red, never as a green saved", async () => {
+    const calls = api((url, method) => (url.startsWith("/v1/budget-policies/scoped") && method !== "GET"
+      ? json({ error: "scoped_budget_refused", detail: "No such trigger or route in this org." }, 422) : undefined));
+    await mount(<EventsHome projectId={PID} actor="ceo" place={place("rules", { conn: "icn_s" })} />);
+    await type('[data-testid="ev-budget"]', "3");
+    await click($('[data-testid="ev-rule-save"]'));
+    expect($('[data-testid="ev-rules-said"]')?.getAttribute("data-tone")).toBe("red");
+    expect($('[data-testid="ev-rules-said"]')?.textContent).toContain("the daily budget was not set (No such trigger or route in this org.)");
+    await type('[data-testid="ev-budget"]', "");
+    await click($('[data-testid="ev-rule-save"]'));
+    expect(calls.some((c) => c.method === "DELETE" && c.url.startsWith("/v1/budget-policies/scoped/sbp_1"))).toBe(true);
+    expect($('[data-testid="ev-rules-said"]')?.textContent).toContain("the daily budget was not removed");
+    expect(calls.filter((c) => c.method === "PATCH").every((c) => c.body.actor === "ceo")).toBe(true);
+  });
   it("without agent:deploy, New rule and Save are pre-greyed; without agent:lifecycle the switch is", async () => {
     denied.add("agent:deploy"); denied.add("agent:lifecycle");
     api();
@@ -377,6 +391,21 @@ describe("E7 People", () => {
     expect(calls.some((c) => c.url.includes("/revoke"))).toBe(false);
     await click($('[data-testid="ev-revoke-yes-U0PRIYA"]'));
     expect(calls.find((c) => c.url.includes("/revoke"))!.url).toBe("/v1/intake/connections/icn_s/people/chl_p/revoke");
+  });
+  it("without user:read the API withholds who each person is, and the row says so", async () => {
+    api((url) => (url.endsWith("/people") ? json({ ...PEOPLE, people_redacted: true,
+      people: PEOPLE.people.map((p) => ({ ...p, person: null })) }) : undefined));
+    await mount(<EventsHome projectId={PID} place={place("people", { conn: "icn_s" })} />);
+    expect($('[data-testid="ev-person-hidden-U0PRIYA"]')?.textContent).toBe("A BOSS person · name hidden");
+    expect($('[data-testid="ev-people-list"]')?.textContent).not.toContain("@northpeak.com");
+  });
+  it("Revoked is a filter of its own", async () => {
+    api((url) => (url.endsWith("/people") ? json({ ...PEOPLE, people: [...PEOPLE.people,
+      { external_user_id: "U0OLD", display: "old", state: "revoked", link_id: "chl_o", method: "code", revoked_at: iso(60_000) }] }) : undefined));
+    await mount(<EventsHome projectId={PID} place={place("people", { conn: "icn_s" })} />);
+    await click($('[data-testid="ev-people-filter-revoked"]'));
+    expect($$('[data-testid^="ev-person-U"]').map((x) => x.getAttribute("data-testid"))).toEqual(["ev-person-U0OLD"]);
+    expect($('[data-testid="ev-person-U0OLD"]')?.textContent).toContain("Revoked");
   });
   it("Turn off the attestation is for an identity-provider admin only; Revoke is pre-greyed for a viewer", async () => {
     denied.add("identity_provider:manage"); denied.add("integration:manage");
