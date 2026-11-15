@@ -46,6 +46,7 @@ import {
 import { postManifest } from "./github-access-row";
 import { useBoard } from "./parts";
 import type { How } from "./add-account-panel";
+import { RepoHandoff } from "./repo-handoff";
 import "./add-github-account.css";
 
 const PAUSE_MS = 600;
@@ -444,6 +445,10 @@ export function AddGitHubAccount({ onClose, onAdvanced, onOther }: {
             </ul>
           ) : null}
           {!done ? <p className="ga-faint">Then BOSS checks it can read, branch and open PRs, and says what it found.</p> : null}
+          {done && results ? (
+            <RepoHandoff variant="guided" projectId={projectId}
+                         repos={results.filter((r) => r.allowed).map((r) => ({ full_name: r.full_name, id: r.id }))} />
+          ) : null}
         </section>
       ) : null}
 

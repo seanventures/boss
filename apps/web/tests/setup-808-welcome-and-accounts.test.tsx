@@ -401,6 +401,11 @@ describe("Screen 3 — Add a GitHub account", () => {
     expect(q(panel, "su-add-account-body")!.getAttribute("data-step")).toBe("3");
     expect(q(panel, "su-account-access-acme/web")!.textContent).toContain("Read ✓Write ✓Open PRs ✓");
     expect(q(panel, "su-account-access-acme/api")!.textContent).toContain("Open PRs ✗");
+    expect(q(panel, "acct-handoff-where")!.textContent).toContain("Start a project");
+    expect(q(panel, "acct-handoff-where")!.textContent).toContain("Add from GitHub");
+    expect(q(panel, "acct-handoff-where")!.textContent).toContain("the project's Repositories");
+    expect(q(panel, "acct-import-acme/web")!.textContent).toBe("Import as a project");
+    expect(q(panel, "acct-add-acme/api")!.textContent).toBe("Add to this project");
     // No token value is ever echoed back into the page.
     expect(document.body.innerHTML).not.toContain("github_pat_not_a_real_one");
     await click(q(panel, "su-account-continue"));
