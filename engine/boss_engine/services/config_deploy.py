@@ -742,15 +742,25 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
             deployment_run_id: Optional[str] = None, app_name: Optional[str] = None,
             from_environment: str = "staging", environment: str = "production",
             target_id: Optional[str] = None, approval_decision_id: Optional[str] = None,
-            person_required: bool = False, workflow_run_id: Optional[str] = None) -> dict[str, Any]:
+            person_required: bool = False, workflow_run_id: Optional[str] = None,
+            expected_bundle_sha256: Optional[str] = None) -> dict[str, Any]:
     """`promote_config`: the exact bundle a SUCCEEDED config deployment shipped (by id, or the
-    latest for app + from_environment) planned to the next environment's config target."""
+    latest for app + from_environment) planned to the next environment's config target.
+
+    INSIDE A WORKFLOW RUN (`workflow_run_id`, set by the runner) the source is never guessed
+    (AMEX-G9, BOSSAPP-1167): the id AND the bundle hash its staging step recorded are
+    required, and a source that shipped other bytes is refused. "The latest staging deploy for
+    the app" is how two tenants in flight promoted each other's file."""
     from ..db import begin
     from .resource_plane import ResourcePlaneService
 
     rp = ResourcePlaneService(settings)
     try:
         with begin(engine) as c:
+            if workflow_run_id and not (deployment_run_id and expected_bundle_sha256):
+                raise ConfigDeployError(
+                    "A workflow promotes only the deployment its own staging step shipped.",
+                    "Bind deployment_id and bundle_sha256 from this run's config_deploy step.")
             if deployment_run_id:
                 src = c.execute(text("SELECT * FROM deployment_runs WHERE id = :i AND project_id = :p"),
                                 {"i": deployment_run_id, "p": project_id}).mappings().first()
@@ -779,6 +789,13 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
                 raise ConfigDeployError(
                     "The stored bundle is not the one that deployment shipped.",
                     "Deploy the files to the lower environment again, then promote.")
+            expected = str(expected_bundle_sha256 or "").strip()
+            if expected and expected != str(src.get("commit_ref") or ""):
+                raise ConfigDeployError(
+                    f"Deployment {src['id']} shipped a different bundle "
+                    f"({str(src.get('commit_ref') or '')[:12]}…) than the one expected "
+                    f"({expected[:12]}…); nothing was promoted.",
+                    "Promote the deployment this run's own staging step shipped.")
             target = find_target(c, project_id, target_id=target_id,
                                  app_name=app_name or src["app_name"], environment=environment)
             if str(target["id"]) == str(src["deployment_target_id"]):

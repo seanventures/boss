@@ -267,9 +267,48 @@ def test_the_tool_reaches_only_the_projects_own_deployments(gateway, eng, projec
         add_deployment_host(c, project, "127.0.0.1")
     out = tool.handler(C("enterprise"), project_id=project, actor="a", args=args)
     assert out["ok"] and out["passed"] == 1
-    refused = tool.handler(C("community"), project_id=project, actor="a",
-                           args={"cases": [{"url": gateway + "/healthz"}]})
-    assert refused["ok"] is False and "Community" in refused["error"]
+
+
+
+def test_community_reaches_only_the_projects_own_deployments(gateway, eng, project):
+    """AMEX-G8 (BOSSAPP-1166): Community runs contract tests, bound to the project's hosts.
+
+    Community has no egress network policy, so the guard is the policy: the project's own
+    deployment hosts answer, and a public host — which a paid edition may reach — is refused
+    before anything is sent. A project with no deployment hosts is refused outright."""
+    from boss_engine.config import get_settings
+    from boss_engine.tools.builtin import build_default_registry
+
+    tool = {s.name: s for s in build_default_registry().specs()}["contract_test"]
+
+    class C:
+        settings = get_settings().model_copy(update={"boss_edition": "community"})
+
+        def begin(self):
+            return eng.begin()
+
+    args = {"cases": [{"path": "/healthz", "expect_status": 200}], "base_url": gateway}
+    none_yet = tool.handler(C(), project_id=project, actor="a", args=args)
+    assert none_yet["ok"] is False and "has none" in none_yet["error"]
+    with eng.begin() as c:
+        add_deployment_host(c, project, "127.0.0.1")
+    out = tool.handler(C(), project_id=project, actor="a", args=args)
+    assert out["ok"] and out["passed"] == 1, out
+    public = tool.handler(C(), project_id=project, actor="a",
+                          args={"cases": [{"url": "http://8.8.8.8/"}]})
+    assert public["ok"] and public["failed"] == 1
+    assert "not one of this project's deployment targets" in public["cases"][0]["failures"][0]
+
+
+def test_project_only_checks_every_redirect_hop(gateway):
+    from boss_engine.services.contract_tests import HostRefused, check_host
+
+    with pytest.raises(HostRefused, match="Community"):
+        check_host("http://8.8.8.8/", frozenset({"127.0.0.1"}), project_only=True)
+    check_host(gateway + "/x", frozenset({"127.0.0.1"}), project_only=True)
+    # Metadata stays refused even when a project names it.
+    with pytest.raises(HostRefused, match="metadata"):
+        check_host("http://169.254.169.254/", frozenset({"169.254.169.254"}), project_only=True)
 
 
 def test_the_capability_is_catalogued_and_judged():

@@ -71,7 +71,8 @@ def _addresses(host: str) -> list[ipaddress._BaseAddress]:
     return out
 
 
-def check_host(url: str, allowed_private: frozenset[str] = frozenset()) -> None:
+def check_host(url: str, allowed_private: frozenset[str] = frozenset(), *,
+               project_only: bool = False) -> None:
     """THE SSRF GUARD, for the first request and every redirect hop.
 
     A contract test sends whatever method, headers and body a caller writes, and returns the
@@ -80,7 +81,12 @@ def check_host(url: str, allowed_private: frozenset[str] = frozenset()) -> None:
     Loopback, private and otherwise non-public addresses — by literal or by what the name
     resolves to — are refused unless the host is one of `allowed_private`: the project's OWN
     deployment targets and hosts, resolved by the caller from the database, never from the
-    arguments."""
+    arguments.
+
+    `project_only` (Community, AMEX-G8): public hosts are refused too, so EVERY request — and
+    every redirect hop — goes to one of the project's own deployment hosts. Community has no
+    egress network policy, so the guard itself is the policy: a step can test what this
+    project deploys and nothing else."""
     parts = urllib.parse.urlsplit(url or "")
     host = (parts.hostname or "").lower().rstrip(".")
     if not host or (parts.scheme or "").lower() not in ("http", "https"):
@@ -91,6 +97,11 @@ def check_host(url: str, allowed_private: frozenset[str] = frozenset()) -> None:
                           "sends there.")
     if host in allowed_private:
         return
+    if project_only:
+        raise HostRefused(
+            f"{host} is not one of this project's deployment targets or hosts. In Community a "
+            "contract test reaches only the project's own deployments; add the host as a "
+            "deployment target (its health URL) or a deployment host first.")
     if any(not a.is_global for a in addresses) or host in ("localhost",):
         raise HostRefused(
             f"{host} is a loopback or private address and not one of this project's "
@@ -101,11 +112,12 @@ def check_host(url: str, allowed_private: frozenset[str] = frozenset()) -> None:
 class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
     """Every redirect hop goes through the same guard as the first request."""
 
-    def __init__(self, allowed_private: frozenset[str]):
+    def __init__(self, allowed_private: frozenset[str], project_only: bool = False):
         self.allowed_private = allowed_private
+        self.project_only = project_only
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
-        check_host(newurl, self.allowed_private)
+        check_host(newurl, self.allowed_private, project_only=self.project_only)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -193,16 +205,17 @@ def json_path(value: Any, path: str) -> tuple[bool, Any]:
 
 
 def _send(case: dict[str, Any], timeout_s: float,
-          allowed_private: frozenset[str] = frozenset()) -> dict[str, Any]:
+          allowed_private: frozenset[str] = frozenset(),
+          project_only: bool = False) -> dict[str, Any]:
     request = urllib.request.Request(case["url"], data=case["body"], method=case["method"],
                                      headers=case["headers"])
     started = time.time()
     try:
-        check_host(case["url"], allowed_private)
+        check_host(case["url"], allowed_private, project_only=project_only)
     except HostRefused as refused:
         return {"status": None, "ms": 0, "headers": {}, "body": "",
                 "error": f"refused: {refused}", "refused": True}
-    opener = urllib.request.build_opener(_CheckedRedirects(allowed_private))
+    opener = urllib.request.build_opener(_CheckedRedirects(allowed_private, project_only))
     try:
         with opener.open(request, timeout=timeout_s) as response:  # noqa: S310 — host checked
             raw = response.read(BODY_EXCERPT * 4)
@@ -280,13 +293,15 @@ def results_table(results: Iterable[Mapping[str, Any]]) -> str:
 def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
               headers: Optional[Mapping[str, str]] = None,
               allowed_private: Iterable[str] = (),
-              deadline_s: Optional[float] = None) -> dict[str, Any]:
+              deadline_s: Optional[float] = None,
+              project_only: bool = False) -> dict[str, Any]:
     """Run every case and say, per case and in total, what passed.
 
     Returns `ok: False` with an `error` when the cases cannot be run as written (not a list, a
     bad method, a path with no base_url) — nothing is sent then. Otherwise `ok` is True and the
     verdict is in `failed`: the tool ran; whether the contract held is the step's judgement
-    (workflow_outcomes.contract_test).
+    (workflow_outcomes.contract_test). `project_only` refuses every host that is not in
+    `allowed_private`, public ones included (`check_host`).
     """
     if isinstance(cases, str):
         try:
@@ -322,7 +337,7 @@ def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
                             "failures": ["not sent: out of time for this turn"],
                             "error": None, "body_excerpt": ""})
             continue
-        answer = _send(case, max(1.0, min(float(timeout), left)), allowed)
+        answer = _send(case, max(1.0, min(float(timeout), left)), allowed, project_only)
         failures = _judge(case, answer)
         results.append({
             "name": case["name"], "method": case["method"], "url": case["url"],

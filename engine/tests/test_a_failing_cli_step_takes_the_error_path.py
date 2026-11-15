@@ -275,3 +275,73 @@ def test_a_built_in_skill_that_reports_an_exit_code_is_judged_as_before(eng, pro
         assert custom_steps.exit_failure(c, project, "gwlint", "Run", {"exit_code": 0}) is None
         assert custom_steps.exit_failure(c, project, "gwlint", "Run", {"exit_code": True}) is None
         assert custom_steps.exit_failure(c, project, "gwlint", "Run", "not a dict") is None
+
+
+# ── the error path reads what the failed step said (AMEX-G10, BOSSAPP-1168) ────────────────
+
+def _publish_report_on_error(c, project_id, step_key):
+    name = f"wf_{uuid.uuid4().hex[:6]}"
+    definition = workflows.create_definition(
+        c, project_id=project_id, workflow_key=name, name=name, description=None,
+        actor="test", namespace="product")
+    return workflows.publish_version(
+        c, project_id=project_id, definition_id=definition["id"], actor="test",
+        spec={"entry_step": "validate", "steps": [
+            {"id": "validate", "kind": "capability", "next": ["deploy"], "on_error": "report",
+             "max_attempts": 1, "approval": {"mode": "auto"},
+             "binding": {"custom_step": step_key, "inputs": {"file": "tenants/lumen-pay.yaml"}}},
+            {"id": "deploy", "kind": "capability", "approval": {"mode": "auto"},
+             "binding": {"capability": "cost_check", "inputs": {}}},
+            # THE ERROR STEP BINDS THE FAILED STEP'S OUTPUT, as any step binds a result.
+            {"id": "report", "kind": "capability", "approval": {"mode": "auto"},
+             "next": ["fixable"],
+             "binding": {"capability": "smoke_test", "inputs": {
+                 "url": {"from_step": "validate", "field": "log_tail"}}}},
+            # …and a condition after it judges the failed step's exit code.
+            {"id": "fixable", "kind": "condition",
+             "expression": {"path": "steps.validate.output.exit_code", "op": "eq", "value": 1},
+             "on_true": "fix", "on_false": "human_only"},
+            {"id": "fix", "kind": "capability", "approval": {"mode": "auto"},
+             "binding": {"capability": "cost_check", "inputs": {}}},
+            {"id": "human_only", "kind": "capability", "approval": {"mode": "auto"},
+             "binding": {"capability": "cost_check", "inputs": {}}},
+        ]})
+
+
+def test_the_error_path_reads_the_failed_steps_output(eng, project, monkeypatch):
+    import boss_engine.services.agent_loop as agent_loop
+
+    monkeypatch.setattr(agent_loop, "_invoke_agent_skill", lambda *a, **k: dict(EXITED))
+    probe = RecordingTool("http_probe", {"status": 200, "ms": 1})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry(
+        [probe, RecordingTool("get_costs", {"spend_usd": 0})]))
+    with eng.begin() as c:
+        step_key = _authored(c, project, f"gwlint_{uuid.uuid4().hex[:6]}", fail_on_exit=True)
+        run = _start(c, project, _publish_report_on_error(c, project, step_key)["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        assert _rows(c, run["id"])["validate"]["status"] == "failed"
+        # In the run context, marked as a failure — never mistaken for a result.
+        seen = runner._run_context(c, run["id"])["steps"]["validate"]
+        assert seen["step_status"] == "failed" and seen["exit_code"] == 1
+        for _ in range(4):
+            runner.tick(c, Ctx(eng), project_id=project)
+        rows = _rows(c, run["id"])
+    assert rows["report"]["status"] == "succeeded", rows["report"]
+    assert probe.calls and "SEC-004" in probe.calls[0]["args"]["url"], \
+        "the error step never received the validator's report"
+    assert rows["fixable"]["output"]["result"] is True
+    assert rows["fix"]["status"] == "succeeded" and rows["human_only"]["status"] == "skipped"
+    assert rows["deploy"]["status"] == "skipped"
+
+
+def test_a_failure_still_being_retried_is_not_an_answer(eng, project, monkeypatch):
+    """Only a terminal failure that went on along its error path is read; an attempt that will
+    run again is not in the context."""
+    _wire(monkeypatch, EXITED)
+    with eng.begin() as c:
+        step_key = _authored(c, project, f"gwlint_{uuid.uuid4().hex[:6]}", fail_on_exit=True)
+        run = _start(c, project, _publish(c, project, step_key)["id"])
+        c.execute(text("UPDATE workflow_step_runs SET status='failed', "
+                       "output=CAST(:o AS JSONB) WHERE workflow_run_id=:r AND step_id='validate'"),
+                  {"o": '{"exit_code": 1}', "r": run["id"]})
+        assert "validate" not in runner._run_context(c, run["id"])["steps"]
