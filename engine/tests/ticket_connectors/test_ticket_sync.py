@@ -578,7 +578,9 @@ def test_each_ticket_tool_declares_its_kind_permission_and_surfaces():
         spec = reg.get(name)
         assert (spec.kind, spec.permission) == (kind, permission), name
         assert set(spec.exposure.surfaces) == {"chat", "agent_step", "mcp"}, name
-        assert not spec.exposure.core_for, name
+        # ticket_get is in the chat core (a named ticket is how new work arrives); the rest
+        # are found by find_tools.
+        assert set(spec.exposure.core_for) == ({"chat"} if name == "ticket_get" else set()), name
         if kind == "read":
             assert outside_origin(name) == "fetched_page", name
         else:

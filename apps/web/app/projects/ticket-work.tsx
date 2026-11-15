@@ -20,6 +20,7 @@ import { writePxUrl, type WorkItem } from "../../lib/project-experience";
 import {
   TYPE_WORDS, codeWords, importAndStart, readConnections, readWaiting, refusalReadiness, startFromTicket, syncWords, workflowFor, workflowWords,
   type Connection, type Read, type Ticket, type TypedError,
+  ticketSetupHref,
 } from "../../lib/tickets";
 import { ProviderMono, TicketChip, TkEmpty, TkReadState, TkTag, WorkflowPick } from "../tickets/ticket-parts";
 import type { PxCtx } from "./project-page";
@@ -164,7 +165,7 @@ export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[]
       <div className="tk-sec-head">
         <h2 id="tk-waiting-h">Waiting for BOSS · <span className="tk-muted">{c.label}{mapped.length ? ` ${mapped.join(", ")}` : ""}, label “{c.settings.pickup.label}”</span> · {tickets.length}</h2>
         <span className="tk-spacer" />
-        <a className="tk-linkbtn" href="?area=setup&focus=ticket_systems" data-testid="tk-waiting-rule"
+        <a className="tk-linkbtn" href={ticketSetupHref(ctx.projectId)} data-testid="tk-waiting-rule"
            title={c.settings.pickup.mode === "auto_start" ? "Tickets with this label start on their own" : "BOSS asks you before starting a labelled ticket"}>Change the rule</a>
       </div>
       {errors.map((e, i) => (
@@ -296,10 +297,10 @@ export function TicketWorkBand({ ctx, conns }: { ctx: PxCtx; conns: Read<Connect
 }
 
 /** No ticket system yet (the Import page's empty state). */
-export function NoTicketSystem({ testid = "tk-none" }: { testid?: string }) {
+export function NoTicketSystem({ testid = "tk-none", projectId }: { testid?: string; projectId?: string }) {
   return (
     <TkEmpty title="No ticket system connected" line="Connect Jira, Plane, GitHub Issues or another once; then import epics and tickets here." testid={testid}>
-      <a className="tk-btn" href="?area=setup&focus=ticket_systems" data-testid={`${testid}-setup`}><Kanban size={13} aria-hidden /> Open Repo and models › Ticket systems</a>
+      <a className="tk-btn" href={ticketSetupHref(projectId)} data-testid={`${testid}-setup`}><Kanban size={13} aria-hidden /> Open Repo and models › Ticket systems</a>
     </TkEmpty>
   );
 }

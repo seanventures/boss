@@ -148,6 +148,41 @@ describe("T3 · New work from a ticket", () => {
     ]);
   });
 
+  // 2026-11-15: a ticket system is connected once for the org. A key typed in a project that did
+  // not connect Jira itself still resolves (and imports through the system's name, since a body
+  // id is confined to its project); with nothing connected, New work says where to connect one.
+  it("a ticket from the org's Jira imports by its system and says where it maps", async () => {
+    const calls = engine(() => ({ body: { tickets: [{ ...TICKET, connection_reach: "org",
+      maps_to: { project_id: "boss-dogfood", name: "BOSS dogfood bootstrap" } }], errors: [], refs: [{}] } }));
+    await openModal();
+    await type(tid("px-compose-text"), "LEND-142");
+    await pause();
+    expect(tid("px-nw-ticket-maps")!.textContent).toBe("Maps to BOSS dogfood bootstrap");
+    await press(tid("px-compose-start"));
+    expect(writes(calls)[0]).toMatchObject({ path: `/v1/projects/${P}/tickets/import`,
+      body: { provider: "jira", items: [{ key: "LEND-142", with_children: false }] } });
+  });
+
+  it("with no ticket system connected, New work offers to connect one for this project", async () => {
+    engine(() => ({ body: { tickets: [], errors: [], refs: [], connected: 0,
+      not_connected: { error: "not_connected", next: "Connect one in Setup › Ticket systems." } } }));
+    await openModal();
+    await type(tid("px-compose-text"), "KAN-7");
+    await pause();
+    expect(tid("px-nw-ticket-connect")!.textContent).toContain("No ticket system is connected");
+    expect(tid("px-nw-ticket-connect-link")!.getAttribute("href"))
+      .toBe(`?area=setup&focus=ticket_systems&project_id=${P}`);
+  });
+
+  it("a key not found in the connected site is said, naming the site", async () => {
+    engine(() => ({ body: { tickets: [], refs: [], connected: 1, errors: [
+      { ref: "LEND-142", error: "not_found", message: "LEND-142 was not found in https://paramg.atlassian.net (Jira)." }] } }));
+    await openModal();
+    await type(tid("px-compose-text"), "LEND-142");
+    await pause();
+    expect(tid("px-nw-ticket-errors")!.textContent).toContain("was not found in https://paramg.atlassian.net (Jira)");
+  });
+
   it("names the system to browse when there is one: Browse Jira", () => {
     expect(browseWords(["Jira"])).toBe("Browse Jira");
     expect(browseWords([])).toBe("Browse tickets");

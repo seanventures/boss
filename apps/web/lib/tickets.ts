@@ -39,6 +39,8 @@ export type Connection = {
   status: "connected" | "disconnected" | "not_connected"; base_url: string; fields: Record<string, string>;
   account: string | null; last4: string | null; fingerprint: string | null; capabilities: Record<string, boolean>;
   settings: TicketSettings; managed_from: { connection_id: string; project_id: string } | null;
+  /** "org": connected once from another project of the org (home_project), usable here too. */
+  reach: "project" | "org"; home_project: { id: string; name: string } | null;
   mirrors: { connection_id: string; project_id: string; status: string }[];
   bindings: { total: number; paused: number };
   /** The connection's own OAuth app for "Connect with Atlassian" (null: the connector has none).
@@ -64,6 +66,10 @@ export type Ticket = {
   /** A full read only. */
   body: string; acceptance_criteria: string[]; comments: { author: string; at: string; body: string }[];
   attachments: { name: string; url: string }[];
+  /** The BOSS project the ticket belongs to (its mapping, else its connection's home). */
+  maps_to: { project_id: string; name: string } | null;
+  /** "org" when the connection was added from another project (import names its system). */
+  connection_reach: "project" | "org";
 };
 export type TypedError = { connection_id?: string; ref?: string; error: string; message: string };
 export type ExternalProject = { key: string; name: string; id: string; url: string; open_count: number | null; epic_count: number | null };
@@ -116,6 +122,8 @@ export function parseConnection(v: unknown): Connection {
     settings: parseSettings(x.settings),
     managed_from: mf && s(mf.connection_id) ? { connection_id: s(mf.connection_id), project_id: s(mf.project_id) } : null,
     mirrors: a(x.mirrors).map((m) => ({ connection_id: s(o(m).connection_id), project_id: s(o(m).project_id), status: s(o(m).status) })),
+    reach: s(x.reach) === "org" ? "org" : "project",
+    home_project: s(o(x.home_project).id) ? { id: s(o(x.home_project).id), name: s(o(x.home_project).name) || s(o(x.home_project).id) } : null,
     bindings: { total: n(o(x.bindings).total) ?? 0, paused: n(o(x.bindings).paused) ?? 0 },
     oauth_app: x.oauth_app && typeof x.oauth_app === "object"
       ? { client_id: s(o(x.oauth_app).client_id), secret_set: o(x.oauth_app).secret_set === true,
@@ -158,6 +166,8 @@ export function parseTicket(v: unknown): Ticket {
     body: s(x.body), acceptance_criteria: strs(x.acceptance_criteria),
     comments: a(x.comments).map((m) => ({ author: s(o(m).author), at: s(o(m).at), body: s(o(m).body) })),
     attachments: a(x.attachments).map((m) => ({ name: s(o(m).name), url: s(o(m).url) })).filter((m) => m.name),
+    connection_reach: s(x.connection_reach) === "org" ? "org" : "project",
+    maps_to: s(o(x.maps_to).project_id) ? { project_id: s(o(x.maps_to).project_id), name: s(o(x.maps_to).name) || s(o(x.maps_to).project_id) } : null,
   };
 }
 
@@ -272,6 +282,14 @@ export function syncWords(label: string, status: string, syncStatus: string): st
 // ── reads ────────────────────────────────────────────────────────────────────────────────────
 const conn = (id: string) => `/v1/ticket-systems/${enc(id)}`;
 
+/**
+ * Setup › Ticket systems FOR THIS PROJECT. A link without `project_id` lands on the org's own
+ * project (page.tsx), so a person who followed "Connect one" from HelpDesk Laptop added Jira to
+ * another project and then saw "No ticket system yet" (2026-11-15). Every link goes through here.
+ */
+export const ticketSetupHref = (projectId?: string) =>
+  `?area=setup&focus=ticket_systems${projectId ? `&project_id=${enc(projectId)}` : ""}`;
+
 export const readCatalog = () => ticketRead("/v1/ticket-systems/catalog", (v) => a(o(v).items).map(parseCatalogItem).filter((c) => c.provider));
 export const readConnections = (projectId: string) =>
   ticketRead(`/v1/ticket-systems?project_id=${enc(projectId)}`, (v) => a(o(v).connections).map(parseConnection));
@@ -295,7 +313,8 @@ export function searchTickets(connectionId: string, q: string, f: { project?: st
 }
 export const readResolve = (projectId: string, text: string) =>
   ticketRead(`/v1/tickets/resolve?project_id=${enc(projectId)}&text=${enc(text.slice(0, 20_000))}`,
-             (v) => ({ tickets: tickets(v), errors: parseErrors(o(v).errors), refs: a(o(v).refs).length }));
+             (v) => ({ tickets: tickets(v), errors: parseErrors(o(v).errors), refs: a(o(v).refs).length,
+                       notConnected: o(v).not_connected ? s(o(o(v).not_connected).next) || "Connect a ticket system first." : "" }));
 export const readWaiting = (projectId: string) =>
   ticketRead(`/v1/projects/${enc(projectId)}/tickets/waiting`, (v) => ({ tickets: tickets(v), errors: parseErrors(o(v).errors) }));
 export const readSync = (workItemId: string) => ticketRead(`/v1/work-items/${enc(workItemId)}/ticket-sync`, parseTimeline);
@@ -333,8 +352,13 @@ export const disconnectTicketOauth = (id: string): Promise<WriteResult> => obsWr
  *  BOSS email). Kept by the API on your own sign-in, audited; yours only. */
 export const confirmTicketIdentity = (connectionId: string): Promise<WriteResult> =>
   obsWrite(`/v1/me/ticket-identities/${enc(connectionId)}/confirm`, {}, press(`confirm:${connectionId}`, "It's mine"));
-export const importTickets = (projectId: string, connectionId: string, items: { key: string; with_children?: boolean }[]): Promise<WriteResult> =>
-  obsWrite(`/v1/projects/${enc(projectId)}/tickets/import`, { connection_id: connectionId, items: items.map((i) => ({ key: i.key, with_children: Boolean(i.with_children) })) },
+/** Which connection an import goes through: this project's own by id; one added from another
+ *  project of the org (reach "org") by its system, since a body id is confined to the project. */
+export type ImportVia = string | { id: string; provider: string; reach?: string };
+export const importVia = (via: ImportVia): R =>
+  typeof via === "string" ? { connection_id: via } : via.reach === "org" ? { provider: via.provider } : { connection_id: via.id };
+export const importTickets = (projectId: string, via: ImportVia, items: { key: string; with_children?: boolean }[]): Promise<WriteResult> =>
+  obsWrite(`/v1/projects/${enc(projectId)}/tickets/import`, { ...importVia(via), items: items.map((i) => ({ key: i.key, with_children: Boolean(i.with_children) })) },
            press(`import:${projectId}`, "Import to Work"));
 export const startFromTicket = (workItemId: string, body: { project_id?: string; workflow_key?: string; start_anyway?: string[] } = {}): Promise<WriteResult> =>
   obsWrite(`/v1/work-items/${enc(workItemId)}/start-from-ticket`, body as R, press(`start:${workItemId}`, "Start"));
@@ -360,12 +384,12 @@ export const parseWebhook = (v: unknown): WebhookSecret => {
  * Import then start, as one press (T3, T4, T5's Start): a ticket not yet in BOSS is imported
  * (a work item + binding), then started on the workflow its type calls for (or the one picked).
  */
-export async function importAndStart(projectId: string, t: Pick<Ticket, "key" | "connection_id" | "in_boss" | "type">, workflowKey?: string,
+export async function importAndStart(projectId: string, t: Pick<Ticket, "key" | "connection_id" | "in_boss" | "type" | "provider"> & { connection_reach?: string }, workflowKey?: string,
                                      startAnyway: readonly string[] = [],
 ): Promise<{ ok: boolean; error: string | null; workItemId: string; runId: string; note: string; readiness: Readiness | null }> {
   let workItemId = t.in_boss?.work_item_id ?? "";
   if (!workItemId) {
-    const imp = await importTickets(projectId, t.connection_id, [{ key: t.key, with_children: t.type === "epic" }]);
+    const imp = await importTickets(projectId, { id: t.connection_id, provider: t.provider, reach: t.connection_reach }, [{ key: t.key, with_children: t.type === "epic" }]);
     if (!imp.ok) return { ok: false, error: imp.error, workItemId: "", runId: "", note: "", readiness: null };
     const done = parseImport(imp.body);
     workItemId = (done.imported.find((r) => r.key === t.key) ?? done.already_in_boss.find((r) => r.key === t.key) ?? done.imported[0])?.work_item_id ?? "";

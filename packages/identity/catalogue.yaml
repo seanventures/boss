@@ -137,6 +137,8 @@ passport_presets:
                   agent:read, decision:read, deployment:read, host:read, meeting:read, observability:read, project:read, system:read,
                   integration:read, work_tracker:write]
     external_ceiling: {github: {contents: write, pull_requests: write, push_refs: "boss/*"}}
+  # integration:read on EVERY preset: every agent looks a named ticket up (ticket_get is in
+  # boss.fundamentals, 2026-11-15). Writing to a ticket system stays work_tracker:write.
   - key: reviewer
     name: Reviewer
     agents: [vera, rook, sentry, weave, muse, plumb, mend]
@@ -146,7 +148,7 @@ passport_presets:
                   artifact:read, assurance:read, assurance:run, workflow_run:read, skill:read,
                   skill:invoke, memory:read, spend:reserve, security_scan:run, meeting:read,
                   meeting:convene,
-                  agent:read, decision:read, deployment:read, host:read, observability:read, project:read, sandbox:read, system:read, workflow:read]
+                  agent:read, decision:read, deployment:read, host:read, observability:read, project:read, sandbox:read, system:read, workflow:read, integration:read]
     external_ceiling: {github: {contents: read, pull_requests: write}}
   - key: planner
     name: Planner
@@ -175,21 +177,21 @@ passport_presets:
              probe, conductor, trace, draft, remedy, seal, ladder]
     permissions: [knowledge:read, budget:read, model_provider:read, infra:read, observability:read, activity:read,
                   spend:reserve, workflow_run:read,
-                  agent:read, code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, memory:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
+                  agent:read, code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, memory:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read, integration:read]
     external_ceiling: {}
   - key: writer
     name: Writer and publisher
     agents: [quill, herald, splice, scribe]
     permissions: [knowledge:read, artifact:read, artifact:rebuild, discovery:read, comms:read, comms:send, memory:read,
                   spend:reserve, workflow_run:read,
-                  agent:read, code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
+                  agent:read, code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read, integration:read]
     external_ceiling: {}
   - key: guardian
     name: Guardian
     agents: [warden, vault, halo]
     permissions: [knowledge:read, agent:read, agent_passport:read, activity:read, policy:read, secret:read_metadata,
                   workflow_run:read,
-                  code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, memory:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
+                  code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, memory:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read, integration:read]
     external_ceiling: {}
   # The Archivist (BOSSAPP-622): reads sources, writes only to the knowledge store. No
   # code_task:create, github write, deployment or comms: its only write is a fact, and the
@@ -200,14 +202,14 @@ passport_presets:
     permissions: [knowledge:read, code_task:read, decision:read, observability:read, reliability:read, repository:read,
                   memory:read, spend:reserve, workflow_run:read,
                   agent:read, deployment:read, github:read, host:read, meeting:read, preview:read,
-                  project:read, sandbox:read, skill:read, system:read, workflow:read]
+                  project:read, sandbox:read, skill:read, system:read, workflow:read, integration:read]
     external_ceiling: {github: {contents: read}}
   - key: baseline
     name: Baseline (every agent)
     agents: [nova, axiom, tempo, sage]
     permissions: [knowledge:read, agent:read, code_task:read, decision:read, deployment:read, github:read, host:read,
                   meeting:read, memory:read, observability:read, preview:read, project:read,
-                  repository:read, sandbox:read, skill:read, system:read, workflow:read, workflow_run:read]
+                  repository:read, sandbox:read, skill:read, system:read, workflow:read, workflow_run:read, integration:read]
     external_ceiling: {}
 
 categories:

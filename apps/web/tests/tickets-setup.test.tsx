@@ -83,6 +83,24 @@ describe("words", () => {
 });
 
 describe("Setup › Ticket systems (T1)", () => {
+  // 2026-11-15: "I added the Jira ticket system but it does not show up". A ticket system is
+  // connected once for the org: from another project it shows, says where it was added and
+  // where its tickets go, and cannot be disconnected from there.
+  it("shows a ticket system added from another project of the org", async () => {
+    const shared = { ...JIRA, id: "wtp_home", project_id: "boss-dogfood", reach: "org",
+                     home_project: { id: "boss-dogfood", name: "BOSS dogfood bootstrap" },
+                     settings: { ...JIRA.settings, mappings: [], project_keys: ["KAN"] } };
+    api((url) => (url.startsWith("/v1/ticket-systems?project_id=") ? json({ connections: [shared] }) : undefined));
+    await mount(<TicketSystemsRow projectId="helpdesk-laptop" />);
+    expect($('[data-testid="tk-systems-empty"]')).toBeNull();
+    expect($('[data-testid="tk-shared-wtp_home"]')?.textContent).toContain("added in BOSS dogfood bootstrap");
+    expect($('[data-testid="tk-system-wtp_home"]')?.textContent).toContain("KAN → BOSS dogfood bootstrap");
+    expect(parseConnection(shared).reach).toBe("org");
+    await click('[data-testid="tk-menu-wtp_home"]');
+    expect(($('[data-testid="tk-off-wtp_home"]') as HTMLButtonElement | null)?.disabled
+           ?? $('[data-testid="tk-off-wtp_home"]')?.getAttribute("aria-disabled") === "true").toBeTruthy();
+  });
+
   it("lists a connection, tests it, opens its settings and disconnects only after confirming", async () => {
     const calls = api();
     await mount(<TicketSystemsRow projectId="p1" />);

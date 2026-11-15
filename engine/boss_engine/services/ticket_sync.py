@@ -1054,14 +1054,18 @@ def _intake_row(db: Any, project_id: str, *, connection_id: Optional[str] = None
     wanted = str(provider or "").strip().lower()
     if cid.startswith("kit:tickets:"):
         wanted, cid = wanted or cid.rsplit(":", 1)[-1], ""
+    from . import ticket_reach as reach
+
     if cid:
         try:
-            return intake.get_row(db, cid, project_id=project_id)
+            return reach.reachable_row(db, project_id, cid)
         except intake.TicketApiError:
             return None
-    rows = [r for r in intake.project_rows(db, project_id)
+    # The project's own first (its default before the rest), then the org-level connections
+    # made from the org's other projects (ticket_reach): connected once, usable everywhere.
+    rows = [r for r in reach.reachable_rows(db, project_id)
             if r.get("status") == "active" and (not wanted or r["provider_key"] == wanted)]
-    rows.sort(key=lambda r: not r.get("is_default"))
+    rows.sort(key=lambda r: (r.get("reach") == "org", not r.get("is_default")))
     return rows[0] if rows else None
 
 
@@ -1073,12 +1077,19 @@ def ticket_import_items(db: Any, settings: Any, *, project_id: str, items: list[
     binding; an epic ``with_children`` brings its children under it."""
     from . import ticket_intake as intake
 
+    from . import ticket_reach as reach
+
     row = _intake_row(db, project_id, connection_id=connection_id, provider=provider)
     if row is None:
-        raise TicketSyncError("No ticket system is connected to this project.", status=409,
-                              code="not_connected")
-    done = intake.import_by_keys(db, settings, project_id=project_id, row=row, items=items,
-                                 actor=actor, person_id=_person(actor))
+        raise TicketSyncError("No ticket system is connected in this organisation. Connect one "
+                              "in Setup › Ticket systems.", status=409, code="not_connected")
+    read = intake.read_for_import(db, row, items, person_id=_person(actor))
+    try:
+        row = reach.project_row_for(db, settings, project_id, row, actor=actor)
+    except intake.TicketApiError as error:
+        raise TicketSyncError(error.message, status=error.status, code=error.code) from None
+    done = intake.import_tickets(db, settings, project_id=project_id, row=row, items=read,
+                                 actor=actor)
     return {"connection_id": str(row["id"]), "provider": str(row["provider_key"]), **done}
 
 

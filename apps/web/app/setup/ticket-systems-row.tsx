@@ -35,7 +35,10 @@ const STATUS: Record<Connection["status"], { word: string; tone: string }> = {
 
 /** "LEND → this project": a connection's mappings in words (all of its projects when none). */
 function mapWords(c: Connection, projectId: string, names: Record<string, string>): string[] {
-  if (!c.settings.mappings.length) return [c.settings.project_keys.length ? `${c.settings.project_keys.join(", ")} → this project` : "All projects → this project"];
+  // No mapping: everything goes to the connection's HOME project (this one, or the project an
+  // org-level connection was added from).
+  const home = c.home_project && c.home_project.id !== projectId ? c.home_project.name : "this project";
+  if (!c.settings.mappings.length) return [c.settings.project_keys.length ? `${c.settings.project_keys.join(", ")} → ${home}` : `All projects → ${home}`];
   return c.settings.mappings.map((m) => `${m.external_project} → ${m.boss_project_id === projectId ? "this project" : names[m.boss_project_id] ?? m.boss_project_id}${m.default ? " (default)" : ""}`);
 }
 
@@ -101,6 +104,8 @@ export function TicketSystemsRow({ projectId, focused = false }: { projectId: st
             {items.map((c) => {
               const st = STATUS[c.status];
               const managed = Boolean(c.managed_from);
+              // ORG-LEVEL: added once from another project; usable here, managed from there.
+              const shared = c.reach === "org" && c.home_project ? c.home_project : null;
               return (
                 <div key={c.id} className="tk-system" role="row" data-testid={`tk-system-${c.id}`} data-status={c.status}>
                   <span role="cell" className="tk-system-name">
@@ -114,6 +119,9 @@ export function TicketSystemsRow({ projectId, focused = false }: { projectId: st
                   <span role="cell" className="tk-cell" data-label="Projects">
                     {mapWords(c, projectId, names).map((m) => <span key={m} className="tk-mono-text">{m}</span>)}
                     {managed ? <span className="tk-faint">Managed from another project</span> : null}
+                    {shared ? <span className="tk-faint" data-testid={`tk-shared-${c.id}`}
+                                    title="A ticket system is connected once for the whole organisation: every project can read and import its tickets. Settings live where it was added.">
+                      Shared · added in {shared.name}</span> : null}
                   </span>
                   <span role="cell" className="tk-cell" data-label="Writes back">{writesWords(c.settings.write_back)}</span>
                   <span role="cell" className="tk-cell" data-label="New tickets" data-testid={`tk-pickup-${c.id}`}>{pickupWords(c.settings)}</span>
@@ -125,7 +133,7 @@ export function TicketSystemsRow({ projectId, focused = false }: { projectId: st
                     <RowMenu label={`${c.label} actions`} testid={`tk-menu-${c.id}`} items={[
                       { label: "Test", testid: `tk-test-${c.id}`, disabled: !manage.allowed || c.status === "disconnected", onSelect: () => void test(c) },
                       { label: "Settings", testid: `tk-edit-${c.id}`, disabled: !manage.allowed || managed, onSelect: () => setDrawer({ mode: "edit", connection: c }) },
-                      { label: "Disconnect", testid: `tk-off-${c.id}`, danger: true, disabled: !manage.allowed || c.status === "disconnected" || managed,
+                      { label: "Disconnect", testid: `tk-off-${c.id}`, danger: true, disabled: !manage.allowed || c.status === "disconnected" || managed || Boolean(shared),
                         onSelect: () => setConfirm(c) },
                     ]} />
                   </span>
@@ -162,7 +170,8 @@ export function TicketSystemsRow({ projectId, focused = false }: { projectId: st
           <a className="tk-linkbtn" href={CONNECTORS_DOC} target="_blank" rel="noreferrer noopener" style={{ fontSize: "inherit" }}>How adapters work <ArrowSquareOut size={11} aria-hidden /></a></div>
       </div>
       {drawer ? (
-        <AddTicketSystem projectId={projectId} connection={drawer.mode === "edit" ? drawer.connection : null}
+        <AddTicketSystem projectId={drawer.mode === "edit" && drawer.connection.reach === "org" && drawer.connection.home_project ? drawer.connection.home_project.id : projectId}
+                         connection={drawer.mode === "edit" ? drawer.connection : null}
                          onClose={() => setDrawer(null)}
                          onSaved={(words) => { setDrawer(null); setSaid({ text: words, tone: "green" }); void load(); }}
                          onChanged={() => void load()} />

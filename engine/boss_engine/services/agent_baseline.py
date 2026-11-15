@@ -79,6 +79,10 @@ FUNDAMENTALS_TOOLS: tuple[str, ...] = (
     "precheck_workflow",
     # memory
     "recall", "recall_role_experience",
+    # the team's ticket systems: look a ticket up by key or link, search, browse (2026-11-15:
+    # "it is supposed to find the ticket from jira" — a named ticket is how new work arrives,
+    # so EVERY agent reads tickets, not only the roles granted tickets.read)
+    "ticket_get", "ticket_search", "ticket_browse",
     # a gap in BOSS itself, diagnosed: written down for BOSS to fix itself (BOSSAPP-571). The one
     # write here: it only queues for a person (FUNDAMENTALS_WRITES).
     "file_platform_gap",
@@ -126,8 +130,9 @@ PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",
                                        # diff; the agent never writes a page (BOSSAPP-891)
                                        "wiki_propose")
 
-#: `tickets.read` / `tickets.write` offer the team's ticket system (BOSSAPP-1047 B2). Granted by
-#: role (pm, engineering_captain, the planners; sre writes), never in the baseline.
+#: `tickets.read` / `tickets.write` offer the team's ticket system (BOSSAPP-1047 B2). The reads are
+#: also in `boss.fundamentals` (every agent looks tickets up, 2026-11-15); `tickets.write` stays a
+#: role grant (pm, engineering_captain, the planners; sre writes).
 TICKET_READ_TOOLS: tuple[str, ...] = ("ticket_get", "ticket_search", "ticket_browse")
 TICKET_WRITE_TOOLS: tuple[str, ...] = ("ticket_import", "ticket_comment", "ticket_transition")
 
@@ -209,6 +214,13 @@ PRIMER = (
     "list_running_work / consistency_report for BOSS's own health; list_capabilities / "
     "list_skills / describe_workflow for what BOSS can do; recall for what this project "
     "already learned. Quote the error line, the file, the value you read.\n"
+    "TICKETS: when a person names a ticket — a key like KAN-7 or LEND-142, or a link to Jira, "
+    "Plane, Linear, GitHub Issues or Azure DevOps — call ticket_get with it BEFORE you answer. "
+    "It looks in every ticket system connected in this project or once for the whole org, and "
+    "says which site it read and which BOSS project the ticket maps to, or that the key was not "
+    "found in that site; repeat that plainly. ticket_search finds tickets by words, "
+    "ticket_import brings one into BOSS as a work item. Never say BOSS cannot read tickets "
+    "unless ticket_get answered not_connected, and then say where to connect one.\n"
     "TO WAIT for work that is running (a job, a build, a workflow run, a code index), call "
     "wait_for once: it blocks until the work settles, without a model call per look. Do not "
     "read a status over and over.\n"

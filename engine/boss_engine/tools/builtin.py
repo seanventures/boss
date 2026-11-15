@@ -5008,7 +5008,9 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "first. Use before launching expensive work, or to explain a spend spike.",
         _obj({"days": {"type": "integer", "minimum": 1, "maximum": 90, "default": 7},
               "limit": _LIMIT, "project_id": {"type": "string"}}), permission="budget:read",
-        exposure=Exposure(tags=("costs",), core_for=("chat",)))
+        # Deferred (found by find_tools "costs") since 2026-11-15: its core seat went to
+        # ticket_get — a named ticket is how new work arrives (tools/ticket_tools.py).
+        exposure=Exposure(tags=("costs", "spend", "budget")))
     def get_costs(ctx, *, project_id, actor, args):
         # Session project is the fence. args.project_id is stripped by MCP HTTP and
         # the discuss-path pin; never fall back to a model-supplied override here

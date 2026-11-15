@@ -150,7 +150,7 @@ describe("Import page", () => {
     expect($('[data-testid="tk-imp-err"]')?.textContent).toBe("Jira refused BOSS's token.");
     unmount();
     await mount(<TicketImportPage ctx={ctx()} conns={conns([])} />);
-    expect($('[data-testid="tk-imp-none-setup"]')?.getAttribute("href")).toBe("?area=setup&focus=ticket_systems");
+    expect($('[data-testid="tk-imp-none-setup"]')?.getAttribute("href")).toMatch(/^\?area=setup&focus=ticket_systems&project_id=./); // keeps the project (2026-11-15)
   });
 
   it("a denied projects read says so; the connection picker switches systems", async () => {
