@@ -879,6 +879,12 @@ def normalise_workflow_spec(
             # this pass only confirms the shape.
             if not str(binding.get("custom_step") or "").strip():
                 bad("binding", f"step '{step_id}' does not say which custom step it runs.")
+            if binding.get("capability"):
+                # ONE THING RUNS A STEP. A custom step that also names a capability would run
+                # the custom step while everything that reads the template — the promotion's
+                # "this run's config_deploy step" — believed the capability (review of #125).
+                bad("binding", f"step '{step_id}' names both a custom step and a capability; "
+                               "a step runs one of them.")
             # A CUSTOM STEP MAY NAME AN AGENT TOO, and until now only the built-in capabilities
             # had their captain checked — so a typo in a role on a customer's step published
             # cleanly and was denied at run time, twenty minutes into a workflow, as
@@ -1190,8 +1196,14 @@ def described_not_run(step: dict[str, Any]) -> bool:
     return isinstance(design, dict) and design.get("status") == "shared_service"
 
 
-def _runs_before(normalized: dict[str, Any]) -> dict[str, set[str]]:
+def _runs_before(normalized: dict[str, Any], *,
+                 failed_counts: bool = False) -> dict[str, set[str]]:
     """For each reachable step, the steps that have certainly finished when it starts.
+
+    `failed_counts`: a step reached by p's error path counts p as having run — p failed, and
+    its failed output is in the run context for that path (AMEX-G10). That is what a binding
+    may read (`binding_order_problems`); "finished" for a re-run (`workflow_test_runs`) still
+    means completed.
 
     An ancestor on EVERY path, not merely on some: after a condition only what came before the
     condition is certain. Parallel branches all run, so a join that waits for all of them has
@@ -1232,7 +1244,8 @@ def _runs_before(normalized: dict[str, Any]) -> dict[str, set[str]]:
                 continue
             # Reached only by p's error path, p did not finish: it failed. What came before
             # p is certain; p's own output is not.
-            sets = [before[p] | ({p} if sid in _success_targets(steps[p]) else set())
+            sets = [before[p] | ({p} if failed_counts or sid in _success_targets(steps[p])
+                                 else set())
                     for p in incoming]
             step = steps[sid]
             if step.get("kind") == "join" and step.get("success_policy", "all") == "all":
@@ -1274,7 +1287,9 @@ def binding_order_problems(
     """
     optional_for = optional_inputs or _capability_optional_inputs
     steps = _step_map(normalized)
-    before = _runs_before(normalized)
+    # A step on an error path may read the step that failed into it: its failed output (exit
+    # code, log tail) is in the run context for that path (AMEX-G10, BOSSAPP-1168).
+    before = _runs_before(normalized, failed_counts=True)
     found: list[dict[str, Any]] = []
     for sid, step in steps.items():
         if sid not in before:

@@ -210,7 +210,9 @@ def validate_config(behaviour: str, config: dict[str, Any], inputs: Iterable[str
     if not 5 <= timeout <= 3600:
         raise SkillDefinitionError("timeout_seconds must be between 5 and 3600.")
     outputs = _named_list(given.get("outputs"), "outputs")
+    local = _local_binaries(given.get("local_binaries"))
     return {
+        **({"local_binaries": local} if local else {}),
         "image": image,
         "command": command,
         "timeout_seconds": timeout,
@@ -227,6 +229,36 @@ def validate_config(behaviour: str, config: dict[str, Any], inputs: Iterable[str
         # nothing changed under a running workflow.
         "fail_on_exit": as_flag(given.get("fail_on_exit"), default=True),
     }
+
+
+#: How many worker paths one skill may declare it runs under local_fenced.
+MAX_LOCAL_BINARIES = 16
+
+
+def _local_binaries(value: Any) -> list[str]:
+    """`local_binaries` (AMEX-G12): absolute worker paths — a CLI's file or its install
+    directory — the command runs when the skill executes under `local_fenced`, where the
+    pinned image is not used. Checked against the operator's BOSS_LOCAL_FENCED_BINARIES at run
+    time (local_fenced.check_local_binaries); here only their shape."""
+    import posixpath
+
+    if value in (None, "", []):
+        return []
+    items = [value] if isinstance(value, str) else value
+    if not isinstance(items, list) or len(items) > MAX_LOCAL_BINARIES:
+        raise SkillDefinitionError(
+            f"local_binaries is a list of at most {MAX_LOCAL_BINARIES} absolute paths.")
+    out: list[str] = []
+    for raw in items:
+        path = str(raw or "").strip()
+        norm = posixpath.normpath(path) if path else ""
+        if not norm.startswith("/") or norm == "/" or ".." in path.split("/") or len(norm) > 300:
+            raise SkillDefinitionError(
+                f"local_binaries entry {raw!r} must be an absolute path on the worker, e.g. "
+                "/opt/northgate/gwlint.")
+        if norm not in out:
+            out.append(norm)
+    return out
 
 
 def as_flag(value: Any, *, default: bool) -> bool:

@@ -177,6 +177,16 @@ def test_no_awaited_failure_is_turned_into_a_success():
 
 # ── Helpers ──────────────────────────────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _promotion_binding_is_its_own_test(monkeypatch):
+    """"Promote only what this run staged" (AMEX-G9) is proved by
+    test_two_runs_in_flight_each_promote_only_what_they_staged. Here promote_config is one
+    capability among all, in a one-step workflow with no staging step, and what is under test
+    is how its failures stop the run."""
+    monkeypatch.setattr(runner, "_bound_promotion",
+                        lambda connection, context, inputs, spec=None: inputs)
+
+
 def _required(key: str) -> dict:
     return {name: "x" for name in CAPABILITIES[key].required_inputs}
 
