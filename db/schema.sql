@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   -- What a project is for, in its creator's words (POST /v1/projects). Optional.
   description TEXT,
+  -- Try a sample (BOSSAPP-1014): one live project per org for a key such as hello-world.
+  sample_key TEXT,
   UNIQUE(workspace_id, slug)
 );
 
@@ -10792,6 +10794,10 @@ CREATE INDEX IF NOT EXISTS idx_projects_archived ON projects(id) WHERE archived_
 -- a knowledge graph (import code → assign the team → first rules scan → review), guided by the
 -- Knowledge Graph area's setup (services/knowledge/project_setup.py). A generic column, not a KG
 -- flag: the type decides which guided flow and home card a project gets.
+-- One Hello World per organization (BOSSAPP-1014). Try a sample finds the live project with
+-- this key instead of creating another. An archived sample gives the key up.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS sample_key TEXT;
+
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_type TEXT NOT NULL DEFAULT 'app';
 DO $project_type$
 BEGIN

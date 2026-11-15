@@ -49,7 +49,7 @@ import { IdeasDialog } from "../../components/v2/templates/ideas-dialog";
 import { adapterLanguage, useStackAdapters } from "../../components/v2/templates/stack-warning";
 import { templatesApi } from "../../lib/templates";
 import { ageShort, hostFolders, type FolderFacts, type FolderHost } from "../../lib/host-folder";
-import { accountsOf, allPresets, createFresh, installWideRefusal, nameFromIdea, projectPageHref, type Preset } from "../../lib/start-project";
+import { accountsOf, allPresets, createFresh, ensureSample, installWideRefusal, nameFromIdea, projectPageHref, type Preset } from "../../lib/start-project";
 import {
   addProjectApi, bringChoices, creatingOwners, defaultWhere, detect, doorOf, estimateTip, estimateWords, hostPort, lineCount, nameFromTitle, nextFreeName, repoSlug,
   type Brief, type BriefField, type Bring, type Door, type Kind, type LocalFolder, type OwnerCredential, type Preview, type RepoCheck, type RepoRead, type Understanding,
@@ -590,7 +590,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       if (!pid) {
         const wide = asReadiness(await installWideRefusal(homeId, SAMPLE.workflow_key, undefined, startAnyway));
         if (wide) { setRefusal(wide); setBusy(null); return; }
-        const made = await guarded("Create the Hello World project.", () => createFresh(SAMPLE.name));
+        const made = await guarded("Create the Hello World project.", () => ensureSample(SAMPLE.name));
         pid = made.id;
         setSampleProject(pid);
       }

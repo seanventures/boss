@@ -179,6 +179,56 @@ def test_a_project_nobody_can_read_is_refused(world, client):
     assert r.status_code in (403, 404)
 
 
+def test_one_hello_world_sample_per_organization(world, client, engine):
+    """Try a sample is one project per org (BOSSAPP-1014). The key is the sample, not the
+    name and not the sheet: a plain Hello World is left alone, a taken slug gets the next
+    name once, and a second press returns that same project."""
+    with world.acting_as(world.ctx(world.owner)):
+        plain = client.post("/v1/projects", json={"name": "Hello World", "slug": "hello-world"})
+        assert plain.status_code == 201, plain.text
+        first = client.post("/v1/projects", json={"name": "Hello World", "sample_key": "hello-world"})
+        second = client.post("/v1/projects", json={"name": "Hello World", "sample_key": "hello-world"})
+        assert first.status_code == 201 and second.status_code == 201, (first.text, second.text)
+        sample_id = first.json()["id"]
+        assert second.json()["id"] == sample_id
+        assert sample_id != "hello-world"
+        assert first.json()["name"].startswith("Hello World")
+        # The key, not the requested name: asking again under another name is still that project.
+        again = client.post("/v1/projects", json={"name": "Not Hello World", "sample_key": "hello-world"})
+        assert again.status_code == 201 and again.json()["id"] == sample_id
+        bad = client.post("/v1/projects", json={"name": "Hello World", "sample_key": "Hello World"})
+        assert bad.status_code == 422, bad.text
+    with engine.connect() as db:
+        rows = db.execute(text(
+            "SELECT p.id, p.sample_key FROM projects p "
+            "JOIN workspaces w ON w.id = p.workspace_id "
+            "WHERE w.org_id = :o AND (p.id = 'hello-world' OR p.sample_key = 'hello-world')"),
+            {"o": world.org}).all()
+    by_id = {row[0]: row[1] for row in rows}
+    assert by_id["hello-world"] is None
+    assert by_id[sample_id] == "hello-world"
+    assert list(by_id.values()).count("hello-world") == 1
+
+    # A deleted sample can be made again, once. The archived row gives the key up.
+    with engine.begin() as db:
+        db.execute(text("UPDATE projects SET archived_at = now(), archived_by = 'test' "
+                        "WHERE id = :p"), {"p": sample_id})
+    with world.acting_as(world.ctx(world.owner)):
+        remade = client.post("/v1/projects", json={"name": "Hello World", "sample_key": "hello-world"})
+        remade_again = client.post("/v1/projects", json={"name": "Hello World", "sample_key": "hello-world"})
+        assert remade.status_code == 201 and remade_again.status_code == 201, (remade.text, remade_again.text)
+        assert remade.json()["id"] == remade_again.json()["id"]
+        assert remade.json()["id"] != sample_id
+    with engine.connect() as db:
+        keys = db.execute(text(
+            "SELECT p.id, p.sample_key, p.archived_at IS NOT NULL FROM projects p "
+            "JOIN workspaces w ON w.id = p.workspace_id "
+            "WHERE w.org_id = :o AND p.sample_key = 'hello-world'"),
+            {"o": world.org}).all()
+    live = [row for row in keys if row[1] == "hello-world" and row[2] is False]
+    assert [row[0] for row in live] == [remade.json()["id"]]
+
+
 def test_the_sample_applies_hello_world_as_a_new_app(world, client, engine):
     slug = f"hello-world-{uuid.uuid4().hex[:6]}"
     with world.acting_as(world.ctx(world.owner)):

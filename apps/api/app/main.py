@@ -6071,6 +6071,9 @@ def create_project_endpoint(request: Request, payload: ProjectCreateBody) -> Any
     codebase, whose guided setup is GET /v1/knowledge/setup (import code, assign the team, first
     rules scan, review).
 
+    `sample_key` (Try a sample) returns the org's live project for that key, or creates it and
+    stamps the key. One Hello World per organization.
+
     `project:create` needs step-up for a person; a service account's own key is exempt exactly as
     it is for every other step-up permission outside identity administration (authz._step_up_exempt)."""
     body = payload.payload()
@@ -6092,6 +6095,7 @@ def create_project_endpoint(request: Request, payload: ProjectCreateBody) -> Any
                 description=body.get("description"), actor=actor, principal=principal,
                 entitlements=entitlements, members=members, specpack=specpack,
                 project_type=body.get("project_type"),
+                sample_key=body.get("sample_key"),
             )
         except project_service.ProjectExists as clash:
             raise HTTPException(status_code=409, detail={

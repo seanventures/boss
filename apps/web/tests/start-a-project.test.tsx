@@ -111,6 +111,19 @@ describe("the URL opens the flow at a choice", () => {
     expect(tid("ap-sample")!.hasAttribute("data-lit")).toBe(true);
   });
 
+  it("Add a project's Try a sample posts the stable sample key", async () => {
+    window.history.replaceState(null, "", "/?org=org_1&new_project=sample");
+    const calls = stubFetch((c) => {
+      if (c.method === "POST" && c.path === "/v1/projects") return { status: 201, body: { id: "hello-world", name: "Hello World" } };
+      if (c.method === "POST" && c.path === "/v1/templates/hello-world/apply") return { status: 201, body: { workflow_run_id: "wfr_1" } };
+      return undefined;
+    });
+    await mountAs(<ProjectMenu projects={[{ id: "p1", name: "Acme Shop" }]} activeId="p1" homeId="p1" />);
+    await click(tid("ap-sample"));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body)
+      .toEqual({ name: "Hello World", sample_key: "hello-world" });
+  });
+
   it("/?new_project=idea opens the one input; the full form is More ways › Blank, with Back", async () => {
     window.history.replaceState(null, "", "/?new_project=idea");
     stubFetch(() => undefined);
@@ -252,11 +265,32 @@ describe("the sample", () => {
     await mountAs(<StartProjectSheet step="sample" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
     expect($$(".spj-flow li b").map((b) => b.textContent)).toEqual(["Plan", "Build", "Review", "Pull request", "Preview"]);
     await click(tid("start-sample-go"));
-    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "Hello World" });
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "Hello World", sample_key: "hello-world" });
     expect(calls.find((c) => c.path.endsWith("/apply"))!.body).toEqual({
       project_id: "hello-world", new_app: { name: "Hello World" }, stack: "node", workflow_key: "minor_feature",
       dedupe_key: "sample:hello-world" });
     expect(new URLSearchParams(String(go.mock.calls[0][0]).split("?")[1]).get("project_id")).toBe("hello-world");
+  });
+
+  it("a closed sheet still asks for the same sample, not Hello World 2", async () => {
+    const answer = (c: { method: string; path: string }) => {
+      if (c.method === "POST" && c.path === "/v1/projects") return { status: 201, body: { id: "hello-world", name: "Hello World" } };
+      if (c.method === "POST" && c.path === "/v1/templates/hello-world/apply") return { status: 201, body: { workflow_run_id: "wfr_1" } };
+      return undefined;
+    };
+    const first = stubFetch(answer);
+    const go = vi.fn();
+    await mountAs(<StartProjectSheet step="sample" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
+    await click(tid("start-sample-go"));
+    unmount();
+    const second = stubFetch(answer);
+    await mountAs(<StartProjectSheet step="sample" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
+    await click(tid("start-sample-go"));
+    const posts = [...first, ...second].filter((c) => c.method === "POST" && c.path === "/v1/projects");
+    expect(posts.map((c) => c.body)).toEqual([
+      { name: "Hello World", sample_key: "hello-world" },
+      { name: "Hello World", sample_key: "hello-world" },
+    ]);
   });
 
   it("refused for what the install lacks: the checklist, then Start anyway sends it once more", async () => {
@@ -279,7 +313,8 @@ describe("the sample", () => {
     await click(tid("dw-readiness-start-anyway"));
     await click(tid("start-sample-go"));
     // One project, two applies: the second says what it starts without.
-    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/projects").length).toBe(1);
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/projects").map((c) => c.body))
+      .toEqual([{ name: "Hello World", sample_key: "hello-world" }]);
     expect((calls.filter((c) => c.path.endsWith("/apply"))[1].body as { start_anyway: string[] }).start_anyway).toEqual(["deployment_target"]);
     expect(go).toHaveBeenCalledTimes(1);
   });

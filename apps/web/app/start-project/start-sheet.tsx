@@ -24,7 +24,7 @@ import { IdentityError } from "../../lib/identity/api";
 import { withConsent } from "../../lib/identity/consent";
 import { templatesApi } from "../../lib/templates";
 import {
-  CHOICES, allPresets, createFresh, installWideRefusal, nameFromIdea, projectPageHref, shownPresets, type Preset, type StartStep,
+  CHOICES, allPresets, createFresh, ensureSample, installWideRefusal, nameFromIdea, projectPageHref, shownPresets, type Preset, type StartStep,
 } from "../../lib/start-project";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { ImportRepo } from "./import-repo";
@@ -93,7 +93,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
         // before the project is made, so a refusal leaves nothing behind.
         const wide = asReadiness(await installWideRefusal(homeId, SAMPLE.workflow_key, undefined, startAnyway));
         if (wide) { setRefusal(wide); setBusy(null); return; }
-        const made = await guarded("Create the Hello World project.", () => createFresh(SAMPLE.name));
+        const made = await guarded("Create the Hello World project.", () => ensureSample(SAMPLE.name));
         pid = made.id;
         setSampleProject(pid);
       }
