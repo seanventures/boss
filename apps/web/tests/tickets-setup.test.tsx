@@ -9,9 +9,10 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { tileLine } from "../app/setup/add-ticket-system";
 import { TicketSystemsRow } from "../app/setup/ticket-systems-row";
 import { ConnectionSection } from "../app/skills/connection-section";
-import { codeWords, parseConnection, pickupWords, writesWords } from "../lib/tickets";
+import { codeWords, oauthReady, parseConnection, pickupWords, writesWords } from "../lib/tickets";
 import { $, $$, mount, settle, unmount } from "./_helpers/live-render";
 
 const JIRA = {
@@ -22,6 +23,7 @@ const JIRA = {
               status_map: { todo: "", doing: "", review: "In Review", done: "" }, pickup: { label: "boss", mode: "ask" },
               inbound: { mode: "webhook", poll_minutes: 5 }, project_keys: ["LEND", "OPS"] },
   managed_from: null, mirrors: [], bindings: { total: 3, paused: 0 },
+  oauth_app: { client_id: "atl-app", secret_set: true, from_host: false, callback_url: "https://boss.example/v1/ticket-systems/oauth/callback" },
 };
 const CATALOG = { items: [
   { provider: "jira", label: "Jira", icon: "jira", description: "Atlassian Jira Cloud — issues, bugs, and epics.", docs_url: "",
@@ -48,7 +50,7 @@ function api(over: (url: string, method: string, body: Record<string, unknown>) 
     if (url.startsWith("/v1/ticket-systems/catalog")) return json(CATALOG);
     if (url.startsWith("/v1/ticket-systems?project_id=")) return json({ connections: [JIRA] });
     if (url.endsWith("/projects")) return json({ projects: [{ key: "LEND", name: "Lending" }, { key: "OPS", name: "Operations" }] });
-    if (url.endsWith("/test")) return json({ connection: JIRA, test: { ok: true, account: "BOSS Bot" } });
+    if (url.endsWith("/test")) return json({ connection: JIRA, test: { ok: true, account: "BOSS Bot", project_keys: ["LEND", "OPS"] } });
     if (url.endsWith("/webhook")) return json({ url: "https://boss.example/v1/webhooks/tickets/wtp_1", secret: "whsec_ONCE", last4: "ONCE", rotated: false });
     if (url.endsWith("/oauth/start/load")) return json({ authorize_url: "https://auth.atlassian.com/authorize?x=1" });
     if (method === "POST" && url === "/v1/ticket-systems") return json({ connection: JIRA, test: { ok: true, account: "BOSS Bot", capabilities: { read: true, write_comment: true, transition: true } } }, 201);
@@ -93,7 +95,8 @@ describe("Setup › Ticket systems (T1)", () => {
     await click('[data-testid="tk-menu-wtp_1"]');
     await click('[data-testid="tk-test-wtp_1"]');
     expect(calls.some((c) => c.method === "POST" && c.url === "/v1/ticket-systems/wtp_1/test")).toBe(true);
-    expect($('[data-testid="tk-said"]')?.textContent).toBe("Jira works · signed in as BOSS Bot.");
+    // The guide's promise: "You should see your name and the projects you can see."
+    expect($('[data-testid="tk-said"]')?.textContent).toBe("Jira works · signed in as BOSS Bot · sees 2 projects: LEND, OPS.");
 
     await click('[data-testid="tk-menu-wtp_1"]');
     await click('[data-testid="tk-off-wtp_1"]');
@@ -109,8 +112,9 @@ describe("Setup › Ticket systems (T1)", () => {
     await click('[data-testid="tk-menu-wtp_1"]');
     await click('[data-testid="tk-edit-wtp_1"]');
     expect($('[data-testid="tk-drawer"]')?.getAttribute("aria-label")).toBe("Jira settings");
-    // The token is never prefilled: a stored one says Set, …last4.
-    expect(($('[data-testid="tk-secret-set"]') as HTMLInputElement).value).toBe("Set, …a1f3");
+    // The token is never prefilled, and no part of it is shown (not even its last four).
+    expect(($('[data-testid="tk-secret-set"]') as HTMLInputElement).value).toBe("Stored in BOSS's vault");
+    expect($('[data-testid="tk-drawer"]')?.textContent).not.toContain("a1f3");
     expect($('[data-testid="tk-secret"]')).toBeNull();
   });
 
@@ -223,6 +227,84 @@ describe("Add a ticket system (T2)", () => {
     await click('[data-testid="tk-cancel"]');
     expect($('[data-testid="tk-drawer"]')).toBeNull();
     expect(calls.filter((c) => c.method === "PATCH")).toEqual([]);
+  });
+});
+
+describe("Connect with Atlassian: the connection's own app (setup guide Part 2)", () => {
+  const NO_APP = { ...JIRA, oauth_app: { client_id: "", secret_set: false, from_host: false, callback_url: "" } };
+  it("asks for the Client ID and Client secret first, shows the callback URL to paste, and saves them write-only", async () => {
+    const writes: string[] = [];
+    vi.stubGlobal("navigator", { clipboard: { writeText: (t: string) => { writes.push(t); return Promise.resolve(); } } });
+    const calls = api((url) => (url.startsWith("/v1/ticket-systems?") ? json({ connections: [NO_APP] }) : undefined));
+    await mount(<TicketSystemsRow projectId="p1" />);
+    await click('[data-testid="tk-menu-wtp_1"]');
+    await click('[data-testid="tk-edit-wtp_1"]');
+    // No app yet: Connect waits, and says what to do in words.
+    expect(($('[data-testid="tk-oauth-start"]') as HTMLButtonElement).disabled).toBe(true);
+    expect($('[data-testid="tk-oauth-why"]')?.textContent).toBe("Add the Atlassian app's Client ID and Client secret below, then Save");
+    // The API named no public origin: the callback is this console's own address + the path.
+    expect($('[data-testid="tk-oauth-callback"]')?.textContent).toBe(`${window.location.origin}/v1/ticket-systems/oauth/callback`);
+    await click('[data-testid="tk-oauth-callback-copy"]');
+    expect(writes).toEqual([`${window.location.origin}/v1/ticket-systems/oauth/callback`]);
+
+    // A secret without its client id is said, not sent.
+    await type('[data-testid="tk-oauth-client-secret"]', "app-secret-1");
+    await click('[data-testid="tk-save"]');
+    expect($('[role="alert"]')?.textContent).toBe("Add the client ID with its secret.");
+    expect(calls.filter((c) => c.method === "PATCH")).toEqual([]);
+
+    await type('[data-testid="tk-oauth-client-id"]', "atl-app-9");
+    expect(($('[data-testid="tk-oauth-client-secret"]') as HTMLInputElement).type).toBe("password");
+    await click('[data-testid="tk-save"]');
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect(patch.body.oauth_app).toEqual({ client_id: "atl-app-9", client_secret: "app-secret-1" });
+    expect($('[data-testid="tk-said"]')?.textContent).toBe("Jira saved.");
+  });
+
+  it("with an app stored: Connect starts, the secret says Stored, and a save without changes sends no app", async () => {
+    const calls = api();
+    await mount(<TicketSystemsRow projectId="p1" />);
+    await click('[data-testid="tk-menu-wtp_1"]');
+    await click('[data-testid="tk-edit-wtp_1"]');
+    expect(($('[data-testid="tk-oauth-client-id"]') as HTMLInputElement).value).toBe("atl-app");
+    expect(($('[data-testid="tk-oauth-client-secret"]') as HTMLInputElement).placeholder).toBe("Stored, type to replace");
+    expect($('[data-testid="tk-oauth-callback"]')?.textContent).toBe("https://boss.example/v1/ticket-systems/oauth/callback");
+    expect($('[data-testid="tk-oauth-why"]')).toBeNull();
+    await click('[data-testid="tk-oauth-start"]');
+    expect(calls.some((c) => c.url === "/v1/ticket-systems/wtp_1/oauth/start/load" && c.method === "POST")).toBe(true);
+    await click('[data-testid="tk-save"]');
+    expect(calls.find((c) => c.method === "PATCH")!.body).not.toHaveProperty("oauth_app");
+  });
+
+  it("knows when sign-in can start: an app on the connection or on the host", () => {
+    expect(oauthReady(parseConnection(JIRA))).toBe(true);
+    expect(oauthReady(parseConnection(NO_APP))).toBe(false);
+    expect(oauthReady(parseConnection({ ...NO_APP, oauth_app: { ...NO_APP.oauth_app, from_host: true } }))).toBe(true);
+    expect(oauthReady(parseConnection({ ...JIRA, oauth_app: null }))).toBe(false);
+  });
+});
+
+describe("the Add drawer's words", () => {
+  it("a tile's second line never repeats its name, and the rule reads Ask me first / Start automatically", async () => {
+    expect(tileLine({ label: "GitHub Issues", description: "GitHub Issues — track work next to the code." })).toBe("Track work next to the code");
+    expect(tileLine({ label: "Jira", description: "Atlassian Jira Cloud — issues, bugs, and epics." })).toBe("Atlassian Jira Cloud");
+    api();
+    await mount(<TicketSystemsRow projectId="p1" />);
+    await click('[data-testid="tk-menu-wtp_1"]');
+    await click('[data-testid="tk-edit-wtp_1"]');
+    expect($$('[data-testid="tk-pickup-mode"] option').map((o) => o.textContent)).toEqual(["Ask me first", "Start automatically"]);
+    expect($('[data-testid="tk-secret-replace"]')?.textContent).toBe("Replace API token");
+  });
+
+  it("a mapping can send a project's tickets to another BOSS project", async () => {
+    const calls = api((url) => (url === "/v1/projects" ? json({ items: [{ id: "p1", name: "Lending" }, { id: "p2", name: "Payments" }] }) : undefined));
+    await mount(<TicketSystemsRow projectId="p1" />);
+    await click('[data-testid="tk-menu-wtp_1"]');
+    await click('[data-testid="tk-edit-wtp_1"]');
+    expect($$('[data-testid="tk-map-to-0"] option').map((o) => o.textContent)).toEqual(["Lending (this project)", "Payments"]);
+    await type('[data-testid="tk-map-to-0"]', "p2");
+    await click('[data-testid="tk-save"]');
+    expect(calls.find((c) => c.method === "PATCH")!.body.mappings).toEqual([{ external_project: "LEND", boss_project_id: "p2", default: true }]);
   });
 });
 

@@ -19,7 +19,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IdentityProvider } from "../components/identity/identity-provider";
 import { NowProvider } from "../components/identity/kit";
 import { SignInSettings } from "../app/identity/sign-in/sign-in-settings";
-import { createBody, emptyForm, idpUrls, missing, oktaIssuerProblem, patchBody, testFailureWords, withIssuer } from "../app/identity/sign-in/provider-form";
+import {
+  createBody, draftTestBody, draftTestMissing, draftTestWords, emptyForm, idpUrls, missing, oktaIssuerProblem, patchBody, testFailureWords, withIssuer,
+} from "../app/identity/sign-in/provider-form";
 import { idpSignOutUrl } from "../components/identity/account-menu";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
 import { resetStub, stubHandle } from "../lib/identity/stub/server";
@@ -157,7 +159,7 @@ describe("the provider form's model", () => {
     expect(createBody({ ...emptyForm("saml"), issuer: "urn:i", saml_sso_url: "https://i/sso", saml_certificate: "P", idp_initiated: true }))
       .toMatchObject({ allow_idp_initiated: true });
     expect(idpUrls(ORIGIN, { id: "idp_1", protocol: "oidc", kind: "okta" })!.map((u) => [u.label, u.value])).toEqual([
-      ["Redirect URL", `${ORIGIN}/v1/auth/sso/idp_1/callback`],
+      ["Sign-in redirect URI", `${ORIGIN}/v1/auth/sso/idp_1/callback`],
       ["Initiate login URI", `${ORIGIN}/v1/auth/sso/idp_1/start`],
       ["Sign-out redirect URI", `${ORIGIN}/login`],
       ["Back-channel logout URI", `${ORIGIN}/v1/auth/sso/idp_1/backchannel-logout`],
@@ -180,6 +182,16 @@ describe("the provider form's model", () => {
     expect(idpUrls(null, { id: "idp_1", protocol: "oidc" })).toBeNull();
     expect(testFailureWords("jwks_refused")).toBe("Can't read its signing keys");
     expect(testFailureWords("anything_else")).not.toMatch(/_/);
+    expect(testFailureWords("discovery_failed")).toBe("No sign-in settings at that address · check the issuer URL");
+    expect(testFailureWords("jwks_failed")).toBe("Can't read its signing keys");
+    // The dry run's needs and words: only what reaches the IdP, never a secret.
+    expect(draftTestMissing(emptyForm("okta"))).toBe("Add the issuer URL to test");
+    expect(draftTestMissing({ ...emptyForm("okta"), issuer: "https://acme-admin.okta.com" })).toBe("Use your Okta URL without -admin");
+    expect(draftTestMissing(emptyForm("google"))).toBe("");
+    expect(draftTestMissing({ ...emptyForm("saml"), issuer: "urn:x", saml_sso_url: "https://i/sso" })).toBe("Paste the signing certificate to test");
+    expect(draftTestBody({ ...emptyForm("okta"), issuer: "https://a.okta.com", client_secret: "s" })).not.toHaveProperty("client_secret");
+    expect(draftTestWords({ ok: false, error: "invalid_provider", detail: "issuer is required" })).toBe("issuer is required");
+    expect(draftTestWords({ ok: true, checked: "configuration" })).toBe("Looks right · certificate and sign-in URL read");
     expect(scimPrincipalId("idp_abc_def")).toBe("sys_scim_abc_def");
   });
 });
@@ -238,6 +250,45 @@ describe("Sign-in providers", () => {
     expect(added.textContent).toContain(`${ORIGIN}/v1/auth/sso/${redirect![1]}/callback`);
     await click(q("[data-testid='provider-done']"));
     expect(document.querySelector("[data-testid^='provider-idp_']")?.textContent).toContain("Okta");
+  });
+
+  it("TEST BEFORE ADDING: a dry run against the issuer from the unsaved form, nothing saved", async () => {
+    const owner = as("param@example.com");
+    await mount(owner, settings(owner, []));
+    // The dry run is the real API's (identity_sso.py test_draft_provider); the stub has no twin.
+    const real = globalThis.fetch;
+    const answers = [{ ok: false, error: "discovery_failed" }, { ok: true, checked: "discovery", issuer: "https://acme2.okta.com" }];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://x");
+      if (url.pathname === "/v1/identity/providers/test") {
+        calls.push({ method: String(init?.method), path: url.pathname, body: JSON.parse(String(init?.body)) });
+        return new Response(JSON.stringify(answers.shift()), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return real(input, init);
+    }));
+    await click(q("[data-testid='provider-add']"));
+    await click(q("[data-testid='kind-okta']"));
+    const test = () => q("[data-testid='provider-draft-test']") as HTMLButtonElement;
+    expect(test().disabled).toBe(true);
+    expect(test().title).toBe("Add the issuer URL to test");
+    await type(q("#pv-issuer"), "https://acme2.okta.com");
+    await type(q("#pv-secret"), "secret-value");
+    expect(test().disabled).toBe(false);                      // no client id needed to test
+    await click(test());
+    expect(q("[data-testid='provider-draft-result']")?.textContent?.trim()).toBe("No sign-in settings at that address · check the issuer URL");
+    await click(test());
+    expect(q("[data-testid='provider-draft-result']")?.textContent?.trim()).toBe("Test passed · BOSS reached the issuer and read its keys");
+    const sent = calls.filter((c) => c.path === "/v1/identity/providers/test");
+    expect(sent).toHaveLength(2);
+    expect(sent[0].body).not.toHaveProperty("client_secret");    // a test never carries the secret
+    expect(sent[0].body).toMatchObject({ protocol: "oidc", preset: "okta", issuer: "https://acme2.okta.com" });
+    expect(calls.some((c) => c.method === "POST" && c.path === "/v1/identity/providers")).toBe(false);
+    // Changing the form clears a stale result.
+    await type(q("#pv-issuer"), "https://acme3.okta.com");
+    expect(q("[data-testid='provider-draft-result']")).toBeNull();
+    // The kind tiles carry an icon each.
+    await click(q("[data-testid='provider-sheet'] .idn-btn.ghost"));
+    expect(document.querySelectorAll("[data-testid^='kind-'] svg").length).toBe(document.querySelectorAll("[data-testid^='kind-']").length);
   });
 
   it("Okta: the tile, sign-out and back-channel URLs come first; linking is an explained opt-in", async () => {

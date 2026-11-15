@@ -52,8 +52,11 @@ export function TicketSystemsRow({ projectId, focused = false }: { projectId: st
   const test = async (c: Connection) => {
     setSaid(null);
     const r = await testTicketSystem(c.id);
-    const t = (r.body ?? {}) as { test?: { ok?: boolean; account?: string } };
-    setSaid(r.ok ? { text: `${c.label} works${t.test?.account ? ` · signed in as ${t.test.account}` : ""}.`, tone: "green" }
+    const t = (r.body ?? {}) as { test?: { ok?: boolean; account?: string; project_keys?: string[] } };
+    // The guide's promise: "You should see your name and the projects you can see."
+    const keys = Array.isArray(t.test?.project_keys) ? t.test.project_keys : [];
+    const seen = keys.length ? ` · sees ${keys.length} project${keys.length === 1 ? "" : "s"}: ${keys.slice(0, 6).join(", ")}${keys.length > 6 ? "…" : ""}` : "";
+    setSaid(r.ok ? { text: `${c.label} works${t.test?.account ? ` · signed in as ${t.test.account}` : ""}${seen}.`, tone: "green" }
                  : { text: r.error ?? "The test failed.", tone: "red" });
     if (r.ok) void load();
   };

@@ -557,15 +557,18 @@ def _scope_row(db: Any, project_id: str) -> Mapping[str, Any]:
 
 
 def _mark_binding(db: Any, binding_id: Optional[str], ok: bool,
-                  error: Optional[dict[str, Any]]) -> None:
+                  error: Optional[dict[str, Any]], state: Optional[str] = None) -> None:
+    """The binding's sync state after one effect. A transition that landed also records the
+    ticket's new status (``state``): the work list's ticket chip reads ``external_state``, and
+    it said "To Do" after BOSS had moved the ticket to In Progress (console walk, 2026-11-14)."""
     if not binding_id:
         return
     db.execute(text(
         "UPDATE work_tracker_bindings SET sync_status = :s, sync_error = CAST(:e AS JSONB), "
-        "last_synced_at = CASE WHEN :ok THEN now() ELSE last_synced_at END, updated_at = now() "
-        "WHERE id = :id"),
+        "last_synced_at = CASE WHEN :ok THEN now() ELSE last_synced_at END, "
+        "external_state = COALESCE(CAST(:st AS TEXT), external_state), updated_at = now() WHERE id = :id"),
         {"s": "synced" if ok else "failed", "e": json.dumps(error or {}), "ok": ok,
-         "id": binding_id})
+         "st": state, "id": binding_id})
 
 
 def _perform(conn: Any, op: str, ticket: Mapping[str, Any], args: Mapping[str, Any]
@@ -632,8 +635,10 @@ def _settle(engine: Any, receipt_id: str, scope: Mapping[str, Any],
                                     {**result, "op": scope["op"], "action": scope["action"]})
         else:
             receipts.mark_failed(db, receipt_id, error)
+        moved_to = str(result.get("to") or "").strip() if scope["op"] == "transition" else ""
         _mark_binding(db, scope.get("binding_id"), error is None,
-                      None if error is None else {**error, "receipt_id": receipt_id})
+                      None if error is None else {**error, "receipt_id": receipt_id},
+                      state=moved_to if error is None and moved_to else None)
         try:
             with db.begin_nested():
                 emit_event(db, scope["project_id"],
