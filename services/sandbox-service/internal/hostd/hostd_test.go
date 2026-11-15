@@ -105,7 +105,7 @@ func (h *harness) config(join string) Config {
 		Hostname: "test-host", Manager: h.mgr, ClaimsFrozen: true, StrictSecrets: true, MaxVMs: 20,
 		HeartbeatEvery: 100 * time.Millisecond, WatchWait: 2 * time.Second,
 		ReconcileEvery: 100 * time.Millisecond, PingEvery: 100 * time.Millisecond,
-		BootGrace: 3 * time.Second, Logf: h.logs.logf,
+		BootGrace: 3 * time.Second, Logf: h.logs.logf, WorkWait: time.Second,
 	}
 }
 
@@ -411,18 +411,25 @@ func TestWatchdogMissedPings(t *testing.T) {
 	h.waitFor(10*time.Second, "serving", func() bool { return len(h.serving()) == 1 })
 	p := pids(t, h.mgr)["vm_1"]
 	stopPID(p) // SIGSTOP: the process exists but answers nothing
+	stopped := time.Now()
 	h.waitFor(5*time.Second, "restart after missed pings", func() bool {
 		s := h.serving()["vm_1"]
 		return s.Restarts == 1
 	})
-	found := false
-	for _, e := range h.cp.Events() {
-		if e.Kind == "vm_state" && e.To == hostapi.StateUnhealthy && strings.HasPrefix(e.Detail["reason"], "missed_pings") {
-			found = true
+	// 3 misses at a 100 ms tick, each ping bounded inside its tick: the
+	// unhealthy transition lands within 3 ticks (+ scheduling slack).
+	var at time.Time
+	h.waitFor(5*time.Second, "missed-ping transition reported", func() bool {
+		for _, e := range h.cp.Events() {
+			if e.Kind == "vm_state" && e.To == hostapi.StateUnhealthy && strings.HasPrefix(e.Detail["reason"], "missed_pings") {
+				at, _ = time.Parse(time.RFC3339Nano, e.At)
+				return true
+			}
 		}
-	}
-	if !found {
-		t.Fatal("missed-ping unhealthy transition was not reported")
+		return false
+	})
+	if took := at.Sub(stopped); took > 600*time.Millisecond {
+		t.Fatalf("hung VM declared unhealthy after %s (want ≤ 3 × 100 ms ticks + slack)", took)
 	}
 	killPID(p)
 	h.crash()

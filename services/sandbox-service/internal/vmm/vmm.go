@@ -16,10 +16,12 @@ package vmm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -49,14 +51,75 @@ type NetAttach struct {
 
 // Spec is everything needed to start one VM.
 type Spec struct {
-	VMID              string
-	DeploymentID      string
-	DeploymentVersion string
-	Mode              string // replica | per_run
-	ImageDigest       string
-	VCPU              int
-	MemMiB            int
-	Net               *NetAttach // nil = no network device at all
+	VMID              string     `json:"vm_id"`
+	DeploymentID      string     `json:"deployment_id"`
+	DeploymentVersion string     `json:"deployment_version"`
+	Mode              string     `json:"vm_mode"` // replica | per_run
+	ImageDigest       string     `json:"image_digest"`
+	VMIP              string     `json:"vm_ip,omitempty"` // replicas
+	VCPU              int        `json:"vcpu"`
+	MemMiB            int        `json:"mem_mib"`
+	Slots             int        `json:"slots"`
+	Net               *NetAttach `json:"net,omitempty"` // nil = no network device at all
+}
+
+// Normalized applies the defaults every backend boots with.
+func (s Spec) Normalized() Spec {
+	if s.VCPU <= 0 {
+		s.VCPU = 1
+	}
+	if s.MemMiB <= 0 {
+		s.MemMiB = 256
+	}
+	return s
+}
+
+// Differs names the first field in which a running VM's recorded spec
+// differs from the wanted one ("" = same). A missing record always differs.
+func Differs(running *Spec, want Spec) string {
+	if running == nil {
+		return "no spec record (not started by this host)"
+	}
+	r, w := running.Normalized(), want.Normalized()
+	switch {
+	case r.ImageDigest != w.ImageDigest:
+		return "image_digest"
+	case r.Mode != w.Mode:
+		return "vm_mode"
+	case r.VMIP != w.VMIP:
+		return "vm_ip"
+	case r.VCPU != w.VCPU:
+		return "vcpu"
+	case r.MemMiB != w.MemMiB:
+		return "mem_mib"
+	case (r.Net == nil) != (w.Net == nil):
+		return "network device"
+	}
+	return ""
+}
+
+// specFile is written 0600 into the VM directory at Create and read back by
+// Scan, so an adopted VM is compared with desired state even without bbolt.
+const specFile = "boss-spec.json"
+
+func writeSpec(dir string, s Spec) error {
+	raw, err := json.Marshal(s.Normalized())
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, specFile), raw, 0o600)
+}
+
+func readSpec(dir string) *Spec {
+	raw, err := os.ReadFile(filepath.Join(dir, specFile))
+	if err != nil {
+		return nil
+	}
+	var s Spec
+	if json.Unmarshal(raw, &s) != nil {
+		return nil
+	}
+	return &s
 }
 
 // VM is a running VM handle.
@@ -64,6 +127,7 @@ type VM struct {
 	ID      string
 	PID     int
 	Dir     string
+	Spec    *Spec         // what it was started with (from boss-spec.json)
 	Adopted bool          // found by Scan, not started by this process
 	Exited  chan struct{} // closed when the VM process is gone
 	once    sync.Once
@@ -89,8 +153,11 @@ type Manager interface {
 	Stop(ctx context.Context, vm *VM) error
 	Stats(vm *VM) Stats
 	Scan() ([]*VM, error)
-	// DialControl opens the host-initiated control channel (vsock port 5000).
-	DialControl(vm *VM) (net.Conn, error)
+	// DialControl opens the host-initiated control channel (vsock port 5000),
+	// giving up at deadline.
+	DialControl(vm *VM, deadline time.Time) (net.Conn, error)
+	// DialInbox opens the VM's work inbox (vsock port 7105).
+	DialInbox(vm *VM, deadline time.Time) (net.Conn, error)
 	// GuestListen is the host end of guest-initiated connections on port.
 	// The listener identifies the VM: nothing else may connect to it.
 	GuestListen(vm *VM, port int) (net.Listener, error)

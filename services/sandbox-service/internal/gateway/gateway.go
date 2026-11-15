@@ -82,8 +82,10 @@ type Gateway struct {
 	HostProof func(method, path string) (string, error)
 	HostCert  func() *tls.Certificate
 	Rules     []Rule
-	Audit     func(hostapi.GuestCall)
-	Event     func(hostapi.HostEvent)
+	// Runs is the host's run → lease map (the run token stays here).
+	Runs  *RunMap
+	Audit func(hostapi.GuestCall)
+	Event func(hostapi.HostEvent)
 	// Enabled gates forwarding (false while the host is revoked).
 	Enabled func() bool
 
@@ -102,6 +104,7 @@ func New(hostID string, minter *pki.Minter, cas *x509.CertPool) *Gateway {
 		HostID: hostID, Minter: minter, UpstreamCAs: cas, Rules: DefaultRules(),
 		bindings: map[string]Binding{}, fences: map[string]int64{}, revoked: map[string]bool{},
 		vms: map[string]*vmGW{}, vmIdent: map[string]Binding{}, endpoints: map[string]string{},
+		Runs: NewRunMap(),
 	}
 }
 
@@ -365,6 +368,10 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 		deny(http.StatusServiceUnavailable, "host_not_serving")
 		return
 	}
+	if !CleanPath(r.URL.Path, r.URL.EscapedPath()) {
+		deny(http.StatusBadRequest, "path_not_canonical")
+		return
+	}
 	if rule.Deny {
 		deny(http.StatusForbidden, "route_denied")
 		return
@@ -420,8 +427,22 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 		r.Body = countingBody{ReadCloser: r.Body, n: &bytesOut}
 	}
 	var keep []string
+	var runToken, leaseRun string
+	ends := false
 	if rule.Route == RouteRunPlane {
-		keep = LeaseHeaders
+		keep = LeaseHeaders // X-Boss-Job, X-Boss-Fence-Epoch (the run token is the host's)
+		if leaseRun = runOfPath(r.URL.Path); leaseRun != "" {
+			l, ok := g.Runs.Get(leaseRun)
+			if !ok || l.ReplicaID != b.ReplicaID {
+				deny(http.StatusConflict, "fenced")
+				return
+			}
+			runToken = l.Token
+			call.RunID = leaseRun
+			ep := l.Epoch
+			call.Epoch = &ep
+			ends = leaseEnds(r)
+		}
 	}
 	var authErr error
 	proxy := &httputil.ReverseProxy{
@@ -434,13 +455,29 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 			pr.Out.URL.RawPath = ""
 			pr.Out.Host = up.Host
 			StripGuestHeaders(pr.Out.Header, keep...)
+			pr.Out.Trailer = nil // guest trailers could smuggle headers past the strip
 			pr.Out.Header.Set(AssertionHeader, assertion)
+			if runToken != "" {
+				pr.Out.Header.Set("X-Boss-Run-Token", runToken)
+			}
 			if setAuth != nil {
 				authErr = setAuth(pr.Out.Header, pr.Out.Method, pr.Out.URL.Path)
 				if authErr != nil {
 					pr.Out.URL.Host = "invalid.invalid" // never forwarded unauthenticated
 				}
 			}
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			if rule.Route != RouteRunPlane {
+				return nil
+			}
+			if ends && resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+				g.Runs.Delete(leaseRun) // the lease ended: forget the token
+			}
+			if r.URL.Path == "/v1/run-plane/admit" {
+				return g.stripAdmitToken(resp, b.ReplicaID)
+			}
+			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			// Fail closed and visibly: there is no direct path to retry on.
@@ -584,6 +621,8 @@ func writeErr(w http.ResponseWriter, status int, reason string) {
 
 // Batcher buffers rows and flushes them in batches (LLD §2.15.6). When the
 // control plane is down it keeps up to Cap rows and counts what it drops.
+// Rows carry a sequence number, so a flush removes exactly the rows it sent
+// even if older rows were dropped from the front meanwhile.
 type Batcher[T any] struct {
 	Flush    func(ctx context.Context, rows []T) error
 	Every    time.Duration
@@ -592,6 +631,7 @@ type Batcher[T any] struct {
 
 	mu      sync.Mutex
 	buf     []T
+	head    uint64 // sequence number of buf[0]
 	dropped int64
 }
 
@@ -600,6 +640,7 @@ func (b *Batcher[T]) Add(row T) {
 	defer b.mu.Unlock()
 	if b.Cap > 0 && len(b.buf) >= b.Cap {
 		b.buf = b.buf[1:]
+		b.head++
 		b.dropped++
 	}
 	b.buf = append(b.buf, row)
@@ -649,16 +690,19 @@ func (b *Batcher[T]) flushOnce(ctx context.Context) {
 			n = max
 		}
 		rows := append([]T(nil), b.buf[:n]...)
+		end := b.head + uint64(n) // one past the last sent sequence
 		b.mu.Unlock()
 		if err := b.Flush(ctx, rows); err != nil {
 			return // keep them; retry next tick
 		}
 		b.mu.Lock()
-		// Rows may have been dropped from the front meanwhile; remove what we sent.
-		if len(b.buf) >= n {
-			b.buf = b.buf[n:]
-		} else {
-			b.buf = nil
+		if end > b.head {
+			k := int(end - b.head) // sent rows still buffered (some may have been dropped)
+			if k > len(b.buf) {
+				k = len(b.buf)
+			}
+			b.buf = b.buf[k:]
+			b.head += uint64(k)
 		}
 		b.mu.Unlock()
 	}

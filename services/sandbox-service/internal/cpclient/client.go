@@ -160,7 +160,16 @@ func parseError(status int, raw []byte) *APIError {
 	return ae
 }
 
+func (c *Client) doHeaders(ctx context.Context, method, path string, hdr map[string]string, in any) error {
+	_, err := c.request(ctx, method, path, nil, hdr, in, nil, true)
+	return err
+}
+
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, in, out any, prove bool) (int, error) {
+	return c.request(ctx, method, path, query, nil, in, out, prove)
+}
+
+func (c *Client) request(ctx context.Context, method, path string, query url.Values, hdr map[string]string, in, out any, prove bool) (int, error) {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
@@ -192,6 +201,9 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		req.Header.Set("Authorization", hostapi.AuthScheme+" "+proof)
 	}
 	req.Header.Set("X-Boss-Host-Api", hostapi.Version)
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
 	resp, err := c.hc.Load().Do(req)
 	if err != nil {
 		return 0, err
@@ -233,6 +245,39 @@ func (c *Client) Heartbeat(ctx context.Context, hostID string, req hostapi.Heart
 		return nil, err
 	}
 	return &out, nil
+}
+
+// HostsNext is the host's single outstanding work request.
+func (c *Client) HostsNext(ctx context.Context, req hostapi.HostsNextRequest) (*hostapi.HostsNextResponse, error) {
+	var raw json.RawMessage
+	if _, err := c.do(ctx, http.MethodPost, hostapi.PathHostsNext, nil, req, &raw, true); err != nil {
+		return nil, err
+	}
+	out := &hostapi.HostsNextResponse{}
+	if len(raw) > 0 && raw[0] == '[' { // a bare list of assignments is accepted too
+		err := json.Unmarshal(raw, &out.Runs)
+		return out, err
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// PutReplicas sends the full replica map (only when hosts/next asks to resync).
+func (c *Client) PutReplicas(ctx context.Context, hostID string, m hostapi.ReplicaMap) error {
+	_, err := c.do(ctx, http.MethodPut, fmt.Sprintf(hostapi.PathReplicas, hostID), nil, m, nil, true)
+	return err
+}
+
+// HandBack returns a claimed run to the queue (the VM refused it or is gone).
+func (c *Client) HandBack(ctx context.Context, a hostapi.Assignment) error {
+	return c.doHeaders(ctx, http.MethodPost, fmt.Sprintf(hostapi.PathRunLease, url.PathEscape(a.RunID)),
+		map[string]string{"X-Boss-Replica": a.ReplicaID, "X-Boss-Job": a.JobID,
+			"X-Boss-Run-Token": a.RunToken, "X-Boss-Fence-Epoch": strconv.FormatInt(a.Epoch, 10)},
+		hostapi.LeaseAction{HandBack: true, Action: "hand_back"})
 }
 
 // Observed pushes replica states at once (on a state change).

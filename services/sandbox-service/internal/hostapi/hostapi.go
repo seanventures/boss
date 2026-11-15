@@ -25,6 +25,9 @@ const (
 	PathObserved   = "/v1/hosts/%s/observed"
 	PathGuestCalls = "/v1/hosts/%s/guest-calls"
 	PathEvents     = "/v1/hosts/%s/events" // optional on the control plane: 404 disables it
+	PathReplicas   = "/v1/hosts/%s/replicas"
+	PathHostsNext  = "/v1/run-plane/hosts/next"
+	PathRunLease   = "/v1/run-plane/runs/%s/lease"
 )
 
 // The host proof: every call after enrolment carries
@@ -68,7 +71,9 @@ const (
 	StateUnhealthy    = "unhealthy"
 	StateCrashloop    = "crashloop"
 	StateStopped      = "stopped"
-	StateRefused      = "refused" // desired but refused by host policy (named reason)
+	StateRefused      = "refused"     // desired but refused by host policy (named reason)
+	StateQuarantined  = "quarantined" // the replacement after a crashloop also failed
+	StateHeadless     = "headless_expired"
 )
 
 // ---- Enrol / renew -------------------------------------------------------
@@ -156,6 +161,7 @@ type ReplicaStatus struct {
 	ImageDigest     string `json:"image_digest,omitempty"`
 	Slots           int    `json:"slots"`
 	Busy            int    `json:"busy"`
+	FreeSlots       int    `json:"free_slots"`        // from the 500 ms ping; 0 unless serving
 	VsockPingAgeMS  int64  `json:"vsock_ping_age_ms"` // -1 = never answered
 	Restarts        int    `json:"restarts"`
 	DropsOriginated uint64 `json:"drops_originated"` // nftables: packets the VM tried to originate
@@ -198,6 +204,52 @@ type HeartbeatResponse struct {
 type ObservedRequest struct {
 	Replicas           []ReplicaStatus `json:"replicas"`
 	ObservedGeneration int64           `json:"observed_generation"`
+	// StateGen is the host's replica-state generation after these changes;
+	// the control plane stores it so the next hosts/next needs no resync.
+	StateGen int64 `json:"state_gen"`
+}
+
+// ---- Work: one long-poll per HOST (LLD §3.13.0, REVISION 2026-11-14) -----
+
+// HostsNextRequest: POST /v1/run-plane/hosts/next. No replica list: BOSS
+// tracks slots itself (total from the deployment version, busy = active
+// leases). StateGen is the host's replica-state generation.
+type HostsNextRequest struct {
+	WaitMS   int   `json:"wait_ms"`
+	StateGen int64 `json:"state_gen"`
+}
+
+// HostsNextResponse: either Resync (PUT the full replica map once, then poll
+// again) or the runs claimed for this host's replicas, leased in BOSS.
+type HostsNextResponse struct {
+	Resync bool         `json:"resync"`
+	Runs   []Assignment `json:"runs"`
+}
+
+// Assignment is one claimed run for one of this host's replicas.
+type Assignment struct {
+	RunID     string `json:"run_id"`
+	JobID     string `json:"job_id"`
+	ReplicaID string `json:"replica_id"`
+	Epoch     int64  `json:"epoch"`
+	// RunToken is the HOST's: kept in memory, attached by the gateway to the
+	// run's run-plane calls, never given to the VM (HOST_API.md §4.5).
+	RunToken       string `json:"run_token,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	LeaseExpiresAt string `json:"lease_expires_at,omitempty"`
+}
+
+// ReplicaMap: PUT /v1/hosts/{id}/replicas — the full map, only on resync.
+type ReplicaMap struct {
+	StateGen int64           `json:"state_gen"`
+	Replicas []ReplicaStatus `json:"replicas"`
+}
+
+// LeaseAction: POST /v1/run-plane/runs/{run}/lease with the lease headers
+// X-Boss-Replica, X-Boss-Job, X-Boss-Run-Token, X-Boss-Fence-Epoch.
+type LeaseAction struct {
+	HandBack bool   `json:"hand_back"`
+	Action   string `json:"action,omitempty"` // "hand_back" too, for an older reader
 }
 
 // ---- Desired state -------------------------------------------------------

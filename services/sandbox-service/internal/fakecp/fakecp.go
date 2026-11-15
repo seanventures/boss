@@ -56,6 +56,9 @@ type CP struct {
 	NoEvents bool
 	// RunPlane, if set, serves /v1/run-plane/* (host-authenticated) for tests.
 	RunPlane http.Handler
+	// OnClaim, if set, runs after each claim and before the answer is sent.
+	OnClaim func(hostapi.Assignment)
+	work    workState
 
 	srv      *http.Server
 	listener net.Listener
@@ -230,6 +233,9 @@ func (cp *CP) Handler() http.Handler {
 	mux.HandleFunc(hostapi.PathEnrol, cp.enrol)
 	mux.HandleFunc("/v1/hosts/", cp.hostRoute)
 	mux.HandleFunc("/v1/run-plane/", func(w http.ResponseWriter, r *http.Request) {
+		if cp.routeRunPlane(w, r) {
+			return
+		}
 		if cp.RunPlane == nil {
 			http.NotFound(w, r)
 			return
@@ -416,6 +422,7 @@ func (cp *CP) hostRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		renew := time.Until(h.cert.NotAfter) <= h.cert.NotAfter.Sub(h.cert.NotBefore)/3
 		cp.mu.Unlock()
+		cp.observeReplicas(id, hb.Replicas, -1, false) // as fleet.heartbeat's _observe does
 		writeJSON(w, http.StatusOK, hostapi.HeartbeatResponse{HostID: id, DesiredGeneration: gen,
 			Status: "ready", ReplicasSeen: len(hb.Replicas), Renew: renew, HeartbeatSeconds: 2})
 	case verb == "observed" && r.Method == http.MethodPost:
@@ -427,7 +434,10 @@ func (cp *CP) hostRoute(w http.ResponseWriter, r *http.Request) {
 		cp.mu.Lock()
 		cp.hosts[id].observed = ob.Replicas
 		cp.mu.Unlock()
+		cp.observeReplicas(id, ob.Replicas, ob.StateGen, false)
 		writeJSON(w, http.StatusOK, map[string]any{"host_id": id, "replicas_seen": len(ob.Replicas)})
+	case verb == "replicas" && r.Method == http.MethodPut:
+		cp.putReplicas(w, r, id)
 	case verb == "renew" && r.Method == http.MethodPost:
 		var req hostapi.RenewRequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {

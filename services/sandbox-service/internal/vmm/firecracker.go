@@ -147,6 +147,9 @@ func (f *Firecracker) Create(ctx context.Context, s Spec) (*VM, error) {
 		return nil, err
 	}
 	vm := newVM(s.VMID, cmd.Process.Pid, dir, false)
+	sp := s.Normalized()
+	vm.Spec = &sp
+	_ = writeSpec(dir, s)
 	go func() { _ = cmd.Wait(); vm.markExited() }()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -205,6 +208,7 @@ func (f *Firecracker) Scan() ([]*VM, error) {
 	for _, pr := range procs {
 		dir := filepath.Dir(pr.Flag("api-sock"))
 		vm := newVM(filepath.Base(dir), pr.PID, dir, true) // the dir name is the vm id
+		vm.Spec = readSpec(dir)
 		watchAdopted(vm)
 		out = append(out, vm)
 	}
@@ -212,14 +216,24 @@ func (f *Firecracker) Scan() ([]*VM, error) {
 }
 
 // DialControl uses Firecracker's host-initiated vsock handshake:
-// "CONNECT <port>\n" → "OK <host port>\n" on the VM's Unix socket.
-func (f *Firecracker) DialControl(vm *VM) (net.Conn, error) {
-	c, err := net.DialTimeout("unix", filepath.Join(vm.Dir, "v.sock"), time.Second)
+// "CONNECT <port>\n" → "OK <host port>\n" on the VM's Unix socket. The
+// whole exchange (dial + handshake) is bounded by deadline.
+func (f *Firecracker) DialControl(vm *VM, deadline time.Time) (net.Conn, error) {
+	return f.dialVsock(vm, guest.PortControl, deadline)
+}
+
+// DialInbox opens the guest's work inbox (vsock port 7105).
+func (f *Firecracker) DialInbox(vm *VM, deadline time.Time) (net.Conn, error) {
+	return f.dialVsock(vm, guest.PortInbox, deadline)
+}
+
+func (f *Firecracker) dialVsock(vm *VM, port int, deadline time.Time) (net.Conn, error) {
+	c, err := (&net.Dialer{Deadline: deadline}).Dial("unix", filepath.Join(vm.Dir, "v.sock"))
 	if err != nil {
 		return nil, err
 	}
-	_ = c.SetDeadline(time.Now().Add(time.Second))
-	if _, err := c.Write([]byte("CONNECT " + strconv.Itoa(guest.PortControl) + "\n")); err != nil {
+	_ = c.SetDeadline(deadline)
+	if _, err := c.Write([]byte("CONNECT " + strconv.Itoa(port) + "\n")); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -239,8 +253,7 @@ func (f *Firecracker) DialControl(vm *VM) (net.Conn, error) {
 		c.Close()
 		return nil, fmt.Errorf("vsock handshake refused: %q", string(line))
 	}
-	_ = c.SetDeadline(time.Time{})
-	return c, nil
+	return c, nil // the deadline stays: callers do one exchange per connection
 }
 
 // GuestListen listens on <uds>_<port>, where Firecracker forwards

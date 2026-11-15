@@ -23,37 +23,57 @@ func TestRenderVMIsInboundOnly(t *testing.T) {
 	v := VMNet{VMID: "vm-1", Tap: TapName("vm-1"), VMIP: "10.200.4.7", VIP: "203.0.113.17", VIPPorts: []int{8443, 443}, VMPrefix: "10.200.4.0/23"}
 	s := RenderVM(v)
 	tap := v.Tap
+	tuple := "ip saddr . ip daddr . tcp sport . tcp dport"
 	must := []string{
 		"ip daddr 169.254.169.254 counter name meta_" + tap + " drop",
-		"ip saddr 203.0.113.17 tcp sport { 443, 8443 } tcp flags & (syn|ack) != syn @nh,128,32 @peers_" + tap + " counter name reply_" + tap + " accept",
+		"add rule inet boss_hostd out_" + tap + " ip daddr @internal_nets counter name orig_" + tap + " drop",
+		"tcp flags & (syn|ack) != syn " + tuple + " @flows_" + tap + " counter name reply_" + tap + " accept",
+		"tcp flags & rst == rst " + tuple + " @flows_" + tap + " delete @flows_" + tap,
+		"tcp flags & fin == fin " + tuple + " @flows_" + tap + " delete @flows_" + tap + " { " + tuple + " } add @closing_" + tap,
+		"tcp flags & (syn|ack) != syn " + tuple + " @closing_" + tap + " counter name reply_" + tap + " accept",
 		"add rule inet boss_hostd out_" + tap + " counter name orig_" + tap + " drop",
-		"ip saddr @directors ip daddr 10.200.4.7 meta l4proto 4",
+		"ip saddr @directors ip daddr 10.200.4.7 gre ip daddr 203.0.113.17 gre tcp dport { 443, 8443 } gre tcp flags & (syn|ack) == syn update @flows_" + tap + " { gre ip daddr . gre ip saddr . gre tcp dport . gre tcp sport }",
 		"add rule inet boss_hostd in_" + tap + " counter name indrop_" + tap + " drop",
-		"flush chain inet boss_hostd out_" + tap,
 	}
 	for _, m := range must {
 		if !strings.Contains(s, m) {
 			t.Fatalf("missing %q in:\n%s", m, s)
 		}
 	}
-	// The out chain's only accept is the reply rule, and it is last-but-one.
-	out := []string{}
-	for _, line := range strings.Split(s, "\n") {
-		if strings.HasPrefix(line, "add rule inet boss_hostd out_") {
-			out = append(out, line)
+	// internal nets are dropped BEFORE any reply accept.
+	if strings.Index(s, "@internal_nets") > strings.Index(s, "accept") {
+		t.Fatal("the internal-net drop must precede the reply accepts")
+	}
+	v.VIP = ""
+	if strings.Contains(RenderVM(v), "accept") {
+		t.Fatal("without a VIP nothing may leave or enter the VM")
+	}
+	base := RenderBase(Policy{VMPrefix: "10.200.4.0/23"}.Internal())
+	if !strings.Contains(base, `iifname "bt*" counter name drop_unknown_tap drop`) || !strings.Contains(base, "169.254.0.0/16") ||
+		!strings.Contains(base, "10.200.4.0/23") {
+		t.Fatalf("base: %s", base)
+	}
+}
+
+// The helper's own policy decides prefix and owner; a caller cannot widen it.
+func TestPolicyOverridesTheCaller(t *testing.T) {
+	p := Policy{VMPrefix: "10.200.4.0/23", TapOwnerUID: 1000}
+	ok := VMNet{Tap: TapName("x"), VMIP: "10.200.4.7", OwnerUID: 1000}
+	if err := p.Check(&ok); err != nil || ok.VMPrefix != "10.200.4.0/23" {
+		t.Fatalf("%v %+v", err, ok)
+	}
+	for _, bad := range []VMNet{
+		{Tap: TapName("x"), VMIP: "10.9.0.7", VMPrefix: "10.9.0.0/16", OwnerUID: 1000}, // caller widens the prefix
+		{Tap: TapName("x"), VMIP: "10.9.0.7", OwnerUID: 1000},                          // outside the helper's prefix
+		{Tap: TapName("x"), VMIP: "10.200.4.7", OwnerUID: 0},                           // tap for root
+	} {
+		b := bad
+		if p.Check(&b) == nil {
+			t.Fatalf("accepted %+v", bad)
 		}
 	}
-	if len(out) != 3 || !strings.HasSuffix(out[2], "drop") || strings.Count(strings.Join(out, "\n"), "accept") != 1 {
-		t.Fatalf("out chain must be meta-drop, reply-accept, drop-all: %v", out)
-	}
-	// No VIP: no accept at all on the way out.
-	v.VIP = ""
-	if strings.Contains(RenderVM(v), "reply_"+tap+" accept") {
-		t.Fatal("without a VIP nothing may leave the VM")
-	}
-	base := RenderBase()
-	if !strings.Contains(base, `iifname "bt*" counter name drop_unknown_tap drop`) {
-		t.Fatal("base must drop traffic from any tap without its own chain")
+	if (Policy{}).Check(&ok) == nil {
+		t.Fatal("a helper without --vm-prefix must refuse everything")
 	}
 }
 

@@ -23,9 +23,10 @@ import (
 func main() {
 	mode := flag.String("mode", "vm", "vm | process")
 	dir := flag.String("dir", "", "process mode: the VM directory holding the sockets")
+	noInbox := flag.Bool("no-inbox", false, "leave the work inbox (vsock 7105) to boss-runtime")
 	_ = flag.String("boss-vm-id", "", "marker for boss-hostd's process scan")
 	flag.Parse()
-	if err := run(*mode, *dir); err != nil {
+	if err := run(*mode, *dir, *noInbox); err != nil {
 		fmt.Fprintln(os.Stderr, "boss-vsockd:", err)
 		if os.Getpid() == 1 {
 			select {} // PID 1 must not exit (kernel panic); the host watchdog sees no pings
@@ -34,10 +35,10 @@ func main() {
 	}
 }
 
-func run(mode, dir string) error {
+func run(mode, dir string, noInbox bool) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
-	d := &guest.Daemon{}
+	d := &guest.Daemon{NoInbox: noInbox}
 	switch mode {
 	case "vm":
 		if os.Getpid() == 1 {

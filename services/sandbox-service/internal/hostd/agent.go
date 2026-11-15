@@ -39,9 +39,20 @@ type Config struct {
 	// Optional only for plain http to a loopback control plane (dev/CI).
 	PinnedCA  []byte
 	JoinToken string // used once, only when the host has no credentials yet
-	Hostname  string
-	Pool      string
-	Labels    []string
+	// JoinTokenFile is deleted after a successful enrolment.
+	JoinTokenFile string
+	// HeadlessMax: with no control-plane contact for this long the host stops
+	// serving (gateway refuses, no work is requested). Default 24 h (NFR-15).
+	HeadlessMax time.Duration
+	// RunHoldMS is passed to the P8a stand-in inbox (tests).
+	RunHoldMS int
+	// WorkWait is the hosts/next long-poll wait (default 25 s).
+	WorkWait time.Duration
+	// DeliverTimeout bounds a hand-off to a VM inbox (default 2 s).
+	DeliverTimeout time.Duration
+	Hostname       string
+	Pool           string
+	Labels         []string
 
 	Manager vmm.Manager
 	Net     netpol.Manager
@@ -93,6 +104,15 @@ func (c *Config) defaults() {
 	if c.MaxVMs <= 0 {
 		c.MaxVMs = 20
 	}
+	if c.HeadlessMax <= 0 {
+		c.HeadlessMax = 24 * time.Hour
+	}
+	if c.WorkWait <= 0 {
+		c.WorkWait = 25 * time.Second
+	}
+	if c.DeliverTimeout <= 0 {
+		c.DeliverTimeout = 2 * time.Second
+	}
 	if c.Net == nil {
 		c.Net = netpol.Noop{}
 	}
@@ -118,6 +138,8 @@ type Agent struct {
 	noEvents  atomic.Bool
 	lastCP    atomic.Int64 // unix nanos of the last successful CP call
 	observed  atomic.Int64
+	stateGen  atomic.Int64 // replica-state generation (bumped on every change)
+	pushedGen atomic.Int64 // the generation the last successful /observed carried
 	kick      chan struct{}
 	renewNow  chan struct{}
 	pushObs   chan struct{}
@@ -128,8 +150,11 @@ type Agent struct {
 	desiredLive bool // false while running on the cached (handle-less) state
 	vms         map[string]*vmState
 	refused     map[string]refusal // vm id → reason (reported once per change)
-	taps        map[string]bool    // taps seen at start (orphan sweep)
-	hbCount     int
+	// gone holds stopped replicas, reported as state "stopped" until a push
+	// carrying them succeeds (the control plane must see the stop).
+	gone    map[string]hostapi.ReplicaStatus
+	taps    map[string]bool // taps seen at start (orphan sweep)
+	hbCount int
 }
 
 // New prepares an agent. Run does the work.
@@ -153,7 +178,8 @@ func New(cfg Config) (*Agent, error) {
 	}
 	a := &Agent{cfg: cfg, pinned: pool, cpBase: base, kick: make(chan struct{}, 1),
 		renewNow: make(chan struct{}, 1), pushObs: make(chan struct{}, 1), unhealthy: make(chan string, 64),
-		vms: map[string]*vmState{}, refused: map[string]refusal{}, taps: map[string]bool{}}
+		vms: map[string]*vmState{}, refused: map[string]refusal{}, taps: map[string]bool{},
+		gone: map[string]hostapi.ReplicaStatus{}}
 	a.client, err = cpclient.New(cfg.CPURL, pool, func() *tls.Certificate {
 		if c := a.creds.Load(); c != nil {
 			cert := c.TLSCertificate()
@@ -227,6 +253,12 @@ func (a *Agent) Enrol(ctx context.Context) error {
 	}
 	a.creds.Store(c)
 	a.client.Rotate()
+	if a.cfg.JoinTokenFile != "" {
+		// The token is spent; do not leave it on disk.
+		if err := os.Remove(a.cfg.JoinTokenFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+			a.logf("could not delete the spent join token file: %v", err)
+		}
+	}
 	a.logf("enrolled as %s (vm_prefix %s)", c.HostID, c.VMPrefix)
 	return nil
 }
@@ -347,7 +379,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer c.Close()
 
 	a.gw = gateway.New(a.HostID(), a.minter, a.upstreamCAs())
-	a.gw.Enabled = func() bool { return !a.revoked.Load() }
+	a.gw.Enabled = func() bool { return !a.revoked.Load() && !a.headlessExpired() }
 	a.gw.CPBase = a.cpBase
 	a.gw.HostProof = a.prove
 	a.gw.HostCert = func() *tls.Certificate {
@@ -377,6 +409,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.gw.Audit = a.calls.Add
 	a.gw.Event = a.events.Add
 
+	a.touchCP() // the headless window starts now if the control plane never answers
 	if err := a.adoptRunning(ctx); err != nil {
 		a.logf("adopt scan: %v", err)
 	}
@@ -392,7 +425,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 	for _, loop := range []func(context.Context){a.watchLoop, a.heartbeatLoop, a.renewLoop, a.reconcileLoop,
-		a.observedLoop, a.calls.Run, a.events.Run} {
+		a.observedLoop, a.workLoop, a.calls.Run, a.events.Run} {
 		wg.Add(1)
 		go func(f func(context.Context)) { defer wg.Done(); f(ctx) }(loop)
 	}
@@ -427,10 +460,32 @@ func (a *Agent) renewLoop(ctx context.Context) {
 
 func (a *Agent) touchCP() { a.lastCP.Store(time.Now().UnixNano()) }
 
-func (a *Agent) event(vmID, kind, from, to string, detail map[string]string) {
-	select { // every state change is pushed to /observed at once
+// headlessExpired reports whether the control plane has been unreachable for
+// longer than HeadlessMax.
+func (a *Agent) headlessExpired() bool {
+	return time.Since(time.Unix(0, a.lastCP.Load())) > a.cfg.HeadlessMax
+}
+
+// bumpState records a replica state change: a new generation, pushed to
+// /observed at once (debounced 100 ms) with the generation it reflects.
+func (a *Agent) bumpState() {
+	a.stateGen.Add(1)
+	select {
 	case a.pushObs <- struct{}{}:
 	default:
+	}
+}
+
+// StateGen is the current replica-state generation.
+func (a *Agent) StateGen() int64 { return a.stateGen.Load() }
+
+// detailOnly are event kinds that change no replica state: they neither
+// bump state_gen nor push /observed.
+var detailOnly = map[string]bool{"handed_back": true, "handle_replay": true, "orphan_tap_removed": true}
+
+func (a *Agent) event(vmID, kind, from, to string, detail map[string]string) {
+	if !detailOnly[kind] {
+		a.bumpState()
 	}
 	if a.events == nil {
 		return

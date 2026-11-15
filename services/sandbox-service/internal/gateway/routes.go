@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"net/http"
+	gopath "path"
 	"strings"
 
 	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
@@ -55,7 +56,38 @@ func (r Rule) matches(port int, method, path string) bool {
 			return false
 		}
 	}
-	return r.PathPrefix == "" || strings.HasPrefix(path, r.PathPrefix)
+	return prefixMatch(path, r.PathPrefix)
+}
+
+// prefixMatch matches on a segment boundary: "/v1/messages" matches itself
+// and "/v1/messages/…", never "/v1/messagesX". A prefix ending in "/" is a
+// directory prefix.
+func prefixMatch(path, prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+	if strings.HasSuffix(prefix, "/") {
+		return strings.HasPrefix(path, prefix)
+	}
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
+}
+
+// CleanPath refuses paths a route table could be confused by: dot segments,
+// empty segments, and encoded slashes, backslashes or dots.
+func CleanPath(decoded, escaped string) bool {
+	if decoded == "" || decoded[0] != '/' || strings.Contains(decoded, "\\") {
+		return false
+	}
+	if gopath.Clean(decoded) != strings.TrimSuffix(decoded, "/") && gopath.Clean(decoded) != decoded {
+		return false
+	}
+	low := strings.ToLower(escaped)
+	for _, bad := range []string{"%2f", "%5c", "%2e", "%00"} {
+		if strings.Contains(low, bad) {
+			return false
+		}
+	}
+	return true
 }
 
 // Handle kinds.
@@ -87,6 +119,9 @@ func DefaultRules() []Rule {
 		{ID: "git-smart-http", Port: guest.PortGit, Methods: git, PathPrefix: "/git/", Route: RouteGit, Handle: HandleEgress, Endpoint: egrUp},
 		{ID: "git-rest-api", Port: guest.PortGit, Methods: rest, PathPrefix: "/api/", Route: RouteAPI, Handle: HandleEgress, Endpoint: egrUp},
 		{ID: "mcp", Port: guest.PortMCP, Methods: []string{http.MethodGet, http.MethodPost, http.MethodDelete}, PathPrefix: "/mcp/", Route: RouteMCP, Handle: HandleMCP, Endpoint: mcpUp},
+		// VMs never poll for work: the host holds the one hosts/next (§3.13.0).
+		{ID: "run-plane-next-denied", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/next", Route: RouteRunPlane, Deny: true},
+		{ID: "run-plane-hosts-denied", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/hosts/", Route: RouteRunPlane, Deny: true},
 		{ID: "run-plane", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/", Route: RouteRunPlane, Handle: HandleRun, Endpoint: runUp, HostAuth: true, SocketIdentity: true},
 		{ID: "connect-p8b", Port: guest.PortConnect, Route: RouteConnect, Deny: true},
 		{ID: "default-deny", Deny: true, Route: "deny"},
@@ -107,14 +142,15 @@ func match(rules []Rule, port int, method, path string) Rule {
 // identity. Matched case-insensitively; prefixes end in "-".
 var strippedHeaders = []string{
 	"Authorization", "Proxy-Authorization", "X-Api-Key", "Api-Key", "Cookie",
+	"X-Auth-Token", "Private-Token", "X-Amz-Security-Token",
 	"Forwarded", "X-Forwarded-", "X-Real-Ip", "X-Boss-", "Boss-",
 }
 
-// LeaseHeaders are the run-plane lease a guest runtime carries (run_plane.
-// LeaseRef). They are data the control plane checks against Postgres in one
-// statement, not credentials: they survive on the run-plane route only.
-// X-Boss-Replica is never taken from the guest; the gateway sets it.
-var LeaseHeaders = []string{"X-Boss-Job", "X-Boss-Run-Token", "X-Boss-Fence-Epoch"}
+// LeaseHeaders are the lease data a guest runtime may carry on run-plane
+// calls (HOST_API.md §4.5): checked against Postgres, not credentials. The
+// run token is never the guest's: the gateway sets X-Boss-Run-Token from the
+// host's run map, and X-Boss-Replica from the socket.
+var LeaseHeaders = []string{"X-Boss-Job", "X-Boss-Fence-Epoch"}
 
 // StripGuestHeaders removes every guest-supplied credential or identity
 // header from h, in place, except the names in keep (canonical form).

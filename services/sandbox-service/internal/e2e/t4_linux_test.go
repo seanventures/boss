@@ -26,7 +26,7 @@ func control(t *testing.T, m vmm.Manager, id, op string) *guest.Response {
 		if vm.ID != id {
 			continue
 		}
-		c, err := m.DialControl(vm)
+		c, err := m.DialControl(vm, time.Now().Add(10*time.Second))
 		if err != nil {
 			t.Fatalf("%s control: %v", id, err)
 		}

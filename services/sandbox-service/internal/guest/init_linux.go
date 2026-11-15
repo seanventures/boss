@@ -64,6 +64,13 @@ func ReplicaNetSetup(b *Bootstrap) error {
 	if ip == nil || gw == nil {
 		return fmt.Errorf("replica bootstrap needs vm_ip and gateway")
 	}
+	// The VIP lives on this VM too (P8b, tunl0/lo): never answer ARP for it,
+	// and always ARP from eth0's own address, so the host's proxy-ARP (which
+	// routes only vm_ip/32 to this tap) answers for the gateway (LLD §3.7.1).
+	for _, kv := range [][2]string{{"all/arp_ignore", "1"}, {"all/arp_announce", "2"},
+		{"eth0/arp_ignore", "1"}, {"eth0/arp_announce", "2"}, {"all/rp_filter", "0"}} {
+		_ = os.WriteFile("/proc/sys/net/ipv4/conf/"+kv[0], []byte(kv[1]), 0o644)
+	}
 	link, err := netlink.LinkByName("eth0")
 	if err != nil {
 		return fmt.Errorf("eth0: %w", err)

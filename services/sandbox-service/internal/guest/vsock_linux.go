@@ -16,12 +16,15 @@ import (
 // dial the host (CID 2) on the route's port.
 type VsockTransport struct{}
 
-func (VsockTransport) ListenControl() (net.Listener, error) {
+func (VsockTransport) ListenControl() (net.Listener, error) { return listenVsock(PortControl) }
+func (VsockTransport) ListenInbox() (net.Listener, error)   { return listenVsock(PortInbox) }
+
+func listenVsock(port int) (net.Listener, error) {
 	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	if err := unix.Bind(fd, &unix.SockaddrVM{CID: unix.VMADDR_CID_ANY, Port: PortControl}); err != nil {
+	if err := unix.Bind(fd, &unix.SockaddrVM{CID: unix.VMADDR_CID_ANY, Port: uint32(port)}); err != nil {
 		unix.Close(fd)
 		return nil, err
 	}
@@ -29,7 +32,7 @@ func (VsockTransport) ListenControl() (net.Listener, error) {
 		unix.Close(fd)
 		return nil, err
 	}
-	return &vsockListener{fd: fd, port: PortControl}, nil
+	return &vsockListener{fd: fd, port: port}, nil
 }
 
 func (VsockTransport) DialHost(port int) (net.Conn, error) {

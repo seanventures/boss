@@ -133,7 +133,7 @@ func (e *env) startHostd() {
 		"BOSS_SANDBOX_FC_KERNEL="+os.Getenv("BOSS_E2E_FC_KERNEL"),
 		"BOSS_HOSTD_FC_ROOTFS="+os.Getenv("BOSS_E2E_FC_ROOTFS"),
 		"BOSS_HOSTD_NETADM_SOCKET="+os.Getenv("BOSS_E2E_NETADM_SOCKET"),
-		"BOSS_HOSTD_MAX_VMS=40",
+		"BOSS_HOSTD_MAX_VMS=80",
 		"BOSS_MICROVM_CLAIMS_FROZEN="+envOr("BOSS_E2E_FROZEN", "true"),
 	)
 	cmd.Stdout, cmd.Stderr = logf, logf

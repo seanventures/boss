@@ -26,7 +26,8 @@ const (
 	PortGit      = 7102
 	PortMCP      = 7103
 	PortRunPlane = 7104
-	PortConnect  = 7105
+	PortConnect  = 7105 // guest → host (CONNECT relay)
+	PortInbox    = 7105 // host → guest (work inbox; a separate vsock direction)
 	HostCID      = 2
 )
 
@@ -50,6 +51,11 @@ type Bootstrap struct {
 	VIP     string `json:"vip,omitempty"`
 	MAC     string `json:"mac,omitempty"`
 	Seed    []byte `json:"seed"` // 32 random bytes, mixed into the guest RNG
+	// Slots is how many runs this VM takes at once (replica default 4).
+	Slots int `json:"slots,omitempty"`
+	// RunHoldMS: the P8a stand-in inbox holds an accepted run this long
+	// before freeing its slot (boss-runtime replaces the stand-in).
+	RunHoldMS int `json:"run_hold_ms,omitempty"`
 	// Handles are opaque: "replica" for a replica's run-plane calls; for a
 	// per_run claim also "model", "egress", "mcp" and "run".
 	Handles map[string]string `json:"handles,omitempty"`
@@ -65,6 +71,29 @@ type Response struct {
 	Ifaces       []string          `json:"ifaces,omitempty"`
 	Selfcheck    map[string]string `json:"selfcheck,omitempty"`
 	Uptime       int64             `json:"uptime_ms,omitempty"`
+	BusySlots    int               `json:"busy_slots"`
+	TotalSlots   int               `json:"total_slots"`
+	Runs         []string          `json:"runs,omitempty"` // op "runs": run ids the inbox accepted
+}
+
+// Work is one line to a VM's work inbox (HOST_API.md §4.5): {"op":"run",…}
+// hands a run over (never a run token); {"op":"ping"|"slots"} asks for slots.
+// One answer line per request; a connection may carry many.
+type Work struct {
+	Op        string `json:"op"` // run | ping | slots
+	RunID     string `json:"run_id,omitempty"`
+	JobID     string `json:"job_id,omitempty"`
+	ReplicaID string `json:"replica_id,omitempty"`
+	Epoch     int64  `json:"epoch,omitempty"`
+}
+
+// InboxReply answers a Work line. Refusal reasons: no_free_slot, draining,
+// duplicate, bad_request.
+type InboxReply struct {
+	OK         bool   `json:"ok"`
+	Reason     string `json:"reason,omitempty"`
+	BusySlots  *int   `json:"busy_slots,omitempty"`
+	TotalSlots *int   `json:"total_slots,omitempty"`
 }
 
 // Exchange writes one request and reads one reply on an open stream.

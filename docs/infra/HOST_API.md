@@ -13,7 +13,22 @@ Where the LLD left a choice open, this document records the choice. Every choice
   the Go tests run against it.
 - **Python executable statement of the host side:** `engine/tests/_fleet_support.py::FakeHost`.
 
-**Contract version:** `1.0`. Changes are additive, and each side ignores fields it does not know.
+**Contract version:** `1.1`. Changes are additive, and each side ignores fields it does not know.
+
+**1.1 (control plane, `p8/a-runplane`, operator decisions 2026-11-14, LLD §3.13.0 and its
+REVISION):** work reaches replicas through **ONE long-poll per host**, `POST
+/v1/run-plane/hosts/next` (§2.8), whose body carries **no replica list** — BOSS keeps its own
+model of every replica's slots, fed by `/observed` with a `state_gen` (§2.4), and asks for the
+full map only on a generation mismatch (`PUT /v1/hosts/{id}/replicas`, §2.9). The host hands each
+claimed run to the VM's **work inbox** (§4.5). VMs never poll BOSS; the per-replica
+`POST /v1/run-plane/next` is gone. The host keeps each run's token in memory and attaches it to
+that run's run-plane calls (§4.2 step 5); the guest never holds one.
+
+**1.1 (host, `p8/a-host`, review fixes 2026-11-14):** replica egress is GRE-based with exact
+per-flow reply learning and an internal-net drop (§5.1, proven in a netns lab on boss-1); the
+privileged helper takes its VM prefix and tap owner from its own flags only (§5.3); adopted VMs are
+compared with desired state and replaced on mismatch (§3.3); crashloop → one replacement →
+quarantine, and a 24 h headless cap (§3.2); stricter gateway path and header rules (§4.2).
 
 ---
 
@@ -96,7 +111,10 @@ Every non-2xx body is FastAPI-shaped: `{"detail": {"error": "<code>", "message":
 | Desired | `GET /v1/hosts/{id}/desired?since=<gen>&wait=<s≤30>` | BossHost | Long-poll. Level-based. |
 | Guest calls | `POST /v1/hosts/{id}/guest-calls` | BossHost | Batched audit, ≤ 1000 rows. |
 | Events | `POST /v1/hosts/{id}/events` | BossHost | **Optional.** A `404` makes the host stop posting events. |
+| Work | `POST /v1/run-plane/hosts/next` | BossHost | **One** outstanding per host (§2.8). |
+| Replica map | `PUT /v1/hosts/{id}/replicas` | BossHost | Only after `{"resync": true}` (§2.9). |
 | Run plane | `/v1/run-plane/*` | BossHost | The guest gateway's forward target (§4). |
+| Hand back | `POST /v1/run-plane/runs/{run}/lease` | BossHost + lease headers | `{"hand_back": true, "action": "hand_back"}` (both spellings) (§2.8). |
 
 ### 2.1 Enrol
 
@@ -173,11 +191,29 @@ Fresh keys every time.
 ### 2.4 Observed
 
 ```json
-{"replicas": [ …the same entries as the heartbeat… ], "observed_generation": 7}
+{"replicas": [ …the same entries as the heartbeat… ], "observed_generation": 7, "state_gen": 42}
 ```
 
 This is how watchdog transitions reach the control plane within about 100 ms: `unhealthy`,
 `crashloop`, `serving` and the restart counts.
+
+**`state_gen` (1.1).** The host's monotonically increasing generation of its replica-state map.
+Bump it on **every** replica state change (serving, draining, unhealthy, gone…) and send the
+changed entries here with the new value; BOSS stores the generation with them. BOSS's claim uses
+only replicas it has recorded as `serving` (§2.8). A replica entry the host does not hold is
+refused **403 `replica_not_on_host`**. The heartbeat's `replicas` list stays as it is (a full list
+every 2 s; it also lets BOSS mark a stopped replica `gone`) but does **not** store `state_gen`.
+
+**Stopped replicas (host).** When the host stops a VM (no longer desired, spec changed,
+crashloop), the replica is reported with `state: "stopped"` (and the reason) in every heartbeat
+and `/observed` push until one carrying it succeeds, then dropped. BOSS must see the stop: its
+claim must never keep a replica the host no longer runs.
+
+**Host behaviour around `state_gen`:**
+- every VM state transition (and a change of the inbox's `total_slots`) bumps it and triggers an
+  `/observed` push (debounced 100 ms); detail-only events (a hand-back, a handle replay) do not;
+- before each `hosts/next` the host waits up to 300 ms for a pending push to land, so steady state
+  never resyncs (P8a-T6 on boss-1: 50 microVMs, 0 resyncs in steady state).
 
 ### 2.5 Desired state
 
@@ -223,7 +259,7 @@ The response is always `200`.
 
 **Extensions the host honours when present.** The Python side omits them in P8a:
 
-- `directors: ["192.0.2.10"]`: the IPv4 addresses allowed to send IPIP to replicas (P8b).
+- `directors: ["192.0.2.10"]`: the IPv4 addresses allowed to send GRE-encapsulated caller traffic to replicas (P8b).
 - `claims_frozen: true`: ORed with the host's own `BOSS_MICROVM_CLAIMS_FROZEN` for `per_run`.
 - Per VM:
   - `replica_handle`;
@@ -273,6 +309,71 @@ through heartbeat and observed.
 
 ---
 
+### 2.8 Work: one long-poll per host (1.1; LLD §3.13.0)
+
+```
+POST /v1/run-plane/hosts/next          Authorization: BossHost …
+{"wait_ms": 25000, "state_gen": 42}
+```
+
+The body is **only** `wait_ms` (≤ 30000) and `state_gen` (and an optional lease `ttl`, 5–120 s,
+default 30). There is **no replica list**: BOSS keeps its own model of the host's replicas:
+
+- **who may take work:** the host's replicas BOSS has recorded `serving` (through `/observed` or
+  the resync map), wanted running, of a live `runtime: microvm` deployment;
+- **total slots:** `agent_replicas.slots` (from the deployment's `resources.slots`, default 4);
+- **busy:** the leases `replica:<id>` holds right now. A run's final write (settle, fail,
+  hand-back) releases it; a crash frees it when its 30 s lease expires.
+
+Answers (always `200`):
+
+| Answer | Meaning |
+|---|---|
+| `{"resync": true, "runs": [], "state_gen": <stored>}` | `state_gen` ≠ the generation BOSS stored for this host. PUT the full map once (§2.9), then poll again. |
+| `{"runs": [ … ]}` | Claimed now, or after a wait. Possibly empty after `wait_ms`. |
+
+```json
+{"runs": [{"run_id": "arun_…", "job_id": "job_…", "replica_id": "rep_…", "epoch": 3,
+           "run_token": "lease_…", "kind": "agent.run", "lease_expires_at": "…"}]}
+```
+
+- **In one transaction** BOSS claims queued jobs whose `target` is `deployment:<d>` for the host's
+  serving deployments (`FOR UPDATE SKIP LOCKED`), up to the replicas' free slots, assigns each run
+  to the replica of its deployment with **the most free slots** (round robin on ties), and leases
+  it to `replica:<id>` at `epoch` = the job's previous epoch + 1.
+- **Nothing claimable:** the request waits (≤ `wait_ms`) on BOSS's event hub for an admission to
+  one of the host's deployments (or for the host's own state to change: a freed slot, a replica
+  now serving), then claims again. One sweep per API process every 5 s catches a lost
+  notification.
+- **`run_token` is the host's.** Keep it in memory (never bbolt, never a log), attach it to that
+  run's run-plane calls (§4.2 step 5), and forget it when the run settles. It never enters the VM.
+- **Then** deliver each run to its replica's work inbox (§4.5) and **immediately** issue the next
+  `hosts/next`. Keep exactly **one** outstanding per host, whatever the number of VMs.
+- **The VM refuses, is dead, or does not answer in 2 s:** hand the run back:
+  `POST /v1/run-plane/runs/{run_id}/lease {"hand_back": true}` with the lease headers
+  (`X-Boss-Replica`, `X-Boss-Job`, `X-Boss-Run-Token`, `X-Boss-Fence-Epoch`). BOSS re-queues the job
+  at once (no attempt spent) and wakes the deployment's hosts; the next claim leases it at
+  epoch + 1, and the old epoch's calls get `409 fenced`. Push the replica's real state through
+  `/observed` if it changed (draining, unhealthy), so BOSS stops assigning to it.
+- **Host refusal rules (local only):** the host refuses at once (and hands back) a run for a replica
+  it does not run (`unknown_replica`), a VM not running, a VM with no free slot by its own 500 ms
+  ping (`no_free_slot`), or an unreachable inbox. Each such refusal is treated as drift: the host
+  bumps `state_gen` and pushes its real map, so BOSS stops assigning there. A refused delivery
+  releases the host's local slot reservation.
+
+### 2.9 The full replica map, after a resync (1.1)
+
+```
+PUT /v1/hosts/{id}/replicas            Authorization: BossHost …
+{"state_gen": 42, "replicas": [{"replica_id": "rep_…", "vm_id": "vm_…", "state": "serving",
+                                "busy": 1, "vm_ip": "…", "restarts": 0}, …]}
+```
+
+- Every VM the host holds, as in the heartbeat. A replica of this host the map omits becomes
+  `gone`; one the host does not hold is refused **403 `replica_not_on_host`**.
+- BOSS stores `state_gen`; the next poll with that generation claims. A full map is never sent
+  otherwise.
+
 ## 3. Lifecycle, watchdog and crash recovery (LLD §3.3, §3.16.1, §3.21)
 
 ### 3.1 Reconcile
@@ -286,13 +387,26 @@ The reconcile loop runs every 500 ms, and immediately on a desired change:
 
 ### 3.2 Watchdog
 
-- It sends a vsock ping every **500 ms**.
+- It sends a vsock ping every **500 ms**. The whole ping (dial, vsock handshake, exchange) is
+  bounded to 90 % of the tick, so **3 misses take ≤ 1.5 s**.
 - A Firecracker or process **exit** is detected at once.
 - **3 missed pings** after a 15 s boot grace mean `unhealthy`.
 - On `unhealthy` the host withdraws first, then restarts.
 - After **3 restarts within 10 min**, the next failure is `crashloop`:
   - the VM is stopped;
-  - a fresh attempt is made after the window.
+  - after the window, **one** replacement attempt is made, keeping the restart history;
+  - if that replacement fails too, the VM is **`quarantined`**: nothing restarts it until its
+    spec changes or it leaves desired state (event `quarantined`);
+  - a replacement that stays healthy for a full window clears the history.
+- **Headless cap.** With no control-plane contact for `BOSS_HOSTD_HEADLESS_MAX_SECONDS` (default
+  86400), the host stops serving: the gateway answers `503 host_not_serving`, no work is
+  requested, the heartbeat status is `headless_expired`. VMs keep running.
+- **Slots (1.1).** The ping's answer carries the runtime's `busy_slots` and `total_slots`
+  (boss-vsockd asks the work inbox, §4.5, with `{"op":"slots"}`; when the control ping carries no
+  slots, the host asks the inbox `{"op":"slots"}` itself within the same tick). A draining or unhealthy VM
+  reports 0 total. The host uses them to refuse or hand back and to detect drift; it never sends
+  them to BOSS (BOSS counts leases itself, §2.8). A change that alters serving / draining is an
+  `/observed` push with a bumped `state_gen`.
 - The first answered control exchange is the **bootstrap**. It carries `vm_id`, the mode, a fresh
   32-byte seed, and for replicas `vm_ip`, `169.254.1.1` as gateway, and the MAC. It carries no
   token.
@@ -304,7 +418,11 @@ The reconcile loop runs every 500 ms, and immediately on a desired change:
   - **`/proc`** for VM processes: Firecracker `--api-sock <run dir>/<vm_id>/…`, or boss-vsockd
     `--boss-vm-id=`;
   - **netlink** for `bt*` taps.
-- Found VMs are **adopted**:
+- Found VMs are **compared with desired state** before adoption: every VM directory holds the
+  spec it was started with (`boss-spec.json`, 0600: image digest, mode, `vm_ip`, vCPU, memory,
+  NIC). A VM whose record differs from desired (or has none) is stopped and replaced
+  (event `adopted_mismatch`, field named); the others are adopted untouched.
+- Adopted VMs:
   - gateway listeners are re-opened;
   - the tap policy is re-applied (counters are kept);
   - the bootstrap is re-sent (it is idempotent).
@@ -332,23 +450,28 @@ to the same vsock port.
 | 7101 | model | `POST /anthropic/v1/messages`, `/openai/v1/chat/completions`, `/openai/v1/responses` | `endpoints.model_gateway` (P8b) |
 | 7102 | git / api | `GET,POST /git/…`; `GET,POST,PATCH,PUT /api/…` | `endpoints.egress` (P8b) |
 | 7103 | mcp | `GET,POST,DELETE /mcp/…` | `endpoints.mcp_gateway` (P8b) |
-| 7104 | run_plane | any `/v1/run-plane/…` | `endpoints.run_plane` (the control plane) |
+| 7104 | run_plane | `/v1/run-plane/next` and `/v1/run-plane/hosts/…` **denied** (VMs never poll for work); any other `/v1/run-plane/…` | `endpoints.run_plane` (the control plane) |
 | 7105 | connect | denied until P8b | — |
+| 7105 (guest side) | **work inbox** (host-initiated, 1.1) | the host connects to the **guest's** port 7105; §4.5 | — |
 | 5000 | control (host-initiated) | `bootstrap`, `ping`, `ifaces`, `selfcheck_egress`, `selfcheck_gateway` | — |
 
 ### 4.2 Per request
 
 1. **Identify** the VM by its socket.
-2. **Match** the request against the route table.
+2. **Match** the request against the route table. Prefixes match on a segment boundary
+   (`/anthropic/v1/messages` never matches `/anthropic/v1/messagesX`). A path with dot segments,
+   empty segments, or an encoded `/`, `\`, `.` or NUL is refused `400 path_not_canonical`.
 3. **Resolve** the handle from `Authorization`, `X-Api-Key` or `Proxy-Authorization`.
    - The handle maps to `(run, epoch, vm)`.
    - A handle from another VM's socket is refused (`handle_replay`), **revoked**, and reported.
    - A fenced epoch gets `409 fenced`.
    - On the run plane, a **replica needs no handle**: its socket is its identity.
 4. **Strip** every guest credential and identity header:
-   - `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `Cookie`;
+   - `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `Cookie`, `X-Auth-Token`,
+     `Private-Token`, `X-Amz-Security-Token`;
    - `Forwarded`, `X-Forwarded-*`, `X-Real-Ip`;
-   - every `X-Boss-*` and `Boss-*`.
+   - every `X-Boss-*` and `Boss-*`;
+   - every request **trailer** (they could smuggle a header past the strip).
    On the run-plane route only, the lease headers `X-Boss-Job`, `X-Boss-Run-Token` and
    `X-Boss-Fence-Epoch` pass through. They are data the control plane checks against Postgres.
 5. **Forward.**
@@ -379,6 +502,30 @@ to the same vsock port.
 
 ---
 
+### 4.5 The work inbox (1.1; LLD §3.13.0)
+
+`boss-runtime` in a VM has **no pull loop**. It listens on **vsock port 7105 of the guest** (the
+host connects to the guest's CID; guest-initiated port 7105 on the host side is the separate
+`connect` route). On the `process` backend it is a Unix socket per VM, `<dir>/w_7105.sock`, mode
+0600. One JSON object per line, one answer line per request; a connection may carry many:
+
+| Host → guest | Guest → host |
+|---|---|
+| `{"op":"run","run_id":"arun_…","job_id":"job_…","replica_id":"rep_…","epoch":3}` | `{"ok":true}` — accepted, the run is driving |
+| | `{"ok":false,"reason":"no_free_slot"\|"draining"\|"duplicate"\|"bad_request"}` — refused: hand it back (§2.8) |
+| `{"op":"ping"}` or `{"op":"slots"}` | `{"ok":true,"busy_slots":1,"total_slots":4}` |
+
+- The guest accepts a run **only while it has a free slot**. It never sees a run token.
+- An accepted run fetches its package through the gateway, `GET /v1/run-plane/runs/{run_id}` (run,
+  messages, pinned agent version, resume answers; never the token), then drives the kernel; all of
+  its calls go back through port 7104 as before.
+- **Run-plane gateway rule (1.1, replaces the pass-through in §4.2 step 4):** for any
+  `/v1/run-plane/runs/{run_id}/…` call, the host sets `X-Boss-Replica` from the socket and
+  `X-Boss-Run-Token` from its run map (overwriting whatever the guest sent); `X-Boss-Job` and
+  `X-Boss-Fence-Epoch` pass through and are checked against Postgres. A run the host holds no
+  token for is answered `409 fenced` without a forward. On `POST /v1/run-plane/admit` responses,
+  the host removes `lease.run_token`, keeps it in its run map, and forwards the rest.
+
 ## 5. Networking (LLD §3.7)
 
 ### 5.1 Replica VMs
@@ -392,16 +539,38 @@ to the same vsock port.
 - `proxy_arp=1`, `rp_filter=0`, IPv6 off on the tap.
 - The guest configures `vm_ip/32` and `default via 169.254.1.1 onlink` from the bootstrap.
 
+- The guest sets `arp_ignore=1` and `arp_announce=2` (the VIP lives on the VM in P8b; ARP is
+  always sourced from `vm_ip`, so proxy-ARP answers for the gateway).
+
+**Directors encapsulate in GRE, not IPIP** (`ipvsadm --tun-type gre`, P8b). nftables can match
+GRE's inner headers with types; it cannot type a raw-payload concatenation of an IPIP inner
+header, and the host's conntrack never sees the inner flow of either. GRE therefore gives the host
+the exact 4-tuple of every caller flow.
+
 **nftables (table `inet boss_hostd`, default drop, every drop counted):**
 
 - **Unknown taps:** any `bt*` interface without its own chain is dropped (`drop_unknown_tap`).
-- **IN** (`in_<tap>`): IPIP from `@directors` to `vm_ip` is accepted. Everything else is
-  dropped (`indrop_`).
+- **`internal_nets`** (interval set): `127.0.0.0/8`, `169.254.0.0/16`, the host's VM prefix, every
+  address on the host, and the operator's infra ranges (`netadm --internal-nets`). Private ranges
+  are not internal by default: callers inside a private network are supported.
+- **IN** (`in_<tap>`): GRE from `@directors` to `vm_ip` carrying TCP to `VIP:vip_port` is
+  accepted (`in_`). A caller's **SYN** learns the flow into `flows_<tap>` as
+  `(VIP, caller, vip_port, caller_port)` (10 min); later packets refresh only a live flow.
+  Everything else is dropped (`indrop_`).
 - **OUT** (`out_<tap>`):
-  - `→ 169.254.169.254` is dropped (`meta_`).
-  - A reply is accepted only when all hold: src is the VIP, sport ∈ `vip_ports`, it is not a bare
-    SYN, and the destination is in `peers_<tap>`.
-  - Everything else is dropped (`orig_`): DNS, VM↔VM, internet, host addresses.
+  - `→ 169.254.169.254` is dropped (`meta_`);
+  - `→ @internal_nets` is dropped (`orig_`), before any accept;
+  - from the VIP, sport ∈ `vip_ports`, on a learned flow: **RST** deletes the flow and is
+    accepted; **FIN** moves the flow to `closing_<tap>` (30 s) and is accepted; any other non-SYN
+    packet on a flow in `flows_` or `closing_` is accepted (`reply_`);
+  - everything else is dropped (`orig_`): DNS, VM↔VM, internet, host addresses, a forged packet to
+    a peer that never called.
+
+**Proof** (`scripts/sandbox/hostd-netlab.sh`, run as root on boss-1, kernel 6.8, nft 1.0.9, with
+the exact rules `boss-hostd netpol-render` prints): a GRE-tunnelled caller gets HTTP 200 with the
+reply returned direct from the VIP (`in=6 reply=6 orig=0`); the flow is learned on SYN and moved
+to `closing_` (30 s) by the server's FIN; 3 forged ACKs `VIP:443 → unseen peer` are dropped and
+counted; VM → infra range is dropped; GRE from a non-director is dropped.
 
 **The P8a-T4 evidence** is `orig_` + `meta_` = 0. It is reported per replica as
 `drops_originated`.
@@ -413,8 +582,13 @@ to the same vsock port.
 
 ### 5.3 The privileged helper
 
-- `boss-hostd netadm --socket S --allow-uid U` holds `CAP_NET_ADMIN`. Under systemd it runs with
-  `AmbientCapabilities=CAP_NET_ADMIN`.
+- `boss-hostd netadm --socket S --allow-uid U --vm-prefix CIDR [--tap-owner-uid N]
+  [--internal-nets CIDR,…]` holds `CAP_NET_ADMIN`. Under systemd it runs with
+  `AmbientCapabilities=CAP_NET_ADMIN`, its flags in a root-owned unit.
+- **Its policy is its own.** The VM prefix, the tap owner uid (default `--allow-uid`) and the
+  internal nets come only from its flags. A request whose `vm_prefix` differs from the helper's,
+  whose `vm_ip` is outside it, or whose tap owner differs, is refused. A helper without
+  `--vm-prefix` refuses everything.
 - It accepts one uid (`SO_PEERCRED`).
 - It accepts only these ops, each re-validated: `ensure`, `remove`, `taps`, `counters`,
   `directors`, `policy`.
@@ -431,8 +605,9 @@ to the same vsock port.
 
 - **Legacy coding lane:** `/v1/sandbox/*`, byte-compatible, static token, unchanged until P8d.
 - **`GET /v1/vms`:** lists the fleet VMs as the heartbeat entries.
-- **`/health`:** reports the VM manager's real capacity (`capacity` = max VMs, `available` = free)
-  instead of the old `capacity = 1`, plus a `fleet` block.
+- **`/health`:** the legacy fields keep their legacy meaning (`capacity`/`available` of the coding
+  lane). The VM manager's capacity is reported only under `fleet`
+  (`{host_id, vms, capacity, available, revoked}`).
 - The LLD's `claim`, `forward`, `cancel`, `drain`, `logs` and `fs` VM calls are P8b.
 
 ---
@@ -443,7 +618,8 @@ to the same vsock port.
 |---|---|
 | `BOSS_HOSTD_CP_URL` | Control plane base URL. It enables the fleet agent. |
 | `BOSS_HOSTD_CP_CA` | PEM bundle pinned for the control plane's TLS server certificate. |
-| `BOSS_HOSTD_JOIN_TOKEN_FILE` | The one-time join token, read on first start only. |
+| `BOSS_HOSTD_JOIN_TOKEN_FILE` | The one-time join token, read on first start only, and **deleted** after a successful enrolment. |
+| `BOSS_HOSTD_HEADLESS_MAX_SECONDS` | Default 86400. Control plane unreachable this long → stop serving (§3.2). |
 | `BOSS_HOSTD_STATE_DIR` | `pki/` (0600 keys, pinned fleet CA) and `cache.db`. Default `/var/lib/boss-hostd`. |
 | `BOSS_HOSTD_RUN_DIR` | Per-VM directories. Keep the path short, because of the Unix socket limit. Default `/run/boss-hostd/vms`. |
 | `BOSS_HOSTD_VM_BACKEND` | `process` (laptop/CI) or `firecracker`. |
@@ -484,14 +660,11 @@ Python control plane as it was built.
    - The gateway sets `X-Boss-Replica`, so a guest cannot claim another replica.
    - Lease headers pass through.
    - Guest `Authorization`, cookies and every other `X-Boss-*` header never survive.
-8. **Reply-only egress uses a learned peer set, not `ct state established`.**
-   - The host only sees the outer IPIP flow, so conntrack has no entry for the inner TCP flow, and
-     the LLD's rule would drop every reply.
-   - Instead, inbound IPIP-carrying-TCP records the inner source address in `peers_<tap>` (10 min
-     timeout), and a reply must be VIP:vip_port → a recorded peer, not a bare SYN.
-   - **Residual:** a compromised replica could still send non-SYN TCP to a caller that reached it
-     in the last 10 minutes. P8b can tighten this to (peer, port) once nft supports typed
-     concatenation of the inner raw payload, or by terminating IPIP on the host.
+8. **Reply-only egress uses GRE and an exact learned flow set**, not IPIP and
+   `ct state established` (which cannot match: the host sees only the outer flow). Flows are
+   learned from the caller's SYN, refreshed while live, moved to a 30 s closing set on FIN,
+   deleted on RST; internal nets are dropped first. **Ask for P8b:** directors use
+   `ipvsadm --tun-type gre`. Proven in `scripts/sandbox/hostd-netlab.sh` (§5.1).
 9. **vm_id is assigned by the control plane.** Tap name, MAC, VM directory and process marker all
    derive from it deterministically. That is what makes crash recovery duplicate-free with no local
    state.
@@ -504,6 +677,22 @@ Python control plane as it was built.
     - `per_run` is refused with `microvm_claims_frozen` while either the host switch or the
       desired flag is frozen.
     - The LLD §3.17.4 rule "frozen ⇒ nothing placed" is applied to `per_run` only.
+
+13. **(1.1) One poll per host, no replica list, BOSS counts slots.** `hosts/next {wait_ms,
+    state_gen}`; slots = `agent_replicas.slots` − live leases; serving/draining from `/observed`
+    with `state_gen`; `{resync:true}` → one `PUT …/replicas`. Operator decision, LLD §3.13.0.
+14. **(1.1) The run token is held by the host**, returned by `hosts/next` and `admit`, attached by
+    the gateway, never in the guest.
+15. **(1.1) The work inbox shares the number 7105 with `connect`** on purpose: host-initiated and
+    guest-initiated vsock ports are separate namespaces.
+16. **(1.1) The privileged helper owns its policy** (§5.3); a caller cannot widen the VM prefix or
+    choose a tap owner.
+17. **(1.1) Adopted VMs carry their own spec record** (`boss-spec.json`), so a mismatch with desired
+    state is caught even after the bbolt cache is lost (§3.3).
+18. **(1.1) Stopped replicas are reported as `stopped`** until a push carrying them succeeds (§2.4).
+19. **(1.1) Until boss-runtime serves the inbox, `boss-vsockd` runs a stand-in** on the same
+    socket and protocol (`--no-inbox` hands it to the runtime); it accepts runs up to its slots and
+    records them, which is what P8a-T6/T7 exercise.
 
 ## Asks for the control-plane side
 
@@ -525,7 +714,7 @@ Python control plane as it was built.
 - Warm pools, the claim call and the setup cache.
 - Signed images and the overlay drive.
 - The VIP on `tunl0` in the guest.
-- Director registration and withdraw (weight 0).
+- Director registration and withdraw (weight 0), with IPVS `--tun-type gre` (§5.1).
 - The TLS self-check before `serving`.
 - The central model, egress and MCP gateways the routes already point at.
 - Per-run DPoP-bound tokens held by the host.

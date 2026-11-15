@@ -93,6 +93,9 @@ func (a *Agent) heartbeatOnce(ctx context.Context) error {
 	hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := a.client.Heartbeat(hctx, a.HostID(), hb)
+	if err == nil {
+		a.clearGone(hb.Replicas)
+	}
 	if err != nil {
 		if cpclient.IsRevoked(err) {
 			a.setRevoked()
@@ -124,9 +127,15 @@ func (a *Agent) observedLoop(ctx context.Context) {
 		case <-time.After(100 * time.Millisecond):
 		}
 		octx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		gen := a.stateGen.Load()
+		reps := a.replicaStatuses(ctx, false)
 		err := a.client.Observed(octx, a.HostID(), hostapi.ObservedRequest{
-			Replicas: a.replicaStatuses(ctx, false), ObservedGeneration: a.observed.Load()})
+			Replicas: reps, ObservedGeneration: a.observed.Load(), StateGen: gen})
 		cancel()
+		if err == nil {
+			a.pushedGen.Store(gen)
+			a.clearGone(reps)
+		}
 		if cpclient.IsRevoked(err) {
 			a.setRevoked()
 		}
@@ -161,7 +170,28 @@ func (a *Agent) replicaStatuses(ctx context.Context, readCounters bool) []hostap
 		out = append(out, hostapi.ReplicaStatus{ReplicaID: r.replicaID, VMID: id, State: hostapi.StateRefused,
 			Reason: r.reason, VsockPingAgeMS: -1})
 	}
+	a.mu.Lock()
+	for _, g := range a.gone {
+		out = append(out, g)
+	}
+	a.mu.Unlock()
 	return out
+}
+
+// clearGone drops tombstones that a successful push has delivered.
+func (a *Agent) clearGone(sent []hostapi.ReplicaStatus) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, r := range sent {
+		if r.State != hostapi.StateStopped {
+			continue
+		}
+		for k, g := range a.gone {
+			if g.VMID == r.VMID && g.ReplicaID == r.ReplicaID && g.Reason == r.Reason {
+				delete(a.gone, k)
+			}
+		}
+	}
 }
 
 // Heartbeat builds the current heartbeat body.
@@ -185,6 +215,8 @@ func (a *Agent) Heartbeat(ctx context.Context) hostapi.HeartbeatRequest {
 	switch {
 	case a.revoked.Load():
 		status = "revoked"
+	case a.headlessExpired():
+		status = hostapi.StateHeadless
 	case time.Since(time.Unix(0, a.lastCP.Load())) > 3*a.cfg.HeartbeatEvery+a.cfg.WatchWait:
 		status = "headless"
 	}

@@ -27,6 +27,24 @@ type vmState struct {
 	crashloopUntil time.Time
 	drops          uint64
 	stopWatch      context.CancelFunc
+	crashloops     int       // crashloops so far; a failure after one quarantines
+	servingSince   time.Time // first answered ping of this incarnation
+	busySlots      int       // from the 500 ms ping (local use only)
+	totalSlots     int
+	pending        int // deliveries since the last ping
+}
+
+// freeSlots is what the host may still deliver to this VM (local only:
+// BOSS keeps its own count). 0 unless serving.
+func (v *vmState) freeSlots() int {
+	if v.state != hostapi.StateServing {
+		return 0
+	}
+	f := v.totalSlots - v.busySlots - v.pending
+	if f < 0 {
+		return 0
+	}
+	return f
 }
 
 func (v *vmState) setState(state, reason string) (prev string) {
@@ -70,8 +88,8 @@ func (v *vmState) status() hostapi.ReplicaStatus {
 	}
 	return hostapi.ReplicaStatus{
 		ReplicaID: v.spec.ReplicaID, VMID: v.id, DeploymentID: v.spec.DeploymentID, Mode: v.spec.Mode,
-		State: v.state, Reason: v.reason, VMIP: v.spec.VMIP, ImageDigest: v.spec.ImageDigest, Slots: slots, Busy: 0,
-		VsockPingAgeMS: age, Restarts: len(v.restarts), DropsOriginated: v.drops,
+		State: v.state, Reason: v.reason, VMIP: v.spec.VMIP, ImageDigest: v.spec.ImageDigest, Slots: slots, Busy: v.busySlots,
+		VsockPingAgeMS: age, Restarts: len(v.restarts), DropsOriginated: v.drops, FreeSlots: v.freeSlots(),
 	}
 }
 

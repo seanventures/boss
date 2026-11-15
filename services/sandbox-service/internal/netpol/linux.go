@@ -20,6 +20,9 @@ import (
 // inside the helper (or inside boss-hostd only when that already has it).
 type Linux struct {
 	Nft string // nft binary (default "nft")
+	// Policy is the privileged side's own configuration; every Ensure is
+	// checked against it, whatever the caller sent.
+	Policy Policy
 }
 
 func (l *Linux) nft() string {
@@ -40,10 +43,17 @@ func (l *Linux) run(ctx context.Context, script string) error {
 }
 
 func (l *Linux) ensureBase(ctx context.Context) error {
-	if err := exec.CommandContext(ctx, l.nft(), "list", "chain", "inet", Table, "pre").Run(); err == nil {
-		return nil
+	internal := l.Policy.Internal()
+	if err := exec.CommandContext(ctx, l.nft(), "list", "chain", "inet", Table, "pre").Run(); err != nil {
+		return l.run(ctx, RenderBase(internal))
 	}
-	return l.run(ctx, RenderBase())
+	// Existing table: make sure the internal-net set exists and holds the
+	// policy's nets (idempotent; auto-merge folds overlaps).
+	script := fmt.Sprintf("add set inet %s internal_nets { type ipv4_addr; flags interval; auto-merge; }\n", Table)
+	if len(internal) > 0 {
+		script += fmt.Sprintf("add element inet %s internal_nets { %s }\n", Table, strings.Join(internal, ", "))
+	}
+	return l.run(ctx, script)
 }
 
 func sysctl(path, val string) error {
@@ -51,7 +61,7 @@ func sysctl(path, val string) error {
 }
 
 func (l *Linux) Ensure(ctx context.Context, v VMNet) error {
-	if err := v.Validate(); err != nil {
+	if err := l.Policy.Check(&v); err != nil {
 		return err
 	}
 	if err := l.ensureBase(ctx); err != nil {

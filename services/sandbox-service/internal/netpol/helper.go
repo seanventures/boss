@@ -108,10 +108,7 @@ func Dispatch(ctx context.Context, m Manager, req helperReq) helperResp {
 		if req.Net == nil {
 			return fail(errors.New("ensure: net required"))
 		}
-		if err := req.Net.Validate(); err != nil {
-			return fail(err)
-		}
-		if err := m.Ensure(ctx, *req.Net); err != nil {
+		if err := m.Ensure(ctx, *req.Net); err != nil { // Ensure enforces the helper's Policy
 			return fail(err)
 		}
 		return helperResp{OK: true}

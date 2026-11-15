@@ -20,6 +20,7 @@ import (
 // in a VM directory for the process backend.
 type Transport interface {
 	ListenControl() (net.Listener, error)
+	ListenInbox() (net.Listener, error)
 	DialHost(port int) (net.Conn, error)
 }
 
@@ -29,6 +30,7 @@ type Transport interface {
 type UnixTransport struct{ Dir string }
 
 func UnixControlPath(dir string) string { return filepath.Join(dir, "ctl.sock") }
+func UnixInboxPath(dir string) string   { return filepath.Join(dir, "w_7105.sock") }
 func UnixGuestPath(dir string, port int) string {
 	return filepath.Join(dir, "g_"+strconv.Itoa(port)+".sock")
 }
@@ -37,6 +39,16 @@ func (u UnixTransport) ListenControl() (net.Listener, error) {
 	p := UnixControlPath(u.Dir)
 	_ = os.Remove(p)
 	return net.Listen("unix", p)
+}
+
+func (u UnixTransport) ListenInbox() (net.Listener, error) {
+	p := UnixInboxPath(u.Dir)
+	_ = os.Remove(p)
+	ln, err := net.Listen("unix", p)
+	if err == nil {
+		_ = os.Chmod(p, 0o600)
+	}
+	return ln, err
 }
 
 func (u UnixTransport) DialHost(port int) (net.Conn, error) {
@@ -51,11 +63,15 @@ type Daemon struct {
 	FixedLoopback bool
 	// NetSetup configures the replica NIC from the bootstrap (Linux VMs only).
 	NetSetup func(b *Bootstrap) error
+	// NoInbox leaves the work inbox to boss-runtime (P8b images).
+	NoInbox bool
 
 	mu    sync.Mutex
 	boot  *Bootstrap
 	ports map[int]int
 	start time.Time
+	busy  int
+	runs  []string
 }
 
 // Run serves until ctx ends.
@@ -73,6 +89,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		d.ports[port] = ln.Addr().(*net.TCPAddr).Port
 		go d.relay(ctx, ln, port)
+	}
+	if !d.NoInbox {
+		inbox, err := d.T.ListenInbox()
+		if err != nil {
+			return fmt.Errorf("inbox listener: %w", err)
+		}
+		go func() { <-ctx.Done(); inbox.Close() }()
+		go d.serveInbox(ctx, inbox)
 	}
 	ctl, err := d.T.ListenControl()
 	if err != nil {
@@ -157,9 +181,13 @@ func (d *Daemon) handle(req Request) Response {
 	d.mu.Unlock()
 	base := Response{OK: true, Bootstrapped: boot != nil, Ports: d.ports,
 		Uptime: time.Since(d.start).Milliseconds()}
+	d.mu.Lock()
+	base.BusySlots = d.busy
 	if boot != nil {
 		base.VMID = boot.VMID
+		base.TotalSlots = slotsOf(boot)
 	}
+	d.mu.Unlock()
 	switch req.Op {
 	case "ping":
 		return base
@@ -197,6 +225,11 @@ func (d *Daemon) handle(req Request) Response {
 		}
 		sort.Strings(base.Ifaces)
 		return base
+	case "runs":
+		d.mu.Lock()
+		base.Runs = append([]string(nil), d.runs...)
+		d.mu.Unlock()
+		return base
 	case "selfcheck_egress":
 		base.Selfcheck = SelfcheckEgress()
 		return base
@@ -227,4 +260,98 @@ func mixSeed(seed []byte) {
 	} else {
 		log.Printf("boss-vsockd: seed not mixed: %v", err)
 	}
+}
+
+func slotsOf(b *Bootstrap) int {
+	if b.Slots > 0 {
+		return b.Slots
+	}
+	if b.Mode == "per_run" {
+		return 1
+	}
+	return 4
+}
+
+// serveInbox is the P8a stand-in for boss-runtime's work inbox (HOST_API.md
+// §4.5): it accepts a run when a slot is free, holds the slot for RunHoldMS,
+// records the id, and answers ping/slots. A connection may carry many lines.
+func (d *Daemon) serveInbox(ctx context.Context, ln net.Listener) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		go func(c net.Conn) {
+			defer c.Close()
+			rd := bufio.NewReader(c)
+			for {
+				_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+				line, err := rd.ReadBytes('\n')
+				if err != nil {
+					return
+				}
+				var w Work
+				var reply InboxReply
+				if json.Unmarshal(line, &w) != nil {
+					reply.Reason = "bad_request"
+				} else {
+					switch w.Op {
+					case "run":
+						if w.RunID == "" {
+							reply.Reason = "bad_request"
+						} else {
+							reply = d.accept(w)
+						}
+					case "ping", "slots":
+						busy, total := d.slots()
+						reply = InboxReply{OK: true, BusySlots: &busy, TotalSlots: &total}
+					default:
+						reply.Reason = "bad_request"
+					}
+				}
+				raw, _ := json.Marshal(reply)
+				if _, err := c.Write(append(raw, '\n')); err != nil {
+					return
+				}
+			}
+		}(c)
+	}
+}
+
+func (d *Daemon) slots() (busy, total int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.boot == nil {
+		return 0, 0
+	}
+	return d.busy, slotsOf(d.boot)
+}
+
+func (d *Daemon) accept(w Work) InboxReply {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.boot == nil {
+		return InboxReply{Reason: "draining"}
+	}
+	for _, r := range d.runs {
+		if r == w.RunID && d.busy > 0 {
+			return InboxReply{Reason: "duplicate"}
+		}
+	}
+	if d.busy >= slotsOf(d.boot) {
+		return InboxReply{Reason: "no_free_slot"}
+	}
+	d.busy++
+	d.runs = append(d.runs, w.RunID)
+	hold := time.Duration(d.boot.RunHoldMS) * time.Millisecond
+	time.AfterFunc(hold, func() {
+		d.mu.Lock()
+		d.busy--
+		d.mu.Unlock()
+	})
+	return InboxReply{OK: true}
 }

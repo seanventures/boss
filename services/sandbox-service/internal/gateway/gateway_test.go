@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,11 @@ func newRig(t *testing.T) *rig {
 			r.peers = append(r.peers, "")
 		}
 		r.mu.Unlock()
+		if req.URL.Path == "/v1/run-plane/admit" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"run_id":"run_adm","status":"leased","lease":{"replica_id":"rep_b","job_id":"job_adm","fence_epoch":5,"run_token":"lease_SECRET_adm"}}`))
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		for i := 0; i < 3; i++ {
 			_, _ = w.Write([]byte("data: chunk" + strconv.Itoa(i) + "\n\n"))
@@ -255,7 +261,7 @@ func TestRouteTableDenies(t *testing.T) {
 		}
 	}
 	// A replica handle reaches the run plane.
-	if got, _ := r.call("vm-b", guest.PortRunPlane, "POST", "/v1/run-plane/next", map[string]string{"Authorization": "Bearer boss_rep_B"}); got != 200 {
+	if got, _ := r.call("vm-b", guest.PortRunPlane, "POST", "/v1/run-plane/admit", map[string]string{"Authorization": "Bearer boss_rep_B"}); got != 200 {
 		t.Fatalf("replica handle on the run plane: %d", got)
 	}
 }
@@ -266,9 +272,10 @@ func TestRouteTableDenies(t *testing.T) {
 // guest claimed. A per_run VM without a handle is refused.
 func TestRunPlaneSocketIdentityAndLeasePassthrough(t *testing.T) {
 	r := newRig(t)
+	r.gw.Runs.Put("run_9", RunLease{ReplicaID: "rep_b", JobID: "job_1", Token: "lease_host_tok", Epoch: 4})
 	status, _ := r.call("vm-b", guest.PortRunPlane, "PUT", "/v1/run-plane/runs/run_9/checkpoints", map[string]string{
 		"Authorization": "Bearer not-a-handle", "X-Boss-Replica": "rep_forged", "X-Boss-Job": "job_1",
-		"X-Boss-Run-Token": "lease-tok", "X-Boss-Fence-Epoch": "4", "X-Boss-Org": "org_forged",
+		"X-Boss-Run-Token": "guest-forged-token", "X-Boss-Fence-Epoch": "4", "X-Boss-Org": "org_forged",
 	})
 	if status != 200 {
 		t.Fatalf("socket-identified replica: %d %+v", status, r.lastCall())
@@ -280,14 +287,65 @@ func TestRunPlaneSocketIdentityAndLeasePassthrough(t *testing.T) {
 	if h.Get("X-Boss-Replica") != "rep_b" || h.Get("X-Boss-Org") != "" {
 		t.Fatalf("identity headers: replica=%q org=%q", h.Get("X-Boss-Replica"), h.Get("X-Boss-Org"))
 	}
-	if h.Get("X-Boss-Job") != "job_1" || h.Get("X-Boss-Run-Token") != "lease-tok" || h.Get("X-Boss-Fence-Epoch") != "4" {
+	if h.Get("X-Boss-Run-Token") != "lease_host_tok" {
+		t.Fatal("the run token must be the host's, never the guest's")
+	}
+	if h.Get("X-Boss-Job") != "job_1" || h.Get("X-Boss-Fence-Epoch") != "4" {
 		t.Fatalf("lease headers must pass through: %v", h)
 	}
-	if r.lastCall().Route != "run_plane" || r.lastCall().Verdict != "allow" {
+	if r.lastCall().Route != "run_plane" || r.lastCall().Verdict != "allow" || r.lastCall().RunID != "run_9" {
 		t.Fatalf("audit: %+v", r.lastCall())
 	}
-	if got, _ := r.call("vm-a", guest.PortRunPlane, "POST", "/v1/run-plane/next", nil); got != 401 {
+	if got, _ := r.call("vm-a", guest.PortRunPlane, "POST", "/v1/run-plane/admit", nil); got != 401 {
 		t.Fatalf("per_run with no handle must be refused, got %d", got)
+	}
+}
+
+// HOST_API.md §4.5: a run the host holds no token for (or another replica's
+// run) is 409 fenced without a forward; settle forgets the token; an admit
+// response loses lease.run_token on the way to the guest.
+func TestRunTokensStayOnTheHost(t *testing.T) {
+	r := newRig(t)
+	n := len(r.seen)
+	got, _ := r.call("vm-b", guest.PortRunPlane, "PUT", "/v1/run-plane/runs/run_unknown/checkpoints",
+		map[string]string{"X-Boss-Run-Token": "guest-guess"})
+	if got != 409 || r.lastCall().RejectedBy != "fenced" || len(r.seen) != n {
+		t.Fatalf("unknown run: %d %+v (forwarded %d)", got, r.lastCall(), len(r.seen)-n)
+	}
+	r.gw.Runs.Put("run_other", RunLease{ReplicaID: "rep_x", Token: "t"})
+	if got, _ := r.call("vm-b", guest.PortRunPlane, "GET", "/v1/run-plane/runs/run_other", nil); got != 409 {
+		t.Fatalf("another replica's run must be fenced: %d", got)
+	}
+	r.gw.Runs.Put("run_s", RunLease{ReplicaID: "rep_b", Token: "lease_s", Epoch: 2})
+	if got, _ := r.call("vm-b", guest.PortRunPlane, "POST", "/v1/run-plane/runs/run_s/lease",
+		map[string]string{"Content-Type": "application/json"}); got != 200 {
+		t.Fatalf("lease call: %d", got)
+	}
+	if _, ok := r.gw.Runs.Get("run_s"); !ok {
+		t.Fatal("a non-ending lease call must keep the token")
+	}
+	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return net.Dial("unix", filepath.Join(r.dir, "vm-b_"+strconv.Itoa(guest.PortRunPlane)))
+	}}}
+	resp, err := c.Post("http://127.0.0.1/v1/run-plane/runs/run_s/lease", "application/json", strings.NewReader(`{"action":"settle"}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("settle: %v", err)
+	}
+	resp.Body.Close()
+	if _, ok := r.gw.Runs.Get("run_s"); ok {
+		t.Fatal("settle must forget the run token")
+	}
+	resp, err = c.Post("http://127.0.0.1/v1/run-plane/admit", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(body), "lease_SECRET_adm") || !strings.Contains(string(body), "job_adm") {
+		t.Fatalf("admit body to the guest: %s", body)
+	}
+	if l, ok := r.gw.Runs.Get("run_adm"); !ok || l.Token != "lease_SECRET_adm" || l.ReplicaID != "rep_b" || l.Epoch != 5 {
+		t.Fatalf("admit lease not kept by the host: %+v %v", l, ok)
 	}
 }
 
@@ -356,5 +414,103 @@ func TestBatcherKeepsRowsUntilFlushSucceeds(t *testing.T) {
 func TestPathTemplateDropsIdentifiers(t *testing.T) {
 	if got := pathTemplate("/v1/run-plane/run_123/checkpoints/abc"); got != "/v1/run-plane/run_123/*" {
 		t.Fatal(got)
+	}
+}
+
+// VMs never poll for work (§3.13.0): next and hosts/next are blocked at the
+// gateway even for a replica the socket identifies.
+func TestVMsCannotPollForWork(t *testing.T) {
+	r := newRig(t)
+	for _, p := range []string{"/v1/run-plane/next", "/v1/run-plane/hosts/next", "/v1/run-plane/hosts/x"} {
+		got, _ := r.call("vm-b", guest.PortRunPlane, "POST", p, map[string]string{"Authorization": "Bearer boss_rep_B"})
+		if got != 403 || r.lastCall().RejectedBy != "route_denied" {
+			t.Fatalf("%s: %d %+v", p, got, r.lastCall())
+		}
+	}
+	if len(r.seen) != 0 {
+		t.Fatal("a work poll reached the control plane")
+	}
+}
+
+func TestPathHygieneAndPrefixBoundary(t *testing.T) {
+	r := newRig(t)
+	auth := map[string]string{"Authorization": "Bearer boss_mdl_A"}
+	if got, _ := r.call("vm-a", guest.PortModel, "POST", "/anthropic/v1/messagesX", auth); got != 403 {
+		t.Fatalf("prefix must stop at a segment boundary: %d", got)
+	}
+	for _, p := range []string{"/anthropic/v1/messages/../../admin", "/anthropic//v1/messages",
+		"/anthropic/v1/messages%2f..%2fx", "/anthropic/v1/%2e%2e/messages"} {
+		got, _ := r.call("vm-a", guest.PortModel, "POST", p, auth)
+		if got == 200 {
+			t.Fatalf("%s was forwarded", p)
+		}
+	}
+	if !CleanPath("/v1/run-plane/runs/r1/checkpoints", "/v1/run-plane/runs/r1/checkpoints") || CleanPath("/a/./b", "/a/./b") {
+		t.Fatal("CleanPath")
+	}
+}
+
+func TestMoreCredentialHeadersAreStripped(t *testing.T) {
+	h := http.Header{}
+	for _, k := range []string{"X-Auth-Token", "Private-Token", "X-Amz-Security-Token"} {
+		h.Set(k, "secret-ish")
+	}
+	StripGuestHeaders(h)
+	if len(h) != 0 {
+		t.Fatalf("left: %v", h)
+	}
+}
+
+func TestGuestTrailersDoNotSurvive(t *testing.T) {
+	r := newRig(t)
+	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return net.Dial("unix", filepath.Join(r.dir, "vm-a_"+strconv.Itoa(guest.PortModel)))
+	}}}
+	body := strings.NewReader(`{"x":1}`)
+	req, _ := http.NewRequest("POST", "http://127.0.0.1/anthropic/v1/messages", io.NopCloser(body))
+	req.ContentLength = -1 // chunked, so trailers are sent
+	req.Header.Set("Authorization", "Bearer boss_mdl_A")
+	req.Trailer = http.Header{"Authorization": {"Bearer smuggled"}, "X-Boss-Replica": {"forged"}}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	h := r.seen[len(r.seen)-1]
+	if strings.Contains(h.Get("Authorization"), "smuggled") || h.Get("X-Boss-Replica") != "" {
+		t.Fatalf("a trailer was smuggled through: %v", h)
+	}
+}
+
+// The front-trim race: rows dropped from the front while a flush is in flight
+// must not make the flush remove rows it never sent.
+func TestBatcherNeverDropsUnsentRowsAfterFrontTrim(t *testing.T) {
+	var got []int
+	var b *Batcher[int]
+	first := true
+	b = &Batcher[int]{MaxBatch: 3, Cap: 4, Flush: func(_ context.Context, rows []int) error {
+		if first {
+			first = false
+			for i := 10; i < 13; i++ { // three new rows arrive mid-flush; the cap trims the front
+				b.Add(i)
+			}
+		}
+		got = append(got, rows...)
+		return nil
+	}}
+	for i := 0; i < 4; i++ {
+		b.Add(i)
+	}
+	b.flushOnce(context.Background())
+	// Sent 0,1,2 first; meanwhile 0,1,2 were trimmed and 10,11,12 added: buf = 3,10,11,12.
+	// None of those may be lost.
+	want := []int{0, 1, 2, 3, 10, 11, 12}
+	if len(got) != len(want) {
+		t.Fatalf("flushed %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("flushed %v, want %v", got, want)
+		}
 	}
 }

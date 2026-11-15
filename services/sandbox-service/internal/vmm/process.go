@@ -64,6 +64,9 @@ func (p *Process) Create(ctx context.Context, s Spec) (*VM, error) {
 		return nil, err
 	}
 	vm := newVM(s.VMID, cmd.Process.Pid, dir, false)
+	sp := s.Normalized()
+	vm.Spec = &sp
+	_ = writeSpec(dir, s)
 	go func() { _ = cmd.Wait(); vm.markExited() }()
 	// Wait for the control socket so the caller can bootstrap.
 	deadline := time.Now().Add(5 * time.Second)
@@ -88,7 +91,7 @@ func (p *Process) Snapshot(context.Context, *VM) (SnapshotRef, error) {
 }
 
 func (p *Process) Stop(ctx context.Context, vm *VM) error {
-	err := stopProcess(ctx, vm, 2*time.Second)
+	err := stopProcess(ctx, vm, 500*time.Millisecond)
 	if err == nil && vm.Dir != "" && strings.HasPrefix(vm.Dir, p.Root) {
 		_ = os.RemoveAll(vm.Dir)
 	}
@@ -107,14 +110,28 @@ func (p *Process) Scan() ([]*VM, error) {
 	var out []*VM
 	for _, pr := range procs {
 		vm := newVM(pr.Flag("boss-vm-id"), pr.PID, pr.Flag("dir"), true)
+		vm.Spec = readSpec(vm.Dir)
 		watchAdopted(vm)
 		out = append(out, vm)
 	}
 	return out, nil
 }
 
-func (p *Process) DialControl(vm *VM) (net.Conn, error) {
-	return net.DialTimeout("unix", guest.UnixControlPath(vm.Dir), time.Second)
+func (p *Process) DialControl(vm *VM, deadline time.Time) (net.Conn, error) {
+	return dialUnix(guest.UnixControlPath(vm.Dir), deadline)
+}
+
+func (p *Process) DialInbox(vm *VM, deadline time.Time) (net.Conn, error) {
+	return dialUnix(guest.UnixInboxPath(vm.Dir), deadline)
+}
+
+func dialUnix(path string, deadline time.Time) (net.Conn, error) {
+	c, err := (&net.Dialer{Deadline: deadline}).Dial("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	_ = c.SetDeadline(deadline)
+	return c, nil
 }
 
 func (p *Process) GuestListen(vm *VM, port int) (net.Listener, error) {

@@ -101,13 +101,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	available := capacity
 	var fleet map[string]any
 	if s.Fleet != nil {
-		// The fleet VM manager is multi-slot: report its real capacity.
+		// The legacy fields keep their legacy meaning (the coding lane, one
+		// task per call); the multi-slot VM manager's capacity is reported
+		// under "fleet" only.
 		max, used := s.Fleet.Capacity()
-		capacity, available = max, max-used
-		if available < 0 || s.Fleet.Revoked() {
-			available = 0
+		free := max - used
+		if free < 0 || s.Fleet.Revoked() {
+			free = 0
 		}
-		fleet = map[string]any{"host_id": s.Fleet.HostID(), "vms": used, "revoked": s.Fleet.Revoked()}
+		fleet = map[string]any{"host_id": s.Fleet.HostID(), "vms": used, "capacity": max,
+			"available": free, "revoked": s.Fleet.Revoked()}
 	}
 	body := map[string]any{
 		"ok":                ready,

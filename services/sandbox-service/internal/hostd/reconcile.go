@@ -1,8 +1,10 @@
 package hostd
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"net"
 	"time"
@@ -125,18 +127,6 @@ func (a *Agent) Reconcile(ctx context.Context) {
 			a.startVM(ctx, dv, nil)
 			continue
 		}
-		switch st.getState() {
-		case hostapi.StateCrashloop:
-			st.mu.Lock()
-			retry := time.Now().After(st.crashloopUntil)
-			st.mu.Unlock()
-			if retry {
-				a.stopVM(ctx, dv.VMID, "crashloop window elapsed; fresh attempt")
-			}
-			continue
-		case hostapi.StateUnhealthy:
-			continue // the watchdog path owns it
-		}
 		st.mu.Lock()
 		changed := st.haveSpec && (st.spec.ImageDigest != dv.ImageDigest || st.spec.Mode != dv.Mode ||
 			st.spec.VMIP != dv.VMIP || st.spec.Resources.VCPU() != dv.Resources.VCPU() ||
@@ -144,8 +134,24 @@ func (a *Agent) Reconcile(ctx context.Context) {
 		st.mu.Unlock()
 		if changed {
 			// P8a replaces in place; P8b rolls with surge 1 behind the VIP.
+			// A changed spec also clears a crashloop or quarantine.
 			a.stopVM(ctx, dv.VMID, "spec changed")
 			continue
+		}
+		switch st.getState() {
+		case hostapi.StateCrashloop:
+			st.mu.Lock()
+			retry := time.Now().After(st.crashloopUntil)
+			st.mu.Unlock()
+			if retry {
+				// One replacement attempt, keeping the history: if it fails
+				// too, the VM is quarantined (LLD §3.3).
+				a.logf("VM %s: crashloop window elapsed; one replacement attempt", dv.VMID)
+				a.startVM(ctx, dv, st)
+			}
+			continue
+		case hostapi.StateQuarantined, hostapi.StateUnhealthy:
+			continue // quarantine waits for a spec change; unhealthy is the watchdog's
 		}
 		a.ensureAttached(ctx, st, dv)
 	}
@@ -228,7 +234,11 @@ func (a *Agent) admissible(ds *hostapi.DesiredState, dv hostapi.DesiredVM) strin
 
 func (a *Agent) vmSpec(dv hostapi.DesiredVM) vmm.Spec {
 	s := vmm.Spec{VMID: dv.VMID, DeploymentID: dv.DeploymentID, DeploymentVersion: dv.AgentVersion,
-		Mode: dv.Mode, ImageDigest: dv.ImageDigest, VCPU: dv.Resources.VCPU(), MemMiB: dv.Resources.MemMiB()}
+		Mode: dv.Mode, ImageDigest: dv.ImageDigest, VCPU: dv.Resources.VCPU(), MemMiB: dv.Resources.MemMiB(),
+		Slots: dv.Slots}
+	if dv.Mode == hostapi.ModeReplica {
+		s.VMIP = dv.VMIP
+	}
 	if dv.Mode == hostapi.ModeReplica && a.cfg.Manager.Name() == "firecracker" {
 		s.Net = &vmm.NetAttach{Tap: netpol.TapName(dv.VMID), MAC: netpol.MACFor(dv.VMIP),
 			VMIP: dv.VMIP, Gateway: netpol.Gateway}
@@ -246,10 +256,12 @@ func (a *Agent) startVM(ctx context.Context, dv hostapi.DesiredVM, prior *vmStat
 	st.mu.Lock()
 	st.spec, st.haveSpec = dv, true
 	st.startedAt, st.lastPing, st.misses, st.bootstrapped, st.vm = time.Now(), time.Time{}, 0, false, nil
+	st.servingSince, st.busySlots, st.totalSlots, st.pending = time.Time{}, 0, 0, 0
 	st.mu.Unlock()
 	st.setState(hostapi.StateProvisioning, "")
 	a.mu.Lock()
 	a.vms[dv.VMID] = st
+	delete(a.gone, dv.VMID)
 	a.mu.Unlock()
 
 	spec := a.vmSpec(dv)
@@ -321,6 +333,14 @@ func (a *Agent) ensureAttached(ctx context.Context, st *vmState, dv hostapi.Desi
 	}
 	if adopted {
 		spec := a.vmSpec(dv)
+		// What is running must be what is desired: compare the VM's own
+		// spec record (boss-spec.json, written at Create; bbolt may be gone).
+		if diff := vmm.Differs(vm.Spec, spec); diff != "" {
+			a.logf("adopted VM %s differs from desired (%s): replacing", dv.VMID, diff)
+			a.event(dv.VMID, "adopted_mismatch", "", "", map[string]string{"field": diff})
+			a.stopVM(ctx, dv.VMID, "adopted VM differs from desired: "+diff)
+			return
+		}
 		if spec.Net != nil {
 			c := a.creds.Load()
 			if err := a.cfg.Net.Ensure(ctx, netpol.VMNet{VMID: dv.VMID, Tap: spec.Net.Tap, VMIP: dv.VMIP,
@@ -374,7 +394,12 @@ func (a *Agent) stopVM(ctx context.Context, id, why string) {
 	}
 	st.mu.Lock()
 	vm, tap, prev := st.vm, st.tap, st.state
+	tomb := hostapi.ReplicaStatus{ReplicaID: st.spec.ReplicaID, VMID: id, DeploymentID: st.spec.DeploymentID,
+		Mode: st.spec.Mode, State: hostapi.StateStopped, Reason: why, VsockPingAgeMS: -1}
 	st.mu.Unlock()
+	a.mu.Lock()
+	a.gone[id] = tomb
+	a.mu.Unlock()
 	if vm != nil {
 		if err := a.cfg.Manager.Stop(ctx, vm); err != nil {
 			a.logf("stop %s: %v", id, err)
@@ -406,6 +431,19 @@ func (a *Agent) handleUnhealthy(ctx context.Context, id string) {
 	}
 	st.mu.Lock()
 	vm, reason, dv := st.vm, st.reason, st.spec
+	if st.crashloops > 0 {
+		// The replacement after a crashloop failed too: quarantine. Nothing
+		// restarts it until its spec changes or it leaves desired state.
+		st.mu.Unlock()
+		if vm != nil {
+			_ = a.cfg.Manager.Stop(ctx, vm)
+		}
+		st.setState(hostapi.StateQuarantined, "replacement after crashloop also failed: "+reason)
+		a.persist(st)
+		a.logf("VM %s QUARANTINED (%s)", id, reason)
+		a.event(id, "quarantined", hostapi.StateUnhealthy, hostapi.StateQuarantined, map[string]string{"reason": reason})
+		return
+	}
 	now := time.Now()
 	kept := st.restarts[:0]
 	for _, t := range st.restarts {
@@ -417,15 +455,16 @@ func (a *Agent) handleUnhealthy(ctx context.Context, id string) {
 	crash := len(st.restarts) >= a.cfg.RestartMax
 	if crash {
 		st.crashloopUntil = st.restarts[0].Add(a.cfg.RestartWindow)
+		st.crashloops++
 	} else {
 		st.restarts = append(st.restarts, now)
 	}
 	restarts := len(st.restarts)
 	st.mu.Unlock()
+	a.event(id, "vm_state", "", hostapi.StateUnhealthy, map[string]string{"reason": reason})
 	if vm != nil {
 		_ = a.cfg.Manager.Stop(ctx, vm)
 	}
-	a.event(id, "vm_state", "", hostapi.StateUnhealthy, map[string]string{"reason": reason})
 	if crash {
 		st.setState(hostapi.StateCrashloop, fmt.Sprintf("%d restarts in %s; last: %s", restarts, a.cfg.RestartWindow, reason))
 		a.persist(st)
@@ -485,6 +524,15 @@ func (a *Agent) watchdog(ctx context.Context, st *vmState, vm *vmm.VM) {
 			prev := st.setState(to, "")
 			a.event(st.id, "vm_state", prev, to, nil)
 		}
+		if ok {
+			st.mu.Lock()
+			if st.servingSince.IsZero() {
+				st.servingSince = time.Now()
+			} else if st.crashloops > 0 && time.Since(st.servingSince) > a.cfg.RestartWindow {
+				st.crashloops, st.restarts = 0, nil // healthy for a full window: history cleared
+			}
+			st.mu.Unlock()
+		}
 		if misses >= a.cfg.PingMisses {
 			report(fmt.Sprintf("missed_pings: %d", misses))
 			return
@@ -493,12 +541,14 @@ func (a *Agent) watchdog(ctx context.Context, st *vmState, vm *vmm.VM) {
 }
 
 func (a *Agent) exchange(st *vmState, vm *vmm.VM) bool {
-	c, err := a.cfg.Manager.DialControl(vm)
+	// The whole ping (dial, handshake, exchange) fits inside one tick, so
+	// PingMisses misses take at most PingMisses × PingEvery.
+	deadline := time.Now().Add(a.cfg.PingEvery * 9 / 10)
+	c, err := a.cfg.Manager.DialControl(vm, deadline)
 	if err != nil {
 		return false
 	}
 	defer c.Close()
-	deadline := time.Now().Add(400 * time.Millisecond)
 	st.mu.Lock()
 	boot := !st.bootstrapped
 	dv := st.spec
@@ -507,7 +557,7 @@ func (a *Agent) exchange(st *vmState, vm *vmm.VM) bool {
 	if boot {
 		seed := make([]byte, 32)
 		_, _ = rand.Read(seed)
-		b := &guest.Bootstrap{VMID: dv.VMID, Mode: dv.Mode, Seed: seed}
+		b := &guest.Bootstrap{VMID: dv.VMID, Mode: dv.Mode, Seed: seed, Slots: dv.Slots, RunHoldMS: a.cfg.RunHoldMS}
 		if dv.Mode == hostapi.ModeReplica {
 			b.VMIP, b.Gateway, b.VIP, b.MAC = dv.VMIP, netpol.Gateway, dv.VIP, netpol.MACFor(dv.VMIP)
 			if dv.ReplicaHandle != "" {
@@ -531,10 +581,24 @@ func (a *Agent) exchange(st *vmState, vm *vmm.VM) bool {
 		a.logf("VM %s answered as %s: refusing", st.id, resp.VMID)
 		return false
 	}
+	busy, total := resp.BusySlots, resp.TotalSlots
+	if total == 0 && resp.Bootstrapped {
+		// boss-runtime owns the inbox (vsockd --no-inbox): ask it directly,
+		// inside the same tick deadline (HOST_API.md §3.2, §4.5).
+		if b, t, ok := a.inboxSlots(vm, deadline); ok {
+			busy, total = b, t
+		}
+	}
+	st.mu.Lock()
 	if boot {
-		st.mu.Lock()
 		st.bootstrapped = true
-		st.mu.Unlock()
+	}
+	slotsChanged := st.totalSlots != total
+	st.busySlots, st.totalSlots = busy, total
+	st.pending = 0 // the ping is the truth again
+	st.mu.Unlock()
+	if slotsChanged {
+		a.bumpState() // total slots are replica state; busy is BOSS's own count
 	}
 	return true
 }
@@ -547,12 +611,13 @@ func (a *Agent) Control(id string, op string) (*guest.Response, error) {
 	if st == nil || st.vm == nil {
 		return nil, fmt.Errorf("vm %s not running", id)
 	}
-	c, err := a.cfg.Manager.DialControl(st.vm)
+	deadline := time.Now().Add(5 * time.Second)
+	c, err := a.cfg.Manager.DialControl(st.vm, deadline)
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
-	return guest.Exchange(c, guest.Request{Op: op}, time.Now().Add(5*time.Second))
+	return guest.Exchange(c, guest.Request{Op: op}, deadline)
 }
 
 func (a *Agent) shutdownGateway() {
@@ -581,4 +646,25 @@ func (a *Agent) Capacity() (int, int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.cfg.MaxVMs, len(a.vms)
+}
+
+// inboxSlots asks a VM's work inbox {"op":"slots"}.
+func (a *Agent) inboxSlots(vm *vmm.VM, deadline time.Time) (busy, total int, ok bool) {
+	c, err := a.cfg.Manager.DialInbox(vm, deadline)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte(`{"op":"slots"}` + "\n")); err != nil {
+		return 0, 0, false
+	}
+	line, err := bufio.NewReader(c).ReadBytes('\n')
+	if err != nil {
+		return 0, 0, false
+	}
+	var r guest.InboxReply
+	if json.Unmarshal(line, &r) != nil || !r.OK || r.BusySlots == nil || r.TotalSlots == nil {
+		return 0, 0, false
+	}
+	return *r.BusySlots, *r.TotalSlots, true
 }
