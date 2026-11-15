@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "07c451e975199c8c"
+CATALOGUE_FINGERPRINT = "787b3402976dba87"
 
 
 class Permission(StrEnum):
@@ -150,6 +150,8 @@ class Permission(StrEnum):
     DEPLOYMENT_PRODUCTION = "deployment:production"
     DEPLOYMENT_ROLLBACK = "deployment:rollback"
     DEPLOYMENT_TARGET_MANAGE = "deployment_target:manage"
+    FLEET_READ = "fleet:read"
+    FLEET_MANAGE = "fleet:manage"
     HOST_READ = "host:read"
     HOST_MANAGE = "host:manage"
     HOST_EXEC = "host:exec"
@@ -217,6 +219,7 @@ class Permission(StrEnum):
     WORKER_LEASE = "worker:lease"
     SELF_FIX_TICKET_READ = "self_fix:ticket_read"
     SELF_FIX_TICKET_REPORT = "self_fix:ticket_report"
+    FLEET_HOST = "fleet:host"
     KNOWLEDGE_READ = "knowledge:read"
     KNOWLEDGE_MANAGE = "knowledge:manage"
     KNOWLEDGE_REVIEW = "knowledge:review"
@@ -363,6 +366,8 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "deployment:production": PermissionMeta(key="deployment:production", title="Deploy to production", description="Deploy or promote to a production target.", category="Deploy and infra", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "deployment:rollback": PermissionMeta(key="deployment:rollback", title="Roll back deployments", description="Roll back a deployment.", category="Deploy and infra", roles=('owner', 'admin', 'operator'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "deployment_target:manage": PermissionMeta(key="deployment_target:manage", title="Manage deployment targets", description="Create, change, bootstrap, purge and tear down targets and their secrets.", category="Deploy and infra", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
+    "fleet:read": PermissionMeta(key="fleet:read", title="View agent hosts", description="See the agent host fleet: hosts, their attestation, replicas and placement.", category="Deploy and infra", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='org', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "fleet:manage": PermissionMeta(key="fleet:manage", title="Manage agent hosts", description="Issue host join tokens, cordon, revoke and reconcile agent hosts.", category="Deploy and infra", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "host:read": PermissionMeta(key="host:read", title="View hosts", description="See deployment hosts and their capacity.", category="Deploy and infra", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "host:manage": PermissionMeta(key="host:manage", title="Manage hosts", description="Provision, attach, verify, re-key and retire hosts.", category="Deploy and infra", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "host:exec": PermissionMeta(key="host:exec", title="Run commands on hosts", description="Run commands on a host or in an investigation shell.", category="Deploy and infra", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
@@ -430,6 +435,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "worker:lease": PermissionMeta(key="worker:lease", title="Lease worker jobs", description="Poll, heartbeat and complete leased jobs (worker protocol).", category="Operations and assurance", roles=('system_worker',), scope='project', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
     "self_fix:ticket_read": PermissionMeta(key="self_fix:ticket_read", title="Read self-fix install tickets", description="List and take the signed, single-use tickets of approved BOSS self-fixes (host self-installer only).", category="Operations and assurance", roles=('system_self_installer',), scope='org', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
     "self_fix:ticket_report": PermissionMeta(key="self_fix:ticket_report", title="Report self-fix install phases", description="Report each install phase of a taken self-fix ticket (host self-installer only).", category="Operations and assurance", roles=('system_self_installer',), scope='org', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
+    "fleet:host": PermissionMeta(key="fleet:host", title="Act as an agent host", description="Heartbeat, watch desired state, report observed state and guest calls, and serve the run plane for the host's own replicas (agent hosts only).", category="Operations and assurance", roles=('system_host',), scope='org', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
     "knowledge:read": PermissionMeta(key="knowledge:read", title="Read knowledge", description="Search this project's knowledge and read a fact, a symbol, and its precedent.", category="Knowledge", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "knowledge:manage": PermissionMeta(key="knowledge:manage", title="Manage knowledge", description="Promote, reject, or forget a fact. Confirmation is required.", category="Knowledge", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "knowledge:review": PermissionMeta(key="knowledge:review", title="Review business rules", description="Approve, edit or reject the business rules agents propose. Confirmation is required.", category="Knowledge", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
@@ -445,11 +451,12 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
     "system_collector": AccessRoleMeta(key="system_collector", name="System collector", description="Collector machine telemetry ingest.", bindable_scopes=('org',), mfa_required=False, system=True),
     "system_scim": AccessRoleMeta(key="system_scim", name="System SCIM", description="SCIM 2.0 provisioning for one identity provider.", bindable_scopes=('org',), mfa_required=False, system=True),
     "system_self_installer": AccessRoleMeta(key="system_self_installer", name="System self-installer", description="The host self-installer (BOSS fixes itself): read signed install tickets and report install phases. Nothing else.", bindable_scopes=('org',), mfa_required=False, system=True),
+    "system_host": AccessRoleMeta(key="system_host", name="System agent host", description="An enrolled agent host (boss-hostd, P8): heartbeat, desired state, guest-call audit and the run plane. Nothing else.", bindable_scopes=('org',), mfa_required=False, system=True),
 }
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 200
+    "owner": frozenset({  # 202
         "directory:read",
         "user:read",
         "user:invite",
@@ -586,6 +593,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "deployment:production",
         "deployment:rollback",
         "deployment_target:manage",
+        "fleet:read",
+        "fleet:manage",
         "host:read",
         "host:manage",
         "host:exec",
@@ -651,7 +660,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "admin": frozenset({  # 191
+    "admin": frozenset({  # 193
         "directory:read",
         "user:read",
         "user:invite",
@@ -781,6 +790,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "deployment:production",
         "deployment:rollback",
         "deployment_target:manage",
+        "fleet:read",
+        "fleet:manage",
         "host:read",
         "host:manage",
         "host:exec",
@@ -844,7 +855,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "operator": frozenset({  # 98
+    "operator": frozenset({  # 99
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
@@ -913,6 +924,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "deployment:read",
         "deployment:create",
         "deployment:rollback",
+        "fleet:read",
         "host:read",
         "sandbox:read",
         "infra:read",
@@ -944,7 +956,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "activity:read",
         "knowledge:read",
     }),
-    "viewer": frozenset({  # 49
+    "viewer": frozenset({  # 50
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
@@ -975,6 +987,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "mcp_server:read",
         "pack:read",
         "deployment:read",
+        "fleet:read",
         "host:read",
         "sandbox:read",
         "infra:read",
@@ -995,7 +1008,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "activity:read",
         "knowledge:read",
     }),
-    "auditor": frozenset({  # 63
+    "auditor": frozenset({  # 64
         "directory:read",
         "user:read",
         "group:read",
@@ -1039,6 +1052,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "mcp_server:read",
         "pack:read",
         "deployment:read",
+        "fleet:read",
         "host:read",
         "infra:read",
         "cicd:read",
@@ -1075,6 +1089,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "self_fix:ticket_read",
         "self_fix:ticket_report",
     }),
+    "system_host": frozenset({  # 1
+        "fleet:host",
+    }),
 }
 
 PASSPORT_PRESETS: dict[str, PassportPreset] = {
@@ -1096,4 +1113,5 @@ SYSTEM_PRINCIPALS: dict[str, SystemPrincipalMeta] = {
     "sys_self_installer": SystemPrincipalMeta(id="sys_self_installer", access_role="system_self_installer", replaces="nothing; the host self-installer that runs approved BOSS self-fix tickets (scripts/install/self_fix_installer.py)"),
     "sys_host_cli": SystemPrincipalMeta(id="sys_host_cli", access_role="none", replaces="nothing; the actor of host-shell recovery (boss identity recover-owner)"),
     "sys_egress": SystemPrincipalMeta(id="sys_egress", access_role="none", replaces="BOSS_EGRESS_SERVICE_KEY (the egress proxy's shared key; it authenticates to /v1/identity/introspect with a boss_sak_ key of its own)"),
+    "sys_host": SystemPrincipalMeta(id="sys_host", access_role="system_host", replaces="nothing; every enrolled agent host (boss-hostd) authenticates as it with its BOSS-issued 24 h certificate (P8a)"),
 }

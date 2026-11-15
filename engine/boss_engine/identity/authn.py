@@ -267,6 +267,11 @@ def _authenticate(creds: RequestCredentials, db: Any, *, memo: bool = False) -> 
     ua = (creds.headers.get("user-agent") or "")[:400] or None
     if cookie:
         return _from_session(creds, db, cookie, ip, ua, memo=memo)
+    host = _from_host(creds, db, ip, ua)
+    if host is not None:
+        if bearer:
+            raise AuthnError("ambiguous_credentials", 400)
+        return host
     if bearer:
         parsed = parse_api_key(bearer)
         if parsed is not None:
@@ -280,6 +285,41 @@ def _authenticate(creds: RequestCredentials, db: Any, *, memo: bool = False) -> 
         if _looks_like_jwt(bearer):
             return _from_run_token(creds, db, bearer, ip, ua)
     return _bridge(creds, db, presented=bool(bearer))
+
+
+#: The principal every enrolled agent host authenticates as (catalogue system_principals).
+HOST_PRINCIPAL = "sys_host"
+
+
+def _from_host(creds: RequestCredentials, db: Any, ip: Optional[str],
+               ua: Optional[str]) -> Optional[AuthContext]:
+    """An enrolled agent host (P8a, boss-agent-hosts-lld.md §3.2.2): a `BossHost` proof signed by
+    its BOSS-issued certificate's key, or a client certificate a TRUSTED TLS terminator verified
+    and forwarded (services/fleet_ca.py). The context is the `sys_host` system principal of the
+    host's org; WHICH host rides on the credential (`credential.id` = host id), so a route can
+    hold a host to its own rows. None when the request presents neither."""
+    from ..services import fleet_ca
+    from .authn_support import is_trusted_proxy
+    from .principal import AuthMethod, CredentialRef, Principal, PrincipalKind, PrincipalStatus
+
+    scheme, _, value = creds.headers.get("authorization", "").partition(" ")
+    forwarded = creds.headers.get(fleet_ca.FORWARDED_CERT_HEADER)
+    try:
+        if scheme.lower() == fleet_ca.AUTH_SCHEME and value.strip():
+            host = fleet_ca.verify_proof(db, value.strip(), htm=creds.method, path=creds.path)
+        elif forwarded and is_trusted_proxy(creds.peer_ip):
+            host = fleet_ca.verify_forwarded_cert(db, forwarded)
+        else:
+            return None
+    except fleet_ca.FleetAuthError as exc:
+        raise AuthnError(exc.code, exc.status) from exc
+    principal = Principal(HOST_PRINCIPAL, PrincipalKind.SYSTEM, host.org_id,
+                          PrincipalStatus.ACTIVE, f"Agent host {host.host_id}")
+    return AuthContext(principal=principal, method=AuthMethod.SYSTEM,
+                       credential=CredentialRef(id=host.host_id, kind="host_cert",
+                                                principal_id=HOST_PRINCIPAL,
+                                                scopes=frozenset({"fleet:host"})),
+                       ip=ip, user_agent=ua, request_id=creds.request_id)
 
 
 def _bridge(creds: RequestCredentials, db: Any, *, presented: bool) -> Optional[AuthContext]:

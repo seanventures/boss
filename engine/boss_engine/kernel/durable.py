@@ -144,14 +144,28 @@ class PgCheckpointStore:
 
     def _write_checkpoint(self, row: dict, *, own: bool = False) -> None:
         started = time.perf_counter()
-        self._run_sql(lambda c: c.execute(_text("""
+        self._put_checkpoint(row, own=own)
+        self.stats.append({"kind": "checkpoint", "bytes": row["bytes"], "mode": row["mode"],
+                           "ms": (time.perf_counter() - started) * 1000.0})
+
+    # THE TWO WRITE PRIMITIVES. Everything above them (durability modes, the async writer, the
+    # exit snapshot, the 'started' marker) is shared with the run plane's RemoteCheckpointStore
+    # (runtime/remote.py), which overrides only these and the reads: one code path, two
+    # transports (boss-agent-hosts-lld.md §2.7).
+    def _put_checkpoint(self, row: dict, *, own: bool = False) -> None:
+        self._run_sql(lambda c: self.insert_checkpoint(c, row), own=own)
+
+    def _put_write(self, row: dict, *, own: bool = False) -> None:
+        self._run_sql(lambda c: self._upsert_write(c, row), own=own)
+
+    @staticmethod
+    def insert_checkpoint(connection: Any, row: dict) -> None:
+        connection.execute(_text("""
             INSERT INTO agent_checkpoints (checkpoint_id, run_id, thread_id, parent_checkpoint_id,
                 ns, step, source, phase, status, state, state_bytes, durability, metadata)
             VALUES (:id, :run, :thread, :parent, :ns, :step, :source, :phase, :status,
                     CAST(:state AS JSONB), :bytes, :mode, CAST(:meta AS JSONB))
-            ON CONFLICT (checkpoint_id) DO NOTHING"""), row), own=own)
-        self.stats.append({"kind": "checkpoint", "bytes": row["bytes"], "mode": row["mode"],
-                           "ms": (time.perf_counter() - started) * 1000.0})
+            ON CONFLICT (checkpoint_id) DO NOTHING"""), row)
 
     def load(self, run_id: str) -> Optional[RunState]:
         row = self._run_sql(lambda c: c.execute(_text(
@@ -210,10 +224,14 @@ class PgCheckpointStore:
             self._enqueue(("write", row))
             return
         started = time.perf_counter()
-        self._run_sql(lambda c: self._upsert_write(c, row))
+        self._put_write(row)
         self.stats.append({"kind": "write", "bytes": len(row.get("result") or "")
                            + len(row.get("rendered") or ""), "mode": self.durability,
                            "ms": (time.perf_counter() - started) * 1000.0})
+
+    @staticmethod
+    def upsert_write(connection: Any, row: dict) -> None:
+        PgCheckpointStore._upsert_write(connection, row)
 
     @staticmethod
     def _upsert_write(connection: Any, row: dict) -> None:
@@ -260,8 +278,7 @@ class PgCheckpointStore:
                     self._write_checkpoint(row, own=True)
                 else:
                     started = time.perf_counter()
-                    with self._engine().begin() as connection:
-                        self._upsert_write(connection, row)
+                    self._put_write(row, own=True)
                     self.stats.append({"kind": "write", "mode": self.durability,
                                        "bytes": len(row.get("result") or ""),
                                        "ms": (time.perf_counter() - started) * 1000.0})

@@ -71,6 +71,13 @@ def _out(row: Any) -> Optional[dict]:
         out[key] = _iso(out.get(key))
     out["expose"] = _json(out.get("expose"), {})
     out["metadata"] = _json(out.get("metadata"), {})
+    # P8a placement (boss-agent-hosts-lld.md §3.1): JSON-safe whatever the driver returns.
+    out["resources"] = _json(out.get("resources"), {})
+    out["placement"] = _json(out.get("placement"), {})
+    if out.get("vip") is not None:
+        out["vip"] = str(out["vip"])
+    if out.get("vip_ports") is not None:
+        out["vip_ports"] = [int(p) for p in out["vip_ports"]]
     return out
 
 
@@ -143,11 +150,17 @@ def _history(connection: Connection, *, project_id: str, agent_key: str, environ
              status: str = "applied", checks: Optional[dict] = None,
              decision_id: Optional[str] = None) -> str:
     hid = make_id("adh")
+    # P8a: each history row records the placement the version runs with (runtime, vm_mode).
     connection.execute(text("""
         INSERT INTO agent_deployment_history (id, project_id, agent_key, environment, action,
-               status, from_version, to_version, checks, decision_id, actor, applied_at)
-        VALUES (:id, :p, :a, :e, :act, :s, :f, :t, CAST(:c AS JSONB), :d, :by,
-                CASE WHEN :s = 'applied' THEN now() END)"""),
+               status, from_version, to_version, checks, decision_id, actor, applied_at,
+               runtime, vm_mode)
+        SELECT :id, :p, :a, :e, :act, :s, :f, :t, CAST(:c AS JSONB), :d, :by,
+               CASE WHEN :s = 'applied' THEN now() END,
+               COALESCE((SELECT runtime FROM agent_deployments WHERE project_id = :p
+                          AND agent_key = :a AND environment = :e), 'local'),
+               (SELECT vm_mode FROM agent_deployments WHERE project_id = :p
+                 AND agent_key = :a AND environment = :e)"""),
         {"id": hid, "p": project_id, "a": agent_key, "e": environment, "act": action,
          "s": status, "f": from_version, "t": to_version, "c": json.dumps(checks or {}, default=str),
          "d": decision_id, "by": actor})
@@ -277,6 +290,10 @@ def admit_run(connection: Connection, deployment: dict, *, thread_id: str, messa
     fctx = {"runner": deployment["runner"], "deployment_id": deployment["id"],
             "agent_key": deployment["agent_key"], "agent_version": deployment.get("version"),
             "environment": deployment["environment"], "started_by": actor, **(extra or {})}
+    if (deployment.get("runtime") or "local") == "microvm":
+        # P8a: the run executes on one of the deployment's replicas, through the run plane;
+        # every job it ever gets carries this (jobs.enqueue_job), so no local worker claims it.
+        fctx["runtime"] = "microvm"
     admitted = thread_runs.admit(
         connection, project_id=deployment["project_id"], thread_id=thread_id,
         messages=messages, finalize_ctx=fctx, policy=policy, trigger=trigger,
@@ -420,6 +437,8 @@ def promote(connection: Connection, project_id: str, agent_key: str, *, from_env
     if not checks["approval"]["required"]:
         out = deploy(connection, project_id, agent_key, dst, actor=actor,
                      version=checks["version"], runner=runner, action="promote")
+        out = _carry_runtime(connection, project_id, agent_key, checks["from_environment"], dst,
+                             actor=actor) or out
         return {"status": "applied", "deployment": out, "checks": checks}
     pending = connection.execute(text(
         "SELECT decision_id FROM agent_deployment_history WHERE project_id = :p AND agent_key = :a "
@@ -435,6 +454,7 @@ def promote(connection: Connection, project_id: str, agent_key: str, *, from_env
                 + (f" (replacing v{checks['live_version']})" if checks["live_version"] else "")
                 + "?")
     recommendation = {"action": ACTION, "agent_key": agent_key, "environment": dst,
+                      "from_environment": checks["from_environment"],
                       "version": checks["version"], "from_version": checks["live_version"],
                       "runner": runner, "requested_by": actor,
                       "checks": [{k: c[k] for k in ("key", "ok", "label")}
@@ -469,7 +489,100 @@ def on_promotion_answered(connection: Connection, decision: Any, *, verdict: str
         return {"applied": False}
     out = deploy(connection, project_id, key, env, actor=actor, version=int(version),
                  runner=str(rec.get("runner") or "deployed_agent"), action="promote")
+    if rec.get("from_environment"):
+        out = _carry_runtime(connection, project_id, key, str(rec["from_environment"]), env,
+                             actor=actor) or out
     return {"applied": True, "deployment": out}
+
+
+# ── Placement: runtime local | microvm (P8a, boss-agent-hosts-lld.md §2.4, FR-1, FR-2) ─────────
+
+RUNTIMES = ("local", "microvm")
+VM_MODES = ("replica", "per_run")
+#: Production on microVMs is HA: at least two replicas on two hosts (NFR-1).
+PROD_MIN_REPLICAS = 2
+MAX_REPLICAS = 64
+
+
+def set_runtime(connection: Connection, project_id: str, agent_key: str, environment: str, *,
+                actor: str, runtime: str, vm_mode: Optional[str] = None,
+                replicas: Optional[int] = None, resources: Optional[dict] = None,
+                image_digest: Optional[str] = None, placement: Optional[dict] = None,
+                settings: Any = None, action: str = "host") -> dict:
+    """Where this deployment's runs execute. `local` (the default) is the worker path, unchanged;
+    `microvm` places replicas on enrolled hosts (the scheduler, services/fleet_scheduler.py).
+    Runs already admitted keep the placement they were admitted with; new runs take this one.
+    `per_run` is built but OFF while BOSS_MICROVM_CLAIMS_FROZEN (operator, 2026-11-14)."""
+    env = _env(environment)
+    current = get(connection, project_id, agent_key, env)
+    if current is None:
+        raise DeploymentError(f"{agent_key} is not deployed to {env}.", status=404)
+    if runtime not in RUNTIMES:
+        raise DeploymentError(f"runtime must be one of {', '.join(RUNTIMES)}.")
+    if runtime == "local":
+        mode, count = None, 1
+    else:
+        mode = vm_mode or current.get("vm_mode") or "replica"
+        if mode not in VM_MODES:
+            raise DeploymentError(f"vm_mode must be one of {', '.join(VM_MODES)}.")
+        if mode == "per_run":
+            from .fleet_scheduler import frozen
+
+            if frozen(settings):
+                raise DeploymentError(
+                    "per_run VMs are built but off on this install: BOSS_MICROVM_CLAIMS_FROZEN "
+                    "is set. Use vm_mode replica, or ask the operator to unfreeze microVM "
+                    "claims.", status=409)
+        floor = PROD_MIN_REPLICAS if (env == "prod" and mode == "replica") else 1
+        count = int(replicas if replicas is not None else max(
+            floor, int(current.get("replicas") or 1)))
+        if not floor <= count <= MAX_REPLICAS:
+            raise DeploymentError(
+                f"replicas must be between {floor} and {MAX_REPLICAS}"
+                + (" (production on microVMs runs at least two replicas on two hosts)"
+                   if floor > 1 else "") + ".")
+    connection.execute(text("""
+        UPDATE agent_deployments SET runtime = :rt, vm_mode = :m, replicas = :n,
+               resources = COALESCE(CAST(:res AS JSONB), resources),
+               image_digest = COALESCE(:img, image_digest),
+               placement = COALESCE(CAST(:pl AS JSONB), placement),
+               placement_state = CASE WHEN :rt = 'local' THEN NULL ELSE 'pending' END,
+               updated_at = now()
+         WHERE id = :id"""),
+        {"rt": runtime, "m": mode, "n": count,
+         "res": json.dumps(resources) if resources is not None else None, "img": image_digest,
+         "pl": json.dumps(placement) if placement is not None else None, "id": current["id"]})
+    _history(connection, project_id=project_id, agent_key=agent_key, environment=env,
+             action=action, actor=actor, from_version=current.get("version"),
+             to_version=current.get("version"),
+             checks={"runtime": runtime, "vm_mode": mode, "replicas": count,
+                     "from_runtime": current.get("runtime") or "local"})
+    emit_event(connection, project_id, "agent.deployment.runtime", actor, "agent_deployment",
+               current["id"], {"agent_key": agent_key, "environment": env, "runtime": runtime,
+                               "vm_mode": mode, "replicas": count})
+    return by_id(connection, current["id"]) or {}
+
+
+def _carry_runtime(connection: Connection, project_id: str, agent_key: str, src: str, dst: str,
+                   *, actor: str) -> Optional[dict]:
+    """A promotion carries the source environment's placement with its version (FR-1)."""
+    source = get(connection, project_id, agent_key, src)
+    target = get(connection, project_id, agent_key, dst)
+    if source is None or target is None:
+        return None
+    if (source.get("runtime") or "local") == (target.get("runtime") or "local") \
+            and source.get("vm_mode") == target.get("vm_mode"):
+        return None
+    replicas = None
+    if (source.get("runtime") or "local") == "microvm":
+        floor = PROD_MIN_REPLICAS if dst == "prod" and (source.get("vm_mode") or "replica") \
+            == "replica" else 1
+        replicas = max(floor, int(target.get("replicas") or 1), int(source.get("replicas") or 1))
+    return set_runtime(connection, project_id, agent_key, dst, actor=actor,
+                       runtime=source.get("runtime") or "local", vm_mode=source.get("vm_mode"),
+                       replicas=replicas, resources=source.get("resources"),
+                       image_digest=source.get("image_digest"),
+                       placement=source.get("placement"), action="promote")
 
 
 # ── What the screens draw ──────────────────────────────────────────────────────────────────────

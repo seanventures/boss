@@ -1,0 +1,680 @@
+"""THE RUN PLANE: how a VM admits, leases, checkpoints and governs a run without a database
+(P8a, BOSSAPP-1063; boss-agent-hosts-lld.md §2.7, §2.14.2, §3.13).
+
+A VM never touches Postgres. Its runtime (boss_engine/runtime) calls these functions over HTTP,
+through boss-hostd, which authenticates as its host (services/fleet_ca.py). They wrap EXACTLY the
+functions the local worker calls — thread_runs.admit, jobs.lease_owned_job,
+jobs.require_active_lease, PgCheckpointStore's rows, DecisionInterrupts, the governed budget
+gate, the ledger and span sinks, agent_run_worker._settle — so a run is the same run on either
+transport (one code path, two transports; P8a-T3).
+
+LEASES. A replica's lease is a job lease whose owner is `replica:<replica id>`, granted with the
+job's `fence_epoch` incremented (jobs.lease_owned_job), TTL 30 s by default, renewed by the
+runtime's heartbeat (10 s). `next` takes the deployment's next admitted run — or reclaims one
+whose lease expired (its last holder died), at epoch + 1.
+
+FENCING (§2.14.2). EVERY call that touches a run carries its lease: the job id, the run token
+(the lease token, never stored raw: jobs keep its hash) and the `fence_epoch`. `fence` checks them
+with jobs.require_active_lease, FOR UPDATE, in the SAME transaction as the write, and compares the
+epoch. A stale holder — reclaimed, handed back, expired, or simply wrong — gets RunPlaneError
+`409 fenced`, and nothing it sent is written. Ledger and span rows go through a connection-bound
+engine (`_FencedEngine`), so they too commit with the fence or not at all.
+
+A HOST ACTS ONLY FOR ITS OWN REPLICAS: every call names a replica, which must be placed on the
+calling host, wanted running, and of a live microvm deployment.
+"""
+from __future__ import annotations
+
+import contextlib
+import json
+import re
+from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import Any, Optional
+
+from sqlalchemy import text
+
+from ..runtime import wire
+
+LEASE_TTL_SECONDS = 30
+LEASE_TTL_MIN, LEASE_TTL_MAX = 5, 120
+KINDS = ("agent.run", "agent.resume")
+_EVENT_TYPE = re.compile(r"^[a-z][a-z0-9_.]{0,60}$")
+
+
+class RunPlaneError(Exception):
+    """`code` is the stable error string (`fenced`, `replica_not_on_host`, ...); never a token."""
+
+    def __init__(self, code: str, status: int = 400, message: str = "", **extra: Any):
+        super().__init__(message or code)
+        self.code, self.status, self.message, self.extra = code, status, message or code, extra
+
+    def body(self) -> dict:
+        return {"error": self.code, "message": self.message, **self.extra}
+
+
+def fenced(message: str = "this run's lease is held by someone else now") -> RunPlaneError:
+    return RunPlaneError("fenced", 409, message)
+
+
+def _jobs(settings: Any) -> Any:
+    from .jobs import JobLeaseService
+
+    return JobLeaseService(settings)
+
+
+def _ttl(value: Any) -> int:
+    try:
+        ttl = int(value or LEASE_TTL_SECONDS)
+    except (TypeError, ValueError):
+        ttl = LEASE_TTL_SECONDS
+    return max(LEASE_TTL_MIN, min(LEASE_TTL_MAX, ttl))
+
+
+def owner_of(replica_id: str) -> str:
+    return f"replica:{replica_id}"
+
+
+# ── Who is calling ──────────────────────────────────────────────────────────────────────────
+
+def replica_for(connection: Any, host_id: str, replica_id: str) -> dict:
+    """The replica the call is for: on THIS host, wanted running, of a live microvm deployment."""
+    row = connection.execute(text("""
+        SELECT r.id, r.host_id, r.deployment_id, r.desired_state, r.slots, r.vm_id,
+               d.project_id, d.agent_key, d.environment, d.status AS deployment_status,
+               d.runtime, d.version
+          FROM agent_replicas r JOIN agent_deployments d ON d.id = r.deployment_id
+         WHERE r.id = :r"""), {"r": replica_id}).mappings().first()
+    if row is None or row["host_id"] != host_id:
+        raise RunPlaneError("replica_not_on_host", 403,
+                            "that replica is not placed on this host")
+    if (row["desired_state"] != "running" or row["deployment_status"] != "live"
+            or row["runtime"] != "microvm"):
+        raise RunPlaneError("replica_not_serving", 409,
+                            "that replica is not wanted running for a live microvm deployment")
+    return dict(row)
+
+
+@dataclass(frozen=True)
+class LeaseRef:
+    """What every run-scoped call carries (headers X-Boss-Job, X-Boss-Run-Token,
+    X-Boss-Fence-Epoch, X-Boss-Replica)."""
+    replica_id: str
+    job_id: str
+    token: str
+    epoch: int
+
+
+def fence(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef, *,
+          settling: bool = False) -> dict:
+    """THE FENCE, in the caller's transaction (module doc). Returns the job row (locked)."""
+    from .jobs import LeaseNotFoundError
+
+    replica_for_any(connection, host_id, lease.replica_id)
+    jobs = _jobs(settings)
+    try:
+        row = dict(jobs._load_leased_job_for_update(  # noqa: SLF001 — the same lock the worker takes
+            connection, owner_of(lease.replica_id), lease.job_id, lease.token,
+            allow_expired=settling))
+    except LeaseNotFoundError as exc:
+        raise fenced(str(exc)) from exc
+    if int(row.get("fence_epoch") or 0) != int(lease.epoch):
+        raise fenced(f"epoch {lease.epoch} is stale; the job is at {row.get('fence_epoch')}")
+    payload = row.get("payload") or {}
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if str(payload.get("run_id") or "") != run_id:
+        raise fenced("that lease is not this run's")
+    return row
+
+
+def replica_for_any(connection: Any, host_id: str, replica_id: str) -> dict:
+    """As replica_for, for calls under a lease the replica already holds: a replica being
+    drained (wanted stopped) may still settle and hand back what it runs."""
+    row = connection.execute(text(
+        "SELECT id, host_id, deployment_id FROM agent_replicas WHERE id = :r"),
+        {"r": replica_id}).mappings().first()
+    if row is None or row["host_id"] != host_id:
+        raise RunPlaneError("replica_not_on_host", 403, "that replica is not placed on this host")
+    return dict(row)
+
+
+# ── Leasing: next, admit ────────────────────────────────────────────────────────────────────
+
+_CANDIDATE = text("""
+    SELECT id, project_id, kind, status, payload, allocation_id, resource_units
+      FROM jobs
+     WHERE kind IN ('agent.run', 'agent.resume')
+       AND payload->>'runtime' = 'microvm' AND payload->>'deployment_id' = :d
+       AND run_after <= now()
+       AND (status IN ('queued', 'failed_retryable')
+            OR (status IN ('leased', 'running') AND lease_expires_at <= now()))
+     ORDER BY CASE status WHEN 'leased' THEN 0 WHEN 'running' THEN 0
+                          WHEN 'failed_retryable' THEN 1 ELSE 2 END,
+              priority ASC, created_at ASC
+     LIMIT 1
+     FOR UPDATE SKIP LOCKED""")
+
+
+def _requeue_expired(connection: Any, settings: Any, job: dict) -> None:
+    """A lease that expired with nobody settling it: its holder died. Back to queued (the slot
+    it held released) so it is leased again at epoch + 1 — the reclaim claim_job does."""
+    from .core import emit_event
+
+    connection.execute(text("""
+        UPDATE jobs SET status = 'queued', lease_owner = NULL, lease_token_hash = NULL,
+               lease_expires_at = NULL, heartbeat_at = NULL, updated_at = now()
+         WHERE id = :j"""), {"j": job["id"]})
+    _jobs(settings).work_orchestration.release_job_slot(
+        connection, project_id=job["project_id"], job_id=job["id"],
+        allocation_id=job.get("allocation_id"), resource_units=int(job.get("resource_units") or 1),
+        reason="replica_lease_expired")
+    emit_event(connection, job["project_id"], "job.lease_reclaimed", "run_plane", "job",
+               job["id"], {"kind": job["kind"], "by": "replica"})
+
+
+def _busy(connection: Any, owner: str) -> int:
+    return int(connection.execute(text(
+        "SELECT count(*) FROM jobs WHERE lease_owner = :o AND status IN ('leased', 'running') "
+        "AND lease_expires_at > now()"), {"o": owner}).scalar() or 0)
+
+
+def next_run(connection: Any, settings: Any, host_id: str, replica_id: str, *,
+             ttl: Any = None) -> Optional[dict]:
+    """THE PULL LOOP'S STEP (§3.13.2 "internal callers"): the deployment's next admitted run,
+    leased to this replica in this transaction, with what the runtime needs to drive it. None
+    when there is nothing to do (or the replica's slots are full)."""
+    from . import thread_runs
+    from .agent_loop import load_agent_run
+
+    replica = replica_for(connection, host_id, replica_id)
+    owner = owner_of(replica_id)
+    if _busy(connection, owner) >= int(replica["slots"] or 1):
+        return None
+    jobs = _jobs(settings)
+    for _ in range(8):
+        job = connection.execute(_CANDIDATE, {"d": replica["deployment_id"]}).mappings().first()
+        if job is None:
+            return None
+        job = dict(job)
+        if job["status"] in ("leased", "running"):
+            _requeue_expired(connection, settings, job)
+        leased = jobs.lease_owned_job(connection, project_id=job["project_id"], job_id=job["id"],
+                                      worker_id=owner, lease_ttl_seconds=_ttl(ttl))
+        payload = job["payload"] if isinstance(job["payload"], dict) else json.loads(
+            job["payload"] or "{}")
+        run_id = str(payload.get("run_id") or "")
+        run = load_agent_run(connection, run_id)
+        status = str((run or {}).get("status") or "")
+        if run is None or status in thread_runs.ENDED or (
+                job["kind"] == "agent.run" and status in ("awaiting_approval", "pending")):
+            # Already settled (a re-delivered job), or waiting on a person / behind another run:
+            # the job is done, as agent_run_worker.execute's no-op answers it.
+            jobs.complete(connection, owner, job["id"], leased["lease_token"],
+                          {"status": status or "missing", "run_id": run_id, "noop": True})
+            continue
+        return _package(connection, settings, run, kind=job["kind"], leased=leased,
+                        replica=replica)
+    return None
+
+
+def _start(connection: Any, run: dict) -> dict:
+    """A queued run starts: its thread's history first, then its own input (agent_run_worker
+    ._drive does exactly this on the local path)."""
+    from . import thread_runs
+    from .agent_loop import _save_run, _zero_usage, load_agent_run
+
+    run_id = str(run["id"])
+    fctx = dict(run["finalize_ctx"] or {})
+    messages = list(run["messages"] or [])
+    thread_id = fctx.get("thread_id")
+    if thread_id:
+        history = thread_runs.thread_history(connection, thread_id, before_run=run_id)
+        if history:
+            head = [m for m in messages[:1] if m.get("role") == "system"]
+            messages = head + history + messages[len(head):]
+    _save_run(connection, run_id, run["project_id"], run["task_id"], "running", messages, [],
+              _zero_usage(), fctx, step=0)
+    thread_runs.finish(connection, run_id)  # thread: busy (not ended)
+    return load_agent_run(connection, run_id) or run
+
+
+def _package(connection: Any, settings: Any, run: dict, *, kind: str, leased: dict,
+             replica: dict) -> dict:
+    """What the runtime drives a run from: the run, its lease, the pinned agent version (for a
+    deployed agent), and — for a run that already checkpointed — the answers it may resume with."""
+    from .interrupts import answers_for_run
+
+    if run["status"] == "queued":
+        run = _start(connection, run)
+    fctx = dict(run["finalize_ctx"] or {})
+    agent = None
+    if (fctx.get("runner") or "") == "deployed_agent" and fctx.get("agent_version"):
+        from ..agents import versions as V
+
+        row = V.get_version(connection, str(run["project_id"]), str(fctx["agent_key"]),
+                            int(fctx["agent_version"]))
+        agent = {"agent_key": fctx["agent_key"], "version": int(fctx["agent_version"]),
+                 "spec": row["spec"] if isinstance(row["spec"], dict) else json.loads(
+                     row["spec"] or "{}"),
+                 "compiled_prompt": row.get("compiled_prompt")}
+    pending = connection.execute(text(
+        "SELECT state->'pending' FROM agent_checkpoints WHERE run_id = :r "
+        "ORDER BY seq DESC LIMIT 1"), {"r": run["id"]}).scalar()
+    return wire.jsonable({
+        "run": {"id": run["id"], "project_id": run["project_id"], "task_id": run["task_id"],
+                "status": run["status"], "messages": run["messages"] or [],
+                "finalize_ctx": fctx, "thread_id": fctx.get("thread_id"), "kind": kind},
+        "lease": {"replica_id": replica["id"], "job_id": leased["id"],
+                  "run_token": leased["lease_token"], "fence_epoch": int(leased["fence_epoch"]),
+                  "expires_at": leased["lease_expires_at"], "attempt": leased["attempt"]},
+        "deployment": {"id": replica["deployment_id"], "agent_key": replica["agent_key"],
+                       "environment": replica["environment"]},
+        "agent": agent,
+        "answers": answers_for_run(connection, pending) if pending else {},
+    })
+
+
+def admit(connection: Any, settings: Any, host_id: str, replica_id: str, *, caller: str,
+          input: Any, thread_id: Optional[str] = None, double_text: Optional[str] = None,
+          traceparent: Optional[str] = None, ttl: Any = None) -> dict:
+    """AN EXTERNAL CALL LANDED ON A REPLICA (§3.13.2): authenticate the caller's forwarded
+    credential, decide `agent:invoke` with the PDP, admit the run (thread_runs.admit: run + job)
+    AND lease it to this replica — one transaction. A busy thread answers `pending` with the
+    replica that holds the active run (`held_by`), per the thread's double-text policy."""
+    from ..identity import authn, authz
+    from ..identity.scope import ResolvedScope
+    from . import agent_protocol
+
+    replica = replica_for(connection, host_id, replica_id)
+    project_id = str(replica["project_id"])
+    try:
+        ctx = authn.authenticate(authn.RequestCredentials(
+            method="POST", path=f"/v1/agents/{replica['agent_key']}/runs",
+            headers={"authorization": str(caller or "")}, cookies={}), db=connection)
+    except authn.AuthnError as exc:
+        raise RunPlaneError("caller_unauthenticated", 401, exc.code) from exc
+    if ctx is None:
+        raise RunPlaneError("caller_unauthenticated", 401, "the caller presented no credential")
+    org = connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": project_id}).scalar()
+    decision = authz.check(ctx, "agent:invoke", ResolvedScope.in_project(str(org), project_id),
+                           db=connection)
+    if not decision.allowed:
+        raise RunPlaneError("caller_forbidden", 403,
+                            f"the caller may not run this agent ({decision.reason})")
+    actor = ctx.principal.id
+    try:
+        if thread_id:
+            agent_protocol.get_thread(connection, project_id, thread_id)
+        else:
+            thread_id = agent_protocol.create_thread(
+                connection, project_id=project_id, agent_key=replica["agent_key"], actor=actor,
+                environment=replica["environment"], double_text=double_text or "enqueue"
+            )["thread_id"]
+        run = agent_protocol.start_run(connection, project_id=project_id, thread_id=thread_id,
+                                       actor=actor, input=input, double_text=double_text,
+                                       traceparent=traceparent, trigger="api")
+    except agent_protocol.ProtocolError as exc:
+        raise RunPlaneError("refused", exc.status, str(exc)) from exc
+    row = connection.execute(text(
+        "SELECT r.id, r.status, r.job_id, j.status AS job_status FROM agent_runs r "
+        "LEFT JOIN jobs j ON j.id = r.job_id WHERE r.id = :r"), {"r": run["run_id"]}
+    ).mappings().first()
+    if row is None or not row["job_id"] or row["job_status"] != "queued":
+        holder = connection.execute(text("""
+            SELECT j.lease_owner FROM agent_threads t JOIN agent_runs a ON a.id = t.active_run_id
+              JOIN jobs j ON j.id = a.job_id WHERE t.id = :t"""), {"t": thread_id}).scalar()
+        return {"run_id": run["run_id"], "thread_id": thread_id, "status": "pending",
+                "held_by": holder}
+    leased = _jobs(settings).lease_owned_job(connection, project_id=project_id,
+                                             job_id=row["job_id"], worker_id=owner_of(replica_id),
+                                             lease_ttl_seconds=_ttl(ttl))
+    from .agent_loop import load_agent_run
+
+    package = _package(connection, settings, load_agent_run(connection, run["run_id"]),
+                       kind="agent.run", leased=leased, replica=replica)
+    return {"run_id": run["run_id"], "thread_id": thread_id, "status": "leased", **package}
+
+
+# ── The lease: heartbeat, hand back, settle, fail ───────────────────────────────────────────
+
+def heartbeat(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef, *,
+              ttl: Any = None) -> dict:
+    """Renew the lease (10 s cadence; TTL 30 s) and answer whether the run should stop at its
+    next step boundary (a double-text interrupt, a cancel: thread_runs.stop_requested)."""
+    from . import thread_runs
+
+    fence(connection, settings, host_id, run_id, lease)
+    out = _jobs(settings).heartbeat(connection, owner_of(lease.replica_id), lease.job_id,
+                                    lease.token, _ttl(ttl))
+    return {"lease_expires_at": out["lease_expires_at"],
+            "stop": thread_runs.stop_requested(connection, run_id)}
+
+
+def settle(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
+           outcome: dict) -> dict:
+    """The run's drive ended: exactly agent_run_worker._settle (drained → back to the queue with
+    the attempt given back; budget_wait → deferred; an unknown outcome → parked; the rest →
+    thread finished, trigger told), then the job completed unless it was handed back."""
+    from . import agent_run_worker
+
+    fence(connection, settings, host_id, run_id, lease, settling=True)
+    jobs = _jobs(settings)
+    worker = agent_run_worker.Lease(jobs, worker_id=owner_of(lease.replica_id),
+                                    job_id=lease.job_id, lease_token=lease.token)
+    result = agent_run_worker._settle(connection, jobs, worker, run_id, dict(outcome or {}),
+                                      handed_back=None)
+    if not result.get("job_deferred"):
+        jobs.complete(connection, owner_of(lease.replica_id), lease.job_id, lease.token, result)
+    return result
+
+
+def fail(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
+         error: str) -> dict:
+    """The drive raised (a fatal model failure): the run is recorded failed and the thread moves
+    on (agent_run_worker.execute's exception path), and the job fails without a retry — a retry
+    of a failed run is a no-op."""
+    from . import agent_run_worker, thread_runs
+
+    fence(connection, settings, host_id, run_id, lease, settling=True)
+    if (connection.execute(text("SELECT status FROM agent_runs WHERE id = :r"),
+                           {"r": run_id}).scalar() or "") in ("running", "queued"):
+        connection.execute(text("UPDATE agent_runs SET status = 'failed', error = :e, "
+                                "updated_at = now() WHERE id = :r"),
+                           {"r": run_id, "e": str(error)[:2000]})
+    thread_runs.finish(connection, run_id, "failed")
+    agent_run_worker._settled_hooks(connection, run_id)
+    _jobs(settings).fail(connection, owner_of(lease.replica_id), lease.job_id, lease.token,
+                         {"message": str(error)[:500], "type": "RuntimeError"}, retryable=False,
+                         retry_delay_seconds=0)
+    return {"status": "failed", "run_id": run_id}
+
+
+def after_commit(engine: Any, run_id: str) -> None:
+    from . import agent_run_worker
+
+    agent_run_worker._after_commit(engine, run_id)
+
+
+# ── Checkpoints ─────────────────────────────────────────────────────────────────────────────
+
+def put_checkpoint(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
+                   row: dict) -> dict:
+    """One checkpoint row, fenced, with the run's agent_runs mirror (what PgCheckpointStore with
+    AgentRunRow does on the worker)."""
+    from ..kernel.durable import PgCheckpointStore
+    from ..kernel.state import RunState
+    from .agent_run_worker import AgentRunRow
+
+    fence(connection, settings, host_id, run_id, lease)
+    if str(row.get("run")) != run_id:
+        raise RunPlaneError("wrong_run", 400, "a run writes only its own checkpoints")
+    state = RunState.from_checkpoint(json.loads(row["state"]) if isinstance(row["state"], str)
+                                     else row["state"])
+    AgentRunRow(connection).save(state)
+    PgCheckpointStore.insert_checkpoint(connection, {**row, "state": row["state"] if isinstance(
+        row["state"], str) else json.dumps(row["state"], default=str)})
+    return {"checkpoint_id": row["id"]}
+
+
+def put_write(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
+              row: dict) -> dict:
+    from ..kernel.durable import PgCheckpointStore
+
+    fence(connection, settings, host_id, run_id, lease)
+    if str(row.get("run")) != run_id:
+        raise RunPlaneError("wrong_run", 400, "a run writes only its own pending writes")
+    PgCheckpointStore.upsert_write(connection, row)
+    return {"call_id": row["call"], "status": row["status"]}
+
+
+def get_checkpoints(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
+                    *, checkpoint_id: Optional[str] = None, ns: str = "",
+                    history: bool = False) -> dict:
+    fence(connection, settings, host_id, run_id, lease)
+    if history:
+        rows = connection.execute(text(
+            "SELECT checkpoint_id, parent_checkpoint_id, step, source, phase, status, "
+            "state_bytes, durability FROM agent_checkpoints WHERE run_id = :r ORDER BY seq"),
+            {"r": run_id}).mappings().all()
+        return {"history": [dict(r) for r in rows]}
+    if checkpoint_id:
+        row = connection.execute(text(
+            "SELECT checkpoint_id, state FROM agent_checkpoints WHERE checkpoint_id = :c "
+            "AND run_id = :r"), {"c": checkpoint_id, "r": run_id}).first()
+    else:
+        row = connection.execute(text(
+            "SELECT checkpoint_id, state FROM agent_checkpoints WHERE run_id = :r AND ns = :ns "
+            "ORDER BY seq DESC LIMIT 1"), {"r": run_id, "ns": ns}).first()
+    if row is None:
+        return {"checkpoint": None}
+    return {"checkpoint": {"checkpoint_id": row[0], "state": row[1]}}
+
+
+def get_writes(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
+               checkpoint_id: str) -> dict:
+    fence(connection, settings, host_id, run_id, lease)
+    rows = connection.execute(text(
+        "SELECT w.call_id, w.tool, w.status, w.result, w.rendered, w.idempotency, "
+        "w.idempotency_key FROM agent_checkpoint_writes w WHERE w.checkpoint_id = :c "
+        "AND w.run_id = :r ORDER BY w.idx"), {"c": checkpoint_id, "r": run_id}
+    ).mappings().all()
+    return {"writes": {str(r["call_id"]): wire.jsonable(dict(r)) for r in rows}}
+
+
+# ── Governance: interrupts, budget, ledger, spans, events ───────────────────────────────────
+
+def open_interrupt(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
+                   item: dict) -> dict:
+    from .interrupts import DecisionInterrupts
+
+    job = fence(connection, settings, host_id, run_id, lease)
+    port = DecisionInterrupts(connection, project_id=str(job["project_id"]),
+                              task_id=job.get("task_id"))
+    return {"decision_id": port.open(SimpleNamespace(run_id=run_id), wire.interrupt_in(item))}
+
+
+def interrupt_answers(connection: Any, settings: Any, host_id: str, run_id: str,
+                      lease: LeaseRef) -> dict:
+    from .interrupts import answers_for_run
+
+    fence(connection, settings, host_id, run_id, lease)
+    pending = connection.execute(text(
+        "SELECT state->'pending' FROM agent_checkpoints WHERE run_id = :r "
+        "ORDER BY seq DESC LIMIT 1"), {"r": run_id}).scalar()
+    return {"answers": answers_for_run(connection, pending) if pending else {}}
+
+
+def _gate(connection: Any, settings: Any, project_id: str, run_id: str, skill_id: str) -> Any:
+    from .model_routing import governed
+
+    return governed(None, connection, settings, project_id, skill_id=skill_id or
+                    "model.agent_turn", ref=run_id)
+
+
+def budget_reserve(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
+                   *, skill_id: str = "") -> dict:
+    """One model turn reserved and receipted (GovernedChatAdapter._reserve), fenced."""
+    from .model_routing import ModelSpendDeferred, ModelSpendRefused
+
+    job = fence(connection, settings, host_id, run_id, lease)
+    try:
+        held = _gate(connection, settings, str(job["project_id"]), run_id, skill_id)._reserve(
+            connection)
+    except ModelSpendDeferred as exc:
+        raise RunPlaneError("spend_deferred", 429, str(exc),
+                            retry_after_seconds=getattr(exc, "retry_after_seconds", None)) from exc
+    except ModelSpendRefused as exc:
+        raise RunPlaneError("spend_refused", 402, str(exc)) from exc
+    return {"held": list(held)}
+
+
+def budget_settle(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef, *,
+                  held: list, usage: Optional[dict] = None, failed: Optional[dict] = None,
+                  skill_id: str = "") -> dict:
+    job = fence(connection, settings, host_id, run_id, lease, settling=True)
+    gate = _gate(connection, settings, str(job["project_id"]), run_id, skill_id)
+    pair = (str(held[0]), str(held[1]))
+    if failed:
+        error = RuntimeError(str(failed.get("message") or "the model call failed")[:500])
+        if failed.get("not_dispatched"):
+            error.provider_not_dispatched = True  # type: ignore[attr-defined]
+        gate._fail(pair, error)
+        return {"released": True}
+    gate._settle_on(connection, pair, usage or {})
+    return {"settled": True}
+
+
+class _FencedEngine:
+    """An engine whose every `begin()` is a savepoint on the fenced connection: the ledger and
+    span sinks write in their own short transactions on the worker; here they commit with the
+    fence or not at all."""
+
+    def __init__(self, connection: Any):
+        self._c = connection
+        self.dialect = connection.dialect
+        self.url = connection.engine.url
+
+    @contextlib.contextmanager
+    def begin(self):
+        with self._c.begin_nested():
+            yield self._c
+
+    connect = begin
+
+
+def ledger_seq(connection: Any, settings: Any, host_id: str, run_id: str,
+               lease: LeaseRef) -> dict:
+    from ..kernel.ledger import next_seq
+
+    fence(connection, settings, host_id, run_id, lease)
+    return {"seq": next_seq(connection)}
+
+
+def ledger_write(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef, *,
+                 event: dict, state: dict, meta: Optional[dict] = None) -> dict:
+    from ..kernel.ledger import DbSink
+
+    fence(connection, settings, host_id, run_id, lease)
+    ev = wire.event_in(event)
+    if ev.run_id != run_id:
+        raise RunPlaneError("wrong_run", 400, "a run writes only its own ledger")
+    who = SimpleNamespace(project_id=str(state.get("project_id") or ""), run_id=run_id,
+                          act_id=state.get("act_id"), attempt=int(state.get("attempt") or 1),
+                          lineage_id=state.get("lineage_id") or run_id)
+    DbSink(_FencedEngine(connection)).write(ev, who, wire.meta_in(meta))
+    return {"written": True}
+
+
+def span_write(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
+               span: dict) -> dict:
+    from .traces import DbSpanSink
+
+    fence(connection, settings, host_id, run_id, lease)
+    item = wire.span_in(span)
+    if item.run_id != run_id:
+        raise RunPlaneError("wrong_run", 400, "a run writes only its own spans")
+    DbSpanSink(_FencedEngine(connection)).write_span(item)
+    return {"span_id": item.span_id}
+
+
+def event_write(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef, *,
+                type: str, data: Optional[dict] = None) -> dict:
+    from .core import emit_event
+
+    job = fence(connection, settings, host_id, run_id, lease)
+    if not _EVENT_TYPE.match(str(type or "")):
+        raise RunPlaneError("bad_event_type", 400, "an event type is lower_snake.dotted")
+    event_id = emit_event(connection, str(job["project_id"]), f"agent.run.{type}",
+                          owner_of(lease.replica_id), "agent_run", run_id,
+                          wire.jsonable(data or {}))
+    return {"event_id": event_id}
+
+
+# ── BOSS-state tools on the control plane (D1a) ─────────────────────────────────────────────
+
+def _server_tools(connection: Any, settings: Any, run: dict) -> Any:
+    """The run's BOSS-state tools, as the worker builds them for a deployed agent: exactly the
+    agent's grants (AgentStepToolSet), or a test's PARTS_HOOK."""
+    from . import bots
+    from .agent_loop import AgentStepToolSet
+
+    fctx = dict(run.get("finalize_ctx") or {})
+    if bots.PARTS_HOOK is not None:
+        from ..agents import versions as V
+
+        row = V.get_version(connection, str(run["project_id"]), str(fctx.get("agent_key")),
+                            int(fctx.get("agent_version") or 0))
+        return bots.PARTS_HOOK(connection, settings, run, row)["tools"]
+    bounded = {**run, "finalize_ctx": {**fctx, "agent_step": {"role_key": fctx.get("agent_key")}}}
+    return AgentStepToolSet(connection, settings, bounded, str(run["id"]))
+
+
+@contextlib.contextmanager
+def _as_agent(connection: Any, run: dict):
+    """The run's delegated authority (the person it is for, through this agent), as the
+    deployed runner drives it on a worker: every tool's identity gate decides against it."""
+    from ..identity import catalogue as _catalogue
+    from ..identity import runs as _identity_runs
+    from .connection_credentials import acting_agent
+
+    fctx = dict(run.get("finalize_ctx") or {})
+    key = str(fctx.get("agent_key") or "")
+    with _identity_runs.delegated(connection.engine, kind="ag", entity_id=str(run["id"]),
+                                  project_id=str(run["project_id"]), role_key=key,
+                                  scope=_catalogue.delegable(),
+                                  job_id=fctx.get("created_by_job_id")), acting_agent(key):
+        yield
+
+
+def _state_for(connection: Any, run: dict) -> Any:
+    from ..kernel.state import RunState
+
+    row = connection.execute(text(
+        "SELECT state FROM agent_checkpoints WHERE run_id = :r ORDER BY seq DESC LIMIT 1"),
+        {"r": run["id"]}).scalar()
+    if row is not None:
+        return RunState.from_checkpoint(row if isinstance(row, dict) else json.loads(row))
+    return RunState(run_id=str(run["id"]), project_id=str(run["project_id"]),
+                    lineage_id=str(run["id"]), system=[], messages=[])
+
+
+def tool_schemas(connection: Any, settings: Any, host_id: str, run_id: str,
+                 lease: LeaseRef) -> dict:
+    from .agent_loop import load_agent_run
+
+    fence(connection, settings, host_id, run_id, lease)
+    run = load_agent_run(connection, run_id)
+    with _as_agent(connection, run):
+        state = _state_for(connection, run)
+        schemas = _server_tools(connection, settings, run).schemas(step=int(state.step),
+                                                                  state=state)
+    return {"tools": [wire.schema_out(s) for s in schemas]}
+
+
+def tool_invoke(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef, *,
+                name: str, call: dict, approved: Optional[dict] = None) -> dict:
+    """`POST /tools/{name}/invoke`: a BOSS-state tool runs HERE, on the control plane, under the
+    run's delegated authority and the toolset's own gates (D1a) — the VM holds no database."""
+    from ..kernel.types import ToolCall
+    from .agent_loop import load_agent_run
+
+    fence(connection, settings, host_id, run_id, lease)
+    run = load_agent_run(connection, run_id)
+    request = ToolCall(id=str(call.get("id") or ""), name=name,
+                       arguments=call.get("arguments") if isinstance(call.get("arguments"),
+                                                                     dict) else None,
+                       raw_arguments=str(call.get("raw_arguments") or ""))
+    with _as_agent(connection, run):
+        result = _server_tools(connection, settings, run).invoke(
+            request, state=_state_for(connection, run), approved=approved)
+    return {"result": wire.result_out(result)}
+
+
+__all__ = ["KINDS", "LEASE_TTL_SECONDS", "LeaseRef", "RunPlaneError", "admit", "after_commit",
+           "budget_reserve", "budget_settle", "event_write", "fail", "fence", "fenced",
+           "get_checkpoints", "get_writes", "heartbeat", "interrupt_answers", "ledger_seq",
+           "ledger_write", "next_run", "open_interrupt", "owner_of", "put_checkpoint",
+           "put_write", "replica_for", "settle", "span_write", "tool_invoke", "tool_schemas"]

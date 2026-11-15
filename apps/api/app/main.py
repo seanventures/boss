@@ -32046,6 +32046,14 @@ app.include_router(build_agent_platform_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# P8a: agent hosts, the fleet and the run plane (routers/fleet.py; boss-agent-hosts-lld.md §3.2,
+# §3.13): host enrolment/heartbeat/desired state, the fenced run plane, the console's fleet view.
+from .routers.fleet import build_fleet_router
+
+app.include_router(build_fleet_router(
+    engine=engine,
+    require_write_actor=require_project_write_actor,
+))
 # AP-P5: a deployed agent as an A2A v1.0 server — signed card, JSON-RPC, push notifications;
 # per-deployment opt-in, refused for agents with write tools until strong isolation (D11).
 from .routers.a2a import build_a2a_router
