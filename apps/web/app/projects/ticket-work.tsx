@@ -124,7 +124,7 @@ export function ImportAction({ ctx, conns }: { ctx: PxCtx; conns: Connection[] }
  *  "Start anyway" with exactly the keys ticked. Before, a ticket's Start printed the API's long
  *  sentence with no way to start anyway (console walk, 2026-11-14). */
 const heldFor = (key: string, message: string | null, readiness: Readiness, again: (anyway: string[]) => Promise<void>): PendingRefusal =>
-  ({ label: `Start ${key}`, message: message ?? `${key} can't start here yet.`, readiness, retry: again });
+  ({ label: `Start ${key}`, message: message !== null && message !== "" ? message : `${key} can't start here yet.`, readiness, retry: again });
 
 // ── T5: Waiting for BOSS ─────────────────────────────────────────────────────────────────────
 export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[] }) {

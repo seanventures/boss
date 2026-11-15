@@ -16,6 +16,8 @@ Every fetch (discovery, JWKS, token, GitHub API) goes through the SSRF-safe clie
 """
 from __future__ import annotations
 
+import contextlib
+
 import hashlib
 import hmac
 import json
@@ -292,6 +294,22 @@ def clear_caches() -> None:
     with _LOCK:
         _DISCOVERY.clear()
         _JWKS.clear()
+
+
+@contextlib.contextmanager
+def isolated_caches():
+    """Run a block against EMPTY, throwaway discovery/JWKS caches: the shared ones are neither read
+    nor written. For a one-off check of an unsaved issuer (the Add form's dry-run Test), which
+    must not answer from a saved provider's cache or leave a key behind."""
+    global _DISCOVERY, _JWKS
+    with _LOCK:
+        kept = (_DISCOVERY, _JWKS)
+        _DISCOVERY, _JWKS = {}, {}
+    try:
+        yield
+    finally:
+        with _LOCK:
+            _DISCOVERY, _JWKS = kept
 
 
 def discovery(provider: Provider) -> dict[str, Any]:

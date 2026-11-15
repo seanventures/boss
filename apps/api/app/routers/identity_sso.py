@@ -729,12 +729,15 @@ def build_identity_sso_router() -> APIRouter:
                 client_secret_vault_item_id=None, scopes=tuple(body.scopes), allowed_algs=(),
                 saml_sp_entity_id=None, saml_certificates=(), domains=(), jit_mode="off",
                 trust_idp_mfa=False, enforce_sso=False, groups_claim=None, status="disabled")
-            try:
-                doc = sso_oidc.discovery(draft)
-                if body.protocol == "oidc":
-                    sso_oidc._jwks(doc["jwks_uri"])
-            except SsoError as exc:
-                return JSONResponse({"ok": False, "error": exc.code})
+            # Its own caches for the one call: a dry run of an arbitrary issuer must neither read
+            # a stale answer from a saved provider's cache nor leave a key in it (unbounded keys).
+            with sso_oidc.isolated_caches():
+                try:
+                    doc = sso_oidc.discovery(draft)
+                    if body.protocol == "oidc":
+                        sso_oidc._jwks(doc["jwks_uri"])
+                except SsoError as exc:
+                    return JSONResponse({"ok": False, "error": exc.code})
             return JSONResponse({"ok": True, "checked": "discovery" if body.protocol == "oidc" else "preset",
                                  "issuer": issuer})
         except AuthnError as exc:

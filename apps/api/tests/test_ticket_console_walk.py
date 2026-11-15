@@ -20,6 +20,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from sqlalchemy import text
 
+from apps.api.app import main
+
 # A person's sign-in is recorded in the identity vault, which needs a master key (as in
 # test_ticket_sync_api.py).
 os.environ.setdefault("BOSS_MASTER_KEY", base64.b64encode(b"p29a-test-master-key-32-bytes!!!").decode())
@@ -75,10 +77,23 @@ def test_the_connections_own_oauth_app_is_set_in_settings_and_used_by_connect(wo
         assert query["client_id"] == "atl-client-2"
         assert query["redirect_uri"] == app["callback_url"]
 
-        # A blank client id removes the app (and its secret reference): host settings apply again.
+        # A blank client id removes the app AND its secret: the reference is revoked and the value
+        # is gone from the store; host settings apply again.
+        with engine.connect() as db:
+            ref_id = db.execute(text("SELECT configuration->>'oauth_client_secret_ref' FROM work_tracker_providers "
+                                     "WHERE id = :i"), {"i": cid}).scalar()
         cleared = client.patch(f"/v1/ticket-systems/{cid}", json={"oauth_app": {"client_id": ""}})
         assert cleared.json()["connection"]["oauth_app"]["client_id"] == ""
         assert cleared.json()["connection"]["oauth_app"]["secret_set"] is False
+        from boss_engine.services.secret_backends import SecretUnavailable, resolve_secret_ref
+        with engine.connect() as db:
+            assert db.execute(text("SELECT status FROM secret_refs WHERE id = :i"), {"i": ref_id}).scalar() == "revoked"
+            try:
+                resolve_secret_ref(db, ref_id, main.settings, project_id=project)
+            except SecretUnavailable:
+                pass
+            else:
+                raise AssertionError("the cleared client secret still resolves")
         refused = client.post(f"/v1/ticket-systems/{cid}/oauth/start/load", json={})
         assert refused.status_code >= 400 and "Settings" in refused.text
 

@@ -64,3 +64,27 @@ def test_the_dry_run_needs_the_permission_to_manage_providers(world, engine):
     refused = client.post("/v1/identity/providers/test", headers=h,
                           json={"protocol": "oidc", "preset": "okta", "name": "Okta", "issuer": "https://acme.okta.com"})
     assert refused.status_code == 403, refused.text
+
+
+def test_the_dry_run_never_reaches_a_private_address(world, engine, okta):
+    """SSRF through the Add form (A70/A71 for the dry run): an issuer on loopback, link-local or
+    RFC 1918 is refused before any request leaves BOSS, and said as `discovery_refused`."""
+    client, h = owner_client(engine)
+    for issuer in ("http://127.0.0.1:8100", "http://169.254.169.254/", "http://10.0.0.5/realms/x",
+                   "https://192.168.1.20", "http://[::1]:8000"):
+        res = client.post("/v1/identity/providers/test", headers=h,
+                          json={"protocol": "oidc", "preset": "generic", "name": "x", "issuer": issuer})
+        assert res.status_code == 200, (issuer, res.text)
+        assert res.json() == {"ok": False, "error": "discovery_refused"}, (issuer, res.text)
+
+
+def test_the_dry_run_leaves_the_shared_caches_alone(world, engine, okta):
+    from boss_engine.identity import sso_oidc
+
+    client, h = owner_client(engine)
+    sso_oidc.clear_caches()
+    ok = client.post("/v1/identity/providers/test", headers=h,
+                     json={"protocol": "oidc", "preset": "okta", "name": "Okta", "issuer": okta.issuer})
+    assert ok.json()["ok"] is True
+    assert sso_oidc._DISCOVERY == {} and sso_oidc._JWKS == {}
+

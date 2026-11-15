@@ -394,6 +394,28 @@ def oauth_app_view(db: Connection, config: dict[str, Any], manifest: Any) -> Opt
             "callback_url": oauth_callback_url(db)}
 
 
+def _retire_secret_ref(db: Connection, app_settings: Any, secret_ref_id: str, *, actor: str) -> None:
+    """Revoke a stored secret reference and delete its value from the backend that holds it.
+    Best effort on the store (a vault that does not answer leaves a revoked, unresolvable
+    reference, which is the same to BOSS); nothing when there is no reference."""
+    from .secret_backends import SecretNotFound, backend_for
+
+    if not secret_ref_id:
+        return
+    row = db.execute(text(
+        "UPDATE secret_refs SET status = 'revoked', revoked_at = now(), revoked_by = :a "
+        "WHERE id = :i AND status <> 'revoked' RETURNING ref_key, storage_backend, ref_kind"),
+        {"a": actor, "i": secret_ref_id}).mappings().first()
+    if row is None:
+        return
+    try:
+        backend_for(str(row["storage_backend"] or row["ref_kind"]), app_settings).delete(str(row["ref_key"]))
+    except SecretNotFound:
+        pass
+    except Exception as exc:  # noqa: BLE001 — revoked in BOSS either way
+        logger.warning("could not delete the ticket OAuth client secret from its store: %s", type(exc).__name__)
+
+
 def set_oauth_app(db: Connection, app_settings: Any, row: dict[str, Any], given: Any, *,
                   actor: str) -> None:
     """Store the connection's OAuth app from Settings: ``{client_id, client_secret}``. The id
@@ -419,6 +441,10 @@ def set_oauth_app(db: Connection, app_settings: Any, row: dict[str, Any], given:
     if client_id is not None:
         changes["oauth_client_id"] = client_id.strip()
         if not client_id.strip():
+            # Removing the app removes its secret too: the reference is revoked and the value
+            # deleted from the store it was written to, so nothing resolvable is left behind.
+            _retire_secret_ref(db, app_settings, str(row["configuration"].get("oauth_client_secret_ref") or ""),
+                               actor=actor)
             changes["oauth_client_secret_ref"] = ""
     if secret:
         if client_id is not None and not client_id.strip():
