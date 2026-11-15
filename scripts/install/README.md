@@ -456,6 +456,27 @@ boss upgrade --no-rollback                                  # keep a failed rele
 
 If the new release fails to start after its source is in place, `boss upgrade` puts the previous release back and starts it again, then says **Rolled back**. Data volumes are kept. Source rollback alone does not undo database migrations; compatibility must be verified for the two revisions. If that compatibility is unknown or rollback cannot start, restore the complete backup into a fresh stack (below).
 
+### Storage hygiene
+
+Everything BOSS creates on your machine has a retention rule or a guardrail, so an install that upgrades every day does not fill the disk (one did: 358 pre-upgrade backups, 170 GB). Each default can be changed in the install's `.env`; none needs a model or an approval.
+
+| What | Rule | Settings in `.env` (default) |
+|---|---|---|
+| Pre-upgrade backups (`~/boss-backups`) | After every complete backup: keep the newest 10 and anything from the last 7 days, within 20 GB in total. The cap wins over the count and the days, but never goes below the newest 3 (so a rollback to the release before last stays possible); oldest go first; never the backup just taken. One log line per removal. | `BOSS_BACKUP_KEEP` (10), `BOSS_BACKUP_KEEP_DAYS` (7), `BOSS_BACKUP_CAP_GB` (20) |
+| In-database hourly backups (backups volume) | Keep 6 hourly, 7 daily, 4 weekly, 6 monthly | `BOSS_BACKUP_KEEP_HOURLY` (6), `_DAILY` (7), `_WEEKLY` (4), `_MONTHLY` (6) |
+| BOSS images | After a successful upgrade only the new release's tags and the `prev-<tag>` rollback point stay; dangling BOSS images go. Never an image a container uses, never one that is not `boss-community-*`. | `boss prune` runs it on demand |
+| Docker build cache | Capped: Docker keeps the newest 10 GB. The cache is Docker-wide; on a machine shared with other projects set it higher, or `0` for no cap. | `BOSS_BUILD_CACHE_CAP_GB` (10) |
+| Container logs | 50 MB × 3 files per container | `BOSS_LOG_MAX_SIZE` (50m), `BOSS_LOG_MAX_FILES` (3) |
+| Postgres | A query may spill at most 5 GB to temp files; a session idle inside a transaction is ended after 15 min; the worker's statements end after 30 min (the API, which runs migrations, has no statement limit). | `BOSS_PG_TEMP_FILE_LIMIT` (5GB), `BOSS_PG_IDLE_IN_TRANSACTION_TIMEOUT` (15min), `BOSS_WORKER_DB_STATEMENT_TIMEOUT_SECONDS` (1800, `0` = none) |
+| Disk check before an upgrade | `boss upgrade` measures free space on this host and on Docker's own disk, estimates the build (about 35 GB for a full rebuild when the build cache is cold, 5 GB when warm) and refuses, with nothing changed, when either has less than that plus the floor. `--skip-disk-check` goes ahead regardless. | `BOSS_DISK_FLOOR_GB` (20), `BOSS_UPGRADE_FULL_BUILD_GB` (35), `BOSS_UPGRADE_INCREMENTAL_BUILD_GB` (5), `BOSS_DISK_CHECK` (`off` to skip) |
+| Disk check before a build | A build or code task is not leased while the disk where builds run has less than the floor free. The run says why ("waiting for room on this machine: … GB of disk free"), BOSS records `host.disk_low` once, and leases again by itself once space is back. | `BOSS_BUILD_DISK_FLOOR_GB` (8) |
+
+To see what the backup rule would remove without removing it:
+
+```bash
+python3 ~/boss/scripts/install/backup_archive.py retention ~/boss-backups --dry-run
+```
+
 ### The database image
 
 The database runs `boss-community-db:pg16.12-vector0.8.1-age1.6.0`, built by the installer from `scripts/install/db-image/Dockerfile`: PostgreSQL 16 on Alpine (the same base and libc as the `postgres:16-alpine` image earlier releases ran) with pgvector 0.8.1 and Apache AGE 1.6.0 compiled in. Upgrading to it is an image swap: the existing volume opens unchanged, and on its first boot the schema step creates the `vector` and `age` extensions. Nothing is dumped or restored. `boss upgrade` takes its protected backup before the swap, as for every upgrade. `engine/tests/test_db_image_upgrade_real_docker.py` proves the swap on a populated volume (row counts, `amcheck` on every B-tree index, both extensions loading) and a fresh install.

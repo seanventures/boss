@@ -104,7 +104,9 @@ class Settings(BaseSettings):
         default=60, alias="BOSS_BACKUP_INTERVAL_MINUTES", ge=5, le=7 * 24 * 60
     )
     backup_dir: str = Field(default="/var/lib/boss/backups", alias="BOSS_BACKUP_DIR")
-    backup_keep_hourly: int = Field(default=24, alias="BOSS_BACKUP_KEEP_HOURLY", ge=1)
+    # 6 hourly (storage hygiene layer 1): a day of hourly dumps of a multi-GB database was the
+    # backups volume's biggest tenant; the daily/weekly/monthly tiers keep the history.
+    backup_keep_hourly: int = Field(default=6, alias="BOSS_BACKUP_KEEP_HOURLY", ge=1)
     backup_keep_daily: int = Field(default=7, alias="BOSS_BACKUP_KEEP_DAILY", ge=0)
     backup_keep_weekly: int = Field(default=4, alias="BOSS_BACKUP_KEEP_WEEKLY", ge=0)
     backup_keep_monthly: int = Field(default=6, alias="BOSS_BACKUP_KEEP_MONTHLY", ge=0)

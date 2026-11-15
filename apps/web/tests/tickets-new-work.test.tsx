@@ -15,7 +15,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { ProjectPage } from "../app/projects/project-page";
-import { hasTicketRef } from "../app/projects/new-work-ticket";
+import { browseWords, hasTicketRef } from "../app/projects/new-work-ticket";
 import {
   FX_DEPLOYMENTS, FX_HEALTH, FX_KNOWLEDGE, FX_ONBOARDING, FX_OVERVIEW, FX_SETTINGS, FX_WORK, FX_WORK_PLAN,
 } from "../lib/project-experience-fixtures";
@@ -41,8 +41,10 @@ const TICKET = {
   body: "Route DTI > 45% to a second reviewer.", acceptance_criteria: ["A", "B", "C"], comments: [], attachments: [],
 };
 
-function engine(resolve: () => { status?: number; body: unknown }) {
+function engine(resolve: () => { status?: number; body: unknown }, first?: (c: Call) => { status?: number; body: unknown } | undefined) {
   return stubFetch((c: Call) => {
+    const over = first?.(c);
+    if (over) return over;
     if (c.path === "/v1/tickets/resolve") return resolve();
     if (c.path === `/v1/projects/${P}/tickets/import`) return { body: { imported: [{ key: "LEND-142", work_item_id: "wi_9" }], already_in_boss: [] } };
     if (/^\/v1\/work-items\/[^/]+\/start-from-ticket$/.test(c.path)) return { body: { workflow_key: "x", run_id: "wfr_9" } };
@@ -119,6 +121,37 @@ describe("T3 · New work from a ticket", () => {
     expect(tid("px-nw-ticket")).toBeNull();
     await press(tid("px-compose-start"));
     expect(writes(calls).some((c) => c.path.includes("tickets/import"))).toBe(false);
+  });
+
+  it("a start the project is not ready for shows the checklist, and Start anyway sends the ticked keys", async () => {
+    const missing = { key: "deployment_target", label: "Somewhere to deploy", fix: "Add a host in Infra.", area: "infra", href: "",
+                      needed_by: [{ step_id: "deploy", label: "Deploy" }], first_step: "deploy", first_step_label: "Deploy", after_a_person: false, ok: false, detail: "none" };
+    let refused = false;
+    const calls = engine(() => ({ body: { tickets: [{ ...TICKET, in_boss: { work_item_id: "wi_old", project_id: P } }], errors: [] } }), (c: Call) => {
+      if (/start-from-ticket$/.test(c.path) && !refused) {
+        refused = true;
+        return { status: 409, body: { detail: { message: "This workflow cannot run here yet.", readiness: { ready: false, checked: [missing], missing: [missing] } } } };
+      }
+      return undefined;
+    });
+    await openModal();
+    await type(tid("px-compose-text"), "LEND-142");
+    await pause();
+    await press(tid("px-compose-start"));
+    expect(tid("dw-readiness-missing-deployment_target")).not.toBeNull();
+    expect(tid("px-composer")).not.toBeNull();
+    await press(tid("dw-readiness-start-anyway"));
+    await press(tid("px-compose-start"));
+    expect(writes(calls).filter((c) => c.path.endsWith("start-from-ticket")).map((c) => c.body)).toEqual([
+      { project_id: P, workflow_key: "minor_feature" },
+      { project_id: P, workflow_key: "minor_feature", start_anyway: ["deployment_target"] },
+    ]);
+  });
+
+  it("names the system to browse when there is one: Browse Jira", () => {
+    expect(browseWords(["Jira"])).toBe("Browse Jira");
+    expect(browseWords([])).toBe("Browse tickets");
+    expect(browseWords(["Jira", "Plane"])).toBe("Browse tickets");
   });
 
   it("Ticket or link says what BOSS recognises; Browse tickets opens the import view on Work", async () => {

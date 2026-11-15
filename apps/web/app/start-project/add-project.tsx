@@ -51,8 +51,8 @@ import { templatesApi } from "../../lib/templates";
 import { ageShort, hostFolders, type FolderFacts, type FolderHost } from "../../lib/host-folder";
 import { accountsOf, allPresets, createFresh, installWideRefusal, nameFromIdea, projectPageHref, type Preset } from "../../lib/start-project";
 import {
-  addProjectApi, bringChoices, defaultWhere, detect, doorOf, estimateTip, estimateWords, hostPort, lineCount, nameFromTitle, nextFreeName, repoSlug,
-  type Brief, type BriefField, type Bring, type Door, type Kind, type LocalFolder, type Preview, type RepoCheck, type RepoRead, type Understanding,
+  addProjectApi, bringChoices, creatingOwners, defaultWhere, detect, doorOf, estimateTip, estimateWords, hostPort, lineCount, nameFromTitle, nextFreeName, repoSlug,
+  type Brief, type BriefField, type Bring, type Door, type Kind, type LocalFolder, type OwnerCredential, type Preview, type RepoCheck, type RepoRead, type Understanding,
 } from "../../lib/add-project";
 import { normalizeChannel } from "../workflows/compose-plan";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
@@ -413,9 +413,27 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
 
   // ── WHERE A NEW APP'S CODE LIVES (917/918): the new GitHub repo's owner and name, and whether
   //    BOSS can make it — asked while the person is still choosing, in the engine's words ───────
+  // WHO CAN MAKE THE REPO (BOSSAPP-1160): every account BOSS holds a credential for, each with
+  // the credential that creates there ("will create as …") or its exact fix. The picker lists
+  // the ones that can; the owner pre-picked is the first of those (the connection's account when
+  // it can), never one BOSS cannot create in while another is possible.
+  const [owners, setOwners] = useState<OwnerCredential[] | null>(null);
   useEffect(() => {
-    if (!plan.newRepo.owner && account) setPlanState((p) => ({ ...p, newRepo: { ...p.newRepo, owner: account } }));
-  }, [account, plan.newRepo.owner]);
+    if (door !== "new") return undefined;
+    const ctl = new AbortController();
+    addProjectApi.repoOwners(projectId, accounts, ctl.signal)
+      .then((o) => setOwners(o.owners))
+      .catch(() => { if (!ctl.signal.aborted) setOwners(null); });
+    return () => ctl.abort();
+  }, [door, projectId, accounts]);
+  const pickable = useMemo(() => creatingOwners(owners, accounts), [owners, accounts]);
+  useEffect(() => {
+    const first = pickable.includes(account) ? account : pickable[0] ?? account;
+    if (!plan.newRepo.owner && first) setPlanState((p) => ({ ...p, newRepo: { ...p.newRepo, owner: first } }));
+    else if (owners && plan.newRepo.owner && !pickable.includes(plan.newRepo.owner) && pickable.length && !touched.current.has("newRepo")) {
+      setPlanState((p) => ({ ...p, newRepo: { ...p.newRepo, owner: first } }));
+    }
+  }, [account, owners, pickable, plan.newRepo.owner]);
   // The name BOSS proposes (from the project's name); taken on GitHub, it moves to name-2, name-3 …
   // on its own. A name the person typed is theirs: never changed.
   const [bump, setBump] = useState(0);
@@ -916,7 +934,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             </div>
             <PlanBoxes kind={kind} preview={preview} plan={plan} set={set} cards={cards} adapters={adapters}
                        helmPicks={u?.picks ?? EMPTY_PICKS} workflow={workflow} registry={allRepos} repoLabel={repoLabel} codeName={repo?.full_name ?? pickedFolder?.path ?? ""}
-                       live={helmLive} accountLogin={account} accounts={accounts} homeHref={homeHref} inUse={inUse}
+                       live={helmLive} accountLogin={account} accounts={pickable} owners={owners} homeHref={homeHref} inUse={inUse}
                        newRepo={{ name: repoName, check: repoCheck, checking }} codeWhere={codeWhere} />
           </section>
 

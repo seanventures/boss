@@ -23,6 +23,11 @@ import type { GitHubOperationsFeed } from "../lib/github-operations";
 import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
 
+/** The repository-level permissions a connection lacks. Flow permissions (contents, pull requests,
+ *  administration — BOSSAPP-1160) are recorded beside them and said in their own words. */
+const FLOW_PERMISSIONS = new Set(["contents", "pull_requests", "administration"]);
+function repoMissing(missing: string[]): string[] { return missing.filter((p) => !FLOW_PERMISSIONS.has(p)); }
+
 type GitHubOperationsProps = {
   feed: GitHubOperationsFeed;
   actor: string;
@@ -782,7 +787,8 @@ export function GitHubOperations({
           {connection ? (
             <div className="ghx-connection-control">
               <span>
-                <b>{connection.connection_label}</b>, credential {connection.credential_configured ? "configured" : "missing"}, {connection.missing_permissions.length} missing permissions
+                <b>{connection.connection_label}</b>, credential {connection.credential_configured ? "configured" : "missing"}, {repoMissing(connection.missing_permissions).length} missing permissions
+                {connection.missing_permissions.includes("administration") ? " · can't create repos" : ""}
               </span>
               <ActionForm permission="github:manage" action={setGitHubConnectionStateAction}>
                 <HiddenScope projectId={feed.projectId} actor={actor} />

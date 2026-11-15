@@ -14,7 +14,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowSquareOut, ArrowsClockwise, Bell, Copy, Crown, Eye, EyeSlash, GearSix, GitBranch, GitMerge, GithubLogo, HandWaving, HardDrives, Headset, Info,
-  Key, LockKey, PencilSimple, Plus, Siren, SlidersHorizontal, SteeringWheel, User, UserCircle,
+  Key, LockKey, PencilSimple, Plus, Siren, SlidersHorizontal, SteeringWheel, Ticket, User, UserCircle,
   type Icon,
 } from "@phosphor-icons/react";
 
@@ -148,6 +148,12 @@ export function SettingsTab({ ctx }: { ctx: PxCtx }) {
                   const I = SECTION_ICON[sec.key]?.icon ?? GearSix;
                   return <button key={sec.key} type="button" aria-current={active === sec.key} onClick={() => goTo(sec.key)} data-testid={`px-set-nav-${sec.key}`}><I size={14} aria-hidden />{sec.key === "repos" ? "Code" : sec.label}</button>;
                 })}
+                {/* The cards below the API's sections have a place in the nav too: the Ticket
+                    system card was only reachable by scrolling past everything (console walk). */}
+                {!ctx.demo ? (
+                  <button type="button" onClick={() => document.querySelector("[data-testid='px-set-tickets']")?.scrollIntoView?.({ block: "start", behavior: "smooth" })}
+                          data-testid="px-set-nav-tickets"><Ticket size={14} aria-hidden />Ticket system</button>
+                ) : null}
               </nav>
               <div className="px-stack">
                 {card("demo_logins")}

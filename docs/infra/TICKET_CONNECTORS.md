@@ -196,6 +196,15 @@ The OAuth app (client id and secret) is resolved in this order:
 1. `configuration.oauth_client_id` with `oauth_client_secret_ref` (a stored secret reference);
 2. the operator's `BOSS_<PROVIDER>_OAUTH_CLIENT_ID` and `_SECRET`.
 
+The first is set in the console: Repo and models › Ticket systems › Jira › Settings › Client ID
+and Client secret, which is `PATCH /v1/ticket-systems/{id}` with
+`{"oauth_app": {"client_id": "…", "client_secret": "…"}}`. The secret goes to the secret backend
+and is never answered back; a blank secret keeps the stored one, and a blank client id removes the
+app. Every connection answers `oauth_app: {client_id, secret_set, from_host, callback_url}`;
+`callback_url` is the install's public origin + `/v1/ticket-systems/oauth/callback` — the console's
+address, which proxies `/v1` — and is exactly what the sign-in sends as `redirect_uri`, so it is
+what goes into the Atlassian app's Callback URL.
+
 ## The host allowlist
 
 Every request goes through `http.TicketHttp`, the one shared helper. It allows a URL only when

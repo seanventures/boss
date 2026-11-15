@@ -190,7 +190,12 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
               {accounts.map((a) => (
                 <tr key={a.id} data-testid={`su-account-${a.id}`}>
                   <td><span className="su-strong" data-user-text>{a.name}</span></td>
-                  <td className="su-faint">{a.how}</td>
+                  <td className="su-faint">{a.how}{a.can_create_repos && a.can_create_repos.ok !== null ? (
+                    <><br /><span data-testid="su-account-creates" data-ok={String(a.can_create_repos.ok)} title={a.can_create_repos.words}>
+                      {a.can_create_repos.ok ? "Can create repos ✓"
+                        : a.can_create_repos.reason === "personal_account" || !a.can_create_repos.missing.length && a.kind === "org_app" ? "Creates repos: not for personal accounts"
+                        : `Can create repos: no (missing: ${a.can_create_repos.missing.join(", ") || "a token with the repo scope"})`}
+                    </span></>) : null}</td>
                   <td>{a.repo_count ?? "—"}</td>
                   <td>
                     <span className="su-line">

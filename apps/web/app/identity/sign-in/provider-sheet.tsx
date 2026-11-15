@@ -7,7 +7,10 @@
  * redirect URL, which needs the new provider's id.
  */
 import React, { useState } from "react";
-import { Check, Copy, Plus, PencilSimple } from "@phosphor-icons/react";
+import {
+  AppleLogo, Check, Copy, GithubLogo, Globe, GoogleLogo, IdentificationBadge, Key, Plugs, Plus, PencilSimple, ShieldCheck, WarningCircle,
+  WindowsLogo, type Icon,
+} from "@phosphor-icons/react";
 
 import { useGuardedCall } from "../../../components/identity/identity-provider";
 import { ErrorLine, Sheet } from "../../../components/identity/kit";
@@ -17,10 +20,16 @@ import type { Provider } from "../../../lib/identity/types";
 import type { ProviderDetail } from "../../../lib/identity/types-sso";
 import { showToast } from "../../client-forms";
 import {
-  KINDS, createBody, emptyForm, formOf, idpUrls, missing, needsIssuer, patchBody, protocolOf, providerRefusal, reserveProviderId,
-  withIssuer, type ProviderForm, type ProviderKind,
+  KINDS, createBody, draftTestBody, draftTestMissing, draftTestWords, emptyForm, formOf, idpUrls, missing, needsIssuer, patchBody,
+  protocolOf, providerRefusal, reserveProviderId, withIssuer, type ProviderForm, type ProviderKind,
 } from "./provider-form";
 import { GUIDES, SIGN_IN_DOC, type Guide } from "../../../lib/identity/sso-guides";
+
+/** One icon per provider kind on the Add sheet's tiles (the premium bar: icons, not bare words). */
+const KIND_ICON: Record<string, Icon> = {
+  google: GoogleLogo, microsoft: WindowsLogo, okta: ShieldCheck, keycloak: Key, github: GithubLogo,
+  saml: IdentificationBadge, generic: Globe, apple: AppleLogo,
+};
 
 /** A value the admin copies into their IdP: label, the value, Copy. */
 export function CopyRow({ label, value, tip }: { label: string; value: string; tip?: string }) {
@@ -82,7 +91,10 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
   // Reserved now, so the redirect URL can be pasted into the IdP BEFORE its client id exists.
   const [reserved] = useState<string | null>(() => (initial ? null : reserveProviderId()));
   const guarded = useGuardedCall();
-  const set = (change: Partial<ProviderForm>) => setForm((f) => (f ? { ...f, ...change } : f));
+  // TEST BEFORE ADDING: a dry run against the issuer (POST /v1/identity/providers/test), nothing saved.
+  const [tested, setTested] = useState<{ ok: boolean; line: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+  const set = (change: Partial<ProviderForm>) => { setTested(null); setForm((f) => (f ? { ...f, ...change } : f)); };
 
   if (added) {
     return (
@@ -102,6 +114,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
           {KINDS.map((k) => (
             <button key={k.kind} type="button" className="idn-sso-kind" role="listitem" title={k.tip} data-testid={`kind-${k.kind}`}
               onClick={() => setForm(emptyForm(k.kind))}>
+              {(() => { const I = KIND_ICON[k.kind] ?? Globe; return <I size={18} aria-hidden />; })()}
               <b>{k.label}</b>
             </button>
           ))}
@@ -114,6 +127,20 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
   const protocol = protocolOf(kind);
   const why = missing(form, editing);
   const kindLabel = KINDS.find((k) => k.kind === kind)?.label ?? "Provider";
+
+  const testWhy = draftTestMissing(form);
+  const testDraft = async () => {
+    setTesting(true);
+    setTested(null);
+    try {
+      const r = await idPost<{ ok?: boolean; error?: string; detail?: string; checked?: string }>("/v1/identity/providers/test", draftTestBody(form));
+      setTested({ ok: r.ok === true, line: draftTestWords(r) });
+    } catch (e) {
+      setTested({ ok: false, line: e instanceof IdentityError ? providerRefusal(e.code, e.detail) || e.message : "Test failed" });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const save = async () => {
     setBusy(true);
@@ -164,7 +191,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
         {needsIssuer(kind) ? (
           <Field id="pv-issuer" label={kind === "saml" ? "IdP entity ID" : "Issuer URL"} tip={editing ? "Fixed once added: add a new provider to change it" : kind === "saml" ? "From your IdP's SAML metadata" : "Your provider's base URL"}>
             <input id="pv-issuer" className="idn-input" value={form.issuer} readOnly={editing} placeholder={kind === "okta" ? "https://acme.okta.com" : kind === "keycloak" ? "https://sso.acme.dev/realms/acme" : "https://"}
-              onChange={(e) => setForm((f) => (f ? withIssuer(f, e.target.value) : f))} />
+              onChange={(e) => { setTested(null); setForm((f) => (f ? withIssuer(f, e.target.value) : f)); }} />
           </Field>
         ) : null}
         {protocol === "saml" ? (
@@ -254,11 +281,22 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
       {initial && origin && form.client_auth === "private_key_jwt" && initial.client_auth === "private_key_jwt" ? (
         <CopyRow label="BOSS public key" value={`${origin.replace(/\/+$/, "")}/v1/identity/providers/${encodeURIComponent(initial.id)}/jwks`} tip="Register this key URL in your IdP" />
       ) : null}
+      {tested ? (
+        <p className={tested.ok ? "idn-ok idn-small idn-sso-tested" : "idn-err idn-small idn-sso-tested"} role="status" data-testid="provider-draft-result">
+          {tested.ok ? <Check size={14} aria-hidden /> : <WarningCircle size={14} aria-hidden />} {tested.line}
+        </p>
+      ) : null}
       <ErrorLine error={error} />
       <div className="idn-mf">
         <span className="idn-dim idn-small">{why}</span>
         <span className="idn-spacer" />
         {!editing ? <button type="button" className="idn-btn ghost" onClick={() => setForm(null)}>Back</button> : null}
+        {!editing ? (
+          <button type="button" className="idn-btn" disabled={testWhy !== "" || testing} onClick={() => void testDraft()} data-testid="provider-draft-test"
+                  title={testWhy !== "" ? testWhy : "Checks BOSS can reach it and read its keys. Nothing is saved."}>
+            <Plugs size={14} aria-hidden /> {testing ? "Testing…" : "Test"}
+          </button>
+        ) : null}
         <button type="button" className="idn-btn ghost" onClick={onClose}>Cancel</button>
         <button type="button" className="idn-btn primary" disabled={Boolean(why) || busy} onClick={save} data-testid="provider-save" title={why || undefined}>
           {busy ? "Saving…" : editing ? "Save" : "Add provider"}
