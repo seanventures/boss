@@ -33,6 +33,8 @@ KNOWN: dict[str, tuple[str, str, str, Optional[int]]] = {
     "claude_login": ("Claude login refresher", "thread", "api", None),
     "codex_login": ("Codex login refresher", "thread", "api", None),
     "backup_scheduler": ("Backups", "scheduler", "api", None),
+    # Telemetry retention (ST-8, BOSSAPP-1153): hourly, under a session advisory lock.
+    "telemetry_retention": ("Telemetry retention", "scheduler", "api", 3600),
     "skill_sources": ("Skill source sync", "scheduler", "api", None),
     "extension_scheduler": ("Extension scheduler", "scheduler", "api", None),
     "ticket_sync": ("Ticket sync", "scheduler", "api", None),

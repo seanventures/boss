@@ -342,8 +342,8 @@ def prune_disk(*, binary: str = "docker", install_id: Optional[str] = None,
 # ------------------------------------------------------------------------------------------ #
 
 def prune_tables(engine: Any) -> dict[str, int]:
-    """Tick tables keep 7 days (and one row an hour for 90); tick and heartbeat events 14
-    days (spec §4a.9). Bounded deletes, so one pass never holds a long lock."""
+    """Tick tables keep 7 days (and one row an hour for 90) (spec §4a.9); tick and heartbeat
+    events are telemetry_retention's (ST-8). Bounded deletes, so one pass never holds a long lock."""
     out: dict[str, int] = {}
     statements = {
         **{table: (
@@ -353,10 +353,11 @@ def prune_tables(engine: Any) -> dict[str, int]:
             f"id FROM {table} WHERE created_at < now() - interval '7 days' "
             "ORDER BY date_trunc('hour', created_at), created_at)) LIMIT 5000)")
            for table in ("metatron_watch_ticks", "process_manager_ticks")},
-        "events": (
-            "DELETE FROM events WHERE ctid IN (SELECT ctid FROM events WHERE "
-            "(event_type LIKE '%.ticked' OR event_type = 'job.heartbeat') "
-            "AND created_at < now() - interval '14 days' LIMIT 5000)"),
+        # `events` is NOT pruned here any more (ST-8): telemetry_retention owns it (policy
+        # `events_ticks`, the same 14 days). `events` is range-partitioned by month now, and a
+        # `ctid IN (SELECT ctid …)` delete on a partitioned table matches the same physical
+        # position in EVERY partition — it deleted live audit events beside the ticks.
+        # test_no_ctid_delete_on_a_partitioned_table guards the class.
         "owned_resources": (
             "DELETE FROM owned_resources WHERE ctid IN (SELECT ctid FROM owned_resources "
             "WHERE released_at < now() - interval '14 days' LIMIT 5000)"),

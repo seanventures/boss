@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     # SCHEDULED SELF-BACKUPS (BOSSAPP-838, services/backup_scheduler.py). Off unless the install
     # turns it on (community-compose.yml does, writing into the boss_community_backups volume).
     backup_schedule_enabled: bool = Field(default=False, alias="BOSS_BACKUP_SCHEDULE_ENABLED")
+    # TELEMETRY RETENTION (ST-8, services/telemetry_retention.py): hourly sweep of events,
+    # receipts, anomaly signals, scrapes and health samples; on unless the install turns it off.
+    telemetry_retention_enabled: bool = Field(default=True, alias="BOSS_TELEMETRY_RETENTION_ENABLED")
     backup_interval_minutes: int = Field(
         default=60, alias="BOSS_BACKUP_INTERVAL_MINUTES", ge=5, le=7 * 24 * 60
     )

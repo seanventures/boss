@@ -264,6 +264,8 @@
 .sc-legend-types { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: var(--fs-meta); color: var(--ink-soft); }
 .sc-legend-types li { display: inline-flex; align-items: center; gap: 6px; }
 .sc-legend-types code { font-family: var(--mono); color: var(--ink); }
+.sc-telemetry { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: var(--fs-meta); color: var(--ink-soft); border-top: 1px solid var(--border); padding-top: 8px; }
+.sc-telemetry code { font-family: var(--mono); color: var(--ink); }
 .sc-swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .sc-trend { margin: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .sc-trend-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: space-between; }
