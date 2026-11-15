@@ -74,6 +74,7 @@ from ..connectors.intake.contract import (
 )
 from . import intake_router
 from .core import emit_event, make_id
+from .redaction import mask_url_credentials, mask_url_credentials_in
 
 logger = logging.getLogger("boss.intake")
 
@@ -1577,7 +1578,8 @@ def redact_people(value: Any) -> Any:
     raw body, each outcome's subject. What a caller without `user:read` gets from every intake
     read (events, one event, dead letters, the route preview, the stream search). A READ VIEW
     only: what an agent receives is never passed through it (agent_triggers._agent_safe).
-    Nothing else changes: the chat user's own id and display stay, URLs stay whole."""
+    Nothing else changes: the chat user's own id and display stay, URLs stay whole here (their
+    credentials are masked for every caller by `mask_credentials`, BOSSAPP-1202)."""
     if isinstance(value, Mapping):
         return {k: (None if _person_key(k) and v is not None else redact_people(v))
                 for k, v in value.items()}
@@ -1588,9 +1590,34 @@ def redact_people(value: Any) -> Any:
     return value
 
 
+def mask_credentials(value: Any) -> Any:
+    """`value` with every URL's userinfo credential masked (`redaction.mask_url_credentials`:
+    `https://user:***@host`), at any depth. Applied to EVERY intake read for EVERY role, Owner
+    included (BOSSAPP-1202): a credential is never shown. A READ VIEW only, like `redact_people`:
+    what an agent receives keeps the URL whole (agent_triggers._agent_safe)."""
+    return mask_url_credentials_in(value)
+
+
+def _mask_raw_base64(encoded: Optional[str]) -> Optional[str]:
+    """A body kept as base64 (not JSON) that is still UTF-8 text is masked like any string and
+    re-encoded; one that is not text has no URL to mask and stays as it is."""
+    if not encoded:
+        return encoded
+    try:
+        body = base64.b64decode(encoded).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return encoded
+    masked = mask_url_credentials(body)
+    return encoded if masked == body else base64.b64encode(masked.encode("utf-8")).decode("ascii")
+
+
 def _redacted(out: dict, reveal: bool) -> dict:
     """`out` as the caller may see it, flagged (`people_redacted`) for the console's "name
-    hidden". Fails closed: `reveal` must be exactly True to show the person."""
+    hidden". Fails closed: `reveal` must be exactly True to show the person. URL credentials
+    are masked for every caller, `reveal` or not (`mask_credentials`)."""
+    out = mask_credentials(out)
+    if out.get("raw_base64") is not None:
+        out["raw_base64"] = _mask_raw_base64(out["raw_base64"])
     if reveal is True:
         return {**out, "people_redacted": False}
     out = redact_people(out)
@@ -1600,14 +1627,17 @@ def _redacted(out: dict, reveal: bool) -> dict:
     return out
 
 
-def _searchable(row: Mapping[str, Any]) -> str:
-    """What `q` reads for a caller who may not see people: the searched columns and the
-    envelope AFTER `redact_people` — the same redaction the answer gets, so a search is never
-    an oracle for a hidden field and the two cannot drift."""
-    shown = redact_people({"type": row.get("type"), "subject": row.get("subject"),
-                           "dedupe_key": row.get("dedupe_key"),
-                           "actor_external_id": row.get("actor_external_id"),
-                           "envelope": _json(row.get("envelope"), {})})
+def _searchable(row: Mapping[str, Any], reveal: bool = False) -> str:
+    """What `q` reads: the searched columns and the envelope AFTER the read view's redaction —
+    URL credentials masked for everyone (`mask_credentials`), people withheld without `reveal`
+    (`redact_people`) — so a search is never an oracle for a hidden field (a password) and the
+    search and the answer cannot drift."""
+    shown = mask_credentials({"type": row.get("type"), "subject": row.get("subject"),
+                              "dedupe_key": row.get("dedupe_key"),
+                              "actor_external_id": row.get("actor_external_id"),
+                              "envelope": _json(row.get("envelope"), {})})
+    if reveal is not True:
+        shown = redact_people(shown)
     return json.dumps(shown, default=str, ensure_ascii=False).casefold()
 
 
@@ -1671,15 +1701,16 @@ def list_events(connection: Connection, project_id: str, *, status: Optional[str
         where.append("received_at < :before")
         params["before"] = _event_time(before)
     if q:
-        # SQL narrows to the rows that match anywhere (a superset); without `reveal` each one is
-        # then re-checked against its redacted form (`_searchable`), page by page.
+        # SQL narrows to the rows that match anywhere (a superset); each one is then re-checked
+        # against its redacted form (`_searchable`), page by page — for every caller, since a
+        # URL credential is masked even for one who may see people (BOSSAPP-1202).
         where.append("(type ILIKE :q OR subject ILIKE :q OR dedupe_key ILIKE :q OR "
                      "actor_external_id ILIKE :q OR envelope::text ILIKE :q)")
         params["q"] = f"%{str(q)[:200]}%"
     sql = (f"SELECT {_EVENT_COLUMNS} FROM intake_events WHERE {' AND '.join(where)} "
            "{after} ORDER BY received_at DESC, id DESC LIMIT :n")
     search: dict[str, Any] = {}
-    if not q or reveal is True:
+    if not q:
         rows = connection.execute(text(sql.format(after="")), params).mappings().all()
     else:
         needle = str(q)[:200].casefold()
@@ -1687,7 +1718,7 @@ def list_events(connection: Connection, project_id: str, *, status: Optional[str
         while len(rows) < params["n"] and scanned < _SEARCH_SCAN_MAX:
             page = connection.execute(text(sql.format(after=after)), params).mappings().all()
             scanned += len(page)
-            rows.extend(r for r in page if needle in _searchable(r))
+            rows.extend(r for r in page if needle in _searchable(r, reveal))
             if len(page) < params["n"]:
                 exhausted = True
                 break

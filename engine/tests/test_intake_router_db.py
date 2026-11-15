@@ -398,6 +398,8 @@ CONTENT = {
     "loan": {"principal_amount": 250000, "principal_currency": "USD"},
     "mail_server": "smtp.acme.com", "email_template": "welcome_v2",
     "bounce": {"recipient": "jane@acme.com", "reason": "mailbox full"},
+    # BOSSAPP-1202: a URL with a password reaches the agent whole; only read views mask it.
+    "push": "https://x-access-token:FAKE-PW-1202@github.com/o/r",
 }
 
 
@@ -436,6 +438,12 @@ def test_an_intake_run_carries_the_content_intact_and_never_the_mapping(world):
     inp = stored["input"] if isinstance(stored["input"], list) else json.loads(stored["input"])
     first = inp[-1]["content"]
     assert "Customer jane@acme.com cannot log in" in first and "git@github.com:o/r.git" in first
+    assert "x-access-token:FAKE-PW-1202@github.com" in first, "the agent gets the URL whole"
+    # ...while every read view of the same event masks it, for every caller (BOSSAPP-1202).
+    with engine.begin() as c:
+        shown = event_intake.get_event(c, ev, project_id=pid, reveal=True)
+    assert "FAKE-PW-1202" not in json.dumps(shown, default=str)
+    assert shown["envelope"]["data"]["push"] == "https://x-access-token:***@github.com/o/r"
     assert ev in first and "Priya" in first
     assert '"bossactor"' not in first and '"principal_id"' not in first
     # The structured context keeps who the run acts for; the read routes never return it.

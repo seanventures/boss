@@ -254,4 +254,126 @@ def test_a_redacted_search_that_hits_its_scan_cap_says_so(world, engine, monkeyp
     assert capped["scanned"] == 1 and capped["search_limit"] == 1
     assert len(found["events"]) == 1 and found["search_truncated"] is False
     assert whole["events"] == [] and whole["search_truncated"] is False and whole["scanned"] == 2
-    assert "search_truncated" not in shown
+    # BOSSAPP-1202: a caller who may see people is re-checked too (URL credentials are masked
+    # for everyone), so the scan reports on its answer as well.
+    assert len(shown["events"]) == 1 and shown["search_truncated"] is False
+
+
+# ── BOSSAPP-1202: a URL's credential is never shown, to any role ─────────────────────────────
+
+#: Fake credentials (never real), each inside a URL's userinfo somewhere a read view shows.
+PW = "FAKEpw-1202-hunter2"
+TOKEN = "FAKEghs1202" + "a1b2c3d4e5f6" * 2
+BARE = "ghp_FAKE1202" + "x9y8z7" * 4
+
+
+@pytest.fixture()
+def cred_world(world, engine):
+    envelope = {"specversion": "1.0", "id": "e2", "source": "webhook://x", "type": "com.acme.push",
+                "data": {"text": f"pushed via https://x-access-token:{TOKEN}@github.com/o/r",
+                         "db": f"postgres://boss:{PW}@db.acme.test:5432/app",
+                         "mirror": f"https://{BARE}@github.com/o/r"},
+                "bossconnection": world.conn,
+                "bossactor": {"kind": "user", "external_id": "U0DEV", "display": "dev"}}
+    raw = json.dumps({"repository": {"clone_url": f"https://deploy:{PW}@git.acme.test/o/r"}})
+    ev = f"iev_{uuid.uuid4().hex[:12]}"
+    with engine.begin() as c:
+        c.execute(text("""
+            INSERT INTO intake_events (id, connection_id, project_id, dedupe_key, type, subject,
+                   status, raw, envelope, headers, actor_kind, actor_external_id, processed_at)
+            VALUES (:id, :c, :p, 'k-cred', 'com.acme.push', :subj, 'dead', :raw,
+                    CAST(:env AS JSONB), CAST(:h AS JSONB), 'user', 'U0DEV', now())"""),
+            {"id": ev, "c": world.conn, "p": world.pid, "raw": raw.encode(),
+             "subj": f"https://ci:{PW}@ci.acme.test/job", "env": json.dumps(envelope),
+             "h": json.dumps({"ce-source": f"https://hook:{PW}@src.acme.test/x"})})
+    world.cred = ev
+    return world
+
+
+def _shows_a_credential(body) -> bool:
+    blob = json.dumps(body)
+    return any(secret in blob for secret in (PW, TOKEN, BARE))
+
+
+@pytest.mark.parametrize("role", sorted(SEES))
+def test_no_role_sees_a_url_credential_in_any_intake_read(cred_world, monkeypatch, role):
+    """Owner included: event detail (envelope, raw body, subject, headers), the list, dead
+    letters and the route preview all mask userinfo; the user and the host stay."""
+    _as(monkeypatch, role)
+    w = cred_world
+    one = w.client.get(f"/v1/intake/events/{w.cred}").json()
+    assert not _shows_a_credential(one), role
+    data = one["envelope"]["data"]
+    assert data["text"] == "pushed via https://x-access-token:***@github.com/o/r"
+    assert data["db"] == "postgres://boss:***@db.acme.test:5432/app"
+    assert data["mirror"] == "https://***@github.com/o/r"
+    assert one["raw"]["repository"]["clone_url"] == "https://deploy:***@git.acme.test/o/r"
+    assert one["subject"] == "https://ci:***@ci.acme.test/job"
+    assert one["headers"]["ce-source"] == "https://hook:***@src.acme.test/x"
+    for path, params in (("/v1/intake/events", {"project_id": w.pid}),
+                         ("/v1/intake/dead-letters", {"project_id": w.pid})):
+        got = w.client.get(path, params=params)
+        assert got.status_code == 200 and not _shows_a_credential(got.json()), (path, role)
+    preview = w.client.post("/v1/agents/support/triggers/preview-match", json={
+        "project_id": w.pid, "connection_id": w.conn,
+        "match": {"field": "data.db", "op": "contains", "value": "postgres"}}).json()
+    assert preview["matched"] == 1 and not _shows_a_credential(preview["events"])
+
+
+@pytest.mark.parametrize("role", sorted(SEES))
+def test_a_search_or_a_preview_cannot_confirm_a_password(cred_world, monkeypatch, role):
+    _as(monkeypatch, role)
+    w = cred_world
+    for needle in (PW, TOKEN, BARE, "hunter2"):
+        got = w.client.get("/v1/intake/events", params={"project_id": w.pid, "q": needle}).json()
+        assert got["events"] == [], (needle, role)
+    # What is still shown still searches: the user and the host.
+    for needle in ("x-access-token", "db.acme.test"):
+        got = w.client.get("/v1/intake/events", params={"project_id": w.pid, "q": needle}).json()
+        assert [e["id"] for e in got["events"]] == [w.cred], (needle, role)
+    preview = w.client.post("/v1/agents/support/triggers/preview-match", json={
+        "project_id": w.pid, "connection_id": w.conn,
+        "match": {"field": "data.db", "op": "contains", "value": PW}}).json()
+    assert preview["matched"] == 0, role
+
+
+def test_a_text_body_kept_as_base64_is_masked_and_an_opaque_one_is_kept():
+    import base64
+
+    body = base64.b64encode(f"url=https://u:{PW}@h.test/x".encode()).decode()
+    shown = event_intake._redacted({"raw_base64": body}, True)["raw_base64"]
+    assert base64.b64decode(shown).decode() == "url=https://u:***@h.test/x"
+    opaque = base64.b64encode(b"\xff\xfe\x00").decode()
+    assert event_intake._redacted({"raw_base64": opaque}, True)["raw_base64"] == opaque
+
+
+@pytest.mark.parametrize("given,shown", [
+    ("https://user:pw@host/x", "https://user:***@host/x"),
+    ("https://x-access-token:FAKEghs_1202abc@github.com/o/r",
+     "https://x-access-token:***@github.com/o/r"),
+    ("https://ghp_FAKE1202FAKE1202FAKE1202@github.com", "https://***@github.com"),
+    ("https://FAKE1202deadbeefdeadbeefdeadbeef12345678@github.com/o/r",
+     "https://***@github.com/o/r"),
+    ("ssh://user:pw@host", "ssh://user:***@host"),
+    ("ssh://user:pw@host:2222/repo.git", "ssh://user:***@host:2222/repo.git"),
+    ("https://user:p%40ss%2Fw0rd@host/x", "https://user:***@host/x"),
+    ("https://user:p@ss@host/x", "https://user:***@host/x"),
+    ("https://:tok@host", "https://:***@host"),
+    ("see https://a:b@h1.test/p and https://c:d@h2.test ok",
+     "see https://a:***@h1.test/p and https://c:***@h2.test ok"),
+    ('{"u": "https://a:b@h.test"}', '{"u": "https://a:***@h.test"}'),
+    # Not credentials: untouched.
+    ("git@github.com:o/r.git", "git@github.com:o/r.git"),
+    ("mail jane@acme.test now", "mail jane@acme.test now"),
+    ("https://user@host/x", "https://user@host/x"),
+    ("https://x-access-token@github.com/o/r", "https://x-access-token@github.com/o/r"),
+    ("ssh://git@github.com/o/r", "ssh://git@github.com/o/r"),
+    ("https://acme.test/u/jane@acme.test", "https://acme.test/u/jane@acme.test"),
+    ("https://acme.test/x?email=jane@acme.test", "https://acme.test/x?email=jane@acme.test"),
+    ("no url here", "no url here"),
+])
+def test_the_url_credential_masker(given, shown):
+    from boss_engine.services.redaction import mask_url_credentials, mask_url_credentials_in
+
+    assert mask_url_credentials(given) == shown
+    assert mask_url_credentials_in({"k": [given, 7, None]}) == {"k": [shown, 7, None]}

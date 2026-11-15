@@ -785,7 +785,9 @@ def preview_match(connection: Connection, *, project_id: str, connection_id: str
     (the console's preview before saving a route). Compiles the filter the way the processor
     does; a filter that does not compile is the first thing it reports. Without `reveal`
     (user:read) the filter reads the redacted envelope (event_intake.redact_people), so a leaf's
-    `actual` never echoes an email or principal and `matched` is no oracle for one."""
+    `actual` never echoes an email or principal and `matched` is no oracle for one. URL
+    credentials are masked for every caller (event_intake.mask_credentials).
+    """
     from . import event_intake
 
     try:
@@ -800,7 +802,9 @@ def preview_match(connection: Connection, *, project_id: str, connection_id: str
     events = []
     matched = 0
     for r in rows:
-        envelope = _json(r.get("envelope"), {}) or {}
+        # The filter reads what the console may show: URL credentials masked for every caller
+        # (BOSSAPP-1202), so neither `actual` nor `matched` can confirm a password.
+        envelope = event_intake.mask_credentials(_json(r.get("envelope"), {}) or {})
         if reveal is not True:
             envelope = event_intake.redact_people(envelope)
         got = compiled.explain(envelope)
@@ -815,9 +819,10 @@ def preview_match(connection: Connection, *, project_id: str, connection_id: str
                        "actor": str((envelope.get("bossactor") or {}).get("display") or ""),
                        "received_at": r["received_at"].isoformat() if r["received_at"] else None,
                        "matched": got["matched"], "leaves": got["leaves"]})
-    return {"ok": True, "matched": matched, "considered": len(rows), "leaves": compiled.leaves,
-            "regex_engine": intake_filters.REGEX_ENGINE, "events": events,
-            "people_redacted": reveal is not True}
+    return event_intake.mask_credentials(
+        {"ok": True, "matched": matched, "considered": len(rows), "leaves": compiled.leaves,
+         "regex_engine": intake_filters.REGEX_ENGINE, "events": events,
+         "people_redacted": reveal is not True})
 
 
 __all__ = ["ADDRESSING", "FANOUT", "FIRE_OUTCOMES", "Fire", "agent_payload", "chat_messages",
