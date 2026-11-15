@@ -30,6 +30,7 @@ import { ReasonChips, rejectKind, sendReasons } from "../improve/rate-it";
 import { RUN_ANSWER_PERMISSION, sendRunAnswer, type RunAction } from "../delivery-workflows-ui";
 import { actOnSystemFindingAction } from "../system-health-actions";
 import { actOnInfraAttentionAction } from "../infra/infra-attention-actions";
+import { StorageDeleteByDecision } from "../infra/storage-delete-decision";
 import type { AttentionAction, AttentionAnswer, AttentionItem } from "../../lib/agents-live-board";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AgFace } from "./agent-face";
@@ -399,7 +400,13 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
             <span data-user-text>{a.label}</span>
           </GatedButton>
         ))}
-        {item.kind === "approval" && !inline && decisionId ? (
+        {item.kind === "approval" && item.decisionKind === "storage_delete" && decisionId && !done ? (
+          <div className="ag-att-storage" data-testid="ag-att-storage-delete">
+            <StorageDeleteByDecision decisionId={decisionId} projectId={projectId} actor={actor} density="card"
+                                     onAnswered={() => finish(`Answered: ${item.title}`)} />
+          </div>
+        ) : null}
+        {item.kind === "approval" && !inline && decisionId && item.decisionKind !== "storage_delete" ? (
           <a className="ag-btn" href={linkTo(decisionPatch(decisionId), orgId)} data-testid="ag-att-review"
              title="Needs a closer look in Approvals"
              onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(decisionPatch(decisionId)); } }}>

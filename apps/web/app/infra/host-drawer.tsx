@@ -401,6 +401,12 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
               </details>
             ) : <Setup host={h} actor={actor} refresh={detail.refresh} />
           ) : null}
+          {/* STORAGE (BOSSAPP-1156): this host's usage by type, growth and forecast live with the
+              retention rules under Govern › Infrastructure; one link, the same card. */}
+          <a className="inf-link" href={consoleHref({ area: "budget", tab: "infrastructure", host: h.id, view: undefined })}
+             data-console-load data-testid="inf-host-storage" title="Usage by type, growth, full-in forecast and the retention rules for this host">
+            Storage · Govern › Infrastructure ↗
+          </a>
           <DrawerSection label="FACTS" testId="inf-host-facts">
             {h.thisComputer ? (
               <dl className="inf-facts">
