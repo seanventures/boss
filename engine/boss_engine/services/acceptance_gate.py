@@ -160,16 +160,32 @@ def items_dropped(spec: Mapping[str, Any]) -> int:
     return _items_and_dropped(spec)[1]
 
 
-def _items_and_dropped(spec: Mapping[str, Any]) -> tuple[list[dict[str, Any]], int]:
+def item_key(text: str) -> str:
+    """A short stable key for an item's text: what records which items a check judged."""
+    import hashlib
+
+    norm = re.sub(r"\W+", " ", str(text or "").lower()).strip()
+    return hashlib.sha1(norm.encode()).hexdigest()[:12]
+
+
+def _raw_items(spec: Mapping[str, Any]) -> list[tuple[str, str]]:
     from .code_task_service import EXISTING_TESTS_CRITERION
 
     spec = _spec_of(spec)
+    if isinstance(spec.get(UNION_KEY), list):
+        return [(str(i.get("source") or "criterion"), _norm(i.get("text")))
+                for i in spec[UNION_KEY] if isinstance(i, Mapping)]
     instructions = str(spec.get("instructions") or "")
     raw: list[tuple[str, str]] = []
     raw += [("must_have", m) for m in brief_must_haves(instructions)]
     raw += [("prd_gating", m) for m in prd_gating_criteria(instructions)]
     raw += [("criterion", _norm(c)) for c in (spec.get("acceptance_criteria") or [])
             if _norm(c) and _norm(c) != _norm(EXISTING_TESTS_CRITERION)]
+    return raw
+
+
+def _items_and_dropped(spec: Mapping[str, Any]) -> tuple[list[dict[str, Any]], int]:
+    raw = _raw_items(spec)
     seen: set[str] = set()
     items: list[dict[str, Any]] = []
     dropped = 0
@@ -185,26 +201,43 @@ def _items_and_dropped(spec: Mapping[str, Any]) -> tuple[list[dict[str, Any]], i
     return items, dropped
 
 
-def lineage_root_row(connection: Any, root: str) -> Optional[dict]:
-    """The lineage's ORIGINAL build: the earliest run of the lineage that is not a follow-up.
-    Not simply the `root_run_id` row: a web-app build and a decomposed PRD mint a root id with
-    no code_task_runs row of its own (start_web_app_build, prd_decomposition), and falling back
-    to the follow-up's own "Fixed: [MAJOR] …" criteria is how a follow-up "met" its must-haves."""
+#: A spec key holding a lineage's union of items (items_spec): every slice's, deduplicated.
+UNION_KEY = "_acceptance_union_items"
+
+
+def lineage_build_rows(connection: Any, root: str) -> list[dict]:
+    """Every BUILD of the lineage — the runs that are not follow-ups, oldest first: the
+    original build, its repair children (same spec) and, for a decomposed PRD, every slice
+    (prd_decomposition starts slices 2..N as non-follow-ups sharing the root id, each with its
+    own items). Their items together are what the pull request must deliver."""
     from sqlalchemy import text
 
-    row = connection.execute(text(
+    rows = connection.execute(text(
         "SELECT id, spec FROM code_task_runs WHERE (id = :r OR finalize_ctx->>'root_run_id' = :r) "
         "AND COALESCE(finalize_ctx->>'is_followup', 'false') <> 'true' "
         "AND finalize_ctx->>'deferred_from_run' IS NULL "
-        "ORDER BY created_at, id LIMIT 1"), {"r": root}).first()
-    return {"id": row[0], "spec": _spec_of(row[1])} if row else None
+        "ORDER BY created_at, id"), {"r": root}).all()
+    return [{"id": r[0], "spec": _spec_of(r[1])} for r in rows]
+
+
+def union_spec(builds: list[dict]) -> dict:
+    """One spec holding the union of every build's items (the first build's instructions are
+    kept for its declared stack)."""
+    raw: list[dict] = []
+    for b in builds:
+        raw += [{"source": src, "text": t} for src, t in _raw_items(b["spec"])]
+    first = builds[0]["spec"] if builds else {}
+    return {"instructions": first.get("instructions") or "",
+            **({"required_stack": first["required_stack"]} if first.get("required_stack")
+               else {}),
+            UNION_KEY: raw}
 
 
 def items_spec(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
                own_spec: Mapping[str, Any]) -> tuple[dict, dict]:
     """(the spec whose items this run is held to, where they came from {run_id, root}).
 
-    A FOLLOW-UP is held to its lineage's ORIGINAL build (`lineage_root_row`): its own spec is the
+    A FOLLOW-UP is held to the UNION of its lineage's builds (`lineage_build_rows`): its own spec is the
     findings it was sent to fix, and judged against those alone it "passes" while the must-haves
     the root missed stay missing (crun_15f0504ac9f64eaeb4a1). When that build cannot be found
     the follow-up has NO items (`root: False`, and the check is not_run) — never its own. Every
@@ -214,11 +247,14 @@ def items_spec(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
     if not is_followup:
         return _spec_of(own_spec), {"run_id": run_id, "root": True}
     root = str(fctx.get("root_run_id") or fctx.get("deferred_from_run") or "").strip()
-    found = lineage_root_row(connection, root) if (root and connection is not None) else None
-    if found and found["id"] != run_id and acceptance_items(found["spec"]):
-        return found["spec"], {"run_id": found["id"], "root": True}
-    return {}, {"run_id": None, "root": False,
-                "why": "the lineage's original build (and so its must-haves) could not be found"}
+    builds = ([b for b in lineage_build_rows(connection, root) if b["id"] != run_id]
+              if (root and connection is not None) else [])
+    if not builds:
+        return {}, {"run_id": None, "root": False,
+                    "why": "the lineage's builds (and so its must-haves) could not be found"}
+    # Found, with or without items: an item-less build's follow-up is `no_items`, not a failure.
+    return union_spec(builds), {"run_id": builds[0]["id"], "root": True,
+                                "builds": [b["id"] for b in builds]}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -362,6 +398,10 @@ _SUMMARY = re.compile(r"(?im)^[\s>*`]*ACCEPTANCE\s*:\s*\**\s*(NOT\s+MET|MET)\b")
 _PATHISH = re.compile(r"(?<![\w/.-])([\w.\-]+(?:/[\w.\-]+)+|[\w\-]+\.[A-Za-z][\w]{0,8})"
                       r"(?::\d+)?(?![\w/])")
 _DOC_PATH = re.compile(r"(?i)(^|/)(readme[^/]*|changelog[^/]*|docs?/.*|[^/]*\.(md|rst|txt|adoc))$")
+#: Manifests and lockfiles declare a dependency; they deliver no behaviour.
+_DECL_PATH = re.compile(r"(?i)(^|/)(go\.(mod|sum)|package(-lock)?\.json|[^/]*\.lock|"
+                        r"pnpm-lock\.ya?ml|requirements[^/]*\.txt|pyproject\.toml|setup\.(py|cfg)|"
+                        r"pipfile|cargo\.toml|pom\.xml|build\.gradle(\.kts)?|gemfile)$")
 
 
 def _resolve(root: Path, cited: str) -> Optional[str]:
@@ -405,9 +445,11 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any) -> list[dict[s
         status, why = answers.get(int(it["n"]), (UNJUDGED, ""))
         if status == MET:
             found, absent = evidence_paths(root, why)
-            code = [f for f in found if not _DOC_PATH.search(f)]
+            code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
             if not code:
-                reason = ("only documents cited" if found
+                reason = ("only manifests/lockfiles cited" if found and all(
+                              _DECL_PATH.search(f) for f in found)
+                          else "only documents cited" if found
                           else f"cited paths not in the tree: {', '.join(absent[:4])}" if absent
                           else "no file evidence cited")
                 status, why = PARTIAL, f"{why} ({reason})".strip()
@@ -428,6 +470,9 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
       no_items  the run states nothing to hold it to (a non-follow-up with no criteria)"""
     stack = dict(stack or {})
     source = dict(source or {"root": True})
+    # WHICH ITEMS this check judged: a later check clears this one's failure only if it judged
+    # at least these (lineage_failures).
+    source["item_keys"] = [item_key(i["text"]) for i in items]
     judged = parse_acceptance(reply or "", items, root=root) if items else []
     m = list(_SUMMARY.finditer(str(reply or "")))
     summary = (" ".join(m[-1].group(1).upper().split()) if m else None)
@@ -445,7 +490,9 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
     elif unjudged:
         verdict, why = "not_run", f"{len(unjudged)} of {len(items)} items were not answered"
     elif summary != "MET":
-        verdict = "not_met"
+        # A reviewer's slip, not the code's: re-ask the reviewer (HARNESS), never send the
+        # coder to repair it. Still never a pass.
+        verdict = "not_run"
         why = ("the reviewer's summary says NOT MET although every item reads met"
                if summary == "NOT MET" else "the reviewer gave no ACCEPTANCE summary line")
     else:
@@ -517,6 +564,8 @@ def must_have_table(record: Optional[Mapping[str, Any]]) -> str:
 def headline(record: Optional[Mapping[str, Any]]) -> str:
     record = record or {}
     c = record.get("counts") or {}
+    if record.get("verdict") == "not_checked":
+        return f"Must-haves: {record.get('why') or 'not checked'}"
     if record.get("verdict") == "not_run" and not record.get("items"):
         return f"Must-haves: not checked ({record.get('why') or 'no answer'})"
     if not record.get("items"):
@@ -603,7 +652,7 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
         "WHERE r.project_id = :p AND (r.id = :root OR r.finalize_ctx->>'root_run_id' = :root) "
         "ORDER BY r.created_at, r.id"),
         {"p": project_id, "root": root}).mappings().all()
-    acc_seen, acc_run = None, None
+    checks: list[tuple[str, dict]] = []
     passed_after: dict[str, int] = {}
     failed_at: dict[str, int] = {}
     for idx, r in enumerate(rows):
@@ -623,18 +672,47 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
         acc = _spec_of(r["acc"])
         if (acc.get("verdict") in ("met", "not_met") and not this
                 and (acc.get("source") or {"root": True}).get("root")):
-            acc_seen, acc_run = acc, r["id"]
+            checks.append((r["id"], acc))
     for g in list(gates):
         if g in WHOLE_TREE_GATES and passed_after.get(g, -1) > failed_at.get(g, 10 ** 9):
             gates.pop(g)
-    latest, latest_run = (cur, run_id) if cur_ok else (acc_seen, acc_run)
-    if latest and latest.get("verdict") == "met":
-        gates.pop(GATE, None)
-    elif latest and latest.get("verdict") == "not_met":
+    if cur_ok:
+        checks.append((run_id, cur))
+    open_failures = _unresolved(checks)
+    if open_failures:
         runs = gates.setdefault(GATE, [])
-        if latest_run and latest_run not in runs:
-            runs.append(latest_run)
+        for rid, _ in open_failures:
+            if rid not in runs:
+                runs.append(rid)
+        latest = open_failures[-1][1]
+    else:
+        gates.pop(GATE, None)
+        latest = checks[-1][1] if checks else None
+        if cur and not cur_ok:
+            latest = cur        # this run's own check could not run: say so, not an old pass
+        elif latest and not cur_ok and checks[-1][0] != run_id:
+            # THIS RUN CHANGED THE CODE AND NO CHECK SAW IT (a tier-0 follow-up has no
+            # acceptance seat): an earlier `met` is not a pass for code it never read.
+            latest = {**latest, "verdict": "not_checked",
+                      "why": f"not checked since {checks[-1][0]}"}
     return {"gates": gates, "acceptance": latest}
+
+
+def _unresolved(checks: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+    """The not_met checks no LATER met check covered: a met clears a failure only when it
+    judged at least the failed check's items (`source.item_keys`). Slice 3 meeting its own
+    items never clears slice 2's gaps; a follow-up held to the union of every slice clears all."""
+    out = []
+    for i, (rid, acc) in enumerate(checks):
+        if acc.get("verdict") != "not_met":
+            continue
+        keys = set((acc.get("source") or {}).get("item_keys") or [])
+        cleared = any(later.get("verdict") == "met"
+                      and keys <= set((later.get("source") or {}).get("item_keys") or [])
+                      for _, later in checks[i + 1:])
+        if not cleared:
+            out.append((rid, acc))
+    return out
 
 
 def card_checks_failing(lineage: Mapping[str, Any], *, run_id: str) -> Optional[dict[str, Any]]:
@@ -710,7 +788,8 @@ def card_words(card: Optional[Mapping[str, Any]], acceptance: Optional[Mapping[s
 
 
 __all__ = [
-    "card_words", "evidence_paths", "items_dropped", "lineage_root_row", "merge_card_checks",
+    "card_words", "evidence_paths", "item_key", "items_dropped", "lineage_build_rows",
+    "merge_card_checks", "union_spec", "UNION_KEY",
     "GATE", "SEAT", "KEY", "SUMMARY_KEY", "acceptance_items", "acceptance_prompt",
     "brief_must_haves", "card_checks_failing", "findings_summary", "headline", "items_spec",
     "judge", "lineage_failures", "must_have_table", "parse_acceptance",

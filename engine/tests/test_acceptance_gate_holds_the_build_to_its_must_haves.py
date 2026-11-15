@@ -203,18 +203,18 @@ def test_build_acceptance_criteria_equal_the_prds_gating_list():
 
 
 class _Rows:
-    """A connection whose lineage holds `rows` [(id, spec, fctx)] (the root-row query only)."""
+    """A connection whose lineage holds `rows` [(id, spec, fctx)] (the build-rows query only)."""
 
     def __init__(self, rows):
         self.rows = rows
 
     def execute(self, _sql, params):
         root = params["r"]
-        hits = [r for r in self.rows
+        hits = [(r[0], json.dumps(r[1])) for r in self.rows
                 if (r[0] == root or r[2].get("root_run_id") == root)
                 and not r[2].get("is_followup") and not r[2].get("deferred_from_run")]
-        first = (hits[0][0], json.dumps(hits[0][1])) if hits else None
-        return type("R", (), {"first": lambda self: first})()
+        return type("R", (), {"all": lambda self: hits,
+                              "first": lambda self: hits[0] if hits else None})()
 
 
 def test_a_follow_up_inherits_its_roots_items():
@@ -224,7 +224,7 @@ def test_a_follow_up_inherits_its_roots_items():
                                  fctx={"is_followup": True, "root_run_id": "crun_root"})
     texts = [i["text"] for i in ag.acceptance_items(spec)]
     assert LONG_MUST_HAVE in texts and RULEBOOK in texts
-    assert source == {"run_id": "crun_root", "root": True}
+    assert source["run_id"] == "crun_root" and source["root"] is True
     # A root run (or a repair child, whose spec is its parent's) is held to its own.
     assert ag.items_spec(conn, run_id="crun_r", own_spec=own, fctx={})[0] == own
 
@@ -239,6 +239,34 @@ def test_a_web_app_lineage_without_a_root_row_resolves_the_original_build():
                                  fctx={"is_followup": True, "root_run_id": "wapp_root"})
     assert source["run_id"] == "crun_build1"
     assert RULEBOOK in [i["text"] for i in ag.acceptance_items(spec)]
+
+
+def test_a_follow_up_is_held_to_the_union_of_every_slice_of_a_decomposed_prd():
+    """prd_decomposition starts slices 2..N as non-follow-ups sharing the root id, each with
+    its own items: a follow-up is held to all of them, not slice 1's alone."""
+    s1 = {"acceptance_criteria": ["slice one: the gateway routes"]}
+    s2 = {"acceptance_criteria": ["slice two: gwlint has 20 rules"]}
+    s3 = {"acceptance_criteria": ["slice three: the demo README"]}
+    conn = _Rows([("crun_s1", s1, {"root_run_id": "wapp_r"}),
+                  ("crun_s2", s2, {"root_run_id": "wapp_r", "decomposition_index": 2}),
+                  ("crun_s3", s3, {"root_run_id": "wapp_r", "decomposition_index": 3}),
+                  ("crun_f", {"acceptance_criteria": ["Fixed: x"]},
+                   {"root_run_id": "wapp_r", "is_followup": True})])
+    spec, source = ag.items_spec(conn, run_id="crun_f", own_spec={},
+                                 fctx={"is_followup": True, "root_run_id": "wapp_r"})
+    texts = [i["text"] for i in ag.acceptance_items(spec)]
+    assert texts == ["slice one: the gateway routes", "slice two: gwlint has 20 rules",
+                     "slice three: the demo README"]
+    assert source["builds"] == ["crun_s1", "crun_s2", "crun_s3"]
+
+
+def test_a_follow_up_of_an_item_less_build_is_no_items_not_a_failure(tmp_path):
+    conn = _Rows([("crun_root", {"instructions": "tidy the logs"}, {})])
+    spec, source = ag.items_spec(conn, run_id="crun_f", own_spec={},
+                                 fctx={"is_followup": True, "root_run_id": "crun_root"})
+    assert source["root"] is True and ag.acceptance_items(spec) == []
+    rec = ag.judge([], None, {}, root=tmp_path, source=source)
+    assert rec["verdict"] == "no_items" and ag.passed(rec)
 
 
 def test_a_follow_up_whose_root_cannot_be_found_is_not_run_never_its_own_items(tmp_path):
@@ -286,13 +314,18 @@ def test_all_partial_fails_the_gate(tmp_path):
     assert "only PARTIAL" in ag.findings_summary(rec)
 
 
-def test_the_summary_line_is_read_and_a_contradiction_fails(tmp_path):
+def test_the_summary_line_is_read_and_a_slip_re_asks_the_reviewer(tmp_path):
+    """A missing or contradicting summary line is the REVIEWER's slip: not_run (HARNESS, the
+    check is asked again), never a pass and never a coder repair round."""
     root = _northgate_tree(tmp_path, rulebook=True)
     spec = {"acceptance_criteria": ["a", "b"]}
     said_not_met = _all_met(2).replace("ACCEPTANCE: MET", "ACCEPTANCE: NOT MET")
-    assert _check(root, spec, Says(said_not_met))["verdict"] == "not_met"
     no_line = _all_met(2).replace("\nACCEPTANCE: MET", "")
-    assert _check(root, spec, Says(no_line))["verdict"] == "not_met"
+    for reply in (said_not_met, no_line):
+        rec = _check(root, spec, Says(reply))
+        assert rec["verdict"] == "not_run" and not ag.passed(rec)
+        assert g.classify_gate_faults(failing=[ag.GATE], evidence={ag.KEY: rec}) == {
+            ag.GATE: "HARNESS"}
     assert _check(root, spec, Says(_all_met(2)))["verdict"] == "met"
 
 
@@ -301,6 +334,8 @@ def test_the_summary_line_is_read_and_a_contradiction_fails(tmp_path):
     ("docs/design.md", "only documents"),
     ("cmd/northgate/handler_does_not_exist.go", "not in the tree"),
     ("it is all there", "no file evidence"),
+    ("go.mod", "only manifests/lockfiles"),
+    ("go.mod and config/../go.mod", "only manifests/lockfiles"),
 ])
 def test_met_needs_code_evidence_that_exists_in_the_tree(tmp_path, cite, why):
     root = _northgate_tree(tmp_path, rulebook=True)
@@ -527,13 +562,15 @@ def test_a_clean_follow_up_on_a_pr_whose_parent_shipped_failing_is_never_passed(
         assert ag.card_words(card, acceptance, "passed").startswith("Automated checks: failing")
 
         # A follow-up's met against its OWN items clears nothing.
-        own_met = {**_rec(_all_met(2), tree), "source": {"run_id": follow, "root": False}}
+        _o = _rec(_all_met(2), tree)
+        own_met = {**_o, "source": {**_o["source"], "run_id": follow, "root": False}}
         with eng.begin() as c:
             card1, _ = ag.merge_card_checks(c, run_id=follow, evidence={ag.KEY: own_met},
                                             checks_failing=None, pr_url=PR)
         assert ag.GATE in cf.gate_names(card1)
         # Met against the ROOT's items clears acceptance; the refuted review does not clear.
-        root_met = {**_rec(_all_met(2), tree), "source": {"run_id": root, "root": True}}
+        _m = _rec(_all_met(2), tree)
+        root_met = {**_m, "source": {**_m["source"], "run_id": root, "root": True}}
         assert root_met["verdict"] == "met"
         with eng.begin() as c:
             card2, acc2 = ag.merge_card_checks(c, run_id=follow, evidence={ag.KEY: root_met},
@@ -553,5 +590,58 @@ def test_a_lineage_never_checked_says_so_and_nothing_failing_keeps_a_plain_card(
                                              pr_url="https://g.test/a/b/pull/8")
         assert card is None and acc is None
         assert "not checked" in ag.card_words(card, acc, "passed")
+    finally:
+        _cleanup(eng, project)
+
+
+def test_slice_three_meeting_its_items_never_clears_slice_twos_gaps(eng, project, tmp_path):
+    """A decomposed PRD: slice 2's check failed, slice 3's check met ITS OWN items. The shared
+    PR's card keeps slice 2's gaps; only a later check covering slice 2's items clears them."""
+    tree = _northgate_tree(tmp_path, rulebook=True)
+    items2 = ag.acceptance_items({"acceptance_criteria": ["slice two: gwlint has 20 rules"]})
+    items3 = ag.acceptance_items({"acceptance_criteria": ["slice three: the demo README"]})
+    s2_bad = ag.judge(items2, "ITEM 1: MISSING — no rulebook\nACCEPTANCE: NOT MET", {},
+                      root=tree)
+    s3_met = ag.judge(items3, _all_met(1), {}, root=tree)
+    assert s2_bad["verdict"] == "not_met" and s3_met["verdict"] == "met"
+    with eng.begin() as c:
+        s1 = _run(c, project, pr=PR, fctx={})
+        _run(c, project, pr=PR, fctx={"root_run_id": s1, "decomposition_index": 2},
+             state={ag.KEY: s2_bad})
+        s3 = _run(c, project, pr=PR, fctx={"root_run_id": s1, "decomposition_index": 3},
+                  state={ag.KEY: s3_met})
+        follow = _run(c, project, status="running",
+                      fctx={"root_run_id": s1, "is_followup": True})
+    try:
+        with eng.begin() as c:
+            card, acc = ag.merge_card_checks(c, run_id=s3, evidence={ag.KEY: s3_met},
+                                             checks_failing=None, pr_url=PR)
+        assert ag.GATE in cf.gate_names(card), "slice 3's met must not clear slice 2's gaps"
+        assert acc["missing"] == [1]
+        # A follow-up held to the union (slice 2 + 3 items) that meets them clears it.
+        union = ag.judge(items2 + [{**items3[0], "n": 2}], _all_met(2), {}, root=tree)
+        with eng.begin() as c:
+            card2, _ = ag.merge_card_checks(c, run_id=follow, evidence={ag.KEY: union},
+                                            checks_failing=None, pr_url=PR)
+        assert card2 is None or ag.GATE not in cf.gate_names(card2)
+    finally:
+        _cleanup(eng, project)
+
+
+def test_a_follow_up_that_no_check_saw_does_not_inherit_an_earlier_met(eng, project, tmp_path):
+    tree = _northgate_tree(tmp_path, rulebook=True)
+    met = ag.judge(ag.acceptance_items({"acceptance_criteria": ["a"]}), _all_met(1), {},
+                   root=tree)
+    with eng.begin() as c:
+        root = _run(c, project, pr=PR, fctx={}, state={ag.KEY: met})
+        follow = _run(c, project, status="running",
+                      fctx={"root_run_id": root, "is_followup": True})
+    try:
+        with eng.begin() as c:
+            card, acc = ag.merge_card_checks(c, run_id=follow, evidence={},
+                                             checks_failing=None, pr_url=PR)
+        assert acc["verdict"] == "not_checked" and root in acc["why"]
+        words = ag.card_words(card, acc, "passed")
+        assert f"not checked since {root}" in words and "Automated checks: passed" not in words
     finally:
         _cleanup(eng, project)
