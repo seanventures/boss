@@ -145,6 +145,21 @@ def _reconcile(c: Any, *, is_frozen: bool, org_id: Optional[str]) -> dict:
     def touch(host_id: str, replica_id: str) -> None:
         changed.setdefault(host_id, set()).add(replica_id)
 
+    # 0b. AP-D11 (P8b-11): an attestation is only as old as its heartbeat. A host silent for
+    # more than 10 s no longer attests strong isolation: its replicas leave the VIPs of
+    # deployments that require it (fleet_directors.desired) on the directors' next generation.
+    from .strong_isolation import MAX_HEARTBEAT_AGE_SECONDS
+
+    for row in c.execute(text("""
+            UPDATE agent_hosts SET isolation_ok = false, updated_at = now()
+             WHERE isolation_ok AND (last_heartbeat_at IS NULL
+                   OR last_heartbeat_at < now() - make_interval(secs => :s))
+               AND (CAST(:o AS TEXT) IS NULL OR org_id = :o)
+            RETURNING id, org_id"""), {"s": MAX_HEARTBEAT_AGE_SECONDS, "o": org_id}).all():
+        host_event(c, org_id=row[1], host_id=row[0], kind="attestation_lapsed",
+                   actor="scheduler")
+        orgs_touched.add(row[1])
+
     # 1. Hosts that stopped beating.
     for row in c.execute(text("""
             UPDATE agent_hosts SET status = 'unreachable', updated_at = now()

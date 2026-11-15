@@ -61,14 +61,24 @@ class A2AError(Exception):
 ANSWER_REFUSED = -32010
 
 
-def strong_isolation() -> bool:
-    """Whether agents with write tools may be exposed publicly (D11). False until strong isolation
-    (§4.10: microVM sandboxes per run) lands — deliberately not configurable.
+def strong_isolation(deployment: Any = None, *, connection: Any = None) -> bool:
+    """Whether this deployment's agent may be exposed publicly with write tools (AP-D11).
+
+    DERIVED FROM ATTESTED FACTS ONLY, never configurable (P8b-11; services/strong_isolation.py):
+    True only for a `runtime: microvm` deployment, not frozen, whose vm_mode meets D5 and whose
+    every serving replica runs on a host attesting Firecracker + jailer + default seccomp +
+    strict_secrets + the inbound-only/no-NIC policy from a heartbeat under 10 s old, from a
+    signed, active image, holding a valid serving certificate, untainted. With no deployment (or
+    no connection to read its facts) it is False.
 
     The worker's per-run fence (`local_fenced`, skill_executors.NON_STRONG_PROVIDERS) is NOT
     strong isolation: a pool uid behind iptables shares the control plane's kernel. Whatever
-    BOSS_GOVERNED_SANDBOX_PROVIDER says, this stays False until a separate kernel per run lands."""
-    return False
+    BOSS_GOVERNED_SANDBOX_PROVIDER says, `runtime: local` stays False."""
+    if deployment is None or connection is None:
+        return False
+    from .strong_isolation import strong_isolation as _derived
+
+    return _derived(connection, deployment)
 
 
 def _json(value: Any, default: Any) -> Any:
@@ -160,9 +170,16 @@ def exposure_refusal(connection: Any, agent: Mapping[str, Any], *,
         return "this deployment runs no spec version."
     _, compiled = _compiled(connection, agent["project_id"], agent["agent_key"], dep["version"])
     writes = write_tools(connection, agent["project_id"], compiled)
-    if writes and not strong_isolation():
-        return ("only read-only agents may be exposed over A2A until strong isolation lands "
-                f"(D11); this one holds {', '.join(writes[:6])}.")
+    _note_isolation_required(connection, dep, bool(writes) and bool(
+        (dep.get("expose") or {}).get("a2a")))
+    if writes:
+        from .strong_isolation import verdict
+
+        held = verdict(connection, dep)
+        if not held:
+            return ("only read-only agents may be exposed over A2A without strong isolation "
+                    f"(D11); this one holds {', '.join(writes[:6])}, and strong isolation does "
+                    f"not hold: {held.explain()[:400]}.")
     if not agent_keys.has_active_key(connection, agent["project_id"], agent["agent_key"]):
         return "the agent holds no signing key, so its card cannot be signed (create one first)."
     return None
@@ -195,11 +212,33 @@ def set_exposure(connection: Any, project_id: str, agent_key: str, environment: 
         "UPDATE agent_deployments SET expose = expose || jsonb_build_object('a2a', "
         "CAST(:on AS BOOLEAN)), updated_at = now() WHERE id = :d"),
         {"on": bool(enabled), "d": dep["id"]})
+    required = False
+    if enabled and dep.get("version"):
+        _, compiled = _compiled(connection, project_id, agent_key, dep["version"])
+        required = bool(write_tools(connection, project_id, compiled))
+    _note_isolation_required(connection, dep, required)
     emit_event(connection, project_id, "agent.a2a_exposure_changed", actor, "agent", agent_key,
                {"environment": environment, "enabled": bool(enabled)})
     return {"agent_key": agent_key, "environment": environment, "a2a": bool(enabled),
             "agent_id": agent_id,
             "card": f"/a2a/{agent_id}/.well-known/agent-card.json" if agent_id else None}
+
+
+def _note_isolation_required(connection: Any, dep: Mapping[str, Any], required: bool) -> None:
+    """Keep agent_deployments.isolation_required = "exposed over A2A with write tools" current:
+    the directors serve such a VIP only from replicas whose host attests (P8b-11)."""
+    if not dep.get("id") or bool(dep.get("isolation_required")) == required:
+        return
+    connection.execute(text(
+        "UPDATE agent_deployments SET isolation_required = :q WHERE id = :d "
+        "AND isolation_required IS DISTINCT FROM :q"), {"q": required, "d": dep["id"]})
+    org = connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": dep.get("project_id")}).scalar()
+    if org:
+        from . import fleet_directors
+
+        fleet_directors.bump(connection, str(org))
 
 
 # ── the card ───────────────────────────────────────────────────────────────────────────────────
@@ -237,6 +276,22 @@ def agent_card(connection: Any, agent: Mapping[str, Any], *, base_url: str) -> d
                     }],
     }
     card["skills"][0] = {k: v for k, v in card["skills"][0].items() if v != []}
+    if dep.get("runtime") == "microvm":
+        # P8b-9: the agent also answers at its VIP, TLS ending in its own VM with a certificate
+        # from the BOSS agent CA. The signed card binds the CA to this agent (§3.17.2).
+        from . import agent_ca
+
+        anchor = agent_ca.published_anchor(connection, base_url=base)
+        if anchor:
+            card["bossAgentCa"] = anchor
+            card["securitySchemes"]["bossCallerCertificate"] = {"mtlsSecurityScheme": {
+                "description": "A client certificate from the BOSS agent CA's caller "
+                               "intermediate, issued to a service account (agent:invoke)."}}
+        host = agent_ca.agent_dns_name({**dep, "agent_key": agent["agent_key"],
+                                        "project_id": agent["project_id"]})
+        card["supportedInterfaces"].append({"url": f"https://{host}/a2a",
+                                            "protocolBinding": "JSONRPC",
+                                            "protocolVersion": t.A2A_VERSION})
     kid, agent_id, signer = agent_keys.jws_signer(connection, agent["project_id"],
                                                   agent["agent_key"])
     return sign_card(card, signer, kid, jku=f"{base}/v1/agents/{agent_id}/jwks")
@@ -244,60 +299,65 @@ def agent_card(connection: Any, agent: Mapping[str, Any], *, base_url: str) -> d
 
 # ── run ↔ task ─────────────────────────────────────────────────────────────────────────────────
 
-def task_for_run(connection: Any, project_id: str, run_id: str, *,
-                 history_length: Optional[int] = None) -> t.Task:
+def view_for_run(connection: Any, agent: Mapping[str, Any], run_id: str) -> dict:
+    """One run of THIS agent, as the shared serving library reads it (protocols/agent_serving):
+    {"run": the Agent Protocol run, "pending": its open decisions, "inputs": its user messages}.
+    The same view the run plane's admit answers for a replica (op `read`). A run of another agent
+    (or none) raises ServingError 404."""
+    from ..protocols.agent_serving import ServingError
+
+    row = connection.execute(text(
+        "SELECT agent_key, thread_id FROM agent_runs WHERE id = :r AND project_id = :p"),
+        {"r": str(run_id or ""), "p": agent["project_id"]}).mappings().first()
+    if row is None or row["agent_key"] != agent["agent_key"] or not row["thread_id"]:
+        raise ServingError(404, "not_found", "task not found")
+    return run_view(connection, agent["project_id"], str(run_id))
+
+
+def run_view(connection: Any, project_id: str, run_id: str) -> dict:
     from . import agent_protocol, protocol_answers
 
     try:
         run = agent_protocol.get_run(connection, project_id, run_id)
     except agent_protocol.ProtocolError:
         raise A2AError(t.TASK_NOT_FOUND, "task not found") from None
-    pending = protocol_answers.pending_for(connection, run_id)
-    status = run["status"]
-    if status == "interrupted" and not pending:
-        state = t.TaskState.WORKING          # answered; the run is resuming
-    else:
-        state = t.state_for_run_status(status)
-    message = None
-    artifacts: list = []
-    if state is t.TaskState.INPUT_REQUIRED:
-        message = t.agent_message(
-            "Waiting on a person: " + "; ".join(str(p["question"] or "")[:200]
-                                                 for p in pending),
-            context_id=run["thread_id"], task_id=run_id,
-            data={"decisions": [{"decision_id": p["decision_id"], "question": p["question"],
-                                 "kind": p["kind"],
-                                 "approve_url": protocol_answers.console_url(p["decision_id"])}
-                                for p in pending],
-                  "how": "A person approves each decision in BOSS (with a fresh sign-in check); "
-                         "then send a message on this task to resume, or wait for the push "
-                         "notification."})
-    elif state is t.TaskState.COMPLETED:
-        output = str(run.get("output") or "")
-        artifacts = [t.Artifact(parts=[t.text_part(output)], name="output",
-                                artifact_id=f"art_{run_id}")]
-        message = t.agent_message(output, context_id=run["thread_id"], task_id=run_id)
-    elif state is t.TaskState.FAILED and run.get("error"):
-        message = t.agent_message(str(run["error"])[:2000], context_id=run["thread_id"],
-                                  task_id=run_id)
-    history = []
-    row = connection.execute(text("SELECT input FROM agent_runs WHERE id = :r"),
+    pending = [{"decision_id": p["decision_id"], "question": p["question"], "kind": p["kind"],
+                "approve_url": protocol_answers.console_url(p["decision_id"])}
+               for p in protocol_answers.pending_for(connection, run_id)]
+    raw = connection.execute(text("SELECT input FROM agent_runs WHERE id = :r"),
                              {"r": run_id}).scalar()
-    for item in _json(row, []) or []:
-        if isinstance(item, Mapping) and item.get("role") == "user" and item.get("content"):
-            history.append(t.Message(role=t.Role.USER, parts=[t.text_part(str(item["content"]))],
-                                     message_id=f"msg_{run_id}_in", context_id=run["thread_id"],
-                                     task_id=run_id))
-    return t.Task(id=run_id, context_id=run["thread_id"],
-                  status=t.TaskStatus(state, message, _iso(run.get("updated_at"))),
-                  artifacts=artifacts, history=history[-(history_length or 50):]
-                  if history_length != 0 else [],
-                  metadata={"agent_key": run.get("agent_key"), "version": run.get("version")})
+    inputs = [str(item["content"]) for item in _json(raw, []) or []
+              if isinstance(item, Mapping) and item.get("role") == "user" and item.get("content")]
+    return {"run": run, "pending": pending, "inputs": inputs}
 
 
-def _iso(value: Any) -> str:
-    text_ = value.isoformat() if hasattr(value, "isoformat") else str(value or "")
-    return text_.replace("+00:00", "Z") if text_ else t.TaskStatus(t.TaskState.WORKING).timestamp
+def task_for_run(connection: Any, project_id: str, run_id: str, *,
+                 history_length: Optional[int] = None) -> t.Task:
+    from ..protocols.agent_serving import task_from_view
+
+    return task_from_view(run_view(connection, project_id, run_id), history_length=history_length)
+
+
+def answer_in_band(connection: Any, agent: Mapping[str, Any], run_id: str, answers: list, *,
+                   auth: Any) -> None:
+    """In-band answers to a task's open interrupts, as the caller (protocol_answers decides who
+    may: a person with step-up; a key is pointed at the console)."""
+    from . import protocol_answers as A
+
+    view_for_run(connection, agent, run_id)
+    for data in answers or []:
+        if not isinstance(data, Mapping) or not data.get("decision_id"):
+            continue
+        verdict = A.parse_response(data)
+        if verdict is None:
+            raise A2AError(-32602, "an answer names verdict approve or reject")
+        try:
+            A.answer(connection, auth, project_id=agent["project_id"],
+                     decision_id=str(data["decision_id"]), verdict=verdict["verdict"],
+                     note=verdict["note"], answer_value=verdict["answer"], via="a2a")
+        except A.AnswerRefused as refused:
+            raise A2AError(ANSWER_REFUSED, f"answer refused: {refused.code}",
+                           data=refused.body()) from refused
 
 
 def _own_task(connection: Any, agent: Mapping[str, Any], task_id: Any) -> dict:
@@ -358,25 +418,11 @@ def _continue(connection: Any, agent: Mapping[str, Any], run_row: dict,
               req: t.SendMessageRequest, *, auth: Any) -> None:
     """A message on an existing task: an answer to its open interrupt (validated as the caller),
     or a nudge to resume once a person has answered in BOSS."""
-    from . import protocol_answers as A
-
     task = task_for_run(connection, agent["project_id"], run_row["id"])
     if task.state.terminal:
         raise A2AError(t.UNSUPPORTED_OPERATION,
                        "this task has ended; send a new message on its contextId instead")
-    for data in req.message.data():
-        if not isinstance(data, Mapping) or not data.get("decision_id"):
-            continue
-        verdict = A.parse_response(data)
-        if verdict is None:
-            raise A2AError(-32602, "an answer names verdict approve or reject")
-        try:
-            A.answer(connection, auth, project_id=agent["project_id"],
-                     decision_id=str(data["decision_id"]), verdict=verdict["verdict"],
-                     note=verdict["note"], answer_value=verdict["answer"], via="a2a")
-        except A.AnswerRefused as refused:
-            raise A2AError(ANSWER_REFUSED, f"answer refused: {refused.code}",
-                           data=refused.body()) from refused
+    answer_in_band(connection, agent, run_row["id"], list(req.message.data()), auth=auth)
     push = req.configuration.task_push_notification_config
     if push is not None:
         _save_push(connection, agent, run_row["id"], push,
@@ -644,6 +690,7 @@ def notify(engine: Any, run_id: str) -> list:
     return out
 
 
-__all__ = ["A2AError", "ANSWER_REFUSED", "POST", "agent_card", "exposure_refusal", "handle",
+__all__ = ["A2AError", "ANSWER_REFUSED", "POST", "agent_card", "answer_in_band",
+           "exposure_refusal", "handle", "run_view", "view_for_run",
            "notify", "resolve", "set_exposure", "stream", "strong_isolation", "task_for_run",
            "write_tools"]

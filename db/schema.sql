@@ -15233,12 +15233,14 @@ CREATE TABLE IF NOT EXISTS director_leases (
 );
 
 -- Director certificates live in agent_certs with their own kind (host_id = the director id).
+-- ('caller' is P8b-9's service-account certificates: every copy of this check lists every kind,
+-- so whichever block runs last leaves the full set.)
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_certs_kind_check') THEN
     ALTER TABLE agent_certs DROP CONSTRAINT agent_certs_kind_check;
   END IF;
   ALTER TABLE agent_certs ADD CONSTRAINT agent_certs_kind_check
-    CHECK (kind IN ('host', 'host_svid', 'replica', 'director'));
+    CHECK (kind IN ('host', 'host_svid', 'replica', 'director', 'caller'));
 END $$;
 
 -- The host's reachable IPv4: the directors route its vm_prefix through it (one static route per
@@ -15353,3 +15355,51 @@ BEGIN
   END IF;
 END $$;
 -- ================================ end BOSSAPP-1163 ==
+
+-- ================================ P8b-9/11: agent CA, in-VM TLS, AP-D11 (BOSSAPP-1076, 1078) ==
+-- boss-agent-hosts-lld.md §3.13.2, §3.17.2-§3.17.4, D7. Additive.
+
+-- THE BOSS AGENT CA (D7): a private root and two intermediates, SEPARATE from the fleet CA
+-- (fleet_ca, which certifies hosts and directors). `serving` signs each replica's 24 h TLS
+-- certificate (key born in the VM); `caller` signs service accounts' client certificates for mTLS
+-- callers. Keys are sealed with a key derived from the identity vault's KEK, like the fleet CA.
+CREATE TABLE IF NOT EXISTS agent_ca (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('root', 'serving', 'caller')),
+  cert_pem TEXT NOT NULL,
+  key_sealed TEXT NOT NULL,
+  install_domain TEXT NOT NULL,
+  not_after TIMESTAMPTZ NOT NULL,
+  retired_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_ca_live_kind ON agent_ca (kind) WHERE retired_at IS NULL;
+
+-- Replica serving certificates (kind 'replica') and service-account caller certificates
+-- (kind 'caller') live in agent_certs beside the fleet's own.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_certs_kind_check') THEN
+    ALTER TABLE agent_certs DROP CONSTRAINT agent_certs_kind_check;
+  END IF;
+  ALTER TABLE agent_certs ADD CONSTRAINT agent_certs_kind_check
+    CHECK (kind IN ('host', 'host_svid', 'replica', 'director', 'caller'));
+END $$;
+ALTER TABLE agent_certs ADD COLUMN IF NOT EXISTS principal_id TEXT;
+ALTER TABLE agent_certs ADD COLUMN IF NOT EXISTS dns_names TEXT[];
+ALTER TABLE agent_certs ADD COLUMN IF NOT EXISTS ip_addresses TEXT[];
+ALTER TABLE agent_certs ADD COLUMN IF NOT EXISTS renews_serial TEXT;
+ALTER TABLE agent_certs ADD COLUMN IF NOT EXISTS revoked_reason TEXT;
+-- A caller certificate is one of its service account's credentials (identity_api_credentials, scope
+-- agent:invoke): the PDP's live check, suspension and revocation apply to it as to a key.
+ALTER TABLE agent_certs ADD COLUMN IF NOT EXISTS credential_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_agent_certs_replica ON agent_certs (replica_id, not_after DESC)
+  WHERE replica_id IS NOT NULL;
+
+-- AP-D11 (§3.17.4). `isolation_ok` is the host's attestation verdict from its last heartbeat
+-- (firecracker_live, jailer_on, seccomp_default, strict_secrets, net_policy_ok, no fallback tap);
+-- a heartbeat older than 10 s lapses it whatever it says. `isolation_required` marks a deployment
+-- exposed over A2A with write-capable tools: the directors serve its VIP only from replicas whose
+-- host attests (the members of a lapsed host are withdrawn).
+ALTER TABLE agent_hosts ADD COLUMN IF NOT EXISTS isolation_ok BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS isolation_required BOOLEAN NOT NULL DEFAULT false;
+-- ================================ end P8b-9/11 ==

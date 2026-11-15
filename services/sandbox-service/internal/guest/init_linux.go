@@ -130,6 +130,13 @@ func ReplicaNetSetup(b *Bootstrap) error {
 		{"eth0/arp_ignore", "1"}, {"eth0/arp_announce", "2"}, {"all/rp_filter", "0"}} {
 		_ = os.WriteFile("/proc/sys/net/ipv4/conf/"+kv[0], []byte(kv[1]), 0o644)
 	}
+	// boss-runtime's TLS listener on VIP:443 is internet-facing (LLD §3.17.1): SYN cookies on
+	// and a deep accept queue, so a SYN flood is absorbed by the kernel, not the listener
+	// (runtime/listener.py listens with a 4096 backlog and checks tcp_syncookies at start).
+	for _, kv := range [][2]string{{"ipv4/tcp_syncookies", "1"},
+		{"ipv4/tcp_max_syn_backlog", "4096"}, {"core/somaxconn", "4096"}} {
+		_ = os.WriteFile("/proc/sys/net/"+kv[0], []byte(kv[1]), 0o644)
+	}
 	link, err := netlink.LinkByName("eth0")
 	if err != nil {
 		return fmt.Errorf("eth0: %w", err)

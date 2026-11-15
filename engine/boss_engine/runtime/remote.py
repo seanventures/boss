@@ -30,12 +30,20 @@ class RemoteCheckpointStore(PgCheckpointStore):
     durable = True
 
     def __init__(self, handle: RunHandle, *, thread_id: Optional[str] = None, ns: str = "",
-                 durability: str = SYNC):
+                 durability: str = SYNC, tap: Optional[Any] = None):
         super().__init__(None, thread_id=thread_id, ns=ns, durability=durability)
         self.handle = handle
+        #: Called with each committed checkpoint row: the in-VM listener streams a run it drives
+        #: from these, on the caller's own connection (P8b-9).
+        self.tap = tap
 
     def _put_checkpoint(self, row: dict, *, own: bool = False) -> None:
         self.handle.call("PUT", "checkpoints", json={"row": row})
+        if self.tap is not None:
+            try:
+                self.tap(row)
+            except Exception:  # noqa: BLE001 — a slow or gone listener never fails the run
+                log.debug("checkpoint tap failed", exc_info=True)
 
     def _put_write(self, row: dict, *, own: bool = False) -> None:
         self.handle.call("PUT", "checkpoint-writes", json={"row": row})

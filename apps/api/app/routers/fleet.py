@@ -131,11 +131,33 @@ class ReplicaMapBody(BaseModel):
 class AdmitBody(BaseModel):
     replica_id: Optional[str] = None
     caller: str = ""
+    #: The mTLS client certificate the replica's listener verified (PEM), forwarded (P8b-9).
+    client_cert: Optional[str] = Field(default=None, max_length=16384)
     input: Any = None
     thread_id: Optional[str] = None
     double_text: Optional[str] = None
     traceparent: Optional[str] = None
     ttl: Optional[int] = None
+    op: str = "invoke"
+    run_id: Optional[str] = None
+    surface: str = "agent_protocol"
+    answers: Optional[list] = None
+    metadata: Optional[dict] = None
+
+
+class ReplicaCertBody(BaseModel):
+    replica_id: Optional[str] = None
+    csr_pem: str = Field(min_length=1, max_length=16384)
+
+
+class CallerCertBody(BaseModel):
+    service_account_id: str
+    csr_pem: str = Field(min_length=1, max_length=16384)
+    days: int = 7
+
+
+class RevokeCertBody(BaseModel):
+    reason: str = ""
 
 
 class LeaseBody(BaseModel):
@@ -608,10 +630,117 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                 return run_plane.admit(connection, _settings(), host.host_id, replica,
                                        caller=body.caller, input=body.input,
                                        thread_id=body.thread_id, double_text=body.double_text,
-                                       traceparent=body.traceparent, ttl=body.ttl)
+                                       traceparent=body.traceparent, ttl=body.ttl, op=body.op,
+                                       run_id=body.run_id, client_cert=body.client_cert,
+                                       surface=body.surface, answers=body.answers,
+                                       metadata=body.metadata)
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
+
+    # ── the agent CA (P8b-9; LLD §3.17.2) ─────────────────────────────────────────────────
+
+    def _ca_fail(error: Exception):
+        from boss_engine.services import agent_ca
+
+        if isinstance(error, agent_ca.AgentCAError):
+            raise HTTPException(status_code=error.status, detail=error.body()) from error
+        _fleet_fail(error)
+
+    @router.post("/v1/run-plane/replica/cert")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def rp_replica_cert(body: ReplicaCertBody, request: Request,
+                        x_boss_replica: Optional[str] = Header(default=None)) -> dict[str, Any]:
+        """The replica's 24 h serving certificate from the agent CA. The key was born in the VM
+        (only its CSR arrives, through boss-hostd); BOSS checks the replica is desired, its host
+        attests, and its image is signed or active. Renew at `renew_after` (two thirds)."""
+        from boss_engine.services import agent_ca
+
+        host = _host(request)
+        replica = _replica(x_boss_replica, body.replica_id)
+        try:
+            with begin(engine) as connection:
+                out = agent_ca.issue_replica_cert(connection, host_id=host.host_id,
+                                                  replica_id=replica, csr_pem=body.csr_pem)
+        except Exception as error:  # noqa: BLE001
+            _ca_fail(error)
+            raise
+        return _wake(out)
+
+    @router.get("/v1/run-plane/replica/trust")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def rp_replica_trust(request: Request,
+                         x_boss_replica: Optional[str] = Header(default=None)) -> dict[str, Any]:
+        """What the replica's listener verifies callers against (cached in the VM): the token
+        JWKS, the caller and serving CA bundles, revoked serials, and the signed A2A card when
+        A2A is open for the agent. Nothing secret."""
+        from .a2a import _base_url
+
+        host = _host(request)
+        replica = _replica(x_boss_replica, None)
+        try:
+            with begin(engine) as connection:
+                return run_plane.replica_trust(connection, host.host_id, replica,
+                                               base_url=_base_url(request))
+        except Exception as error:  # noqa: BLE001
+            _ca_fail(error)
+            raise
+
+    @router.get("/v1/pki/agent-ca")
+    @public(reason=PublicReason.JWKS)
+    def agent_ca_bundle() -> JSONResponse:
+        """The BOSS agent CA (D7): the serving bundle callers pin to reach an agent's VIP and the
+        caller bundle. Public, like a JWKS. It never creates the CA (the first authenticated
+        issuance does) and lists no revoked serials (those are per org, in the replica's
+        authenticated trust document). 404 until the CA exists."""
+        from boss_engine.services import agent_ca
+
+        with begin(engine) as connection:
+            doc = agent_ca.public_bundle(connection)
+        if doc is None:
+            raise HTTPException(status_code=404, detail={
+                "error": "not_found", "message": "no agent CA yet (made at first issuance)"})
+        return JSONResponse(doc, headers={"Cache-Control": "public, max-age=300"})
+
+    @router.post("/v1/pki/caller-certs", status_code=201)
+    @permit(P.SERVICE_ACCOUNT_KEY_MANAGE, scope=Scope.org())
+    def issue_caller_cert(body: CallerCertBody, request: Request) -> dict[str, Any]:
+        """A service account's client certificate for calling agents over mTLS (scope
+        agent:invoke only; every call is still decided by the PDP)."""
+        from boss_engine.services import agent_ca
+
+        try:
+            with begin(engine) as connection:
+                return agent_ca.issue_caller_cert(
+                    connection, org_id=_org(request, connection),
+                    principal_id=body.service_account_id, csr_pem=body.csr_pem,
+                    days=body.days, actor=_who(request, None))
+        except Exception as error:  # noqa: BLE001
+            _ca_fail(error)
+            raise
+
+    @router.post("/v1/fleet/agent-certs/{serial}/revoke")
+    @permit(P.FLEET_MANAGE, scope=Scope.org())
+    def revoke_agent_cert(serial: str, body: RevokeCertBody, request: Request
+                          ) -> dict[str, Any]:
+        """Revoke one agent certificate (a replica's or a caller's). The replica then holds no
+        valid certificate: AP-D11 no longer holds for its deployment."""
+        from boss_engine.services import agent_ca
+
+        with begin(engine) as connection:
+            org = _org(request, connection)
+            done = agent_ca.revoke(connection, serial=serial, org_id=org,
+                                   reason=body.reason or f"revoked by {_who(request, None)}")
+            if done:
+                from boss_engine.services import fleet_directors
+
+                woken = fleet_directors.bump(connection, org)
+            else:
+                woken = []
+        if not done:
+            raise HTTPException(status_code=404, detail={
+                "error": "not_found", "message": "no live agent certificate with that serial"})
+        return _wake({"revoked": done, "_wake": woken})
 
     @router.post("/v1/run-plane/runs/{run_id}/lease")
     @permit(P.FLEET_HOST, scope=Scope.org())

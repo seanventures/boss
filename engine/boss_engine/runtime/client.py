@@ -119,11 +119,30 @@ class RunPlaneClient:
         # on; on the process backend the runtime stands in for the host and says it itself.
         return {"X-Boss-Replica": self.replica_id}
 
-    def admit(self, *, caller: str, input: Any, thread_id: Optional[str] = None,
-              double_text: Optional[str] = None, ttl: Optional[int] = None) -> dict:
-        return self.transport.request("POST", f"{PREFIX}/admit", json={
-            "caller": caller, "input": input, "thread_id": thread_id,
-            "double_text": double_text, "ttl": ttl}, headers=self._replica())
+    def admit(self, *, caller: Optional[str], input: Any = None,
+              thread_id: Optional[str] = None, double_text: Optional[str] = None,
+              ttl: Optional[int] = None, op: str = "invoke", run_id: Optional[str] = None,
+              client_cert: Optional[str] = None, surface: str = "agent_protocol",
+              answers: Optional[list] = None, metadata: Optional[dict] = None,
+              traceparent: Optional[str] = None) -> dict:
+        """THE PDP CALL (§3.13.2): every external request a replica serves goes through here
+        with the caller's forwarded credential; BOSS decides, never the VM."""
+        body = {"caller": caller or "", "input": input, "thread_id": thread_id,
+                "double_text": double_text, "ttl": ttl, "op": op, "run_id": run_id,
+                "client_cert": client_cert, "surface": surface, "answers": answers,
+                "metadata": metadata, "traceparent": traceparent}
+        return self.transport.request("POST", f"{PREFIX}/admit",
+                                      json={k: v for k, v in body.items() if v is not None},
+                                      headers=self._replica())
+
+    def replica_cert(self, csr_pem: str) -> dict:
+        """The replica's serving certificate from the agent CA (P8b-9): only the CSR leaves."""
+        return self.transport.request("POST", f"{PREFIX}/replica/cert",
+                                      json={"csr_pem": csr_pem}, headers=self._replica())
+
+    def trust(self) -> dict:
+        """JWKS, CA bundles, revoked serials and the signed card (cached by the listener)."""
+        return self.transport.request("GET", f"{PREFIX}/replica/trust", headers=self._replica())
 
     def assigned(self, work: dict) -> "RunHandle":
         """The handle for a run the host handed this VM over the work inbox: {run_id, job_id,

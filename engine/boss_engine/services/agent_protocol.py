@@ -305,14 +305,14 @@ def stream(engine: Any, project_id: str, run_id: str, *, timeout: float = 300.0,
            poll: float = 0.25, stop_on_interrupt: bool = True) -> Iterator[dict]:
     """The run's typed events (see the module docstring) until it ends — or stops for a person,
     when `stop_on_interrupt` — or `timeout`."""
+    from ..protocols.agent_serving import (checkpoint_events, final_events, interrupt_events,
+                                           metadata_event, stopped)
+
     deadline = time.monotonic() + max(0.0, float(timeout))
     seen_seq, seen_messages, announced = 0, 0, set()
     with engine.connect() as c:
         run = get_run(c, project_id, run_id)
-    yield {"type": "metadata", "ns": [], "data": {"run_id": run_id,
-                                                  "thread_id": run["thread_id"],
-                                                  "agent_key": run["agent_key"],
-                                                  "version": run["version"]}}
+    yield metadata_event(run)
     while True:
         with engine.connect() as c:
             rows = c.execute(text(
@@ -322,34 +322,15 @@ def stream(engine: Any, project_id: str, run_id: str, *, timeout: float = 300.0,
             run = get_run(c, project_id, run_id)
         for cp in rows:
             seen_seq = int(cp["seq"])
-            state = _json(cp["state"], {}) or {}
-            yield {"type": "updates", "ns": [f"step:{cp['step']}"],
-                   "data": {"checkpoint_id": cp["checkpoint_id"], "step": cp["step"],
-                            "phase": cp["phase"], "status": cp["status"],
-                            "source": cp["source"]}}
-            messages = state.get("messages") or []
-            for message in messages[seen_messages:]:
-                yield {"type": "messages", "ns": [f"step:{cp['step']}"],
-                       "data": {"role": message.get("role"), "content": message.get("content"),
-                                "tool_calls": message.get("tool_calls"),
-                                "tool_call_id": message.get("tool_call_id")}}
-            seen_messages = max(seen_messages, len(messages))
-        if run["status"] == "interrupted":
-            fresh = [d for d in run["interrupts"] or [] if d.get("status") == "pending"
-                     and d["decision_id"] not in announced]
-            if fresh:
-                announced.update(d["decision_id"] for d in fresh)
-                yield {"type": "custom", "ns": [], "data": {
-                    "kind": "interrupt", "decisions": fresh,
-                    "how": "Answer each through the Decision API (POST /v1/decisions/{id}/"
-                           "approve or /reject); the run resumes when the last is answered."}}
-        if run["status"] in TERMINAL or (stop_on_interrupt and waits_on_a_person(run)):
-            yield {"type": "values", "ns": [], "data": run}
-            yield {"type": "end", "ns": [], "data": {"status": run["status"]}}
+            events, seen_messages = checkpoint_events(cp, _json(cp["state"], {}) or {},
+                                                      seen_messages)
+            yield from events
+        yield from interrupt_events(run, announced)
+        if stopped(run, stop_on_interrupt=stop_on_interrupt):
+            yield from final_events(run)
             return
         if time.monotonic() >= deadline:
-            yield {"type": "values", "ns": [], "data": run}
-            yield {"type": "end", "ns": [], "data": {"status": run["status"], "timed_out": True}}
+            yield from final_events(run, timed_out=True)
             return
         time.sleep(poll)
 

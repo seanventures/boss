@@ -325,6 +325,7 @@ def revoke(connection: Any, *, org_id: str, host_id: str, actor: str, reason: st
     renewal. Its replicas are stopped and placed elsewhere by the next reconcile."""
     row = connection.execute(text(
         "UPDATE agent_hosts SET revoked_at = now(), revoked_reason = :r, status = 'retired', "
+        "isolation_ok = false, "
         "desired_generation = desired_generation + 1, updated_at = now() "
         "WHERE id = :i AND org_id = :o AND revoked_at IS NULL RETURNING id"),
         {"r": reason[:500], "i": host_id, "o": org_id}).first()
@@ -368,6 +369,27 @@ def _apply_facts(connection: Any, host_id: str, facts: dict) -> None:
     clause = ", ".join(f"{k} = :{k}" for k in sets)
     connection.execute(text(f"UPDATE agent_hosts SET {clause} WHERE id = :i"),
                        {**sets, "i": host_id})
+
+
+def refresh_isolation(connection: Any, host_id: str) -> bool:
+    """Store the host's AP-D11 attestation verdict (agent_hosts.isolation_ok, P8b-11) from the
+    facts it just reported. True when it flipped: the directors must re-filter the members of
+    deployments that require strong isolation (fleet_directors.desired)."""
+    from .strong_isolation import HOST_FACTS, host_isolation_ok
+
+    row = connection.execute(text(
+        "SELECT backend, status, revoked_at, facts, isolation_ok, " + ", ".join(HOST_FACTS)
+        + " FROM agent_hosts WHERE id = :i"), {"i": host_id}).mappings().first()
+    if row is None:
+        return False
+    host = dict(row)
+    host["facts"] = _json(host.get("facts"), {})
+    ok = host_isolation_ok(host)
+    if ok == bool(row["isolation_ok"]):
+        return False
+    connection.execute(text("UPDATE agent_hosts SET isolation_ok = :ok WHERE id = :i"),
+                       {"ok": ok, "i": host_id})
+    return True
 
 
 def _ipv4_or_none(value: Any) -> Optional[str]:
@@ -466,6 +488,10 @@ def heartbeat(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
 
         _note_wake(connection, fleet_directors.bump(connection, str(row["org_id"])))
     _apply_facts(connection, host.host_id, facts)
+    if refresh_isolation(connection, host.host_id):
+        from . import fleet_directors
+
+        _note_wake(connection, fleet_directors.bump(connection, str(row["org_id"])))
     _record_capabilities(connection, host.host_id, body.get("capabilities"))
     seen = _observe(connection, host.host_id, body.get("replicas") or ())
     if isinstance(body.get("replicas"), list):
