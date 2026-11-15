@@ -360,8 +360,10 @@ func (cp *CP) authHost(w http.ResponseWriter, r *http.Request, id string) (strin
 	cp.mu.Lock()
 	hostID, known := cp.byFP[fp]
 	var h *host
+	revoked := false
 	if known {
 		h = cp.hosts[hostID]
+		revoked = h.revoked // read under the lock: Revoke writes it
 	}
 	spent := cp.jtis[claims.Jti]
 	cp.jtis[claims.Jti] = true
@@ -370,7 +372,7 @@ func (cp *CP) authHost(w http.ResponseWriter, r *http.Request, id string) (strin
 	case !known:
 		cp.refuse(w, http.StatusUnauthorized, hostapi.ReasonCertUnknown, "unknown host certificate")
 		return "", false
-	case h.revoked:
+	case revoked:
 		cp.refuse(w, http.StatusForbidden, hostapi.ReasonHostRevoked, "this host is revoked.")
 		return "", false
 	}
