@@ -23,7 +23,7 @@ vi.mock("../components/identity/identity-provider", async (orig) => ({
 }));
 
 import { EventsHome } from "../app/events/events-home";
-import { eventFlow, flowSentence, parseEventDetail } from "../lib/intake";
+import { eventFlow, flowSentence, parseEventDetail, parsePreview } from "../lib/intake";
 import { emptyDraft, fromMatch, ruleWords, toMatch } from "../lib/intake-rules";
 import { $, $$, click, mount, settle, unmount } from "./_helpers/live-render";
 
@@ -289,6 +289,24 @@ describe("E4 Rules", () => {
     expect(($('[data-testid="ev-budget"]') as HTMLInputElement).value).toBe("5.00");
     expect($('[data-testid="ev-triage"]')?.getAttribute("aria-checked")).toBe("false");
   });
+  it("a preview read without View people says live results may differ (BOSSAPP-1199)", async () => {
+    expect(parsePreview({ ok: true, matched: 1, considered: 2, events: [], people_redacted: true }).people_redacted).toBe(true);
+    expect(parsePreview({ ok: true, matched: 1, considered: 2, events: [] }).people_redacted).toBe(false);
+    api((url) => (url.includes("/preview-match") ? json({ ok: true, matched: 3, considered: 50, events: [], people_redacted: true }) : undefined));
+    await mount(<EventsHome projectId={PID} place={place("rules", { conn: "icn_s" })} />);
+    await new Promise((r) => setTimeout(r, 450)); await settle();
+    const note = $('[data-testid="ev-match-people-hidden"]');
+    expect(note?.textContent).toBe("People hidden · live results may differ");
+    expect(note?.getAttribute("title")).toContain("may match live events the preview did not");
+    expect(note?.className).toBe("ev-faint");
+  });
+  it("a preview with people shown carries no such note", async () => {
+    api();
+    await mount(<EventsHome projectId={PID} place={place("rules", { conn: "icn_s" })} />);
+    await new Promise((r) => setTimeout(r, 450)); await settle();
+    expect($('[data-testid="ev-match-count"]')?.textContent).toBe("Would match 7 of the last 50 events");
+    expect($('[data-testid="ev-match-people-hidden"]')).toBeNull();
+  });
   it("Save sends the sentence as the filter, the acting-for, limits, quiet hours and the daily budget", async () => {
     const calls = api();
     await mount(<EventsHome projectId={PID} place={place("rules", { conn: "icn_s" })} />);
@@ -353,6 +371,18 @@ describe("E5 Stream", () => {
     expect($('[data-testid="ev-detail-flow-reply"]')?.getAttribute("data-state")).toBe("done");
     at("/?area=setup&events=stream&ev=iev_2");
     window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  it("a redacted search that stopped at its cap says so; a full one says nothing (BOSSAPP-1199)", async () => {
+    api((url) => (url.startsWith("/v1/intake/events?") ? json({ ...EVENTS, search_truncated: true, search_limit: 5000, scanned: 5000 }) : undefined));
+    await mount(<EventsHome projectId={PID} place={place("stream")} />);
+    const note = $('[data-testid="ev-search-truncated"]');
+    expect(note?.textContent).toBe("Searched the newest 5,000 events");
+    expect(note?.getAttribute("title")).toContain("Narrow the period or source");
+    expect(note?.className).toBe("ev-faint");
+    unmount();
+    api();
+    await mount(<EventsHome projectId={PID} place={place("stream")} />);
+    expect($('[data-testid="ev-search-truncated"]')).toBeNull();
   });
 });
 

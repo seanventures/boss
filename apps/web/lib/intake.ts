@@ -170,8 +170,12 @@ export const parseCounts = (v: unknown): Counts => {
   const x = o(v);
   return Object.fromEntries([...EVENT_STATUSES, "total"].map((k) => [k, n(x[k])])) as Counts;
 };
-export type EventList = { events: EventSummary[]; counts: Counts };
-export const parseEventList = (v: unknown): EventList => ({ events: a(o(v).events).map(parseEvent).filter((e) => e.id), counts: parseCounts(o(v).counts) });
+export type EventList = { events: EventSummary[]; counts: Counts;
+  /** A search without View people re-checks events one by one and stops after `search_limit` of
+   *  the newest; true when it stopped there with older events unread (BOSSAPP-1199). */
+  search_truncated: boolean; search_limit: number };
+export const parseEventList = (v: unknown): EventList => ({ events: a(o(v).events).map(parseEvent).filter((e) => e.id), counts: parseCounts(o(v).counts),
+  search_truncated: o(v).search_truncated === true, search_limit: n(o(v).search_limit) });
 
 export type Subject = { mode: string; kind: string; principal_id: string; method: string; display: string; reason: string; read_only: boolean };
 export type Outcome = {
@@ -347,10 +351,14 @@ export function parseRule(v: unknown): Rule {
 export const byOrder = (x: Rule, y: Rule) => x.priority - y.priority || x.id.localeCompare(y.id);
 
 export type PreviewEvent = { id: string; type: string; subject: string; status: string; received_at: string; matched: boolean; text: string; actor: string };
-export type Preview = { ok: boolean; error: string; matched: number; considered: number; events: PreviewEvent[] };
+export type Preview = { ok: boolean; error: string; matched: number; considered: number; events: PreviewEvent[];
+  /** The caller lacks user:read: the preview matched the events with people's fields hidden, so a
+   *  rule on those fields may match live events the preview did not (BOSSAPP-1199). */
+  people_redacted: boolean };
 export const parsePreview = (v: unknown): Preview => {
   const x = o(v);
   return { ok: x.ok !== false, error: s(x.error), matched: n(x.matched), considered: n(x.considered),
+           people_redacted: x.people_redacted === true,
            events: a(x.events).map((e) => ({ id: s(o(e).id), type: s(o(e).type), subject: s(o(e).subject), status: s(o(e).status),
              received_at: s(o(e).received_at), matched: o(e).matched === true, text: s(o(e).text), actor: s(o(e).actor) })) };
 };

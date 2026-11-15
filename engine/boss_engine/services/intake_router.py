@@ -177,6 +177,27 @@ def event_text(event: IntakeEvent) -> str:
     return ""
 
 
+def agent_payload(conn: IntakeConnection, event: IntakeEvent, event_id: str, *,
+                  chat: bool, who: str = "") -> dict[str, Any]:
+    """WHAT THE AGENT'S RUN CARRIES from an intake event (its first message, `finalize_ctx`'s
+    `payload`), BOSSAPP-1199: the event id, kind, the words, the channel, the sender's display
+    name, the screen verdict and (for a record event, not a chat turn) the record's own fields,
+    INTACT — an email or a URL in a ticket is content the agent needs. What it never carries is
+    the directory MAPPING: no envelope, no `bossactor` (the chat user's email and ids), no
+    resolved subject or principal. Who the run acts for is structured run context (`acting`,
+    the fire's `subject`), never text in the thread."""
+    data = event.data or {}
+    out: dict[str, Any] = {"event_id": event_id, "source": conn.kind, "type": event.type,
+                           "subject": event.subject, "text": event_text(event),
+                           "channel": data.get("channel"),
+                           "from": who or event.bossactor.display or None}
+    if event.bossscreen:
+        out["bossscreen"] = {"verdict": event.bossscreen.get("verdict")}
+    if not chat:
+        out["data"] = data
+    return {k: v for k, v in out.items() if v not in (None, "")}
+
+
 def _addressed(envelope: Mapping[str, Any]) -> bool:
     type_ = str(envelope.get("type") or "").lower()
     if type_.endswith(ADDRESSED_SUFFIXES):
@@ -656,7 +677,9 @@ def route(connection: Connection, conn: IntakeConnection, event: IntakeEvent,
             fires.append(_decided(target, conn, event_row, dedupe, "refused", refused.reason))
             continue
         messages = chat_messages(target, conn, event, thread_key, subject) if chat else None
-        fires.append(Fire(trigger_id=str(target["id"]), dedupe_key=dedupe, payload=envelope,
+        payload = agent_payload(conn, event, event_id, chat=chat,
+                                who=subject.display or event.bossactor.display)
+        fires.append(Fire(trigger_id=str(target["id"]), dedupe_key=dedupe, payload=payload,
                           thread_id=thread_id, acting=subject.acting, reason=reason, extra=extra,
                           policy=double_text if thread_id else None, messages=messages,
                           owner_grant=subject.kind != "person"))
@@ -797,7 +820,7 @@ def preview_match(connection: Connection, *, project_id: str, connection_id: str
             "people_redacted": reveal is not True}
 
 
-__all__ = ["ADDRESSING", "FANOUT", "FIRE_OUTCOMES", "Fire", "chat_messages", "choose_chat_route",
-           "dedupe_key_for", "reply_target", "route_names",
+__all__ = ["ADDRESSING", "FANOUT", "FIRE_OUTCOMES", "Fire", "agent_payload", "chat_messages",
+           "choose_chat_route", "dedupe_key_for", "reply_target", "route_names",
            "event_text", "fire_all", "is_chat", "preview_match", "render_thread_key", "route",
            "routes_for", "thread_owned"]
