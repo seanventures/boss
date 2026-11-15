@@ -32,8 +32,8 @@ P0:
     - engine/tests/test_identity_f1_sandbox_boundary.py
     - engine/tests/test_sandbox_network_fence.py
     - engine/tests/test_a_build_fans_out_inside_its_sandbox.py
-    # Build pipeline happy path
-    - engine/tests/test_code_task_service.py
+    # Build pipeline happy path. test_code_task_service.py was an empty file (pytest
+    # "no tests ran"), which the P0 gate treated as a finished run (BOSSAPP-972).
     - engine/tests/test_a_build_proves_its_app_runs.py
     # Workflow runner core: gates, retry/skip, one approval per deploy
     - engine/tests/test_an_approved_gate_releases_the_work.py

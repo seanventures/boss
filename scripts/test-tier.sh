@@ -177,9 +177,13 @@ cat "$OUT"/engine.log "$OUT"/api[0-9]*.log 2>/dev/null | grep -E "^(FAILED|ERROR
   | grep -E '^(engine|apps)/' > "$OUT/failed.txt"
 grep -E "^ FAIL " "$OUT/web.log" 2>/dev/null | sed 's/^ FAIL  *//; s/ >.*//' >> "$OUT/failed.txt"
 # A pytest run that never printed its summary ("N passed in 12.3s") crashed or was killed: that
-# is a failure too, never a silent pass.
+# is a failure too, never a silent pass. "no tests ran" IS a summary, and it is a failure: an
+# empty file on the tier must not pass the gate (BOSSAPP-972).
 for log in "$OUT"/engine.log "$OUT"/api[0-9]*.log; do
   [ -f "$log" ] || continue
+  if grep -qE 'no tests ran.* in [0-9.]+s' "$log"; then
+    echo "$(basename "$log" .log): no tests ran (see $log)" >> "$OUT/failed.txt"
+  fi
   grep -qE '(passed|failed|error|skipped|no tests ran).* in [0-9.]+s' "$log" \
     || echo "$(basename "$log" .log): the pytest run did not finish (see $log)" >> "$OUT/failed.txt"
 done
