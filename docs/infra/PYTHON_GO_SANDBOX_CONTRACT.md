@@ -32,13 +32,29 @@ Request body (built by `build_submit_request`):
   "git_token": "<short-lived repo token>",
   "instructions": "…", "acceptance_criteria": ["…"], "test_commands": ["pytest -q"],
   "engine": "claude_code|openai|native|…",
-  "engine_env": { "CLAUDE_CODE_OAUTH_TOKEN": "…", "OPENAI_API_KEY": "…" },
+  "engine_env": { "CLAUDE_CODE_OAUTH_TOKEN": "…" },
   "run_mutation": false,
   "resources": { }
 }
 ```
 `engine_env` carries the **per-task** model credentials by env-var name — the guest exports them for the
 agent; they are **never baked into the guest image**. Response: `{ "sandbox_task_id": "<id>" }`.
+
+**Only the selected engine's names (P8-pre S5, BOSSAPP-1061).** `claude_code` reads
+`CLAUDE_CODE_OAUTH_TOKEN`; `openai`/`native` read the `OPENAI_*` and `AZURE_OPENAI_*` names; `echo`
+reads none. `build_submit_request` sends only the selected engine's names, and both validators
+(`validate_submit_request` in Python, `ValidateSubmit` in Go) refuse with a named reason:
+- `engine_env_unknown` — a name the guest does not read (e.g. `ANTHROPIC_API_KEY`: a `claude_code`
+  guest on the Anthropic API key is refused instead of booting with no credential);
+- `engine_env_not_for_engine` — a known credential sent to an engine that never reads it.
+
+Go answers **422** with that reason; Python raises `EngineEnvRefused` before submitting.
+
+**Retained workspaces (P8-pre S1/S2).** Every file under a task directory is owner-only (0600,
+directories 0700). Before a failed or timed-out task is retained, its spec copies are deleted and
+`.git/config` is scrubbed of credentials; the guest itself resets `origin` to the credential-free
+URL right after the clone. `GET …/fs` refuses `spec.json`, `.git/config` and `*credentials*` paths
+with **403** `{reason: "secret_path_refused"}`.
 
 ### 2. Poll — `GET /v1/sandbox/tasks/{sandbox_task_id}`
 Response (normalized by `parse_status` / `parse_result`):

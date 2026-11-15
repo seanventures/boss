@@ -172,16 +172,30 @@ def test_without_isolation_the_shim_still_checks_the_peer(tmp_path, monkeypatch)
         runs.close_shim_socket(shim.run_id)
 
 
-def test_the_agents_mcp_json_lives_in_the_run_directory(fake_sandbox, monkeypatch):
-    from boss_engine.services import code_task_mcp
+@pytest.mark.parametrize("gateway_flag", [None, "off"])
+def test_the_agents_mcp_json_lives_in_the_run_directory(fake_sandbox, monkeypatch, gateway_flag):
+    from boss_engine.services import code_task_mcp, mcp_gateway
 
-    monkeypatch.setattr(code_task_mcp, "plan", lambda c, s, p, r: {"servers": {"docs": {"type": "http", "url": "u"}},
-                                                                  "disallowed": []})
+    # The MCP gateway is on by default (P8-pre S4); the file's place is the same either way.
+    if gateway_flag is None:
+        monkeypatch.delenv(mcp_gateway.FLAG, raising=False)
+    else:
+        monkeypatch.setenv(mcp_gateway.FLAG, gateway_flag)
+    monkeypatch.setattr(code_task_mcp, "plan", lambda c, s, p, r, **kw: {
+        "servers": {"docs": {"type": "http", "url": "u"}}, "disallowed": [],
+        "gateway_servers": {"docs": {"server_id": "mcp_docs", "granted_tools": []}}})
     monkeypatch.setattr("boss_engine.services.resource_ledger.claim_dir", lambda p: None)
-    with owned_process.owner_scope("code_run", "crun_mcp"), sandbox_identity.bind("crun_mcp") as ident:
-        harness = code_task_mcp.prepare(None, None, "p", "forge")
-        assert Path(harness.path).resolve().is_relative_to(ident.run_dir.resolve())
-        assert not str(harness.path).startswith(("/tmp/boss-mcp-", "/private/tmp/boss-mcp-"))
+    gateway = mcp_gateway.McpGateway()
+    mcp_gateway.set_gateway(gateway)
+    try:
+        with owned_process.owner_scope("code_run", "crun_mcp"), \
+                sandbox_identity.bind("crun_mcp") as ident:
+            harness = code_task_mcp.prepare(None, None, "p", "forge")
+            assert Path(harness.path).resolve().is_relative_to(ident.run_dir.resolve())
+            assert not str(harness.path).startswith(("/tmp/boss-mcp-", "/private/tmp/boss-mcp-"))
+    finally:
+        gateway.stop()
+        mcp_gateway.set_gateway(None)
 
 
 def test_the_helper_source_holds_its_limits():

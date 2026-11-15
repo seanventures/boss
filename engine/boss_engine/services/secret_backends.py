@@ -21,8 +21,10 @@ Rules that hold for every backend:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -1141,7 +1143,8 @@ def pick_default_backend(settings: Settings) -> tuple[str, list[str]]:
 
 
 def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
-                       project_id: Optional[str] = None) -> str:
+                       project_id: Optional[str] = None, *,
+                       principal: Optional[str] = None) -> str:
     """THE place a stored reference becomes a value.
 
     One function so that "which backend, which key, is it usable" is answered once. A second
@@ -1164,6 +1167,8 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
     from . import secret_access_log as _access
 
     who = _access.who_is_accessing(connection, project_id or row.get("project_id"))
+    if principal and not who.principal:
+        who.principal = principal       # the system variant (resolve_system_secret) names BOSS
 
     def _refuse(reason: str, message: str) -> SecretUnavailable:
         _access.record_access(connection, secret_ref_id=secret_ref_id,
@@ -1194,6 +1199,110 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
 
     _register_known(value)
     return value
+
+
+#: The principal a read BOSS makes for itself is recorded under (secret_access_events.principal):
+#: the install's own CLI credentials — the Claude login, the Anthropic key, a harness token.
+SYSTEM_PRINCIPAL = "system:boss"
+#: secret_access_events.secret_ref_id for a value read from the store by name with no reference
+#: row (an operator wrote it straight into the store): "store:<key>".
+STORE_KEY_PREFIX = "store:"
+
+
+@contextlib.contextmanager
+def _audit_connection(settings: Settings, connection=None):
+    """The caller's connection, else a short transaction of BOSS's own; None when the database
+    cannot be reached (a read never fails because its audit row could not be written)."""
+    if connection is not None:
+        yield connection
+        return
+    try:
+        from ..db import get_engine
+
+        ctx = get_engine(settings).begin()
+        own = ctx.__enter__()
+    except Exception:  # noqa: BLE001 — no database here (a sandboxed child, a unit test)
+        yield None
+        return
+    failed = False
+    try:
+        yield own
+    except BaseException:
+        failed = True
+        ctx.__exit__(*sys.exc_info())
+        raise
+    finally:
+        if not failed:
+            try:
+                ctx.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def resolve_system_ref(settings: Settings, keys, *, connection=None,
+                       project_id: Optional[str] = None) -> Optional[str]:
+    """THE SYSTEM-PRINCIPAL VARIANT of `resolve_secret_ref` (P8-pre S3, BOSSAPP-1061): BOSS
+    reading one of its own install-wide credentials BY NAME (cli_harness.stored_credential —
+    the Claude login, the Anthropic key, a harness token).
+
+    Those reads called `store.get` directly, so "which run read the Anthropic key" had no
+    answer in secret_access_events and no scope check applied. Now a usable reference row
+    stored under one of `keys` resolves through `resolve_secret_ref` itself — status and
+    subject-scope checks (a user- or agent-scoped reference is REFUSED for any other subject,
+    and the refusal is logged), one access row naming the run, the run's redaction — with the
+    principal recorded as SYSTEM_PRINCIPAL. A value with no reference row is read by name by
+    the caller, which records it with `record_system_read`.
+
+    Returns the value; None when no usable reference exists (or the database cannot be
+    reached), or when the reference's store no longer holds it. Raises `SecretUnavailable`
+    when the store did not answer or the reference refused.
+    """
+    keys = [str(k) for k in keys if k]
+    with _audit_connection(settings, connection) as conn:
+        if conn is None:
+            return None
+        ref_id = _system_ref_for(conn, keys, project_id)
+        if not ref_id:
+            return None
+        try:
+            value = resolve_secret_ref(conn, ref_id, settings, principal=SYSTEM_PRINCIPAL)
+        except SecretNotFound:
+            return None                 # the reference's store lost it: read by name
+        return (value or "").strip() or None
+
+
+def record_system_read(settings: Settings, key: str, *, connection=None,
+                       project_id: Optional[str] = None) -> None:
+    """One access row for a credential read from the store BY NAME, with no reference row
+    (an operator wrote it straight into the store): `store:<key>`, principal SYSTEM_PRINCIPAL.
+    Never raises."""
+    try:
+        from . import secret_access_log as _access
+
+        with _audit_connection(settings, connection) as conn:
+            if conn is None:
+                return
+            who = _access.who_is_accessing(conn, project_id)
+            if not who.principal:
+                who.principal = SYSTEM_PRINCIPAL
+            _access.record_access(conn, secret_ref_id=STORE_KEY_PREFIX + str(key),
+                                  project_id=project_id, outcome="resolved", who=who)
+    except Exception:  # noqa: BLE001 — the log never fails a read
+        pass
+
+
+def _system_ref_for(connection, keys: list, project_id: Optional[str]) -> Optional[str]:
+    """The newest usable reference row stored under one of `keys` (this project's first)."""
+    try:
+        with connection.begin_nested():
+            row = connection.execute(sql(
+                "SELECT id FROM secret_refs WHERE ref_key = ANY(:keys) "
+                "AND status IN ('active', 'rotating', 'rotation_due') "
+                "ORDER BY (project_id = :p) DESC, updated_at DESC NULLS LAST, id LIMIT 1"),
+                {"keys": list(keys), "p": project_id or ""}).first()
+    except Exception:  # noqa: BLE001 — a schema without the table: no reference, read by name
+        return None
+    return str(row[0]) if row else None
 
 
 def _hold_to_provider(secret_ref_id: str, row, value: Optional[str]) -> None:

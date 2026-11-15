@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seanheiney/boss/services/sandbox-service/internal/backend"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/contract"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/job"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/run"
@@ -244,6 +245,13 @@ func (s *Server) fs(w http.ResponseWriter, r *http.Request, id string) {
 			"only paths under /work are browsable")
 		return
 	}
+	if backend.IsSecretPath(rel) {
+		// P8-pre S2: never serve a guest spec, a git config or a credentials file,
+		// even if one survived the retention scrub.
+		writeErr(w, http.StatusForbidden, contract.ReasonSecretPath,
+			"this path may hold credentials and is not browsable")
+		return
+	}
 	hostPath := filepath.Join(job.TaskDir, filepath.FromSlash(rel))
 	info, err := os.Stat(hostPath)
 	if err != nil {
@@ -258,6 +266,9 @@ func (s *Server) fs(w http.ResponseWriter, r *http.Request, id string) {
 		}
 		out := make([]map[string]any, 0, len(entries))
 		for _, e := range entries {
+			if !e.IsDir() && backend.IsSecretPath(rel+"/"+e.Name()) {
+				continue
+			}
 			out = append(out, map[string]any{"name": e.Name(), "dir": e.IsDir()})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"path": guestPath, "entries": out})

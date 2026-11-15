@@ -55,11 +55,11 @@ text is the summary. StopReason: `end_turn` → `done`; `max_tokens`, `max_turn_
 1. A read-only session rejects every write tool (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`).
 2. `tool_gateway.verdict(name, agent.tool_policy, args)`: `run` → `allow_once`; `deny` → `reject_once`.
 3. `wait`:
-   * **MCP gateway on** (`BOSS_MCP_GATEWAY=on`, BOSSAPP-814) with the run's gateway token: a
+   * **MCP gateway on** (`BOSS_MCP_GATEWAY`, on by default since P8-pre S4; BOSSAPP-814) with the run's gateway token: a
      `gateway_request_approval` decision is raised and the call **parks** until a person answers
      it in Approvals (`mcp_gateway.raise_decision` + `park`, the stage clock stopped).
      Approved → `allow_once`; rejected/withdrawn/timed out → `reject_once`.
-   * **Gateway off** (pre-814): `reject_once`, `session/cancel`, and the turn returns
+   * **Gateway off** (`BOSS_MCP_GATEWAY=off`; pre-814 behaviour): `reject_once`, `session/cancel`, and the turn returns
      `stop_reason: awaiting_approval` with `pending_tool`, `pending_args_sha256` and
      `pending_args_preview` — the native loop's shape for an Ask tool.
 

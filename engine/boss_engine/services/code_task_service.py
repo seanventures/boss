@@ -3171,6 +3171,26 @@ def _refused_grant(c, run_id: str) -> Optional[str]:
         return None
 
 
+def _guest_model_fields(settings: Settings, guest_engine: Optional[str]) -> dict:
+    """The model fields a micro-VM guest of `guest_engine` reads, and no other engine's.
+
+    claude_code gets nothing here (its credential is resolved by claude_credential), echo gets
+    nothing; the OpenAI-compatible engines get the OpenAI/Azure lane. An engine this does not
+    know gets nothing, and the contract refuses whatever it cannot place."""
+    name = str(guest_engine or "").strip().lower()
+    if name not in ("openai", "native"):
+        return {}
+    return {
+        "openai_api_key": settings.openai_api_key, "model": settings.openai_model,
+        # provider-agnostic: base_url selects OpenAI/Grok/Together/etc.
+        "openai_base_url": settings.openai_base_url,
+        "azure_endpoint": settings.azure_openai_endpoint,
+        "azure_deployment": settings.azure_openai_deployment,
+        "azure_api_version": settings.azure_openai_api_version,
+        "azure_key": settings.azure_openai_key,
+    }
+
+
 def _run_project(engine, run_id: str) -> Optional[str]:
     """The run's project, for its link environment (app_links.run_env); None if unreadable."""
     try:
@@ -3376,16 +3396,14 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                 "acceptance_criteria": spec.get("acceptance_criteria", []),
                 "test_commands": spec.get("test_commands", []),
                 "engine": settings.sandbox_guest_engine,
-                "openai_api_key": settings.openai_api_key, "model": settings.openai_model,
-                # provider-agnostic: base_url selects OpenAI/Grok/Together/etc.; claude token for claude_code
-                "openai_base_url": settings.openai_base_url,
-                "azure_endpoint": settings.azure_openai_endpoint,
-                "azure_deployment": settings.azure_openai_deployment,
-                "azure_api_version": settings.azure_openai_api_version,
-                "azure_key": settings.azure_openai_key,
                 "token": token, "timeout": settings.code_agent_timeout_seconds,
                 "repo_host": repo_host_kind,
             }
+            # ONLY THE SELECTED ENGINE'S CREDENTIAL (P8-pre S5, BOSSAPP-1061): the OpenAI and
+            # Azure keys were sent to every guest, a claude_code one included.
+            guest_spec.update(_guest_model_fields(settings, guest_spec["engine"]))
+            # The credential reads below are attributed to this run (secret_access_events).
+            set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
             if guest_spec["engine"] == "claude_code":
                 # The login or the console's Anthropic API key (claude_credential).
                 from .claude_credential import resolve_claude_credential

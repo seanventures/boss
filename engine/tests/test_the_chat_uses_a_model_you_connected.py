@@ -205,7 +205,7 @@ def test_the_chat_cli_is_given_the_credential_this_install_holds():
     assert "resolve_for_pick(self.settings" in env
     from boss_engine.services import claude_credential
 
-    assert "_store_lookup(settings, TOKEN_NAME)" in inspect.getsource(
+    assert "_store_lookup(settings, TOKEN_NAME" in inspect.getsource(
         claude_credential._subscription_token)
     assert "stored_credential(" in inspect.getsource(claude_credential._store_lookup)
     assert cli_harness.claude_login_token  # kept as a view of the same resolution

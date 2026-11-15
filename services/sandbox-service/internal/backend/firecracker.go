@@ -118,7 +118,7 @@ func runTool(ctx context.Context, logPath string, name string, args ...string) e
 	cmd := exec.CommandContext(ctx, name, args...)
 	out, err := cmd.CombinedOutput()
 	if logPath != "" && len(out) > 0 {
-		fd, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		fd, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, FileMode)
 		if ferr == nil {
 			fmt.Fprintf(fd, "$ %s %s\n%s\n", name, strings.Join(args, " "), out)
 			fd.Close()
@@ -149,23 +149,24 @@ func (f *Firecracker) Run(ctx context.Context, r RunRequest) error {
 	}
 
 	// 2. Work drive carrying spec.json in (and result.json/agent.log out).
-	stage := filepath.Join(r.TaskDir, "workstage")
-	if err := os.MkdirAll(stage, 0o755); err != nil {
-		return err
-	}
-	spec, err := os.ReadFile(r.SpecPath)
+	// The staged spec still carries the task's credentials (until contract v1.1
+	// sends handles only), so it is owner-only and exists just long enough to
+	// build the drive; the drive itself is deleted once its outputs are out.
+	stage, err := stageSpec(r.TaskDir, r.SpecPath)
 	if err != nil {
-		return fmt.Errorf("firecracker backend: read spec: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(stage, "spec.json"), spec, 0o644); err != nil {
 		return err
 	}
 	workImg := filepath.Join(r.TaskDir, "work.ext4")
+	defer func() { _ = os.Remove(workImg) }()
 	mke2fs, _ := lookPathSbin("mke2fs")
-	if err := runTool(runCtx, setupLog, mke2fs, "-F", "-q", "-t", "ext4", "-m", "0",
-		"-L", "bosswork", "-d", stage, workImg, fmt.Sprintf("%dm", f.workMB())); err != nil {
-		return fmt.Errorf("firecracker backend: build work drive: %w", err)
+	mkErr := runTool(runCtx, setupLog, mke2fs, "-F", "-q", "-t", "ext4", "-m", "0",
+		"-L", "bosswork", "-d", stage, workImg, fmt.Sprintf("%dm", f.workMB()))
+	_ = os.RemoveAll(stage) // the host copy is not needed once the drive is built
+	if mkErr != nil {
+		return fmt.Errorf("firecracker backend: build work drive: %w", mkErr)
 	}
+	_ = os.Chmod(workImg, FileMode)
+	_ = os.Chmod(taskRootfs, FileMode)
 
 	// 3. VM config + boot.
 	bootArgs := "console=ttyS0 reboot=k panic=1 pci=off random.trust_cpu=on init=/sbin/boss-init"
@@ -196,15 +197,11 @@ func (f *Firecracker) Run(ctx context.Context, r RunRequest) error {
 		cfg["network-interfaces"] = netIfaces
 	}
 	cfgPath := filepath.Join(r.TaskDir, "vm.json")
-	raw, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(cfgPath, raw, 0o644); err != nil {
+	if err := writeVMConfig(cfgPath, cfg); err != nil {
 		return err
 	}
 
-	console, err := os.Create(r.ConsoleLog)
+	console, err := os.OpenFile(r.ConsoleLog, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, FileMode)
 	if err != nil {
 		return err
 	}
@@ -218,25 +215,63 @@ func (f *Firecracker) Run(ctx context.Context, r RunRequest) error {
 	}
 
 	// 4. Pull result.json / agent.log out of the work drive (no mounts needed),
-	// and the repo tree for console fs browsing (best effort).
+	// and the repo tree for console fs browsing (best effort). The repo is
+	// dumped for failed runs too — those are the ones retained for inspection —
+	// and the runner scrubs it (ScrubRetained) before anyone can browse it.
 	debugfs, _ := lookPathSbin("debugfs")
 	extract := func(guestPath, hostPath string) error {
 		return runTool(context.Background(), setupLog, debugfs, "-R",
 			fmt.Sprintf("dump %s %s", guestPath, hostPath), workImg)
 	}
 	_ = extract("/agent.log", filepath.Join(r.TaskDir, "agent.log"))
+	workDir := filepath.Join(r.TaskDir, "work")
+	if err := os.MkdirAll(workDir, DirMode); err == nil {
+		_ = runTool(context.Background(), setupLog, debugfs, "-R",
+			fmt.Sprintf("rdump /repo %s", workDir), workImg)
+	}
 	if err := extract("/result.json", r.ResultPath); err != nil || !fileNonEmpty(r.ResultPath) {
 		if vmErr != nil {
 			return fmt.Errorf("firecracker backend: VM exited: %v (no result.json; see console.log)", vmErr)
 		}
 		return fmt.Errorf("firecracker backend: VM exited without writing result.json (see console.log)")
 	}
-	workDir := filepath.Join(r.TaskDir, "work")
-	if err := os.MkdirAll(workDir, 0o755); err == nil {
-		_ = runTool(context.Background(), setupLog, debugfs, "-R",
-			fmt.Sprintf("rdump /repo %s", workDir), workImg)
-	}
 	return nil
+}
+
+// stageSpec copies the guest spec into <taskDir>/workstage/spec.json, owner-only
+// (P8-pre S1: it was 0644, readable by every host user). Returns the stage dir.
+func stageSpec(taskDir, specPath string) (string, error) {
+	stage := filepath.Join(taskDir, "workstage")
+	if err := os.MkdirAll(stage, DirMode); err != nil {
+		return "", err
+	}
+	_ = os.Chmod(stage, DirMode)
+	spec, err := os.ReadFile(specPath)
+	if err != nil {
+		return "", fmt.Errorf("firecracker backend: read spec: %w", err)
+	}
+	if err := writePrivate(filepath.Join(stage, "spec.json"), spec); err != nil {
+		return "", err
+	}
+	return stage, nil
+}
+
+// writeVMConfig writes the Firecracker config owner-only (P8-pre S1).
+func writeVMConfig(path string, cfg map[string]any) error {
+	raw, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writePrivate(path, raw)
+}
+
+// writePrivate writes a file at FileMode, also when it already existed with a
+// wider mode (os.WriteFile only applies the mode on create).
+func writePrivate(path string, data []byte) error {
+	if err := os.WriteFile(path, data, FileMode); err != nil {
+		return err
+	}
+	return os.Chmod(path, FileMode)
 }
 
 func fileNonEmpty(path string) bool {
