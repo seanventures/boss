@@ -1,0 +1,31 @@
+# The Northgate build brief (2026-11-15), trimmed: the directive, BOSS's deploy-machine
+# sentence, and the spec lines that name a language. A test fixture for
+# engine/tests/test_toolchains_go.py (BOSSAPP-1209); the IP is a documentation address.
+Northgate API Gateway + gwlint: API-onboarding case study demo
+
+Problem: Automate tenant API onboarding: validate tenant YAML configs for format, security and API-guideline conformance, reject non-conforming ones (with a fix suggestion), and promote them from staging to production.
+
+Who uses it: tenants onboarding to the API gateway (demo tenants: Lumen Pay, Orbit Travel, Harbor Health)
+
+Must-haves:
+- northgate-gateway: reverse-proxy API gateway (Go) with host/path/method routing, multi-tenant config/gateway.yaml + config/tenants/<tenant>.yaml, and hot reload that keeps the last good config on erro
+- Authentication per route (JWT/OAuth2, API keys hashed, optional mTLS), rate limiting per tenant/route, CORS, request size limits and JSON Schema/OpenAPI request validation
+- gwlint CLI: validate tenant YAML against a JSON Schema and an api-guidelines.yaml rulebook of at least 20 security/guideline rules, with exit codes 0/1/2
+- gwlint --fix writes a corrected file for mechanically fixable rules and lists the ones needing a human
+- Demo content: examples/lumen-pay.good.yaml and lumen-pay.bad.yaml (5+ violations) plus a README describing the fork → add tenant config → PR → BOSS-validates onboarding flow
+- Two environments (staging and production) as two instances of the same binary via docker-compose, with mock upstreams so the demo runs with no external services
+
+THE MACHINE THIS APP DEPLOYS TO: vm-1 (203.0.113.10) has Docker (29.1.3), Docker Compose 2.40.3+ds1-0ubuntu1, python3 (3.14.4), git; has no node, npm, pip3, java, go, ruby, php, make. Write boss.deploy.yaml for what that machine has: use kind: compose (a Dockerfile and a docker-compose.yml) when it has Docker and not the app's runtime; use kind: commands only with programs it has.
+
+---
+
+THE PRODUCT SPEC BELOW IS THE BRIEF.
+
+### 1. `northgate-gateway` (Go, medium complexity)
+- **`gwlint` CLI** (Go, same repo): `gwlint validate <file|dir>` prints a human report (rule id, YAML line, why, how to fix) or `--json`; exit code **0** pass, **1** violations, **2** invalid YAML/schema. `gwlint --fix <file>` writes a corrected file for the mechanically fixable rules and lists the ones that need a human. Golden tests: one good tenant config; several bad ones each triggering specific rules; a `--fix` round-trip test.
+- Clean, idiomatic Go; `go vet` and `go test ./...` clean; `make test`, `make run-staging`, `make run-prod`.
+The brief specifies Go. **This install does not support Go.** The panel's converged decision is to build on **Node (Fastify)** instead — the closest supported stack, and per Forge's assessment a better practical fit than Python for JWKS/JSON-Schema tooling. This is a required deviation from the literal brief, flagged prominently, not buried.
+| Gateway runtime | **Node + Fastify** | Go unsupported on this install; Fastify's plugin model fits per-route auth/CORS/schema cleanly. |
+| **Quality** | Lint-clean, `npm test` clean, one container image per environment. No `go vet`/Go toolchain anywhere in this repo. |
+
+Allowed commands (the spec's dump): ["bazel", "bundle", "cargo", "cmake", "composer", "ctest", "dotnet", "go", "gradle", "gradlew", "java", "javac", "kotlin", "make", "mvn", "mvnw", "node", "npm", "npx", "php", "pip", "pip3", "pnpm", "pytest", "python", "python3", "rake", "ruby", "rustc", "tox", "uv", "yarn"]

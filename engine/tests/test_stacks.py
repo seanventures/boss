@@ -67,14 +67,16 @@ def test_the_registry_reads_the_toolchains_this_image_has(no_java):
     by = {l["key"]: l for l in caps["languages"]}
     assert by["python"]["ready"] and by["node"]["ready"]
     assert not by["java"]["ready"] and by["java"]["enable"] == "boss toolchains enable java"
-    assert "Go" in caps["not_supported"]
+    # Go is a language BOSS builds once its toolchain is on (BOSSAPP-1210), not "unsupported".
+    assert "Go" not in caps["not_supported"]
+    assert not by["go"]["ready"] and by["go"]["enable"] == "boss toolchains enable go"
     block = stacks.prompt_block()
     assert "Python (FastAPI" in block and "boss toolchains enable java" in block and "Go" in block
 
 
 # ── Fail fast: Start, architecture, build ──────────────────────────────────────────────────
 
-@pytest.mark.parametrize("brief", ["Build it in Go", "A golang microservice for invoices",
+@pytest.mark.parametrize("brief", ["An Elixir service for invoices", "A Scala backend",
                                    "Rust backend with a React UI", "a Ruby on Rails app",
                                    "an ASP.NET core API"])
 def test_an_unsupported_stack_is_refused_at_start(brief, with_java):
@@ -135,15 +137,16 @@ Stack: backend=python/fastapi, frontend=node/react
 """
 
 
-def test_a_go_architecture_is_refused_at_approval(with_java):
+def test_a_go_architecture_is_refused_at_approval_while_go_is_off(with_java):
     verdict = stacks.check_architecture(ARCH_GO)
-    assert not verdict.ok and verdict.unsupported == ["go"]
-    assert "The architecture asks for Go" in verdict.message
+    assert not verdict.ok and verdict.off == ["go"] and verdict.unsupported == []
+    assert "The architecture needs Go, which is not turned on" in verdict.message
+    assert "boss toolchains enable go" in verdict.message
     # Rejected alternatives are not the stack.
     assert stacks.check_architecture(ARCH_OK_REJECTED_GO).ok
     # No Stack line: only the sections that describe what is built are read.
     prose = "## Components\nA Go service and a Postgres database.\n## Risks\nRust was rejected.\n"
-    assert stacks.check_architecture(prose).unsupported == ["go"]
+    assert stacks.check_architecture(prose).off == ["go"]
 
 
 def test_the_approval_fails_the_step_before_a_build(monkeypatch, with_java):
@@ -168,7 +171,7 @@ def test_the_approval_fails_the_step_before_a_build(monkeypatch, with_java):
         Conn(), {"id": "d1", "recommendation": {"architecture_review_id": "arch_1", "version": 1}},
         action="approve", actor="ceo", note=None)
     updates = [p for s, p in executed if "UPDATE architecture_reviews" in s]
-    assert updates and "BOSS cannot build" in updates[0]["e"]
+    assert updates and "boss toolchains enable go" in updates[0]["e"]
     assert not any("status = 'approved'" in s for s, _ in executed)
 
 
@@ -206,7 +209,7 @@ def test_the_build_guard_reads_the_request_not_the_template_material(no_java):
     assert not stacks.check_build("Build the helpdesk in Go.\n\n---\n\nspec").ok
     assert not stacks.check_build("helpdesk", template_stack="java").ok  # toolchain off
     approved = "Build it.\n\n---\n\nTHE APPROVED ARCHITECTURE BELOW IS BINDING.\n" + ARCH_GO
-    assert stacks.check_build(approved).unsupported == ["go"]
+    assert stacks.check_build(approved).off == ["go"]
 
 
 # ── Full-stack: the per-service plan ───────────────────────────────────────────────────────
@@ -332,12 +335,21 @@ def test_the_backend_really_starts_and_answers(tmp_path):
     assert not stack_verify.answers(port)
 
 
-def test_a_go_service_in_the_tree_fails_the_plan_in_words(tmp_path, with_java):
+def test_a_go_service_in_the_tree_fails_the_plan_in_words_while_go_is_off(tmp_path, with_java):
     app = tmp_path / "app"
     _write(app / "api" / "go.mod", "module x\n")
     _write(app / "web" / "package.json", json.dumps({"dependencies": {"react": "1"}}))
     plan = verification_target.resolve_gate_plan({}, "t", tmp_path, changed=["app/api/go.mod"])
-    assert plan.source == "stack" and "Go, which BOSS cannot build" in plan.error
+    assert plan.source == "stack" and "needs Go, which is not turned on" in plan.error
+    assert "boss toolchains enable go" in plan.error
+
+
+def test_a_rust_service_in_the_tree_fails_the_plan_in_words(tmp_path, with_java):
+    app = tmp_path / "app"
+    _write(app / "api" / "Cargo.toml", "[package]\nname = 'x'\n")
+    _write(app / "web" / "package.json", json.dumps({"dependencies": {"react": "1"}}))
+    plan = verification_target.resolve_gate_plan({}, "t", tmp_path, changed=["app/api/Cargo.toml"])
+    assert plan.source == "stack" and "Rust, which BOSS cannot build" in plan.error
 
 
 def test_a_full_stack_brief_with_no_services_yet_says_what_is_missing(tmp_path):
@@ -411,16 +423,18 @@ def test_every_framework_the_build_code_knows_belongs_to_an_adapter():
             assert set(c.frameworks) <= known, (a.id, c)
 
 
-def test_the_initial_levels_and_go_is_unsupported():
+def test_the_initial_levels_and_go_is_an_opt_in_best_effort_stack():
     level = {a.id: a.support_level for a in stacks.ADAPTERS}
     assert level["react-vite+express+postgres"] == "experimental"
     assert level["react-vite+fastapi+postgres"] == "experimental"
     assert level["nextjs+fastapi+postgres"] == "experimental"
     assert level["java-spring"] == "experimental"
     assert not any(a.support_level == "certified" for a in stacks.ADAPTERS)
+    assert level["go-service"] == "best_effort"
     unsupported = {u["id"]: u for u in stacks.unsupported_adapters()}
-    assert unsupported["go"]["support_level"] == "unsupported"
-    assert unsupported["go"]["detection_files"] == ["go.mod"]
+    assert "go" not in unsupported
+    assert unsupported["rust"]["support_level"] == "unsupported"
+    assert unsupported["rust"]["detection_files"] == ["Cargo.toml"]
 
 
 def test_an_adapter_is_derived_from_the_build_code(with_java):
@@ -464,7 +478,8 @@ def test_apps_are_matched_to_their_adapter(tmp_path):
 
 
 def test_the_messages_say_the_support_level(with_java):
-    assert "experimental" in stacks.check_text("build it in Go").message
+    assert "experimental" in stacks.check_text("build it in Rust").message
+    assert "best effort" in stacks.check_text("build it in Go").message
 
 
 def test_supported_stacks_doc_matches_the_registry():

@@ -51,14 +51,32 @@ def _start(client, key, directive, **extra):
         "input": {"directive": directive, "title": "Helpdesk"}, **extra})
 
 
-def test_go_is_refused_at_start_in_words(client, building):
+@pytest.fixture
+def no_toolchains(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}\n")
+    monkeypatch.setenv("BOSS_TOOLCHAINS_MANIFEST", str(manifest))
+
+
+def test_rust_is_refused_at_start_in_words(client, building):
+    r = _start(client, building, "Build the helpdesk backend in Rust")
+    assert r.status_code == 409, r.text
+    detail = r.json().get("detail") or r.json()
+    assert detail["error"] == "stack_unsupported"
+    assert "Rust, which BOSS cannot build" in detail["message"]
+    assert "BOSS builds Python" in detail["message"]
+    assert any(l["key"] == "python" for l in detail["supported"]["languages"])
+
+
+def test_go_is_refused_at_start_while_its_toolchain_is_off(client, building, no_toolchains):
+    """Go is an opt-in toolchain (BOSSAPP-1210): off, the start says how to turn it on."""
     r = _start(client, building, "Build the helpdesk backend in Go")
     assert r.status_code == 409, r.text
     detail = r.json().get("detail") or r.json()
     assert detail["error"] == "stack_unsupported"
-    assert "Go, which BOSS cannot build" in detail["message"]
-    assert "BOSS builds Python" in detail["message"]
-    assert any(l["key"] == "python" for l in detail["supported"]["languages"])
+    assert "needs Go, which is not turned on" in detail["message"]
+    assert "boss toolchains enable go" in detail["message"]
+    assert detail["off"] == [{"language": "Go", "enable": "boss toolchains enable go"}]
 
 
 def test_started_anyway_on_the_persons_word(client, building):
@@ -77,10 +95,10 @@ def test_a_workflow_that_does_not_build_may_discuss_go(client, deciding):
 
 
 def test_the_console_can_ask_before_start(client):
-    r = client.get("/v1/stacks", params={"project_id": PROJECT, "text": "build it in Go"})
+    r = client.get("/v1/stacks", params={"project_id": PROJECT, "text": "build it in Rust"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["check"]["ok"] is False and body["check"]["unsupported"] == ["Go"]
+    assert body["check"]["ok"] is False and body["check"]["unsupported"] == ["Rust"]
     assert "Python" in body["sentence"]
     ok = client.get("/v1/stacks", params={"project_id": PROJECT, "text": "a Flask API"}).json()
     assert ok["check"]["ok"] is True

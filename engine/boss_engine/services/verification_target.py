@@ -703,6 +703,14 @@ class GatePlan:
         return self.source in ("manifest", "manifest_error")
 
     @property
+    def needs_human(self) -> bool:
+        """The gate cannot run here and no code change makes it run: the project's stack needs a
+        toolchain this install lacks, or is one BOSS cannot build. A person turns it on (or
+        changes the brief); a repair round never gets it, and nothing may gate it as another
+        stack instead."""
+        return self.source == "toolchain_missing" and bool(self.error)
+
+    @property
     def runs_steps(self) -> bool:
         """Run as `steps` from the repo root, no web scaffold repair: a manifest plan, or a
         stack plan from an opt-in toolchain (services.toolchains), including the one that says
@@ -882,15 +890,43 @@ def resolve_gate_plan(
     app_dir = app_dir or where.path
     node_here = (app_dir / "package.json").is_file() \
         or str(spec.get("project_kind", "")).lower() in _WEB_KINDS
+    compiled = stacks.compiled_stack(app_dir)
+    if compiled != "java":
+        java = None
+    # A STACK THIS INSTALL CANNOT RUN IS NOT GATED AS ANOTHER ONE. Without its toolchain, a Java
+    # or Go build in the app's directory is toolchain_missing even with a package.json or a
+    # Python manifest beside it: otherwise a repair that adds a package.json flips the gate to
+    # npm and "passes" code nobody compiled (the class of the Northgate build, 2026-11-15).
+    # toolchain_missing is a person's to fix (GatePlan.needs_human), never a repair's.
+    if java and not toolchains.has("java"):
+        message = toolchains.missing_message("java", toolchains.build_file(java))
+        return GatePlan([], app_dir, "toolchain_missing", message, error=message)
+    if compiled == "go" and not toolchains.has("go"):
+        message = toolchains.missing_message("go", "go.mod")
+        return GatePlan([], app_dir, "toolchain_missing", message, error=message)
     if java and not node_here:
-        if not toolchains.has("java"):
-            message = toolchains.missing_message("java", toolchains.build_file(java))
-            return GatePlan([], app_dir, "toolchain_missing", message, error=message)
         commands = toolchains.java_gate_commands(java)
         # A first build downloads its dependencies through egress: give it the manifest's room.
         return GatePlan(commands, app_dir, "toolchain", " && ".join(commands),
                         timeout_seconds=toolchains.GATE_TIMEOUT_SECONDS,
                         steps=[(c, app_dir) for c in commands])
+    # A GO MODULE (go.mod) in the app's directory and no Node app there: `go vet` and `go test`.
+    # ANY OTHER STACK'S MANIFEST BOSS CANNOT RUN (go.mod without Go turned on, a Cargo.toml, a
+    # Gemfile …) and no Node or Python app beside it: the gate says so in words. Never the npm
+    # or Python default — Northgate's Go tree was "verified" as a Node package (2026-11-15).
+    py_here = any((app_dir / n).is_file()
+                  for n in ("requirements.txt", "pyproject.toml", "setup.py", "Pipfile"))
+    if compiled == "go" and not node_here and not py_here:
+        commands = list(toolchains.GO_GATE)
+        return GatePlan(commands, app_dir, "toolchain", " && ".join(commands),
+                        timeout_seconds=toolchains.GATE_TIMEOUT_SECONDS,
+                        steps=[(c, app_dir) for c in commands])
+    if not node_here and not py_here:
+        foreign = stacks.unsupported_manifest(app_dir)
+        if foreign is not None:
+            label, manifest = foreign
+            message = toolchains.unsupported_message(label, manifest)
+            return GatePlan([], app_dir, "toolchain_missing", message, error=message)
     commands = default_test_commands(spec, title)
     # THE APP'S OWN FILES SAY WHAT IT IS when the task does not (no explicit project_kind): a
     # folder with a package.json and no Python manifest is a Node app whatever the brief's
