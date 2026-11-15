@@ -15181,3 +15181,64 @@ DO $$ BEGIN
     CHECK (aud IN ('boss:api', 'boss:mcp', 'boss:egress', 'boss:token', 'boss:model', 'boss:run_plane'));
 END $$;
 -- ================================ end P8b-6/7 ==
+-- ================================ AMEX-G3 (BOSSAPP-1139): a non-zero exit fails the step ==
+-- `skill.sandboxed_command` always returned `exit_code`, and the workflow runner never read it:
+-- a validator that exited 1 went green and the run went on to deploy. New sandboxed_command
+-- skills are saved with `fail_on_exit: true` (skill_definitions.validate_config); the ones
+-- authored before the flag existed keep today's behaviour by an EXPLICIT false, written ONCE.
+-- ONE-TIME, not on every boot: recorded in `schema_backfills`, so a skill authored or edited
+-- after this ran (which always carries the key) is never touched by it again.
+CREATE TABLE IF NOT EXISTS schema_backfills (
+  key TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rows_changed INTEGER NOT NULL DEFAULT 0
+);
+DO $$
+DECLARE changed INTEGER;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_backfills WHERE key = 'amex_g3_fail_on_exit_false') THEN
+    UPDATE skill_definitions
+       SET config = config || '{"fail_on_exit": false}'::jsonb
+     WHERE behaviour_kind = 'sandboxed_command'
+       AND NOT (config ? 'fail_on_exit');
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    INSERT INTO schema_backfills (key, rows_changed)
+    VALUES ('amex_g3_fail_on_exit_false', changed) ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;
+-- ================================ end AMEX-G3 ==
+-- ================================ BOSSAPP-1163: standing grants cover the project's local repos ==
+-- A grant now names the repositories BOSS keeps ON THIS MACHINE as `resources.local.repos`
+-- (identity/grants.py). Standing grants made before that named none, so a schedule on a
+-- local-first project stopped at its next fire (consent.require_for_workflow: AuthorityLost
+-- `grant_no_longer_covers`). Each live standing grant (never a task grant, never the Captain
+-- authority, which keeps its own repositories) gains its OWN projects' registered local
+-- repositories, nothing else. Idempotent: a grant already naming them all is not touched.
+-- In a DO block: the grants table's statement trigger bumps the permission epoch, so the
+-- UPDATE runs only when some grant still misses a repository (not on every deploy).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM identity_delegation_grants g JOIN github_repository_bindings b
+                ON b.project_id = ANY(g.project_ids) AND b.host = 'local'
+               AND COALESCE(b.status, 'active') = 'active'
+               AND split_part(b.full_name, '/', 1) = 'local_' || b.project_id
+             WHERE g.status = 'active' AND g.task_run_id IS NULL AND COALESCE(g.authority_kind, '') <> 'captain'
+               AND NOT (COALESCE(g.resources->'local'->'repos', '[]'::jsonb) ? b.full_name)) THEN
+    UPDATE identity_delegation_grants g
+       SET resources = jsonb_set(COALESCE(g.resources, '{}'::jsonb), '{local}', jsonb_build_object('repos', (
+             SELECT jsonb_agg(DISTINCT u.r ORDER BY u.r) FROM (
+               SELECT jsonb_array_elements_text(COALESCE(g.resources->'local'->'repos', '[]'::jsonb)) AS r
+               UNION
+               SELECT b.full_name FROM github_repository_bindings b
+                WHERE b.project_id = ANY(g.project_ids) AND b.host = 'local'
+                  AND COALESCE(b.status, 'active') = 'active'
+                  AND split_part(b.full_name, '/', 1) = 'local_' || b.project_id) u)))
+     WHERE g.status = 'active' AND g.task_run_id IS NULL AND COALESCE(g.authority_kind, '') <> 'captain'
+       AND EXISTS (SELECT 1 FROM github_repository_bindings b
+                    WHERE b.project_id = ANY(g.project_ids) AND b.host = 'local'
+                      AND COALESCE(b.status, 'active') = 'active'
+                      AND split_part(b.full_name, '/', 1) = 'local_' || b.project_id
+                      AND NOT (COALESCE(g.resources->'local'->'repos', '[]'::jsonb) ? b.full_name));
+  END IF;
+END $$;
+-- ================================ end BOSSAPP-1163 ==

@@ -36,12 +36,30 @@ def name_the_driver(environ) -> None:
 
 name_the_driver(os.environ)
 
+# NOT INSIDE THE LIVE INSTALL'S SERVER (BOSSAPP-1152). The tests here create and drop databases
+# and schemas on BOSS_TEST_DATABASE_URL's server. On the server the install uses
+# (BOSS_DATABASE_URL, or a DATABASE_URL not named like a test database) that is allowed only for
+# a database called boss_test* / boss_scratch*; anything else is refused with the way to start
+# the separate test Postgres (`db-test`, compose profile `dev`).
+from boss_engine.dev.test_databases import guard_test_url as _guard_test_url, session_start as _session_start  # noqa: E402
+
+_guard_test_url(variable="BOSS_TEST_DATABASE_URL")
+
 # A RUNAWAY QUERY FAILS FAST (BOSSAPP-1144). A test-helper catalog join ran for minutes on the
 # shared bench DB and spilled 6-11 GB of temp files. libpq reads PGOPTIONS for every connection
 # this process opens that does not name its own `options`, so one line covers every engine.
 os.environ.setdefault("PGOPTIONS", "-c statement_timeout=60000")
 
 from sqlalchemy import text
+
+
+def pytest_sessionstart(session):
+    """Storage hygiene first (BOSSAPP-1162): drop `boss_scratch_*_<stamp>` databases and
+    `boss_test_*_<stamp>` schemas past their 24 h TTL on the test server — never an unstamped
+    name — and warn when its lock table is too small for a schema this size. Best effort."""
+    for line in _session_start(os.environ.get("BOSS_TEST_DATABASE_URL", "")):
+        print(line)
+
 
 # Identity needs a PERSISTENT server key and refuses to run without one (F3/L2). Tests get a fixed,
 # test-only key (never a real one) unless the run names its own.

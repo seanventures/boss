@@ -92,6 +92,16 @@ Commands:
                       upgrade and update. Also: --dry-run
   host-sample         macOS: post this Mac's swap and biggest memory users to BOSS's system
                       doctor, which cannot see past Docker Desktop's VM
+  dev CMD             Developer tooling for the test Postgres (compose profile `dev`, db-test,
+                      port 55700; never the install's database):
+                        up | down             start or stop db-test; up prints the URL to export
+                        sweep-test-db         drop boss_scratch_*_<stamp> databases and
+                                              boss_test_*_<stamp> schemas older than 24 h, by the
+                                              UTC stamp in the name, nothing else. --dry-run lists;
+                                              --max-age-hours N; --include-unstamped also the API
+                                              suite's legacy boss_test_<12 hex> schemas no session
+                                              holds a lock in; --url for another test server
+                        test-db-preflight     is max_locks_per_transaction big enough for the schema?
   steward CMD         The Infra Agent's host helper (pull-only; storage readings + signed, typed
                       cleanup jobs with a label gate): install | uninstall | status | run
   identity CMD        Named accounts, from the host shell:
@@ -443,6 +453,39 @@ cmd_prune() {
   need_install
   BOSS_DEDICATED_HOST="$(env_value BOSS_DEDICATED_HOST)" \
     bash "$INSTALL_DIR/scripts/install/prune.sh" "$@"
+}
+
+# ---- dev: the test Postgres (storage hygiene, BOSSAPP-1152/1162) -----------------------------
+#
+# Tests never run inside the install's database server. `db-test` (compose profile `dev`) is a
+# second Postgres from the same image on port 55700 with its own volume; the suites refuse a
+# database inside `db` unless it is named boss_test*/boss_scratch*. The sweeper and the preflight
+# are boss_engine code (engine/boss_engine/dev/test_databases.py) and run inside the api
+# container, which reaches db-test over the compose network; the password travels in the URL
+# through the container's environment and is never printed (the engine redacts it).
+cmd_dev() {
+  need_install
+  local action="${1:-}"; shift || true
+  local port url
+  port="$(env_value BOSS_TEST_POSTGRES_PORT)"; port="${port:-55700}"
+  case "$action" in
+    up)
+      compose --profile dev up -d db-test
+      printf 'Test Postgres is up. Point the suites at it:\n'
+      printf '  export BOSS_TEST_DATABASE_URL=postgresql+psycopg://boss:$BOSS_DB_PASSWORD@localhost:%s/boss_test\n' "$port"
+      printf '(BOSS_DB_PASSWORD is in %s/.env; never paste it into a chat or a ticket.)\n' "$INSTALL_DIR" ;;
+    down)
+      compose --profile dev stop db-test ;;
+    sweep-test-db|test-db-preflight)
+      # Inside the compose network the test server is db-test:5432. --url overrides, e.g. for a
+      # bench database on another server the tests were pointed at.
+      url="postgresql+psycopg://boss:$(env_value BOSS_DB_PASSWORD)@db-test:5432/boss_test"
+      compose exec -T -u boss -e "BOSS_TEST_DATABASE_URL=$url" api \
+        python -m boss_engine dev "$action" "$@" </dev/null ;;
+    *)
+      printf 'boss dev: up | down | sweep-test-db [--dry-run] [--max-age-hours N] [--include-unstamped] [--url URL] | test-db-preflight [--url URL]\n' >&2
+      exit 2 ;;
+  esac
 }
 
 cmd_update() {
@@ -1676,6 +1719,7 @@ case "$COMMAND" in
   uninstall) cmd_uninstall "$@" ;;
   prune) cmd_prune "$@" ;;
   host-sample) cmd_host_sample "$@" ;;
+  dev) cmd_dev "$@" ;;
   steward) cmd_steward "$@" ;;
   toolchains) cmd_toolchains "$@" ;;
   self-fix) cmd_self_fix "$@" ;;

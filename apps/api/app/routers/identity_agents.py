@@ -124,6 +124,7 @@ def _grant_json(g, db) -> dict[str, Any]:
 
     names = _names(db, [g.user_principal_id, *g.agent_ids])
     gh = grants.github_resources(g)
+    loc = grants.local_resources(g)
     last = db.execute(text("SELECT last_used_at FROM identity_delegation_grants WHERE id = :g"), {"g": g.id}).scalar()
     last_run = db.execute(text("SELECT run_id FROM identity_run_credentials WHERE grant_id = :g ORDER BY issued_at DESC "
                                "LIMIT 1"), {"g": g.id}).scalar()
@@ -136,6 +137,8 @@ def _grant_json(g, db) -> dict[str, Any]:
         "github": ({"repos": list(gh.get("repos") or []), "contents": gh.get("contents"),
                     "pull_requests": gh.get("pull_requests"), "ref_rule": "boss/*" if gh.get("contents") == "write" else None,
                     "as_user": bool(gh.get("as_user"))} if gh else None),
+        # Repositories on this machine the grant covers (BOSSAPP-1163; grants.local_resources).
+        "local": ({"repos": list(loc.get("repos") or [])} if loc.get("repos") else None),
         "subdelegation": {"allowed": g.allow_subdelegation, "to": list(g.allowed_children)},
         "max_depth": g.max_depth, "created_at": g.created_at.isoformat(),
         "expires_at": g.expires_at.isoformat() if g.expires_at else None, "purpose": g.purpose or None,
@@ -536,7 +539,7 @@ def build_identity_agents_router() -> APIRouter:
         from datetime import timedelta, timezone
 
         known = {"agents", "permissions", "projects", "resources", "allow_subdelegation", "allowed_children",
-                 "max_depth", "expires_at", "task_run_id", "purpose", "kind", "days", "github"}
+                 "max_depth", "expires_at", "task_run_id", "purpose", "kind", "days", "github", "local"}
         if not isinstance(body, dict) or set(body) - known:
             return _err("unknown_fields", 422)          # mass assignment: no user/org/status fields
         kind = body.get("kind") or ("task" if body.get("task_run_id") else "standing")
@@ -554,6 +557,9 @@ def build_identity_agents_router() -> APIRouter:
         resources = dict(body.get("resources") or {})
         if body.get("github") and "github" not in resources:
             resources["github"] = body["github"]
+        # The sheet's `local` block: repositories on this machine (grants._validate_local).
+        if body.get("local") and "local" not in resources:
+            resources["local"] = body["local"]
         return GrantRequest(
             agent_ids=tuple(body.get("agents") or ()), permissions=frozenset(body.get("permissions") or ()),
             project_ids=tuple(body.get("projects") or ()), resources=resources,

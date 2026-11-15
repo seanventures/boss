@@ -134,6 +134,13 @@ export const REFUSAL_WORDS: Readonly<Record<string, (body: Body) => string>> = {
   github_access_lacking: (b) => (strOf(b.repo)
     ? `Your own GitHub account can't push to ${strOf(b.repo)}, so you can't let an agent do it. Connect your GitHub in My account › Agents, then try again.`
     : "Connect your GitHub first"),
+  // A repository on this machine belongs to one project (engine grants._validate_local).
+  repo_outside_projects: (b) => (strOf(b.repo)
+    ? `${strOf(b.repo)} belongs to another project. Pick that project too, or leave the repository out.`
+    : "That repository belongs to another project"),
+  repo_not_registered: (b) => (strOf(b.repo)
+    ? `${strOf(b.repo)} isn't registered to that project on this machine.`
+    : "That repository isn't registered to the project"),
   public_origin_required: () => "Set BOSS's public address first",
   run_token_required: () => "Only a running agent can do this",
   unknown_provider: () => "BOSS doesn't know that provider",
