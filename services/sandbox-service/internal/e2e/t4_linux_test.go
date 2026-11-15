@@ -72,8 +72,11 @@ func TestP8aT4NoVMOriginatesAPacket(t *testing.T) {
 	})
 	hb, _ := e.cp.LastHeartbeat(e.hostID())
 	f := hb.Facts
-	if !f.KVM || !f.FirecrackerLive || !f.Seccomp || !f.StrictSecrets || !f.NetPolicyOK || f.Jailer {
+	if !f.KVM || !f.FirecrackerLive || !f.Seccomp || !f.StrictSecrets || !f.NetPolicyOK {
 		t.Fatalf("heartbeat facts on KVM: %+v", f)
+	}
+	if f.Jailer != (os.Getenv("BOSS_E2E_JAILER_BIN") != "") {
+		t.Fatalf("jailer_on must be measured, not configured: %+v", f)
 	}
 	t.Logf("heartbeat facts: kvm=%v firecracker_live=%v seccomp=%v jailer=%v smt_off=%v ksm_off=%v swap_off=%v strict=%v net_policy_ok=%v reasons=%v",
 		f.KVM, f.FirecrackerLive, f.Seccomp, f.Jailer, f.SMTOff, f.KSMOff, f.SwapOff, f.StrictSecrets, f.NetPolicyOK, f.Reasons)
@@ -125,17 +128,24 @@ func TestP8aT4NoVMOriginatesAPacket(t *testing.T) {
 	}
 	t.Logf("per_run VM: interfaces=%v, egress=%v", ifs, sc)
 
-	// Positive control: rep-01 deliberately tries to get out.
+	// Positive control: rep-01 deliberately tries to get out. Under the
+	// jailer (P8b) Firecracker's MMDS answers 169.254.169.254 inside the VM
+	// with non-secret data, so that probe connects without a frame ever
+	// reaching the tap; every other probe must die at the host end.
+	mmds := os.Getenv("BOSS_E2E_JAILER_BIN") != ""
 	sc = control(t, e.mgr, "vm_01", "selfcheck_egress").Selfcheck
 	for k, v := range sc {
+		if mmds && strings.Contains(k, "169.254.169.254") && v == "CONNECTED" {
+			continue
+		}
 		if v == "CONNECTED" || v == "REPLY" || v == "RESOLVED" {
 			t.Fatalf("replica egress escaped: %s=%s", k, v)
 		}
 	}
 	time.Sleep(500 * time.Millisecond)
 	c1, _ := nc.Counters(context.Background(), netpol.TapName("vm_01"))
-	if c1.Originated == 0 || c1.Metadata == 0 {
-		t.Fatalf("deliberate egress was not counted: %+v (guest saw %v)", c1, sc)
+	if c1.Originated == 0 || (c1.Metadata == 0) != mmds {
+		t.Fatalf("deliberate egress was not counted as expected (mmds=%v): %+v (guest saw %v)", mmds, c1, sc)
 	}
 	for i := 2; i <= n; i++ {
 		c, _ := nc.Counters(context.Background(), netpol.TapName(fmt.Sprintf("vm_%02d", i)))

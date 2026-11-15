@@ -200,15 +200,13 @@ func (a *Agent) Heartbeat(ctx context.Context) hostapi.HeartbeatRequest {
 	a.hbCount++
 	readCounters := a.hbCount%5 == 1 // nft counters every ~10 s
 	frozen := a.cfg.ClaimsFrozen
-	pools := map[string]hostapi.PoolDepth{}
-	if a.desired != nil {
-		frozen = frozen || a.desired.ClaimsFrozen
-		for _, p := range a.desired.Pools {
-			pools[p.DeploymentID] = hostapi.PoolDepth{Depth: 0, MinWarm: p.MinWarm}
-		}
+	ds := a.desired
+	if ds != nil {
+		frozen = frozen || ds.ClaimsFrozen
 	}
-	running := len(a.vms)
+	running := len(a.vms) + len(a.warm)
 	a.mu.Unlock()
+	pools := a.warmPoolsLocked(ds)
 
 	replicas := a.replicaStatuses(ctx, readCounters)
 	status := "ready"

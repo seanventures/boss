@@ -42,3 +42,31 @@ func zombie(pid int) bool {
 	}
 	return raw[i+2] == 'Z' || raw[i+2] == 'X'
 }
+
+// Root is the process's root directory ("/" unless chrooted; "" if unknown).
+func Root(pid int) string {
+	link, err := os.Readlink("/proc/" + strconv.Itoa(pid) + "/root")
+	if err != nil {
+		return ""
+	}
+	return link
+}
+
+// UID is the process's real uid (-1 if unknown).
+func UID(pid int) int {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return -1
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "Uid:") {
+			f := strings.Fields(line[4:])
+			if len(f) > 0 {
+				if n, err := strconv.Atoi(f[0]); err == nil {
+					return n
+				}
+			}
+		}
+	}
+	return -1
+}

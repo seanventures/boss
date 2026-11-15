@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanheiney/boss/services/sandbox-service/internal/vmm"
 )
 
 // facts measures the hardening facts. Each false fact carries its reason.
@@ -33,7 +34,15 @@ func (a *Agent) facts(ctx context.Context) hostapi.Attestation {
 		f.Reasons["firecracker_live"] = "backend is " + a.cfg.Manager.Name()
 		f.Reasons["seccomp_default"] = "backend is " + a.cfg.Manager.Name()
 	}
-	f.Reasons["jailer_on"] = "jailer lands in P8b"
+	if att, ok := a.cfg.Manager.(vmm.Attestor); ok && fc {
+		if on, why := att.JailerOn(); on {
+			f.Jailer = true
+		} else {
+			f.Reasons["jailer_on"] = why
+		}
+	} else {
+		f.Reasons["jailer_on"] = "backend is " + a.cfg.Manager.Name()
+	}
 	if v, ok := readTrim("/sys/devices/system/cpu/smt/active"); ok {
 		f.SMTOff = v == "0"
 		if !f.SMTOff {

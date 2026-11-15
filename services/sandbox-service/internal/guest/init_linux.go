@@ -4,6 +4,7 @@ package guest
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -13,10 +14,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// InitSystem does what PID 1 must before the daemon runs: mounts, loopback
-// up, and child reaping. The root disk is the shared read-only base image;
-// writable state lives on tmpfs (and the per-VM overlay drive in P8b).
+// OverlayDevice is the per-VM writable overlay drive (the second virtio
+// block device; the first is the shared read-only base rootfs).
+const OverlayDevice = "/dev/vdb"
+
+// InitSystem does what PID 1 must before the daemon runs: mounts, the
+// writable overlay root when an overlay drive is attached, loopback up, and
+// child reaping. The root disk is the shared read-only base image; without an
+// overlay drive writable state lives on tmpfs.
 func InitSystem() error {
+	_ = os.MkdirAll("/dev", 0o755)
+	if err := unix.Mount("devtmpfs", "/dev", "devtmpfs", 0, ""); err != nil && err != unix.EBUSY {
+		fmt.Fprintf(os.Stderr, "boss-vsockd init: mount /dev: %v\n", err)
+	}
+	if err := switchToOverlay(); err != nil {
+		fmt.Fprintf(os.Stderr, "boss-vsockd init: overlay root: %v (staying on the read-only root)\n", err)
+	}
 	mounts := []struct{ src, dst, fstype string }{
 		{"proc", "/proc", "proc"},
 		{"sysfs", "/sys", "sysfs"},
@@ -41,6 +54,51 @@ func InitSystem() error {
 	return nil
 }
 
+// switchToOverlay mounts the overlay drive and pivots into an overlayfs root
+// (lower = the read-only base, upper = the drive), so every path is writable
+// and nothing is ever written to the shared base (LLD §3.4). No drive: no-op.
+func switchToOverlay() error {
+	if _, err := os.Stat(OverlayDevice); err != nil {
+		return nil
+	}
+	if err := unix.Mount("tmpfs", "/run", "tmpfs", 0, ""); err != nil && err != unix.EBUSY {
+		return fmt.Errorf("tmpfs /run: %w", err)
+	}
+	for _, d := range []string{"/run/ov", "/run/newroot"} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+	}
+	if err := unix.Mount(OverlayDevice, "/run/ov", "ext4", 0, ""); err != nil {
+		return fmt.Errorf("mount overlay drive: %w", err)
+	}
+	for _, d := range []string{"/run/ov/upper", "/run/ov/work"} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+	}
+	opts := "lowerdir=/,upperdir=/run/ov/upper,workdir=/run/ov/work"
+	if err := unix.Mount("overlay", "/run/newroot", "overlay", 0, opts); err != nil {
+		return fmt.Errorf("mount overlayfs: %w", err)
+	}
+	if err := os.MkdirAll("/run/newroot/oldroot", 0o755); err != nil {
+		return err
+	}
+	if err := os.Chdir("/run/newroot"); err != nil {
+		return err
+	}
+	if err := unix.PivotRoot(".", "oldroot"); err != nil {
+		return fmt.Errorf("pivot_root: %w", err)
+	}
+	if err := os.Chdir("/"); err != nil {
+		return err
+	}
+	// The overlay holds its own references to the lower and upper mounts.
+	_ = unix.Unmount("/oldroot", unix.MNT_DETACH)
+	_ = os.Remove("/oldroot")
+	return nil
+}
+
 func reap() {
 	ch := make(chan os.Signal, 8)
 	signal.Notify(ch, syscall.SIGCHLD)
@@ -56,8 +114,9 @@ func reap() {
 }
 
 // ReplicaNetSetup configures eth0 as a routed /32 behind the host's
-// proxy-ARP gateway (LLD §3.7.1). The VIP on tunl0 lands with the directors
-// in P8b.
+// proxy-ARP gateway (LLD §3.7.1). A restored clone first takes its own MAC
+// from the bootstrap (the snapshot's NIC carries the template's). The VIP on
+// tunl0 lands with the directors.
 func ReplicaNetSetup(b *Bootstrap) error {
 	ip := net.ParseIP(b.VMIP).To4()
 	gw := net.ParseIP(b.Gateway).To4()
@@ -75,6 +134,12 @@ func ReplicaNetSetup(b *Bootstrap) error {
 	if err != nil {
 		return fmt.Errorf("eth0: %w", err)
 	}
+	if mac, err := net.ParseMAC(b.MAC); err == nil && link.Attrs().HardwareAddr.String() != mac.String() {
+		_ = netlink.LinkSetDown(link)
+		if err := netlink.LinkSetHardwareAddr(link, mac); err != nil {
+			log.Printf("boss-vsockd: eth0 mac %s: %v", mac, err)
+		}
+	}
 	if err := netlink.AddrReplace(link, &netlink.Addr{IPNet: &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}}); err != nil {
 		return fmt.Errorf("addr: %w", err)
 	}
@@ -85,6 +150,10 @@ func ReplicaNetSetup(b *Bootstrap) error {
 	if err := netlink.RouteReplace(&netlink.Route{LinkIndex: link.Attrs().Index, Dst: gwNet, Scope: netlink.SCOPE_LINK}); err != nil {
 		return fmt.Errorf("gw route: %w", err)
 	}
+	// MMDS (169.254.169.254) is answered by Firecracker on eth0 itself; the
+	// host tap drops anything to it, so this never leaves the VM.
+	mmds := &net.IPNet{IP: net.IPv4(169, 254, 169, 254), Mask: net.CIDRMask(32, 32)}
+	_ = netlink.RouteReplace(&netlink.Route{LinkIndex: link.Attrs().Index, Dst: mmds, Scope: netlink.SCOPE_LINK})
 	if err := netlink.RouteReplace(&netlink.Route{LinkIndex: link.Attrs().Index, Gw: gw, Flags: int(netlink.FLAG_ONLINK)}); err != nil {
 		return fmt.Errorf("default route: %w", err)
 	}
