@@ -10,6 +10,7 @@ import secrets
 PREFIXES = frozenset({
     "usr", "sva", "agt", "sys", "grp", "arl", "rbd", "ses", "key", "pky", "inv", "idp", "dlg", "acr",
     "rt", "vlt", "egr", "evt", "pcn", "apd",
+    "mdl",  # a model-gateway handle row (boss_mdl_, P8b S10)
 })
 
 

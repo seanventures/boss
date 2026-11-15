@@ -14825,3 +14825,33 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS target TEXT;
 CREATE INDEX IF NOT EXISTS idx_jobs_target_claimable ON jobs (target, priority, created_at)
   WHERE target IS NOT NULL AND status IN ('queued', 'failed_retryable', 'leased', 'running');
 -- ================================ end P8a ==
+
+-- ================================ P8b: contract v1.1 and the model gateway (BOSSAPP-1070/1071) ==
+-- MODEL-GATEWAY HANDLES (boss-agent-hosts-lld.md §3.9, §3.1): the `boss_mdl_` placeholder a
+-- guest holds instead of a provider key. Stored HASHED, bound to (run, fence_epoch, vm_id), ≤ the
+-- run's life, revoked at run end or on a replay. `credential_ref` names WHERE the gateway reads the
+-- real key (secret_ref:<id> | env:<NAME> | llm_gateway:<id>); the row never holds a key.
+CREATE TABLE IF NOT EXISTS model_gateway_handles (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  fence_epoch BIGINT NOT NULL DEFAULT 0,
+  vm_id TEXT,
+  deployment_id TEXT,
+  provider TEXT NOT NULL,
+  upstream TEXT,
+  credential_ref TEXT NOT NULL,
+  models TEXT[] NOT NULL DEFAULT '{}',
+  requests BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  revoked_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_model_gateway_handles_run ON model_gateway_handles (run_id);
+-- The gateway asks "which epoch is this run at now" on every call (a fenced epoch is refused
+-- within one request, §3.8 step 2); jobs are found by the run id in their payload.
+CREATE INDEX IF NOT EXISTS idx_jobs_payload_run_id ON jobs ((payload->>'run_id'));
+-- ================================ end P8b ==

@@ -56,6 +56,7 @@ func (leakyBackend) Run(_ context.Context, r backend.RunRequest) error {
 // is owner-only, no spec survives, .git/config is credential-free, and the fs
 // endpoint refuses spec.json, .git/config and *credentials* paths.
 func TestFailedTaskIsRetainedScrubbedAndOwnerOnly(t *testing.T) {
+	legacyLane(t) // v1.0 carried the token the retention hygiene scrubs; v1.1 never carries one
 	store := job.NewStore(false)
 	b := leakyBackend{}
 	store.ConfigureBackend(b.Name(), b.Check)
@@ -168,6 +169,7 @@ func TestFailedTaskIsRetainedScrubbedAndOwnerOnly(t *testing.T) {
 // P8pre-T5 (Go half): an unknown engine_env name, and a credential sent to an
 // engine that never reads it, are refused with named reasons.
 func TestSubmitRefusesUnknownAndForeignEngineEnv(t *testing.T) {
+	legacyLane(t)
 	srv := New(job.NewStore(false), "tok")
 	for env, reason := range map[string]string{
 		"ANTHROPIC_API_KEY": contract.ReasonEngineEnvUnknown,
@@ -186,6 +188,58 @@ func TestSubmitRefusesUnknownAndForeignEngineEnv(t *testing.T) {
 		_ = json.NewDecoder(res.Body).Decode(&e)
 		if e.Reason != reason || !strings.Contains(e.Error, env) || strings.Contains(e.Error, "value-not-printed") {
 			t.Fatalf("%s: reason=%q error=%q", env, e.Reason, e.Error)
+		}
+	}
+}
+
+// legacyLane puts the service on the frozen v1.0 lane (P8b S9): strict secrets off and
+// legacy bodies allowed, for the tests that pin what v1.0 still does there.
+func legacyLane(t *testing.T) {
+	t.Setenv("BOSS_SANDBOX_CONTRACT_LEGACY", "1")
+	t.Setenv("BOSS_STRICT_SECRETS", "0")
+}
+
+// P8b S9: a strict host refuses a v1.1 body carrying a raw credential field, and a
+// v1.0 body outright, each with its named reason and never the value.
+func TestStrictHostRefusesRawCredentialsAndLegacyBodies(t *testing.T) {
+	srv := New(job.NewStore(false), "tok")
+	cases := []struct {
+		name, reason string
+		body         map[string]any
+	}{
+		{"git_token", contract.ReasonRawCredentialField, map[string]any{
+			"contract_version": "1.1", "task_id": "crun_raw", "engine": "claude_code",
+			"repo": map[string]string{"owner": "o", "name": "r"}, "git_token": "ghs_value-not-printed",
+			"handles": map[string]string{}, "endpoints": map[string]string{}}},
+		{"engine_env", contract.ReasonRawCredentialField, map[string]any{
+			"contract_version": "1.1", "task_id": "crun_raw", "engine": "claude_code",
+			"repo":       map[string]string{"owner": "o", "name": "r"},
+			"engine_env": map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "value-not-printed"},
+			"handles":    map[string]string{}, "endpoints": map[string]string{}}},
+		{"handle_is_not_a_handle", contract.ReasonRawCredentialField, map[string]any{
+			"contract_version": "1.1", "task_id": "crun_raw", "engine": "claude_code",
+			"repo":    map[string]string{"owner": "o", "name": "r"},
+			"handles": map[string]string{"mdl": "sk-ant-api03-value-not-printed-xxxxxxxxxxxxxxxx"}, "endpoints": map[string]string{}}},
+		{"secret_shaped_value", contract.ReasonSecretShapedValue, map[string]any{
+			"contract_version": "1.1", "task_id": "crun_raw", "engine": "claude_code",
+			"repo":      map[string]string{"owner": "o", "name": "r"},
+			"resources": map[string]any{"GITHUB_TOKEN": "value-not-printed"},
+			"handles":   map[string]string{}, "endpoints": map[string]string{}}},
+		{"legacy_v10", contract.ReasonContractLegacyRefused, map[string]any{
+			"contract_version": "1.0", "task_id": "crun_old", "engine": "claude_code",
+			"repo": map[string]string{"owner": "o", "name": "r"}, "git_token": "",
+			"engine_env": map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "value-not-printed"}}},
+	}
+	for _, c := range cases {
+		body, _ := json.Marshal(c.body)
+		res := doJSON(t, srv, http.MethodPost, "/v1/sandbox/tasks", body, "tok")
+		if res.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: status=%d", c.name, res.StatusCode)
+		}
+		var e contract.ErrorBody
+		_ = json.NewDecoder(res.Body).Decode(&e)
+		if e.Reason != c.reason || strings.Contains(e.Error, "value-not-printed") {
+			t.Fatalf("%s: reason=%q error=%q", c.name, e.Reason, e.Error)
 		}
 	}
 }

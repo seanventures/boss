@@ -38,9 +38,32 @@ func TestGuestSpecFromGoldenSubmit(t *testing.T) {
 	if spec["base_branch"] != "main" {
 		t.Fatalf("base_branch: %v", spec["base_branch"])
 	}
-	// engine_env env-var names flatten to the guest's field names.
-	if spec["claude_oauth_token"] == nil || spec["claude_oauth_token"] == "" {
-		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN must map to claude_oauth_token: %v", spec)
+	// v1.1: handles, endpoints and mcp ride into the guest; no credential field does.
+	handles, _ := spec["handles"].(map[string]string)
+	if handles["mdl"] == "" || !strings.HasPrefix(handles["mdl"], "boss_mdl_") {
+		t.Fatalf("handles.mdl must reach the guest: %v", spec)
+	}
+	if spec["endpoints"].(map[string]string)["model"] != "http://127.0.0.1:7101" {
+		t.Fatalf("endpoints must reach the guest: %v", spec)
+	}
+	for _, field := range []string{"token", "claude_oauth_token", "openai_api_key", "azure_key"} {
+		if _, ok := spec[field]; ok {
+			t.Fatalf("a v1.1 guest spec carries %s", field)
+		}
+	}
+	// The legacy fixture still flattens engine_env names to the guest's fields (frozen lane).
+	legacy, err := DecodeSubmit(func() []byte {
+		raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "testdata", "submit_legacy_v10.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if GuestSpec(legacy)["claude_oauth_token"] != "tok" {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN must map to claude_oauth_token on the legacy lane: %v", GuestSpec(legacy))
 	}
 	// The spec must stay valid JSON (it is written to /work/spec.json).
 	if _, err := json.Marshal(spec); err != nil {
@@ -54,8 +77,8 @@ func TestGuestSpecEchoIsAlwaysOfflineTestMode(t *testing.T) {
 		TaskID:          "diag-roundtrip",
 		Engine:          "echo",
 		Repo:            RepoSpec{Owner: "o", Name: "r", BaseBranch: "main"},
-		GitToken:        "tok",
-		EngineEnv:       map[string]string{},
+		Handles:         map[string]string{},
+		Endpoints:       map[string]string{},
 	})
 	if spec["test_mode"] != true {
 		t.Fatalf("echo must force test_mode (no network, no credentials): %v", spec)
@@ -85,7 +108,8 @@ func TestCancelledIsTerminal(t *testing.T) {
 // P8pre-T5 / S1: a claude_code guest spec stages only its own engine's
 // credential; an OpenAI or Azure key is never written into its work drive.
 func TestGuestSpecStagesOnlyTheSelectedEnginesCredential(t *testing.T) {
-	req := SubmitRequest{ContractVersion: Version, TaskID: "crun_x", Engine: "claude_code",
+	legacy := Options{StrictSecrets: false, AllowLegacy: true}
+	req := SubmitRequest{ContractVersion: LegacyVersion, TaskID: "crun_x", Engine: "claude_code",
 		Repo: RepoSpec{Owner: "o", Name: "r"},
 		EngineEnv: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "tok", "OPENAI_API_KEY": "k",
 			"AZURE_OPENAI_KEY": "az"}}
@@ -98,14 +122,14 @@ func TestGuestSpecStagesOnlyTheSelectedEnginesCredential(t *testing.T) {
 	if spec["claude_oauth_token"] != "tok" {
 		t.Fatalf("claude token missing: %v", spec["claude_oauth_token"] != nil)
 	}
-	problems := ValidateSubmit(req)
+	problems := ValidateSubmitWith(req, legacy)
 	if len(problems) != 2 || !strings.HasPrefix(problems[0], ReasonEngineEnvNotForEngine+": engine_env AZURE_OPENAI_KEY") {
 		t.Fatalf("problems=%v", problems)
 	}
-	open := SubmitRequest{ContractVersion: Version, TaskID: "crun_y", Engine: "openai",
+	open := SubmitRequest{ContractVersion: LegacyVersion, TaskID: "crun_y", Engine: "openai",
 		Repo:      RepoSpec{Owner: "o", Name: "r"},
 		EngineEnv: map[string]string{"OPENAI_API_KEY": "k", "SOMETHING_ELSE": "v"}}
-	problems = ValidateSubmit(open)
+	problems = ValidateSubmitWith(open, legacy)
 	if len(problems) != 1 || !strings.HasPrefix(problems[0], ReasonEngineEnvUnknown+": engine_env SOMETHING_ELSE") {
 		t.Fatalf("problems=%v", problems)
 	}

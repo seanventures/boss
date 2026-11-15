@@ -6,7 +6,7 @@ from apps.api.app.services import sandbox_contract as sc
 
 
 def test_version_and_statuses():
-    assert sc.CONTRACT_VERSION == "1.0"
+    assert sc.CONTRACT_VERSION == "1.1" and sc.LEGACY_CONTRACT_VERSION == "1.0"
     assert sc.is_terminal("done") and sc.is_terminal("failed") and sc.is_terminal("timeout")
     assert sc.is_terminal("cancelled")
     assert not sc.is_terminal("running") and not sc.is_terminal("queued") and not sc.is_terminal(None)
@@ -30,15 +30,23 @@ def test_routes():
 def test_build_submit_request():
     spec = {"owner": "example-user", "repo": "boss-sandbox", "instructions": "do X",
             "acceptance_criteria": ["a"], "test_commands": ["pytest"], "engine": "claude_code",
-            "claude_oauth_token": "tok", "openai_api_key": "sk"}
+            "claude_oauth_token": "tok", "openai_api_key": "sk",
+            "handles": {"mdl": "boss_mdl_x", "egr": "boss_egr_y", "bogus": "boss_z"}}
     body = sc.build_submit_request(spec, "tenant-1", task_id="crun_9")
-    assert body["contract_version"] == "1.0" and body["task_id"] == "crun_9"
+    assert body["contract_version"] == "1.1" and body["task_id"] == "crun_9"
     assert body["tenant_id"] == "tenant-1"
     assert body["repo"] == {"owner": "example-user", "name": "boss-sandbox",
                             "base_branch": "main", "work_branch": "boss/code/crun_9"}
     assert body["engine"] == "claude_code"
-    # creds map into engine_env by env-var name, never baked elsewhere
-    assert body["engine_env"] == {"CLAUDE_CODE_OAUTH_TOKEN": "tok", "OPENAI_API_KEY": "sk"}
+    # v1.1: handles, the loopback endpoints and the MCP gateway URLs ride; no credential does
+    assert body["handles"] == {"mdl": "boss_mdl_x", "egr": "boss_egr_y"}
+    assert body["endpoints"]["model"] == "http://127.0.0.1:7101"
+    assert body["mcp"] == {"servers": {}}
+    assert "tok" not in str(body) and "engine_env" not in body and "git_token" not in body
+    # The frozen legacy lane still builds v1.0, narrowed to the engine's own names.
+    legacy = sc.build_submit_request(spec, "tenant-1", task_id="crun_9", legacy=True)
+    assert legacy["contract_version"] == "1.0"
+    assert legacy["engine_env"] == {"CLAUDE_CODE_OAUTH_TOKEN": "tok"}
 
 
 def test_parse_submit_response():
@@ -80,4 +88,36 @@ def test_provider_submit_body_uses_the_contract():
     from apps.api.app.services.sandbox_provider import MicroVMProvider
     p = MicroVMProvider(SimpleNamespace(sandbox_token="", sandbox_agent_url="http://svc"))
     body = p._submit_body({"owner": "o", "repo": "r", "task_id": "crun_x"}, "t")
-    assert body["contract_version"] == "1.0" and body["task_id"] == "crun_x"
+    assert body["contract_version"] == "1.1" and body["task_id"] == "crun_x"
+    assert body["handles"] == {} and body["endpoints"]["git"] == "http://127.0.0.1:7102"
+
+
+def test_v11_refuses_raw_credentials_and_v10_only_on_the_legacy_lane(monkeypatch):
+    """P8b S9: both validators refuse a credential field by name and, on a strict host, a
+    secret-shaped value anywhere; v1.0 passes only on the legacy lane and never strict."""
+    good = sc.build_submit_request({"owner": "o", "repo": "r"}, None, task_id="t1")
+    assert sc.validate_submit_request(good) == []
+    for field in ("git_token", "engine_env", "claude_oauth_token"):
+        problems = sc.validate_submit_request({**good, field: "value-not-printed"})
+        assert problems[0].startswith(f"{sc.RAW_CREDENTIAL_FIELD}: {field} ")
+        assert "value-not-printed" not in " ".join(problems)
+    bad_handle = {**good, "handles": {"mdl": "sk-ant-api03-" + "x" * 40}}
+    assert sc.validate_submit_request(bad_handle)[0].startswith(
+        f"{sc.RAW_CREDENTIAL_FIELD}: handles.mdl ")
+    shaped = {**good, "resources": {"GITHUB_TOKEN": "value-not-printed"}}
+    assert sc.validate_submit_request(shaped) == [
+        f"{sc.SECRET_SHAPED_VALUE}: resources.GITHUB_TOKEN is named like a secret and holds a value"]
+    assert sc.validate_submit_request(shaped, strict_secrets=False) == []
+    key_in_prose = {**good, "instructions": "log in with AKIAIOSFODNN7EXAMPLE"}
+    assert sc.validate_submit_request(key_in_prose)[0].startswith(sc.SECRET_SHAPED_VALUE)
+    # ids named *_key are not secrets (go_job_contract's dedupe_key, idempotency_key)
+    assert sc.validate_submit_request({**good, "dedupe_key": "go-job:x", "idempotency_key": "i"}) == []
+    legacy = sc.build_submit_request({"owner": "o", "repo": "r"}, None, task_id="t1", legacy=True)
+    monkeypatch.delenv(sc.LEGACY_ENV, raising=False)
+    assert sc.validate_submit_request(legacy)[0].startswith(sc.CONTRACT_LEGACY_REFUSED)
+    assert sc.validate_submit_request(legacy, allow_legacy=True)[0].startswith(
+        sc.CONTRACT_LEGACY_REFUSED)                       # strict host: never
+    assert sc.validate_submit_request(legacy, allow_legacy=True, strict_secrets=False) == []
+    monkeypatch.setenv(sc.LEGACY_ENV, "1")
+    assert sc.legacy_lane_enabled()
+    assert sc.validate_submit_request(legacy, strict_secrets=False) == []
