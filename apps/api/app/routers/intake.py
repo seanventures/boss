@@ -16,6 +16,7 @@ are the shapes it will read.
   POST    /v1/intake/connections/{connection_id}/test            secrets resolve, inbox stats
   POST    /v1/intake/connections/{connection_id}/rotate-secret   new secret, shown ONCE
   POST    /v1/intake/connections/{connection_id}/pause | /resume
+  PUT/DELETE /v1/intake/connections/{connection_id}/sso-attestation   identity_provider:manage
 
   EVENTS (E5) and DEAD LETTERS (E6)
   GET     /v1/intake/events?project_id=&status=&connection_id=&q=&hours=&limit=
@@ -34,6 +35,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import text as sa_text
 
 from boss_engine.connectors.intake import REGISTRY
 from boss_engine.connectors.intake.contract import MAX_BODY_BYTES, RawRequest
@@ -74,6 +76,14 @@ class ActorBody(BaseModel):
 class RotateBody(BaseModel):
     actor: Optional[str] = None
     field: Optional[str] = None
+
+
+class AttestationBody(BaseModel):
+    """§6.3: which BOSS identity provider the source's workspace signs in through, and which of
+    its verified domains may auto-link (default all). Who attested and when are stamped by BOSS."""
+    actor: Optional[str] = None
+    identity_provider_id: str
+    domains: Optional[list[str]] = Field(default=None, max_length=50)
 
 
 class ReplayBody(ProjectBody):
@@ -229,6 +239,54 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
             except Exception as error:  # noqa: BLE001
                 _fail(error)
         return _with_url(request, out)
+
+    def _same_org(db, request: Request, project_id: str) -> None:
+        """identity_provider:manage is org-only: the connection must be in the caller's org."""
+        try:
+            from .. import identity_guard
+
+            ctx = identity_guard.request_auth(request)
+        except Exception:  # noqa: BLE001 — a bare test app has no identity middleware
+            ctx = None
+        if ctx is None:
+            return
+        org = db.execute(sa_text(
+            "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+            "WHERE p.id = :p"), {"p": project_id}).scalar()
+        if str(org or "") != str(ctx.principal.org_id):
+            raise HTTPException(status_code=404, detail={"error": "not_found",
+                                                         "message": "no such connection."})
+
+    @router.put("/v1/intake/connections/{connection_id}/sso-attestation")
+    @permit(P.IDENTITY_PROVIDER_MANAGE, scope=Scope.org())
+    def attest_intake_connection(connection_id: str, body: AttestationBody,
+                                 request: Request) -> dict:
+        """An identity-provider admin attests the source signs people in through this IdP, so
+        chat users with a verified email in its domains are auto-linked (never guests)."""
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            _same_org(db, request, project_id)
+            actor = require_write_actor(db, project_id, body.actor, "integration_manage")
+            try:
+                return event_intake.set_sso_attestation(
+                    db, project_id=project_id, connection_id=connection_id, actor=actor,
+                    identity_provider_id=body.identity_provider_id, domains=body.domains)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+
+    @router.delete("/v1/intake/connections/{connection_id}/sso-attestation")
+    @permit(P.IDENTITY_PROVIDER_MANAGE, scope=Scope.org())
+    def clear_intake_attestation(connection_id: str, request: Request,
+                                 actor: Optional[str] = None) -> dict:
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            _same_org(db, request, project_id)
+            who = require_write_actor(db, project_id, actor, "integration_manage")
+            try:
+                return event_intake.clear_sso_attestation(db, project_id=project_id,
+                                                          connection_id=connection_id, actor=who)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
 
     def _set_status(connection_id: str, body: Optional[ActorBody], status: str) -> dict:
         body = body or ActorBody()

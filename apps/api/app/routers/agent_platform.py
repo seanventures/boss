@@ -10,7 +10,9 @@ surface sprawl. Keep a single router."). What the wireframes A1-A7 draw:
       POST /v1/agents/{role_key}/deployments              deploy a version (and its host)
       POST /v1/agents/{role_key}/promote                  dev/staging now; prod via a Decision
       POST /v1/agents/{role_key}/rollback
-  A4  GET  /v1/agents/{role_key}/triggers                 + POST to add one
+  A4  GET  /v1/agents/{role_key}/triggers                 + POST to add one (kind=intake: an
+                                                           event route, P9a-2; ?kind= narrows)
+      POST /v1/agents/{role_key}/triggers/preview-match   a route filter against recent events
       GET  /v1/agent-triggers/preview                     the next N firings of a schedule
       PATCH/DELETE /v1/agent-triggers/{trigger_id}, POST …/pause, …/resume, …/rotate-secret
       POST /v1/webhooks/inbound/agent/{path_token}        a signed webhook firing (public, HMAC)
@@ -34,6 +36,7 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import text as sa_text
 
 from boss_engine.db import begin
 from boss_engine.identity import P, Scope, permit, public
@@ -72,6 +75,16 @@ class TriggerBody(ProjectBody):
     concurrency: str = "skip_if_active"
     name: str = ""
     auto_pause: bool = True
+    # An `intake` route (P9a-2, boss-eventing-lld.md §5-§7): the connection it listens to, its
+    # order among the connection's routes, who the run acts for, the thread-key template, the
+    # guard limits and the quiet hours. `config` carries match / addressing / fanout / triage /
+    # double_text / goal.
+    connection_id: Optional[str] = None
+    priority: int = Field(default=100, ge=0, le=10000)
+    identity_mode: Optional[str] = None
+    thread_key: Optional[str] = None
+    limits: Optional[dict[str, Any]] = None
+    quiet_hours: Optional[dict[str, Any]] = None
 
 
 class TriggerPatchBody(ProjectBody):
@@ -80,6 +93,18 @@ class TriggerPatchBody(ProjectBody):
     concurrency: Optional[str] = None
     name: Optional[str] = None
     auto_pause: Optional[bool] = None
+    priority: Optional[int] = Field(default=None, ge=0, le=10000)
+    identity_mode: Optional[str] = None
+    thread_key: Optional[str] = None
+    limits: Optional[dict[str, Any]] = None
+    quiet_hours: Optional[dict[str, Any]] = None
+
+
+class MatchPreviewBody(ProjectBody):
+    """`match` against the connection's last `limit` parsed events (the console's "would match")."""
+    connection_id: str
+    match: Optional[dict[str, Any]] = None
+    limit: int = Field(default=50, ge=1, le=200)
 
 
 class PauseBody(ProjectBody):
@@ -244,15 +269,50 @@ def build_agent_platform_router(*, engine, require_write_actor: Callable[..., st
 
     @router.get("/v1/agents/{role_key}/triggers")
     @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
-    def list_triggers(role_key: str, project_id: str) -> dict[str, Any]:
+    def list_triggers(role_key: str, project_id: str, kind: Optional[str] = None,
+                      connection_id: Optional[str] = None) -> dict[str, Any]:
+        """Every trigger of the agent's live deployments; `kind=intake` (and `connection_id`)
+        narrows it to its event routes (P9a-2)."""
+        from boss_engine.services import intake_identity, intake_router
+
         with begin(engine) as connection:
             require_reader(connection, project_id)
             deps = agent_deployments.for_agent(connection, project_id, role_key)
             rows = _triggers.for_deployments(connection, [d["id"] for d in deps])
+            if kind:
+                rows = [r for r in rows if r["kind"] == kind]
+            if connection_id:
+                rows = [r for r in rows if r.get("connection_id") == connection_id]
             return {"agent_key": role_key,
                     "triggers": [_triggers.describe(connection, r) for r in rows],
                     "kinds": list(_triggers.KINDS),
-                    "concurrency": list(_triggers.CONCURRENCY)}
+                    "concurrency": list(_triggers.CONCURRENCY),
+                    "route_options": {"identity_modes": list(intake_identity.MODES),
+                                      "addressing": list(intake_router.ADDRESSING),
+                                      "fanout": list(intake_router.FANOUT),
+                                      "double_text": ["enqueue", "reject", "interrupt",
+                                                      "rollback"],
+                                      "quiet_modes": ["defer", "ack_and_defer", "answer"]}}
+
+    @router.post("/v1/agents/{role_key}/triggers/preview-match")
+    @permit(P.INTEGRATION_READ, scope=Scope.project(body="project_id"))
+    def preview_match(role_key: str, body: MatchPreviewBody) -> dict[str, Any]:
+        """Which of the connection's recent events a route filter would match, and which leaf
+        held for each (the console shows it before the route is saved). Read-only."""
+        from boss_engine.services import intake_router
+
+        with begin(engine) as connection:
+            require_reader(connection, body.project_id)
+            owner = connection.execute(
+                sa_text("SELECT project_id FROM intake_connections WHERE id = :c"),
+                {"c": body.connection_id}).scalar()
+            if owner is None or str(owner) != body.project_id:
+                raise HTTPException(status_code=404, detail="no such intake connection in this "
+                                                            "project.")
+            return {"agent_key": role_key, "connection_id": body.connection_id,
+                    **intake_router.preview_match(connection, project_id=body.project_id,
+                                                  connection_id=body.connection_id,
+                                                  match=body.match, limit=body.limit)}
 
     @router.post("/v1/agents/{role_key}/triggers", status_code=201)
     @permit(P.AGENT_DEPLOY, scope=Scope.project(body="project_id"))
@@ -270,7 +330,11 @@ def build_agent_platform_router(*, engine, require_write_actor: Callable[..., st
                                         deployment_id=dep["id"], kind=body.kind, actor=actor,
                                         config=body.config, input=body.input,
                                         concurrency=body.concurrency, name=body.name,
-                                        auto_pause=body.auto_pause)
+                                        auto_pause=body.auto_pause,
+                                        connection_id=body.connection_id, priority=body.priority,
+                                        identity_mode=body.identity_mode,
+                                        thread_key=body.thread_key, limits=body.limits,
+                                        quiet_hours=body.quiet_hours)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 
@@ -300,7 +364,10 @@ def build_agent_platform_router(*, engine, require_write_actor: Callable[..., st
                 return _triggers.update(connection, project_id=body.project_id,
                                         trigger_id=trigger_id, actor=actor, config=body.config,
                                         input=body.input, concurrency=body.concurrency,
-                                        name=body.name, auto_pause=body.auto_pause)
+                                        name=body.name, auto_pause=body.auto_pause,
+                                        priority=body.priority, identity_mode=body.identity_mode,
+                                        thread_key=body.thread_key, limits=body.limits,
+                                        quiet_hours=body.quiet_hours)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 

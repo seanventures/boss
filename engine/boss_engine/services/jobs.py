@@ -656,8 +656,9 @@ class JobLeaseService:
               AND """ + projects_archive.live_sql("jobs.project_id") + """
               -- A RUN OF A `runtime: microvm` DEPLOYMENT IS NEVER A LOCAL WORKER'S (P8a): its
               -- job's target is 'deployment:<id>', claimed only by that deployment's hosts
-              -- through the run plane (services/run_plane.claim_for_host).
-              AND target IS NULL
+              -- through the run plane (services/run_plane.claim_for_host). A local worker
+              -- claims the local target only (NULL, or 'local' spelled out; P9a-5).
+              AND (target IS NULL OR target = 'local')
               AND (
                 (run_after <= :now_utc
                  AND (

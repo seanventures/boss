@@ -10,8 +10,9 @@
   monitor  a polled check with a cycle cap (agent_wakeups' semantics): fires every
            `every_seconds` until `max_cycles`, then pauses itself with the reason
   intake   an event-intake ROUTE (P9a, boss-eventing-lld.md §5): fired by the intake processor
-           for events of one intake connection (services/event_intake.py); the filter DSL,
-           thread key and identity mode are P9a-2, this kind is the row they live on
+           for events of one intake connection (services/event_intake.py) through the router
+           (services/intake_router: the filter DSL, addressing, identity mode, thread key and
+           guards); `fire(thread_id=, acting=, policy=, messages=)` is what the router uses
 
 EVERY KIND COMPILES TO "ADMIT A RUN ON A THREAD" (thread_runs.admit, through
 agent_deployments.admit_run): the run and its job in one transaction, pinned to the version the
@@ -131,19 +132,99 @@ def normalise_config(kind: str, config: Optional[Mapping[str, Any]]) -> dict:
         cfg["event_type"] = event_type
         cfg["filter"] = {str(k): v for k, v in dict(cfg.get("filter") or {}).items()}
     elif kind == "intake":
-        # P9a-1 keeps the route's config as the console sends it and checks only its shape;
-        # P9a-2 compiles `match` (the filter DSL), `thread_key`, `addressing` and `fanout`.
+        # P9a-2 (boss-eventing-lld.md §5): the filter DSL compiles here, so a route that cannot
+        # be evaluated is never saved; the processor compiles the same spec (cached per version).
+        from . import intake_filters, intake_guards, intake_router, thread_runs
+
         for key in ("match", "triage"):
-            if key in cfg and not isinstance(cfg[key], dict):
+            if key in cfg and cfg[key] is not None and not isinstance(cfg[key], dict):
                 raise TriggerError(f"{key} must be an object.")
+        try:
+            intake_filters.validate(cfg.get("match"))
+        except intake_filters.FilterError as exc:
+            raise TriggerError(f"match: {exc}") from exc
+        try:
+            cfg["triage"] = intake_guards.normalise_triage(cfg.get("triage"))
+        except (ValueError, TypeError) as exc:
+            raise TriggerError(str(exc)) from exc
         fanout = str(cfg.get("fanout") or "first_match")
-        if fanout not in ("first_match", "all_matches"):
+        if fanout not in intake_router.FANOUT:
             raise TriggerError("fanout must be first_match or all_matches.")
         cfg["fanout"] = fanout
-        for key in ("thread_key", "goal", "addressing"):
+        addressing = str(cfg.get("addressing") or "mention_or_dm")
+        if addressing not in intake_router.ADDRESSING:
+            raise TriggerError(f"addressing must be one of {', '.join(intake_router.ADDRESSING)}.")
+        cfg["addressing"] = addressing
+        double_text = str(cfg.get("double_text") or thread_runs.ENQUEUE)
+        if double_text not in thread_runs.POLICIES:
+            raise TriggerError(f"double_text must be one of {', '.join(thread_runs.POLICIES)}.")
+        cfg["double_text"] = double_text
+        allow = cfg.get("allow_bots")
+        if allow is not None and allow is not True and allow is not False and \
+                not (isinstance(allow, list) and all(isinstance(a, str) for a in allow)):
+            raise TriggerError("allow_bots is true, false or a list of bot ids.")
+        for key in ("thread_key", "goal"):
             if key in cfg and cfg[key] is not None and not isinstance(cfg[key], str):
                 raise TriggerError(f"{key} must be text.")
     return cfg
+
+
+#: Route columns beside `config` (P9a-2): the identity mode, the thread-key template, the
+#: guard limits and the quiet hours. Validated by `normalise_route_columns`.
+QUIET_KEYS = ("start", "end", "timezone", "mode")
+
+
+def normalise_route_columns(*, source_kind: Optional[str], identity_mode: Optional[str],
+                            thread_key: Optional[str], limits: Optional[Mapping[str, Any]],
+                            quiet_hours: Optional[Mapping[str, Any]]) -> dict:
+    from . import intake_guards, intake_identity
+
+    out: dict[str, Any] = {}
+    if identity_mode is not None:
+        mode = str(identity_mode)
+        allowed = intake_identity.allowed_modes(str(source_kind or ""))
+        if mode not in allowed:
+            raise TriggerError(f"identity_mode for a {source_kind or 'route'} source is one of "
+                               f"{', '.join(allowed)}.")
+        out["identity_mode"] = mode
+    if thread_key is not None:
+        if not isinstance(thread_key, str) or len(thread_key) > 300:
+            raise TriggerError("thread_key is a template of at most 300 characters.")
+        out["thread_key"] = thread_key or None
+    if limits is not None:
+        clean: dict[str, Any] = {}
+        for key, value in dict(limits).items():
+            if key in ("per_entity", "per_entity_window_seconds", "storm_per_min"):
+                if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                    raise TriggerError(f"limits.{key} is a positive whole number.")
+                clean[key] = value
+            elif key == "auto_pause_on_limit":
+                clean[key] = bool(value)
+            else:
+                raise TriggerError(f"limits.{key} is not a route limit (per_entity, "
+                                   "per_entity_window_seconds, storm_per_min, auto_pause_on_limit).")
+        out["limits"] = clean
+    if quiet_hours is not None:
+        q = {k: v for k, v in dict(quiet_hours).items() if k in QUIET_KEYS and v not in (None, "")}
+        if q:
+            from datetime import time as dtime
+
+            for key in ("start", "end"):
+                try:
+                    dtime.fromisoformat(str(q.get(key) or ""))
+                except ValueError as exc:
+                    raise TriggerError(f"quiet_hours.{key} is a time like 22:00.") from exc
+            tz = str(q.get("timezone") or "UTC")
+            try:
+                ZoneInfo(tz)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise TriggerError(f"unknown timezone {tz!r}.") from exc
+            q["timezone"] = tz
+            if q.get("mode") is not None and str(q["mode"]) not in intake_guards.QUIET_MODES:
+                raise TriggerError(f"quiet_hours.mode is one of "
+                                   f"{', '.join(intake_guards.QUIET_MODES)}.")
+        out["quiet_hours"] = q
+    return out
 
 
 def next_fire(kind: str, config: Mapping[str, Any], *, after: Optional[datetime] = None
@@ -226,12 +307,36 @@ def words(row: Mapping[str, Any]) -> dict:
         return {"when": "When", "what": "A webhook is called",
                 "detail": f"…{INBOUND_PATH_PREFIX}{token[:4]}…" if token else ""}
     if kind == "intake":
-        return {"when": "When", "what": "An event arrives",
+        match = cfg.get("match") or {}
+        return {"when": "When", "what": "An event arrives" if not match else
+                f"An event matches ({_match_words(match)})",
                 "detail": row.get("name") or (f"connection {row.get('connection_id')}"
                                               if row.get("connection_id") else "")}
     return {"when": "When", "what": cfg.get("check") or row.get("name") or "A monitor fires",
             "detail": _every_words(int(cfg.get("every_seconds") or 60))
             + (f", at most {cfg['max_cycles']} checks" if cfg.get("max_cycles") else "")}
+
+
+def _match_words(node: Any, depth: int = 0) -> str:
+    """A filter in a few words: `type in [a, b] and data.channel = C0…`."""
+    if not isinstance(node, Mapping) or depth > 2:
+        return "…"
+    for key in ("all", "any"):
+        if key in node and isinstance(node[key], list):
+            joiner = " and " if key == "all" else " or "
+            parts = [_match_words(c, depth + 1) for c in node[key][:3]]
+            if len(node[key]) > 3:
+                parts.append("…")
+            return joiner.join(parts)
+    if "not" in node:
+        return "not " + _match_words(node["not"], depth + 1)
+    op = {"eq": "=", "ne": "≠", "in": "in", "nin": "not in", "gt": ">", "gte": "≥", "lt": "<",
+          "lte": "≤", "matches": "~", "contains": "contains", "prefix": "starts with",
+          "suffix": "ends with", "exists": "exists", "changed": "changed"}.get(
+        str(node.get("op") or ""), str(node.get("op") or "?"))
+    value = node.get("value")
+    shown = json.dumps(value, default=str) if value is not None else ""
+    return f"{node.get('field')} {op} {shown[:40]}".strip()
 
 
 def short_words(row: Mapping[str, Any]) -> str:
@@ -275,8 +380,30 @@ def describe(connection: Connection, row: Mapping[str, Any], *, previews: int = 
                     if row.get("on_behalf_of") else None),
     }
     if row["kind"] == "intake":
+        from . import intake_filters, intake_identity
+
         out["connection_id"] = row.get("connection_id")
         out["priority"] = int(row.get("priority") or 100)
+        source_kind = connection.execute(text(
+            "SELECT kind FROM intake_connections WHERE id = :c"),
+            {"c": row.get("connection_id")}).scalar() if row.get("connection_id") else None
+        out["source_kind"] = source_kind
+        out["identity_mode"] = row.get("identity_mode") or intake_identity.default_mode(
+            str(source_kind or ""))
+        out["identity_modes"] = list(intake_identity.allowed_modes(str(source_kind or "")))
+        out["thread_key"] = row.get("thread_key")
+        out["limits"] = _json(row.get("limits"), {}) or {}
+        out["quiet_hours"] = _json(row.get("quiet_hours"), {}) or {}
+        out["digest_until"] = _iso(row.get("digest_until"))
+        out["digest_mode"] = bool(row.get("digest_until")
+                                  and row["digest_until"].replace(tzinfo=row["digest_until"].tzinfo
+                                                                  or timezone.utc) > _now())
+        try:
+            out["match_leaves"] = intake_filters.compile_filter(cfg.get("match")).leaves
+            out["match_ok"] = True
+        except intake_filters.FilterError as exc:
+            out["match_ok"], out["match_error"] = False, str(exc)
+        out["regex_engine"] = intake_filters.REGEX_ENGINE
     if row["kind"] == "webhook" and row.get("path_token"):
         out["url_path"] = INBOUND_PATH_PREFIX + str(row["path_token"])
     if row["kind"] in ("cron", "monitor") and row["status"] == "on":
@@ -324,21 +451,32 @@ def create(connection: Connection, *, project_id: str, deployment_id: str, kind:
            input: Optional[Mapping[str, Any]] = None, concurrency: str = "skip_if_active",
            name: str = "", legacy_ref: Optional[str] = None, status: str = "on",
            next_fire_at: Optional[datetime] = None, auto_pause: bool = True,
-           connection_id: Optional[str] = None, priority: int = 100) -> dict:
+           connection_id: Optional[str] = None, priority: int = 100,
+           identity_mode: Optional[str] = None, thread_key: Optional[str] = None,
+           limits: Optional[Mapping[str, Any]] = None,
+           quiet_hours: Optional[Mapping[str, Any]] = None) -> dict:
     """A new trigger on a deployment. A webhook's signing secret is in the answer ONCE. An
-    `intake` route names the intake connection whose events it fires on (`connection_id`)."""
+    `intake` route names the intake connection whose events it fires on (`connection_id`) and
+    may set its identity mode, thread-key template, limits and quiet hours (P9a-2)."""
     if concurrency not in CONCURRENCY:
         raise TriggerError(f"concurrency must be one of {', '.join(CONCURRENCY)}.")
+    columns: dict[str, Any] = {}
     if kind == "intake":
         if not connection_id:
             raise TriggerError("an intake route names the connection it listens to.")
-        owner = connection.execute(text(
-            "SELECT project_id FROM intake_connections WHERE id = :c"), {"c": connection_id}
-        ).scalar()
-        if owner is None or str(owner) != str(project_id):
+        source = connection.execute(text(
+            "SELECT project_id, kind FROM intake_connections WHERE id = :c"), {"c": connection_id}
+        ).mappings().first()
+        if source is None or str(source["project_id"]) != str(project_id):
             raise TriggerError("no such intake connection in this project.", status=404)
+        columns = normalise_route_columns(source_kind=str(source["kind"]),
+                                         identity_mode=identity_mode, thread_key=thread_key,
+                                         limits=limits, quiet_hours=quiet_hours)
     elif connection_id:
         raise TriggerError("only an intake route has a connection.")
+    elif any(v is not None for v in (identity_mode, thread_key, limits, quiet_hours)):
+        raise TriggerError("identity_mode, thread_key, limits and quiet_hours belong to an "
+                           "intake route.")
     dep = connection.execute(text(
         "SELECT * FROM agent_deployments WHERE id = :d AND project_id = :p"),
         {"d": deployment_id, "p": project_id}).mappings().first()
@@ -363,15 +501,18 @@ def create(connection: Connection, *, project_id: str, deployment_id: str, kind:
         INSERT INTO agent_triggers (id, project_id, deployment_id, kind, name, config, input,
                concurrency, status, auto_pause, thread_id, next_fire_at, path_token,
                secret_ref_id, legacy_ref, created_by, on_behalf_of, grant_id, connection_id,
-               priority)
+               priority, identity_mode, thread_key, limits, quiet_hours)
         VALUES (:id, :p, :d, :k, :n, CAST(:c AS JSONB), CAST(:i AS JSONB), :cc, :s, :ap, :t,
-                :nf, :tok, :ref, :legacy, :by, :obo, :grant, :conn, :prio)"""),
+                :nf, :tok, :ref, :legacy, :by, :obo, :grant, :conn, :prio, :im, :tk,
+                CAST(:lim AS JSONB), CAST(:qh AS JSONB))"""),
         {"id": trigger_id, "p": project_id, "d": deployment_id, "k": kind, "n": name[:120],
          "c": json.dumps(cfg), "i": json.dumps(dict(input or {})), "cc": concurrency,
          "s": status, "ap": bool(auto_pause), "t": thread_id, "nf": first, "tok": path_token,
          "ref": secret_ref, "legacy": legacy_ref, "by": actor,
          "obo": (link or {}).get("on_behalf_of"), "grant": (link or {}).get("grant_id"),
-         "conn": connection_id, "prio": int(priority)})
+         "conn": connection_id, "prio": int(priority), "im": columns.get("identity_mode"),
+         "tk": columns.get("thread_key"), "lim": json.dumps(columns.get("limits") or {}),
+         "qh": json.dumps(columns.get("quiet_hours") or {})})
     if kind == "event" and not cfg.get("internal"):
         sub_id = make_id("esub")
         connection.execute(text("""
@@ -442,24 +583,53 @@ def _invalidate(project_id: str) -> None:
 def update(connection: Connection, *, project_id: str, trigger_id: str, actor: str,
            config: Optional[Mapping[str, Any]] = None, input: Optional[Mapping[str, Any]] = None,
            concurrency: Optional[str] = None, name: Optional[str] = None,
-           auto_pause: Optional[bool] = None) -> dict:
+           auto_pause: Optional[bool] = None, priority: Optional[int] = None,
+           identity_mode: Optional[str] = None, thread_key: Optional[str] = None,
+           limits: Optional[Mapping[str, Any]] = None,
+           quiet_hours: Optional[Mapping[str, Any]] = None) -> dict:
     row = get(connection, trigger_id, project_id=project_id, lock=True)
     if row is None:
         raise TriggerError("no such trigger in this project.", status=404)
     cfg = normalise_config(row["kind"], config) if config is not None else _json(row["config"], {})
     if concurrency is not None and concurrency not in CONCURRENCY:
         raise TriggerError(f"concurrency must be one of {', '.join(CONCURRENCY)}.")
+    columns: dict[str, Any] = {}
+    route_fields = (priority, identity_mode, thread_key, limits, quiet_hours)
+    if row["kind"] == "intake":
+        source_kind = connection.execute(text(
+            "SELECT kind FROM intake_connections WHERE id = :c"),
+            {"c": row.get("connection_id")}).scalar()
+        columns = normalise_route_columns(source_kind=str(source_kind or ""),
+                                         identity_mode=identity_mode, thread_key=thread_key,
+                                         limits=limits, quiet_hours=quiet_hours)
+    elif any(v is not None for v in route_fields):
+        raise TriggerError("priority, identity_mode, thread_key, limits and quiet_hours belong "
+                           "to an intake route.")
     connection.execute(text("""
         UPDATE agent_triggers SET config = CAST(:c AS JSONB),
                input = COALESCE(CAST(:i AS JSONB), input),
                concurrency = COALESCE(:cc, concurrency), name = COALESCE(:n, name),
                auto_pause = COALESCE(:ap, auto_pause),
+               priority = COALESCE(:prio, priority),
+               identity_mode = CASE WHEN :has_im THEN :im ELSE identity_mode END,
+               thread_key = CASE WHEN :has_tk THEN :tk ELSE thread_key END,
+               limits = CASE WHEN :has_lim THEN CAST(:lim AS JSONB) ELSE limits END,
+               quiet_hours = CASE WHEN :has_qh THEN CAST(:qh AS JSONB) ELSE quiet_hours END,
                next_fire_at = CASE WHEN :clocked THEN :nf ELSE next_fire_at END,
                updated_at = now() WHERE id = :t"""),
         {"c": json.dumps(cfg), "i": json.dumps(dict(input)) if input is not None else None,
          "cc": concurrency, "n": name, "ap": auto_pause, "t": trigger_id,
+         "prio": int(priority) if priority is not None else None,
+         "has_im": "identity_mode" in columns, "im": columns.get("identity_mode"),
+         "has_tk": "thread_key" in columns, "tk": columns.get("thread_key"),
+         "has_lim": "limits" in columns, "lim": json.dumps(columns.get("limits") or {}),
+         "has_qh": "quiet_hours" in columns, "qh": json.dumps(columns.get("quiet_hours") or {}),
          "clocked": config is not None and row["kind"] in ("cron", "monitor"),
          "nf": next_fire(row["kind"], cfg)})
+    if row["kind"] == "intake":
+        from . import intake_filters
+
+        intake_filters.invalidate(trigger_id)
     emit_event(connection, project_id, "agent.trigger.updated", actor, "agent_trigger",
                trigger_id, {"kind": row["kind"]})
     return describe(connection, get(connection, trigger_id) or {})
@@ -558,13 +728,24 @@ def _record(connection: Connection, trigger: Mapping[str, Any], *, outcome: str,
     return got is not None
 
 
+_OWNER = object()   # fire(acting=...) not given: the trigger's standing grant decides
+
+
 def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
          payload: Optional[Mapping[str, Any]] = None, scheduled_for: Optional[datetime] = None,
-         dedupe_key: Optional[str] = None, finalize_extra: Optional[Mapping[str, Any]] = None
-         ) -> dict:
+         dedupe_key: Optional[str] = None, finalize_extra: Optional[Mapping[str, Any]] = None,
+         thread_id: Optional[str] = None, acting: Any = _OWNER, policy: Optional[str] = None,
+         messages: Optional[list] = None) -> dict:
     """Fire one trigger: under its row lock, refuse a paused one, apply its concurrency, and
     admit a run on its thread (pinned to the deployment's version now). Returns {outcome,
-    run_id?, job_id?, reason?}."""
+    run_id?, job_id?, reason?}.
+
+    P9a-2 (intake routes): `thread_id` admits the run on the thread the thread key names instead
+    of the trigger's own — then `policy` (the route's double-text, `enqueue` by default) decides
+    what a busy thread does and the trigger's concurrency does not apply (a follow-up waits, it
+    is never skipped); `acting` is the resolved subject (None = run unlinked, as before; not
+    given = the trigger's standing grant, re-checked now); `messages` replaces the trigger's
+    preamble + payload turn (a chat event is a normal chat turn)."""
     from . import agent_deployments, thread_runs
 
     trigger = get(connection, trigger_id, lock=True)
@@ -591,21 +772,24 @@ def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
         _record(connection, trigger, outcome="refused", reason="not deployed",
                 scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
         return {"outcome": "refused", "reason": "the agent is not deployed"}
+    on_thread = thread_id or trigger["thread_id"]
     thread = connection.execute(text(
         "SELECT active_run_id FROM agent_threads WHERE id = :t FOR UPDATE"),
-        {"t": trigger["thread_id"]}).mappings().first()
+        {"t": on_thread}).mappings().first()
     active = thread["active_run_id"] if thread else None
     busy = bool(active) and (connection.execute(text(
         "SELECT status FROM agent_runs WHERE id = :r"), {"r": active}).scalar()
         in thread_runs.ACTIVE)
     waiting = int(connection.execute(text(
         "SELECT count(*) FROM agent_runs WHERE thread_id = :t AND status = 'pending'"),
-        {"t": trigger["thread_id"]}).scalar() or 0)
+        {"t": on_thread}).scalar() or 0)
     skip_reason = ""
-    if busy and trigger["concurrency"] == "skip_if_active":
-        skip_reason = "the last run is still going (skip if active)"
-    elif waiting and trigger["concurrency"] == "coalesce":
-        skip_reason = "a run is already waiting (coalesce)"
+    if thread_id is None:
+        # The trigger's own thread: its concurrency rule, as every clocked/webhook trigger has.
+        if busy and trigger["concurrency"] == "skip_if_active":
+            skip_reason = "the last run is still going (skip if active)"
+        elif waiting and trigger["concurrency"] == "coalesce":
+            skip_reason = "a run is already waiting (coalesce)"
     if skip_reason:
         _record(connection, trigger, outcome="skipped", reason=skip_reason, run_id=active,
                 scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
@@ -613,14 +797,15 @@ def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
             "UPDATE agent_triggers SET skips = skips + 1, last_outcome = 'skipped', "
             "updated_at = now() WHERE id = :t"), {"t": trigger_id})
         return {"outcome": "skipped", "reason": skip_reason, "active_run_id": active}
-    messages = [{"role": "user", "content": _message(trigger, payload)}]
+    if messages is None:
+        messages = [{"role": "user", "content": _message(trigger, payload)}]
     extra = {"trigger_id": trigger_id, "trigger_kind": trigger["kind"],
              "trigger_input": _json(trigger.get("input"), {}),
              **({"payload": dict(payload)} if payload else {}), **dict(finalize_extra or {})}
     from ..identity import consent, lineage
 
     try:
-        acting = _authority(connection, trigger)
+        acting = _authority(connection, trigger) if acting is _OWNER else acting
     except consent.AuthorityLost as lost:
         # THE GRANT IT RAN ON ENDED: refused, and the trigger pauses until someone renews it.
         reason = f"Renew authority: the standing grant this trigger runs on ended ({lost})."
@@ -632,8 +817,8 @@ def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
         return {"outcome": "refused", "reason": reason}
     def admit() -> dict:
         return agent_deployments.admit_run(
-            connection, dep, thread_id=trigger["thread_id"], messages=messages,
-            trigger=f"{trigger['kind']}:{trigger_id}", policy="enqueue", extra=extra,
+            connection, dep, thread_id=on_thread, messages=messages,
+            trigger=f"{trigger['kind']}:{trigger_id}", policy=policy or "enqueue", extra=extra,
             actor=actor)
 
     try:
@@ -648,6 +833,12 @@ def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
         # Unlinked and unattended under enforce: nobody's authority to run it on.
         reason = "no standing grant: re-save the trigger signed in to link yours"
         _record(connection, trigger, outcome="refused", reason=reason,
+                scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
+        return {"outcome": "refused", "reason": reason}
+    except thread_runs.ThreadBusy as busy_thread:
+        # The route's double-text policy is `reject`: the thread is busy, nothing is written.
+        reason = f"the thread is busy and the route rejects a second message ({busy_thread})"
+        _record(connection, trigger, outcome="refused", reason=reason[:300],
                 scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
         return {"outcome": "refused", "reason": reason}
     _record(connection, trigger, outcome="admitted", run_id=admitted["run_id"],
@@ -832,6 +1023,6 @@ def receive(connection: Connection, path_token: str, raw_body: bytes,
 
 __all__ = ["CONCURRENCY", "FAILING_STREAK", "INBOUND_PATH_PREFIX", "KINDS", "MIN_EVERY_SECONDS",
            "SINK_KIND", "TriggerError", "create", "delete", "describe", "due", "fire",
-           "for_deployments", "get", "next_fire", "normalise_config", "on_event",
-           "on_run_settled", "preview", "receive", "rotate_secret", "set_paused", "short_words",
-           "tick", "update", "words"]
+           "for_deployments", "get", "next_fire", "normalise_config", "normalise_route_columns",
+           "on_event", "on_run_settled", "preview", "receive", "rotate_secret", "set_paused",
+           "short_words", "tick", "update", "words"]

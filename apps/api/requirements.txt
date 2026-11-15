@@ -17,6 +17,7 @@ websockets==15.0.1
 reportlab==4.5.1
 markdown==3.9
 redis==5.2.1
+regex==2026.4.4
 playwright==1.60.0  # one-time browser fetch: python -m playwright install chromium
 pypdf==5.9.0
 # The code graph's parsers (engine/boss_engine/services/knowledge/code_parse.py): Java, Go, C#,

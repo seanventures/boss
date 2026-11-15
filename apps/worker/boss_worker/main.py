@@ -3,6 +3,7 @@ import logging
 import signal
 import threading
 import time
+from typing import Any
 
 from apps.api.app.db import database_is_reachable, get_engine
 from boss_engine.services.self_observability import StallTracker
@@ -781,17 +782,28 @@ def _extra_lease_loop(settings, index: int) -> None:
                 LOGGER.exception("worker_slot_cycle_failed worker_id=%s", slot_settings.worker_id)
                 ran = False
             if not ran:
-                idle_wait(float(slot_settings.poll_interval_seconds))
+                idle_wait(idle_seconds(client, slot_settings))
     finally:
         client.close()
+
+
+def idle_seconds(client: Any, settings: Any) -> float:
+    """How long an idle cycle sleeps: nothing after a long-poll the API honoured (the request
+    itself was the wait, P9a-5), else the poll interval (an older API, or the long-poll off)."""
+    if bool(getattr(client, "long_polled", False)):
+        return 0.0
+    return float(getattr(settings, "poll_interval_seconds", 15) or 15)
 
 
 def idle_wait(seconds: float, *, stopping=lambda: _STOPPING, sleep=time.sleep,
               clock=time.monotonic) -> tuple[float, float]:
     """Sleep `seconds` in one-second steps, stopping early when asked. Returns
-    (planned, actual): how long the steps that ran were meant to take, and how long they did."""
+    (planned, actual): how long the steps that ran were meant to take, and how long they did.
+    Zero seconds (the API already held the poll) sleeps nothing."""
     planned = 0.0
     started = clock()
+    if seconds <= 0:
+        return planned, clock() - started
     for _ in range(max(1, int(seconds))):
         if stopping():
             break
@@ -942,8 +954,9 @@ def main() -> None:
                 # _sweep_deployment_health run on their own thread — see
                 # _run_background_sweeps. Leaving them here too would double every call.
                 # Interruptible sleep: an idle worker that is asked to stop should not hold the
-                # deploy open for a full poll interval doing nothing.
-                late = observe_idle_wait(_stalls, float(settings.poll_interval_seconds))
+                # deploy open for a full poll interval doing nothing. After a long-poll the API
+                # honoured there is nothing to sleep: the held request was the wait (P9a-5).
+                late = observe_idle_wait(_stalls, idle_seconds(client, settings))
                 if late:
                     LOGGER.warning(
                         "host_stall worker_id=%s stalled_seconds=%.0f — BOSS was not scheduled; "
