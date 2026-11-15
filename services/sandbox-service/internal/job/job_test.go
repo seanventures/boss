@@ -14,7 +14,8 @@ func TestAdmitFailsClosedWhenFrozen(t *testing.T) {
 		TaskID:          "crun_x",
 		Repo:            contract.RepoSpec{Owner: "o", Name: "r"},
 		Engine:          "claude_code",
-		EngineEnv:       map[string]string{},
+		Handles:         map[string]string{},
+		Endpoints:       map[string]string{},
 	}
 	reason, msg := s.Admit(req)
 	if reason != contract.ReasonClaimsFrozen {
@@ -32,7 +33,8 @@ func TestAdmitFailsClosedWhenUnfrozenButNoFirecracker(t *testing.T) {
 		TaskID:          "crun_x",
 		Repo:            contract.RepoSpec{Owner: "o", Name: "r"},
 		Engine:          "openai",
-		EngineEnv:       map[string]string{},
+		Handles:         map[string]string{},
+		Endpoints:       map[string]string{},
 	}
 	reason, _ := s.Admit(req)
 	if reason != contract.ReasonFirecrackerDisabled {
@@ -54,7 +56,8 @@ func TestHeartbeatExtendsLeaseAndExpiryIsVisible(t *testing.T) {
 		TaskID:          "exercise_echo_api",
 		Engine:          "echo",
 		TestMode:        true,
-		EngineEnv:       map[string]string{},
+		Handles:         map[string]string{},
+		Endpoints:       map[string]string{},
 	})
 	if job.Lease.ExpiresAt.Sub(now) != 30*time.Second {
 		t.Fatalf("ttl not applied: %v", job.Lease.ExpiresAt)
@@ -82,7 +85,8 @@ func TestExpiredLeaseBecomesTimeoutNotSilentDrop(t *testing.T) {
 		TaskID:          "exercise_echo_api",
 		Engine:          "echo",
 		TestMode:        true,
-		EngineEnv:       map[string]string{},
+		Handles:         map[string]string{},
+		Endpoints:       map[string]string{},
 	})
 	s.mu.Lock()
 	s.jobs[job.ID].Status = contract.StatusRunning
@@ -110,7 +114,8 @@ func TestReleaseDropsSuccessRetainsFailure(t *testing.T) {
 		TaskID:          "echo_ok",
 		Engine:          "echo",
 		TestMode:        true,
-		EngineEnv:       map[string]string{},
+		Handles:         map[string]string{},
+		Endpoints:       map[string]string{},
 	})
 	if !s.Release(okJob.ID) {
 		t.Fatal("release success")
@@ -124,7 +129,8 @@ func TestReleaseDropsSuccessRetainsFailure(t *testing.T) {
 		TaskID:          "echo_fail",
 		Engine:          "echo",
 		TestMode:        true,
-		EngineEnv:       map[string]string{},
+		Handles:         map[string]string{},
+		Endpoints:       map[string]string{},
 	})
 	s.mu.Lock()
 	s.jobs[fail.ID].Status = contract.StatusFailed

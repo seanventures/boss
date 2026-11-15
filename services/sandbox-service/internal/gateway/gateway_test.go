@@ -162,10 +162,15 @@ func TestGuestAuthorizationNeverSurvives(t *testing.T) {
 		t.Fatalf("status %d body %q", status, body)
 	}
 	h := r.seen[len(r.seen)-1]
-	for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie", "X-Boss-Run-Id", "X-Forwarded-For"} {
+	for _, name := range []string{"X-Api-Key", "Proxy-Authorization", "Cookie", "X-Boss-Run-Id", "X-Forwarded-For"} {
 		if v := h.Get(name); v != "" {
 			t.Fatalf("guest header %s survived to the upstream", name)
 		}
+	}
+	// The guest's Authorization is gone; what the upstream sees there is the HOST's proof
+	// (P8b S10, HOST_API.md §4.6), and the guest's handle only in X-Boss-Handle.
+	if a := h.Get("Authorization"); a != "BossHost proof-for-POST-/anthropic/v1/messages" || strings.Contains(a, "boss_mdl_A") {
+		t.Fatalf("Authorization at the upstream = %q", a)
 	}
 	if a := h.Get(AssertionHeader); a == "" || a == "forged.assertion.sig" {
 		t.Fatal("the upstream must see the host's run assertion, never the guest's")
@@ -511,6 +516,39 @@ func TestBatcherNeverDropsUnsentRowsAfterFrontTrim(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("flushed %v, want %v", got, want)
+		}
+	}
+}
+
+// HOST_API.md §4.6 (P8b S10): a model forward carries the HOST's proof over the
+// gateway path, the guest's handle moved into X-Boss-Handle, and the host's word
+// on the VM, run and epoch — while still presenting the VM's SVID. The run plane
+// keeps its own shape (host transport, X-Boss-Replica, no handle header).
+func TestModelForwardCarriesTheHostProofAndTheBoundHandle(t *testing.T) {
+	r := newRig(t)
+	status, _ := r.call("vm-a", guest.PortModel, "POST", "/anthropic/v1/messages", map[string]string{
+		"X-Api-Key": "boss_mdl_A", "X-Boss-Handle": "boss_mdl_FORGED", "X-Boss-Vm": "vm-forged",
+		"X-Boss-Run": "run_forged", "X-Boss-Fence-Epoch": "99",
+	})
+	if status != 200 {
+		t.Fatalf("status %d %+v", status, r.lastCall())
+	}
+	h := r.seen[len(r.seen)-1]
+	if h.Get("Authorization") != "BossHost proof-for-POST-/anthropic/v1/messages" {
+		t.Fatalf("the forward must carry the host proof for the gateway path, got %q", h.Get("Authorization"))
+	}
+	if h.Get("X-Boss-Handle") != "boss_mdl_A" || h.Get("X-Api-Key") != "" {
+		t.Fatalf("the guest's handle moves into X-Boss-Handle, nothing else: handle=%q key=%q", h.Get("X-Boss-Handle"), h.Get("X-Api-Key"))
+	}
+	if h.Get("X-Boss-Vm") != "vm-a" || h.Get("X-Boss-Run") != "run_7" || h.Get("X-Boss-Fence-Epoch") != "3" || h.Get("X-Boss-Deployment") != "dep" {
+		t.Fatalf("the binding headers are the HOST's word, never the guest's: %v", h)
+	}
+	if got := r.peers[len(r.peers)-1]; got != "spiffe://inst.boss/host/hst_1/vm/vm-a" {
+		t.Fatalf("a model forward still presents the VM's SVID, got %q", got)
+	}
+	for _, rule := range DefaultRules() {
+		if rule.Route == RouteModel && !rule.Deny && !rule.HostProof {
+			t.Fatalf("model rule %s must carry the host proof", rule.ID)
 		}
 	}
 }

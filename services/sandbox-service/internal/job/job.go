@@ -5,7 +5,6 @@ package job
 import (
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -113,14 +112,12 @@ func (s *Store) FirecrackerLive() bool {
 
 // Admit decides whether a submit may create work. Fail-closed with a named reason.
 func (s *Store) Admit(req contract.SubmitRequest) (reason, message string) {
-	if problems := contract.ValidateSubmit(req); len(problems) > 0 {
-		// An engine_env refusal carries its own named reason (P8-pre S5).
-		for _, named := range []string{contract.ReasonEngineEnvUnknown, contract.ReasonEngineEnvNotForEngine} {
-			if strings.HasPrefix(problems[0], named+":") {
-				return named, problems[0]
-			}
-		}
-		return contract.ReasonContractInvalid, problems[0]
+	// v1.1 under the host's switches (P8b S9): a strict host refuses any raw
+	// credential field or secret-shaped value, and every v1.0 body; the frozen
+	// legacy lane (BOSS_SANDBOX_CONTRACT_LEGACY=1, strict off) still takes v1.0.
+	// A refusal carries its own named reason (never a value).
+	if problems := contract.ValidateSubmitWith(req, contract.OptionsFromEnv()); len(problems) > 0 {
+		return contract.RefusalReason(problems), problems[0]
 	}
 	if contract.IsEcho(req) {
 		return "", ""

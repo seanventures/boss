@@ -38,6 +38,11 @@ type Rule struct {
 	// SocketIdentity lets a replica call with no handle: the socket that
 	// accepted the connection is the replica (P8a run plane).
 	SocketIdentity bool
+	// HostProof adds the host's BossHost proof and the binding headers
+	// (X-Boss-Handle, X-Boss-Vm, X-Boss-Run, X-Boss-Fence-Epoch,
+	// X-Boss-Deployment) to a forward that still presents the VM's SVID
+	// (P8b S10: the model gateway, HOST_API.md §4.6).
+	HostProof bool
 }
 
 func (r Rule) matches(port int, method, path string) bool {
@@ -113,9 +118,9 @@ func DefaultRules() []Rule {
 	git := []string{http.MethodGet, http.MethodPost}
 	rest := []string{http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodPut}
 	return []Rule{
-		{ID: "model-anthropic-messages", Port: guest.PortModel, Methods: post, PathPrefix: "/anthropic/v1/messages", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
-		{ID: "model-openai-chat", Port: guest.PortModel, Methods: post, PathPrefix: "/openai/v1/chat/completions", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
-		{ID: "model-openai-responses", Port: guest.PortModel, Methods: post, PathPrefix: "/openai/v1/responses", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
+		{ID: "model-anthropic-messages", Port: guest.PortModel, Methods: post, HostProof: true, PathPrefix: "/anthropic/v1/messages", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
+		{ID: "model-openai-chat", Port: guest.PortModel, Methods: post, HostProof: true, PathPrefix: "/openai/v1/chat/completions", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
+		{ID: "model-openai-responses", Port: guest.PortModel, Methods: post, HostProof: true, PathPrefix: "/openai/v1/responses", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
 		{ID: "git-smart-http", Port: guest.PortGit, Methods: git, PathPrefix: "/git/", Route: RouteGit, Handle: HandleEgress, Endpoint: egrUp},
 		{ID: "git-rest-api", Port: guest.PortGit, Methods: rest, PathPrefix: "/api/", Route: RouteAPI, Handle: HandleEgress, Endpoint: egrUp},
 		{ID: "mcp", Port: guest.PortMCP, Methods: []string{http.MethodGet, http.MethodPost, http.MethodDelete}, PathPrefix: "/mcp/", Route: RouteMCP, Handle: HandleMCP, Endpoint: mcpUp},
