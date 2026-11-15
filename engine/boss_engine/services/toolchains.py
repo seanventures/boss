@@ -94,6 +94,22 @@ def has(name: str) -> bool:
     return name in installed()
 
 
+def manifest_problem() -> Optional[str]:
+    """Why this install's toolchain manifest cannot be read, or None when it reads as a JSON
+    object. Every image writes one ({} with no toolchain on), so a missing, unreadable or
+    malformed file means BOSS cannot tell which toolchains are on — never "it is off"."""
+    path = manifest_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return f"{path}: {exc.strerror or type(exc).__name__}"
+    except ValueError:
+        return f"{path}: not valid JSON"
+    if not isinstance(data, dict):
+        return f"{path}: not a JSON object"
+    return None
+
+
 def parse_selection(value: Optional[str]) -> list[str]:
     """BOSS_TOOLCHAINS as a list: "java,go" -> ["java", "go"]; "none" or empty -> []. The same
     reading as the Dockerfile's and boss.sh's: comma-separated, no spaces, "none" alone."""
@@ -149,6 +165,13 @@ def enable_instructions(name: str) -> str:
 def missing_message(name: str, found: str) -> str:
     """The words a build shows when the project needs a toolchain this install does not have."""
     label = LABELS.get(name, name)
+    problem = manifest_problem()
+    if problem:
+        return (f"This project needs {label} (it has a {found}), and BOSS could not read its "
+                f"toolchain manifest ({problem}), so it cannot tell whether {label} is turned on. "
+                f"Rebuild the images with `boss update`; if {label} is not on, turn it on with "
+                f"{enable_instructions(name)}. Then run the build again. BOSS does not build it "
+                "in another language instead.")
     return (f"This project needs {label} (it has a {found}), and {label} is not turned on for "
             f"this BOSS. Turn it on with {enable_instructions(name)}, then run the build again. "
             f"BOSS does not build it in another language instead.")

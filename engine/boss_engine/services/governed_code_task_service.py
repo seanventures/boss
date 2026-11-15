@@ -1079,6 +1079,16 @@ class StackUnsupportedError(RuntimeError):
     sandbox is provisioned, so the refusal costs nothing."""
 
 
+def stop_if_the_gate_needs_a_person(plan) -> None:
+    """A gate plan no code change can make run (GatePlan.needs_human: a go.mod tree while Go is
+    off, a Java build without Java, a language BOSS cannot build) stops the build here, as
+    needs_human / stack_unsupported, with the plan's own words — which toolchain and how to turn
+    it on (`boss toolchains enable go`, then `boss update`). Never a repair round: none of them
+    can install a toolchain, so each one is money spent on a gate that cannot pass."""
+    if getattr(plan, "needs_human", False):
+        raise StackUnsupportedError(plan.error or plan.description)
+
+
 def _stack_context(engine, run: dict, title: str, instructions: str) -> dict:
     """What the build is meant to be, before any file exists (services.stacks): the applied
     template's stack and test command, the full-stack layout the brief or the approved
@@ -5981,6 +5991,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _recorded_app = _app_root.recorded_app_dir(_c, run)
         except Exception:  # noqa: BLE001 — the named app and the change list still decide
             _log_caught(logger)
+        from . import app_root as _app_root_mod
+
         _gate_plan0 = verification_target.resolve_gate_plan(
             spec, title, root, app_id=_app_id, pinned=_pinned_manifest, layout=_stack_layout,
             lineage=_lineage_paths, recorded=_recorded_app)
@@ -6033,6 +6045,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _gate_plan0 = verification_target.resolve_gate_plan(
                     spec, title, root, app_id=_app_id, changed=list(_seeded_paths),
                     pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
+        # A GATE ONLY A PERSON CAN UNBLOCK stops the build before any service, agent or repair
+        # round is paid for (the toolchain it needs is off on this install) — WHEN BOSS KNOWS
+        # THE APP'S FOLDER (named, recorded, or the seeded attempt's files). Otherwise this plan
+        # was made at the repository root with no change to place it: a Go-root repo whose
+        # task builds the Node app in web/ would be stopped for Go it never uses. Every verify
+        # re-plans with the run's changed files and stops there (_halt_if_needs_person).
+        if (_app_root_mod.clean_rel(_app_id or _app_scope) or _recorded_app or _seeded):
+            stop_if_the_gate_needs_a_person(_gate_plan0)
         # BUILD SERVICES (build_services): the run's own throwaway Postgres when the repo
         # declares `services: [postgres]` or the project's setting asks for it. Provisioned
         # before any agent, so the agents and every verify command see DATABASE_URL; a run that
@@ -6355,10 +6375,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # The last recorded verify's failing check (verification_target.failed_check): what ran
         # and its first error line, so a blocked build names it (checks_headline).
         _failed_check: list = [None]
+        #: THE GATE ONLY A PERSON CAN UNBLOCK, once any verify met it (GatePlan.needs_human).
+        #: Sticky: every later verify, the review panel and the PR step re-raise it, so no
+        #: broad handler that swallows one verify's exception lets the build carry on to a
+        #: repair round or a PR with code no gate could run.
+        _needs_person: list = [None]
+
+        def _halt_if_needs_person(plan=None) -> None:
+            if plan is not None and getattr(plan, "needs_human", False) \
+                    and _needs_person[0] is None:
+                _needs_person[0] = StackUnsupportedError(plan.error or plan.description)
+            if _needs_person[0] is not None:
+                raise _needs_person[0]
 
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory. BOSS's own
             install (NPM_INSTALL_CMD, the one every gate runs) is its first step."""
+            _halt_if_needs_person()
             result = _run_verify_once(record=record)
             env = None
             if record and not result.ok:
@@ -6408,6 +6441,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
                 pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
+            # The tree turned into a stack this install cannot gate (an agent wrote a go.mod
+            # while Go is off): a person's to fix, so no further repair round runs on it.
+            _halt_if_needs_person(plan)
             _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
             cwd = plan.cwd
             try:
@@ -7183,6 +7219,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                        "code_task_run", run_id,
                                        {k: _rf[k] for k in ("failed", "reproduces", "failing",
                                                             "word", "exit_code")})
+                    except StackUnsupportedError:
+                        raise
                     except Exception:  # noqa: BLE001 — unproven, never a failed build
                         _log_caught(logger)
 
@@ -7876,6 +7914,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         impl_files = [
                             fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)
                         ] or impl_files
+            except StackUnsupportedError:
+                raise
             except Exception:  # noqa: BLE001 — quality pass must not sink a green run
                 _log_caught(logger)
                 q_ok = False
@@ -8122,7 +8162,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if _app_id:
                         panel["full"] = bool(tests_passed)
                     else:
-                        panel["full"] = bool(_run_verify(record=False).ok)
+                        try:
+                            panel["full"] = bool(_run_verify(record=False).ok)
+                        except StackUnsupportedError:
+                            # A seat's error is recorded, not raised: never read as passed.
+                            panel["full"] = False
+                            raise
 
             def _do_consistency():
                 set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
@@ -8298,6 +8343,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 owner_id=lambda label: f"{run_id}:{label}",
                 kill_strays=lambda: _kill_stray_review_processes(root, review_root))
             review_errors.extend(_seat_run.errors.values())
+            _halt_if_needs_person()
             if _seat_run.timed_out:
                 review_errors.append(
                     f"{len(_seat_run.timed_out)} review check(s) exceeded {review_deadline}s "
@@ -8451,6 +8497,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _was_n = preexisting_test_counts.get(_p, 0)
             if _now_n < _was_n:
                 _weakened.append(f"{_p} ({_was_n} -> {_now_n} tests)")
+        _halt_if_needs_person()
         gates = {
             "code_written": bool(impl_files) or (_is_repair_iteration and tests_passed),
             "written_tests_pass": tests_passed,
@@ -9266,6 +9313,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         seat_deadline_s=_rs_deadline,
                         owner_id=lambda label: f"{run_id}:reseat{round_i}:{label}",
                         kill_strays=lambda: _kill_stray_review_processes(root, review_root))
+                    _halt_if_needs_person()
                     _reseat = {}
                     for stage_key, _fn in _wanted:
                         if _rs_run.finished(stage_key) and stage_key not in _rs_run.errors:
@@ -9433,6 +9481,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if set(failing) - {"code_review_passed", "consistent", "app_serves",
                                        "security_clean", "tests_strong_enough"}:
                         break  # a non-judgment gate regressed — legacy handling below
+              except StackUnsupportedError:
+                raise
               except Exception as exc:  # noqa: BLE001
                 _log_caught(logger)
                 with _transaction(engine) as c:
@@ -9495,6 +9545,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                  for f in _sf0[:20] if isinstance(f, dict)]})
                     secret_repair_record = repair_committed_secrets(
                         _sf0, run_fix=_secret_fix, rejudge=_secret_rejudge)
+                except StackUnsupportedError:
+                    raise
                 except Exception as exc:  # noqa: BLE001 — the gate's verdict stands as it was
                     _log_caught(logger)
                     secret_repair_record = {"attempted": True, "cleared": False,
@@ -10181,6 +10233,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 "|| jsonb_build_object('past_last_stage_boundary', true), updated_at=now() "
                 "WHERE id=:id"), {"id": run_id})
             _abort_if_cancelled("before opening the PR", spends=False)
+            _halt_if_needs_person()  # never a PR of code no gate could run
             _pr_files = ([FileChange(path=p, content=content)
                           for p, content in accumulated.items()]
                          if use_microvm else sandbox.diff())
@@ -10534,7 +10587,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             fclass, rcode = "needs_human", "stack_unsupported"
         # SHIP WHAT EXISTS, EVEN ON A FAILURE — same helper every other exit uses, so the
         # rule lives in exactly one place and cannot drift between paths again.
-        _partial_pr = _rescue_pr(reason)
+        # EXCEPT A GATE ONLY A PERSON CAN UNBLOCK: no gate could run on that code, so no PR
+        # carries it. The work is kept for the retry once the toolchain is on.
+        if isinstance(exc, StackUnsupportedError):
+            _partial_pr = None
+            _save_workspace(f"exit: {reason}")
+        else:
+            _partial_pr = _rescue_pr(reason)
 
         with _transaction(engine) as c:
             _release(budget, c, project_id, reservation_id, f"governed code task error: {reason}", run_id=run_id)
