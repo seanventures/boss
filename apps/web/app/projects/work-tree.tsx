@@ -15,7 +15,7 @@ import { CaretDown, CaretRight, LinkSimple, LockSimple, Plus, TreeStructure } fr
 import { GatedButton } from "../../components/gated";
 import {
   POLICY_EXAMPLE, STATUS_WORDS, completeItem, createItem, flatten, partyName, readItem, readPolicy,
-  readTree, relateItem, updateItem, type WorkNode, type WorkStatus, type WorkTree,
+  readTree, relateItem, updateItem, withListed, type ListedPiece, type WorkNode, type WorkStatus, type WorkTree,
 } from "../../lib/work-items";
 import { ItemCards, OutputsSection, StatusCards, WatchSection } from "./work-item-extras";
 import { ItemAccess, PrivateBlocker } from "./work-access";
@@ -25,11 +25,17 @@ import "./work-tree.css";
 
 const SETTABLE: WorkStatus[] = ["backlog", "todo", "active", "blocked", "cancelled"];
 
-export function StatusChip({ status }: { status: WorkStatus }) {
-  return <span className="wt-chip" data-s={status} data-testid="wt-status">{STATUS_WORDS[status]}</span>;
+export function StatusChip({ status, words }: { status: WorkStatus; words?: string }) {
+  return <span className="wt-chip" data-s={status} data-testid="wt-status">{words || STATUS_WORDS[status]}</span>;
 }
 
-export function WorkTreeView({ projectId, demo = false }: { projectId: string; demo?: boolean }) {
+export function WorkTreeView({ projectId, demo = false, listed = [], onOpenListed }: {
+  projectId: string; demo?: boolean;
+  /** Runs, builds and PRs from the work list. The graph does not contain them until a run is linked. */
+  listed?: ListedPiece[];
+  /** A list-store row opens the work drawer. It is not a graph item. */
+  onOpenListed?: (id: string) => void;
+}) {
   const [tree, setTree] = useState<WorkTree | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -53,14 +59,15 @@ export function WorkTreeView({ projectId, demo = false }: { projectId: string; d
 
   if (error) return <div className="px-card wt-empty" data-testid="wt-error">{error}</div>;
   if (!tree) return <div className="px-card wt-empty" data-testid="wt-loading">Loading the work tree…</div>;
-  const rows = flatten(tree.items).filter(({ node }) => !hiddenBy(node, tree, folded));
-  const all = flatten(tree.items).map((r) => r.node);
+  const view = withListed(tree, listed);
+  const rows = flatten(view.items).filter(({ node }) => !hiddenBy(node, view, folded));
+  const all = flatten(view.items).map((r) => r.node);
   return (
     <div className="wt" data-testid="wt">
       <div className="wt-bar">
         <span className="wt-counts" aria-label="By status">
-          {(Object.keys(STATUS_WORDS) as WorkStatus[]).filter((s) => tree.by_status[s]).map((s) => (
-            <span key={s}><StatusChip status={s} /> {tree.by_status[s]}</span>
+          {(Object.keys(STATUS_WORDS) as WorkStatus[]).filter((s) => view.by_status[s]).map((s) => (
+            <span key={s}><StatusChip status={s} /> {view.by_status[s]}</span>
           ))}
         </span>
         <span className="px-spacer" />
@@ -91,12 +98,15 @@ export function WorkTreeView({ projectId, demo = false }: { projectId: string; d
                     {folded.has(node.id) ? <CaretRight size={11} /> : <CaretDown size={11} />}
                   </button>
                 ) : <span className="wt-fold" aria-hidden />}
-                <button type="button" className="wt-open" onClick={() => setOpen(open === node.id ? null : node.id)}>
+                <button type="button" className="wt-open" onClick={() => {
+                  if (node.listed) { onOpenListed?.(node.subject_id || node.id); return; }
+                  setOpen(open === node.id ? null : node.id);
+                }}>
                   {node.human_key ? <span className="wt-key">{node.human_key}</span> : null}
                   {node.visibility === "private" ? <LockSimple size={11} aria-label="Private" data-testid="wt-private-mark" /> : null}
                   <span className="wt-title">{node.title}</span>
                 </button>
-                <StatusChip status={node.status} />
+                <StatusChip status={node.status} words={node.status_words} />
                 {node.on_hold ? <span className="wt-blocked" data-testid="wt-on-hold">On hold</span> : null}
                 {node.blocked_by.length ? (
                   <span className="wt-blocked" data-testid="wt-blocked"
@@ -107,7 +117,7 @@ export function WorkTreeView({ projectId, demo = false }: { projectId: string; d
                 {node.labels.map((l) => <span key={l.name} className="wt-label">{l.name}</span>)}
                 {node.assignee ? <span className="wt-who" title={node.assignee}>{partyName(node.assignee)}</span> : null}
               </div>
-              {open === node.id ? (
+              {open === node.id && !node.listed ? (
                 <ItemPanel projectId={projectId} id={node.id} all={all} demo={demo} onChanged={() => void load()} />
               ) : null}
             </li>

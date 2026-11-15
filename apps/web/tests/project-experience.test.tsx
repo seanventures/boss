@@ -471,6 +471,23 @@ describe("Work (screens 5, 5b)", () => {
     expect(tid("px-work-columns")).not.toBeNull();
   });
 
+  // BOSSAPP-1038: list view reads the project-experience work store; the tree reads the
+  // work-item graph. Existing runs and PRs stay in the list store, so the tree must draw both.
+  it("the tree shows the work list when the work-item graph is empty", async () => {
+    const calls = engine((c) => {
+      if (c.path === "/v1/work-items/tree") return { body: { items: [], count: 0, by_status: {}, goals: [], labels: [] } };
+      return undefined;
+    });
+    await openProject("&tab=work");
+    expect(tid("px-work-rows")!.textContent).toContain("Visual refresh finish");
+    await press(tid("px-work-tree"));
+    expect(tid("wt-empty")).toBeNull();
+    expect(tid("wt")!.textContent).toContain("Visual refresh finish");
+    expect(tid("wt")!.textContent).toContain("Ticket search filters");
+    expect(tid("wt")!.textContent).toContain("Needs you");
+    expect(calls.some((c) => c.method === "POST" && c.path.startsWith("/v1/work-items"))).toBe(false);
+  });
+
   it("on an engine without §3's POST it uses the project's start door, with the checklist and Start anyway", async () => {
     let refused = true;
     const calls = engine((c) => {

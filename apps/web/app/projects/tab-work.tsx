@@ -170,7 +170,11 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
         </div>
       </div>
       {view === "tree" ? (
-        <WorkTreeView projectId={ctx.projectId} demo={ctx.demo} />
+        <WorkTreeView projectId={ctx.projectId} demo={ctx.demo} onOpenListed={(id) => ctx.open("work", id)}
+          listed={items.map((w) => ({
+            id: w.id, title: w.title, label: w.label, state: w.state, source: w.source,
+            source_label: w.source_label, work_item_id: w.work_item_id,
+          }))} />
       ) : view === "mine" ? (
         <InboxView projectId={ctx.projectId} demo={ctx.demo} />
       ) : !ctx.work ? (

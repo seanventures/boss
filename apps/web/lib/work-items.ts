@@ -23,6 +23,12 @@ export type WorkNode = {
   id: string; human_key: string | null; title: string; description: string; status: WorkStatus;
   parent_id: string | null; goal_id: string | null; assignee: string | null;
   responsible_person: string | null; subject_type: string;
+  /** The run, build or PR this graph node already stands for, when the server sent one. */
+  subject_id?: string | null;
+  /** Chip text for a row drawn from the work list (BOSSAPP-1038). The graph status stays for colour. */
+  status_words?: string;
+  /** Drawn from the project work list, not stored on the work-item graph. Opening it does not load a graph item. */
+  listed?: boolean;
   labels: { name: string; color: string }[]; blocked_by: ItemRef[];
   execution_policy: Policy | null; execution_state: Record<string, unknown> | null;
   children: WorkNode[];
@@ -87,6 +93,7 @@ export function parseNode(w: unknown): WorkNode {
     parent_id: str(o.parent_id) || null, goal_id: str(o.goal_id) || null,
     assignee: str(o.assignee) || null, responsible_person: str(o.responsible_person) || null,
     subject_type: str(o.subject_type) || "item",
+    subject_id: str(o.subject_id) || null,
     labels: arr(o.labels).map(obj).map((l) => ({ name: str(l.name), color: str(l.color) || "gray" })),
     blocked_by: arr(o.blocked_by).map(ref),
     execution_policy: Array.isArray(policy.stages) ? policy as unknown as Policy : null,
@@ -121,6 +128,54 @@ export function parseTree(w: unknown): WorkTree {
 /** Every node, depth-first, with its depth — what the tree draws as rows. */
 export function flatten(nodes: WorkNode[], depth = 0): { node: WorkNode; depth: number }[] {
   return nodes.flatMap((n) => [{ node: n, depth }, ...flatten(n.children, depth + 1)]);
+}
+
+/** A row from the project work list (runs, builds, PRs). Not a work-item graph node. */
+export type ListedPiece = {
+  id: string; title?: string; label?: string; state?: string;
+  source?: string; source_label?: string; work_item_id?: string | null;
+};
+
+/** List-store states, said in the list's own words. Colour reuses a graph status; failed is not Cancelled. */
+const LIST_STATE: Record<string, { status: WorkStatus; words: string }> = {
+  needs_you: { status: "in_review", words: "Needs you" },
+  stalled: { status: "blocked", words: "Stalled" },
+  running: { status: "active", words: "Running" },
+  planned: { status: "todo", words: "Planned" },
+  done: { status: "done", words: "Done" },
+  failed: { status: "blocked", words: "Failed" },
+};
+
+/**
+ * The graph plus the work-list rows it does not already show (BOSSAPP-1038). Render only:
+ * nothing is written, migrated or deleted. A list row whose id, work_item_id or the graph
+ * node's subject_id is already in the tree is skipped. Synthetic ids are `run:<id>` so a click
+ * cannot load them as graph items.
+ */
+export function withListed(tree: WorkTree, pieces: ListedPiece[]): WorkTree {
+  const claimed = new Set<string>();
+  for (const { node } of flatten(tree.items)) {
+    if (node.id) claimed.add(node.id);
+    if (node.subject_id) claimed.add(node.subject_id);
+  }
+  const extra: WorkNode[] = [];
+  for (const piece of pieces) {
+    if (!piece.id || claimed.has(piece.id) || (piece.work_item_id && claimed.has(piece.work_item_id))) continue;
+    const mapped = LIST_STATE[piece.state ?? ""] ?? { status: "active" as WorkStatus, words: piece.state || "Running" };
+    claimed.add(piece.id);
+    extra.push({
+      id: `run:${piece.id}`, human_key: null, title: piece.title || piece.label || piece.id,
+      description: "", status: mapped.status, status_words: mapped.words,
+      parent_id: null, goal_id: null, assignee: null, responsible_person: null,
+      subject_type: piece.source || "workflow_run", subject_id: piece.id,
+      labels: [], blocked_by: [], execution_policy: null, execution_state: null,
+      children: [], visibility: "project", listed: true,
+    });
+  }
+  const items = [...tree.items, ...extra];
+  const by_status: Record<string, number> = {};
+  for (const { node } of flatten(items)) by_status[node.status] = (by_status[node.status] ?? 0) + 1;
+  return { ...tree, items, count: flatten(items).length, by_status };
 }
 
 /** "agent:frontend" → "frontend"; "person:ceo" → "ceo". */

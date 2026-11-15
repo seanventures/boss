@@ -94,4 +94,39 @@ describe("the work tree", () => {
     expect(calls.some((c) => c.method === "POST" && c.url === "/v1/work-items/w2/complete")).toBe(true);
     expect($('[data-testid="wt-said"]')?.textContent).toBe("In review — its first stage is in Needs you.");
   });
+
+  // BOSSAPP-1038: the graph and the work list are different stores. A run or PR that only
+  // lives on the list must still be a row, and a run the graph already has must not be drawn twice.
+  it("draws list-store runs beside the graph and does not duplicate one the graph already has", async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    const opened: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      calls.push({ url: String(url), method, body: init?.body ? JSON.parse(String(init.body)) : null });
+      const body = String(url).startsWith("/v1/work-items/tree")
+        ? { count: 1, by_status: { active: 1 }, goals: [], labels: [], items: [
+            { id: "w_graph", human_key: "WI-9", title: "Graph only", status: "active",
+              subject_type: "workflow_run", subject_id: "wfr_linked", children: [] },
+          ] }
+        : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    await mount(<WorkTreeView projectId="p1" onOpenListed={(id) => opened.push(id)} listed={[
+      { id: "wfr_linked", label: "Already in the graph", state: "running", source: "workflow_run" },
+      { id: "wfr_new", label: "Unlinked run", title: "Unlinked run", state: "failed", source: "workflow_run" },
+    ]} />);
+    expect($('[data-testid="wt-empty"]')).toBeNull();
+    expect($('[data-testid="wt-row-w_graph"]')).not.toBeNull();
+    expect(document.body.textContent).toContain("Unlinked run");
+    expect(document.body.textContent).not.toContain("Already in the graph");
+    const chip = $('[data-testid="wt-row-run:wfr_new"] [data-testid="wt-status"]');
+    expect(chip?.textContent).toBe("Failed");
+    expect(document.body.textContent).not.toContain("Cancelled");
+    ($('[data-testid="wt-row-run:wfr_new"] .wt-open') as HTMLButtonElement).click();
+    await settle();
+    expect($('[data-testid="wt-panel"]')).toBeNull();
+    expect(opened).toEqual(["wfr_new"]);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(calls.some((c) => c.method === "GET" && c.url.includes("/v1/work-items/") && !c.url.includes("/tree"))).toBe(false);
+  });
 });
