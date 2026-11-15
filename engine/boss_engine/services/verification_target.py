@@ -891,6 +891,26 @@ def resolve_gate_plan(
         return GatePlan(commands, app_dir, "toolchain", " && ".join(commands),
                         timeout_seconds=toolchains.GATE_TIMEOUT_SECONDS,
                         steps=[(c, app_dir) for c in commands])
+    # A GO MODULE (go.mod) in the app's directory and no Node app there: `go vet` and `go test`.
+    # ANY OTHER STACK'S MANIFEST BOSS CANNOT RUN (go.mod without Go turned on, a Cargo.toml, a
+    # Gemfile …) and no Node or Python app beside it: the gate says so in words. Never the npm
+    # or Python default — Northgate's Go tree was "verified" as a Node package (2026-11-15).
+    py_here = any((app_dir / n).is_file()
+                  for n in ("requirements.txt", "pyproject.toml", "setup.py", "Pipfile"))
+    if toolchains.detect_go(app_dir) and not node_here and not py_here:
+        if not toolchains.has("go"):
+            message = toolchains.missing_message("go", "go.mod")
+            return GatePlan([], app_dir, "toolchain_missing", message, error=message)
+        commands = list(toolchains.GO_GATE)
+        return GatePlan(commands, app_dir, "toolchain", " && ".join(commands),
+                        timeout_seconds=toolchains.GATE_TIMEOUT_SECONDS,
+                        steps=[(c, app_dir) for c in commands])
+    if not node_here and not py_here:
+        foreign = stacks.unsupported_manifest(app_dir)
+        if foreign is not None:
+            label, manifest = foreign
+            message = toolchains.unsupported_message(label, manifest)
+            return GatePlan([], app_dir, "toolchain_missing", message, error=message)
     commands = default_test_commands(spec, title)
     # THE APP'S OWN FILES SAY WHAT IT IS when the task does not (no explicit project_kind): a
     # folder with a package.json and no Python manifest is a Node app whatever the brief's

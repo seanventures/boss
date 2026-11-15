@@ -343,7 +343,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
+        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or a list (java,go). Every image
         # built from python-runtime takes the same value, so that stage is built once.
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
     image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
@@ -721,7 +721,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
+        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or a list (java,go). Every image
         # built from python-runtime takes the same value, so that stage is built once.
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
     image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
@@ -996,7 +996,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
+        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or a list (java,go). Every image
         # built from python-runtime takes the same value, so that stage is built once.
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
     image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-mcp-tools:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
@@ -1083,7 +1083,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
+        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or a list (java,go). Every image
         # built from python-runtime takes the same value, so that stage is built once.
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
     image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-egress:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}

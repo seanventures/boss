@@ -186,6 +186,12 @@ class SandboxIdentity:
                     "LOGNAME": f"sbx{self.uid}", "XDG_CONFIG_HOME": f"{home}/.config",
                     "XDG_CACHE_HOME": f"{home}/.cache", "CLAUDE_CONFIG_DIR": f"{home}/.claude",
                     "npm_config_cache": f"{home}/.npm", "BOSS_SANDBOX_UID": str(self.uid)})
+        # Opt-in toolchains' own settings (Go: its module proxy and checksum database through
+        # boss-egress, its caches under this HOME so they persist per project).
+        with contextlib.suppress(Exception):
+            from . import toolchains
+
+            out.update(toolchains.sandbox_env(home))
         for name in ("CODEX_HOME", "GROK_HOME"):
             if name in out:
                 out[name] = f"{home}/.{name.split('_')[0].lower()}"

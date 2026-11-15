@@ -38,6 +38,11 @@ DEFAULT_ALLOW = (
     # services.gradle.org, so a project's ./gradlew cannot fetch a distribution; BOSS runs the
     # image's pinned Gradle instead.
     "repo.maven.apache.org", "repo1.maven.org", "plugins.gradle.org", "plugins-artifacts.gradle.org",
+    # Go (opt-in): the module proxy and the checksum database (GOPROXY/GOSUMDB, set per run by
+    # toolchains.sandbox_env). The proxy serves module zips itself (no redirect to
+    # storage.googleapis.com), and with GOPROXY set to it there is no `direct` VCS fallback, so
+    # no source host is needed.
+    "proxy.golang.org", "sum.golang.org",
     # The security review's dependency audit (OSV-Scanner, online by default: decision D6).
     "api.osv.dev",
 )

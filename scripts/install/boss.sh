@@ -112,12 +112,13 @@ Commands:
                         legacy status         the shared credentials still in use, with end dates
                         posture | audit verify | migrate
   toolchains [list]   Build toolchains: which this install has (Python and Node always)
-  toolchains enable java|security | disable java|security
-                      Turn an opt-in toolchain on or off: saves BOSS_TOOLCHAINS in .env,
-                      rebuilds the api and worker images and restarts them. Java adds a
-                      pinned Temurin JDK 21, Maven and Gradle (about 0.5 GB); security adds
-                      Semgrep, OSV-Scanner and OWASP ZAP on top of Java. See
-                      docs/community/TOOLCHAINS.md
+  toolchains enable java|go|security | disable java|go|security
+                      Turn an opt-in toolchain on or off, keeping the others: saves
+                      BOSS_TOOLCHAINS in .env (comma-separated, e.g. java,go), rebuilds the
+                      api and worker images and restarts them. Java adds a pinned Temurin
+                      JDK 21, Maven and Gradle (about 0.5 GB); Go adds Go 1.27 (about
+                      0.25 GB); security adds Semgrep, OSV-Scanner and OWASP ZAP on top of
+                      Java. See docs/community/TOOLCHAINS.md
   clone PROJECT [DIR] [--branch B] [--open]
                       A working copy of a local project's code (BOSS's git remote,
                       http://localhost:3000/git/PROJECT.git), in DIR (default ~/code/PROJECT).
@@ -527,16 +528,33 @@ cmd_update() {
 
 # ---- toolchains ------------------------------------------------------------------------------
 
-KNOWN_TOOLCHAINS=(java security)
+KNOWN_TOOLCHAINS=(java go security)
+
+# BOSS_TOOLCHAINS is "none" or a comma-separated list of KNOWN_TOOLCHAINS ("java,go"), the same
+# reading as Dockerfile.community's selectors. toolchains_with LIST NAME / toolchains_without
+# LIST NAME print the normalised list (known order, no spaces, "none" when empty).
+toolchains_normalise() {
+  local list=",$(printf '%s' "${1:-}" | tr -d ' ' | tr 'A-Z' 'a-z')," out="" t
+  for t in "${KNOWN_TOOLCHAINS[@]}"; do
+    [[ "$list" == *",$t,"* ]] && out="${out:+$out,}$t"
+  done
+  printf '%s\n' "${out:-none}"
+}
+toolchains_with() { toolchains_normalise "${1:-},${2}"; }
+toolchains_without() {
+  local list=",$(printf '%s' "${1:-}" | tr -d ' ' | tr 'A-Z' 'a-z'),"
+  toolchains_normalise "${list//,$2,/,}"
+}
 
 cmd_toolchains() {
   need_install
   local action="${1:-list}" name="${2:-}" current wanted
-  current="$(env_value BOSS_TOOLCHAINS)"; current="${current:-none}"
+  current="$(env_value BOSS_TOOLCHAINS)"; current="$(toolchains_normalise "${current:-none}")"
   case "$action" in
     list|status)
       printf 'Configured in .env: BOSS_TOOLCHAINS=%s\n' "$current"
       printf 'Always installed:   python, node\n'
+      printf 'Known toolchains:   %s\n' "${KNOWN_TOOLCHAINS[*]}"
       printf 'In the running image: '
       compose exec -T api cat /opt/toolchains/manifest.json </dev/null 2>/dev/null \
         || printf '(api not running)\n'
@@ -546,7 +564,11 @@ cmd_toolchains() {
   esac
   [[ " ${KNOWN_TOOLCHAINS[*]} " == *" $name "* ]] \
     || die "unknown toolchain: ${name:-(none given)}. Known: ${KNOWN_TOOLCHAINS[*]}"
-  if [[ "$action" == enable ]]; then wanted="$name"; else wanted=none; fi
+  if [[ "$action" == enable ]]; then
+    wanted="$(toolchains_with "$current" "$name")"
+  else
+    wanted="$(toolchains_without "$current" "$name")"
+  fi
   if [[ "$current" == "$wanted" ]]; then
     printf 'BOSS_TOOLCHAINS is already %s; nothing to change.\n' "$wanted"
     return 0

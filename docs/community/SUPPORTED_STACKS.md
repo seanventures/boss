@@ -21,7 +21,7 @@ Promotion: An experimental adapter becomes certified only when a recorded benchm
 | `node-service` — Node service (Express, Fastify, Koa, Hono, NestJS, node:http) | best effort | Node | express, fastify, koa, hono, nestjs, node-http | postgres, sqlite (local development) |
 | `node-web` — Node web front end (Vue, Svelte, Angular) | best effort | Node | vue, svelte, angular |  |
 | `java-dropwizard` — Java Dropwizard | best effort | Java | dropwizard | postgres, sqlite (local development) |
-| `go` — Go | not supported | Go | — | — |
+| `go-service` — Go service (net/http, Gin, Echo, chi, Fiber) | best effort | Go | net-http, gin, echo, chi, fiber | postgres, sqlite (local development) |
 | `rust` — Rust | not supported | Rust | — | — |
 | `ruby` — Ruby | not supported | Ruby | — | — |
 | `php` — PHP | not supported | PHP | — | — |
@@ -36,6 +36,7 @@ Promotion: An experimental adapter becomes certified only when a recorded benchm
 | Python | python >=3.11 | pip | `requirements.txt`, `pyproject.toml`, `setup.py`, `Pipfile` | always installed |
 | Node | node >=20 | npm | `package.json` | always installed |
 | Java | java 21 (Temurin) | maven or gradle | `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts` | opt-in: `boss toolchains enable java` |
+| Go | go 1.27 | go modules | `go.mod` | opt-in: `boss toolchains enable go` |
 
 ## Commands
 
@@ -46,6 +47,7 @@ Each service runs its own, in its own directory. `—`: not a separate step.
 | Python | `python3 -m pip install --user --disable-pip-version-check --no-input -q -r requirements.txt` | — | — | — | `python3 -m pytest -q` | — |
 | Node | `npm install --include=dev --no-audit --no-fund --loglevel=error` | `npm run build` | `npm run lint` | `npm run typecheck` | `npm run test` | `npm run test:e2e` |
 | Java | — | `mvn -B -ntp verify | gradle --no-daemon --console=plain build` | — | — | `mvn -B -ntp verify | gradle --no-daemon --console=plain build` | — |
+| Go | — | — | `go vet ./...` | — | `go test ./...` | — |
 
 ## Starting a backend and serving a front end
 
@@ -70,5 +72,12 @@ BOSS starts the backend on `$PORT` (the command in the service's `boss.preview.c
 | Svelte (Node) | frontend | `exec npm run preview -- --host 127.0.0.1 --port "$PORT" --strictPort` |
 | Spring Boot (Java) | backend | `java -Dserver.port="$PORT" -jar <the built jar>` |
 | Dropwizard (Java) | backend | `java -jar <the built jar> server config.yml` |
+| Gin (Go) | backend | `go build -o <binary> <main package> && exec <binary> (on "$PORT")` |
+| Echo (Go) | backend | `go build -o <binary> <main package> && exec <binary> (on "$PORT")` |
+| chi (Go) | backend | `go build -o <binary> <main package> && exec <binary> (on "$PORT")` |
+| Fiber (Go) | backend | `go build -o <binary> <main package> && exec <binary> (on "$PORT")` |
+| net/http (Go) | backend | `go build -o <binary> <main package> && exec <binary> (on "$PORT")` |
+
+Go builds a server with `go build` (the module root's `package main`, else the first `./cmd/<name>`) and runs it; it listens on `$PORT`.
 
 A multi-service app is a backend and a web front end, each in its own directory with its own manifest. Data: `DATABASE_URL` (PostgreSQL) with a local SQLite file when it is unset, for local development.
