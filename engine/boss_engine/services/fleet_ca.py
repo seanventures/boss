@@ -25,7 +25,8 @@ one outcome (the host row the certificate is pinned to):
      cache, identity_dpop_replay).
   2. mTLS terminated in front of the API: the terminator verifies the chain against the fleet CA
      and forwards the leaf as `X-Boss-Client-Cert` (URL-escaped PEM). Honoured only from a peer in
-     BOSS_TRUSTED_PROXIES; the certificate's signature is re-checked against the CA here.
+     BOSS_HOST_CERT_TERMINATORS (empty by default: form 2 off); the certificate's signature is
+     re-checked against the CA here.
 
 Either way the certificate must be one this CA issued (agent_certs, by SHA-256 fingerprint), not
 expired, not revoked, and its host not revoked or retired.
@@ -289,21 +290,27 @@ class HostIdentity:
     status: str
 
 
+#: The certificate must be one this CA issued, unexpired, AND the host's CURRENT one: a renewal
+#: supersedes the certificate it replaced (agent_hosts.cert_fingerprint is the pin).
 _HOST_SQL = text("""
     SELECT c.host_id, c.org_id, c.fingerprint, c.public_key_pem, h.status, h.revoked_at,
-           c.revoked_at AS cert_revoked_at
+           c.revoked_at AS cert_revoked_at, (h.cert_fingerprint = c.fingerprint) AS current
       FROM agent_certs c JOIN agent_hosts h ON h.id = c.host_id
      WHERE c.fingerprint = :f AND c.kind = 'host' AND c.not_after > now()""")
-
 
 _PINNED_AND_SPENT = text("""
-    WITH spent AS (
-      INSERT INTO identity_dpop_replay (jkt, jti, expires_at) VALUES (:k, :j, :e)
+    WITH cert AS (
+      SELECT c.host_id, c.org_id, c.fingerprint, c.public_key_pem, h.status, h.revoked_at,
+             c.revoked_at AS cert_revoked_at, (h.cert_fingerprint = c.fingerprint) AS current
+        FROM agent_certs c JOIN agent_hosts h ON h.id = c.host_id
+       WHERE c.fingerprint = :f AND c.kind = 'host' AND c.not_after > now()),
+    spent AS (
+      -- the jti is spent only once the certificate matched: an unknown certificate fills
+      -- nothing (the replay cache is not a sink for strangers' proofs)
+      INSERT INTO identity_dpop_replay (jkt, jti, expires_at)
+      SELECT :k, :j, :e WHERE EXISTS (SELECT 1 FROM cert)
       ON CONFLICT (jkt, jti) DO NOTHING RETURNING 1)
-    SELECT c.host_id, c.org_id, c.fingerprint, c.public_key_pem, h.status, h.revoked_at,
-           c.revoked_at AS cert_revoked_at, EXISTS (SELECT 1 FROM spent) AS fresh
-      FROM agent_certs c JOIN agent_hosts h ON h.id = c.host_id
-     WHERE c.fingerprint = :f AND c.kind = 'host' AND c.not_after > now()""")
+    SELECT cert.*, EXISTS (SELECT 1 FROM spent) AS fresh FROM cert""")
 
 
 def _pinned(db: Any, fingerprint: str) -> tuple[HostIdentity, str]:
@@ -316,6 +323,8 @@ def _host_of(row: Any) -> tuple[HostIdentity, str]:
     if (row["revoked_at"] is not None or row["cert_revoked_at"] is not None
             or row["status"] == "retired"):
         raise FleetAuthError("host_revoked", 403)
+    if not row["current"]:
+        raise FleetAuthError("host_certificate_superseded")
     return (HostIdentity(str(row["host_id"]), str(row["org_id"]), str(row["fingerprint"]),
                          str(row["status"])), str(row["public_key_pem"]))
 
@@ -421,6 +430,30 @@ def on_proof_connection(fn: Any) -> Any:
             if attempt == 2 or not exc.connection_invalidated:
                 raise
     raise RuntimeError("unreachable")
+
+
+TERMINATORS_ENV = "BOSS_HOST_CERT_TERMINATORS"
+
+
+def is_cert_terminator(peer: Optional[str]) -> bool:
+    """FORM 2 IS ONLY EVER BELIEVED FROM A NAMED TLS TERMINATOR: BOSS_HOST_CERT_TERMINATORS
+    (addresses or CIDRs, comma-separated), EMPTY BY DEFAULT — never merely any
+    BOSS_TRUSTED_PROXIES peer, since a public reverse proxy forwarding a client's own header
+    would let anyone holding a (public) host certificate speak as that host. The terminator
+    must verify the client certificate against the fleet CA and strip any inbound
+    X-Boss-Client-Cert before setting its own."""
+    import ipaddress
+
+    from ..identity.authn_support import _trusted_networks
+
+    raw = (os.environ.get(TERMINATORS_ENV) or "").strip()
+    if not raw or not peer:
+        return False
+    try:
+        ip = ipaddress.ip_address(peer.split("%", 1)[0])
+    except ValueError:
+        return False
+    return any(ip in n for n in _trusted_networks(raw))
 
 
 def verify_forwarded_cert(db: Any, escaped_pem: str) -> HostIdentity:

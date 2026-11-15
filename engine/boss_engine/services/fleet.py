@@ -24,7 +24,6 @@ import json
 import os
 import re
 import secrets
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
@@ -125,7 +124,11 @@ def _supernet() -> ipaddress.IPv4Network:
 
 
 def _allocate_prefix(connection: Any, org_id: str) -> str:
-    """The lowest free /23 in the supernet (per org; addresses are only routed within it)."""
+    """The lowest free /23 in the supernet (per org; addresses are only routed within it),
+    under a per-org advisory lock so two concurrent enrolments never take the same block (the
+    unique index idx_agent_hosts_vm_prefix holds it in the database too)."""
+    connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+                       {"k": f"boss.fleet.vm_prefix:{org_id}"})
     used = {str(r[0]) for r in connection.execute(text(
         "SELECT vm_prefix FROM agent_hosts WHERE org_id = :o AND vm_prefix IS NOT NULL "
         "AND revoked_at IS NULL"), {"o": org_id}).all()}
@@ -353,10 +356,24 @@ def _not_mine(connection: Any, host_id: str, replicas: Iterable[dict]) -> None:
 
 
 def _store_gen(connection: Any, host_id: str, state_gen: Any) -> None:
+    """The full map (PUT …/replicas) sets the generation outright."""
     if state_gen is not None:
         connection.execute(text(
             "UPDATE agent_hosts SET replica_state_gen = :g WHERE id = :h"),
             {"g": int(state_gen), "h": host_id})
+
+
+def _advance_gen(connection: Any, host_id: str, state_gen: Any) -> bool:
+    """An /observed push moves the generation by exactly one. Anything else (a push lost in
+    between, a host that restarted its count) is NOT stored: the host's next poll then
+    mismatches and answers {resync: true}, and the full map repairs whatever was missed."""
+    if state_gen is None:
+        return True
+    moved = connection.execute(text(
+        "UPDATE agent_hosts SET replica_state_gen = :g WHERE id = :h "
+        "AND replica_state_gen = :g - 1 RETURNING 1"),
+        {"g": int(state_gen), "h": host_id}).first()
+    return bool(moved)
 
 
 def put_replicas(connection: Any, host: fleet_ca.HostIdentity, *, state_gen: int,
@@ -380,13 +397,14 @@ def observed(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
     """Replica state changes, pushed by the host on every change (watchdog transitions too),
     with the host's bumped state_gen (§3.13.0 REVISION)."""
     _not_mine(connection, host.host_id, body.get("replicas") or ())
-    _store_gen(connection, host.host_id, body.get("state_gen"))
+    in_step = _advance_gen(connection, host.host_id, body.get("state_gen"))
     seen = _observe(connection, host.host_id, body.get("replicas") or ())
     if body.get("observed_generation") is not None:
         connection.execute(text(
             "UPDATE agent_hosts SET observed_generation = GREATEST(observed_generation, :g) "
             "WHERE id = :i"), {"g": int(body["observed_generation"]), "i": host.host_id})
-    return {"host_id": host.host_id, "replicas_seen": seen}
+    return {"host_id": host.host_id, "replicas_seen": seen,
+            **({} if in_step else {"resync": True})}
 
 
 #: The kinds boss-hostd reports (HOST_API.md §2.7), recorded as host_events rows.
@@ -464,23 +482,41 @@ def desired(connection: Any, host_id: str) -> dict:
             "pools": [], "endpoints": endpoints(host_id), "fences": [], "revocations": []}
 
 
-def watch(engine: Any, host_id: str, *, since: int, wait: float = 0.0,
-          poll: float = 0.25) -> dict:
+async def watch(engine: Any, host_id: str, *, since: int, wait: float = 0.0) -> dict:
     """GET …/desired?since=g&wait=s: the whole desired state as soon as the host's generation is
     past `since` (at once when it already is: a reconnect with since=0 is a full resync), or
-    `{"changed": false, "generation": g}` after `wait` seconds (long-poll, at most 30)."""
-    deadline = time.monotonic() + max(0.0, min(float(wait or 0), WATCH_MAX_SECONDS))
-    while True:
+    `{"changed": false, "generation": g}` after `wait` seconds (long-poll, at most 30).
+
+    The wait is an asyncio wait on THIS process's waiters (run_plane.WAITERS), never a thread
+    and never a per-waiter query: a reconcile, revoke or cordon wakes it after its commit, and
+    one generation sweep per process (a single query for every waiting host) catches a change
+    another process made."""
+    from starlette.concurrency import run_in_threadpool
+
+    from .run_plane import WAITERS
+
+    def read() -> tuple:
         with engine.begin() as c:
             gen = c.execute(text("SELECT desired_generation FROM agent_hosts WHERE id = :i"),
                             {"i": host_id}).scalar()
             if gen is None:
                 raise FleetError("no such host.", status=404, code="not_found")
-            if int(gen) > int(since or 0):
-                return {"changed": True, **desired(c, host_id)}
-        if time.monotonic() >= deadline:
-            return {"changed": False, "host_id": host_id, "generation": int(gen)}
-        time.sleep(poll)
+            return int(gen), (desired(c, host_id) if int(gen) > int(since or 0) else None)
+
+    timeout = max(0.0, min(float(wait or 0), WATCH_MAX_SECONDS))
+    waiter = WAITERS.register_desired(engine, host_id, int(since or 0)) if timeout else None
+    try:
+        gen, state = await run_in_threadpool(read)
+        if state is not None:
+            return {"changed": True, **state}
+        if waiter is not None and await waiter.wait(timeout):
+            gen, state = await run_in_threadpool(read)
+            if state is not None:
+                return {"changed": True, **state}
+        return {"changed": False, "host_id": host_id, "generation": gen}
+    finally:
+        if waiter is not None:
+            WAITERS.unregister(waiter)
 
 
 # ── Guest-call audit ────────────────────────────────────────────────────────────────────────

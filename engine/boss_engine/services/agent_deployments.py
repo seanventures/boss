@@ -519,6 +519,9 @@ def set_runtime(connection: Connection, project_id: str, agent_key: str, environ
         raise DeploymentError(f"{agent_key} is not deployed to {env}.", status=404)
     if runtime not in RUNTIMES:
         raise DeploymentError(f"runtime must be one of {', '.join(RUNTIMES)}.")
+    if runtime == "microvm" and (current.get("runner") or "deployed_agent") != "deployed_agent":
+        raise DeploymentError("only a deployed agent runs on microVMs; BOSS's own bots "
+                              f"({current.get('runner')}) stay on the local workers.")
     if runtime == "local":
         mode, count = None, 1
     else:
@@ -552,6 +555,7 @@ def set_runtime(connection: Connection, project_id: str, agent_key: str, environ
         {"rt": runtime, "m": mode, "n": count,
          "res": json.dumps(resources) if resources is not None else None, "img": image_digest,
          "pl": json.dumps(placement) if placement is not None else None, "id": current["id"]})
+    _retarget(connection, current["id"], runtime)
     _history(connection, project_id=project_id, agent_key=agent_key, environment=env,
              action=action, actor=actor, from_version=current.get("version"),
              to_version=current.get("version"),
@@ -561,6 +565,34 @@ def set_runtime(connection: Connection, project_id: str, agent_key: str, environ
                current["id"], {"agent_key": agent_key, "environment": env, "runtime": runtime,
                                "vm_mode": mode, "replicas": count})
     return by_id(connection, current["id"]) or {}
+
+
+def _retarget(connection: Connection, deployment_id: str, runtime: str) -> int:
+    """A RUNTIME SWITCH MOVES THE WORK NOT YET TAKEN. The deployment's runs that have not ended
+    take the new placement (finalize_ctx.runtime, so a later resume job is stamped right), and
+    their jobs still waiting in the queue are retargeted — nothing is stranded on a target no
+    one claims any more. A run a replica or worker holds now finishes where it is."""
+    microvm = runtime == "microvm"
+    connection.execute(text(f"""
+        UPDATE agent_runs SET finalize_ctx = {"COALESCE(finalize_ctx, '{}'::jsonb) || "
+                                               "jsonb_build_object('runtime', 'microvm')"
+                                               if microvm else "finalize_ctx - 'runtime'"}
+         WHERE deployment_id = :d AND status <> ALL(:ended)"""),
+        {"d": deployment_id, "ended": ["completed", "failed", "cancelled", "rolled_back",
+                                       "denied"]})
+    moved = connection.execute(text("""
+        UPDATE jobs SET target = :target,
+               payload = CASE WHEN :microvm
+                              THEN payload || jsonb_build_object('runtime', 'microvm',
+                                                                 'deployment_id', CAST(:d AS TEXT))
+                              ELSE payload - 'runtime' END,
+               updated_at = now()
+         WHERE kind IN ('agent.run', 'agent.resume') AND status IN ('queued', 'failed_retryable')
+           AND payload->>'run_id' IN (SELECT id FROM agent_runs WHERE deployment_id = :d)
+        RETURNING id"""),
+        {"target": f"deployment:{deployment_id}" if microvm else None, "microvm": microvm,
+         "d": deployment_id}).all()
+    return len(moved)
 
 
 def _carry_runtime(connection: Connection, project_id: str, agent_key: str, src: str, dst: str,

@@ -1128,3 +1128,84 @@ def test_fifty_replicas_on_one_host_keep_exactly_one_outstanding_poll(plane):
     assert len({r["replica_id"] for r in claimed}) == 20, \
         "each run to a replica with a free slot (most free first)"
     assert all(set(p) == {"wait_ms", "state_gen"} for p in host.polls), "no replica list, ever"
+
+
+# ════ review fixes (PR #103): poison job, attempt cap, +1 generation, host-only poll ══════════
+
+def test_a_job_that_cannot_be_leased_is_skipped_never_the_whole_claim(plane, monkeypatch):
+    from boss_engine.services.jobs import JobDeferredError, JobLeaseService
+
+    with plane.eng.begin() as c:
+        c.execute(text("UPDATE agent_replicas SET slots = 2 WHERE id = :r"),
+                  {"r": plane.replica_id})
+    poison = _admit_microvm(plane)
+    good = _admit_microvm(plane)
+    real = JobLeaseService.lease_owned_job
+
+    def lease(self, connection, **kw):
+        if kw["job_id"] == poison["job_id"]:
+            raise JobDeferredError("slot_policy")
+        return real(self, connection, **kw)
+
+    monkeypatch.setattr(JobLeaseService, "lease_owned_job", lease)
+    runs = plane.host.claim()
+    assert [r["run_id"] for r in runs] == [good["run_id"]], "the poison job is skipped"
+    job = _row(plane.eng, "SELECT status, lease_owner FROM jobs WHERE id = :j",
+               j=poison["job_id"])
+    assert job["status"] == "queued" and job["lease_owner"] is None, "its savepoint rolled back"
+
+
+def test_a_run_whose_attempts_are_spent_parks_failed_instead_of_cycling(plane):
+    admitted = _admit_microvm(plane)
+    with plane.eng.begin() as c:
+        c.execute(text("UPDATE jobs SET attempt = max_attempts WHERE id = :j"),
+                  {"j": admitted["job_id"]})
+    assert plane.host.claim() == []
+    job = _row(plane.eng, "SELECT status FROM jobs WHERE id = :j", j=admitted["job_id"])
+    run = _row(plane.eng, "SELECT status, error FROM agent_runs WHERE id = :r",
+               r=admitted["run_id"])
+    assert job["status"] not in ("queued", "leased", "running"), job
+    assert run["status"] == "failed" and "lost its executor" in run["error"]
+
+
+def test_an_observed_generation_is_stored_only_one_step_at_a_time(plane):
+    host = plane.host
+    jump = host.call("POST", f"/v1/hosts/{host.host_id}/observed", json={
+        "replicas": list(host.vms.values()), "state_gen": host.state_gen + 2})
+    assert jump.status_code == 200 and jump.json()["resync"] is True, "not stored: resync"
+    host.state_gen += 2
+    _admit_microvm(plane)
+    assert len(host.claim()) == 1 and host.resyncs == 1
+    step = host.call("POST", f"/v1/hosts/{host.host_id}/observed", json={
+        "replicas": list(host.vms.values()), "state_gen": host.state_gen + 1})
+    assert "resync" not in step.json()
+    host.state_gen += 1
+    host.claim()
+    assert host.resyncs == 1
+
+
+def test_hosts_next_is_the_hosts_own_call_never_a_vms(plane):
+    path = "/v1/run-plane/hosts/next"
+    through_gateway = plane.client.post(path, json={"state_gen": plane.host.state_gen}, headers={
+        **plane.host.headers("POST", path), "X-Boss-Replica": plane.replica_id})
+    assert through_gateway.status_code == 403
+    assert through_gateway.json()["detail"]["error"] == "host_only"
+
+
+def test_switching_a_deployment_back_to_local_retargets_its_queued_runs(plane):
+    from boss_engine.services import agent_deployments
+
+    admitted = _admit_microvm(plane)
+    with plane.eng.begin() as c:
+        agent_deployments.set_runtime(c, plane.project, plane.dep["agent_key"], "dev",
+                                      actor="ceo", runtime="local")
+    job = _row(plane.eng, "SELECT target, payload FROM jobs WHERE id = :j",
+               j=admitted["job_id"])
+    fctx = _row(plane.eng, "SELECT finalize_ctx FROM agent_runs WHERE id = :r",
+                r=admitted["run_id"])["finalize_ctx"]
+    assert job["target"] is None and "runtime" not in job["payload"] and "runtime" not in fctx
+    with plane.eng.begin() as c:
+        agent_deployments.set_runtime(c, plane.project, plane.dep["agent_key"], "dev",
+                                      actor="ceo", runtime="microvm")
+    job = _row(plane.eng, "SELECT target FROM jobs WHERE id = :j", j=admitted["job_id"])
+    assert job["target"] == f"deployment:{plane.dep['id']}"

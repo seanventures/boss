@@ -307,12 +307,11 @@ HOST_PRINCIPAL = "sys_host"
 def _from_host(creds: RequestCredentials, db: Any, ip: Optional[str],
                ua: Optional[str]) -> Optional[AuthContext]:
     """An enrolled agent host (P8a, boss-agent-hosts-lld.md §3.2.2): a `BossHost` proof signed by
-    its BOSS-issued certificate's key, or a client certificate a TRUSTED TLS terminator verified
+    its BOSS-issued certificate's key, or a client certificate a NAMED TLS terminator (BOSS_HOST_CERT_TERMINATORS) verified
     and forwarded (services/fleet_ca.py). The context is the `sys_host` system principal of the
     host's org; WHICH host rides on the credential (`credential.id` = host id), so a route can
     hold a host to its own rows. None when the request presents neither."""
     from ..services import fleet_ca
-    from .authn_support import is_trusted_proxy
     from .principal import AuthMethod, CredentialRef, Principal, PrincipalKind, PrincipalStatus
 
     scheme, _, value = creds.headers.get("authorization", "").partition(" ")
@@ -320,7 +319,7 @@ def _from_host(creds: RequestCredentials, db: Any, ip: Optional[str],
     try:
         if scheme.lower() == fleet_ca.AUTH_SCHEME and value.strip():
             host = fleet_ca.verify_proof(db, value.strip(), htm=creds.method, path=creds.path)
-        elif forwarded and is_trusted_proxy(creds.peer_ip):
+        elif forwarded and fleet_ca.is_cert_terminator(creds.peer_ip):
             host = fleet_ca.verify_forwarded_cert(db, forwarded)
         else:
             return None

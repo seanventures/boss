@@ -14682,6 +14682,9 @@ CREATE TABLE IF NOT EXISTS agent_hosts (
 CREATE INDEX IF NOT EXISTS idx_agent_hosts_org ON agent_hosts (org_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_hosts_fingerprint ON agent_hosts (cert_fingerprint)
   WHERE cert_fingerprint IS NOT NULL;
+-- One live host per VM address block in an org (enrol allocates under an advisory lock).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_hosts_vm_prefix ON agent_hosts (org_id, vm_prefix)
+  WHERE vm_prefix IS NOT NULL AND revoked_at IS NULL;
 
 -- ONE ROW PER VM (§3.1). A serving replica row is an IPVS real server (P8b) or an ECMP member
 -- (P8e). `generation` is the host desired generation that last changed the row.

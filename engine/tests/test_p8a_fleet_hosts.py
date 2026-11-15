@@ -123,6 +123,10 @@ def test_a_revoked_host_is_refused_its_heartbeat_and_its_renewal(eng, world):
                         json={"csr_pem": make_csr(host.key)})
     assert renewed.status_code == 200, renewed.text
     assert renewed.json()["certificate_pem"] != host.cert_pem
+    superseded = host.heartbeat()
+    assert superseded.status_code == 401
+    assert superseded.json()["detail"]["error"] == "host_certificate_superseded", \
+        "a renewal supersedes the certificate it replaced"
     with eng.begin() as c:
         fleet.revoke(c, org_id=world["org"], host_id=host.host_id, actor="ceo",
                      reason="decommissioned")
@@ -355,7 +359,8 @@ def test_mtls_at_a_trusted_terminator_authenticates_the_host_and_nothing_else_do
     host = world["host"]()
     host.enrol(join_token(eng, world["org"], pool=world["pool"]))
     settings = get_settings()
-    monkeypatch.setattr(settings, "trusted_proxies", "10.9.9.9")
+    monkeypatch.setattr(settings, "trusted_proxies", "10.9.9.9,10.8.8.8")
+    monkeypatch.setenv(fleet_ca.TERMINATORS_ENV, "10.9.9.9")
 
     def creds(peer: str, pem: str):
         return authn.RequestCredentials(method="POST", path="/x", cookies={}, peer_ip=peer,
@@ -367,6 +372,13 @@ def test_mtls_at_a_trusted_terminator_authenticates_the_host_and_nothing_else_do
         assert ctx.credential.kind == "host_cert" and ctx.principal.org_id == world["org"]
         assert authn.authenticate(creds("203.0.113.5", host.cert_pem), db=c) is None, \
             "a client cannot claim the terminator's header"
+        assert authn.authenticate(creds("10.8.8.8", host.cert_pem), db=c) is None, \
+            "a trusted proxy is not a certificate terminator"
+    monkeypatch.delenv(fleet_ca.TERMINATORS_ENV)
+    with eng.begin() as c:
+        assert authn.authenticate(creds("10.9.9.9", host.cert_pem), db=c) is None, \
+            "no terminator is named by default: the header is never believed"
+    monkeypatch.setenv(fleet_ca.TERMINATORS_ENV, "10.9.9.9")
     # A certificate this CA never signed is refused even from the terminator.
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -507,3 +519,59 @@ def test_the_wire_shapes_boss_hostd_decodes_and_its_event_and_sweep(eng, world):
                               "WHERE host_id = :h AND kind = 'crashloop'"),
                          {"h": host.host_id}).mappings().all()
     assert len(rows) == 1 and rows[0]["detail"]["to"] == "crashloop"
+
+
+def test_placement_needs_kvm_capacity_and_the_image_and_re_placement_is_rate_limited(
+        eng, world):
+    """§3.14.1: KVM live (Firecracker hosts), capacity (max_vms), image presence when reported;
+    a deployment re-placing what it lost moves at most 10 % per minute (at least one)."""
+    from boss_engine.services import fleet_scheduler
+
+    fc = world["host"](backend="firecracker")
+    fc.enrol(join_token(eng, world["org"], pool=world["pool"]))
+    dep = deploy_agent(eng, world["project"], replicas=1, pool=world["pool"])
+    fleet_scheduler.reconcile(eng)
+    with eng.begin() as c:
+        placed = c.execute(text("SELECT count(*) FROM agent_replicas WHERE deployment_id = :d "
+                                "AND desired_state = 'running'"), {"d": dep["id"]}).scalar()
+    assert placed == 0, "a Firecracker host without KVM takes no VM"
+    fc.heartbeat(facts={"kvm_live": True, "images": ["sha256:other"]},
+                 capacity={"max_vms": 1})
+    with eng.begin() as c:
+        c.execute(text("UPDATE agent_deployments SET image_digest = 'sha256:wanted' "
+                       "WHERE id = :d"), {"d": dep["id"]})
+    fleet_scheduler.reconcile(eng)
+    with eng.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM agent_replicas WHERE deployment_id = :d"),
+                         {"d": dep["id"]}).scalar() == 0, "the host does not hold the image"
+    fc.heartbeat(facts={"images": ["sha256:wanted"]})
+    fleet_scheduler.reconcile(eng)
+    with eng.begin() as c:
+        rows = c.execute(text("SELECT host_id FROM agent_replicas WHERE deployment_id = :d "
+                              "AND desired_state = 'running'"), {"d": dep["id"]}).all()
+    assert [r[0] for r in rows] == [fc.host_id]
+
+    # Grown to 3 by the operator (unlimited), on 3 more process hosts with room.
+    others = []
+    for _ in range(3):
+        h = world["host"]()
+        h.enrol(join_token(eng, world["org"], pool=world["pool"]))
+        others.append(h)
+    with eng.begin() as c:
+        c.execute(text("UPDATE agent_deployments SET replicas = 3, placement_state = 'pending' "
+                       "WHERE id = :d"), {"d": dep["id"]})
+    fleet_scheduler.reconcile(eng)
+    # Two hosts go silent: two replicas are lost, but only one is re-placed this minute.
+    with eng.begin() as c:
+        held = [r[0] for r in c.execute(text(
+            "SELECT host_id FROM agent_replicas WHERE deployment_id = :d "
+            "AND desired_state = 'running' AND host_id <> :fc"),
+            {"d": dep["id"], "fc": fc.host_id}).all()]
+        c.execute(text("UPDATE agent_hosts SET last_heartbeat_at = now() - interval '1 minute' "
+                       "WHERE id = ANY(:h)"), {"h": held})
+    report = fleet_scheduler.reconcile(eng)
+    assert dep["id"] in report.get("rate_limited", [])
+    with eng.begin() as c:
+        running = c.execute(text("SELECT count(*) FROM agent_replicas WHERE deployment_id = :d "
+                                 "AND desired_state = 'running'"), {"d": dep["id"]}).scalar()
+    assert running == 2, "one lost replica re-placed this minute, not both"

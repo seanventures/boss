@@ -30,6 +30,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from boss_engine.db import begin
 from boss_engine.identity import P, Scope, permit, public
@@ -310,12 +311,13 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
 
     @router.get("/v1/hosts/{agent_host_id}/desired")
     @permit(P.FLEET_HOST, scope=Scope.org())
-    def desired(agent_host_id: str, request: Request, since: int = 0,
-                wait: float = 0.0) -> dict[str, Any]:
-        """Level-based: the whole desired state once the generation is past `since`."""
-        _host(request, agent_host_id)
+    async def desired(agent_host_id: str, request: Request, since: int = 0,
+                      wait: float = 0.0) -> dict[str, Any]:
+        """Level-based: the whole desired state once the generation is past `since`. An async
+        wait: a long-poll holds no worker thread and queries nothing while it waits."""
+        await run_in_threadpool(_host, request, agent_host_id)
         try:
-            return _fleet.watch(engine, agent_host_id, since=since, wait=wait)
+            return await _fleet.watch(engine, agent_host_id, since=since, wait=wait)
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
@@ -393,16 +395,23 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
 
     @router.post("/v1/run-plane/hosts/next")
     @permit(P.FLEET_HOST, scope=Scope.org())
-    def rp_hosts_next(body: HostsNextBody, request: Request) -> dict[str, Any]:
+    async def rp_hosts_next(body: HostsNextBody, request: Request,
+                            x_boss_replica: Optional[str] = Header(default=None)
+                            ) -> dict[str, Any]:
         """ONE outstanding work request per HOST (§3.13.0): {wait_ms, state_gen}, no replica
         list. A stale state_gen → {resync: true} (PUT …/replicas once). Otherwise runs for the
         host's serving replicas (BOSS's own slot count), each leased to one replica at epoch + 1
-        — or a wait on the hub (≤ wait_ms) for this host's deployments, then a second claim."""
-        host = _host(request)
+        — or an async wait (≤ wait_ms) for this host's deployments, then a second claim. A call
+        that carries X-Boss-Replica came through a guest gateway: a VM never polls BOSS."""
+        if x_boss_replica:
+            raise HTTPException(status_code=403, detail={
+                "error": "host_only", "message": "hosts/next is the host's own call; a VM "
+                "never polls for work (HOST_API.md §2.8)"})
+        host = await run_in_threadpool(_host, request)
         try:
-            return run_plane.host_next(engine, _settings(), host.host_id,
-                                       state_gen=body.state_gen, wait_ms=body.wait_ms,
-                                       ttl=body.ttl)
+            return await run_plane.host_next(engine, _settings(), host.host_id,
+                                             state_gen=body.state_gen, wait_ms=body.wait_ms,
+                                             ttl=body.ttl)
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
@@ -673,6 +682,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
             _fleet_fail(error)
             raise
         out["reconcile"] = fleet_scheduler.reconcile(engine, _settings())
+        run_plane.wake_desired([agent_host_id])
         return out
 
     def _cordon(agent_host_id: str, request: Request, body: ActorBody, cordoned: bool) -> dict:

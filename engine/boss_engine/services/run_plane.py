@@ -34,7 +34,11 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+import logging
+
 from ..runtime import wire
+
+log = logging.getLogger(__name__)
 
 LEASE_TTL_SECONDS = 30
 LEASE_TTL_MIN, LEASE_TTL_MAX = 5, 120
@@ -179,7 +183,8 @@ SWEEP_SECONDS = 5.0
 WAKE_KINDS = ("agent.run_admitted", "agent.run_queued")
 
 _CANDIDATES = text("""
-    SELECT id, project_id, kind, status, payload, allocation_id, resource_units, target
+    SELECT id, project_id, kind, status, payload, allocation_id, resource_units, target,
+           attempt, max_attempts
       FROM jobs
      WHERE target = ANY(:targets) AND kind IN ('agent.run', 'agent.resume')
        AND run_after <= now()
@@ -225,6 +230,65 @@ def _requeue(connection: Any, settings: Any, job: dict, *, reason: str,
                job["id"], {"kind": job["kind"], "by": "host", "reason": reason})
 
 
+#: A run whose VM refused it this many times is no longer given its attempt back: refusals
+#: then count against max_attempts like any other loss, and the run parks (§2.14.1).
+HAND_BACK_FREE = 3
+
+
+def _park_exhausted(connection: Any, settings: Any, jobs: Any, job: dict, owner: str,
+                    lease_token: str, run_id: str) -> None:
+    """ATTEMPTS SPENT (leases lost to dead replicas, or refusals past HAND_BACK_FREE): the job
+    fails without a retry and the run is recorded failed in words — never reclaimed forever."""
+    from . import agent_run_worker, thread_runs
+
+    why = (f"the run lost its executor {int(job.get('attempt') or 0)} times "
+           f"(max {int(job.get('max_attempts') or 0)}): its replicas died or refused it")
+    if (connection.execute(text("SELECT status FROM agent_runs WHERE id = :r"),
+                           {"r": run_id}).scalar() or "") not in thread_runs.ENDED:
+        connection.execute(text("UPDATE agent_runs SET status = 'failed', error = :e, "
+                                "updated_at = now() WHERE id = :r"), {"r": run_id, "e": why})
+        thread_runs.finish(connection, run_id, "failed")
+        agent_run_worker._settled_hooks(connection, run_id)
+    jobs.fail(connection, owner, job["id"], lease_token,
+              {"message": why, "type": "AttemptsExhausted", "code": "attempts_exhausted"},
+              retryable=False, retry_delay_seconds=0)
+
+
+def _lease_one(connection: Any, settings: Any, jobs: Any, job: dict, replica: str,
+               ttl: Any) -> Optional[dict]:
+    """Lease one claimed job to `replica` (epoch + 1) and start its run. None when the job is
+    a no-op (settled, waiting, behind another run) or its attempts are spent (parked)."""
+    from . import thread_runs
+    from .agent_loop import load_agent_run
+
+    if job["status"] in ("leased", "running"):
+        _requeue(connection, settings, job, reason="replica_lease_expired")
+    owner = owner_of(replica)
+    leased = jobs.lease_owned_job(connection, project_id=job["project_id"], job_id=job["id"],
+                                  worker_id=owner, lease_ttl_seconds=_ttl(ttl))
+    payload = job["payload"] if isinstance(job["payload"], dict) else json.loads(
+        job["payload"] or "{}")
+    run_id = str(payload.get("run_id") or "")
+    if int(leased["attempt"]) > int(job.get("max_attempts") or 3):
+        _park_exhausted(connection, settings, jobs, {**job, "attempt": leased["attempt"]},
+                        owner, leased["lease_token"], run_id)
+        return None
+    run = load_agent_run(connection, run_id)
+    status = str((run or {}).get("status") or "")
+    if run is None or status in thread_runs.ENDED or (
+            job["kind"] == "agent.run" and status in ("awaiting_approval", "pending")):
+        # Settled already (a re-delivered job), or waiting on a person / behind another run:
+        # the job is done, as agent_run_worker.execute's no-op answers it.
+        jobs.complete(connection, owner, job["id"], leased["lease_token"],
+                      {"status": status or "missing", "run_id": run_id, "noop": True})
+        return None
+    if status == "queued":
+        _start(connection, run)
+    return {"run_id": run_id, "job_id": job["id"], "replica_id": replica,
+            "epoch": int(leased["fence_epoch"]), "run_token": leased["lease_token"],
+            "kind": job["kind"], "lease_expires_at": leased["lease_expires_at"]}
+
+
 _ROUND_ROBIN: dict = {}
 
 
@@ -260,8 +324,6 @@ def claim_for_host(connection: Any, settings: Any, host_id: str, *,
     {"runs": [{run_id, job_id, replica_id, epoch, run_token, kind, lease_expires_at}],
     "targets": [...]} — the run token is the HOST's to keep in memory and attach to the VM's
     run-plane calls; it never reaches the guest."""
-    from . import thread_runs
-    from .agent_loop import load_agent_run
 
     stored = connection.execute(text(
         "SELECT replica_state_gen FROM agent_hosts WHERE id = :h"), {"h": host_id}).scalar()
@@ -272,9 +334,11 @@ def claim_for_host(connection: Any, settings: Any, host_id: str, *,
     capacity = min(CLAIM_MAX, sum(r["free"] for r in offer.values()))
     runs: list = []
     jobs = _jobs(settings)
+    skipped: set = set()
     while targets and len(runs) < capacity:
         batch = [dict(j) for j in connection.execute(_CANDIDATES, {
-            "targets": targets, "n": capacity - len(runs)}).mappings().all()]
+            "targets": targets, "n": capacity - len(runs) + len(skipped)}).mappings().all()
+            if j["id"] not in skipped]
         if not batch:
             break
         for job in batch:
@@ -282,46 +346,77 @@ def claim_for_host(connection: Any, settings: Any, host_id: str, *,
             replica = _pick(offer, deployment)
             if replica is None:
                 continue
-            if job["status"] in ("leased", "running"):
-                _requeue(connection, settings, job, reason="replica_lease_expired")
-            owner = owner_of(replica)
-            leased = jobs.lease_owned_job(connection, project_id=job["project_id"],
-                                          job_id=job["id"], worker_id=owner,
-                                          lease_ttl_seconds=_ttl(ttl))
-            payload = job["payload"] if isinstance(job["payload"], dict) else json.loads(
-                job["payload"] or "{}")
-            run_id = str(payload.get("run_id") or "")
-            run = load_agent_run(connection, run_id)
-            status = str((run or {}).get("status") or "")
-            if run is None or status in thread_runs.ENDED or (
-                    job["kind"] == "agent.run" and status in ("awaiting_approval", "pending")):
-                # Settled already (a re-delivered job), or waiting on a person / behind another
-                # run: the job is done, as agent_run_worker.execute's no-op answers it.
-                jobs.complete(connection, owner, job["id"], leased["lease_token"],
-                              {"status": status or "missing", "run_id": run_id, "noop": True})
+            try:
+                # A SAVEPOINT PER JOB: one job that cannot be leased (a slot policy defers it, a
+                # budget state cancels it, its row is broken) is skipped, never the whole
+                # claim — a poison job at the head of the queue must not fail every poll.
+                with connection.begin_nested():
+                    taken = _lease_one(connection, settings, jobs, job, replica, ttl)
+            except Exception as exc:  # noqa: BLE001 — skipped; the rest of the claim goes on
+                log.warning("job %s skipped in a host claim: %s", job["id"], type(exc).__name__)
+                skipped.add(job["id"])
                 continue
-            if status == "queued":
-                _start(connection, run)
+            if taken is None:
+                continue
             offer[replica]["free"] -= 1
-            runs.append({"run_id": run_id, "job_id": job["id"], "replica_id": replica,
-                         "epoch": int(leased["fence_epoch"]), "run_token": leased["lease_token"],
-                         "kind": job["kind"], "lease_expires_at": leased["lease_expires_at"]})
+            runs.append(taken)
         targets = targets_of(offer)
         if len(batch) < capacity:
             break
     return {"runs": runs, "targets": targets_of(offer, free_only=False)}
 
 
+class Waiter:
+    """One waiting request: an asyncio event set from any thread (the hub's listener, a sweep,
+    a handler after its commit). `targets` may grow after registration (the claim names them)."""
+
+    def __init__(self, targets: set, *, host_id: Optional[str] = None, since: int = 0):
+        import asyncio
+
+        self.loop = asyncio.get_running_loop()
+        self.event = asyncio.Event()
+        self.targets = set(targets)
+        self.host_id, self.since = host_id, since
+
+    def set(self) -> None:
+        try:
+            self.loop.call_soon_threadsafe(self.event.set)
+        except RuntimeError:  # the loop is gone: the request ended
+            pass
+
+    def clear(self) -> None:
+        self.event.clear()
+
+    async def wait(self, seconds: float) -> bool:
+        import asyncio
+
+        try:
+            await asyncio.wait_for(self.event.wait(), max(0.0, seconds))
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+
 class _HostWaiters:
-    """THE HOSTS WAITING ON THIS PROCESS, by target. Woken by the hub (agent.run_admitted /
-    agent.run_queued, filtered by deployment_id in the NOTIFY payload) and by ONE sweep per
-    process every SWEEP_SECONDS — never a tick per waiter (boss-eventing-lld.md §8.2)."""
+    """EVERY LONG-POLL WAITING ON THIS PROCESS, as asyncio waits — no thread is held and no
+    waiter queries anything on its own (boss-eventing-lld.md §8.2):
+
+      * work waits (hosts/next), by target: woken by the hub (`agent.run_admitted` /
+        `agent.run_queued`, filtered by the NOTIFY's deployment_id), by `host:<id>` after a
+        commit that moved the host's own state, and by ONE job sweep per process every
+        SWEEP_SECONDS (a single query over every waited-on target);
+      * desired-state waits (GET …/desired), by host and generation: woken after a commit that
+        bumped a host's generation in this process, and by ONE generation sweep per process
+        every DESIRED_SWEEP_SECONDS (a single query over every waiting host)."""
+
+    DESIRED_SWEEP_SECONDS = 1.0
 
     def __init__(self) -> None:
         import threading
 
         self._lock = threading.Lock()
-        self._waiting: dict = {}  # waiter event -> frozenset(targets)
+        self._work: set = set()
+        self._desired: set = set()
         self._started = False
         self.sweeps = 0
 
@@ -336,11 +431,36 @@ class _HostWaiters:
             from .event_stream import Interest, get_hub
 
             get_hub(engine).listen(Interest(kinds=WAKE_KINDS), self._on_note)
-        except Exception:  # noqa: BLE001 — without the hub the sweep still wakes everyone
+        except Exception:  # noqa: BLE001 — without the hub the sweeps still wake everyone
             pass
         threading.Thread(target=self._sweep_loop, args=(engine,), name="run-plane-sweep",
                          daemon=True).start()
 
+    # registration
+    def register_work(self, engine: Any, targets: set) -> Waiter:
+        self.start(engine)
+        waiter = Waiter(targets)
+        with self._lock:
+            self._work.add(waiter)
+        return waiter
+
+    def register_desired(self, engine: Any, host_id: str, since: int) -> Waiter:
+        self.start(engine)
+        waiter = Waiter({f"desired:{host_id}"}, host_id=host_id, since=since)
+        with self._lock:
+            self._desired.add(waiter)
+        return waiter
+
+    def unregister(self, waiter: Waiter) -> None:
+        with self._lock:
+            self._work.discard(waiter)
+            self._desired.discard(waiter)
+
+    def count(self) -> int:
+        with self._lock:
+            return len(self._work) + len(self._desired)
+
+    # waking
     def _on_note(self, note: dict) -> None:
         if note.get("__resync__"):
             self.wake_all()
@@ -351,22 +471,23 @@ class _HostWaiters:
 
     def wake(self, targets: set) -> None:
         with self._lock:
-            hit = [event for event, wanted in self._waiting.items() if wanted & targets]
-        for event in hit:
-            event.set()
+            hit = [w for w in (*self._work, *self._desired) if w.targets & targets]
+        for waiter in hit:
+            waiter.set()
 
     def wake_all(self) -> None:
         with self._lock:
-            hit = list(self._waiting)
-        for event in hit:
-            event.set()
+            hit = [*self._work, *self._desired]
+        for waiter in hit:
+            waiter.set()
 
     def wanted(self) -> list:
         with self._lock:
-            return sorted(set().union(*self._waiting.values())) if self._waiting else []
+            return sorted({t for w in self._work for t in w.targets
+                           if t.startswith("deployment:")})
 
+    # the two sweeps (one query each, whatever the number of waiters)
     def sweep(self, engine: Any) -> list:
-        """The one query: which waited-on targets have claimable work."""
         targets = self.wanted()
         if not targets:
             return []
@@ -382,63 +503,81 @@ class _HostWaiters:
             self.wake(set(found))
         return found
 
+    def sweep_desired(self, engine: Any) -> None:
+        with self._lock:
+            waiting = list(self._desired)
+        if not waiting:
+            return
+        with engine.connect() as c:
+            gens = {r[0]: int(r[1]) for r in c.execute(text(
+                "SELECT id, desired_generation FROM agent_hosts WHERE id = ANY(:h)"),
+                {"h": sorted({w.host_id for w in waiting})}).all()}
+        for waiter in waiting:
+            if gens.get(waiter.host_id, 0) > waiter.since:
+                waiter.set()
+
     def _sweep_loop(self, engine: Any) -> None:
         import time as _time
 
+        last_jobs = 0.0
         while True:
-            _time.sleep(SWEEP_SECONDS)
+            _time.sleep(self.DESIRED_SWEEP_SECONDS)
             try:
-                self.sweep(engine)
+                self.sweep_desired(engine)
+                if _time.monotonic() - last_jobs >= SWEEP_SECONDS:
+                    last_jobs = _time.monotonic()
+                    self.sweep(engine)
             except Exception:  # noqa: BLE001 — the next sweep tries again
                 pass
-
-    def wait(self, targets: list, seconds: float) -> bool:
-        import threading
-
-        event = threading.Event()
-        with self._lock:
-            self._waiting[event] = frozenset(targets)
-        try:
-            return event.wait(seconds)
-        finally:
-            with self._lock:
-                self._waiting.pop(event, None)
-
-    def count(self) -> int:
-        with self._lock:
-            return len(self._waiting)
 
 
 WAITERS = _HostWaiters()
 
 
-def host_next(engine: Any, settings: Any, host_id: str, *, state_gen: Optional[int],
-              wait_ms: Any = 0, ttl: Any = None) -> dict:
-    """POST /v1/run-plane/hosts/next: claim now; nothing claimable → wait on the hub (≤ wait_ms)
-    for this host's deployments, then claim again. A stale state_gen → {resync: true} at once."""
+async def host_next(engine: Any, settings: Any, host_id: str, *, state_gen: Optional[int],
+                    wait_ms: Any = 0, ttl: Any = None) -> dict:
+    """POST /v1/run-plane/hosts/next: claim now; nothing claimable → an asyncio wait (≤ wait_ms)
+    for this host's deployments or its own state, then claim again. A stale state_gen →
+    {resync: true} at once. The claim runs in the threadpool; the wait holds no thread. The
+    waiter is registered BEFORE the claim, so an admission committed during it is not lost."""
     import time as _time
+
+    from starlette.concurrency import run_in_threadpool
 
     wait = max(0, min(int(wait_ms or 0), WAIT_MAX_MS)) / 1000.0
     deadline = _time.monotonic() + wait
-    if wait:
-        WAITERS.start(engine)
-    while True:
+    waiter = WAITERS.register_work(engine, {f"host:{host_id}"}) if wait else None
+
+    def claim() -> dict:
         with engine.begin() as connection:
-            out = claim_for_host(connection, settings, host_id, state_gen=state_gen, ttl=ttl)
-        if out.get("resync"):
-            return {"resync": True, "runs": [], "state_gen": out["state_gen"]}
-        left = deadline - _time.monotonic()
-        if out["runs"] or left <= 0:
-            return {"runs": out["runs"]}
-        # Woken by an admission for one of its deployments, or by its own state moving (a
-        # replica now serving, a slot freed by a settled run): host:<id>, local to this process.
-        WAITERS.wait(out["targets"] + [f"host:{host_id}"], left)
+            return claim_for_host(connection, settings, host_id, state_gen=state_gen, ttl=ttl)
+
+    try:
+        while True:
+            if waiter is not None:
+                waiter.clear()
+            out = await run_in_threadpool(claim)
+            if out.get("resync"):
+                return {"resync": True, "runs": [], "state_gen": out["state_gen"]}
+            left = deadline - _time.monotonic()
+            if out["runs"] or left <= 0 or waiter is None:
+                return {"runs": out["runs"]}
+            waiter.targets.update(out["targets"])
+            await waiter.wait(left)
+    finally:
+        if waiter is not None:
+            WAITERS.unregister(waiter)
 
 
 def wake_host(host_id: str) -> None:
     """The host's own state moved (a slot freed, a replica serving): its waiting poll in this
     process claims again. Called AFTER the commit that moved it."""
     WAITERS.wake({f"host:{host_id}"})
+
+
+def wake_desired(host_ids: Any) -> None:
+    """Hosts whose desired generation a commit in this process just bumped."""
+    WAITERS.wake({f"desired:{h}" for h in host_ids})
 
 
 def _start(connection: Any, run: dict) -> dict:
@@ -514,7 +653,12 @@ def hand_back(connection: Any, settings: Any, host_id: str, run_id: str,
     from .core import emit_event
 
     job = fence(connection, settings, host_id, run_id, lease, settling=True)
-    _requeue(connection, settings, job, reason="handed_back", give_back_attempt=True)
+    refusals = int(connection.execute(text(
+        "UPDATE jobs SET payload = payload || jsonb_build_object('hand_backs', "
+        "COALESCE((payload->>'hand_backs')::int, 0) + 1) WHERE id = :j "
+        "RETURNING (payload->>'hand_backs')::int"), {"j": lease.job_id}).scalar() or 1)
+    _requeue(connection, settings, job, reason="handed_back",
+             give_back_attempt=refusals <= HAND_BACK_FREE)
     deployment = str(job.get("target") or "").split(":", 1)[-1] if job.get("target") else None
     if not deployment:
         deployment = connection.execute(text(
