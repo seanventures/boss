@@ -147,13 +147,39 @@ def root_problem(settings: Any, directory: str) -> Optional[str]:
             "Choose a directory beneath one of them, or ask the operator to add a root.")
 
 
-def reload_problem(settings: Any, command: Optional[str]) -> Optional[str]:
-    if not command:
-        return None
-    if command.strip() not in reload_commands(settings):
+def reload_urls(settings: Any) -> list[str]:
+    """BOSS_CONFIG_RELOAD_URLS: reload hooks allowed beyond loopback and the target's own host."""
+    raw = str(getattr(settings, "config_reload_urls", "") or "")
+    return [u.strip() for u in raw.replace("\n", ",").split(",") if u.strip()]
+
+
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def reload_problem(settings: Any, command: Optional[str], url: Optional[str] = None,
+                   host_address: Optional[str] = None) -> Optional[str]:
+    if command and command.strip() not in reload_commands(settings):
         return (f"the reload command {command.strip()[:80]!r} is not in the operator's allowlist "
                 "(BOSS_CONFIG_RELOAD_COMMANDS). Use a listed command, a reload_url, or none.")
+    if url:
+        from urllib.parse import urlsplit
+
+        host = (urlsplit(str(url)).hostname or "").lower()
+        allowed = str(url).strip() in reload_urls(settings) or host in _LOOPBACK or (
+            host_address and host == str(host_address).strip().lower())
+        if not allowed:
+            return (f"the reload URL {str(url)[:80]!r} is neither loopback, the target's own host, "
+                    "nor in the operator's allowlist (BOSS_CONFIG_RELOAD_URLS).")
     return None
+
+
+def _host_address(connection: Connection, host_id: Optional[str]) -> Optional[str]:
+    if not host_id:
+        return None
+    from .deployment_fleet import get_host
+
+    host = get_host(connection, host_id)
+    return str(host.get("address") or "") if host else None
 
 
 def versions_root(directory: str) -> str:
@@ -251,7 +277,8 @@ def create_config_target(connection: Connection, settings: Settings, *, project_
         if url and not str(url).startswith(("http://", "https://")):
             raise ConfigDeployError(f"{what} must be an http(s) URL.", f"Got {str(url)[:80]!r}.")
     directory = posixpath.normpath(directory)
-    problem = root_problem(settings, directory) or reload_problem(settings, reload_command)
+    problem = root_problem(settings, directory) or reload_problem(
+        settings, reload_command, reload_url, _host_address(connection, host_id))
     if problem:
         raise ConfigDeployError(problem)
     if reload_command or reload_url:
@@ -286,6 +313,7 @@ def create_config_target(connection: Connection, settings: Settings, *, project_
                              "reload_url": (reload_url or "").strip() or None}],
         secret_refs=[],
         health_checks=[{"url": str(health_url), "expected_status": int(health_expected_status or 200)}],
+        config_target=True,
         rollback_points=[{"step": f"Restore the previous file versions kept under "
                                   f"{versions_root(directory)}/<run> and reload."}],
         actor=actor)
@@ -459,7 +487,9 @@ def _policy_problem(connection: Connection, project_id: str, target: ConfigTarge
 def plan_problem(connection: Connection, project_id: str, target: ConfigTarget,
                  settings: Any = None) -> Optional[dict[str, str]]:
     if settings is not None:
-        why = root_problem(settings, target.directory) or reload_problem(settings, target.reload_command)
+        why = root_problem(settings, target.directory) or reload_problem(
+            settings, target.reload_command, target.reload_url,
+            _host_address(connection, target.host_id))
         if why:
             return {"headline": why, "action": "Recreate the target within the operator's rules.",
                     "reason": "config_target_not_allowed"}
@@ -502,6 +532,12 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
     from .resource_plane import _SURFACE_LEASE_SECONDS
 
     cfg = read_target(target)
+    from ..identity.object_rules import is_production_environment
+
+    if is_production_environment(cfg.environment):
+        # PRODUCTION IS A PERSON'S ANSWER (review of #119): no environment policy and no gate a
+        # step passes in approves configuration for production; a person approves this run.
+        person_required, approval_decision_id = True, None
     problem = plan_problem(connection, project_id, cfg, rp.settings)
     if problem:
         return governed.refuse_plan(connection, project_id=project_id, target=target, actor=actor,
@@ -926,7 +962,8 @@ def apply_config(engine: Any, settings: Settings, *, row: dict, governance: dict
         if not trow:
             return {"status": "failed", "reason": "the deployment target no longer exists"}
         cfg = read_target(dict(trow))
-        refused = root_problem(settings, cfg.directory) or reload_problem(settings, cfg.reload_command)
+        refused = root_problem(settings, cfg.directory) or reload_problem(
+            settings, cfg.reload_command, cfg.reload_url, _host_address(c, cfg.host_id))
         if refused:
             return {"status": "blocked", "reason": refused}
         packet = _loads(row.get("release_packet"), {}) or {}

@@ -11,7 +11,7 @@ BOSS_CONFIG_DEPLOY_ROOTS=/srv/northgate              # comma-separated; a target
 BOSS_CONFIG_RELOAD_COMMANDS=kill -HUP $(cat gateway.pid)   # one per line (or a JSON list); exact matches only
 ```
 
-With no roots set, no config target can be made. A target outside the roots is refused when it is created, when a deployment is planned and again on the machine, against the directory's resolved path (a symlink cannot walk it out). A reload command must be one of the listed commands, and a target with any reload (command or URL) is created by a person, never an agent.
+With no roots set, no config target can be made. A target outside the roots is refused when it is created, when a deployment is planned and again on the machine, against the directory's resolved path (a symlink cannot walk it out). A reload command must be one of the listed commands; a reload URL must be loopback, the target's own host, or listed in `BOSS_CONFIG_RELOAD_URLS`; and a target with any reload is created by a person, never an agent. Config targets are made only with `create_config_target`: `POST /v1/deployments` and the `deployment.target.register` skill refuse `config_dir`. A deployment to production always waits for a person, whatever production's policy says.
 
 ## The target
 

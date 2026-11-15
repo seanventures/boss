@@ -377,3 +377,66 @@ def test_config_goes_only_where_the_operator_allows(eng, project, gateway, dirs,
     refused = config_deploy.deploy_files(eng, _fresh_settings(), project_id=project, actor=PERSON,
                                          target_id=made["target_id"], files={"a.yaml": "a"})
     assert refused["status"] == "blocked" and "outside the allowed" in refused["reason"]
+
+
+def test_a_config_deploy_straight_to_production_waits_for_a_person(eng, project, gateway, dirs):  # noqa: F811
+    """Re-review of #119: deploy_config aimed at production is a person's answer, whatever
+    production's policy says and whatever gate a step passes in."""
+    settings = _fresh_settings()
+    with eng.begin() as c:
+        prod = _target(c, settings, project, "production", dirs["production"], gateway)
+        set_approval_policy(c, project_id=project, environment="production", requires_approval=False,
+                            actor="usr_owner", note="a policy can never answer production")
+    planned = config_deploy.deploy_files(eng, settings, project_id=project, actor=PERSON,
+                                         target_id=prod["target_id"], files={"a.yaml": "a: 1\n"},
+                                         approval_decision_id="dec_some_gate")
+    assert planned["status"] == "planned", planned
+    assert planned["approval"] is None and planned["run_status"] == "awaiting_approval"
+    with eng.begin() as c:
+        decision = c.execute(text("SELECT status FROM decisions WHERE id = :d"),
+                             {"d": planned["decision_id"]}).scalar_one()
+    assert decision == "pending" and not (dirs["production"] / "a.yaml").exists()
+
+
+def test_config_targets_are_made_only_by_create_config_target(eng, project, gateway, dirs, monkeypatch):  # noqa: F811
+    """POST /v1/deployments and the deployment.target.register skill would skip the roots, the
+    reload allowlists and the person: both reach ResourcePlaneService.create_deployment_target,
+    which refuses config_dir unless create_config_target asks."""
+    import inspect
+    from types import SimpleNamespace
+
+    from apps.api.app import main as api_main
+    from boss_engine.services import skill_executors
+    from boss_engine.services.resource_plane import ResourcePlaneService
+
+    settings = _fresh_settings()
+    rp = ResourcePlaneService(settings)
+    args = dict(project_id=project, app_name="Sneaky", repo="config:x", environment="staging",
+                provider_account_id=None, target_ref="local:/etc", domains=[],
+                required_resources=[{"kind": "config_dir", "directory": "/etc"}], secret_refs=[],
+                health_checks=[], rollback_points=[], actor=PERSON)
+    for kind in ("config_dir", "Config-Dir"):
+        with eng.begin() as c, pytest.raises(ValueError, match="create_config_target"):
+            rp.create_deployment_target(c, target_kind=kind, **args)
+    with eng.begin() as c, pytest.raises(ValueError, match="create_config_target"):
+        skill_executors.execute_deployment_target_register(
+            SimpleNamespace(connection=c, project_id=project, actor=PERSON, deployments=rp),
+            {"provider": "config_dir", "app_id": "Sneaky", "repo": "config:x",
+             "environment": "staging", "target_ref": "local:/etc"})
+    route = inspect.getsource(api_main.create_deployment_target)
+    assert "resource_plane.create_deployment_target(" in route and "config_target" not in route
+    assert "except (ProviderAccountNotFoundError, ValueError)" in route   # → 422, not 500
+
+    # A reload URL: loopback or the target's host or the allowlist; anything else is refused.
+    def make(url, actor=PERSON, env="staging", app="UrlGw"):
+        with eng.begin() as c:
+            return config_deploy.create_config_target(
+                c, _fresh_settings(), project_id=project, app_name=app, environment=env,
+                directory=str(dirs["staging"]), health_url=f"{gateway['base']}/readyz",
+                reload_url=url, actor=actor)
+    with pytest.raises(config_deploy.ConfigDeployError, match="BOSS_CONFIG_RELOAD_URLS"):
+        make("http://169.254.169.254/latest/meta-data")
+    with pytest.raises(config_deploy.ConfigDeployError, match="a person sets it"):
+        make(f"{gateway['base']}/-/reload", actor="agent:deploy-lead")
+    monkeypatch.setenv("BOSS_CONFIG_RELOAD_URLS", "https://gw.internal.example/-/reload")
+    assert make("https://gw.internal.example/-/reload")["ok"]

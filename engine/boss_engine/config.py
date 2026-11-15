@@ -1718,6 +1718,9 @@ class Settings(BaseSettings):
     # line (or a JSON list). A command not listed here is refused; a reload is always set by a
     # person.
     config_reload_commands: str = Field(default="", alias="BOSS_CONFIG_RELOAD_COMMANDS")
+    # Reload hooks (HTTP POST) a config_dir target may call beyond loopback and its own host,
+    # comma-separated exact URLs.
+    config_reload_urls: str = Field(default="", alias="BOSS_CONFIG_RELOAD_URLS")
     # What this install runs for whom. `trusted` (the default): the operator's own projects on
     # their own machine. `untrusted`: code or configuration BOSS did not author, for tenants the
     # operator does not vouch for — a command then runs ONLY under strong isolation (a microVM),

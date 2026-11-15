@@ -764,7 +764,7 @@ def _isolation_available(settings: Settings) -> tuple[bool, str]:
         f"this deployment's sandbox provider is {provider or 'local'}, which runs on the "
         "control plane's own host. A command authored in a skill only runs where there is real "
         "isolation — set BOSS_GOVERNED_SANDBOX_PROVIDER to local_fenced (the worker's per-run "
-        "fence, the default) or to a microVM substrate."
+        "fence, opt-in) or to a microVM substrate."
     )
 
 
