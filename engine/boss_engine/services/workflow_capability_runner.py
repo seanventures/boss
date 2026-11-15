@@ -2798,9 +2798,12 @@ def _execute_step(
             # Translated, not wrapped: the runner's failure path records
             # CapabilityExecutionError, and the customer's sentence is the part worth keeping.
             # A refusal only a person can lift is settled: one stop, with Retry / Skip.
-            if getattr(error, "settled", False):
-                raise SettledCapabilityError(str(error)) from error
-            raise CapabilityExecutionError(str(error)) from error
+            translated = (SettledCapabilityError(str(error)) if getattr(error, "settled", False)
+                          else CapabilityExecutionError(str(error)))
+            # The evidence travels with the sentence: a command's exit code and log tail are
+            # kept on the failed step run, not only summarised in `last_error`.
+            translated.output = getattr(error, "output", None)
+            raise translated from error
 
     key = str(binding.get("capability") or "")
     if key not in CAPABILITY_KEYS:
@@ -2962,12 +2965,32 @@ def _notify(
             from .mattermost_adapter import MattermostAdapter
 
             receipt = MattermostAdapter(settings).post_message(channel, subject, body)
+        elif kind == "github":
+            # github:owner/repo#12 or github:#12 (the project's primary repository): the
+            # outcome goes on the pull request, as one comment kept current per run and step.
+            from .github_actions import GitHubActionError, post_comment
+
+            target = channel.split(":", 1)[1].strip()
+            repository, _, number = target.rpartition("#")
+            try:
+                posted = post_comment(
+                    connection, settings, project_id=project_id, actor="workflow",
+                    number=number, body=f"**{subject}**\n\n{body}",
+                    repository=repository or None, marker=f"notify:{run_id}:{step_id}",
+                    run_id=run_id)
+            except GitHubActionError as error:
+                return {"capability": "notify", "status": "failed", "posted": False,
+                        "channel": channel,
+                        "error": f"Could not tell {channel}: {error} Then retry this step, "
+                                 "or skip it."}
+            receipt = posted.get("comment_url")
         else:
             return {"capability": "notify", "status": "failed", "posted": False,
                     "channel": channel,
                     "error": (f"'{channel}' is not a channel BOSS can post to. Use "
-                              "email:someone@example.com or mattermost:<channel id>, then "
-                              "retry this step — or skip it.")}
+                              "email:someone@example.com, mattermost:<channel id> or "
+                              "github:owner/repo#<pr number>, then retry this step — or "
+                              "skip it.")}
     except IntegrationConfigurationError as error:
         need = "email" if kind == "email" else "mattermost"
         from .workflow_readiness import need_for
@@ -4105,7 +4128,16 @@ def _perform_capability(
             # The step promised a person: the deployment it starts may not run on the
             # environment's policy, whatever happened to the gate on the way here.
             inputs = {**inputs, "person_required": True}
-        output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
+        # THE RUN NAMES ITSELF on the pull request (fix branch boss/<run>-fix-<slug>, the
+        # comment's receipt, the PR body): set here, on the server, never an input a caller or
+        # a workflow could write (github_actions.WORKFLOW_RUN_ID).
+        from .github_actions import WORKFLOW_RUN_ID
+
+        run_token = WORKFLOW_RUN_ID.set(str(context.get("run_id") or ""))
+        try:
+            output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
+        finally:
+            WORKFLOW_RUN_ID.reset(run_token)
     result = {"capability": key, "tool": capability.tool, **output,
               "ran_as": {**ran_as, "tool": capability.tool,
                          "skills_offered": [], "skills_used": []},
@@ -7995,6 +8027,10 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                     # A settled verdict fails once and says so. Retrying it spends ticks and
                     # minutes to arrive at the same sentence.
                     retryable=not isinstance(error, SettledCapabilityError),
+                    # What the work returned before it was judged (a command's exit_code and
+                    # log_tail, AMEX-G3), when the error carries it. None keeps the old path.
+                    output=(getattr(error, "output", None)
+                            if isinstance(getattr(error, "output", None), dict) else None),
                 )
                 if isinstance(error, StaleApprovalError):
                     # The approval covered other content, so it no longer releases this

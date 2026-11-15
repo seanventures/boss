@@ -15146,6 +15146,32 @@ CREATE INDEX IF NOT EXISTS idx_model_gateway_handles_run ON model_gateway_handle
 CREATE INDEX IF NOT EXISTS idx_jobs_payload_run_id ON jobs ((payload->>'run_id'));
 -- ================================ end P8b ==
 
+-- ================================ AMEX-G3 (BOSSAPP-1139): a non-zero exit fails the step ==
+-- `skill.sandboxed_command` always returned `exit_code`, and the workflow runner never read it:
+-- a validator that exited 1 went green and the run went on to deploy. New sandboxed_command
+-- skills are saved with `fail_on_exit: true` (skill_definitions.validate_config); the ones
+-- authored before the flag existed keep today's behaviour by an EXPLICIT false, written ONCE.
+-- ONE-TIME, not on every boot: recorded in `schema_backfills`, so a skill authored or edited
+-- after this ran (which always carries the key) is never touched by it again.
+CREATE TABLE IF NOT EXISTS schema_backfills (
+  key TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rows_changed INTEGER NOT NULL DEFAULT 0
+);
+DO $$
+DECLARE changed INTEGER;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_backfills WHERE key = 'amex_g3_fail_on_exit_false') THEN
+    UPDATE skill_definitions
+       SET config = config || '{"fail_on_exit": false}'::jsonb
+     WHERE behaviour_kind = 'sandboxed_command'
+       AND NOT (config ? 'fail_on_exit');
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    INSERT INTO schema_backfills (key, rows_changed)
+    VALUES ('amex_g3_fail_on_exit_false', changed) ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;
+-- ================================ end AMEX-G3 ==
 -- ================================ BOSSAPP-1163: standing grants cover the project's local repos ==
 -- A grant now names the repositories BOSS keeps ON THIS MACHINE as `resources.local.repos`
 -- (identity/grants.py). Standing grants made before that named none, so a schedule on a

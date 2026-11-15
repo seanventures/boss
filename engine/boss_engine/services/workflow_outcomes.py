@@ -237,6 +237,48 @@ def smoke_test(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
     return Verdict(SUCCEEDED, "", produced)
 
 
+def contract_test(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """`contract_test` ran every case and counted; `ok: False` means the cases could not be run
+    as written. One failed case is a failed contract — the reason names the cases, and the
+    table travels on the step as `results_table` for the PR comment that follows."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    produced = {name: result.get(name) for name in
+                ("passed", "failed", "total", "results_table", "failed_cases")
+                if name in result}
+    failed = result.get("failed")
+    if not isinstance(failed, int) or not isinstance(result.get("total"), int):
+        return Verdict(FAILED, "the contract test reported no counts", produced)
+    if failed:
+        names = ", ".join(str(n) for n in (result.get("failed_cases") or [])[:8]) or "see table"
+        return Verdict(FAILED, f"{failed} of {result['total']} contract case(s) failed: {names}",
+                       produced)
+    if not result["total"]:
+        return Verdict(FAILED, "no contract cases ran", produced)
+    return Verdict(SUCCEEDED, "", produced)
+
+
+def github_comment(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """`github_comment`: a comment exists (`posted`, with its URL) or nothing was said."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    if result.get("posted") is True and result.get("comment_url"):
+        return Verdict(SUCCEEDED, "", {"comment_url": result.get("comment_url")})
+    return Verdict(FAILED, _reason(result) or "no comment was posted")
+
+
+def fix_pr(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """`github_open_fix_pr`: a pull request exists, or it does not."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    if result.get("pull_request_url"):
+        return Verdict(SUCCEEDED, "", {"pull_request_url": result.get("pull_request_url")})
+    return Verdict(FAILED, _reason(result) or "no pull request was opened")
+
+
 def finished_tool(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
     """teardown_preview, cost_check: one call that finishes in the call."""
     return _refused(result) or Verdict(SUCCEEDED)
@@ -285,6 +327,9 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "video_edit": commissions_nothing,
     "social_publish": commissions_nothing,
     "smoke_test": smoke_test,
+    "contract_test": contract_test,
+    "github_comment": github_comment,
+    "fix_pr": fix_pr,
     "wait_for_ci": awaited_work,
     "teardown_preview": finished_tool,
     "cost_check": finished_tool,
@@ -338,6 +383,30 @@ FAILURE_SHAPES: dict[str, tuple[dict[str, Any], ...]] = {
         # Community refuses URL probes outright.
         {"ok": False, "error": "Community URL probes require a project-bound destination and "
                                "a network policy; use recorded deployment health."},
+    ),
+    # tools/builtin.py contract_test: cases that cannot be run as written; a run where a case
+    # failed (the tool ran, `ok` is True, the contract did not hold); Community's refusal.
+    "contract_test": (
+        {"ok": False, "error": "cases must be a non-empty list of case objects."},
+        {"ok": True, "total": 1, "passed": 0, "failed": 1,
+         "cases": [{"name": "health", "method": "GET", "url": "http://127.0.0.1:9/healthz",
+                    "status": 503, "ms": 2, "ok": False,
+                    "failures": ["answered 503, expected 200"], "error": None,
+                    "body_excerpt": "down"}],
+         "results_table": "| Case | Request | Status | Time | Result |",
+         "failed_cases": ["health"]},
+        {"ok": False, "error": "Community URL probes require a project-bound destination and "
+                               "a network policy; use recorded deployment health."},
+    ),
+    # tools/github_tools.py github_comment: no repository bound to the project.
+    "github_comment": (
+        {"ok": False, "error": "this project has no GitHub repository bound. Connect one under "
+                               "Repositories, then retry.", "code": "no_repository"},
+    ),
+    # tools/github_tools.py github_open_fix_pr: no repository bound to the project.
+    "fix_pr": (
+        {"ok": False, "error": "this project has no GitHub repository bound. Connect one under "
+                               "Repositories, then retry.", "code": "no_repository"},
     ),
     # tools/builtin.py stop_preview: an unknown preview, or the service raising.
     "teardown_preview": ({"ok": False, "error": "no preview prv_missing"},),
