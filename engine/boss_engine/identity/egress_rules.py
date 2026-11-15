@@ -235,14 +235,42 @@ def check_git(method: str, path: str, query: Mapping[str, str], *, perms: Mappin
 _BB_REPO_PATH = re.compile(r"^/2\.0/repositories/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(/.*)?$")
 _BB_FORBIDDEN = re.compile(r"^/(permissions-config|hooks|deploy-keys|deployments|environments|"
                            r"branch-restrictions|pipelines_config)(/|$)")
+#: GET/HEAD only, fullmatched on the path after /2.0/repositories/{w}/{r}. A read not listed
+#: here is not_in_rule_table (BOSSAPP-1176). The old rule allowed every GET that was not on
+#: _BB_FORBIDDEN, so a new or forgotten endpoint was a read.
+_BB_READS: tuple[tuple[str, tuple[str, str]], ...] = (
+    (r"", ("contents", "read")),
+    (r"/src(/.*)?", ("contents", "read")),
+    (r"/refs(/(branches|tags)(/.*)?)?", ("contents", "read")),
+    (r"/commits(/.*)?", ("contents", "read")),
+    (r"/commit/[^/]+(/.*)?", ("contents", "read")),
+    (r"/diff(/.*)?", ("contents", "read")),
+    (r"/diffstat(/.*)?", ("contents", "read")),
+    (r"/patch(/.*)?", ("contents", "read")),
+    (r"/filehistory(/.*)?", ("contents", "read")),
+    (r"/pullrequests", ("pull_requests", "read")),
+    (r"/pullrequests/\d+", ("pull_requests", "read")),
+    (r"/pullrequests/\d+/(activity|comments|commits|diff|diffstat|statuses|tasks)(/.*)?",
+     ("pull_requests", "read")),
+    (r"/pipelines(/.*)?", ("contents", "read")),
+)
+
+
+def _bb_read(sub: str) -> Optional[tuple[str, str]]:
+    for pattern, need in _BB_READS:
+        if re.fullmatch(pattern, sub):
+            return need
+    return None
 
 
 def check_bitbucket_api(method: str, path: str, *, perms: Mapping[str, str], repos: Iterable[str],
                         body: Optional[Mapping[str, Any]] = None,
                         push_pattern: str = "") -> RuleDecision:
-    """The Bitbucket REST surface a run may use: reads of its own repositories, opening a pull
-    request FROM one of its own branches, and commenting on a pull request. Nothing else — no
-    branch or tag writes (git does those, under the ref rules), no merge, no settings."""
+    """The Bitbucket REST surface a run may use. Reads are `_BB_READS` (the repository, its
+    source, refs, commits, diffs, pull requests and pipeline runs). The only writes are opening
+    a pull request FROM one of the run's own branches, and commenting on a pull request.
+    Nothing else — no branch or tag writes (git does those, under the ref rules), no merge, no
+    settings, and no GET the list does not name."""
     m = _BB_REPO_PATH.match(path)
     if not m:
         return _deny("/2.0/{other}", "not_in_rule_table")
@@ -254,7 +282,9 @@ def check_bitbucket_api(method: str, path: str, *, perms: Mapping[str, str], rep
         return _deny(tpl, "forbidden_endpoint")
     verb = method.upper()
     if verb in ("GET", "HEAD"):
-        need = ("pull_requests", "read") if sub.startswith("/pullrequests") else ("contents", "read")
+        need = _bb_read(sub)
+        if need is None:
+            return _deny(tpl, "not_in_rule_table")
         if not _level_ok(perms, need):
             return RuleDecision(False, tpl, "insufficient_permission", need)
         return RuleDecision(True, tpl, need=need)
