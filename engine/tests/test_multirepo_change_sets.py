@@ -19,7 +19,8 @@ from boss_engine.multirepo import change_sets, components, cross_check, github, 
     registry, release
 from boss_engine.multirepo.common import MultiRepoError
 
-from ._multirepo_support import ACME, lister_for, make_engine, make_world, prober_for
+from ._multirepo_support import ACME, lister_for, make_engine, make_world, prober_for, \
+    stub_token_and_probe
 
 _sha = itertools.count(1000)
 
@@ -112,6 +113,11 @@ class Jobs:
 @pytest.fixture(scope="module")
 def eng():
     return make_engine()
+
+
+@pytest.fixture(autouse=True)
+def _connection_can_reach(monkeypatch):
+    stub_token_and_probe(monkeypatch)
 
 
 @pytest.fixture()
@@ -495,7 +501,7 @@ def test_a_lane_never_reaches_a_repository_outside_its_app(eng, gh, model, build
 def test_the_identity_mint_refuses_outside_the_app(eng, gh, model, builds):
     """The token mint itself (identity/github_app.mint_for_run) enforces it, not a prompt."""
     from boss_engine.identity import github_app
-    from boss_engine.identity.principal import TaskBinding
+    from boss_engine.identity.principal import RunMode, TaskBinding
 
     jobs = Jobs()
     world = make_world(eng)
@@ -505,8 +511,12 @@ def test_the_identity_mint_refuses_outside_the_app(eng, gh, model, builds):
     run = builds[0]["run_id"]
 
     class Claims:
+        # mint_for_run reads RunTokenClaims.mode before the repo check (obo vs the agent
+        # itself). This mint has no person grant, so it is autonomous: the refusal stays
+        # the registry / change-set boundary, which is what the assertions below pin.
         org_id = world["org"]
         grant_id = None
+        mode = RunMode.AUTONOMOUS
 
     with eng.begin() as db:
         task = TaskBinding(run_id=f"run_cs:{cs_id}/ct:{run}", project_id=app["pid"],

@@ -11,12 +11,19 @@ from boss_engine.config import get_settings
 from boss_engine.multirepo import components, project_repos, registry
 from boss_engine.multirepo.common import MultiRepoError
 
-from ._multirepo_support import ACME, bind, lister_for, make_engine, make_world, prober_for
+from ._multirepo_support import (
+    ACME, bind, lister_for, make_engine, make_world, prober_for, stub_token_and_probe,
+)
 
 
 @pytest.fixture(scope="module")
 def eng():
     return make_engine()
+
+
+@pytest.fixture(autouse=True)
+def _connection_can_reach(monkeypatch):
+    stub_token_and_probe(monkeypatch)
 
 
 @pytest.fixture()

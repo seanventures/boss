@@ -87,6 +87,27 @@ def prober_for(states: dict[str, str] | None = None, calls: list | None = None):
     return prober
 
 
+def stub_token_and_probe(monkeypatch) -> None:
+    """`make_world` stores `credential_ref='secret:none'`. `project_repos.add` still calls
+    `_connection_for`, which resolves that ref and probes GitHub, then raises
+    github_repo_unreachable. These stand-ins make the project's own connection reachable
+    without a network call (BOSSAPP-1186)."""
+    from boss_engine.services import setup_checks
+    from boss_engine.services.github_connections import GitHubConnectionService
+
+    def resolve(self, secret_ref, connection=None):
+        return "ghs_test_token"
+
+    def probe(token, full_name, *, api_base="https://api.github.com", http=None):
+        ok = {"ok": True, "state": "working", "at": "now"}
+        return {"state": "working", "default_branch": "main", "private": True,
+                "expires_at": None, "retry_at": None,
+                "checks": {"read": ok, "write": dict(ok), "pull_requests": dict(ok)}}
+
+    monkeypatch.setattr(GitHubConnectionService, "_resolve_secret", resolve)
+    monkeypatch.setattr(setup_checks, "probe_repository", probe)
+
+
 def bind(engine, world, pid: str, full_name: str, *, role: str = "source", checks: str = "working") -> str:
     bid = f"ghb_{uuid.uuid4().hex[:12]}"
     owner, name = full_name.split("/")
