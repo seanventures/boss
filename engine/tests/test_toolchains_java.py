@@ -163,14 +163,15 @@ def test_health_path_is_declarable_and_java_gets_build_time(tmp_path, java_on):
 
 # ---- egress ------------------------------------------------------------------------------------------
 
-def test_egress_allows_maven_central_and_the_gradle_portal_and_nothing_broader(monkeypatch):
+def test_egress_allows_maven_central_and_the_gradle_portal_and_nothing_broader(monkeypatch,
+                                                                              java_on):
     sys.path.insert(0, str(ROOT))
     from apps.egress.boss_egress import connect
 
     monkeypatch.delenv("BOSS_EGRESS_CONNECT_ALLOW", raising=False)
     for host in ("repo.maven.apache.org", "repo1.maven.org", "plugins.gradle.org",
                  "plugins-artifacts.gradle.org"):
-        assert host in connect.DEFAULT_ALLOW and connect.host_allowed(host)
+        assert host in connect.TOOLCHAIN_ALLOW["java"] and connect.host_allowed(host)
     for host in ("services.gradle.org", "downloads.gradle.org", "maven.org", "evil.maven.org",
                  "jitpack.io", "oss.sonatype.org"):
         assert not connect.host_allowed(host), host
@@ -181,6 +182,17 @@ def test_egress_allows_maven_central_and_the_gradle_portal_and_nothing_broader(m
 
 
 # ---- the sandbox: proxy config and per-project caches ---------------------------------------------
+
+def test_maven_hosts_are_closed_on_an_install_without_java(monkeypatch, java_off):
+    """Every allowlisted host is a way out too: an install without Java does not open them."""
+    sys.path.insert(0, str(ROOT))
+    from apps.egress.boss_egress import connect
+
+    monkeypatch.delenv("BOSS_EGRESS_CONNECT_ALLOW", raising=False)
+    for host in connect.TOOLCHAIN_ALLOW["java"]:
+        assert host not in connect.DEFAULT_ALLOW and not connect.host_allowed(host), host
+    assert connect.host_allowed("registry.npmjs.org")
+
 
 def test_maven_and_gradle_get_the_egress_proxy_in_their_own_config(tmp_path, java_on):
     home = tmp_path / "home"

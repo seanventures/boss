@@ -134,8 +134,11 @@ PY
 # GO: the official release tarball, pinned with its published SHA-256 per architecture (go.dev/dl
 # and dl.google.com/go/<file>.sha256 agree), checked before it is unpacked, downloaded with
 # Python's urllib. Everything lands under /opt/toolchains/go, with go and gofmt linked from
-# /opt/toolchains/bin. GOTOOLCHAIN=local is set for every sandboxed run (toolchains.sandbox_env):
-# a go.mod's `toolchain` line never downloads another Go.
+# /opt/toolchains/bin. The release's own $GOROOT/go.env (GOPROXY=…,direct, GOTOOLCHAIN=auto) is
+# rewritten, so `go` is safe without any per-run environment: modules only from the Go module
+# proxy (no `direct` fetch from a source host), always checked against sum.golang.org, and a
+# go.mod's `toolchain` line never downloads another Go. toolchains.sandbox_env sets the same and
+# more for every sandboxed run.
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS toolchains-go
 ARG TARGETARCH
 ARG GO_VERSION=1.27.4
@@ -154,6 +157,8 @@ RUN set -eu; \
     mkdir -p /opt/toolchains/go /opt/toolchains/bin; \
     tar -xzf go.tgz -C /opt/toolchains/go --strip-components=1; \
     rm -rf go.tgz /opt/toolchains/go/api /opt/toolchains/go/test; \
+    printf 'GOPROXY=https://proxy.golang.org\nGOSUMDB=sum.golang.org\nGOTOOLCHAIN=local\nGOTELEMETRY=off\n' \
+      > /opt/toolchains/go/go.env; \
     ln -s ../go/bin/go /opt/toolchains/bin/go; \
     ln -s ../go/bin/gofmt /opt/toolchains/bin/gofmt; \
     chmod -R a+rX,go-w /opt/toolchains; \

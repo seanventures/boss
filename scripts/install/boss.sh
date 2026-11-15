@@ -564,6 +564,15 @@ cmd_toolchains() {
   esac
   [[ " ${KNOWN_TOOLCHAINS[*]} " == *" $name "* ]] \
     || die "unknown toolchain: ${name:-(none given)}. Known: ${KNOWN_TOOLCHAINS[*]}"
+  if [[ "$action" == disable && "$name" == java && ",$current," == *",security,"* ]]; then
+    # The security scanners are built on the Java stage (ZAP needs its JRE): an install with
+    # security has Java whatever the list says, so removing java alone would change nothing.
+    printf 'BOSS_TOOLCHAINS=%s includes security, and the security scanners include Java (OWASP ZAP\n' "$current"
+    printf 'needs its JRE), so Java stays installed while security is on. To remove Java, turn the\n'
+    printf 'scanners off too:\n  boss toolchains disable security\n'
+    [[ ",$current," == *",java,"* ]] && printf '  boss toolchains disable java\n'
+    return 1
+  fi
   if [[ "$action" == enable ]]; then
     wanted="$(toolchains_with "$current" "$name")"
   else

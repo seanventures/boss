@@ -117,6 +117,10 @@ class Language:
     #: Regexes that name the language in a brief, for a language whose name is also an
     #: everyday word ("Go": "go to", "go live" are not requests). Read with `words`.
     patterns: tuple[str, ...] = ()
+    #: Regexes for the language's own tooling ("go vet", "go test ./..."). A mention of the
+    #: tooling is a request only in a sentence that states a requirement ("… clean", "must
+    #: pass"): "our CLI runs `go test ./...` separately" asks for nothing.
+    tooling_patterns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -329,11 +333,16 @@ GO_PATTERNS = (
     # A parenthesised language tag: "(Go)", "(Go, medium complexity)", "(Go/Gin)".
     r"\(\s*go\s*(?:[,;/)]|\s+\d)",
     r"\bgo\s*(?:\+|/|and)\s*(?:react|vue|svelte|htmx)\b",
-    # The go command: "go vet", "go test ./...", "go build ./cmd/x", "go mod tidy".
+    r"\bgin(?:-gonic)?\s+(?:framework|router)\b",
+    # Go as the TARGET of a migration: "port the Node service to Go".
+    r"\b(?:port\w*|re-?writ\w*|migrat\w*|convert\w*|mov(?:e|es|ed|ing)|translat\w*)\b"
+    r"[^.;\n]{0,60}?\b(?:to|into)\s+go\b" + _GO_NOT_LANGUAGE)
+#: The go command and its files: "go vet", "go test ./...", "go build ./cmd/x", "go mod tidy",
+#: go.mod. Requests only in a sentence that states a requirement (Language.tooling_patterns).
+GO_TOOLING_PATTERNS = (
     r"\bgo\s+(?:vet|fmt|mod\s+(?:init|tidy|download|vendor))\b",
     r"\bgo\s+(?:test|build|run|install|generate)\s+(?:-[\w=.]+\s+)*\.{1,3}/",
-    r"`go\s+(?:test|build|run)\b", r"\bgofmt\b",
-    r"\bgo\.mod\b", r"\bgin(?:-gonic)?\s+(?:framework|router)\b")
+    r"`go\s+(?:test|build|run)\b", r"\bgofmt\b", r"\bgo\.mod\b")
 
 
 def _npm_install() -> str:
@@ -404,7 +413,7 @@ LANGUAGES: dict[str, Language] = {
         runtime="go 1.27", package_manager="go modules",
         commands={"install": None, "build": None, "lint": toolchains.GO_GATE[0],
                   "typecheck": None, "test": toolchains.GO_GATE[1], "e2e": None},
-        patterns=GO_PATTERNS),
+        patterns=GO_PATTERNS, tooling_patterns=GO_TOOLING_PATTERNS),
 }
 
 #: Languages BOSS recognises in a brief or an architecture and cannot build. For the words only.
@@ -429,6 +438,18 @@ _NEGATED_LIST = re.compile(r"\b(?:not|no|never|without|lacks?)\s+(?:[\w.+#/-]+\s
 #: An inventory of tool names (a JSON array of three or more bare words, as a spec's allowed
 #: commands are dumped: ["bazel", "bundle", "cargo", …, "ruby"]) is not a request for any.
 _NAME_INVENTORY = re.compile(r"\[\s*\"[\w.+-]{1,24}\"(?:\s*,\s*\"[\w.+-]{1,24}\"){2,}\s*\]")
+#: …unless its key says it IS the stack: `"stack": ["go", "react", "postgres"]` is a request.
+_STACK_KEY = re.compile(r"[\"']?(?:stacks?|languages?|frameworks?|runtimes?|backend|frontend|"
+                        r"required_stack)[\"']?\s*[:=]\s*$", re.I)
+#: A sentence that moves code FROM a language: what follows "to/into/in <other language>" is the
+#: target. "Rewrite our Go codebase in Node", "Port our Go service to Python (FastAPI)".
+_MIGRATION_VERB = re.compile(r"\b(?:re-?writ\w*|port(?:s|ed|ing)?|migrat\w*|convert\w*|"
+                             r"translat\w*|replac\w*|mov(?:e|es|ed|ing)|away\s+from|from)\b", re.I)
+_TARGET_LEAD = re.compile(r"\b(?:to|into|in|onto|using|with)\s+", re.I)
+#: A sentence that states a requirement (for tooling mentions).
+_REQUIREMENT = re.compile(r"\b(?:must|clean|pass(?:es|ing)?|green|requires?|required|should|"
+                          r"needs? to|has to|have to)\b", re.I)
+_SENTENCE_END = re.compile(r"[.!?;](?:\s|$)|\n")
 
 
 # ── The adapter registry (BOSS_OSS_v1 stack recommendations §6-7) ───────────────────────────
@@ -744,20 +765,73 @@ def prompt_block() -> str:
 
 # ── Reading a stack out of words ────────────────────────────────────────────────────────────
 
-def _matches(pattern: str, text: str) -> bool:
+def _sentence(text: str, start: int, end: int) -> tuple[str, str]:
+    """(the sentence before the match, the sentence after it)."""
+    before = text[max(0, start - 200):start]
+    cuts = list(_SENTENCE_END.finditer(before))
+    if cuts:
+        before = before[cuts[-1].end():]
+    after = text[end:end + 200]
+    cut = _SENTENCE_END.search(after)
+    return before, (after[:cut.start()] if cut else after)
+
+
+def _other_language_words(key: Optional[str]) -> list[str]:
+    words: list[str] = []
+    for lang in LANGUAGES.values():
+        if lang.key != key:
+            words += [lang.label.lower(), *lang.words, *(w for f in lang.frameworks
+                                                         for w in (f.label.lower(), *f.words))]
+    for u in UNSUPPORTED:
+        if u.key != key:
+            words.append(u.label.lower())
+    return [w for w in dict.fromkeys(words) if len(w) > 1]
+
+
+def _is_source(text: str, start: int, end: int, key: Optional[str]) -> bool:
+    """Is the language at text[start:end] what the sentence moves code AWAY from? A migration
+    verb before it, and another language named as the target after it."""
+    before, after = _sentence(text, start, end)
+    if not _MIGRATION_VERB.search(before) and not re.match(r"\s*(?:code(?:base)?\s+)?to\b",
+                                                             after, re.I):
+        return False
+    lead = _TARGET_LEAD.search(after)
+    if lead is None:
+        return False
+    target = after[lead.end():lead.end() + 60].lower()
+    return any(re.search(rf"(?<![\w.]){re.escape(w)}(?![\w])", target)
+               for w in _other_language_words(key))
+
+
+def _matches(pattern: str, text: str, key: Optional[str] = None, *,
+             requirement: bool = False) -> bool:
+    """Does `text` ask for what `pattern` names? Not under a negation ("not in Go", "has no
+    node, java, go"), not as the SOURCE of a migration ("rewrite our Go codebase in Node"), and
+    — for `requirement` patterns (a language's tooling) — only in a sentence that states one."""
     for m in re.finditer(pattern, text, re.I):
         before = text[max(0, m.start() - 40):m.start()]
-        if not _NEGATION.search(before) and not _NEGATED_LIST.search(text[max(0, m.start() - 160):m.start()]):
-            return True
+        if _NEGATION.search(before) or _NEGATED_LIST.search(text[max(0, m.start() - 160):m.start()]):
+            continue
+        if _is_source(text, m.start(), m.end(), key):
+            continue
+        if requirement and not _REQUIREMENT.search("".join(_sentence(text, m.start(), m.end()))):
+            continue
+        return True
     return False
+
+
+def _drop_inventory(m: "re.Match[str]") -> str:
+    if _STACK_KEY.search(m.string[max(0, m.start() - 40):m.start()]):
+        return m.group(0)
+    return " "
 
 
 def _requests_only(text: str) -> str:
     """Text without what names a language and asks for none: BOSS's own sentences about the
     deploy machine ("has no node, npm, pip3, java, go, ruby, php, make") and inventories of
-    tool names (a spec's allowed-command list). The Northgate spec was read as asking for Ruby
-    and PHP from exactly those (2026-11-15)."""
-    return _NAME_INVENTORY.sub(" ", _DEPLOY_BRIEFS.sub("", str(text or "")))
+    tool names (a spec's allowed-command list) — never an array its key calls the stack. The
+    Northgate spec was read as asking for Ruby and PHP from exactly those (2026-11-15)."""
+    return _NAME_INVENTORY.sub(_drop_inventory, _DEPLOY_BRIEFS.sub("", str(text or "")))
 
 
 def unsupported_named(text: str) -> list[str]:
@@ -765,7 +839,7 @@ def unsupported_named(text: str) -> list[str]:
     body = _requests_only(text)
     if not body.strip():
         return []
-    return [u.key for u in UNSUPPORTED if any(_matches(p, body) for p in u.patterns)]
+    return [u.key for u in UNSUPPORTED if any(_matches(p, body, u.key) for p in u.patterns)]
 
 
 def languages_named(text: str) -> list[str]:
@@ -777,7 +851,8 @@ def languages_named(text: str) -> list[str]:
         # "Java" is not "JavaScript".
         patterns = [r"\bjava\b(?!\s*script)" if w == "java" else rf"\b{re.escape(w)}\b"
                     for w in words] + list(lang.patterns)
-        if any(_matches(p, body) for p in patterns):
+        if any(_matches(p, body, lang.key) for p in patterns) or any(
+                _matches(p, body, lang.key, requirement=True) for p in lang.tooling_patterns):
             out.append(lang.key)
     return out
 
@@ -995,7 +1070,7 @@ def _service_in_unsafe(path: Path, rel: str) -> Optional[Service]:
     for manifest, key in _UNSUPPORTED_MANIFESTS.items():
         if (path / manifest).is_file():
             return Service(rel, key, None, "backend", supported=False)
-    if any((path / m).is_file() for m in GO_MANIFESTS):
+    if compiled_stack(path) == "go":
         text = _read(path / "go.mod")
         framework = next((f.key for f in LANGUAGES["go"].frameworks
                           if any(m in text for m in f.markers)), "net-http")
@@ -1032,6 +1107,41 @@ def _service_in_unsafe(path: Path, rel: str) -> Optional[Service]:
             framework = "django"
         return Service(rel, "python", framework, "backend")
     return None
+
+
+def _count_sources(base: Path, suffix: str, cap: int = 400) -> int:
+    n = 0
+    stack = [(base, 0)]
+    while stack and n < cap:
+        d, level = stack.pop()
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            continue
+        for p in entries:
+            if p.is_symlink():
+                continue
+            if p.is_dir():
+                if level < 4 and p.name not in SKIP_DIRS - {"src"} and not p.name.startswith("."):
+                    stack.append((p, level + 1))
+            elif p.suffix == suffix:
+                n += 1
+    return n
+
+
+def compiled_stack(path: Path | str) -> Optional[str]:
+    """"java" or "go" when `path` is a build of either (pom.xml / build.gradle, go.mod), else None.
+    A directory with BOTH is the one most of its source is in, Java on a tie: a stray go.mod in
+    a Maven project does not make it a Go service."""
+    base = Path(path)
+    try:
+        java = any((base / m).is_file() for m in JAVA_MANIFESTS)
+        go = any((base / m).is_file() for m in GO_MANIFESTS)
+    except OSError:
+        return None
+    if java and go:
+        return "go" if _count_sources(base, ".go") > _count_sources(base, ".java") else "java"
+    return "java" if java else "go" if go else None
 
 
 def unsupported_manifest(path: Path | str) -> Optional[tuple[str, str]]:

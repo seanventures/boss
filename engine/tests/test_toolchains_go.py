@@ -75,6 +75,12 @@ def test_the_go_stage_pins_a_release_and_checks_it_per_architecture():
     assert "ln -s ../go/bin/go /opt/toolchains/bin/go" in go
     assert "ln -s ../go/bin/gofmt /opt/toolchains/bin/gofmt" in go
     assert '"go$GO_VERSION "' in go                       # the binary is the pinned one
+    # The release's own go.env (GOPROXY=…,direct, GOTOOLCHAIN=auto) is rewritten: `go` is safe
+    # without the per-run environment.
+    goenv = re.search(r"printf '([^']*)' \\\n\s*> /opt/toolchains/go/go.env", go)
+    assert goenv, "the stage rewrites $GOROOT/go.env"
+    assert goenv.group(1).split("\\n")[:3] == [
+        "GOPROXY=https://proxy.golang.org", "GOSUMDB=sum.golang.org", "GOTOOLCHAIN=local"]
     assert """printf '{"go": {"go": "%s"}}\\n' "$GO_VERSION" > /opt/toolchains/manifest.json""" in go
 
 
@@ -170,6 +176,20 @@ def test_enable_and_disable_add_to_and_remove_from_the_list(call, expected):
     assert _bash(call) == [expected]
 
 
+def test_disabling_java_under_security_says_security_includes_java():
+    text = (ROOT / "scripts" / "install" / "boss.sh").read_text()
+    body = text[text.index("cmd_toolchains() {"):]
+    guard = body[body.index('if [[ "$action" == disable && "$name" == java'):]
+    guard = guard[:guard.index("  fi\n") + 5]
+    assert "the security scanners include Java" in guard
+    assert "boss toolchains disable security" in guard and "return 1" in guard
+    out = subprocess.run(["bash", "-c", "f() { local action=disable name=java current=java,security\n"
+                          + guard + "\nreturn 0; }; f"], capture_output=True, text=True)
+    assert out.returncode == 1
+    assert "boss toolchains disable security" in out.stdout
+    assert "boss toolchains disable java" in out.stdout
+
+
 def test_the_python_reading_of_the_setting_matches(go_on):
     assert toolchains.parse_selection("java,go") == ["java", "go"]
     assert toolchains.parse_selection("none") == [] == toolchains.parse_selection("")
@@ -239,6 +259,47 @@ def test_a_tree_of_a_language_boss_cannot_build_is_not_gated_as_node(tmp_path, g
                                  "cannot build")
 
 
+def test_toolchain_missing_is_a_persons_to_fix(tmp_path, go_off):
+    plan = verification_target.resolve_gate_plan({}, "", _repo(tmp_path, "go.mod"))
+    assert plan.needs_human
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert not verification_target.resolve_gate_plan({}, "", empty).needs_human
+
+
+@pytest.mark.parametrize("extra", ["package.json", "requirements.txt"])
+def test_a_repair_cannot_flip_a_go_tree_to_npm_or_python_while_go_is_off(tmp_path, go_off, extra):
+    """A repair that adds a package.json (or a Python manifest) beside go.mod does not turn the
+    gate into npm's: the tree still needs Go, and the gate still says so."""
+    plan = verification_target.resolve_gate_plan({}, "", _repo(tmp_path, "go.mod", "main.go", extra))
+    assert plan.source == "toolchain_missing" and plan.needs_human
+    assert plan.error.startswith("This project needs Go")
+
+
+def test_a_repair_cannot_flip_a_java_tree_to_npm_while_java_is_off(tmp_path, go_off):
+    plan = verification_target.resolve_gate_plan({}, "", _repo(tmp_path, "pom.xml", "package.json"))
+    assert plan.source == "toolchain_missing" and plan.needs_human
+    assert plan.error.startswith("This project needs Java")
+
+
+def test_a_stray_go_mod_does_not_make_a_maven_project_go(tmp_path, monkeypatch):
+    _manifest(tmp_path, monkeypatch, {"java": {"jdk": "21"}, "go": {"go": "1.27.4"}})
+    repo = _repo(tmp_path, "pom.xml", "go.mod")
+    src = repo / "src" / "main" / "java"
+    src.mkdir(parents=True)
+    for i in range(3):
+        (src / f"A{i}.java").write_text("class A {}\n")
+    (repo / "tools.go").write_text("package tools\n")
+    assert stacks.compiled_stack(repo) == "java"
+    assert stacks._service_in(repo, ".").language == "java"
+    assert verification_target.resolve_gate_plan({}, "", repo).commands == ["mvn -B -ntp verify"]
+    # Mostly Go: the go.mod is the build.
+    for i in range(5):
+        (repo / f"g{i}.go").write_text("package main\n")
+    assert stacks.compiled_stack(repo) == "go"
+    assert stacks._service_in(repo, ".").language == "go"
+
+
 def test_node_and_python_beside_a_go_mod_keep_their_plans(tmp_path, go_on):
     node = _repo(tmp_path, "package.json", "go.mod")
     assert verification_target.resolve_gate_plan({}, "", node).source == "default"
@@ -295,16 +356,29 @@ def test_a_root_main_package_runs_from_the_module_root(tmp_path):
 
 # ---- the sandbox: proxy, checksum database and per-project caches ---------------------------------
 
-def test_egress_allows_the_go_module_proxy_and_checksum_database_only(monkeypatch):
+def test_egress_allows_the_go_module_proxy_and_checksum_database_only(monkeypatch, go_on):
     sys.path.insert(0, str(ROOT))
     from apps.egress.boss_egress import connect
 
     monkeypatch.delenv("BOSS_EGRESS_CONNECT_ALLOW", raising=False)
     for host in ("proxy.golang.org", "sum.golang.org"):
-        assert host in connect.DEFAULT_ALLOW and connect.host_allowed(host)
+        assert host in connect.TOOLCHAIN_ALLOW["go"] and connect.host_allowed(host)
     for host in ("storage.googleapis.com", "golang.org", "go.dev", "dl.google.com",
                  "gopkg.in", "go.googlesource.com"):
         assert not connect.host_allowed(host), host
+
+
+def test_the_go_hosts_are_closed_on_an_install_without_go(monkeypatch, go_off):
+    """The module proxy fetches any public path on request: it is a way out as well as in, so
+    an install without Go does not open it."""
+    sys.path.insert(0, str(ROOT))
+    from apps.egress.boss_egress import connect
+
+    monkeypatch.delenv("BOSS_EGRESS_CONNECT_ALLOW", raising=False)
+    for host in ("proxy.golang.org", "sum.golang.org"):
+        assert host not in connect.DEFAULT_ALLOW and not connect.host_allowed(host)
+    assert "exfil" in (ROOT / "apps" / "egress" / "boss_egress" / "connect.py").read_text() \
+        or "a way\n#: OUT" in (ROOT / "apps" / "egress" / "boss_egress" / "connect.py").read_text()
 
 
 def test_a_run_reaches_modules_only_through_the_proxy_with_caches_under_home(tmp_path, go_on):
@@ -312,6 +386,8 @@ def test_a_run_reaches_modules_only_through_the_proxy_with_caches_under_home(tmp
     assert env["GOPROXY"] == "https://proxy.golang.org"          # no `,direct`
     assert env["GOSUMDB"] == "sum.golang.org"
     assert env["GOTOOLCHAIN"] == "local" and env["GOFLAGS"] == "-modcacherw"
+    for name in ("GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GONOSUMCHECK", "GOINSECURE"):
+        assert env[name] == "", name                          # nothing skips proxy or sumdb
     home = str(tmp_path / "home")
     assert env["GOMODCACHE"] == f"{home}/go/pkg/mod" and env["GOCACHE"] == f"{home}/.cache/go-build"
     cached = {name: rel for name, rel, tool in toolchains.CACHE_DIRS if tool == "go"}
@@ -324,7 +400,8 @@ def test_no_go_environment_without_go(tmp_path, go_off):
 
 def test_the_sandbox_identity_hands_the_go_environment_to_every_process():
     text = (ROOT / "engine" / "boss_engine" / "services" / "sandbox_identity.py").read_text()
-    assert "out.update(toolchains.sandbox_env(home))" in text
+    block = text[text.index("out.update(toolchains.sandbox_env(home))") - 200:][:500]
+    assert "except Exception as exc" in block and "log.warning(" in block   # never silent
 
 
 def test_go_caches_persist_per_project_and_never_cross(tmp_path, go_on):
@@ -356,7 +433,7 @@ def test_go_caches_persist_per_project_and_never_cross(tmp_path, go_on):
     "- Clean, idiomatic Go; tests pass",
     "`go vet` must be clean",
     "and `go test ./...` clean",
-    "A golang microservice", "Build it in Go", "a Go service", "written in Go.", "go.mod at the root",
+    "A golang microservice", "Build it in Go", "a Go service", "written in Go.", "a go.mod must be at the root",
 ])
 def test_go_is_read_from_the_phrasings_a_brief_uses(text):
     assert stacks.languages_named(text) == ["go"], text
@@ -369,6 +446,50 @@ def test_go_is_read_from_the_phrasings_a_brief_uses(text):
 ])
 def test_ordinary_go_words_are_not_the_language(text):
     assert "go" not in stacks.languages_named(text), text
+
+
+@pytest.mark.parametrize("brief,source,target", [
+    ("Rewrite our Go codebase in Node", "go", "node"),
+    ("Port our Go service to Python (FastAPI)", "go", "python"),
+    ("Migrate the API from Go to Python", "go", "python"),
+    ("Port our Rails app to Python", "ruby", "python"),
+])
+def test_the_language_code_moves_away_from_is_not_requested(brief, source, target):
+    named = stacks.languages_named(brief) + stacks.unsupported_named(brief)
+    assert source not in named and target in named, named
+
+
+@pytest.mark.parametrize("brief", ["Rewrite it in Go", "Port the Node service to Go",
+                                   "Migrate the billing service to Go"])
+def test_the_language_code_moves_to_is_requested(brief):
+    assert "go" in stacks.languages_named(brief), brief
+
+
+@pytest.mark.parametrize("brief", [
+    "Rewrite our Go codebase in Node",
+    "Build a Python service. Our CLI runs `go test ./...` separately.",
+    "Port our Go service to Python (FastAPI)",
+])
+def test_go_as_a_source_or_incidental_tooling_does_not_stop_a_build(brief, go_off):
+    assert stacks.check_build(brief + "\n\n---\n\nspec").ok, brief
+    declared = (brief + "\n\n---\n\nTHE APPROVED ARCHITECTURE BELOW IS BINDING.\n"
+                "## Components\nStack: backend=python/fastapi\n")
+    assert stacks.check_build(declared).ok, brief
+
+
+@pytest.mark.parametrize("text,asks", [
+    ("Our CLI runs `go test ./...` separately.", False),
+    ("We keep a go.mod for the tools.", False),
+    ("`go vet` and `go test ./...` must pass", True),
+    ("- Clean; `go vet` and `go test ./...` clean", True),
+])
+def test_go_tooling_is_a_request_only_as_a_requirement(text, asks):
+    assert ("go" in stacks.languages_named(text)) == asks, text
+
+
+def test_a_stack_array_in_a_brief_is_read(go_on):
+    assert stacks.unsupported_named('{"stack": ["ruby", "rails", "postgres"]}') == ["ruby"]
+    assert stacks.unsupported_named('allowed: ["ruby", "rake", "bundle"]') == []
 
 
 def test_the_northgate_brief_stops_while_go_is_off(go_off):

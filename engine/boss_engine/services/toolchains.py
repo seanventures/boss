@@ -210,7 +210,16 @@ def sandbox_env(home: Path | str) -> dict[str, str]:
     home = str(home)
     return {"GOPATH": f"{home}/go", "GOMODCACHE": f"{home}/go/pkg/mod",
             "GOCACHE": f"{home}/.cache/go-build", "GOPROXY": GOPROXY, "GOSUMDB": GOSUMDB,
-            "GOTOOLCHAIN": "local", "GOTELEMETRY": "off", "GOFLAGS": "-modcacherw"}
+            "GOTOOLCHAIN": "local", "GOTELEMETRY": "off", "GOFLAGS": "-modcacherw",
+            # Nothing skips the proxy or the checksum database, whatever a project's own
+            # environment or go.work says. Empty, not unset: an empty value overrides go env -w.
+            # Not -mod=readonly: building a Go change means `go get` / `go mod tidy` updating
+            # go.mod and go.sum, and every added module is still checked against GOSUMDB.
+            **{name: "" for name in GO_PRIVATE_VARS}}
+
+
+#: The variables that would let a module skip GOPROXY or GOSUMDB (or fetch over plain HTTP).
+GO_PRIVATE_VARS = ("GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GONOSUMCHECK", "GOINSECURE")
 
 
 #: The only module source (no `,direct`: a direct fetch would go to a VCS host the egress

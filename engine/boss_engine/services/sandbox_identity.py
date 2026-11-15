@@ -188,10 +188,12 @@ class SandboxIdentity:
                     "npm_config_cache": f"{home}/.npm", "BOSS_SANDBOX_UID": str(self.uid)})
         # Opt-in toolchains' own settings (Go: its module proxy and checksum database through
         # boss-egress, its caches under this HOME so they persist per project).
-        with contextlib.suppress(Exception):
+        try:
             from . import toolchains
 
             out.update(toolchains.sandbox_env(home))
+        except Exception as exc:  # noqa: BLE001 — the image's go.env still pins proxy and sumdb
+            log.warning("toolchain environment for sandbox %s not set: %s", self.key, exc)
         for name in ("CODEX_HOME", "GROK_HOME"):
             if name in out:
                 out[name] = f"{home}/.{name.split('_')[0].lower()}"
