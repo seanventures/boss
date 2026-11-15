@@ -327,7 +327,6 @@ func (a *Agent) startVM(ctx context.Context, dv hostapi.DesiredVM, prior *vmStat
 		st.mu.Lock()
 		st.vm, st.claimStart = w.vm, claimStart
 		st.mu.Unlock()
-		a.putMetadata(ctx, st, spec)
 		a.persist(st)
 		a.attach(ctx, st)
 		return
@@ -365,7 +364,6 @@ func (a *Agent) startVM(ctx context.Context, dv hostapi.DesiredVM, prior *vmStat
 		st.tap = spec.Net.Tap
 	}
 	st.mu.Unlock()
-	a.putMetadata(ctx, st, spec)
 	a.persist(st)
 	a.attach(ctx, st)
 }
@@ -389,23 +387,6 @@ func (a *Agent) desiredOf(vmID string) hostapi.DesiredVM {
 		}
 	}
 	return hostapi.DesiredVM{}
-}
-
-// putMetadata fills a replica's MMDS with non-secret identity (LLD §3.18):
-// never a seed, a handle or a token. per_run VMs have no MMDS.
-func (a *Agent) putMetadata(ctx context.Context, st *vmState, spec vmm.Spec) {
-	md, ok := a.cfg.Manager.(vmm.Metadata)
-	if !ok || spec.Net == nil {
-		return
-	}
-	st.mu.Lock()
-	vm, dv := st.vm, st.spec
-	st.mu.Unlock()
-	data := map[string]string{"vm_id": dv.VMID, "vm_mode": dv.Mode, "vm_ip": dv.VMIP, "vip": dv.VIP,
-		"mac": netpol.MACFor(dv.VMIP), "deployment_id": dv.DeploymentID}
-	if err := md.PutMetadata(ctx, vm, data); err != nil {
-		a.logf("VM %s: mmds: %v", st.id, err)
-	}
 }
 
 // fail records a start failure and routes it through the restart policy.

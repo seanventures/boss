@@ -128,24 +128,17 @@ func TestP8aT4NoVMOriginatesAPacket(t *testing.T) {
 	}
 	t.Logf("per_run VM: interfaces=%v, egress=%v", ifs, sc)
 
-	// Positive control: rep-01 deliberately tries to get out. Under the
-	// jailer (P8b) Firecracker's MMDS answers 169.254.169.254 inside the VM
-	// with non-secret data, so that probe connects without a frame ever
-	// reaching the tap; every other probe must die at the host end.
-	mmds := os.Getenv("BOSS_E2E_JAILER_BIN") != ""
+	// Positive control: rep-01 deliberately tries to get out.
 	sc = control(t, e.mgr, "vm_01", "selfcheck_egress").Selfcheck
 	for k, v := range sc {
-		if mmds && strings.Contains(k, "169.254.169.254") && v == "CONNECTED" {
-			continue
-		}
 		if v == "CONNECTED" || v == "REPLY" || v == "RESOLVED" {
 			t.Fatalf("replica egress escaped: %s=%s", k, v)
 		}
 	}
 	time.Sleep(500 * time.Millisecond)
 	c1, _ := nc.Counters(context.Background(), netpol.TapName("vm_01"))
-	if c1.Originated == 0 || (c1.Metadata == 0) != mmds {
-		t.Fatalf("deliberate egress was not counted as expected (mmds=%v): %+v (guest saw %v)", mmds, c1, sc)
+	if c1.Originated == 0 || c1.Metadata == 0 {
+		t.Fatalf("deliberate egress was not counted: %+v (guest saw %v)", c1, sc)
 	}
 	for i := 2; i <= n; i++ {
 		c, _ := nc.Counters(context.Background(), netpol.TapName(fmt.Sprintf("vm_%02d", i)))
@@ -154,6 +147,35 @@ func TestP8aT4NoVMOriginatesAPacket(t *testing.T) {
 		}
 	}
 	t.Logf("positive control vm_01: guest=%v counters=%+v; other %d taps still 0", sc, c1, n-1)
+
+	// Second positive control on vm_02: jailed, it is a clone restored from
+	// vm_01's snapshot (uniform tap0 in its own netns); unjailed, a cold boot
+	// (replica snapshots are refused without the jailer). Either way its
+	// traffic must show on ITS OWN tap only, never on the template's.
+	if n >= 2 {
+		sc2 := control(t, e.mgr, "vm_02", "selfcheck_egress").Selfcheck
+		for k, v := range sc2 {
+			if v == "CONNECTED" || v == "REPLY" || v == "RESOLVED" {
+				t.Fatalf("restored replica egress escaped: %s=%s", k, v)
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+		c2, _ := nc.Counters(context.Background(), netpol.TapName("vm_02"))
+		if c2.Originated == 0 || c2.Metadata == 0 {
+			t.Fatalf("restored replica's egress was not counted on its own tap: %+v (guest saw %v)", c2, sc2)
+		}
+		c1b, _ := nc.Counters(context.Background(), netpol.TapName("vm_01"))
+		if c1b != c1 {
+			t.Fatalf("vm_02's traffic moved vm_01's tap counters: %+v → %+v", c1, c1b)
+		}
+		for i := 3; i <= n; i++ {
+			c, _ := nc.Counters(context.Background(), netpol.TapName(fmt.Sprintf("vm_%02d", i)))
+			if c.Originated != 0 || c.Metadata != 0 {
+				t.Fatalf("vm_%02d counters moved: %+v", i, c)
+			}
+		}
+		t.Logf("restored replica vm_02: own tap counters=%+v; vm_01's unchanged; other %d taps still 0", c2, n-2)
+	}
 }
 
 type upLog struct {

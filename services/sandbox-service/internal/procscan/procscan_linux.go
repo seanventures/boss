@@ -70,3 +70,20 @@ func UID(pid int) int {
 	}
 	return -1
 }
+
+// SeccompMode is the process's seccomp mode from /proc/<pid>/status
+// (0 none, 1 strict, 2 filter; -1 if unknown).
+func SeccompMode(pid int) int {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return -1
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "Seccomp:") {
+			if n, err := strconv.Atoi(strings.TrimSpace(line[8:])); err == nil {
+				return n
+			}
+		}
+	}
+	return -1
+}

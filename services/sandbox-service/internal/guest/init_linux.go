@@ -150,10 +150,6 @@ func ReplicaNetSetup(b *Bootstrap) error {
 	if err := netlink.RouteReplace(&netlink.Route{LinkIndex: link.Attrs().Index, Dst: gwNet, Scope: netlink.SCOPE_LINK}); err != nil {
 		return fmt.Errorf("gw route: %w", err)
 	}
-	// MMDS (169.254.169.254) is answered by Firecracker on eth0 itself; the
-	// host tap drops anything to it, so this never leaves the VM.
-	mmds := &net.IPNet{IP: net.IPv4(169, 254, 169, 254), Mask: net.CIDRMask(32, 32)}
-	_ = netlink.RouteReplace(&netlink.Route{LinkIndex: link.Attrs().Index, Dst: mmds, Scope: netlink.SCOPE_LINK})
 	if err := netlink.RouteReplace(&netlink.Route{LinkIndex: link.Attrs().Index, Gw: gw, Flags: int(netlink.FLAG_ONLINK)}); err != nil {
 		return fmt.Errorf("default route: %w", err)
 	}

@@ -8,9 +8,15 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
+
+// aclMu serializes the read-modify-write of an ACL: parallel fills grant on
+// the same shared inode, and a lost update would leave a VM with EACCES at
+// /snapshot/load.
+var aclMu sync.Mutex
 
 // POSIX ACLs let a 0600 snapshot file be read by exactly the jailer uids of
 // the VMs restored from it (LLD §3.4 S15 rule 5: files are 0600 to the owner;
@@ -122,6 +128,8 @@ func grantRead(path string, uid int) error {
 	if uid <= 0 {
 		return nil
 	}
+	aclMu.Lock()
+	defer aclMu.Unlock()
 	entries, err := readACL(path)
 	if err != nil {
 		return err
@@ -141,6 +149,8 @@ func revokeRead(path string, uid int) error {
 	if uid <= 0 {
 		return nil
 	}
+	aclMu.Lock()
+	defer aclMu.Unlock()
 	entries, err := readACL(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

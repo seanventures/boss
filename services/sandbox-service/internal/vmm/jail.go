@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -30,12 +31,19 @@ type Jailer struct {
 	NoFile            int    // default 4096
 	// NoNetns skips --netns (tests on hosts without /run/netns).
 	NoNetns bool
+
+	once sync.Once
+	mu   sync.Mutex
+	live map[int]string // uid → fcid, for VMs this process started (parallel fills)
 }
 
 // MemOverheadMiB is the cgroup memory headroom above the VM's memory.
 const MemOverheadMiB = 32
 
-func (j *Jailer) defaults() {
+// defaults fills the zero fields once (launches run in parallel).
+func (j *Jailer) defaults() { j.once.Do(j.setDefaults) }
+
+func (j *Jailer) setDefaults() {
 	if j.UIDBase <= 0 {
 		j.UIDBase = 100000
 	}
@@ -108,13 +116,24 @@ func (j *Jailer) chroot(fcid string) string {
 func (j *Jailer) jailDir(fcid string) string { return filepath.Join(j.ChrootBase, "firecracker", fcid) }
 
 // uidFor derives a stable uid from the VM id and moves past any uid another
-// jail directory already owns.
+// jail directory already owns or another in-flight launch of this process
+// has reserved. The reservation is released at Stop.
 func (j *Jailer) uidFor(fcid string) int {
 	j.defaults()
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.live == nil {
+		j.live = map[int]string{}
+	}
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(fcid))
 	start := int(h.Sum32() % uint32(j.UIDRange))
 	used := map[int]bool{}
+	for uid, owner := range j.live {
+		if owner != fcid {
+			used[uid] = true
+		}
+	}
 	if ents, err := os.ReadDir(filepath.Join(j.ChrootBase, "firecracker")); err == nil {
 		for _, e := range ents {
 			if e.Name() == fcid {
@@ -130,10 +149,21 @@ func (j *Jailer) uidFor(fcid string) int {
 	for i := 0; i < j.UIDRange; i++ {
 		uid := j.UIDBase + (start+i)%j.UIDRange
 		if !used[uid] {
+			j.live[uid] = fcid
 			return uid
 		}
 	}
 	return j.UIDBase + start
+}
+
+// release frees a uid reservation (Stop, or a failed launch).
+func (j *Jailer) release(uid int) {
+	if j == nil || uid <= 0 {
+		return
+	}
+	j.mu.Lock()
+	delete(j.live, uid)
+	j.mu.Unlock()
 }
 
 // argv builds the jailer command line. The jailer itself adds --id and

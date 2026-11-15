@@ -64,17 +64,14 @@ func (a fcAPI) createSnapshot(ctx context.Context, statePath, memPath string) er
 
 // loadSnapshot restores from the (chroot-relative) paths and resumes. The
 // memory file is mapped MAP_PRIVATE by Firecracker (File backend, not
-// shared), so clean pages are shared copy-on-write between clones.
+// shared), so clean pages are shared copy-on-write between clones. The
+// device state (including a NIC's host_dev_name) is the snapshot's:
+// Firecracker 1.10 has no network_overrides (1.12+).
 func (a fcAPI) loadSnapshot(ctx context.Context, statePath, memPath string) error {
 	return a.do(ctx, http.MethodPut, "/snapshot/load", map[string]any{
 		"snapshot_path":         statePath,
 		"mem_backend":           map[string]string{"backend_type": "File", "backend_path": memPath},
 		"enable_diff_snapshots": false, "resume_vm": true}, 60*time.Second)
-}
-
-// putMMDS replaces the MMDS data store (never persisted in a snapshot).
-func (a fcAPI) putMMDS(ctx context.Context, data map[string]string) error {
-	return a.do(ctx, http.MethodPut, "/mmds", data, 5*time.Second)
 }
 
 // ping reports whether the API socket answers.

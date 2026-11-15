@@ -5,6 +5,7 @@ package vmm
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -49,5 +50,33 @@ func TestGrantAndRevokeRead(t *testing.T) {
 	st, _ := os.Stat(path)
 	if st.Mode().Perm()&0o007 != 0 {
 		t.Fatalf("others must have no access: %o", st.Mode().Perm())
+	}
+}
+
+// Parallel grants on one shared inode (warm pool fills) must not lose
+// entries: the read-modify-write is serialized.
+func TestParallelGrantsKeepEveryEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mem")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := grantRead(path, 200000); err != nil {
+		t.Skipf("no ACL support here: %v", err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func(uid int) {
+			defer wg.Done()
+			if err := grantRead(path, uid); err != nil {
+				t.Error(err)
+			}
+		}(200001 + i)
+	}
+	wg.Wait()
+	for i := 0; i < 32; i++ {
+		if !readableBy(path, 200001+i) {
+			t.Fatalf("uid %d lost its grant", 200001+i)
+		}
 	}
 }

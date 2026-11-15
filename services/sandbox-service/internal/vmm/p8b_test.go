@@ -5,16 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
 // LLD §3.6: disk 50 MB/s and 1000 IOPS on every drive, 100 Mbit/s on the
 // replica tap; §3.4: a shared read-only base plus a per-VM overlay; §3.18:
 // MMDS V2 for replicas only.
-func TestFirecrackerConfigLimitsOverlayAndMMDS(t *testing.T) {
+func TestFirecrackerConfigLimitsOverlayNoMMDS(t *testing.T) {
 	f := &Firecracker{Kernel: "/k", Rootfs: "/base.ext4", OverlayMiB: 1024}
 	rep := f.VMConfig(Spec{VMID: "vm-1", Mode: "replica", Net: &NetAttach{Tap: "bt0123456789ab", MAC: "02:fc:0a:c8:04:07"}}, "/d")
 	drives := rep["drives"].([]map[string]any)
@@ -33,9 +35,8 @@ func TestFirecrackerConfigLimitsOverlayAndMMDS(t *testing.T) {
 			t.Fatalf("%s: %+v", k, nic[k])
 		}
 	}
-	mmds := rep["mmds-config"].(map[string]any)
-	if mmds["version"] != "V2" {
-		t.Fatalf("replica MMDS must be V2: %+v", mmds)
+	if rep["mmds-config"] != nil {
+		t.Fatal("no MMDS until a consumer and the in-guest root-only rule exist")
 	}
 	perRun := f.VMConfig(Spec{VMID: "run-1", Mode: "per_run"}, "/d")
 	if perRun["mmds-config"] != nil || perRun["network-interfaces"] != nil {
@@ -86,6 +87,49 @@ func TestJailerArgv(t *testing.T) {
 	}
 	if a < j.UIDBase || a >= j.UIDBase+j.UIDRange {
 		t.Fatalf("uid %d outside the pool", a)
+	}
+}
+
+// An unjailed replica is never snapshotted: Firecracker 1.10 restores the
+// snapshot's tap name, so a clone would open the template's tap.
+func TestUnjailedReplicaSnapshotRefused(t *testing.T) {
+	f := &Firecracker{Kernel: "/k", Rootfs: "/r", SnapDir: t.TempDir()}
+	vm := &VM{ID: "vm-1", Spec: &Spec{VMID: "vm-1", Mode: "replica", ImageDigest: "sha256:a", Net: &NetAttach{Tap: "bt0123456789ab"}}}
+	if _, err := f.Snapshot(context.Background(), vm); !errors.Is(err, ErrReplicaNeedsJail) {
+		t.Fatalf("want ErrReplicaNeedsJail, got %v", err)
+	}
+}
+
+// Parallel fills (warm pool) must never share a uid: the live set is the
+// reservation, released at stop.
+func TestJailerUIDsDistinctUnderParallelFills(t *testing.T) {
+	j := &Jailer{Bin: "/usr/bin/jailer", ChrootBase: t.TempDir(), UIDBase: 5000, UIDRange: 64}
+	var mu sync.Mutex
+	seen := map[int]string{}
+	var wg sync.WaitGroup
+	for i := 0; i < 48; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("w-%02d", i)
+			uid := j.uidFor(id)
+			mu.Lock()
+			defer mu.Unlock()
+			if other, dup := seen[uid]; dup {
+				t.Errorf("uid %d given to %s and %s", uid, other, id)
+			}
+			seen[uid] = id
+		}(i)
+	}
+	wg.Wait()
+	if len(seen) != 48 {
+		t.Fatalf("want 48 distinct uids, got %d", len(seen))
+	}
+	for uid := range seen {
+		j.release(uid)
+	}
+	if again := j.uidFor("w-00"); again < j.UIDBase || again >= j.UIDBase+j.UIDRange {
+		t.Fatalf("after release: %d", again)
 	}
 }
 

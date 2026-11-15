@@ -24,22 +24,22 @@ claimed run to the VM's **work inbox** (§4.5). VMs never poll BOSS; the per-rep
 `POST /v1/run-plane/next` is gone. The host keeps each run's token in memory and attaches it to
 that run's run-plane calls (§4.2 step 5); the guest never holds one.
 
+**1.1 (host, `p8/a-host`, review fixes 2026-11-14):** replica egress is GRE-based with exact
+per-flow reply learning and an internal-net drop (§5.1, proven in a netns lab on boss-1); the
+privileged helper takes its VM prefix and tap owner from its own flags only (§5.3); adopted VMs are
+compared with desired state and replaced on mismatch (§3.3); crashloop → one replacement →
+quarantine, and a 24 h headless cap (§3.2); stricter gateway path and header rules (§4.2).
+
 **1.1 (host, `p8/b-snapshots-jailer`, P8b-1 and P8b-8, BOSSAPP-1068/1075):** every Firecracker VM
 runs under the **jailer** (§8: chroot, a uid/gid per VM, new PID namespace, a netns per VM, cgroup v2
 `cpu.max`/`memory.max`, default seccomp, API-socket mode); `jailer_on` and `seccomp_default` are
-measured (§2.3). VMs boot from the shared read-only base plus a **per-VM overlay drive**; the first
+measured from the running processes (§2.3). VMs boot from the shared read-only base plus a **per-VM overlay drive**; the first
 VM of a shape is **snapshotted** clean and the rest are **restored** with the memory file mapped
 `MAP_PRIVATE`; **warm pools** (§3.4) serve `per_run` claims (min_warm, default 2, frozen by default)
 and keep one spare per replica shape; snapshot **hygiene** (S15) refuses to snapshot any VM that saw
 an identity, handle or run, records `clean_attested`, keeps files 0600 and collects them with their
 image digest; the bootstrap reseeds the guest RNG and clock; **rate limiters** on every drive and
 tap (§8.3). Measured on boss-1 (KVM, Firecracker v1.10.1 + jailer): see §3.4.
-
-**1.1 (host, `p8/a-host`, review fixes 2026-11-14):** replica egress is GRE-based with exact
-per-flow reply learning and an internal-net drop (§5.1, proven in a netns lab on boss-1); the
-privileged helper takes its VM prefix and tap owner from its own flags only (§5.3); adopted VMs are
-compared with desired state and replaced on mismatch (§3.3); crashloop → one replacement →
-quarantine, and a 24 h headless cap (§3.2); stricter gateway path and header rules (§4.2).
 
 ---
 
@@ -182,8 +182,10 @@ Fresh keys every time.
 - Facts are **measured**, never configured. A false fact carries its reason in `facts.reasons`.
 - `net_policy_ok` is true only on the Firecracker backend, and only while the nftables base
   table's dispatch maps and fail-closed rules are intact.
-- `seccomp_default` is true when Firecracker is live, because the host never passes
-  `--no-seccomp` or a custom filter (to Firecracker or to the jailer).
+- `seccomp_default` is **measured**: true when Firecracker is live and every running Firecracker
+  process shows `Seccomp: 2` (filter mode) in `/proc/<pid>/status`; the host never passes
+  `--no-seccomp` or a custom filter (to Firecracker or to the jailer). A VM without a filter names
+  itself in the reason.
 - `jailer_on` is true only when the jailer is configured (`BOSS_HOSTD_JAILER_BIN`), usable
   (binary present and executable, boss-hostd runs as root, cgroup v2 with the `cpu` and `memory`
   controllers) **and every running Firecracker VM of this host is inside a jail** (process scan). A
@@ -498,20 +500,31 @@ reached the guest at that point.
    depend on it (boss-1's guest kernel is 5.10). The guest also sets its clock from
    `host_time_unix_nano` when off by more than a second, and a replica re-MACs `eth0` from the
    bootstrap (the snapshot carries the template's MAC).
-4. **MMDS** is configured for replicas only (`V2`, `eth0`, `169.254.169.254`) and filled after
-   boot or restore (`PUT /mmds`, never in the snapshot) with `vm_id`, `vm_mode`, `vm_ip`, `vip`,
-   `mac`, `deployment_id`. No seed, no handle, no token. `per_run` VMs have no NIC and so no MMDS.
+4. **No MMDS** (decision 27). The bootstrap over vsock already carries every non-secret
+   identity field, nothing in the guest consumes MMDS, and the in-guest `meta skuid != 0 drop`
+   rule (LLD §3.18) does not exist yet. A guest's attempt to reach `169.254.169.254` therefore
+   leaves on the tap and is dropped and counted there (`meta_`), as in P8a. MMDS returns with a
+   consumer and that rule, V2 and non-secret only.
 5. **Files:** `mem`, `state`, `overlay.ext4` and `meta.json` are 0600, owned by boss-hostd (root).
    A restoring VM's uid is granted **read** by a POSIX ACL entry (`user:<uid>:r--`) for as long as
    it runs and revoked at stop; no group or other access ever. Clones hard-link the same inode into
    their jails and Firecracker maps it `MAP_PRIVATE`, so clean pages are shared copy-on-write. On a
    filesystem without ACLs or across filesystems the host falls back to a private sparse copy.
-6. **GC:** every `BOSS_HOSTD_SNAPSHOT_GC` sweep (1 min) deletes snapshots whose `image_digest` no
-   desired VM or pool references, once older than the grace (10 min) — event `snapshot_gc`.
+6. **GC:** a sweep every minute deletes snapshots whose `image_digest` no desired VM or pool
+   references, once older than a 10 min grace (both fixed in `hostd.Config`: `SnapshotGCEvery`,
+   `SnapshotGCGrace`; no environment variable) — event `snapshot_gc`.
+
+**Follow-up (S15 rule 2):** the "TLS key and credential clients only after the bootstrap" rule
+for `boss-runtime` is documented here and has no test yet; add one (50 clones, 50 distinct TLS
+keys) once `boss-runtime` is in the image.
 
 **Restore.** Jail prepared (kernel and base hard-linked, overlay copied sparse from the snapshot,
 `mem`/`state` linked or copied), Firecracker started with no config, `PUT /snapshot/load`
-(`mem_backend: File`, `resume_vm: true`), then the bootstrap over vsock. A restored clone keeps
+(`mem_backend: File`, `resume_vm: true`), then the bootstrap over vsock. The device state is the
+snapshot's, tap name included, and Firecracker 1.10 has no `network_overrides` (1.12+): so **a
+replica is snapshotted only under the jailer**, where every replica's guest tap is `tap0` in its own
+namespace; an unjailed replica is refused (`ErrReplicaNeedsJail`) and cold boots every time
+(decision 28). `per_run` snapshots have no NIC and restore anywhere. A restored clone keeps
 its snapshot's vsock CID (Firecracker fixes it at load; the host identifies VMs by socket, never by
 CID, and the bootstrap's `cid` is informational).
 
@@ -538,16 +551,16 @@ a pool of 10):
 
 | Measure | n | p50 | p95 | Target (LLD §4.2 T7) |
 |---|---|---|---|---|
-| Warm claim (desired VM → bootstrapped from the pool) | 50 | 81 ms | **117 ms** | < 300 ms |
-| Snapshot restore (`PUT /snapshot/load` → vsock up) | 59 | 95 ms | **115 ms** | — (LLD estimate 10–40 ms) |
-| Cold boot (jail + Firecracker → control answers) | 2 | — | **711 ms** | < 3 s |
-| Snapshot (pause, write 128 MiB + state + overlay, resume) | 2 | 378 ms | — | — |
+| Warm claim (desired VM → bootstrapped from the pool) | 50 | 89 ms | **124 ms** | < 300 ms |
+| Snapshot restore (`PUT /snapshot/load` → vsock up) | 61 | 94 ms | **127 ms** | — (LLD estimate 10–40 ms) |
+| Cold boot (jail + Firecracker → control answers) | 2 | — | **709 ms** | < 3 s |
+| Snapshot (pause, write 128 MiB + state + overlay, resume) | 2 | 370 ms | — | — |
 | Pool of 10 filled (1 cold boot + snapshot, 9 restores) | 1 | 4.0 s | — | — |
 
 P8b-T4 on the same run: 50 clones, 50 distinct RNG outputs and `vm_id`s, 49 restored (the
 first was the cold-booted template), 50 reseeded, clocks within 5 s; no run token, private key
-or join token in any jail, console log or snapshot file. Density sample: 61 jailed 128 MiB VMs
-used 1314 MiB of host RSS, 21.5 MiB per VM (memory file shared `MAP_PRIVATE`). Stopping a VM left
+or join token in any jail, console log or snapshot file. Density sample: 63 jailed 128 MiB VMs
+used 1313 MiB of host RSS, 20.8 MiB per VM (memory file shared `MAP_PRIVATE`). Stopping a VM left
 no jail, cgroup, namespace or ACL grant behind.
 
 ---
@@ -813,17 +826,16 @@ connections (§4.3). The limits are part of the VM config and so of its snapshot
 
 ### 8.4 Proven on boss-1
 
-`internal/e2e/p8b_linux_test.go` (run as root): 61 jailed VMs on one host had distinct uids,
+`internal/e2e/p8b_linux_test.go` (run as root): 63 jailed VMs on one host had distinct uids,
 `Seccomp: 2`, a new PID namespace, 0700 chroots owned by their uid, cgroup v2 limits under
 `/sys/fs/cgroup/boss-hostd/<id>` and a namespace each; a restored clone's uid was refused another
 VM's chroot, the store's `meta.json` and the host's spec record while reading only its own
 snapshot memory through the ACL; `jailer_on` and `seccomp_default` were measured true with no
 reasons; two jailed replicas served with `eth0` bridged in their namespace and the run plane
-reached over vsock. P8a-T4 re-run under the jailer (20 replicas in namespaces + 1 `per_run`):
-every tap `orig=0 meta=0` in steady state; the deliberate egress probes were dropped and counted
-on the host end, except the metadata probe, which Firecracker's MMDS now answers inside the VM
-(so it never reaches the tap). Restricting MMDS to the guest's init (`meta skuid != 0 drop`, LLD
-§3.18) is guest-image work that lands with `boss-init`..
+reached over vsock. P8a-T4 re-run jailed (20 replicas in namespaces + 1 `per_run`) and unjailed
+(plain taps): every tap `orig=0 meta=0` in steady state; the deliberate egress and metadata probes
+of the cold-booted template and of a restored replica were each dropped and counted on their own
+tap only (`orig=2 meta=1` on vm_01 and on vm_02, every other tap 0, both jailed and unjailed)..
 
 ## Decisions
 
@@ -904,6 +916,11 @@ Python control plane as it was built.
     host identifies a VM by its socket. The bootstrap carries the CID as information.
 26. **(P8b) The replica surge spare exists only on link-owning backends** (jailer + netns), where
     the link can exist before the `vm_ip` is known.
+28. **(P8b review) Replica snapshots only under the jailer.** Firecracker 1.10 restores the
+    snapshot's `host_dev_name`; without the jailer's uniform `tap0` a clone would open the template's
+    tap. `network_overrides` (Firecracker 1.12+) can lift this later.
+27. **(P8b review) No MMDS yet.** Removed until a guest consumer and the in-guest root-only rule
+    exist; the vsock bootstrap carries the same data, and the tap keeps counting metadata attempts.
 
 ## Asks for the control-plane side
 
@@ -920,6 +937,7 @@ Python control plane as it was built.
 ## Left for later P8b tickets
 
 - Signed images (two flavours) and the image roll with a canary snapshot.
+- MMDS V2 (non-secret) for replicas, with the in-guest `meta skuid != 0 drop` rule (decision 27).
 - The per-repository setup cache (S22).
 - The VIP on `tunl0` in the guest.
 - Director registration and withdraw (weight 0), with IPVS `--tun-type gre` (§5.1).

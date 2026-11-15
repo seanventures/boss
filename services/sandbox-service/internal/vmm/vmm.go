@@ -42,6 +42,10 @@ var ErrNotImplemented = errors.New("not implemented")
 // has received a handle, an identity or a run is never snapshotted.
 var ErrTainted = errors.New("snapshot refused: VM has received an identity, handle or run")
 
+// ErrReplicaNeedsJail: a replica snapshot is only taken under the jailer,
+// where every replica's guest tap has the same name (see Firecracker.Snapshot).
+var ErrReplicaNeedsJail = errors.New("replica snapshots need the jailer (uniform guest tap); unjailed replicas cold boot")
+
 // ErrNoSnapshot means no snapshot exists for the spec's shape.
 var ErrNoSnapshot = errors.New("no snapshot for this shape")
 
@@ -291,18 +295,15 @@ type Manager interface {
 	GuestListen(vm *VM, port int) (net.Listener, error)
 }
 
-// Attestor is implemented by backends that can say whether every VM runs
-// under the jailer (heartbeat fact jailer_on).
+// Attestor is implemented by backends that measure the heartbeat facts
+// jailer_on and seccomp_default from the running processes.
 type Attestor interface {
 	// JailerOn is (true, "") when the jailer is configured, usable and every
 	// running VM is jailed; otherwise (false, reason).
 	JailerOn() (bool, string)
-}
-
-// Metadata is implemented by backends with an MMDS (replicas only; V2,
-// non-secret data only: LLD §3.18).
-type Metadata interface {
-	PutMetadata(ctx context.Context, vm *VM, data map[string]string) error
+	// SeccompOn is (true, "") when every running VM is under a seccomp filter
+	// (Seccomp: 2 in /proc/<pid>/status); otherwise (false, reason).
+	SeccompOn() (bool, string)
 }
 
 func newVM(id string, pid int, dir string, adopted bool) *VM {

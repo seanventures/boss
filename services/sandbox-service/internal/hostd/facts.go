@@ -22,10 +22,19 @@ func (a *Agent) facts(ctx context.Context) hostapi.Attestation {
 		f.Reasons["kvm_live"] = "/dev/kvm not usable"
 	}
 	fc := a.cfg.Manager.Name() == "firecracker"
+	att, measured := a.cfg.Manager.(vmm.Attestor)
 	if fc {
 		if err := a.cfg.Manager.Check(); err == nil {
 			f.FirecrackerLive = true
-			f.Seccomp = true // boss-hostd never passes --no-seccomp or a custom filter
+			// Measured, not configured: every running VM must show
+			// "Seccomp: 2" (boss-hostd never passes --no-seccomp or a filter).
+			if !measured {
+				f.Reasons["seccomp_default"] = "backend cannot measure seccomp"
+			} else if on, why := att.SeccompOn(); on {
+				f.Seccomp = true
+			} else {
+				f.Reasons["seccomp_default"] = why
+			}
 		} else {
 			f.Reasons["firecracker_live"] = err.Error()
 			f.Reasons["seccomp_default"] = "firecracker not live"
@@ -34,7 +43,7 @@ func (a *Agent) facts(ctx context.Context) hostapi.Attestation {
 		f.Reasons["firecracker_live"] = "backend is " + a.cfg.Manager.Name()
 		f.Reasons["seccomp_default"] = "backend is " + a.cfg.Manager.Name()
 	}
-	if att, ok := a.cfg.Manager.(vmm.Attestor); ok && fc {
+	if measured && fc {
 		if on, why := att.JailerOn(); on {
 			f.Jailer = true
 		} else {

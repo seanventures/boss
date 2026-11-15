@@ -99,6 +99,22 @@ func (f *Firecracker) Check() error {
 	return nil
 }
 
+// SeccompOn implements Attestor: true when every running Firecracker VM of
+// this host reports "Seccomp: 2" (filter mode) in /proc/<pid>/status.
+// boss-hostd never passes --no-seccomp or a custom filter; this measures it.
+func (f *Firecracker) SeccompOn() (bool, string) {
+	vms, err := f.Scan()
+	if err != nil {
+		return false, "process scan failed: " + err.Error()
+	}
+	for _, vm := range vms {
+		if mode := procscan.SeccompMode(vm.PID); mode != 2 {
+			return false, fmt.Sprintf("VM %s runs with seccomp mode %d", vm.ID, mode)
+		}
+	}
+	return true, ""
+}
+
 // JailerOn implements Attestor: true only when the jailer is configured and
 // usable and every running Firecracker VM of this host runs inside it.
 func (f *Firecracker) JailerOn() (bool, string) {
@@ -274,10 +290,11 @@ func (f *Firecracker) config(s Spec, l layout) map[string]any {
 			"iface_id": "eth0", "guest_mac": s.Net.MAC, "host_dev_name": dev,
 			"rx_rate_limiter": netLimiter(), "tx_rate_limiter": netLimiter(),
 		}}
-		// MMDS V2, non-secret data only, replicas only (LLD §3.18). The data
-		// store is never part of a snapshot; PutMetadata fills it per VM.
-		cfg["mmds-config"] = map[string]any{"version": "V2", "network_interfaces": []string{"eth0"},
-			"ipv4_address": "169.254.169.254"}
+		// No MMDS: the bootstrap over vsock carries the same data, nothing
+		// consumes it, and the in-guest "meta skuid != 0 drop" rule does not
+		// exist yet (review of PR #112). Replicas therefore reach
+		// 169.254.169.254 only through the tap, where the host drops and
+		// counts it (meta_).
 	}
 	return cfg
 }
@@ -445,6 +462,7 @@ func (f *Firecracker) launch(ctx context.Context, s Spec, snap *SnapshotRef) (*V
 	}
 	cleanup, err := f.prepare(s, l, uid, snap)
 	if err != nil {
+		f.Jailer.release(uid)
 		return nil, err
 	}
 	var netnsPathArg string
@@ -599,6 +617,13 @@ func (f *Firecracker) Snapshot(ctx context.Context, vm *VM) (SnapshotRef, error)
 	if vm.Spec == nil {
 		return SnapshotRef{}, errors.New("snapshot: VM has no spec record")
 	}
+	if vm.Spec.Net != nil && !vm.Jailed {
+		// The snapshot bakes the NIC's host_dev_name and Firecracker 1.10 has
+		// no network_overrides at load (1.12+): a restored replica would open
+		// the template's tap. Only jailed replicas (uniform tap0 in their own
+		// netns) can be snapshotted; unjailed replicas cold boot every time.
+		return SnapshotRef{}, ErrReplicaNeedsJail
+	}
 	spec := f.shapeOf(*vm.Spec)
 	shape := spec.Shape()
 	st := f.store()
@@ -672,16 +697,6 @@ func (f *Firecracker) FindSnapshot(shape Shape) (SnapshotRef, bool) {
 func (f *Firecracker) Snapshots() []SnapshotRef             { return f.store().List() }
 func (f *Firecracker) DeleteSnapshot(ref SnapshotRef) error { return f.store().Delete(ref) }
 
-// PutMetadata fills the replica's MMDS (V2) with non-secret data. A per_run
-// VM has no NIC and so no MMDS: nothing is sent.
-func (f *Firecracker) PutMetadata(ctx context.Context, vm *VM, data map[string]string) error {
-	if vm.Spec == nil || vm.Spec.Net == nil {
-		return nil
-	}
-	l := layout{host: vm.Dir, meta: vm.Meta, jailed: vm.Jailed}
-	return fcAPI{sock: l.apiSock()}.putMMDS(ctx, data)
-}
-
 func (f *Firecracker) Stop(ctx context.Context, vm *VM) error {
 	err := stopProcess(ctx, vm, 500*time.Millisecond)
 	if err != nil {
@@ -700,6 +715,7 @@ func (f *Firecracker) Stop(ctx context.Context, vm *VM) error {
 	}
 	if vm.Jailed && f.Jailer != nil {
 		fcid := filepath.Base(filepath.Dir(vm.Dir))
+		f.Jailer.release(vm.UID)
 		if vm.Meta != "" && strings.HasPrefix(vm.Meta, f.Jailer.ChrootBase) {
 			_ = os.RemoveAll(vm.Meta)
 		}
