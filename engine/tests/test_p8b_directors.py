@@ -401,7 +401,9 @@ def test_the_wire_shape_boss_lbd_decodes(eng, world):
     assert set(d["hosts"][0]) == {"host_id", "address", "vm_prefix"}
     assert set(d["self"]) == {"id", "address", "side", "port"}
     hb = a.heartbeat(groups_master=[0]).json()
-    assert set(hb) >= {"director_id", "desired_generation", "leases", "renew", "heartbeat_seconds"}
+    assert set(hb) >= {"director_id", "desired_generation", "leases", "lease_expires", "renew",
+                       "heartbeat_ms"}
+    assert hb["lease_expires"]["0"] > 0 and hb["heartbeat_ms"] == 500
     assert uuid.UUID is not None
 
 

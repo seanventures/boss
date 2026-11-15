@@ -110,11 +110,9 @@ func (p *Programmer) SetDesired(d *hostapi.DirectorDesired) {
 			delete(p.overrides, k)
 		}
 	}
-	for k := range p.health {
-		if !live[k] {
-			delete(p.health, k)
-		}
-	}
+	// The health set is NOT pruned here: a feed that drops a member and lists
+	// it again between two checker ticks must not bring a dead VM back. The
+	// checker forgets a member only when a tick finds it gone (Checker.Tick).
 }
 
 // Push errors.

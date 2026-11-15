@@ -31,7 +31,8 @@ from sqlalchemy import text
 from . import fleet_ca
 from .core import make_id
 
-LEASE_SECONDS = 5
+LEASE_SECONDS = 2        # renewed every heartbeat (HEARTBEAT_MS): a dead holder lapses within 2 s
+HEARTBEAT_MS = 500
 GROUP_SIZE = 50          # VIPs per VRRP instance (LLD §3.14.2 "about 50")
 VRID_BASE = 1
 MAX_GROUPS = 255 - VRID_BASE
@@ -220,13 +221,18 @@ def heartbeat(connection: Any, director: fleet_ca.HostIdentity, body: dict) -> d
     connection.execute(text(
         "DELETE FROM director_leases WHERE org_id = :o AND holder = :me "
         "AND NOT (vrrp_group = ANY(:m))"), {"o": org_id, "me": director.host_id, "m": masters})
-    leases = {str(r[0]): str(r[1]) for r in connection.execute(text(
-        "SELECT vrrp_group, holder FROM director_leases WHERE org_id = :o AND expires_at > now()"),
-        {"o": org_id}).all()}
+    rows = connection.execute(text(
+        "SELECT vrrp_group, holder, expires_at FROM director_leases "
+        "WHERE org_id = :o AND expires_at > now()"), {"o": org_id}).all()
+    leases = {str(r[0]): str(r[1]) for r in rows}
+    # The expiry lets boss-lbd see a RENEWAL (an increase) — how it tells a live split-brain peer
+    # from a lease that is merely not expired yet (HOST_API.md §9.3).
+    lease_expires = {str(r[0]): int(r[2].timestamp() * 1000) for r in rows}
     renew_due = bool(row["cert_not_after"] and row["cert_not_after"] - _now() <= timedelta(
         hours=fleet_ca.HOST_CERT_HOURS * (1 - fleet_ca.RENEW_FRACTION)))
     return {"director_id": director.host_id, "desired_generation": int(row["desired_generation"]),
-            "leases": leases, "renew": renew_due, "heartbeat_seconds": 2, "status": row["status"]}
+            "leases": leases, "lease_expires": lease_expires, "renew": renew_due,
+            "heartbeat_ms": HEARTBEAT_MS, "status": row["status"]}
 
 
 def mark_unreachable(connection: Any, org_id: Optional[str] = None) -> list:

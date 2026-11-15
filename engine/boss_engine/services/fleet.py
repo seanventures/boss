@@ -278,7 +278,11 @@ def revoke(connection: Any, *, org_id: str, host_id: str, actor: str, reason: st
         "WHERE host_id = :i AND desired_state = 'running'"), {"i": host_id})
     host_event(connection, org_id=org_id, host_id=host_id, kind="revoked",
                detail={"reason": reason[:500]}, actor=actor)
-    return {"host_id": host_id, "revoked": True}
+    # The directors drop the host's route and its real servers now, not at the next reconcile.
+    from . import fleet_directors
+
+    woken = fleet_directors.bump(connection, org_id)
+    return {"host_id": host_id, "revoked": True, "directors_woken": woken}
 
 
 def set_cordon(connection: Any, *, org_id: str, host_id: str, actor: str,

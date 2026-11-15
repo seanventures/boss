@@ -261,40 +261,48 @@ echo "T13: director A /proc/net/ip_vs_stats (hex: conns pkts-in pkts-out bytes-i
 [ -n "$cps" ] && ok "T13: $cps new TLS connections/s through one director (client-bound, 1 netns client); $slab" || bad "T13: no s_time result"
 echo "director A /status: $(ip netns exec p8a curl -s http://127.0.0.1:9446/status)"
 st_a=$(ip netns exec p8a curl -s http://127.0.0.1:9446/status)
-echo "$st_a" | grep -q '"keepalived":{"0":"MASTER","1":"FAULT"}' && ok "keepalived notify → boss-lbd: A is MASTER of group 0 and FAULT for group 1 (B holds its lease), so A can never claim B's VIP" || bad "keepalived state not reported: $st_a"
+echo "$st_a" | grep -q '"keepalived":{"0":"MASTER","1":"BACKUP"}' && ok "keepalived notify → boss-lbd: A is MASTER of group 0, BACKUP of group 1 (no fault in steady state)" || bad "keepalived state not reported: $st_a"
 
-# ---- Director lease (lease file = the control plane's rules): steady state
-sleep 3
+# ---- Director lease (lease file = the control plane's rules: 2 s TTL, renewed every 0.5 s)
+sleep 2
 leases=$(cat "$LAB/leases.json" 2>/dev/null)
-echo "leases: $leases"
 echo "$leases" | grep -q '"0":{"holder":"dir_a"' && echo "$leases" | grep -q '"1":{"holder":"dir_b"' && ok "lease: A holds group 0, B holds group 1" || bad "leases: $leases"
-[ "$(cat "$LAB/B/run/track/0" 2>/dev/null)" = fault ] && [ "$(cat "$LAB/A/run/track/0" 2>/dev/null)" = ok ] && ok "lease: B tracks group 0 as fault (A holds it); A ok" || bad "track files A0=$(cat "$LAB/A/run/track/0" 2>/dev/null) B0=$(cat "$LAB/B/run/track/0" 2>/dev/null)"
+[ "$(cat "$LAB/B/run/track/0" 2>/dev/null)" = ok ] && [ "$(cat "$LAB/A/run/track/1" 2>/dev/null)" = ok ] && ok "lease: no fault in steady state (the BACKUP side of each group stays BACKUP)" || bad "track files A1=$(cat "$LAB/A/run/track/1" 2>/dev/null) B0=$(cat "$LAB/B/run/track/0" 2>/dev/null)"
 
-# ---- Split brain: B stops hearing A's VRRP adverts for 12 s. Without the lease B would turn MASTER of
-# group 0 (two MASTERs); with it B stays FAULT and never claims the VIP, and does not flap.
-m0=$(grep -c "(boss_g0) Entering MASTER" "$LAB/B/keepalived.log" || true)
-$B nft add table inet splitbrain; $B nft add chain inet splitbrain in "{ type filter hook input priority -10; }"
-$B nft add rule inet splitbrain in ip saddr 192.0.2.10 ip protocol vrrp drop
-held=0
-for i in $(seq 1 24); do $B ip -4 addr show dev eth0 | grep -q "$VIP/32" && held=$((held+1)); sleep 0.5; done
-m1=$(grep -c "(boss_g0) Entering MASTER" "$LAB/B/keepalived.log" || true)
-$B nft delete table inet splitbrain
-a17=$($A ip -4 addr show dev eth0 | grep -c "$VIP/32" || true)
-[ "$held" = 0 ] && [ "$m1" = "$m0" ] && [ "$a17" = 1 ] && ok "split brain (VRRP A→B cut 12 s): B never became MASTER of group 0 nor held $VIP (0/24 samples); A kept it" || bad "split brain: B held $VIP in $held/24 samples, MASTER entries $m0→$m1, A=$a17 ($(grep boss_g0 "$LAB/B/keepalived.log" | tail -4))"
-r=$($C curl -s -m 3 --cacert "$LAB/pki/agent-ca.pem" "https://$VIP/" || echo FAIL)
-echo "$r" | grep -q '^v[13]$' && ok "during/after the split brain $VIP still served via A: $r" || bad "after split brain: $r"
-
-# ---- Director failover: kill A's keepalived (SIGKILL: no notify) → A's lbd sees it dead, releases the
-# lease; B's fault clears, B becomes MASTER. Bound: heartbeat 2 s + rise 2 s + VRRP master-down ≈ 3.6 s.
+# ---- Director failover: SIGKILL A's keepalived, VRRP child FIRST (no priority-0 advert, no notify:
+# what a dead node looks like) → A stops renewing; B: plain VRRP master-down.
+kill -9 $(cat "$LAB/A/ka/vrrp.pid") 2>/dev/null || true
 kill -9 $(cat "$LAB/A/ka/keepalived.pid") 2>/dev/null || true
 t0=$(date +%s.%N); moved=""
-for i in $(seq 1 200); do $B ip -4 addr show dev eth0 | grep -q "$VIP/32" && { moved=$(echo "$(date +%s.%N) - $t0" | bc); break; }; sleep 0.1; done
+for i in $(seq 1 150); do $B ip -4 addr show dev eth0 | grep -q "$VIP/32" && { moved=$(echo "$(date +%s.%N) - $t0" | bc); break; }; sleep 0.05; done
 $A ip -4 addr flush dev eth0 to $VIP/32 2>/dev/null || true   # SIGKILL left A's address behind; a dead node holds nothing
-[ -n "$moved" ] && ok "director failover with the lease: A's keepalived SIGKILLed → B owns $VIP after ${moved}s" || bad "failover: B never took $VIP ($(tail -3 "$LAB/B/keepalived.log"); leases $(cat "$LAB/leases.json"))"
+[ -n "$moved" ] && ok "director failover: A's keepalived SIGKILLed → B owns $VIP after ${moved}s" || bad "failover: B never took $VIP ($(tail -3 "$LAB/B/keepalived.log"); leases $(cat "$LAB/leases.json"))"
+echo "FAILOVER_SECONDS=$moved"
 $C ip route replace $VIP/32 via 192.0.2.11 src 198.51.100.5
 r=$($C curl -s -m 3 --cacert "$LAB/pki/agent-ca.pem" "https://$VIP/" || echo FAIL)
 echo "$r" | grep -q '^v[13]$' && ok "after failover B serves $VIP: $r" || bad "after failover: $r"
-echo "leases after failover: $(cat "$LAB/leases.json")"
+sleep 1.5
+echo "$(cat "$LAB/leases.json")" | grep -q '"0":{"holder":"dir_b"' && ok "lease: B took group 0's lease after A stopped renewing" || bad "leases after failover: $(cat "$LAB/leases.json")"
+
+# ---- A comes back (nopreempt: B keeps both groups), then a SPLIT BRAIN: A stops hearing B's adverts
+# for 14 s. A turns MASTER (two MASTERs) until it sees B renew the lease after its transition, then
+# FAULT — latched while B holds the lease: no flapping, no VIP on A for the rest of the window.
+$A keepalived -f "$LAB/A/ka/keepalived.conf" -p "$LAB/A/ka/keepalived.pid" -r "$LAB/A/ka/vrrp.pid" -n -l -D -G >>"$LAB/A/keepalived.log" 2>&1 &
+sleep 5
+m0=$(grep -c "(boss_g1) Entering MASTER" "$LAB/A/keepalived.log" || true)
+$A nft add table inet splitbrain; $A nft add chain inet splitbrain in "{ type filter hook input priority -10; }"
+$A nft add rule inet splitbrain in ip saddr 192.0.2.11 ip protocol vrrp drop
+t0=$(date +%s.%N); first=""; last=""; late=0
+for i in $(seq 1 140); do
+  if $A ip -4 addr show dev eth0 | grep -q "$VIP2/32"; then
+    el=$(echo "$(date +%s.%N) - $t0" | bc); [ -z "$first" ] && first=$el; last=$el; [ "$i" -gt 100 ] && late=$((late+1)); fi
+  sleep 0.1
+done
+m1=$(grep -c "(boss_g1) Entering MASTER" "$LAB/A/keepalived.log" || true)
+$A nft delete table inet splitbrain
+echo "split brain: A held $VIP2 from ${first:-never}s to ${last:-never}s; MASTER entries on A for group 1: $m0 → $m1; A track g1=$(cat "$LAB/A/run/track/1")"
+[ "$late" = 0 ] && [ $((m1 - m0)) -le 1 ] && [ "$(cat "$LAB/A/run/track/1")" = fault ] && ok "split brain (14 s): the stray MASTER dropped $VIP2 after ${last:-0}s and stayed FAULT (latched, $((m1-m0)) MASTER entry, no flapping)" || bad "split brain: late=$late entries $m0→$m1"
+$B ip -4 addr show dev eth0 | grep -q "$VIP2/32" && ok "B kept $VIP2 throughout" || bad "B lost $VIP2"
 
 echo "lbd-netlab: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

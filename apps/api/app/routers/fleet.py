@@ -808,7 +808,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
             _fleet_fail(error)
             raise
         out["reconcile"] = fleet_scheduler.reconcile(engine, _settings())
-        run_plane.wake_desired([agent_host_id])
+        run_plane.wake_desired([agent_host_id, *out.pop("directors_woken", [])])
         return out
 
     def _cordon(agent_host_id: str, request: Request, body: ActorBody, cordoned: bool) -> dict:

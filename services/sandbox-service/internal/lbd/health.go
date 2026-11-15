@@ -3,6 +3,7 @@ package lbd
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,12 +77,19 @@ func (c *Checker) Tick(ctx context.Context) {
 		}
 	}
 	c.mu.Lock()
+	var gone []string
 	for k := range c.state {
 		if !live[k] {
 			delete(c.state, k)
+			gone = append(gone, k)
 		}
 	}
 	c.mu.Unlock()
+	for _, k := range gone {
+		if vip, vmIP, ok := strings.Cut(k, "|"); ok {
+			c.Prog.ClearHealth(vip, vmIP)
+		}
+	}
 	par := c.Parallel
 	if par <= 0 {
 		par = 64

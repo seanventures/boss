@@ -77,25 +77,95 @@ func Masters(states map[int]string) []int {
 	return out
 }
 
-// TrackDecision is the rule (review of PR #120): a group is FAULT here for
-// as long as ANOTHER live director holds its lease, whatever keepalived's
-// local state. Tracking only while MASTER flapped under a real split brain:
-// FAULT → not MASTER → fault cleared → MASTER again (with GARPs) every few
-// seconds. `groups` are every group the desired state knows; a group with
-// no lease, or our own, is ok. Leases arrive already filtered to live ones
-// (unexpired), so a dead holder's lease lapses within its TTL and the fault
-// clears by itself.
-func TrackDecision(selfID string, groups []int, leases map[string]string) map[int]bool {
-	out := map[int]bool{}
-	for _, g := range groups {
-		out[g] = false
+// LeaseInfo is one live lease: its holder and its expiry in the lease
+// store's own clock (only ever compared with itself, so director and
+// control-plane clocks never need to agree).
+type LeaseInfo struct {
+	Holder  string
+	Expires int64
+}
+
+// LeaseTracker decides each group's track file (review of PR #120, second
+// round). A director faults a group only when it is MASTER of it AND the
+// lease holder (another live director) RENEWED the lease after this node
+// became MASTER: proof that the holder is alive and also MASTER, i.e. a real
+// split brain. Once raised, the fault is LATCHED for as long as that other
+// director holds the lease, whatever the local VRRP state, so FAULT taking
+// MASTER away can never clear it and flap the group. In steady state the
+// BACKUP side is not faulted, so a failover is plain VRRP (≈ 3 s, LLD §2.14).
+//
+// "Renewed after" is decided without clocks across nodes: the first lease
+// observation whose request was SENT after the local MASTER transition is a
+// baseline; a later one with a larger expiry is a renewal after it.
+type LeaseTracker struct {
+	Self        string
+	masterSince map[int]time.Time
+	baseline    map[int]int64
+	latched     map[int]bool
+}
+
+// Observe takes one lease answer (for a request sent at sentAt, with the
+// keepalived states read just before) and returns the fault per group.
+func (t *LeaseTracker) Observe(sentAt time.Time, groups []int, states map[int]string, leases map[string]LeaseInfo) map[int]bool {
+	if t.masterSince == nil {
+		t.masterSince, t.baseline, t.latched = map[int]time.Time{}, map[int]int64{}, map[int]bool{}
 	}
-	for gs, holder := range leases {
-		g, err := strconv.Atoi(gs)
-		if err != nil {
+	for g, st := range states {
+		if st == "MASTER" {
+			if _, ok := t.masterSince[g]; !ok {
+				t.masterSince[g] = sentAt
+				delete(t.baseline, g)
+			}
+		} else {
+			delete(t.masterSince, g)
+			delete(t.baseline, g)
+		}
+	}
+	for g := range t.masterSince {
+		if states[g] != "MASTER" {
+			delete(t.masterSince, g)
+			delete(t.baseline, g)
+		}
+	}
+	all := map[int]bool{}
+	for _, g := range groups {
+		all[g] = true
+	}
+	for gs := range leases {
+		if g, err := strconv.Atoi(gs); err == nil {
+			all[g] = true
+		}
+	}
+	out := map[int]bool{}
+	for g := range all {
+		l := leases[strconv.Itoa(g)]
+		if l.Holder == "" || l.Holder == t.Self {
+			delete(t.latched, g)
+			delete(t.baseline, g)
+			out[g] = false
 			continue
 		}
-		out[g] = holder != "" && holder != selfID
+		if t.latched[g] {
+			out[g] = true
+			continue
+		}
+		since, master := t.masterSince[g]
+		if !master || sentAt.Before(since) {
+			out[g] = false
+			continue
+		}
+		b, ok := t.baseline[g]
+		if !ok {
+			t.baseline[g] = l.Expires
+			out[g] = false
+			continue
+		}
+		if l.Expires > b {
+			t.latched[g] = true
+			out[g] = true
+			continue
+		}
+		out[g] = false
 	}
 	return out
 }
@@ -130,6 +200,10 @@ func Track(stateDir string, group int) int {
 	return 0
 }
 
+// DefaultLeaseTTL matches fleet_directors.LEASE_SECONDS; the holder renews
+// every heartbeat (0.5 s), so a dead holder's lease lapses within 2 s.
+const DefaultLeaseTTL = 2 * time.Second
+
 // FileLeases is the lab's lease store (no control plane): the same rules as
 // fleet_directors.heartbeat — take a group's lease when it is free, expired
 // or ours; release our lease of a group we are no longer MASTER of — kept
@@ -145,10 +219,10 @@ type fileLease struct {
 }
 
 // Acquire renews/takes the leases of masters and answers every live holder.
-func (f FileLeases) Acquire(self string, masters []int) (map[string]string, error) {
+func (f FileLeases) Acquire(self string, masters []int) (map[string]LeaseInfo, error) {
 	ttl := f.TTL
 	if ttl <= 0 {
-		ttl = 5 * time.Second
+		ttl = DefaultLeaseTTL
 	}
 	fd, err := os.OpenFile(f.Path, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
@@ -189,10 +263,10 @@ func (f FileLeases) Acquire(self string, masters []int) (map[string]string, erro
 	if _, err := fd.Write(out); err != nil {
 		return nil, err
 	}
-	live := map[string]string{}
+	live := map[string]LeaseInfo{}
 	for k, l := range table {
 		if l.Expires >= now {
-			live[k] = l.Holder
+			live[k] = LeaseInfo{Holder: l.Holder, Expires: l.Expires}
 		}
 	}
 	return live, nil

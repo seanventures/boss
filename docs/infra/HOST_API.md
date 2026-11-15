@@ -982,19 +982,21 @@ as `master` **and** `backup` on both nodes (both carry traffic); sysctls `ip_for
    "renew": false, "heartbeat_seconds": 2}
 ```
 
-`director_leases(org_id, vrrp_group) → holder, expires_at` (5 s TTL). A heartbeat takes the lease
-of every group its keepalived reports MASTER when it is free, expired or already its own; it
-never takes another live director's; and it **releases its own lease of every group it no longer
-reports MASTER** (a dead keepalived — pid gone — reports none). `boss-lbd` writes
-`track/<group>` = `fault` for **as long as another live director holds the group's lease,
-whatever keepalived's local state** (review of PR #120: tracking only while MASTER flapped under a
-real split brain); keepalived's `vrrp_script` (`boss-lbd track --group N`, every second, `fall 2`,
-`rise 2`) keeps that instance in FAULT, so the BACKUP side of each group sits in FAULT in steady
-state and can never claim the VIP. Failover: the holder's keepalived dies → its lease is released
-at the next heartbeat (≤ 2 s; or lapses in 5 s if the whole node died) → the peer's fault clears
-(rise 2 s) → VRRP master-down (≈ 3.6 s). Measured 5.1–5.7 s on boss-1 (the LLD's 3 s was VRRP alone). **A missing lease, an unreachable control
-plane or an expired peer lease never fault** (decision 30): the lease breaks ties, it does not
-take every VIP down with Postgres.
+`director_leases(org_id, vrrp_group) → holder, expires_at` (**2 s TTL**, renewed by every heartbeat:
+**every 0.5 s**; the answer carries `lease_expires`, group → unix ms). A heartbeat takes the lease
+of every group its keepalived reports MASTER when it is free, expired or already its own; it never
+takes another live director's; it releases its own lease of every group it no longer reports
+MASTER (a dead keepalived — pid gone — reports none).
+
+`boss-lbd` faults a group (`track/<group>` = `fault`; keepalived `vrrp_script`, `fall 2`) **only on a
+real split brain**: it is MASTER of the group AND the holder (another director) **renewed the lease
+after this node became MASTER** (an expiry larger than the one seen in the first answer to a
+request sent after the transition — no cross-node clock comparison). The fault is then **latched**
+while that director holds the lease, whatever the local VRRP state, so FAULT taking MASTER away
+cannot clear it and flap the group (first review). In steady state the BACKUP side is not faulted,
+so a director failover is plain VRRP (≈ 3–4 s, LLD §2.14): a dead holder simply stops renewing. A
+split brain lasts at most ≈ 1 s (baseline + one renewal) + `fall 2` before the newcomer drops the VIP.
+After a healed split brain the latch holds until the holder's lease lapses or is released.
 
 A director silent for 10 s is marked `unreachable` by the scheduler pass; its leases lapse.
 
@@ -1051,8 +1053,8 @@ decapsulate to the VIP. Replies leave `eth0` with source = VIP (DSR).
 
 Two director namespaces (boss-lbd + keepalived 2.2.8, kernel 6.8, GRE tunnel mode), one host
 namespace with the exact `boss-hostd netpol-render` policy on three taps, three replica
-namespaces (VIP on lo, `bgre0`, a TLS server), one client. 24 checks green (2026-11-15, after the
-PR #120 review):
+namespaces (VIP on lo, `bgre0`, a TLS server), one client. 25 checks green, 3 runs (2026-11-15, after
+the second PR #120 review):
 
 | Check | Result |
 |---|---|
@@ -1060,7 +1062,7 @@ PR #120 review):
 | T2 health | replica killed → drained after 2 failed 1 s checks (≈ 2 s), deleted 2 s later; a 40-connection client loop: **0 failures** after one retry |
 | T2 push | host → both directors over mTLS, weight 0 then DELETE: **2.0–3.7 ms** round trip per director (TLS handshake included); IPVS apply on the director ≤ **0.31 ms** (`boss_lbd_withdraw_seconds_max`); a non-fleet certificate refused |
 | T13 | **~1 600 new TLS connections/s** through one director from a single client (client-bound: `openssl s_time`; IPVS counted 8 471 conns, 0 outgoing packets); `ip_vs_conn` is merged into kmalloc on 6.8 (≈ 320 B per entry → ~300 MB per million connections, as §2.8 estimated) |
-| VRRP + lease | group 0 MASTER on A, group 1 on B; each side FAULT for the other's group (lease file = the CP's rules); **split brain** (A→B adverts cut 12 s): B never MASTER of group 0, never held the VIP; A's keepalived SIGKILLed → B owns the VIP after **5.1–5.7 s** and serves it |
+| VRRP + lease | group 0 MASTER on A, group 1 on B (lease file = the CP's rules, 2 s TTL, 0.5 s renewals); **split brain** (A→B adverts cut 12 s): the stray MASTER held the VIP ≈ 2.5 s (from 3.4 s to 5.9 s), then FAULT, latched, one MASTER entry, no flapping; **failover**: A's keepalived SIGKILLed with its VRRP child first (node death) → B owns the VIP after **3.41–3.58 s** (3 runs; VRRP master-down), a keepalived stop 0.62 s |
 | Push auth | another host's replica, a director certificate, a non-fleet certificate, an unknown `vm_ip`: all `403`, IPVS unchanged |
 
 ## Decisions

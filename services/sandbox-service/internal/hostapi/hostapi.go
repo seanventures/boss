@@ -419,8 +419,11 @@ type DirectorHeartbeatResponse struct {
 	DirectorID        string            `json:"director_id"`
 	DesiredGeneration int64             `json:"desired_generation"`
 	Leases            map[string]string `json:"leases"`
-	Renew             bool              `json:"renew"`
-	HeartbeatSeconds  int               `json:"heartbeat_seconds,omitempty"`
+	// LeaseExpires: group → the lease's expiry (unix ms, the control
+	// plane's clock; compared only with itself: a renewal is an increase).
+	LeaseExpires     map[string]int64 `json:"lease_expires,omitempty"`
+	Renew            bool             `json:"renew"`
+	HeartbeatSeconds int              `json:"heartbeat_seconds,omitempty"`
 }
 
 // Endpoint keys in DesiredState.Endpoints.

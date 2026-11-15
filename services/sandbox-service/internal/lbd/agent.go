@@ -63,7 +63,7 @@ type Config struct {
 	Backend ipvs.Backend // nil = the kernel
 	Prober  Prober       // nil = GREProber
 
-	HeartbeatEvery time.Duration // 2 s
+	HeartbeatEvery time.Duration // 0.5 s (the director lease's renewal; TTL 2 s)
 	WatchWait      time.Duration // 25 s
 	ReconcileEvery time.Duration // 10 s
 	Logf           func(string, ...any)
@@ -96,7 +96,7 @@ func (c *Config) defaults() {
 		}
 	}
 	if c.HeartbeatEvery <= 0 {
-		c.HeartbeatEvery = 2 * time.Second
+		c.HeartbeatEvery = 500 * time.Millisecond
 	}
 	if c.WatchWait <= 0 {
 		c.WatchWait = 25 * time.Second
@@ -123,6 +123,7 @@ type Agent struct {
 	mu       sync.Mutex
 	desired  *hostapi.DirectorDesired
 	leases   map[string]string
+	tracker  LeaseTracker
 	lastCP   atomic.Int64
 	kick     chan struct{}
 	renewNow chan struct{}
@@ -623,6 +624,8 @@ func (a *Agent) heartbeatOnce(ctx context.Context) {
 		gen = a.desired.Generation
 	}
 	a.mu.Unlock()
+	states := a.states()
+	sentAt := time.Now()
 	hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := a.client.DirectorHeartbeat(hctx, a.ID(), hostapi.DirectorHeartbeatRequest{Address: a.cfg.Address,
@@ -635,23 +638,11 @@ func (a *Agent) heartbeatOnce(ctx context.Context) {
 		return // an unreachable control plane never faults a group (decision 30)
 	}
 	a.touchCP()
-	a.mu.Lock()
-	a.leases = resp.Leases
-	a.mu.Unlock()
-	faults := TrackDecision(a.ID(), a.groupIDs(), resp.Leases)
-	n := 0
-	for _, f := range faults {
-		if f {
-			n++
-		}
+	leases := map[string]LeaseInfo{}
+	for g, h := range resp.Leases {
+		leases[g] = LeaseInfo{Holder: h, Expires: resp.LeaseExpires[g]}
 	}
-	a.metrics.Set("boss_lbd_lease_faults", float64(n))
-	if err := WriteTrack(a.cfg.RunDir, faults); err != nil {
-		a.logf("track files: %v", err)
-	}
-	if n > 0 {
-		a.logf("lease: MASTER of %d group(s) another director holds → FAULT", n)
-	}
+	a.applyLeases(sentAt, states, leases)
 	if resp.Renew {
 		select {
 		case a.renewNow <- struct{}{}:
@@ -663,11 +654,39 @@ func (a *Agent) heartbeatOnce(ctx context.Context) {
 // masters are the groups keepalived reports MASTER — none when keepalived is
 // not running (a SIGKILLed keepalived never writes STOP; its stale MASTER
 // files must not keep renewing leases the peer needs).
-func (a *Agent) masters() []int {
+func (a *Agent) masters() []int { return Masters(a.states()) }
+
+func (a *Agent) states() map[int]string {
 	if !a.cfg.NoKeepalived && !KeepalivedLive(a.cfg.KeepalivedPid) {
-		return nil
+		return map[int]string{}
 	}
-	return Masters(ReadStates(a.cfg.RunDir))
+	return ReadStates(a.cfg.RunDir)
+}
+
+// applyLeases runs the lease tracker and writes the track files.
+func (a *Agent) applyLeases(sentAt time.Time, states map[int]string, leases map[string]LeaseInfo) {
+	holders := map[string]string{}
+	for g, l := range leases {
+		holders[g] = l.Holder
+	}
+	a.mu.Lock()
+	a.leases = holders
+	a.tracker.Self = a.ID()
+	a.mu.Unlock()
+	faults := a.tracker.Observe(sentAt, a.groupIDs(), states, leases)
+	n := 0
+	for _, f := range faults {
+		if f {
+			n++
+		}
+	}
+	a.metrics.Set("boss_lbd_lease_faults", float64(n))
+	if err := WriteTrack(a.cfg.RunDir, faults); err != nil {
+		a.logf("track files: %v", err)
+	}
+	if n > 0 {
+		a.logf("lease: split brain on %d group(s): another live director renewed the lease after we became MASTER → FAULT", n)
+	}
 }
 
 // groupIDs are the VRRP groups of the current desired state.
@@ -692,27 +711,17 @@ func (a *Agent) labLeaseLoop(ctx context.Context) {
 	t := time.NewTicker(a.cfg.HeartbeatEvery)
 	defer t.Stop()
 	for {
-		masters := a.masters()
-		var leases map[string]string
+		states := a.states()
+		sentAt := time.Now()
+		var leases map[string]LeaseInfo
 		if a.cfg.LeaseFile != "" {
-			l, err := FileLeases{Path: a.cfg.LeaseFile}.Acquire(a.ID(), masters)
+			l, err := FileLeases{Path: a.cfg.LeaseFile}.Acquire(a.ID(), Masters(states))
 			if err != nil {
 				a.logf("lease file: %v", err)
 			}
 			leases = l
 		}
-		a.mu.Lock()
-		a.leases = leases
-		a.mu.Unlock()
-		faults := TrackDecision(a.ID(), a.groupIDs(), leases)
-		n := 0
-		for _, f := range faults {
-			if f {
-				n++
-			}
-		}
-		a.metrics.Set("boss_lbd_lease_faults", float64(n))
-		_ = WriteTrack(a.cfg.RunDir, faults)
+		a.applyLeases(sentAt, states, leases)
 		select {
 		case <-ctx.Done():
 			return
