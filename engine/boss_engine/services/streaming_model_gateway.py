@@ -1361,20 +1361,27 @@ class ModelGateway:
                     yield chunk
                 ok = True
             finally:
-                await cm.__aexit__(None, None, None)
-                usage = as_ledger_usage(reader.finish(), model=model)
-                audit.update(bytes_out=sent, duration_ms=int((time.monotonic() - started) * 1000))
-                if not ok:
-                    audit["rejected_by"] = "client_disconnected"
-                self.audit.put(audit)
-                # A stream the client abandoned WAS answered by the provider as far as it got:
-                # what was read is settled (the tokens read from the stream so far), never
-                # released as if nothing had been sent. Only an upstream error, or a stream
-                # that never produced a byte, releases the reservation.
-                await self._settle(held, usage, ok=int(status) < 400 and (ok or sent > 0),
-                                   handle=handle, status=int(status), model=model,
-                                   latency_ms=audit["duration_ms"],
-                                   error=None if ok else "client_disconnected")
+                # SHIELDED: on a real client disconnect Starlette cancels this task, and every
+                # await below would be cancelled again — the upstream left open, the budget
+                # never settled, no audit row. The close-out runs to completion regardless.
+                import anyio
+
+                with anyio.CancelScope(shield=True):
+                    await cm.__aexit__(None, None, None)
+                    usage = as_ledger_usage(reader.finish(), model=model)
+                    audit.update(bytes_out=sent,
+                                 duration_ms=int((time.monotonic() - started) * 1000))
+                    if not ok:
+                        audit["rejected_by"] = "client_disconnected"
+                    self.audit.put(audit)
+                    # A stream the client abandoned WAS answered by the provider as far as it
+                    # got: what was read is settled (the tokens read from the stream so far),
+                    # never released as if nothing had been sent. Only an upstream error, or
+                    # a stream that never produced a byte, releases the reservation.
+                    await self._settle(held, usage, ok=int(status) < 400 and (ok or sent > 0),
+                                       handle=handle, status=int(status), model=model,
+                                       latency_ms=audit["duration_ms"],
+                                       error=None if ok else "client_disconnected")
 
         return StreamingResponse(relay(), status_code=int(status), headers=passthrough)
 

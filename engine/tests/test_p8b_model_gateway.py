@@ -805,3 +805,86 @@ def test_the_pooled_client_is_one_per_process():
         assert smg._CLIENT is None
 
     asyncio.run(scenario())
+
+
+def test_a_cancelled_streaming_task_still_settles_and_audits():
+    """A real client disconnect: Starlette's StreamingResponse sees `http.disconnect` and cancels
+    the streaming task. The close-out is shielded, so the upstream is closed, the reservation is
+    settled with what was read, and the audit row is written — with awaits inside the cancelled
+    task, not a `send` that raised."""
+    class Budget:
+        def __init__(self) -> None:
+            self.settled, self.failed = [], []
+
+        def reserve(self, project_id, run_id, model):
+            return ("gate", ("r", "c"))
+
+        def settle(self, held, usage):
+            self.settled.append(dict(usage))
+
+        def fail(self, held, error):
+            self.failed.append(str(error))
+
+    class SlowUpstream(FakeUpstream):
+        """Yields the first chunks at once, then stalls so the disconnect lands mid-stream."""
+
+        @contextlib.asynccontextmanager
+        async def __call__(self, method, url, headers, body):
+            self.calls.append({"url": url})
+
+            async def gen():
+                for chunk in self.chunks[:3]:
+                    self.pulled += 1
+                    yield chunk
+                await asyncio.sleep(30)          # never reached by the client
+                yield self.chunks[3]
+
+            try:
+                yield 200, {"content-type": "text/event-stream"}, gen()
+            finally:
+                self.closed = True
+
+    chunks = [b'data: {"type":"message_start","message":{"usage":{"input_tokens":21}}}\n\n',
+              b"data: {}\n\n", b"data: {}\n\n", b'data: {"type":"message_delta","usage":{"output_tokens":9}}\n\n']
+    up = SlowUpstream(chunks)
+    budget, audit = Budget(), FakeAudit()
+    app = _app(_gateway(up, budget=budget, audit=audit))
+
+    async def disconnect_mid_stream():
+        body = json.dumps({"model": "m"}).encode()
+        scope = {"type": "http", "http_version": "1.1", "method": "POST", "scheme": "http",
+                 "path": "/anthropic/v1/messages", "raw_path": b"/anthropic/v1/messages",
+                 "query_string": b"", "root_path": "", "server": ("test", 80),
+                 "client": ("127.0.0.1", 1), "headers": [
+                     (k.encode(), v.encode()) for k, v in {
+                         **HOST_HEADERS, smg.HANDLE_HEADER: HANDLE,
+                         "content-type": "application/json",
+                         "content-length": str(len(body))}.items()]}
+        got: list = []
+        three = asyncio.Event()
+        state = {"body": False}
+
+        async def receive():
+            if not state["body"]:
+                state["body"] = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await three.wait()                   # the client hangs up after three chunks
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and message.get("body"):
+                got.append(message["body"])
+                if len(got) == 3:
+                    three.set()
+
+        await asyncio.wait_for(app(scope, receive, send), 10)
+        return got
+
+    got = asyncio.run(disconnect_mid_stream())
+    assert len(got) == 3
+    assert up.closed, "the upstream was closed although the task was cancelled"
+    assert budget.failed == [] and len(budget.settled) == 1
+    assert budget.settled[0]["prompt_tokens"] == 21 and budget.settled[0]["completion_tokens"] == 0
+    row = audit.rows[-1]
+    assert row["verdict"] == "allow" and row["rejected_by"] == "client_disconnected"
+    assert row["bytes_out"] == sum(len(c) for c in chunks[:3])
