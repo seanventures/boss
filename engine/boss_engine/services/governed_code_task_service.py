@@ -7435,6 +7435,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         test_arbitrations: list[dict] = []  # CODE_WRONG/TEST_WRONG rulings on failing tests
 
+        # The arbiter runs when implement tests fail, before `if do_review` assigns the
+        # review clone. Until then the tree under test is `root`. Leaving this unbound was
+        # a NameError on every failing implement, so the arbiter never ruled and never
+        # failed closed (BOSSAPP-967). The review block below rebinds it when it exists.
+        review_root = root
+
         def _arbitrate_tests(test_output: str, round_i) -> str:
             """TEST ARBITRATION: before an implementer chases the oracle, establish that the
             oracle is right. An over-specified test is unsatisfiable, and every round spent
