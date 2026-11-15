@@ -63,7 +63,12 @@ PROFILES = {
 SCENARIOS: dict[str, dict[str, Any]] = {
     "clean": {"faults": "", "final": "completed", "pr": True, "fix_round": False,
               "stages": ["write_tests", "implement", "review_code", "security_check",
-                         "consistency_check", "check_tests"]},
+                         "consistency_check", "check_tests", "acceptance_check"]},
+    # The acceptance check (acceptance_gate.py) finds a must-have missing once: a fact, so the
+    # warm fix round delivers it and the whole-branch check re-runs and passes.
+    "acceptance_missing": {"faults": "acceptance_missing", "final": "completed", "pr": True,
+                           "fix_round": True,
+                           "stages": ["write_tests", "implement", "acceptance_check"]},
     "failing_test": {"faults": "failing_test", "final": "completed", "pr": True,
                      "fix_round": True,
                      "stages": ["write_tests", "implement", "review_code"]},

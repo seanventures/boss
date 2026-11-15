@@ -54,6 +54,8 @@ SEAT_OF_GATE: dict[str, tuple[str, str]] = {
     "security_clean": ("security_check", "security_summary"),
     "code_review_passed": ("review_code", "review_summary"),
     "consistent": ("consistency_check", "consistency_summary"),
+    # The acceptance check (acceptance_gate.py): each missing must-have as a FINDING line.
+    "acceptance_met": ("acceptance_check", "acceptance_summary"),
 }
 #: The gates that never open a pull request past themselves (see the module docstring).
 HELD_GATES = frozenset({"template_tests", "no_committed_secrets"})

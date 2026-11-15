@@ -485,9 +485,16 @@ def directive(words: str, brief: Optional[Mapping[str, Any]]) -> str:
         lines.append("Open questions:")
         lines += [f"- {q}" for q in open_q]
         lines.append("")
+    head = "\n".join(lines).strip()
     if words:
-        lines += ["In the person's words:", words]
-    return "\n".join(lines).strip()
+        # THE BRIEF IS NEVER CUT (BOSSAPP-1212): only the quoted words give way to the cap.
+        from .add_project import MAX_DIRECTIVE
+
+        room = MAX_DIRECTIVE - len(head) - len("\n\nIn the person's words:\n")
+        if room > 200:
+            quoted = words if len(words) <= room else words[:room - 2].rstrip() + " …"
+            head = f"{head}\n\nIn the person's words:\n{quoted}"
+    return head
 
 
 __all__ = ["BRIEF_SCHEMA", "MAX_OWN_QUESTIONS", "PRIORITIES", "code_area", "directive",

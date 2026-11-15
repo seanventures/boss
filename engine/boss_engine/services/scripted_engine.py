@@ -19,6 +19,7 @@ engine's telemetry is):
     review_code                        a verdict naming the changed files (or a BLOCKER finding)
     security_check                     VERDICT: CLEAN
     consistency_check                  CONSISTENT: YES
+    acceptance_check                   every item MET, the fixture's files as evidence
     check_tests                        the arbiter: CODE_WRONG (the probe's plant is
                                        deterministic since BOSSAPP-1004 — no model call)
     rule_scan                          one rule on the first symbol listed (rule_scan.scripted_reply)
@@ -35,6 +36,7 @@ turn, to exercise the fix rounds:
                     on any other fixture, the first changed .js/.mjs/.py module fails to import)
     blocker         the first review_code answers with a BLOCKER finding
     crash_on_start  the first implement writes a server that exits on start
+    acceptance_missing  the first acceptance check answers item 1 MISSING
     crash           every session raises (an engine that cannot run at all)
 
 SELF-FIX STAGES (`self_fix_*`, BOSSAPP-571) play the scripts of self_fix_scripts.py, chosen by
@@ -58,6 +60,8 @@ from .engine_contract import EngineCapabilities
 from .workspace_perms import tidies_workspace
 
 ENGINE = "scripted"
+#: What the `acceptance_missing` fault's fix round writes: the "missing must-have", delivered.
+ACCEPTANCE_MARKER = "src/acceptance-delivered.js"
 MODEL = "scripted-v1"
 
 _DEFAULT_FIXTURE = (Path(__file__).resolve().parents[3] / "tests" / "e2e" / "fixtures"
@@ -329,6 +333,23 @@ class ScriptedEngine:
             return (f"{', '.join(sorted(impl))} and {', '.join(sorted(tests))} agree with the "
                     "criteria.\nCONSISTENT: YES")
 
+        if stage == "acceptance_check" or "ACCEPTANCE REVIEWER" in text:
+            # The acceptance check (acceptance_gate.py): every item MET with the fixture's files
+            # as evidence. The `acceptance_missing` fault answers item 1 MISSING until a writing
+            # turn told the must-haves were not delivered has written ACCEPTANCE_MARKER — so a
+            # pass proves the fix round DELIVERED it, not that the fault ran out.
+            evidence = ", ".join(p for p in sorted(impl) if (root / p).exists()) or "the tree"
+            lines = []
+            delivered = (root / (prefix + ACCEPTANCE_MARKER)).exists()
+            for n in re.findall(r"(?m)^ITEM (\d+) \[", text):
+                if "acceptance_missing" in self.faults and n == "1" and not delivered:
+                    state.fired.add("acceptance_missing")
+                    lines.append(f"ITEM {n}: MISSING — looked through {evidence}; nothing "
+                                 "implements it (scripted fault: acceptance_missing)")
+                else:
+                    lines.append(f"ITEM {n}: MET — {evidence}")
+            missing = any(": MISSING" in ln for ln in lines)
+            return ("\n".join(lines) + "\nACCEPTANCE: " + ("NOT MET" if missing else "MET")), written
         if stage == "review_panel" or "=== CODE REVIEW ===" in text:
             # The merged panel session (BOSSAPP-1000): one marked section per seat the prompt
             # asked for, each closing with its own seat's verdict line.
@@ -349,6 +370,10 @@ class ScriptedEngine:
         if read_only:
             return f"Read {', '.join(sorted(impl))}. Nothing further.", written
         # A writing stage: implement, solo, repair, quality, a fix round, an install fix.
+        if "MUST-HAVES NOT DELIVERED" in text and "acceptance_missing" in self.faults:
+            # The fix round for the acceptance check delivers the missing must-have.
+            self._write(root, prefix + ACCEPTANCE_MARKER,
+                        "export const delivered = true;\n", turns, written)
         broken = self._generic_failing_test(root, impl, state)
         for rel, body in impl.items():
             if rel == broken:
@@ -411,6 +436,7 @@ def _stage_from_prompt(prompt: str) -> str:
     text = prompt or ""
     for marker, stage in (("QA engineer", "write_tests"), ("security reviewer", "security_check"),
                           ("internal consistency", "consistency_check"),
+                          ("ACCEPTANCE REVIEWER", "acceptance_check"),
                           ("design reviewer", "review_plan"), ("Mutation testing", "check_tests")):
         if marker in text:
             return stage
