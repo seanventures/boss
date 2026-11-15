@@ -203,7 +203,24 @@ def grant_repos(grant: Optional[DelegationGrant]) -> frozenset[str]:
 
 # ---- create ------------------------------------------------------------------------------------------
 
-def _validate_local(resources: Mapping[str, Any]) -> dict[str, Any]:
+def local_repo_registered(db: Any, project_id: str, full_name: str) -> bool:
+    """Is `full_name` a repository on this machine registered (an active local binding) to the
+    project? No bindings table, no registration."""
+    from sqlalchemy import text
+
+    if db is None or not db.execute(text("SELECT to_regclass('github_repository_bindings') IS NOT NULL")).scalar():
+        return False
+    return bool(db.execute(text(
+        "SELECT 1 FROM github_repository_bindings WHERE project_id = :p AND host = 'local' "
+        "AND COALESCE(status, 'active') = 'active' AND lower(full_name) = lower(:f) LIMIT 1"),
+        {"p": project_id, "f": full_name}).first())
+
+
+def _validate_local(resources: Mapping[str, Any], project_ids: Iterable[str] = (), *,
+                    db: Any = None) -> dict[str, Any]:
+    """`resources.local`: only repositories ON THIS MACHINE, each belonging to one of the grant's
+    own projects (`local_<project>/…`, local_repo.project_of) AND registered there — a grant for
+    project A never names project B's code, whatever a request or a workflow's input says."""
     loc = resources.get("local")
     if loc is None:
         return {}
@@ -213,6 +230,15 @@ def _validate_local(resources: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(repos, list) or not all(isinstance(r, str) and REPO_PATTERN.match(r) and is_local_repo(r)
                                               for r in repos):
         raise GrantRefused("bad_repos", 422, {"resource": "local"})
+    from ..services.local_repo import project_of
+
+    projects = set(project_ids)
+    for repo in repos:
+        project = project_of(repo.split("/", 1)[0])
+        if project not in projects:
+            raise GrantRefused("repo_outside_projects", 403, {"repo": repo, "project": project})
+        if not local_repo_registered(db, project, repo):
+            raise GrantRefused("repo_not_registered", 403, {"repo": repo, "project": project})
     return {"repos": sorted(set(repos))}
 
 
@@ -225,6 +251,10 @@ def _validate_github(resources: Mapping[str, Any]) -> dict[str, Any]:
     repos = gh.get("repos") or []
     if not isinstance(repos, list) or not all(isinstance(r, str) and REPO_PATTERN.match(r) for r in repos):
         raise GrantRefused("bad_repos", 422)
+    if any(is_local_repo(r) for r in repos):
+        # A repository on this machine is granted as `local`, with its project checked
+        # (_validate_local) — never smuggled in as GitHub access.
+        raise GrantRefused("bad_repos", 422, {"resource": "github", "reason": "local_repo_in_github"})
     out: dict[str, Any] = {"repos": sorted(set(repos))}
     for key, value in gh.items():
         if key in ("repos",):
@@ -414,7 +444,7 @@ def create_grant(ctx: AuthContext, request: GrantRequest, *, db: Any) -> Delegat
     if gh:
         resources["github"] = gh
         check_user_repo_access(person.org_id, person.id, gh, db=db)
-    loc = _validate_local(resources)
+    loc = _validate_local(resources, request.project_ids, db=db)
     if loc:
         resources["local"] = loc
     elif "local" in resources:

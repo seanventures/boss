@@ -128,16 +128,7 @@ describe("a 409 consent_required from a server action is a question, not a failu
     expect(action).toHaveBeenCalledTimes(1);
     expect(tid("action-form-error")?.textContent).toBe("Needs your consent");
   });
-
-  it("the dock keeps an offer standing while consent is still the question", () => {
-    const DOCK = codeOnly("app/agent-ui.tsx");
-    const accept = DOCK.slice(DOCK.indexOf("const acceptAction = useCallback"), DOCK.indexOf("const confirmPlan = useCallback"));
-    const guard = accept.indexOf("const stillAsking");
-    expect(guard).toBeGreaterThan(accept.indexOf("await withConsentResult(press)"));
-    expect(guard).toBeLessThan(accept.indexOf("setProposed((list) => list.filter"));
-    expect(guard).toBeLessThan(accept.indexOf("runTurn(fd)"));
-    expect(accept.slice(guard)).toMatch(/if \(stillAsking\) \{[\s\S]*?return;\s*\}/);
-  });
+  // The dock's offer that needs consent: rendered in tests/the-dock-keeps-an-offer-that-needs-consent.test.tsx.
 });
 
 describe("Let an agent act for me lists a project's repository on this machine", () => {

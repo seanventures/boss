@@ -62,8 +62,9 @@ def _owner(world):
 APP_V1 = "".join(f"line {i}\n" for i in range(1, 11))
 
 
-def _local_project_with_change(engine, world):
-    """A fresh local-first project with the builder in its roster, a build's branch with two
+def _local_project_with_change(engine, world, *, roster: bool = True):
+    """A fresh local-first project (with the builder in its roster unless `roster=False`: an agent sits
+    in one roster only), a build's branch with two
     commits, its open change set #1 and the pending merge decision."""
     from boss_engine.services.core import create_blocking_decision
 
@@ -73,9 +74,13 @@ def _local_project_with_change(engine, world):
                         {"p": world.project_a}).scalar()
         db.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES (:id, :ws, :n, :id)"),
                    {"id": pid, "ws": ws, "n": f"Desk {pid[-4:]}"})
-        db.execute(text("INSERT INTO roles (id, project_id, role_key, display_name, agent_id) VALUES "
-                        "(:id, :p, 'forge', 'Software Engineer', :a)"),
-                   {"id": f"role_{uuid.uuid4().hex[:8]}", "p": pid, "a": world.builder.id})
+        if roster:
+            # Its own Software Engineer: roles.agent_id is unique, and roles outlive a test.
+            world.builder = world.agent(f"forge-{pid[-6:]}", sponsor=world.owner,
+                                        ceiling=tuple(sorted(consent.CODE_TASK_PERMISSIONS | {"code_task:create"})))
+            db.execute(text("INSERT INTO roles (id, project_id, role_key, display_name, agent_id) VALUES "
+                            "(:id, :p, 'forge', 'Software Engineer', :a)"),
+                       {"id": f"role_{uuid.uuid4().hex[:8]}", "p": pid, "a": world.builder.id})
         bound = local_projects.create_for_project(db, get_settings(), pid, name="desk", actor="t")
     bare = local_repo.bare_path(bound["owner"], bound["repo"])
     local_repo.commit_files(bare, "main", {"src/app.js": APP_V1}, "base files")
@@ -148,3 +153,110 @@ def test_request_changes_on_a_local_project_asks_for_the_local_repository_and_th
                           {"p": pid}).scalar()
     assert status == "revision_requested" and fix and fix != run_id and jobs >= 1
     assert (spec["owner"], spec["repo"]) == tuple(local_name.split("/"))
+
+
+# ── a grant never names another project's code (review of PR #115, finding 1) ─────────────────
+
+def test_a_grant_for_project_a_naming_project_bs_local_repository_is_refused(client, world, engine, repo_root):
+    a, a_repo, _r, _d = _local_project_with_change(engine, world)
+    b, b_repo, _r2, _d2 = _local_project_with_change(engine, world, roster=False)
+    base = {"agents": [world.builder.id], "permissions": ["code_task:read"], "projects": [a],
+            "kind": "standing", "days": 30, "purpose": "Build in A"}
+    with _owner(world):
+        foreign = client.post("/v1/identity/me/delegations", json={**base, "local": {"repos": [b_repo]}}, headers=H)
+        ghost = client.post("/v1/identity/me/delegations",
+                            json={**base, "local": {"repos": [f"local_{a}/ghost"]}}, headers=H)
+        smuggled = client.post("/v1/identity/me/delegations",
+                               json={**base, "github": {"repos": [b_repo], "contents": "write"}}, headers=H)
+        own = client.post("/v1/identity/me/delegations", json={**base, "local": {"repos": [a_repo]}}, headers=H)
+    assert foreign.status_code == 403 and foreign.json()["error"] == "repo_outside_projects", foreign.text
+    assert foreign.json()["repo"] == b_repo and foreign.json()["project"] == b
+    assert ghost.status_code == 403 and ghost.json()["error"] == "repo_not_registered", ghost.text
+    assert smuggled.status_code == 422 and smuggled.json()["error"] == "bad_repos", smuggled.text
+    assert own.status_code == 201 and own.json()["local"] == {"repos": [a_repo]}, own.text
+    with engine.connect() as db:
+        named = db.execute(text("SELECT count(*) FROM identity_delegation_grants WHERE user_principal_id = :u "
+                                "AND resources::text LIKE :b"), {"u": world.owner.id, "b": f"%{b_repo}%"}).scalar()
+    assert named == 0
+
+
+# ── existing standing grants are backfilled, so schedules keep running (finding 2) ────────────
+
+def _migration_sql() -> str:
+    """The backfill exactly as it ships in db/schema.sql (ensure_schema runs it on every deploy)."""
+    from pathlib import Path
+
+    sql = (Path(__file__).resolve().parents[3] / "db" / "schema.sql").read_text(encoding="utf-8")
+    start = sql.index("-- ================================ BOSSAPP-1163:")
+    end = sql.index("-- ================================ end BOSSAPP-1163 ==")
+    return sql[sql.index("DO $$", start):end].strip()
+
+
+def _grant_row(engine, world, *, project: str, permissions, agents, task_run_id=None, resources="{}") -> str:
+    gid = f"dlg_{uuid.uuid4().hex[:12]}"
+    with engine.begin() as db:
+        db.execute(text(
+            "INSERT INTO identity_delegation_grants (id, org_id, user_principal_id, agent_ids, project_ids, "
+            "resources, status, task_run_id, expires_at) VALUES (:g, :o, :u, :a, :p, CAST(:r AS JSONB), 'active', "
+            ":t, now() + interval '30 days')"),
+            {"g": gid, "o": world.org, "u": world.owner.id, "a": list(agents), "p": [project],
+             "r": resources, "t": task_run_id})
+        for key in permissions:
+            db.execute(text("INSERT INTO identity_delegation_grant_permissions (grant_id, permission_key) "
+                            "VALUES (:g, :k)"), {"g": gid, "k": key})
+    return gid
+
+
+def test_a_schedule_on_a_local_project_keeps_running_after_the_backfill(world, engine, repo_root):
+    from boss_engine.identity import catalogue, grants, lineage
+    from boss_engine.identity.lineage import Acting
+
+    pid, local_name, _r, _d = _local_project_with_change(engine, world)
+    other, other_name, _r2, _d2 = _local_project_with_change(engine, world, roster=False)
+    spec = {"steps": [{"id": "build", "kind": "code_task", "binding": {}}]}
+    with engine.begin() as db:
+        role_keys, needed, repos = consent.workflow_needs(db, pid, spec, {})
+    agents = [world.builder.id]
+    for rk in role_keys:                                       # every agent the schedule's run uses
+        if rk == "forge":
+            continue
+        extra = world.agent(f"{rk}-{uuid.uuid4().hex[:4]}", sponsor=world.owner)
+        agents.append(extra.id)
+        with engine.begin() as db:
+            db.execute(text("INSERT INTO roles (id, project_id, role_key, display_name, agent_id) VALUES "
+                            "(:id, :p, :k, :k, :a)"),
+                       {"id": f"role_{uuid.uuid4().hex[:8]}", "p": pid, "k": rk, "a": extra.id})
+    assert repos == [local_name]
+    perms = sorted(k for k in needed if catalogue.is_known(k) and catalogue.meta(k).delegable)
+    # The schedule's standing grant, made before grants named local repositories: none named.
+    schedule_grant = _grant_row(engine, world, project=pid, permissions=perms, agents=agents)
+    task_grant = _grant_row(engine, world, project=pid, permissions=perms, agents=agents,
+                            task_run_id="run_ct:crun_old")
+    other_grant = _grant_row(engine, world, project=other, permissions=perms, agents=agents)
+
+    def fire():
+        with engine.begin() as db, lineage.acting(Acting(principal_id=world.owner.id, org_id=world.org,
+                                                         grant_id=schedule_grant)):
+            return consent.require_for_workflow(db, project_id=pid, spec=spec, input_data={},
+                                                run_id=f"wfr_{uuid.uuid4().hex[:8]}")
+
+    with pytest.raises(consent.AuthorityLost) as lost:
+        fire()                                                 # the defect the backfill repairs
+    assert lost.value.reason == "grant_no_longer_covers"
+
+    with engine.begin() as db:
+        db.exec_driver_sql(_migration_sql())
+    acting = fire()
+    assert acting is not None and acting.grant_id == schedule_grant
+
+    def resources():
+        with engine.connect() as db:
+            return {g: grants.load(g, db=db).resources for g in (schedule_grant, task_grant, other_grant)}
+
+    after = resources()
+    assert after[schedule_grant]["local"] == {"repos": [local_name]}, "its own project's repository only"
+    assert after[other_grant]["local"] == {"repos": [other_name]}
+    assert "local" not in after[task_grant], "a task grant ends with its run: never widened"
+    with engine.begin() as db:
+        db.exec_driver_sql(_migration_sql())                   # every deploy runs it: idempotent
+    assert resources() == after

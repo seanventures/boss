@@ -81,14 +81,31 @@ def test_a_workflow_that_builds_in_a_local_repository_names_it(monkeypatch):
 
 # ---- the grant stores it, covers reads it ---------------------------------------------------------
 
-def test_validate_local_takes_only_repositories_on_this_machine():
-    assert grants._validate_local({}) == {}
-    assert grants._validate_local({"local": {"repos": [LOCAL, LOCAL]}}) == {"repos": [LOCAL]}
+def test_validate_local_takes_only_this_projects_registered_repositories(monkeypatch):
+    registered = {(PROJECT, LOCAL)}
+    monkeypatch.setattr(grants, "local_repo_registered", lambda db, p, f: (p, f) in registered)
+    assert grants._validate_local({}, [PROJECT]) == {}
+    assert grants._validate_local({"local": {"repos": [LOCAL, LOCAL]}}, [PROJECT]) == {"repos": [LOCAL]}
     with pytest.raises(grants.GrantRefused) as refused:
-        grants._validate_local({"local": {"repos": ["acme/web"]}})
+        grants._validate_local({"local": {"repos": ["acme/web"]}}, [PROJECT])
     assert refused.value.code == "bad_repos" and refused.value.status == 422
     with pytest.raises(grants.GrantRefused):
-        grants._validate_local({"local": ["x"]})
+        grants._validate_local({"local": ["x"]}, [PROJECT])
+    # A grant for project A never names project B's code (review of PR #115).
+    with pytest.raises(grants.GrantRefused) as other:
+        grants._validate_local({"local": {"repos": ["local_prj_other/x"]}}, [PROJECT])
+    assert other.value.code == "repo_outside_projects" and other.value.detail["project"] == "prj_other"
+    # ...nor a name in its own project that is not registered there.
+    with pytest.raises(grants.GrantRefused) as ghost:
+        grants._validate_local({"local": {"repos": [f"local_{PROJECT}/ghost"]}}, [PROJECT])
+    assert ghost.value.code == "repo_not_registered"
+
+
+def test_validate_github_refuses_a_repository_on_this_machine():
+    with pytest.raises(grants.GrantRefused) as refused:
+        grants._validate_github({"github": {"repos": [LOCAL], "contents": "write"}})
+    assert refused.value.code == "bad_repos" and refused.value.detail["reason"] == "local_repo_in_github"
+    assert grants._validate_github({"github": {"repos": ["acme/web"], "contents": "write"}})["repos"] == ["acme/web"]
 
 
 def test_covers_reads_the_local_block_and_the_union():
