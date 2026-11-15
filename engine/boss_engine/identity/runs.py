@@ -131,6 +131,19 @@ def start_run(ctx: AuthContext, start: RunStart, *, grant_id: Optional[str], db:
         shim = Shim(run_id=start.run_id, key=None, host_jkt=jkt)
     else:
         shim = Shim(run_id=start.run_id)
+    if start.bitbucket_repos:
+        # A payload or a deployment's metadata NAMES Bitbucket repositories; only the ones the
+        # registry and the run's grants allow enter the token (identity/repo_scope.py), exactly as
+        # GitHub's are judged at its mint. The rest are `repo_outside_run` at egress.
+        from dataclasses import replace
+
+        from . import grants, repo_scope
+        from .principal import PrincipalKind
+
+        start = replace(start, bitbucket_repos=repo_scope.granted(
+            db, provider=repo_scope.BITBUCKET, org_id=ctx.principal.org_id, run_id=start.run_id,
+            grant=grants.load(grant_id, db=db), obo=ctx.principal.kind == PrincipalKind.USER,
+            repos=start.bitbucket_repos))
     task = _task(start)
     agent = AgentInstance(start.agent_id, start.run_id)
     auds = list(audiences) + ([AUD_EGRESS] if start.repos and AUD_EGRESS not in audiences else [])

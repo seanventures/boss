@@ -917,7 +917,14 @@ never a body, query or token.
 **The run's git scope** is the token's, not the handle's: `POST /v1/run-plane/runs/{run}/tokens`
 mints the `boss:egress` token with `repos`, `bitbucket_repos` and `github_needs` from the job's
 payload, else the deployment's `metadata` (`run_plane.run_git_scope`). Nothing named → nothing
-reachable. The handle is minted with the run's lease (`run_plane._guest_handles`, `handles.egr`,
+reachable. What is named is a request, not authority: one check for every provider
+(`identity/repo_scope.py`) keeps only the repositories the registry and the run's grants allow —
+GitHub at each installation-token mint (registry, change-set grant, the person's grant), Bitbucket
+when the token is minted (`runs.start_run`) and again at every egress request. Bitbucket's
+registry is the install's registered repositories (`BOSS_TARGET_BITBUCKET_WORKSPACE` /
+`BOSS_TARGET_BITBUCKET_REPO`, `BOSS_BITBUCKET_REPOS`), **fail closed** when none is registered,
+since the install-wide credential reaches the whole workspace; on someone's behalf the repository
+must also be in their grant's `resources.bitbucket.repos`. Anything else is `repo_outside_run`. The handle is minted with the run's lease (`run_plane._guest_handles`, `handles.egr`,
 bound to the replica's VM) and revoked with it.
 
 **The local lane is unchanged**: `runs.egress_access` (the per-run shim socket, the network-bound

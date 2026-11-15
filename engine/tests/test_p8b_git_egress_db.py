@@ -228,7 +228,7 @@ def _agent_module():
 def _scope(world: World, repos: list) -> None:
     with world.eng.begin() as c:
         c.execute(text("UPDATE agent_deployments SET metadata = CAST(:m AS JSONB) WHERE id = :d"),
-                  {"m": __import__("json").dumps({"repos": repos, "bitbucket_repos": ["ws/app"],
+                  {"m": __import__("json").dumps({"repos": repos, "bitbucket_repos": ["ws/app", "ws/secret"],
                                                   "github_needs": {"contents": "write"}}),
                    "d": world.dep["id"]})
 
@@ -262,6 +262,11 @@ def rig(world, tmp_path, monkeypatch):
     run = world.work["run_id"]
     assert world.work["handles"]["egr"].startswith("boss_egr_")
     _scope(world, ["acme/web"])
+    # The install's Bitbucket registry (identity/repo_scope.py): ws/app only. The metadata ALSO
+    # names ws/secret — a request, not authority — so it never enters the run's token.
+    monkeypatch.delenv("BOSS_TARGET_BITBUCKET_WORKSPACE", raising=False)
+    monkeypatch.delenv("BOSS_TARGET_BITBUCKET_REPO", raising=False)
+    monkeypatch.setenv("BOSS_BITBUCKET_REPOS", "ws/app")
     key = dpop.DPoPKey.generate()                    # boss-hostd's per-run key, in Python
     minted = world.tokens(key.jkt)
     assert minted.status_code == 200, minted.text
@@ -283,6 +288,7 @@ def rig(world, tmp_path, monkeypatch):
     bb = hub / "ws" / "app.git"                      # the Bitbucket repository (D19)
     _git(env, tmp_path, "clone", "-q", "--bare", str(bare), str(bb))
     _git(env, tmp_path, "-C", str(bb), "config", "http.receivepack", "true")
+    _git(env, tmp_path, "clone", "-q", "--bare", str(bare), str(hub / "ws" / "secret.git"))
     monkeypatch.setenv("BOSS_BITBUCKET_TOKEN", FAKE_BITBUCKET)
     monkeypatch.setenv("BOSS_BITBUCKET_GIT_URL", "http://fakebitbucket.test")
 
@@ -495,3 +501,26 @@ def test_bitbucket_is_routed_with_the_same_rules(rig):
             "SELECT deny_reason FROM identity_egress_log WHERE run_id = :r AND provider = 'bitbucket' "
             "AND decision = 'denied'"), {"r": run}).scalars().all())
     assert {"force_push", "repo_outside_run"} <= reasons, reasons
+
+
+def test_a_bitbucket_repo_the_payload_names_but_no_grant_allows_is_refused(rig, monkeypatch):
+    """Finding 1 (PR #126): the deployment's metadata names ws/app AND ws/secret; only ws/app is
+    registered. The run's token binds ws/app alone, a clone of ws/secret is `repo_outside_run`
+    though the upstream holds it, and unregistering ws/app mid-run takes it away at egress too."""
+    payload = rig["tokens"][delegation.AUD_EGRESS]["access_token"].split(".")[1]
+    claims = __import__("json").loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    assert claims["boss_task"]["resources"].get("bitbucket") == ["ws/app"]
+    env, tmp, run = rig["env"], rig["tmp"], rig["run"]
+    before = len(rig["upstream"].seen)
+    secret = _git(env, tmp, "clone", "-q", "https://bitbucket.org/ws/secret.git", str(tmp / "bs"), ok=False)
+    assert secret.returncode != 0
+    assert len(rig["upstream"].seen) == before, "a refused repository never reaches the upstream"
+    _git(env, tmp, "clone", "-q", "https://bitbucket.org/ws/app.git", str(tmp / "ba"))
+    monkeypatch.setenv("BOSS_BITBUCKET_REPOS", "ws/elsewhere")
+    gone = _git(env, tmp, "clone", "-q", "https://bitbucket.org/ws/app.git", str(tmp / "bc"), ok=False)
+    assert gone.returncode != 0
+    with rig["world"].eng.begin() as c:
+        denied = c.execute(text(
+            "SELECT path_template, deny_reason FROM identity_egress_log WHERE run_id = :r "
+            "AND provider = 'bitbucket' AND decision = 'denied'"), {"r": run}).all()
+    assert {r[1] for r in denied} == {"repo_outside_run"}, denied

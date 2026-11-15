@@ -106,3 +106,97 @@ def test_the_guest_git_config_holds_no_credential(tmp_path, monkeypatch):
     assert helpers[0] == "" and len(helpers) == 2
     with pytest.raises(RuntimeError):
         agent.configure_git_relay({"endpoints": {"git": "http://evil.example:7102"}})
+
+
+# ---- the run's git scope, one check for every provider (PR #126 finding 1) -------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from boss_engine.identity import repo_scope  # noqa: E402
+
+
+def _grant(**resources):
+    return SimpleNamespace(resources=resources)
+
+
+@pytest.fixture()
+def bb_registry(monkeypatch):
+    monkeypatch.delenv("BOSS_TARGET_BITBUCKET_WORKSPACE", raising=False)
+    monkeypatch.delenv("BOSS_TARGET_BITBUCKET_REPO", raising=False)
+    monkeypatch.setenv("BOSS_BITBUCKET_REPOS", "ws/app, ws/lib")
+
+
+def _bb(repos, *, grant=None, obo=False):
+    return repo_scope.granted(None, provider="bitbucket", org_id="org_1", run_id="arun_1",
+                              grant=grant, obo=obo, repos=repos)
+
+
+def test_a_payload_named_bitbucket_repo_outside_the_registry_is_refused(bb_registry):
+    assert _bb(["ws/app", "ws/secret"]) == ("ws/app",)
+    assert repo_scope.refusal(None, provider="bitbucket", org_id="org_1", run_id="arun_1", grant=None,
+                              obo=False, repos=["ws/secret"]) == "repo_not_allowed"
+
+
+def test_no_registered_bitbucket_repo_means_none_is_reachable(monkeypatch):
+    for name in ("BOSS_TARGET_BITBUCKET_WORKSPACE", "BOSS_TARGET_BITBUCKET_REPO", "BOSS_BITBUCKET_REPOS"):
+        monkeypatch.delenv(name, raising=False)
+    assert _bb(["ws/app"]) == ()
+    monkeypatch.setenv("BOSS_TARGET_BITBUCKET_WORKSPACE", "ws")
+    monkeypatch.setenv("BOSS_TARGET_BITBUCKET_REPO", "app")
+    assert _bb(["ws/app", "WS/App.git", "ws/other"]) == ("ws/app", "WS/App.git")
+
+
+def test_on_someones_behalf_a_bitbucket_repo_must_also_be_in_their_grant(bb_registry):
+    grant = _grant(bitbucket={"repos": ["ws/app"]}, github={"repos": ["ws/lib"]})
+    assert _bb(["ws/app", "ws/lib"], grant=grant, obo=True) == ("ws/app",)
+    assert repo_scope.refusal(None, provider="bitbucket", org_id="org_1", run_id="arun_1", grant=grant,
+                              obo=True, repos=["ws/lib"]) == "repo_outside_grant"
+    assert _bb(["ws/app"], grant=None, obo=True) == ()
+
+
+def test_a_multi_repo_builds_change_set_grant_binds_bitbucket_too(bb_registry, monkeypatch):
+    from boss_engine.multirepo import grants as repo_grants
+
+    monkeypatch.setattr(repo_grants, "outside_run_grant", lambda db, run, repos: list(repos) != ["ws/app"])
+    assert _bb(["ws/app", "ws/lib"]) == ("ws/app",)
+
+
+def test_egress_rejudges_the_tokens_bitbucket_repos_at_every_request(bb_registry, monkeypatch):
+    from apps.egress.boss_egress import proxy
+
+    claims = SimpleNamespace(grant_id=None, org_id="org_1", mode=SimpleNamespace(value="autonomous"),
+                             task=SimpleNamespace(run_id="arun_1",
+                                                  resources={"bitbucket": ["ws/app", "ws/secret"]}))
+    assert proxy.bitbucket_repos(claims, None) == ["ws/app"]
+    monkeypatch.setenv("BOSS_BITBUCKET_REPOS", "ws/elsewhere")
+    assert proxy.bitbucket_repos(claims, None) == []
+
+
+def test_github_is_judged_exactly_as_before(monkeypatch):
+    from boss_engine.identity import github_app
+    from boss_engine.multirepo import registry
+
+    seen = {}
+
+    def mint_allowed(db, org_id, repos):
+        seen["registry"] = (org_id, list(repos))
+        return [r for r in repos if r == "acme/unticked"]
+
+    monkeypatch.setattr(registry, "mint_allowed", mint_allowed)
+
+    def gh(repos, grant=None, obo=False):
+        return repo_scope.refusal(None, provider="github", org_id="org_1", run_id="arun_1",
+                                  grant=grant, obo=obo, repos=repos)
+
+    assert gh(["acme/web"]) is None and seen["registry"] == ("org_1", ["acme/web"])
+    assert gh(["acme/unticked"]) == "repo_not_allowed"
+    # obo: the grant's GitHub block, verbatim (case-sensitive), as mint_for_run always read it
+    assert gh(["acme/web"], grant=_grant(github={"repos": ["acme/web"]}), obo=True) is None
+    assert gh(["acme/Web"], grant=_grant(github={"repos": ["acme/web"]}), obo=True) == "repo_outside_grant"
+    assert gh(["acme/web"], grant=_grant(bitbucket={"repos": ["acme/web"]}), obo=True) == "repo_outside_grant"
+    # and the mint raises the same reason it always did
+    claims = SimpleNamespace(grant_id=None, org_id="org_1", mode=SimpleNamespace(value="autonomous"),
+                             sub="agt_1")
+    task = SimpleNamespace(run_id="arun_1", resources={"github": ["acme/unticked"]})
+    with pytest.raises(github_app.GitHubRefused, match="repo_not_allowed"):
+        github_app.mint_for_run(claims, task=task, db=None)

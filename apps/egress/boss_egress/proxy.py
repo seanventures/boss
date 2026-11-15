@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import parse_qsl
 
-from boss_engine.identity import egress_rules, github_app, lineage, runs, tokens
+from boss_engine.identity import egress_rules, github_app, grants, lineage, repo_scope, runs, tokens
 from boss_engine.identity.principal import RunTokenClaims
 
 log = logging.getLogger("boss.egress")
@@ -197,10 +197,22 @@ def _strict() -> bool:
     return (os.environ.get(STRICT_ENV) or "").strip().lower() in ("1", "true", "yes")
 
 
-def bitbucket_repos(task: Any) -> list[str]:
-    """The run's Bitbucket repositories (`workspace/repo_slug`), from its token's task binding."""
-    repos = ((getattr(task, "resources", None) or {}).get("bitbucket")) or []
-    return [r for r in repos if isinstance(r, str)]
+def bitbucket_repos(claims: RunTokenClaims, db: Any) -> list[str]:
+    """The run's Bitbucket repositories (`workspace/repo_slug`): its token's task binding, judged
+    AGAIN against the registry and the run's grants at every request (identity/repo_scope.py) —
+    the same check GitHub's mint makes — so a repository unregistered since the run started, or
+    one a token names without the grant, is `repo_outside_run`. Fails closed."""
+    repos = ((getattr(claims.task, "resources", None) or {}).get("bitbucket")) or []
+    repos = [r for r in repos if isinstance(r, str)]
+    if not repos:
+        return []
+    try:
+        grant = grants.load(claims.grant_id, db=db)
+    except Exception:  # noqa: BLE001 — unreadable grant: nothing is reachable
+        return []
+    return list(repo_scope.granted(db, provider=repo_scope.BITBUCKET, org_id=claims.org_id,
+                                   run_id=claims.task.run_id, grant=grant,
+                                   obo=claims.mode.value == "obo", repos=repos))
 
 
 def bitbucket_credential() -> str:
@@ -411,7 +423,7 @@ class EgressProxy:
             return self._refuse(db, claims, provider, req.method, template, "body_too_large")
         perms = github_app.run_permissions(claims, db=db)
         repos = github_app.run_repos(claims.task)
-        bb_repos = bitbucket_repos(claims.task)
+        bb_repos = bitbucket_repos(claims, db)
         pattern = github_app.push_ref_pattern(claims, db=db)
         pairs = parse_qsl(req.query, keep_blank_values=True)
         query = dict(pairs)
