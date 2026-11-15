@@ -36,6 +36,15 @@ _log = logging.getLogger("boss.storage_cleanup")
 
 #: Re-ask a "Not now" after this long, or on a further fall (the next escalation re-plans).
 ASK_AGAIN_AFTER = timedelta(hours=1)
+#: THE CARD'S FORM (typed_forms): what the console may send in the approve body's `answer`.
+#: `make_rule` (checkbox, defaults to the card's pre-tick) and `args` (an object: "Keep 20
+#: instead"). Without a form, typed_forms.record_answer refuses every answer.
+ASK_FORM: dict = {"fields": [
+    {"key": "make_rule", "type": "checkbox", "label": "Make this a permanent rule", "required": False,
+     "help": "Approved once; next time this step is tier 2 and automatic."},
+    {"key": "args", "type": "object", "label": "Other arguments", "required": False,
+     "help": "e.g. {\"keep_newest\": 20}: planned again with these, re-asked if still tier 3."},
+]}
 #: A dry run older than this is re-planned before a real run (the disk moved on).
 DRY_RUN_FRESH_FOR = timedelta(minutes=30)
 IDLE_IN_TRANSACTION_MINUTES = 10
@@ -67,8 +76,19 @@ def _json(value: Any, default: Any) -> Any:
     return default if value is None else value
 
 
-def install_id() -> str:
-    return (os.environ.get("BOSS_INSTALL_ID") or "").strip()
+def install_id(connection: Any = None) -> str:
+    """BOSS_INSTALL_ID, else the id the resource ledger recorded (resource_ledger.install_id), so
+    the labels the executor asks for are the ones BOSS wrote. Empty only when neither exists —
+    and then the helper refuses every job (its own id must match, and "" never does)."""
+    env = (os.environ.get("BOSS_INSTALL_ID") or "").strip()
+    if env or connection is None:
+        return env
+    try:
+        from .resource_ledger import install_id as _ledger_id
+
+        return str(_ledger_id(connection) or "").strip()
+    except Exception:  # noqa: BLE001 — no ledger: no id
+        return ""
 
 
 # ── the tool catalogue ──────────────────────────────────────────────────────────────────────
@@ -161,7 +181,7 @@ def build_plan(connection: Any, incident: Mapping[str, Any], sample: Mapping[str
             continue
         args = dict(tool.args_of(sample, rule_args) if tool.args_of else {})
         if tool.where == "host":
-            args["install_id"] = install_id()
+            args["install_id"] = install_id(connection)
         prev = earlier.get(tool.name)
         if prev and prev.get("state") in TERMINAL:
             steps.append(dict(prev))
@@ -542,6 +562,10 @@ def _ask(c: Any, inc: dict, plan: list, step: dict, items: Sequence[str]) -> dic
     decision_id = create_blocking_decision(c, inc.get("project_id") or storage_incidents.default_project(c),
                                            None, question, rec, {"estimated_cost_usd": 0.0}, reason,
                                            risk_tier=3, default_action="hold")
+    from .typed_forms import normalize_form
+
+    c.execute(text("UPDATE decisions SET form_schema = CAST(:f AS JSONB) WHERE id = :id"),
+              {"f": json.dumps(normalize_form(ASK_FORM)), "id": decision_id})
     step.update({"state": "ask", "decision_id": decision_id, "asked_at": _iso(_now())})
     c.execute(text("UPDATE storage_actions SET decision_id = :d WHERE id = :id"),
               {"d": decision_id, "id": step.get("action_id")})
@@ -574,6 +598,8 @@ def on_delete_decision(connection: Any, engine: Any, decision: Mapping[str, Any]
             storage_incidents.set_status(connection, incident_id, inc.get("severity") or "critical")
         return {"state": "refused", "ask_again_at": step["ask_again_at"]}
     proposal = rec.get("rule_proposal") or {}
+    # The approve body's typed answer decides; absent, the card's pre-tick does. An explicit
+    # False creates NO rule, whatever the pre-tick said.
     want_rule = bool(proposal.get("preticked")) if make_rule is None else bool(make_rule)
     if want_rule and proposal.get("kind"):
         storage_rules.upsert(connection, kind=str(proposal["kind"]), rule=dict((args or proposal.get("rule")) or {}),

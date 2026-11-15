@@ -39,7 +39,9 @@ from .core import create_blocking_decision, emit_event
 log = logging.getLogger(__name__)
 
 ACTION = "answer_form"
-FIELD_TYPES = ("text", "select", "checkbox", "item_verdicts", "task_suggestions")
+FIELD_TYPES = ("text", "select", "checkbox", "item_verdicts", "task_suggestions",
+               # a JSON object passed through as is (the storage card's alternative arguments)
+               "object")
 DEFAULT_VERDICTS = ("accept", "reject")
 MAX_FIELDS = 20
 TOOL_NAME = "ask_human"
@@ -151,6 +153,8 @@ def validate_answer(schema: Mapping[str, Any], answer: Any) -> dict[str, Any]:
             elif kind == "task_suggestions":
                 out[key] = []
             continue
+        if isinstance(value, Mapping) and not value and kind == "object":
+            continue                          # {} is "no other arguments"
         if kind == "text":
             out[key] = str(value).strip()[:8000]
         elif kind == "select":
@@ -162,6 +166,10 @@ def validate_answer(schema: Mapping[str, Any], answer: Any) -> dict[str, Any]:
             if not isinstance(value, bool):
                 raise FormError(f"{f['label']}: true or false")
             out[key] = value
+        elif kind == "object":
+            if not isinstance(value, Mapping):
+                raise FormError(f"{f['label']}: an object")
+            out[key] = {str(k)[:60]: v for k, v in list(value.items())[:50]}
         elif kind == "item_verdicts":
             if not isinstance(value, Mapping):
                 raise FormError(f"{f['label']}: a verdict per item, {{item_id: verdict}}")

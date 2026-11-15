@@ -14954,8 +14954,6 @@ CREATE INDEX IF NOT EXISTS idx_host_jobs_pull ON host_jobs (host_id, status, cre
 ALTER TABLE backups ADD COLUMN IF NOT EXISTS label JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE backups ADD COLUMN IF NOT EXISTS retain_until TIMESTAMPTZ;
 -- ============================ end Infra Agent storage ==
-=======
-=======
 -- ================================ P9a: EVENT INTAKE (BOSSAPP-1093; boss-eventing-lld.md §4) ==
 -- The front door and the inbox for anything that happens in another system. One connection row
 -- per connected source install (its secrets live in the secret backend; `secret_refs` holds only

@@ -356,3 +356,59 @@ def test_the_helper_never_prints_the_host_key(env, capsys):
     text = env.log_path.read_text()
     assert "not-a-real-key" not in text
     assert "not-a-real-key" not in json.dumps(steward.collect(env, runner=lambda argv, timeout=0: subprocess.CompletedProcess(argv, 1, "", "")))
+
+
+def test_a_fresh_install_gets_a_stable_id_and_backups_carry_it(tmp_path):
+    """install.sh mints BOSS_INSTALL_ID; an archive update of an older install gets one from the
+    reconciler, once; backup.sh hands it to the manifest; the steward prunes only backups that
+    carry it."""
+    import importlib.util as _iu
+    import re
+
+    spec = _iu.spec_from_file_location("_reconcile", ROOT / "scripts" / "install" / "reconcile_api_credentials.py")
+    reconcile = _iu.module_from_spec(spec)
+    spec.loader.exec_module(reconcile)
+    env_file = tmp_path / ".env"
+    env_file.write_text("BOSS_API_KEY=owner-key\nBOSS_WORKER_API_KEY=worker-key\n")
+    reconcile.reconcile(env_file, ensure_worker=True)
+    first = re.search(r"^BOSS_INSTALL_ID=(inst_[0-9a-f]{16})$", env_file.read_text(), re.M)
+    assert first, env_file.read_text()
+    reconcile.reconcile(env_file, ensure_worker=True)
+    assert env_file.read_text().count("BOSS_INSTALL_ID=") == 1
+    assert re.search(r"^BOSS_INSTALL_ID=(inst_[0-9a-f]{16})$", env_file.read_text(), re.M)[1] == first[1], "stable"
+    install_sh = (ROOT / "install.sh").read_text()
+    assert 'BOSS_INSTALL_ID="inst_$(openssl rand -hex 8)"' in install_sh
+    assert '_existing BOSS_INSTALL_ID' in install_sh and "BOSS_INSTALL_ID=${BOSS_INSTALL_ID}" in install_sh
+    assert "BOSS_INSTALL_ID: ${BOSS_INSTALL_ID:-}" in (ROOT / "scripts/install/community-compose.yml").read_text()
+    backup_sh = (ROOT / "scripts/install/backup.sh").read_text()
+    assert "^BOSS_INSTALL_ID=" in backup_sh and "install_id=" in backup_sh
+
+
+def test_an_install_without_an_id_prunes_nothing_and_says_so(tmp_path, keypair, docker, monkeypatch, capsys):
+    priv, pub = keypair
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / ".env").write_text("BOSS_HOST_API_KEY=not-a-real-key\nBOSS_DEDICATED_HOST=1\n")   # no BOSS_INSTALL_ID
+    root = tmp_path / "backups"
+    root.mkdir()
+    for name in ("BOSS_INSTALL_ID", "BOSS_HOST_ID"):
+        monkeypatch.delenv(name, raising=False)
+    env = steward.Env(str(install), api_url="http://127.0.0.1:1", backup_root=str(root),
+                      state_dir=str(tmp_path / "state"), docker=["fake-docker"])
+    env.is_mac = False
+    assert env.install_id == ""
+    _real_backup(root, "20261001T000000Z", 1, install_id="", age_days=40)
+    _real_backup(root, "20261002T000000Z", 2, install_id="inst_abc", age_days=40)
+    assert steward.walk_backups(env) == [], "nothing can be ours without an id"
+    # a job that also carries an empty id ("" == "") is refused, not matched
+    for verb, args in (("remove_backups", {"install_id": "", "dry_run": True, "keep_newest": 0}),
+                       ("remove_images", {"install_id": "", "dry_run": True}),
+                       ("prune_build_cache", {"install_id": "", "dry_run": True})):
+        out = steward.perform(env, _job(priv, env, verb, args), pub, runner=docker)
+        assert not out["ok"] and "BOSS_INSTALL_ID" in out["error"], (verb, out)
+    assert (root / "boss-20261001T000000Z-1").exists() and (root / "boss-20261002T000000Z-2").exists()
+    assert docker.removed == []
+    # the reading still goes out, with a loud warning on stderr and in the report
+    report = steward.once(env, runner=docker, sample_only=True)
+    assert "BOSS_INSTALL_ID" in report["warning"]
+    assert "BOSS_INSTALL_ID" in capsys.readouterr().err

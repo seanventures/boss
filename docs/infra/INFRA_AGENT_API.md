@@ -19,6 +19,7 @@ Every route is JSON. Times are ISO-8601 UTC strings. Sizes are **GB (decimal, 1e
 | `GET /v1/infra/storage/hold` | `system:read` @ org | strip / Command Center |
 | `POST /v1/infra/storage/clean` | `autonomy:manage` @ org (step-up) | "Clean now" (tier 1, no hold) |
 | `POST /v1/infra/storage/hold/release` | `autonomy:manage` @ org (step-up) | safety valve |
+| `POST /v1/infra/storage/incidents/{id}/replan` | `autonomy:manage` @ org (step-up) | "Keep 20 instead" from outside the card: body `{ tool, args }`; withdraws the old card |
 | `GET /v1/infra/storage/rules` | `system:read` @ org | Storage card |
 | `PUT /v1/infra/storage/rules` | `autonomy:manage` @ org (step-up) | thresholds + retention |
 | `POST /v1/infra/storage/samples` | `system:operate` @ org **and the Host tools principal only** (`sva_host_tools`, the key from `boss identity host-key`; any other principal gets 403) | `boss steward` only |

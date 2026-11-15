@@ -135,11 +135,11 @@ def require_host_tools_principal() -> None:
     from boss_engine.identity.principal import PrincipalKind
 
     ctx = REQUEST_IDENTITY.get()
+    # No legacy bridge, under every mode: the host key is an identity key (boss identity
+    # host-key), so nothing older than identity ever needs these routes, and a forged reading
+    # from an Owner's key would set the install-wide hold.
     ok = (ctx is not None and ctx.run_token is None and ctx.principal.id == HOST_TOOLS_PRINCIPAL
           and ctx.principal.kind in (PrincipalKind.SERVICE_ACCOUNT, PrincipalKind.SYSTEM))
-    if not ok and not identity_enforced() and ctx is None and _legacy_worker_ok():
-        # Shadow/off with transport auth off (local development): the legacy rule decides.
-        ok = True
     if not ok:
         raise HTTPException(status_code=403, detail={
             "error": "forbidden", "permission": "system:operate",

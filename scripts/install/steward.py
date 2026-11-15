@@ -705,8 +705,13 @@ def check_job(env: Env, job: dict, pubkey: dict, *, now: Optional[_dt.datetime] 
     if str(job["host_id"]) != env.host_id:
         raise Refused("job is for another host")
     args = dict(job["args"] or {})
-    if verb != "du" and str(args.get("install_id") or "") != env.install_id:
-        raise Refused("job names another install")
+    if verb != "du":
+        if not env.install_id:
+            # "" == "" would pass: an install with no id can never prove a thing is its own.
+            raise Refused("this install has no BOSS_INSTALL_ID in .env: nothing can be labelled as "
+                          "ours, so nothing is pruned (run `boss update` or set BOSS_INSTALL_ID)")
+        if str(args.get("install_id") or "") != env.install_id:
+            raise Refused("job names another install")
     if not bool(args.get("dry_run", False)) and verb != "du" and not args.get("plan_hash"):
         raise Refused("a real run needs the dry run's plan_hash")
     return args
@@ -743,6 +748,12 @@ def perform(env: Env, job: dict, pubkey: dict, *, runner: Callable = run_cmd,
 
 def once(env: Env, *, runner: Callable = run_cmd, sample_only: bool = False) -> dict:
     report: dict[str, Any] = {"host_id": env.host_id}
+    if not env.install_id:
+        # Loud, every run: without the id the backups and images of this install are invisible
+        # to the gate, so the headline cause can never be cleaned.
+        report["warning"] = ("no BOSS_INSTALL_ID in .env: backups and images cannot be told apart "
+                             "from a stranger's, so none are sampled or pruned")
+        print(f"boss steward: {report['warning']}", file=sys.stderr)
     try:
         sample = collect(env, runner)
         got = api(env, "POST", "/v1/infra/storage/samples", sample)

@@ -105,6 +105,12 @@ def reconcile(path: Path, *, ensure_worker: bool = False) -> None:
     if not values.get("BOSS_KMS_MASTER_KEY", "").strip():
         import base64
         lines = _set(lines, "BOSS_KMS_MASTER_KEY", base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii"))
+    # THE INSTALL'S ID (BOSSAPP-1157). Every container, image, volume and backup BOSS makes carries
+    # `boss.install_id`, and the Infra Agent's host helper deletes ONLY what carries this id. A
+    # fresh install mints it (install.sh); an archive update of an older install gets one here.
+    # Random, stable, never replaced: the labels already written depend on it.
+    if not values.get("BOSS_INSTALL_ID", "").strip():
+        lines = _set(lines, "BOSS_INSTALL_ID", f"inst_{secrets.token_hex(8)}")
     # Remote archive updates apply this to the live .env; replace it atomically
     # so a failed write cannot leave the previous install without credentials.
     temporary: Path | None = None
