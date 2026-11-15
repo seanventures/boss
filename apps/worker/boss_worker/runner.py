@@ -1252,13 +1252,29 @@ def _hand_back_after_conflict(client: ControlPlaneClient, settings: WorkerSettin
                     settings.worker_id, job.id)
 
 
+def poll_wait_ms(settings: Any) -> int:
+    """What a cycle asks the API to wait (P9a-5): the configured long-poll wait, never more
+    than the API allows (25 s) nor the poll interval (the worker's own ticks keep their cadence);
+    0 when the long-poll is off."""
+    if not bool(getattr(settings, "long_poll", True)):
+        return 0
+    wait = int(getattr(settings, "long_poll_wait_ms", 15000) or 0)
+    interval_ms = int(getattr(settings, "poll_interval_seconds", 15) or 15) * 1000
+    return max(0, min(wait, interval_ms, 25000))
+
+
 def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bool:
     _tick_ai_sre_overwatch(settings)
-    job = client.poll(
-        settings.worker_id,
-        capabilities(),
-        settings.lease_ttl_seconds,
-    )
+    try:
+        job = client.poll(
+            settings.worker_id,
+            capabilities(),
+            settings.lease_ttl_seconds,
+            wait_ms=poll_wait_ms(settings),
+        )
+    except TypeError:
+        # A test double or an older client without `wait_ms`: the plain poll.
+        job = client.poll(settings.worker_id, capabilities(), settings.lease_ttl_seconds)
     if not job:
         LOGGER.info("worker_idle worker_id=%s", settings.worker_id)
         # NO MONITORING SWEEP HERE. Every lease slot runs this function, so a sweep on this idle

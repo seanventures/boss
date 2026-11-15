@@ -13,8 +13,11 @@ database itself is down, the one case the source's retry is allowed to carry dur
 THE PROCESSOR (`process_due`) is a competing consumer: claim with `FOR UPDATE SKIP LOCKED` and a
 60 s lease, parse in full, screen the outsider's text for prompt injection, drop our own bot's
 echoes (loop layer 1) and anything that already hopped three times (layer 2), serialise events of
-one conversation with an advisory lock, then hand the event to the ROUTER SEAM
-(services/intake_router.route — P9a-2) and fire what it returns through `agent_triggers.fire`.
+one conversation with an advisory lock, then hand the event to the ROUTER
+(services/intake_router.route: filters, addressing, identity, thread keys, guards — P9a-2) and
+fire what it returns through `agent_triggers.fire`. A route that DEFERS the event (a rate limit,
+quiet hours, a person without a grant yet) parks it `failed` with `next_attempt_at` and no
+attempt counted; digest mode records it `digest`.
 A failure retries with backoff (1 s … 2 h, 8 attempts) and then parks the event `dead` with its
 reason; a person replays it (`replay`): `reprocess` fires only routes that have not admitted a run
 for this event (the fires table's dedupe key), `force` with a typed reason runs it again.
@@ -832,7 +835,16 @@ def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str =
         RETURNING e.*"""),
         {"now": now, "lease": now + timedelta(seconds=LEASE_SECONDS), "who": holder[:80],
          "n": int(limit)}).mappings().all()
-    return [dict(r) for r in rows]
+    # RETURNING does not keep the CTE's ORDER BY (an UPDATE … FROM answers in join order), so
+    # the batch is put back in the order the query chose: round-robin rank across connections,
+    # then received order within one. The processor walks the list as it is (P9a-2 T5).
+    out = sorted((dict(r) for r in rows), key=lambda r: (r["received_at"], r["id"]))
+    rank: dict[str, int] = {}
+    for r in out:
+        rank[r["connection_id"]] = rank.get(r["connection_id"], 0) + 1
+        r["_rn"] = rank[r["connection_id"]]
+    out.sort(key=lambda r: (r.pop("_rn"), r["received_at"], r["id"]))
+    return out
 
 
 def _finish(connection: Connection, event_id: str, status: str, *, envelope: Any = None,
@@ -854,6 +866,7 @@ def _finish(connection: Connection, event_id: str, status: str, *, envelope: Any
                conversation_key = COALESCE(:ck, conversation_key),
                actor_kind = COALESCE(:ak, actor_kind),
                actor_external_id = COALESCE(:ax, actor_external_id),
+               principal_id = COALESCE(:pid, principal_id),
                screen = COALESCE(CAST(:screen AS JSONB), screen),
                event_time = COALESCE(:et, event_time),
                expires_at = CASE WHEN :s IN ('dead', 'refused')
@@ -866,6 +879,7 @@ def _finish(connection: Connection, event_id: str, status: str, *, envelope: Any
          "out": json.dumps(outcome, default=str) if outcome is not None else "[]",
          "type": f.get("type"), "subject": f.get("subject"), "ck": f.get("conversation_key"),
          "ak": f.get("actor_kind"), "ax": f.get("actor_external_id"),
+         "pid": f.get("principal_id"),
          "screen": json.dumps(f["screen"], default=str) if f.get("screen") is not None else None,
          "et": f.get("event_time"), "dead_days": DEAD_RETENTION_DAYS, "id": event_id})
 
@@ -986,7 +1000,8 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                                        "WHERE id = :id AND attempts > 0"), {"id": event_id})
                         return {"id": event_id, "status": "received",
                                 "reason": f"deferred behind {earlier['id']}"}
-                fires = intake_router.route(c, conn, ev, row, replay_n=force_n)
+                fires = intake_router.route(c, conn, ev, row, replay_n=force_n,
+                                            settings=settings, now=now)
                 caused_by = (ev.bosscausality or {}).get("deployment_id")
                 if caused_by:
                     kept = []
@@ -1006,15 +1021,6 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
             if "failed" in words:
                 raise RuntimeError("; ".join(str(o.get("reason")) for o in all_outcomes
                                              if o.get("fire_outcome") == "failed")[:500])
-            if words & {"admitted", "duplicate", "skipped"}:
-                status = "routed"
-            elif words and words <= {"refused"}:
-                status = "refused"
-            elif words or filtered_reason:
-                status = "filtered"
-            else:
-                status = "ignored"
-                all_outcomes.append({"reason": "no route on this connection"})
             fields: dict[str, Any] = {}
             envelope = None
             if primary is not None:
@@ -1022,14 +1028,44 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                 envelope = primary.to_dict()
                 if len(events) > 1:
                     envelope["bossbatch"] = {"count": len(events), "ids": [e.id for e in events]}
+            fields["principal_id"] = next((str(o["subject"]["principal_id"]) for o in all_outcomes
+                                           if isinstance(o.get("subject"), dict)
+                                           and o["subject"].get("principal_id")), None)
+            # Replay markers (who replayed, why) stay on the row ahead of this pass's outcomes.
+            history = [m for m in (_json(row.get("outcome"), []) or [])
+                       if isinstance(m, dict) and "replay" in m]
+            # DEFERRED (P9a-2, §6.1/§7): a guard or a missing grant holds the event until
+            # `until`; it comes back through the inbox and the routes that already admitted a run
+            # dedupe to `duplicate`. The attempt is not counted (a deferral is not a failure).
+            held = [o for o in all_outcomes if o.get("fire_outcome") == "deferred"
+                    and not o.get("digest") and o.get("until")]
+            if held:
+                until = min(_event_time(o["until"]) or now for o in held)
+                _finish(c, event_id, "failed", envelope=envelope, outcome=history + all_outcomes,
+                        now=now, fields=fields,
+                        error="deferred: " + "; ".join(str(o.get("reason")) for o in held)[:800],
+                        next_attempt_at=max(until, now + timedelta(seconds=1)))
+                c.execute(text("UPDATE intake_events SET attempts = GREATEST(attempts - 1, 0) "
+                               "WHERE id = :id"), {"id": event_id})
+                return {"id": event_id, "status": "deferred", "outcome": all_outcomes,
+                        "until": until.isoformat()}
+            digest = any(o.get("digest") for o in all_outcomes)
+            if words & {"admitted", "duplicate", "skipped"} and not digest:
+                status = "routed"
+            elif digest:
+                status = "digest"
+            elif words and words <= {"refused"}:
+                status = "refused"
+            elif words or filtered_reason:
+                status = "filtered"
+            else:
+                status = "ignored"
+                all_outcomes.append({"reason": "no route on this connection"})
             if status == "routed":
                 emit_event(c, conn.project_id, "intake.event_routed", "intake", "intake_event",
                            event_id, {"connection_id": conn.id, "type": fields.get("type"),
                                       "runs": [o.get("run_id") for o in all_outcomes
                                                if o.get("run_id")]})
-            # Replay markers (who replayed, why) stay on the row ahead of this pass's outcomes.
-            history = [m for m in (_json(row.get("outcome"), []) or [])
-                       if isinstance(m, dict) and "replay" in m]
             _finish(c, event_id, status, envelope=envelope, outcome=history + all_outcomes,
                     now=now, fields=fields)
             return {"id": event_id, "status": status, "outcome": all_outcomes}
@@ -1080,7 +1116,7 @@ def process_due(engine: Any, settings: Any = None, *, limit: int = PROCESSOR_BAT
     with begin(engine) as c:
         rows = claim(c, limit=limit, holder=holder, now=now)
     out = {"claimed": len(rows), "routed": 0, "ignored": 0, "filtered": 0, "refused": 0,
-           "failed": 0, "dead": 0, "received": 0}
+           "failed": 0, "dead": 0, "received": 0, "deferred": 0, "digest": 0}
     for row in rows:
         got = process_one(engine, settings, row, now=now)
         out[got["status"]] = out.get(got["status"], 0) + 1

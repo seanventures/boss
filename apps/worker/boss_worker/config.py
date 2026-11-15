@@ -20,7 +20,13 @@ class WorkerSettings(BaseSettings):
         default=None, validation_alias=AliasChoices("BOSS_WORKER_API_KEY", "BOSS_API_KEY")
     )
     worker_id: str = Field(default="worker-local", alias="BOSS_WORKER_ID")
+    # HOW LONG AN IDLE WORKER SLEEPS between polls when the API does NOT hold the request
+    # (an older API, or BOSS_WORKER_LONG_POLL=false). With the long-poll (P9a-5, the default)
+    # the API holds /v1/worker/poll up to `long_poll_wait_ms` and a queued job is claimed within
+    # milliseconds; this interval is then only the cadence of the worker's own ticks.
     poll_interval_seconds: int = Field(default=15, alias="BOSS_POLL_INTERVAL_SECONDS")
+    long_poll: bool = Field(default=True, alias="BOSS_WORKER_LONG_POLL")
+    long_poll_wait_ms: int = Field(default=15000, alias="BOSS_WORKER_LONG_POLL_WAIT_MS")
     # Long enough that a single durable step (a meeting phase / agent plan that can
     # run a minute+ without heart-beating) keeps its lease, while still bounding
     # crash recovery. A crashed worker's 'running' job is reclaimed after this.

@@ -54,6 +54,8 @@ class ControlPlaneClient:
     ):
         self.base_url = base_url.rstrip("/")
         self.worker_id: Optional[str] = None
+        #: Did the last poll's API hold the request (wait_ms honoured)? False on an older API.
+        self.long_polled: bool = False
         # Lease-control requests must not inherit the two-hour execution read timeout.
         # httpx bounds each network phase; long execution calls retain their own timeout.
         self.lease_timeout_seconds = max(0.1, min(float(timeout), 30.0))
@@ -83,18 +85,27 @@ class ControlPlaneClient:
         worker_id: str,
         capabilities: list[str],
         lease_ttl_seconds: int,
+        wait_ms: int = 0,
     ) -> Optional[LeasedJob]:
+        """One claim. `wait_ms` > 0 asks the API to hold the request until a job appears
+        (P9a-5): the answer says whether it did (`self.long_polled`), so an idle answer from an
+        API that ignored it (version skew) still gets the poll-interval sleep."""
         self.worker_id = worker_id
+        body: dict[str, Any] = {
+            "worker_id": worker_id,
+            "capabilities": capabilities,
+            "lease_ttl_seconds": lease_ttl_seconds,
+        }
+        if wait_ms and wait_ms > 0:
+            body["wait_ms"] = int(wait_ms)
         response = self._client.post(
-            "/v1/worker/poll",
-            json={
-                "worker_id": worker_id,
-                "capabilities": capabilities,
-                "lease_ttl_seconds": lease_ttl_seconds,
-            },
+            "/v1/worker/poll", json=body,
+            timeout=httpx.Timeout(connect=10.0, read=max(30.0, wait_ms / 1000.0 + 15.0),
+                                  write=30.0, pool=30.0),
         )
         response.raise_for_status()
         payload = response.json()
+        self.long_polled = bool(payload.get("long_poll"))
         if payload["status"] == "idle" or payload.get("job") is None:
             return None
         return LeasedJob(**payload["job"])

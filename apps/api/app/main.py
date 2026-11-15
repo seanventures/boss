@@ -24210,18 +24210,29 @@ def require_worker_principal() -> None:
 
 @app.post("/v1/worker/poll", response_model=WorkerPollResponse)
 @permit(P.WORKER_LEASE)
-def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
+async def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
+    """Claim a local job. With `wait_ms` (P9a-5, boss-eventing-lld.md §8.2) the request waits —
+    an asyncio wait on the job hub, no thread held, no polling — for a job of one of the
+    worker's kinds and claims again on wake, so a run is executing within milliseconds of its
+    admission instead of a poll interval later."""
     require_worker_principal()
-    with begin(engine) as connection:
-        job = jobs.claim_job(
-            connection,
-            payload.worker_id,
-            payload.capabilities,
-            payload.lease_ttl_seconds,
-        )
-        if not job:
-            return WorkerPollResponse(status="idle", job=None)
-        return WorkerPollResponse(status="leased", job=LeasedJob(**job))
+    from boss_engine.services import worker_longpoll
+
+    def claim() -> Optional[dict[str, Any]]:
+        with begin(engine) as connection:
+            return jobs.claim_job(
+                connection,
+                payload.worker_id,
+                payload.capabilities,
+                payload.lease_ttl_seconds,
+            )
+
+    got = await worker_longpoll.poll(engine, claim=claim, capabilities=payload.capabilities,
+                                     wait_ms=payload.wait_ms)
+    return WorkerPollResponse(status=got["status"],
+                              job=LeasedJob(**got["job"]) if got.get("job") else None,
+                              long_poll=bool(got.get("long_poll")),
+                              waited_ms=int(got.get("waited_ms") or 0))
 
 
 @app.post("/v1/workers/register")
