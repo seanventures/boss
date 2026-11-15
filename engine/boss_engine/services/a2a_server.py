@@ -63,7 +63,11 @@ ANSWER_REFUSED = -32010
 
 def strong_isolation() -> bool:
     """Whether agents with write tools may be exposed publicly (D11). False until strong isolation
-    (§4.10: microVM sandboxes per run) lands — deliberately not configurable."""
+    (§4.10: microVM sandboxes per run) lands — deliberately not configurable.
+
+    The worker's per-run fence (`local_fenced`, skill_executors.NON_STRONG_PROVIDERS) is NOT
+    strong isolation: a pool uid behind iptables shares the control plane's kernel. Whatever
+    BOSS_GOVERNED_SANDBOX_PROVIDER says, this stays False until a separate kernel per run lands."""
     return False
 
 

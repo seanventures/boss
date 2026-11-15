@@ -184,8 +184,8 @@ EXPECTED_PER_SURFACE = {
     # work_hold_set/release: chat, agent_step and mcp), never pinned.
     # +3 github_comment, github_open_fix_pr, contract_test (AMEX-G5/G6/G7, 2026-11-14): chat,
     # agent_step and mcp — a workflow agent comments on the PR it is validating.
-    "chat": 208,   # +1 transfer_to_agent (AP-P7 handoffs); +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
-    "mcp": 207,
+    "chat": 211,  # +3 create_config_target, deploy_config, promote_config (AMEX-G4; chat and mcp)   # +1 transfer_to_agent (AP-P7 handoffs); +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
+    "mcp": 210,
     # find_tools; agent steps join when K4 moves them onto the kernel. +6 the ticket tools,
     # offered to workflow agents through the tickets.read / tickets.write skills (BOSSAPP-1047 B2).
     # +4 the run filesystem's tools (AP-P6): agent_step only, so chat's and MCP's registry

@@ -158,6 +158,7 @@ SUPPORTED_PROVIDERS = {
             # ChangeSet. See services/governed_host_deploy.py.
             "ssh_host.app.deploy",
         ],
+
     },
 }
 
@@ -176,6 +177,13 @@ PHASED_APPLY_SKILLS: dict[str, str] = {
     "ssh_host.app.deploy": (
         "is a host deployment: approve its decision{decision} in Approvals and BOSS's worker "
         "applies it (services/governed_host_deploy.py). It is never approved or applied "
+        "through the ChangeSet routes."
+    ),
+    # Configuration files into a config_dir target (AMEX-G4): the same decision, the same
+    # worker job, a different phase two (services/config_deploy.py).
+    "config_dir.files.deploy": (
+        "is a configuration deployment: approve its decision{decision} in Approvals and BOSS's "
+        "worker applies it (services/config_deploy.py). It is never approved or applied "
         "through the ChangeSet routes."
     ),
 }
@@ -2034,7 +2042,16 @@ class ResourcePlaneService:
         health_checks: list[dict[str, Any]],
         rollback_points: list[dict[str, Any]],
         actor: str,
+        config_target: bool = False,
     ) -> dict[str, Any]:
+        # A CONFIG DIRECTORY (config_deploy, AMEX-G4) is made only by create_config_target, which
+        # enforces the operator's roots, the reload allowlists and a person for any reload. The
+        # generic routes (POST /v1/deployments, the deployment.target.register skill) would
+        # skip all three, so they are refused here, in the one place every caller passes.
+        kind = str(target_kind or "").strip().lower().replace("-", "_")
+        if kind == "config_dir" and not config_target:
+            raise ValueError("A config_dir target is made with create_config_target (it checks "
+                             "the allowed directory roots and reloads); this route does not.")
         if provider_account_id:
             self.get_provider_account(connection, project_id, provider_account_id)
         normalized_environment = self._normalize_deployment_environment(environment)

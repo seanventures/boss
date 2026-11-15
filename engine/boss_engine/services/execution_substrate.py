@@ -25,7 +25,9 @@ class ExecutionSubstrate(str, Enum):
     DAYTONA = "daytona"
 
 
-_LOCAL = {"local", "subprocess", "local_subprocess"}
+# `local_fenced` (AMEX-G2): the build stages are the local subprocess substrate; the knob
+# only changes where an authored `sandboxed_command` skill runs (skill_executors).
+_LOCAL = {"local", "subprocess", "local_subprocess", "local_fenced"}
 _MICROVM = {"microvm", "firecracker", "gvisor"}
 _ENVIRONMENT = {
     "ssh": ExecutionSubstrate.SSH,
