@@ -29,7 +29,22 @@ from boss_engine.services import workflow_capabilities as caps
 from boss_engine.services import workflow_outcomes as outcomes
 from boss_engine.tools.builtin import build_default_registry
 
-from .test_workflow_custom_steps import Ctx, eng, project  # noqa: F401
+from .amex_workflow_fixtures import eng, project  # noqa: F401
+from .test_workflow_custom_steps import Ctx
+
+
+def _as_run(run_id):
+    """What the workflow runner does around a step's tool call: the run is set on the server."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def scope():
+        token = ga.WORKFLOW_RUN_ID.set(run_id)
+        try:
+            yield
+        finally:
+            ga.WORKFLOW_RUN_ID.reset(token)
+    return scope()
 
 
 class FakeGitHub:
@@ -128,9 +143,9 @@ def _tools():
 
 def test_a_comment_is_posted_receipted_and_on_the_ledger(eng, project, github):
     tool = _tools()["github_comment"]
-    out = tool.handler(Ctx(eng), project_id=project, actor="usr_a",
-                       args={"number": 12, "body": "## Validation\n\n1 violation",
-                             "workflow_run_id": "wfr_1"})
+    with _as_run("wfr_1"):
+        out = tool.handler(Ctx(eng), project_id=project, actor="usr_a",
+                           args={"number": 12, "body": "## Validation\n\n1 violation"})
     assert out["ok"] and out["posted"] and out["updated"] is False
     assert out["repository"] == "northgate/gateway" and out["number"] == 12
     assert out["comment_url"].endswith(f"#issuecomment-{out['comment_id']}")
@@ -158,6 +173,39 @@ def test_a_marked_comment_is_updated_not_repeated(eng, project, github):
     third = tool.handler(Ctx(eng), project_id=project, actor="usr_a",
                          args={"number": 7, "body": "tests", "marker": "contract-tests"})
     assert third["updated"] is False and len(github.comments[7]) == 2
+
+
+def test_a_persons_comment_carrying_the_marker_is_never_overwritten(eng, project, github):
+    """A marker is predictable: anyone can paste it. BOSS updates only its own comment."""
+    github.comments[9] = [{"id": 1, "user": "mallory", "bot": False,
+                           "body": "hi " + ga.marker_line("validation-report"),
+                           "created_at": "2026-11-14T00:00:00Z", "updated_at": None}]
+    out = _tools()["github_comment"].handler(
+        Ctx(eng), project_id=project, actor="a",
+        args={"number": 9, "body": "report", "marker": "validation-report"})
+    assert out["updated"] is False and out["comment_id"] != 1
+    assert github.comments[9][0]["body"].startswith("hi "), "a person's comment was edited"
+    assert ("update_comment", 1) not in github.calls
+
+
+def test_another_bots_comment_or_an_unrecorded_one_is_not_ours(eng, project, github):
+    marker = ga.marker_line("validation-report")
+    other_bot = {"id": 2, "user": "renovate[bot]", "bot": True, "body": "x " + marker,
+                 "created_at": "2026-11-14T00:00:01Z", "updated_at": None}
+    assert ga.is_boss_comment(other_bot, "boss-app[bot]") is False
+    assert ga.is_boss_comment({**other_bot, "user": "BOSS-App[bot]"}, "boss-app[bot]") is True
+    github.comments[4] = [other_bot]
+    first = _tools()["github_comment"].handler(
+        Ctx(eng), project_id=project, actor="a",
+        args={"number": 4, "body": "r1", "marker": "validation-report"})
+    assert first["updated"] is False and github.comments[4][0]["body"] == "x " + marker
+    # Only the comment BOSS recorded under the marker is updated, even among BOSS's own.
+    assert ga.find_marked_comment(github.comments[4], "validation-report",
+                                  comment_id=first["comment_id"])["id"] == first["comment_id"]
+    second = _tools()["github_comment"].handler(
+        Ctx(eng), project_id=project, actor="a",
+        args={"number": 4, "body": "r2", "marker": "validation-report"})
+    assert second["updated"] is True and second["comment_id"] == first["comment_id"]
 
 
 def test_no_repository_is_a_refusal_not_a_crash(eng, project, monkeypatch):
@@ -194,8 +242,10 @@ def test_a_refusal_from_github_is_the_steps_result(eng, project, github):
 # ── the fix PR ─────────────────────────────────────────────────────────────────────────────
 
 def _fix(eng, project, **args):
-    return _tools()["github_open_fix_pr"].handler(Ctx(eng), project_id=project, actor="usr_a",
-                                                  args=args)
+    run_id = args.pop("workflow_run_id", "")
+    with _as_run(run_id):
+        return _tools()["github_open_fix_pr"].handler(Ctx(eng), project_id=project,
+                                                      actor="usr_a", args=args)
 
 
 def test_a_fix_pr_is_a_run_branch_the_file_and_one_pull_request(eng, project, github):
@@ -238,10 +288,11 @@ def test_the_branch_is_one_the_egress_rules_let_the_run_push(eng, project, githu
                                 body={"head": out["branch"], "base": "main"},
                                 push_pattern=pattern)
     assert pr.allowed, pr
-    # Editing BOSS's own marker comment from inside a run is in the rule table too.
+    # Editing a comment is NOT in a run's rule table: an agent inside a run could otherwise
+    # edit anybody's comment. BOSS edits its own marker comment through the tool only.
     patch = egress_rules.check_api("PATCH", "/repos/o/r/issues/comments/55", perms=perms,
                                    repos=["o/r"], body={"body": "x"}, push_pattern=pattern)
-    assert patch.allowed, patch
+    assert not patch.allowed and patch.reason == "not_in_rule_table", patch
 
 
 def test_a_fix_pr_is_idempotent(eng, project, github):
@@ -277,6 +328,70 @@ def test_a_fix_pr_refuses_what_it_must_not_do(eng, project, github):
                 workflow_run_id="w")["code"] == "invalid"
     assert _fix(eng, project, title="t", path="a", content="x", base_branch="boss/other",
                 workflow_run_id="w")["code"] == "invalid"
+    assert github.pulls == []
+
+
+@pytest.mark.parametrize("path", [
+    ".github/workflows/ci.yml", "./.github/workflows/x", ".github//workflows/x",
+    ".github/./workflows/x", "/.github/workflows/x", ".GitHub/Workflows/x.yml",
+    "docs/../.github/workflows/x", ".git/config",
+])
+def test_ci_workflows_cannot_be_reached_by_any_spelling(eng, project, github, path):
+    out = _fix(eng, project, title="t", path=path, content="x", workflow_run_id="w")
+    assert out["ok"] is False and out["code"] == "not_allowed", (path, out)
+    assert github.pulls == [] and not any(c[0] == "upsert" for c in github.calls)
+
+
+@pytest.mark.parametrize("path", [
+    '".github/workflows/x"', "'.github/workflows/x'", ".github%2Fworkflows/x",
+    "%2egithub/workflows/x", ".github\\workflows\\x", "a\tb", "../outside", "..", ".", "/",
+])
+def test_quoted_encoded_and_escaping_paths_are_refused(eng, project, github, path):
+    out = _fix(eng, project, title="t", path=path, content="x", workflow_run_id="w")
+    assert out["ok"] is False and out["code"] in ("invalid", "not_allowed"), (path, out)
+    assert github.pulls == []
+
+
+@pytest.mark.parametrize("header", [
+    "+++ b/.github/workflows/ci.yml", "+++ /.github/workflows/ci.yml",
+    "+++ b//.github/workflows/ci.yml", "+++ b/./.github/workflows/ci.yml",
+    '+++ "b/.github/workflows/ci.yml"', "+++ b/.GITHUB/workflows/ci.yml",
+])
+def test_a_diff_cannot_reach_ci_workflows_either(eng, project, github, header):
+    diff = f"--- a/x\n{header}\n@@ -0,0 +1,1 @@\n+evil: true\n"
+    out = _fix(eng, project, title="t", diff=diff, workflow_run_id="w")
+    assert out["ok"] is False and out["code"] in ("invalid", "not_allowed"), (header, out)
+    assert github.pulls == []
+
+
+def test_a_normalised_path_is_what_gets_written(eng, project, github):
+    out = _fix(eng, project, title="t", path="/tenants/./lumen-pay.yaml", content="a: 1\n",
+               workflow_run_id="wfr_n")
+    assert out["files"] == ["tenants/lumen-pay.yaml"]
+
+
+def test_the_run_comes_from_the_server_never_the_arguments(eng, project, github):
+    """`workflow_run_id` is not an argument: a caller cannot name a run it is not."""
+    schema = _tools()["github_open_fix_pr"].parameters
+    assert "workflow_run_id" not in schema["properties"]
+    assert schema["additionalProperties"] is False
+    out = _tools()["github_open_fix_pr"].handler(
+        Ctx(eng), project_id=project, actor="a",
+        args={"title": "t", "path": "a.yaml", "content": "x", "workflow_run_id": "wfr_forged"})
+    assert "wfr_forged" not in out["branch"] and out["branch"].startswith("boss/manual-")
+
+
+def test_a_direct_fix_pr_waits_for_a_person(eng, project, github):
+    """Tier 2 wherever it comes from: from chat, an agent or MCP the model offers it and a
+    person presses it; a workflow step is held at the approval floor instead."""
+    from boss_engine.tools.builtin import build_default_registry
+
+    reg = build_default_registry()
+    spec = reg.get("github_open_fix_pr")
+    assert spec.operator_only and not spec.self_executable
+    out = reg.invoke("github_open_fix_pr", Ctx(eng), project_id=project, actor="a",
+                     args={"title": "t", "path": "a.yaml", "content": "x"})
+    assert out["ok"] is False and out["error"] == "operator_confirmation_required"
     assert github.pulls == []
 
 
@@ -323,7 +438,8 @@ def test_the_tools_sit_behind_their_catalogue_permissions(monkeypatch):
     comment = reg.invoke("github_comment", None, project_id="p1", actor="usr_a",
                          args={"number": 1, "body": "x"}, auth=alice)
     fix = reg.invoke("github_open_fix_pr", None, project_id="p1", actor="usr_a",
-                     args={"title": "t", "path": "a", "content": "b"}, auth=alice)
+                     args={"title": "t", "path": "a", "content": "b"}, auth=alice,
+                     operator_confirmed=True)
     assert comment["ok"] is False and comment["permission"] == "work_tracker:write"
     assert fix["ok"] is False and fix["permission"] == "code_task:create"
     assert asked == ["work_tracker:write", "code_task:create"]

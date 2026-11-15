@@ -589,6 +589,12 @@ def test_a_recorded_failure_shape_is_what_the_tool_returns(eng, project):
     closed.close()
 
     tools = {spec.name: spec for spec in build_default_registry().specs()}
+    # The Down server stands in for this project's own deployment: contract_test reaches a
+    # loopback host only when it is one of the project's deployment hosts (AMEX-G7 review).
+    from .amex_workflow_fixtures import add_deployment_host
+
+    with eng.begin() as c:
+        add_deployment_host(c, project, "127.0.0.1")
 
     class RealCtx:
         def __init__(self, edition):

@@ -9199,18 +9199,26 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                           "description": "headers every case sends (a case's own win)"},
               "timeout_s": {"type": "integer", "minimum": 1, "maximum": 60, "default": 10}},
              ["cases"]),
-        kind="write", reversibility="safe", idempotency="idempotent",
+        # IRREVERSIBLE for a resumed run: a case may POST or DELETE, so a call whose outcome was
+        # never recorded is not sent again on its own (kernel/idempotency.py).
+        kind="write", reversibility="safe", idempotency="irreversible",
         permission="observability:manage",
         exposure=Exposure(tags=("network", "tests"), surfaces=("chat", "agent_step", "mcp"),
                           search_hint="contract test api assert status json body staging"))
     def contract_test(ctx, *, project_id, actor, args):
-        from ..services.contract_tests import run_cases
+        from ..services.contract_tests import project_deployment_hosts, run_cases
 
         if _community_restricted(ctx.settings):
             return {"ok": False, "error": "Community URL probes require a project-bound "
                     "destination and a network policy; use recorded deployment health."}
+        # WHERE IT MAY SEND: public hosts, and the private ones that are THIS project's own
+        # deployment targets and hosts — read from the database, never from the arguments.
+        with ctx.begin() as db:
+            allowed = project_deployment_hosts(db, args.get("project_id") or project_id)
+        per_request = _turn_seconds(int(args.get("timeout_s") or 10))
         return run_cases(args.get("cases"), base_url=str(args.get("base_url") or ""),
-                         timeout_s=args.get("timeout_s") or 10, headers=args.get("headers"))
+                         timeout_s=per_request, headers=args.get("headers"),
+                         allowed_private=allowed, deadline_s=_turn_seconds(300))
 
     @reg.tool(
         "git_history",

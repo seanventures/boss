@@ -3953,12 +3953,6 @@ def _perform_capability(
     #
     # `plrr` was dispatched HERE and could never reach it: the capability declares `tool=None`,
     # and that branch above returns for every key it handles. Moved up rather than duplicated.
-    if key in ("github_comment", "fix_pr"):
-        # THE RUN NAMES ITSELF on the pull request: the fix branch is boss/<run>-fix-<slug>
-        # (the one shape the egress rules let a run push) and the comment's receipt and the PR
-        # body cite the run. Added here, as `build` adds its own, never bound by the workflow.
-        inputs = {**inputs, "workflow_run_id": str(context.get("run_id") or "")}
-
     if key == "build":
         inputs = {**inputs, "workflow_run_id": str(context.get("run_id") or "")}
         # A FEATURE FOR AN APP THAT EXISTS is that app's next build, not a new app: the tool
@@ -4134,7 +4128,16 @@ def _perform_capability(
             # The step promised a person: the deployment it starts may not run on the
             # environment's policy, whatever happened to the gate on the way here.
             inputs = {**inputs, "person_required": True}
-        output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
+        # THE RUN NAMES ITSELF on the pull request (fix branch boss/<run>-fix-<slug>, the
+        # comment's receipt, the PR body): set here, on the server, never an input a caller or
+        # a workflow could write (github_actions.WORKFLOW_RUN_ID).
+        from .github_actions import WORKFLOW_RUN_ID
+
+        run_token = WORKFLOW_RUN_ID.set(str(context.get("run_id") or ""))
+        try:
+            output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
+        finally:
+            WORKFLOW_RUN_ID.reset(run_token)
     result = {"capability": key, "tool": capability.tool, **output,
               "ran_as": {**ran_as, "tool": capability.tool,
                          "skills_offered": [], "skills_used": []},

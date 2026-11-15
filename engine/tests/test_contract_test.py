@@ -15,6 +15,11 @@ from boss_engine.services import contract_tests as ct
 from boss_engine.services import workflow_capabilities as caps
 from boss_engine.services import workflow_outcomes as outcomes
 
+from .amex_workflow_fixtures import add_deployment_host, eng, project  # noqa: F401
+
+#: The local test gateway stands in for the project's own staging deployment.
+LOCAL = frozenset({"127.0.0.1"})
+
 
 class Gateway(http.server.BaseHTTPRequestHandler):
     """A tiny API with a contract: a token reaches /v1/accounts, no token is a 401, POST echoes
@@ -39,6 +44,18 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                 self._send(401, b'{"error": "unauthenticated"}')
         elif self.path.startswith("/admin"):
             self._send(404, b"not found", "text/plain")
+        elif self.path.startswith("/to-private"):
+            self.send_response(302)
+            self.send_header("Location", "http://10.0.0.7/internal")
+            self.end_headers()
+        elif self.path.startswith("/to-metadata"):
+            self.send_response(302)
+            self.send_header("Location", "http://169.254.169.254/latest/meta-data/")
+            self.end_headers()
+        elif self.path.startswith("/to-health"):
+            self.send_response(302)
+            self.send_header("Location", "/healthz")
+            self.end_headers()
         else:
             self._send(503, b"down", "text/plain")
 
@@ -102,7 +119,7 @@ def test_a_passing_contract(gateway):
          "json": {"tenant": "lumen-pay"}, "expect_status": 201,
          "expect_json": {"$.echo.tenant": "lumen-pay",
                          "$.content_type": "application/json"}},
-    ], base_url=gateway, headers={"X-Request-Id": "contract"})
+    ], base_url=gateway, headers={"X-Request-Id": "contract"}, allowed_private=LOCAL)
     assert out["ok"] and out["failed"] == 0 and out["passed"] == 5 and out["total"] == 5
     assert out["failed_cases"] == []
     assert all(c["ok"] for c in out["cases"])
@@ -124,7 +141,7 @@ def test_a_failing_case_fails_the_contract_and_names_why(gateway, dead_port):
         {"name": "not json", "url": gateway + "/admin", "expect_status": 404,
          "expect_json": {"$.a": 1}},
         {"name": "fine", "url": gateway + "/healthz"},
-    ], timeout_s=2)
+    ], timeout_s=2, allowed_private=LOCAL)
     assert out["ok"] is True, "the tool RAN; the contract did not hold"
     assert out["total"] == 7 and out["failed"] == 6 and out["passed"] == 1
     by_name = {c["name"]: c for c in out["cases"]}
@@ -166,28 +183,91 @@ def test_cases_that_cannot_run_are_refused_before_any_request(cases, base, said)
 
 def test_cases_may_arrive_as_a_json_string(gateway):
     """A workflow input or a chat argument may carry the list as text."""
-    out = ct.run_cases(json.dumps([{"url": gateway + "/healthz"}]))
+    out = ct.run_cases(json.dumps([{"url": gateway + "/healthz"}]), allowed_private=LOCAL)
     assert out["ok"] and out["passed"] == 1
+
+
+# ── where it may send (SSRF) ──────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("url,said", [
+    ("http://169.254.169.254/latest/meta-data/", "metadata or link-local"),
+    ("http://metadata.google.internal/computeMetadata/v1/", "metadata or link-local"),
+    ("http://[fe80::1]/", "metadata or link-local"),
+    ("http://127.0.0.1:9/", "loopback or private"),
+    ("http://localhost:9/", "loopback or private"),
+    ("http://10.1.2.3/admin", "loopback or private"),
+    ("http://192.168.0.10/", "loopback or private"),
+    ("http://[::1]/", "loopback or private"),
+])
+def test_private_and_metadata_hosts_are_refused_before_any_request(url, said):
+    out = ct.run_cases([{"name": "probe", "method": "POST", "url": url, "json": {"x": 1}}])
+    assert out["ok"] and out["failed"] == 1
+    case = out["cases"][0]
+    assert case["status"] is None and case["ms"] == 0, "nothing was sent"
+    assert said in case["failures"][0], case
+
+
+def test_metadata_stays_refused_even_if_a_project_names_it():
+    with pytest.raises(ct.HostRefused):
+        ct.check_host("http://169.254.169.254/", frozenset({"169.254.169.254"}))
+
+
+def test_the_projects_own_deployment_host_is_allowed(gateway):
+    assert ct.run_cases([{"url": gateway + "/healthz"}],
+                        allowed_private=LOCAL)["passed"] == 1
+    assert ct.run_cases([{"url": gateway + "/healthz"}])["failed"] == 1
+
+
+@pytest.mark.parametrize("path,said", [("/to-private", "10.0.0.7"),
+                                       ("/to-metadata", "169.254.169.254")])
+def test_every_redirect_hop_is_checked(gateway, path, said):
+    out = ct.run_cases([{"url": gateway + path, "expect_status": 200}], allowed_private=LOCAL)
+    case = out["cases"][0]
+    assert out["failed"] == 1 and case["status"] is None
+    assert case["failures"][0].startswith("refused a redirect") and said in case["failures"][0]
+
+
+def test_a_redirect_within_the_allowed_host_is_followed(gateway):
+    out = ct.run_cases([{"url": gateway + "/to-health", "expect_json": {"$.status": "ok"}}],
+                       allowed_private=LOCAL)
+    assert out["passed"] == 1, out["cases"]
+
+
+def test_no_case_is_sent_after_the_turns_deadline(gateway):
+    out = ct.run_cases([{"url": gateway + "/healthz"}] * 3, allowed_private=LOCAL,
+                       deadline_s=-1)  # a turn whose time is already spent
+    assert out["failed"] == 3
+    assert all(c["failures"] == ["not sent: out of time for this turn"] for c in out["cases"])
 
 
 # ── the tool and the capability ───────────────────────────────────────────────────────────
 
-def test_the_tool_runs_the_cases_and_community_refuses(gateway):
+def test_the_tool_reaches_only_the_projects_own_deployments(gateway, eng, project):
     from boss_engine.config import get_settings
+    from boss_engine.kernel.idempotency import declared
     from boss_engine.tools.builtin import build_default_registry
 
     tool = {s.name: s for s in build_default_registry().specs()}["contract_test"]
     assert tool.permission == "observability:manage"
+    # It can POST or DELETE: a resumed run never re-sends it on its own.
+    assert tool.idempotency == "irreversible" and declared("contract_test") == "irreversible"
 
     class C:
         def __init__(self, edition):
             self.settings = get_settings().model_copy(update={"boss_edition": edition})
 
-    out = tool.handler(C("enterprise"), project_id="p", actor="a",
-                       args={"cases": [{"path": "/healthz", "expect_status": 200}],
-                             "base_url": gateway})
+        def begin(self):
+            return eng.begin()
+
+    args = {"cases": [{"path": "/healthz", "expect_status": 200}], "base_url": gateway}
+    before = tool.handler(C("enterprise"), project_id=project, actor="a", args=args)
+    assert before["ok"] and before["failed"] == 1, "127.0.0.1 is not this project's yet"
+    assert "loopback or private" in before["cases"][0]["failures"][0]
+    with eng.begin() as c:
+        add_deployment_host(c, project, "127.0.0.1")
+    out = tool.handler(C("enterprise"), project_id=project, actor="a", args=args)
     assert out["ok"] and out["passed"] == 1
-    refused = tool.handler(C("community"), project_id="p", actor="a",
+    refused = tool.handler(C("community"), project_id=project, actor="a",
                            args={"cases": [{"url": gateway + "/healthz"}]})
     assert refused["ok"] is False and "Community" in refused["error"]
 

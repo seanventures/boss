@@ -107,7 +107,9 @@ _declare(IRREVERSIBLE,
          "create_discovery", "decide", "delete_project", "delete_workflow", "deploy_app",
          "extend_code_task", "generate_image", "publish_document", "redeploy", "remove_app",
          "request_meeting", "request_self_fix", "retry_code_task", "review_pull_request_again",
-         "run_on_host", "start_workflow", "system_doctor_act", "ticket_comment", "waive_gates",
+         "run_on_host", "start_workflow",
+         # sends whatever a case says (POST, DELETE) to a deployed API
+         "contract_test", "system_doctor_act", "ticket_comment", "waive_gates",
          "write_db")
 _declare(IDEMPOTENT,
          # converges when repeated: the second run finds the state the first one left
@@ -117,7 +119,7 @@ _declare(IDEMPOTENT,
          "register_repository", "remove_project_repository", "resolve_review_comment",
          "restore_project", "retarget_app", "retry_workflow_step", "set_job_priority",
          # a fix PR converges: the branch exists, the file is at this content, the PR is open
-         "github_open_fix_pr", "contract_test",
+         "github_open_fix_pr",
          "set_ontology_pack", "set_project_setting", "set_project_team", "skip_workflow_step",
          "start_preview", "stop_preview", "stop_watching", "test_github_access", "ticket_import",
          "ticket_transition", "update_ledger")

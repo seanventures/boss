@@ -26,7 +26,8 @@ from boss_engine.services import workflow_custom_steps as custom_steps
 from boss_engine.services import workflows
 
 from .test_workflow_capability_runner import RecordingRegistry, RecordingTool
-from .test_workflow_custom_steps import HOLDER, Ctx, _agent, eng, project  # noqa: F401
+from .amex_workflow_fixtures import eng, project  # noqa: F401
+from .test_workflow_custom_steps import HOLDER, Ctx, _agent
 
 IMAGE = "ghcr.io/northgate/gwlint@sha256:" + "a" * 64
 REPO = Path(__file__).resolve().parents[2]
@@ -61,12 +62,16 @@ def test_fails_on_exit_reads_the_stored_config():
 
 # ── the backfill ───────────────────────────────────────────────────────────────────────────
 
-def _backfill_statement() -> str:
+BACKFILL_KEY = "amex_g3_fail_on_exit_false"
+
+
+def _backfill_block(key: str) -> str:
+    """The schema's one-time backfill, under `key` so the test does not depend on (or disturb)
+    the marker the real boot already wrote."""
     sql = (REPO / "db" / "schema.sql").read_text(encoding="utf-8")
-    match = re.search(r"UPDATE skill_definitions\s+SET config = config \|\| "
-                      r"'\{\"fail_on_exit\": false\}'::jsonb.*?;", sql, re.S)
-    assert match, "db/schema.sql no longer carries the AMEX-G3 backfill"
-    return match.group(0)
+    match = re.search(r"DO \$\$\nDECLARE changed INTEGER;.*?END \$\$;", sql, re.S)
+    assert match and BACKFILL_KEY in match.group(0), "db/schema.sql lost the AMEX-G3 backfill"
+    return match.group(0).replace(BACKFILL_KEY, key)
 
 
 def _raw_skill(c, project_id, key, config):
@@ -80,18 +85,48 @@ def _raw_skill(c, project_id, key, config):
          "c": json.dumps(config)})
 
 
-def test_skills_authored_before_the_flag_keep_todays_behaviour(eng, project):
-    """The backfill writes an explicit false ONLY where the key is absent, and is idempotent."""
-    with eng.begin() as c:
-        _raw_skill(c, project, "old_lint", {"image": IMAGE, "command": "lint"})
-        _raw_skill(c, project, "new_lint", {"image": IMAGE, "command": "lint",
-                                            "fail_on_exit": True})
-        c.execute(text(_backfill_statement()))
-        c.execute(text(_backfill_statement()))     # a second apply changes nothing
-        old = sd.get_skill(c, project, "old_lint")
-        new = sd.get_skill(c, project, "new_lint")
+def test_skills_authored_before_the_flag_keep_todays_behaviour_once(eng, project):
+    """The backfill writes an explicit false ONLY where the key is absent, and runs ONCE: a
+    key-less row that appears after it ran is not touched by the next boot."""
+    key = f"test_{uuid.uuid4().hex[:8]}"
+    block = _backfill_block(key)
+    try:
+        with eng.begin() as c:
+            _raw_skill(c, project, "old_lint", {"image": IMAGE, "command": "lint"})
+            _raw_skill(c, project, "new_lint", {"image": IMAGE, "command": "lint",
+                                                "fail_on_exit": True})
+            c.exec_driver_sql(block)
+            _raw_skill(c, project, "later_lint", {"image": IMAGE, "command": "lint"})
+            c.exec_driver_sql(block)               # the next boot: recorded, so a no-op
+            old = sd.get_skill(c, project, "old_lint")
+            new = sd.get_skill(c, project, "new_lint")
+            later = sd.get_skill(c, project, "later_lint")
+            assert c.execute(text("SELECT count(*) FROM schema_backfills WHERE key=:k"),
+                             {"k": key}).scalar() == 1
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM schema_backfills WHERE key=:k"), {"k": key})
     assert old["config"]["fail_on_exit"] is False and sd.fails_on_exit(old) is False
     assert new["config"]["fail_on_exit"] is True and sd.fails_on_exit(new) is True
+    assert "fail_on_exit" not in later["config"], "the second boot rewrote a row"
+
+
+def test_an_edit_that_does_not_send_the_flag_keeps_the_stored_value(eng, project):
+    """The skill drawer did not send the key and validate_config defaulted it to true, so the
+    first edit of a backfilled skill silently switched it on."""
+    def save(config):
+        sd.save_skill(c, project_id=project, actor="test", skill_key="lint",
+                      label="Lint", behaviour_kind="sandboxed_command",
+                      inputs=[{"name": "file", "required": True}], produces=[{"name": "report"}],
+                      config={"image": IMAGE, "command": "lint {file}", **config},
+                      risk_tier=0, trusted=True)
+        return sd.get_skill(c, project, "lint")["config"]["fail_on_exit"]
+
+    with eng.begin() as c:
+        assert save({"fail_on_exit": False}) is False
+        assert save({}) is False, "an edit without the key flipped it on"
+        assert save({"fail_on_exit": True}) is True
+        assert save({}) is True
 
 
 # ── the step ───────────────────────────────────────────────────────────────────────────────
@@ -211,6 +246,24 @@ def test_a_zero_exit_passes_with_the_flag_on(eng, project, monkeypatch):
     assert rows["validate"]["status"] == "succeeded"
     assert rows["deploy"]["status"] == "succeeded"
     assert rows["reject"]["status"] == "skipped"
+
+
+def test_the_log_tail_is_redacted_before_it_is_kept(eng, project, monkeypatch):
+    from boss_engine.services import run_secret_redaction
+
+    secret = f"sk-live-{uuid.uuid4().hex}"
+    run_secret_redaction.register(secret, run_id=f"other-run-{uuid.uuid4().hex[:6]}")
+    leaked = {"status": "succeeded",
+              "result": {**EXITED["result"], "log_tail": f"auth failed for token {secret}"}}
+    _wire(monkeypatch, leaked)
+    with eng.begin() as c:
+        step_key = _authored(c, project, f"gwlint_{uuid.uuid4().hex[:6]}", fail_on_exit=True)
+        run = _start(c, project, _publish(c, project, step_key)["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        validate = _rows(c, run["id"])["validate"]
+    assert validate["status"] == "failed"
+    assert secret not in validate["last_error"] and "[SECRET]" in validate["last_error"]
+    assert secret not in validate["output"]["log_tail"]
 
 
 def test_a_built_in_skill_that_reports_an_exit_code_is_judged_as_before(eng, project):

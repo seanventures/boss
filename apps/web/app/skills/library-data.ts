@@ -26,6 +26,8 @@ export const BLANK = {
   skill_key: "", label: "", summary: "", behaviour_kind: "sandboxed_command",
   knowledge: "", inputs: "", produces: "",
   image: "", command: "", timeout_seconds: "300", network: false,
+  /** A non-zero exit fails the step (AMEX-G3). On for a new skill; an edit keeps what is stored. */
+  fail_on_exit: true,
   mcp_server_id: "", tool_name: "", executor_id: "",
   language: "python", source: "", program_timeout: "60",
   risk_tier: "1", trusted: false, enabled: true,
@@ -44,6 +46,9 @@ export function draftFromSkill(s: Skill): Draft {
     inputs: lines(s.inputs), produces: lines(s.produces),
     image: String(c.image ?? ""), command: String(c.command ?? ""),
     timeout_seconds: String(c.timeout_seconds ?? "300"), network: Boolean(c.network),
+    // Absent = a row from before the flag that the backfill has not reached: shown as stored
+    // (off), never silently flipped on by opening and saving the form.
+    fail_on_exit: c.fail_on_exit === undefined ? false : c.fail_on_exit !== false,
     mcp_server_id: String(c.mcp_server_id ?? ""), tool_name: String(c.tool_name ?? ""),
     executor_id: String(c.executor_id ?? ""),
     language: String(c.language ?? "python"), source: String(c.source ?? ""),

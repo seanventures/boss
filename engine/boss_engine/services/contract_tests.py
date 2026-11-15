@@ -15,9 +15,12 @@ workflow_capabilities.py) decide who may run it and what a failure does to the r
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
+import socket
 import time
+import urllib.parse
 import urllib.error
 import urllib.request
 from typing import Any, Iterable, Mapping, Optional
@@ -36,6 +39,74 @@ BODY_EXCERPT = 2000
 
 class CaseError(ValueError):
     """A case that cannot be run as written. Said with the case's name and the field."""
+
+
+class HostRefused(ValueError):
+    """A request (or a redirect hop) to a host a contract test may not reach."""
+
+
+#: Never, whatever the project says: cloud metadata endpoints (the shared ticket-connector list,
+#: connectors/tickets/http.py) — and every link-local address with them.
+def _blocked_hosts() -> tuple[str, ...]:
+    from ..connectors.tickets.http import _BLOCKED_HOSTS
+
+    return tuple(_BLOCKED_HOSTS)
+
+
+def _addresses(host: str) -> list[ipaddress._BaseAddress]:
+    try:
+        return [ipaddress.ip_address(host)]
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return []          # does not resolve: the request fails as "did not answer"
+    out = []
+    for info in infos:
+        try:
+            out.append(ipaddress.ip_address(info[4][0].split("%", 1)[0]))
+        except ValueError:
+            continue
+    return out
+
+
+def check_host(url: str, allowed_private: frozenset[str] = frozenset()) -> None:
+    """THE SSRF GUARD, for the first request and every redirect hop.
+
+    A contract test sends whatever method, headers and body a caller writes, and returns the
+    answer — so where it may send is the whole security question. Metadata and link-local hosts
+    are refused always (the shared connector rule, `connectors/tickets/http.check_host`).
+    Loopback, private and otherwise non-public addresses — by literal or by what the name
+    resolves to — are refused unless the host is one of `allowed_private`: the project's OWN
+    deployment targets and hosts, resolved by the caller from the database, never from the
+    arguments."""
+    parts = urllib.parse.urlsplit(url or "")
+    host = (parts.hostname or "").lower().rstrip(".")
+    if not host or (parts.scheme or "").lower() not in ("http", "https"):
+        raise HostRefused(f"{url!r} is not an http(s) URL.")
+    addresses = _addresses(host)
+    if host in _blocked_hosts() or any(a.is_link_local for a in addresses):
+        raise HostRefused(f"{host} is a metadata or link-local address; a contract test never "
+                          "sends there.")
+    if host in allowed_private:
+        return
+    if any(not a.is_global for a in addresses) or host in ("localhost",):
+        raise HostRefused(
+            f"{host} is a loopback or private address and not one of this project's "
+            "deployment targets. A contract test reaches the project's own deployments and "
+            "public hosts only.")
+
+
+class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
+    """Every redirect hop goes through the same guard as the first request."""
+
+    def __init__(self, allowed_private: frozenset[str]):
+        self.allowed_private = allowed_private
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        check_host(newurl, self.allowed_private)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _one_case(index: int, raw: Any, base_url: str, shared_headers: Mapping[str, str]) -> dict[str, Any]:
@@ -121,12 +192,19 @@ def json_path(value: Any, path: str) -> tuple[bool, Any]:
     return True, current
 
 
-def _send(case: dict[str, Any], timeout_s: float) -> dict[str, Any]:
+def _send(case: dict[str, Any], timeout_s: float,
+          allowed_private: frozenset[str] = frozenset()) -> dict[str, Any]:
     request = urllib.request.Request(case["url"], data=case["body"], method=case["method"],
                                      headers=case["headers"])
     started = time.time()
     try:
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310
+        check_host(case["url"], allowed_private)
+    except HostRefused as refused:
+        return {"status": None, "ms": 0, "headers": {}, "body": "",
+                "error": f"refused: {refused}", "refused": True}
+    opener = urllib.request.build_opener(_CheckedRedirects(allowed_private))
+    try:
+        with opener.open(request, timeout=timeout_s) as response:  # noqa: S310 — host checked
             raw = response.read(BODY_EXCERPT * 4)
             return {"status": int(response.status), "ms": round((time.time() - started) * 1000),
                     "headers": {k.lower(): v for k, v in response.headers.items()},
@@ -136,7 +214,15 @@ def _send(case: dict[str, Any], timeout_s: float) -> dict[str, Any]:
         return {"status": int(error.code), "ms": round((time.time() - started) * 1000),
                 "headers": {k.lower(): v for k, v in (error.headers or {}).items()},
                 "body": raw.decode("utf-8", errors="replace"), "error": None}
+    except HostRefused as refused:
+        return {"status": None, "ms": round((time.time() - started) * 1000), "headers": {},
+                "body": "", "error": f"refused a redirect: {refused}", "refused": True}
     except Exception as error:  # noqa: BLE001 — unreachable is a RESULT, not a crash
+        cause = getattr(error, "reason", None)
+        if isinstance(cause, HostRefused):
+            return {"status": None, "ms": round((time.time() - started) * 1000),
+                    "headers": {}, "body": "", "error": f"refused a redirect: {cause}",
+                    "refused": True}
         return {"status": None, "ms": round((time.time() - started) * 1000), "headers": {},
                 "body": "", "error": f"{type(error).__name__}: {str(error)[:300]}"}
 
@@ -146,6 +232,8 @@ def _judge(case: dict[str, Any], answer: dict[str, Any]) -> list[str]:
     failures: list[str] = []
     status = answer["status"]
     if status is None:
+        if answer.get("refused"):
+            return [str(answer["error"])]
         return [f"did not answer: {answer['error'] or 'no response'}"]
     wanted = case["expect_status"]
     if wanted is not None and status not in wanted:
@@ -190,7 +278,9 @@ def results_table(results: Iterable[Mapping[str, Any]]) -> str:
 
 
 def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
-              headers: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
+              headers: Optional[Mapping[str, str]] = None,
+              allowed_private: Iterable[str] = (),
+              deadline_s: Optional[float] = None) -> dict[str, Any]:
     """Run every case and say, per case and in total, what passed.
 
     Returns `ok: False` with an `error` when the cases cannot be run as written (not a list, a
@@ -220,9 +310,19 @@ def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
     except CaseError as error:
         return {"ok": False, "error": str(error)}
 
+    allowed = frozenset(str(h).lower().rstrip(".") for h in allowed_private if h)
+    # THE TURN'S CLOCK: no case is sent after `deadline_s`, and none waits past it.
+    ends = time.monotonic() + float(deadline_s) if deadline_s else None
     results: list[dict[str, Any]] = []
     for case in prepared:
-        answer = _send(case, timeout)
+        left = (ends - time.monotonic()) if ends is not None else timeout
+        if left <= 0:
+            results.append({"name": case["name"], "method": case["method"], "url": case["url"],
+                            "status": None, "ms": 0, "ok": False,
+                            "failures": ["not sent: out of time for this turn"],
+                            "error": None, "body_excerpt": ""})
+            continue
+        answer = _send(case, max(1.0, min(float(timeout), left)), allowed)
         failures = _judge(case, answer)
         results.append({
             "name": case["name"], "method": case["method"], "url": case["url"],
@@ -240,4 +340,41 @@ def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
     }
 
 
-__all__ = ["CaseError", "MAX_CASES", "METHODS", "json_path", "results_table", "run_cases"]
+def project_deployment_hosts(db: Any, project_id: str) -> frozenset[str]:
+    """The hosts this project deploys to: its deployment targets' domains and refs, and its
+    registered deployment hosts. The only private hosts a contract test may reach."""
+    from sqlalchemy import text
+
+    hosts: set[str] = set()
+
+    def add(value: Any) -> None:
+        raw = str(value or "").strip()
+        if not raw:
+            return
+        parsed = urllib.parse.urlsplit(raw if "://" in raw else f"http://{raw}")
+        if parsed.hostname:
+            hosts.add(parsed.hostname.lower().rstrip("."))
+
+    for queries in (
+        ("SELECT domains, target_ref FROM deployment_targets WHERE project_id = :p", True),
+        ("SELECT address FROM deployment_hosts WHERE project_id = :p", False),
+    ):
+        sql, is_target = queries
+        try:
+            with db.begin_nested():
+                rows = db.execute(text(sql), {"p": project_id}).all()
+        except Exception:  # noqa: BLE001 — a table this install lacks adds nothing
+            continue
+        for row in rows:
+            if is_target:
+                domains = row[0] if isinstance(row[0], list) else []
+                for d in domains:
+                    add(d.get("host") or d.get("domain") if isinstance(d, dict) else d)
+                add(row[1])
+            else:
+                add(row[0])
+    # The guard's own refusals still win: a metadata or link-local host never becomes allowed.
+    return frozenset(h for h in hosts if h not in _blocked_hosts())
+
+
+__all__ = ["CaseError", "HostRefused", "check_host", "project_deployment_hosts", "MAX_CASES", "METHODS", "json_path", "results_table", "run_cases"]

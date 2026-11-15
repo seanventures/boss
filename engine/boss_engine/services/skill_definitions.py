@@ -513,7 +513,16 @@ def prepare_skill(
         if problems:
             raise SkillDefinitionError(
                 f"{problems[0]['message']} (line {problems[0]['line']}).")
-    parsed_config = validate_config(behaviour, config or {},
+    config = dict(config or {})
+    if behaviour == "sandboxed_command" and "fail_on_exit" not in config and exists:
+        # AN EDIT KEEPS WHAT IS STORED. A form or a script that does not send the flag must not
+        # turn a backfilled `false` into the new-skill default `true` (AMEX-G3 review).
+        stored = connection.execute(
+            text("SELECT config->'fail_on_exit' FROM skill_definitions "
+                 "WHERE project_id = :p AND skill_key = :k"),
+            {"p": project_id, "k": key}).scalar()
+        config["fail_on_exit"] = False if stored is None else stored
+    parsed_config = validate_config(behaviour, config,
                                     [entry["name"] for entry in parsed_inputs])
     if behaviour == "mcp_tool":
         parsed_config = _resolve_mcp_binding(connection, project_id, parsed_config)

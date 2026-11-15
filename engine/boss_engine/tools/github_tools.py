@@ -7,8 +7,13 @@ binding's own adapter (services/github_actions.py). Never a token in an argument
 
 Both are workflow capabilities too (`github_comment`, `fix_pr` in workflow_capabilities.py): the
 runner dispatches the step to the tool here, so a step and an agent's tool call are the same
-code under the same permission. The runner adds `workflow_run_id`, which names the run in the
-branch and the PR body; a chat or MCP call has none and the branch says so (`manual-<time>`).
+code under the same permission. The run that names the branch and the PR body is the one the
+runner set (github_actions.WORKFLOW_RUN_ID) — never an argument, so no caller can claim a run it
+is not; a chat or MCP call has none and the branch says so (`manual-<time>`).
+
+A FIX PR IS TIER 2 WHEREVER IT COMES FROM. As a workflow step it waits at the manual-approval
+floor; called directly (chat, an agent, MCP) it is `operator_only`: the model offers it and a
+person presses it (registry.invoke refuses an unconfirmed call).
 """
 from __future__ import annotations
 
@@ -30,8 +35,6 @@ _REPOSITORY = {
 def _schema(properties: dict[str, Any], required: tuple[str, ...]) -> dict[str, Any]:
     return {"type": "object",
             "properties": {**properties, "repository": _REPOSITORY,
-                           "workflow_run_id": {"type": "string",
-                                               "description": "set by the workflow runner"},
                            "project_id": {"type": "string"}},
             "required": list(required), "additionalProperties": False}
 
@@ -77,7 +80,7 @@ def _refusal(error: BaseException) -> dict[str, Any]:
 
 
 def _comment(ctx, *, project_id, actor, args):
-    from ..services.github_actions import GitHubActionError, post_comment
+    from ..services.github_actions import WORKFLOW_RUN_ID, GitHubActionError, post_comment
 
     args = dict(args or {})
     pid = args.get("project_id") or project_id
@@ -87,13 +90,13 @@ def _comment(ctx, *, project_id, actor, args):
                 db, getattr(ctx, "settings", None), project_id=pid, actor=actor,
                 number=args.get("number"), body=str(args.get("body") or ""),
                 repository=args.get("repository"), marker=args.get("marker") or None,
-                run_id=args.get("workflow_run_id") or None)
+                run_id=WORKFLOW_RUN_ID.get() or None)
     except GitHubActionError as error:
         return _refusal(error)
 
 
 def _fix_pr(ctx, *, project_id, actor, args):
-    from ..services.github_actions import GitHubActionError, open_fix_pr
+    from ..services.github_actions import WORKFLOW_RUN_ID, GitHubActionError, open_fix_pr
 
     args = dict(args or {})
     pid = args.get("project_id") or project_id
@@ -105,7 +108,7 @@ def _fix_pr(ctx, *, project_id, actor, args):
                 base_branch=args.get("base_branch"), files=args.get("files"),
                 path=args.get("path"), content=args.get("content"), diff=args.get("diff"),
                 report=args.get("report"), summary=args.get("summary"), slug=args.get("slug"),
-                draft=args.get("draft"), run_id=args.get("workflow_run_id") or None)
+                draft=args.get("draft"), run_id=WORKFLOW_RUN_ID.get() or None)
     except GitHubActionError as error:
         return _refusal(error)
 
@@ -127,4 +130,7 @@ def register_github_tools(reg) -> None:
                     "the run and carries the validation report. No build, no coding agent; "
                     "merging stays a person's decision. Receipted.",
         parameters=_FIX_PR, handler=_fix_pr, kind="write", reversibility="safe",
-        permission="code_task:create", idempotency="idempotent", exposure=_EXPOSURE))
+        permission="code_task:create", idempotency="idempotent", operator_only=True,
+        offer_note="It opens a pull request on the customer's repository; merging stays a "
+                   "person's decision.",
+        exposure=_EXPOSURE))

@@ -813,7 +813,7 @@ def execute(
                 f"'{row['label']}' failed: {result.get('reason') or 'the skill did not run'}"
             )
         exited = exit_failure(connection, project_id, str(row["skill_id"]), str(row["label"]),
-                              result.get("result"))
+                              result.get("result"), run_id=run_id)
         if exited:
             # THE COMMAND SAID NO. `skill.sandboxed_command` reports its `exit_code`; the
             # invocation itself succeeded, so this is the only place the step learns the
@@ -821,7 +821,7 @@ def execute(
             # they do to a failed tool, and the sentence carries the code and the log tail
             # (AMEX-G3, BOSSAPP-1139).
             raise CustomStepError(exited, output={
-                **(result.get("result") or {}),
+                **redacted_output(result.get("result") or {}, run_id),
                 "_step": {"custom_step": key, "label": row["label"], "binding": "skill",
                           "skill_id": row["skill_id"], "risk_tier": risk["risk_tier"]},
                 "ran_as": ran_as,
@@ -877,8 +877,25 @@ def execute(
     }
 
 
+def redacted_output(output: dict[str, Any], run_id: Optional[str]) -> dict[str, Any]:
+    """A command's output with its log fields passed through the secret redaction
+    (run_secret_redaction.scrub) — a command echoes what it was given, secrets included.
+
+    Scrubbed of EVERY live run's values, not only `run_id`'s: the workflow run and the sandbox
+    run that registered a secret need not share an id, and `scrub`'s run filter only ever
+    narrows. `run_id` is kept on the signature as the run the output belongs to."""
+    from .run_secret_redaction import scrub
+
+    del run_id  # the wider scrub covers it
+    out = dict(output)
+    for field in ("log_tail", "stdout", "stderr"):
+        if isinstance(out.get(field), str):
+            out[field] = str(scrub(out[field]))
+    return out
+
+
 def exit_failure(connection: Connection, project_id: str, skill_id: str, label: str,
-                 output: Any) -> Optional[str]:
+                 output: Any, *, run_id: Optional[str] = None) -> Optional[str]:
     """The sentence a step fails with when its command exited non-zero, or None.
 
     ONLY FOR A SKILL THAT SAYS SO. `fail_on_exit` is a setting of the authored skill: on for
@@ -903,6 +920,7 @@ def exit_failure(connection: Connection, project_id: str, skill_id: str, label: 
     policy = ((item or {}).get("spec") or {}).get("policy") or {}
     if not policy.get("fail_on_exit"):
         return None
+    output = redacted_output(output, run_id)
     tail = str(output.get("log_tail") or output.get("stderr") or output.get("stdout") or "")
     tail = " ".join(tail.strip().split())[-600:]
     said = f"'{label}' exited with code {code}"
