@@ -44,17 +44,15 @@ def pinned_engine(spec: dict) -> str:
     if isinstance(default, dict):
         _pinned_engine = str(default.get("engine") or "").strip().lower()
     elif isinstance(default, str) and default.strip():
-        _pinned_engine = default.split(":", 1)[0].strip().lower()
-        # ASK THE REGISTRY, not a list of three. This allow-list predates the harness seam and
-        # silently dropped every engine added since — a run pinned to "codex:gpt-5-codex" or
-        # "openrouter:…" in string form fell back to the process default and ran somewhere
-        # else, with nothing saying so.
-        try:
-            from ..harness_registry import get_harness
+        # Split once. `ollama:llama3.1:8b` pins ollama; `llama3.1:8b` is a model
+        # tag and pins nothing (BOSSAPP-1023). An unknown prefix is not a pin.
+        from ..harness_registry import is_registered_harness, split_engine_model
 
-            get_harness(_pinned_engine)
-        except Exception:  # noqa: BLE001 — an unknown engine is not a pin
-            _pinned_engine = ""
+        text = default.strip()
+        if ":" in text:
+            _pinned_engine = split_engine_model(text)[0] or ""
+        else:
+            _pinned_engine = text.lower() if is_registered_harness(text) else ""
     return _pinned_engine
 
 

@@ -417,9 +417,12 @@ def _parse_route(value) -> dict:
         if v in ("low_cost", "strong"):
             return {"engine": None, "model": None, "model_class": v}
         if ":" in v:
-            eng, _, mdl = v.partition(":")
-            eng = eng.strip().lower() or None
-            mdl = mdl.strip() or None
+            # Once, from the left. `llama3.1:8b` is a model tag, not an engine
+            # (BOSSAPP-1023). A prefix counts only when a harness is registered
+            # under that name; otherwise the whole string is the model.
+            from .harness_registry import split_engine_model
+
+            eng, mdl = split_engine_model(v)
             if eng or mdl:
                 return {"engine": eng, "model": mdl, "model_class": None}
         elif v:

@@ -264,8 +264,16 @@ class RoutingPolicy:
 
 def _target(value: Any, where: str) -> Target:
     if isinstance(value, str):
-        engine, _, model = value.partition(":")
-        value = {"engine": engine, "model": model or None}
+        if ":" in value:
+            from ..harness_registry import split_engine_model
+
+            engine, model = split_engine_model(value)
+            # A model tag is not an engine. `llama3.1:8b` must not become
+            # engine llama3.1 (BOSSAPP-1023).
+            value = {"engine": engine, "model": model} if engine else {}
+        else:
+            engine, _, model = value.partition(":")
+            value = {"engine": engine, "model": model or None}
     if not isinstance(value, Mapping) or not str(value.get("engine") or "").strip():
         raise PolicyError(f"{where}: each target needs an engine.")
     model = value.get("model")

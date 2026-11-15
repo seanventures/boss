@@ -214,6 +214,41 @@ def get_harness(name: Optional[str]) -> HarnessSpec:
     return spec
 
 
+def is_registered_harness(name: Optional[str]) -> bool:
+    """True when `name` is a harness the registry can build.
+
+    Only UnknownHarness means "not an engine". Any other failure is a broken
+    registry and must surface, not be read as a model name.
+    """
+    if not str(name or "").strip():
+        return False
+    try:
+        get_harness(name)
+    except UnknownHarness:
+        return False
+    return True
+
+
+def split_engine_model(text: str) -> tuple[Optional[str], Optional[str]]:
+    """Split a routing id once from the left.
+
+    The prefix is an engine only when it is a registered harness name.
+    `ollama:llama3.1:8b` is engine `ollama` and model `llama3.1:8b`.
+    `llama3.1:8b` and `qwen2.5-coder:7b` are models — the whole string.
+    A string with no colon is returned as a model; the caller decides whether
+    a bare harness name is an engine.
+    """
+    raw = str(text or "").strip()
+    if not raw or ":" not in raw:
+        return None, (raw or None)
+    engine, _, model = raw.partition(":")
+    engine = engine.strip().lower()
+    model = model.strip() or None
+    if engine and is_registered_harness(engine):
+        return engine, model
+    return None, raw
+
+
 def build_harness(name: Optional[str], settings) -> object:
     return get_harness(name).build(settings)
 
