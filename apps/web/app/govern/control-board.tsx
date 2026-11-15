@@ -479,12 +479,12 @@ function TokenGuides({ view }: {
         </li>
       </ul>
       {/* The per-call cap editor is gone (BOSSAPP-999 §3): it edited a guide that never
-          stopped a call. To stop calls by volume, set per-class caps — the `call_classes`
-          project setting (deny a class, or cap its calls/tokens per day). */}
-      <p className="gv-honesty" data-testid="gv-token-pointer">
-        Per-call figures are guides for alerts. To stop calls by volume, set per-class caps
-        {" "}(project setting <code>call_classes</code>: deny a class, or cap its calls/tokens per day).
-      </p>
+          stopped a call. The long explanation stays in the tooltip so the board stays
+          within the six-word copy budget (activity-govern-copy-budget). */}
+      <span className="gv-honesty" data-testid="gv-token-pointer"
+            title="To stop calls by volume, set per-class caps (project setting call_classes: deny a class, or cap its calls/tokens per day).">
+        Per-call figures guide alerts
+      </span>
     </section>
   );
 }
