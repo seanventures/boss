@@ -104,6 +104,19 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
         _log.warning("storage watch not started", exc_info=True)
         started["storage_watch"] = False
     try:
+        # Telemetry retention (ST-8, BOSSAPP-1153): events in monthly partitions, per-table
+        # windows, batched deletes. Every API process starts it; an advisory lock lets one sweep.
+        from . import telemetry_retention
+
+        if getattr(settings, "telemetry_retention_enabled", True):
+            telemetry_retention.start(engine, settings)
+            started["telemetry_retention"] = True
+        else:
+            started["telemetry_retention"] = False
+    except Exception:  # noqa: BLE001
+        _log.warning("telemetry retention not started", exc_info=True)
+        started["telemetry_retention"] = False
+    try:
         # Scheduled self-backups (BOSSAPP-838): every API process starts it; the DB lease lets
         # exactly one of them back up.
         from . import backup_scheduler

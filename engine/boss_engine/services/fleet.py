@@ -276,7 +276,17 @@ def endpoints(host_id: str) -> dict:
             "model_gateway": _model_gateway_url(),
             # The MCP/tool gateway lives on the control plane (P8b S12; HOST_API.md §4.7): the
             # guest's /mcp/<server> is forwarded here, relative to the control-plane URL.
-            "mcp_gateway": _mcp_gateway_route()}
+            "mcp_gateway": _mcp_gateway_route(),
+            # boss-egress (P8b S11; HOST_API.md §4.9): the guest's /git/<host>/… and /api/<host>/…
+            # go here with the host's proof. Absent → the host answers 503 gateway_unconfigured.
+            "egress": _egress_url()}
+
+
+def _egress_url() -> str:
+    """The URL hosts reach boss-egress at: BOSS_EGRESS_HOST_URL (the address hosts see, when it
+    differs from the API's), else BOSS_EGRESS_URL. "" when egress is off."""
+    return (os.environ.get("BOSS_EGRESS_HOST_URL") or os.environ.get("BOSS_EGRESS_URL")
+            or "").strip().rstrip("/")
 
 
 def _mcp_gateway_route() -> str:

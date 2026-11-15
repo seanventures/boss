@@ -2,6 +2,7 @@
 
     /github/<owner>/<repo>.git/...   git smart-HTTP (clone, fetch, push)
     /github-api/...                  the GitHub REST API
+    /git/<host>/..., /api/<host>/... a microVM's git and REST through its boss-hostd (P8b S11)
     /_boss/register                  the run supervisor hands over a run's egress token
                                      (server to server, `X-Boss-Egress-Key`: BOSS_EGRESS_SERVICE_KEY)
     /_boss/healthz                   liveness
@@ -145,6 +146,10 @@ def build_app(engine: Optional[Any] = None, *, upstream=None, listen: bool = Fal
         Route("/_boss/register", register, methods=["POST"]),
         Route("/github/{path:path}", forward, methods=["GET", "POST"]),
         Route("/github-api/{path:path}", forward, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
+        # The host route (P8b S11; HOST_API.md §4.9): a microVM's git and REST, forwarded by its
+        # boss-hostd with the host's proof, the moved handle and the run's boss:egress token.
+        Route("/git/{path:path}", forward, methods=["GET", "POST"]),
+        Route("/api/{path:path}", forward, methods=["GET", "POST", "PUT", "PATCH"]),
     ])
     if listen:
         stop = threading.Event()

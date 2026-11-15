@@ -40,6 +40,40 @@ def _git(args, cwd):
     return _run(["git", "-C", str(cwd), *args])
 
 
+#: Git hosts the relay routes (P8b S11, D19). Any other host has no insteadOf: its clone fails
+#: closed (the VM has no network), and egress refuses it by name if it is ever addressed.
+RELAY_GIT_HOSTS = ("github.com", "bitbucket.org")
+#: git's credential helper: asks boss-hostd (through the relay) for this VM's boss_egr_ handle on
+#: `get`, ignores `store`/`erase`. The answer lives in git's memory for one request; nothing is
+#: written to a config file or the environment.
+_HELPER = ("!f() { test \"$1\" = get || exit 0; python3 -I -c 'import sys, urllib.request as u; "
+           "o = u.build_opener(u.ProxyHandler({})); "
+           "sys.stdout.write(o.open(sys.argv[1], timeout=10).read().decode())' \"%s\"; }; f")
+
+
+def configure_git_relay(spec, *, scope=("--global",)):
+    """Point git at boss-hostd's git route (contract v1.1 `endpoints.git`): every
+    https://<github.com|bitbucket.org>/ URL becomes http://127.0.0.1:7102/git/<host>/, and the
+    credential helper asks boss-hostd for the handle (P8b S11; HOST_API.md §4.9). This replaces
+    the in-VM shim: no token, no handle, in any git config or environment variable."""
+    base = str((spec.get("endpoints") or {}).get("git") or "http://127.0.0.1:7102").rstrip("/")
+    if not re.fullmatch(r"http://127\.0\.0\.1:\d{2,5}", base):
+        raise RuntimeError("endpoints.git must be the guest loopback relay")
+    url = base + "/_boss/git-credential"
+    if spec.get("run_id"):
+        url += "?run=" + re.sub(r"[^A-Za-z0-9_.:/#-]", "", str(spec["run_id"]))
+    cmds = [["git", "config", *scope, "--replace-all", f"url.{base}/git/{h}/.insteadOf",
+             f"https://{h}/"] for h in RELAY_GIT_HOSTS]
+    cmds += [["git", "config", *scope, "--replace-all", "credential.helper", ""],
+             ["git", "config", *scope, "--add", "credential.helper", _HELPER % url],
+             ["git", "config", *scope, f"http.{base}/.proxy", ""]]
+    for cmd in cmds:
+        rc, _o, e = _run(cmd)
+        if rc != 0:
+            raise RuntimeError("git relay config failed: " + (e or "")[:200])
+    return base
+
+
 def _prepare_repo(spec):
     WORK.parent.mkdir(parents=True, exist_ok=True)
     if spec.get("test_mode"):
@@ -53,6 +87,10 @@ def _prepare_repo(spec):
         owner, repo = spec["owner"], spec["repo"]
         branch = spec.get("base_branch", "main")
         token = spec.get("token")
+        if (spec.get("handles") or {}).get("egr") and not token:
+            # Contract v1.1 on a microVM: git goes through boss-hostd → egress (P8b S11). The
+            # handle in the spec is only the signal; git gets it from the helper, per request.
+            configure_git_relay(spec)
         # BOSS-267: host-aware clone (the guest is dependency-free, so the tiny URL map lives
         # inline; the host passes spec.repo_host — absent -> github, unchanged behavior).
         host = (spec.get("repo_host") or "github").lower()

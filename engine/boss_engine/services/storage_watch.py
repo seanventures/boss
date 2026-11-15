@@ -432,6 +432,13 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
         level = "floor"
     open_incident = storage_incidents.current_for_host(connection, host_id)
     last = storage_incidents.last_resolved(connection, host_id)
+    try:
+        from . import telemetry_retention
+
+        with connection.begin_nested():
+            telemetry = telemetry_retention.share(connection)
+    except Exception:  # noqa: BLE001 — the card renders without it
+        telemetry = None
     host_rows = []
     for h in hosts(connection):
         s = latest(connection, h, within=timedelta(days=2)) or {}
@@ -454,6 +461,8 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
                       for t, u, fr in series],
             "thresholds": th, "level": level, "rules": rules,
             "last_cleanup": last, "open_incident_id": (open_incident or {}).get("id"),
+            # ST-8: telemetry tables' share of the database and the last retention sweep.
+            "telemetry": telemetry,
             "hosts": host_rows}
 
 

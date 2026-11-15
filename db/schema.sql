@@ -2701,6 +2701,38 @@ ALTER TABLE events
   ALTER COLUMN created_at SET DEFAULT clock_timestamp();
 CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
 
+-- TELEMETRY RETENTION (ST-8, BOSSAPP-1153; services/telemetry_retention.py). `events` is
+-- converted ONLINE into monthly range partitions on created_at by the retention service (never
+-- here: a boot must not take a long lock), and expired months are dropped whole. Audit-relevant
+-- events (decisions, GitHub, deploys, secrets, identity, settings, budget, ledger, ...) are first
+-- copied here, so dropping a month never loses audit evidence. Same columns as `events`; the
+-- copy names the columns both tables have.
+CREATE TABLE IF NOT EXISTS events_archive (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL,
+  archived_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_events_archive_project_created
+  ON events_archive(project_id, created_at DESC);
+-- A conversion that died between adding its NOT VALID `created_at < cutover` check and the swap
+-- leaves the check on the PLAIN table; once the cutover passes, every event insert would fail.
+-- Only a conversion in flight may hold it, and none is in flight while the schema applies: drop
+-- it here (the retention service also drops it before it starts). No-op once events is
+-- partitioned (the bound then lives on nothing) and on a fresh install.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE oid = to_regclass('events') AND relkind = 'r')
+     AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'events_legacy_bound'
+                 AND conrelid = to_regclass('events')) THEN
+    ALTER TABLE events DROP CONSTRAINT events_legacy_bound;
+  END IF;
+END $$;
+
 -- A human approves one exact, short-lived MCP HTTP request. No submitted body
 -- or credential material is stored: only a digest and redacted review preview.
 CREATE TABLE IF NOT EXISTS mcp_confirmations (
@@ -2766,7 +2798,7 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   endpoint_id TEXT NOT NULL REFERENCES webhook_endpoints(id),
-  event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
+  event_id TEXT,                 -- soft reference: events is partitioned by month in ST-8
   event_type TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   dedupe_key TEXT NOT NULL,
@@ -2797,7 +2829,7 @@ CREATE TABLE IF NOT EXISTS inbound_webhooks (
   signature_status TEXT NOT NULL,
   payload_hash TEXT NOT NULL,
   payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-  event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
+  event_id TEXT,                 -- soft reference: events is partitioned by month in ST-8
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(source, delivery_key)
 );
@@ -15445,3 +15477,16 @@ CREATE INDEX IF NOT EXISTS idx_agent_certs_replica ON agent_certs (replica_id, n
 ALTER TABLE agent_hosts ADD COLUMN IF NOT EXISTS isolation_ok BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS isolation_required BOOLEAN NOT NULL DEFAULT false;
 -- ================================ end P8b-9/11 ==
+
+-- ================================ P8b-5: git and REST through boss-hostd → egress (BOSSAPP-1072) ==
+-- boss-agent-hosts-lld.md §3.8, §3.11 (S11), D19; HOST_API.md §4.9. A microVM's `boss_egr_` handle
+-- is redeemed only through its host (sandbox_id = 'host:'; runs.resolve_egress refuses it on the
+-- direct route) and is bound to (org, run, epoch, vm) like the model and MCP handles: a handle
+-- minted before its VM exists binds to the first VM that redeems it; another VM's use is a replay.
+ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS org_id TEXT;
+ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS vm_id TEXT;
+ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS fence_epoch BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS deployment_id TEXT;
+ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS revoked_reason TEXT;
+CREATE INDEX IF NOT EXISTS idx_identity_egress_credentials_run ON identity_egress_credentials (run_id);
+-- ================================ end P8b-5 ==

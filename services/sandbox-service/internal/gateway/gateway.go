@@ -446,6 +446,15 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 		deny(http.StatusForbidden, "route_denied")
 		return
 	}
+	if rule.Credential {
+		g.serveCredential(v, cw, r, &call)
+		return
+	}
+	if rule.Challenge && handle == "" {
+		cw.Header().Set("WWW-Authenticate", `Basic realm="boss"`)
+		deny(http.StatusUnauthorized, "handle_required")
+		return
+	}
 	b, d := g.resolve(v, rule, handle)
 	if d != nil {
 		deny(d.status, d.reason)
@@ -604,6 +613,50 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 		},
 	}
 	proxy.ServeHTTP(cw, r)
+}
+
+// serveCredential answers git's credential helper (`git credential fill`
+// format) with the VM's OWN egress handle, from the socket's identity: never a
+// token, never another VM's handle (P8b S11, HOST_API.md §4.9). A VM that holds
+// several runs' handles names the run (`?run=`); a fenced or unknown run gets
+// nothing.
+func (g *Gateway) serveCredential(v *vmGW, w http.ResponseWriter, r *http.Request, call *hostapi.GuestCall) {
+	want := r.URL.Query().Get("run")
+	g.mu.RLock()
+	var found []Binding
+	var raws []string
+	for _, m := range []map[string]Binding{g.bindings, g.runBindings} {
+		for raw, b := range m {
+			if b.Kind != HandleEgress || b.VMID != v.id || g.revoked[Fingerprint(raw)] {
+				continue
+			}
+			if min, ok := g.fences[b.RunID]; ok && b.Epoch < min {
+				continue
+			}
+			if want != "" && b.RunID != want {
+				continue
+			}
+			found = append(found, b)
+			raws = append(raws, raw)
+		}
+	}
+	g.mu.RUnlock()
+	if len(found) != 1 {
+		reason := "no_egress_handle"
+		if len(found) > 1 {
+			reason = "run_required"
+		}
+		call.Verdict, call.RejectedBy = "deny", reason
+		writeErr(w, http.StatusNotFound, reason)
+		return
+	}
+	call.Verdict, call.RunID, call.HandleFP = "allow", found[0].RunID, Fingerprint(raws[0])
+	ep := found[0].Epoch
+	call.Epoch = &ep
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "username=boss\npassword="+raws[0]+"\n")
 }
 
 // joinPath prefixes the endpoint path unless the guest path already carries

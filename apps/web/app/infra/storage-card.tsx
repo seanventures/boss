@@ -16,7 +16,7 @@ import { ArrowRight, Bell, Broom, Clock, Cpu, Database, HardDrives, Laptop, Shie
 import { GatedButton } from "../../components/gated";
 import {
   CLEAN_PERMISSION, RULES_PERMISSION, cleanNow, daysWord, fullInDays, gb, reportPatch, setRuleEnabled, storageTone, useInfraIncident, useStorageSummary, whenWord,
-  type HostStorageRow, type StorageSummary,
+  type HostStorageRow, type StorageSummary, type TelemetryShare,
 } from "../../lib/infra-storage";
 import { showToast } from "../client-forms";
 import { StripLink } from "./infra-strip-banner";
@@ -89,6 +89,30 @@ function TrendForecast({ s }: { s: StorageSummary }) {
       </svg>
       <span className="sc-axis"><span>{s.trend.length ? "30 days ago" : "no readings yet"}</span><span>today</span><span>full · {gb(s.totalGb)}</span></span>
     </figure>
+  );
+}
+
+/** ST-8: how much of the database is telemetry, and what the last retention sweep removed. */
+export function telemetryWords(t: TelemetryShare): { share: string; sweep: string } {
+  const share = `${gb(t.gb)}${t.sharePct !== null ? ` · ${Math.round(t.sharePct)} % of the database` : ""}`;
+  const l = t.lastSweep;
+  const sweep = !l ? "no sweep yet"
+    : l.errors.length ? `last sweep ${whenWord(l.at)} · ${l.errors.length} table${l.errors.length === 1 ? "" : "s"} not finished`
+    : l.rows || l.partitions.length ? `last sweep ${whenWord(l.at)} · ${l.rows.toLocaleString("en-US")} rows · ${gb(l.bytes / 1e9)}`
+    : `last sweep ${whenWord(l.at)} · nothing past retention`;
+  return { share, sweep };
+}
+
+function TelemetryRow({ t }: { t: TelemetryShare }) {
+  const w = telemetryWords(t);
+  const top = t.tables.slice(0, 4).map((x) => `${x.table} ${gb(x.gb)}${x.keepDays ? ` · keeps ${x.keepDays} d` : ""}${x.partitioned ? " · monthly" : ""}`).join("\n");
+  return (
+    <div className="sc-telemetry" data-testid="sc-telemetry" title={top}>
+      <Database size={13} aria-hidden />
+      <span>Telemetry <code>{w.share}</code></span>
+      <span className="sc-spacer" />
+      <span className="ia-chip" data-tone={t.lastSweep?.errors.length ? "amber" : "grey"} data-testid="sc-telemetry-sweep"><Broom size={11} aria-hidden />{w.sweep}</span>
+    </div>
   );
 }
 
@@ -205,6 +229,7 @@ export function StorageCardView({ s, projectId, orgId, sample, pendingDecisionId
           {segs.map((x) => <li key={x.key}><span className="sc-swatch" data-tone={TYPE_TONES[x.key] ?? "grey"} aria-hidden />{x.label} <code>{gb(x.gb)}</code></li>)}
           {!segs.length ? <li className="sc-faint">No reading by type yet.</li> : null}
         </ul>
+        {s.telemetry ? <TelemetryRow t={s.telemetry} /> : null}
       </section>
 
       <section className="sc-card">

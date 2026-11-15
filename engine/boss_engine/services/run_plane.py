@@ -332,7 +332,49 @@ def _guest_handles(connection: Any, settings: Any, job: dict, run_id: str, repli
                 deployment_id=row["deployment_id"]))
     except Exception as exc:  # noqa: BLE001 — the run still starts; its tool calls fail closed
         log.warning("no MCP handle for run %s: %s", run_id, type(exc).__name__)
+    try:
+        # P8b S11: the guest's git/REST handle, redeemed only through its host at boss-egress
+        # (HOST_API.md §4.9). It carries no authority: the run's boss:egress token does.
+        from ..identity import egress_handles
+
+        with connection.begin_nested():
+            handles["egr"] = egress_handles.issue(
+                connection, org_id=str(row["org_id"]), run_id=run_id, epoch=epoch,
+                vm_id=row["vm_id"], deployment_id=row["deployment_id"])
+    except Exception as exc:  # noqa: BLE001 — the run still starts; its git calls fail closed
+        log.warning("no egress handle for run %s: %s", run_id, type(exc).__name__)
     return handles
+
+
+def run_git_scope(connection: Any, job: dict, deployment_id: Optional[str]) -> dict:
+    """What the run's `boss:egress` token may reach in git (P8b S11): `repos` (GitHub
+    `owner/repo`), `bitbucket_repos` (`workspace/repo_slug`, D19) and `github_needs`. The job's
+    payload names them for one run; otherwise the deployment's `metadata` does for all its runs.
+    Nothing named → nothing reachable: every git call is `repo_outside_run`."""
+    payload = job.get("payload") or {}
+    if isinstance(payload, str):
+        payload = json.loads(payload or "{}")
+    meta: dict = {}
+    if deployment_id:
+        try:
+            with connection.begin_nested():
+                found = connection.execute(text(
+                    "SELECT metadata FROM agent_deployments WHERE id = :d"),
+                    {"d": deployment_id}).scalar()
+            meta = found if isinstance(found, dict) else json.loads(found or "{}")
+        except Exception:  # noqa: BLE001 — no scope read: the token names no repository
+            meta = {}
+
+    def names(key: str) -> tuple:
+        value = payload.get(key) if payload.get(key) is not None else meta.get(key)
+        return tuple(dict.fromkeys(str(v).strip() for v in (value or [])
+                                   if isinstance(v, str) and "/" in v and str(v).strip()))
+
+    needs = payload.get("github_needs") if payload.get("github_needs") is not None \
+        else meta.get("github_needs")
+    return {"repos": names("repos"), "bitbucket_repos": names("bitbucket_repos"),
+            "github_needs": {str(k): str(v) for k, v in needs.items()}
+            if isinstance(needs, dict) else None}
 
 
 _ROUND_ROBIN: dict = {}
@@ -997,13 +1039,19 @@ def settle(connection: Any, settings: Any, host_id: str, run_id: str, lease: Lea
 
 
 def _revoke_handles(connection: Any, run_id: str, reason: str) -> None:
-    """The run's model and MCP handles die with its lease (P8b S10, S12), and so do the
+    """The run's model, MCP and egress handles die with its lease (P8b S10, S12, S11), and so do the
     host-held tokens minted for it (S13)."""
     from . import mcp_gateway
     from . import streaming_model_gateway as smg
 
     smg.revoke_run(connection, run_id, reason)
     mcp_gateway.revoke_run_handles(connection, run_id, reason)
+    try:
+        from ..identity import egress_handles
+
+        egress_handles.revoke_run(connection, run_id, reason)
+    except Exception:  # noqa: BLE001 — an install mid-upgrade: the columns arrive with the schema
+        log.debug("egress handles not revocable yet for %s", run_id)
     try:
         with connection.begin_nested():
             connection.execute(text(
@@ -1076,9 +1124,15 @@ def host_tokens(connection: Any, settings: Any, host_id: str, run_id: str, lease
         raise RunPlaneError("bad_scope", 400,
                             f"a host run's scope is within {', '.join(sorted(HOST_RUN_SCOPE))}")
     try:
+        scope_git = run_git_scope(connection, job, replica.get("deployment_id")) \
+            if delegation.AUD_EGRESS in wanted else {"repos": (), "bitbucket_repos": (),
+                                                     "github_needs": None}
         shim = identity_runs.start_run(
             subject, identity_runs.RunStart(run_id=run_id, agent_id=agent_id,
-                                            project_id=project_id, scope=chosen),
+                                            project_id=project_id, scope=chosen,
+                                            repos=scope_git["repos"],
+                                            bitbucket_repos=scope_git["bitbucket_repos"],
+                                            github_needs=scope_git["github_needs"]),
             grant_id=grant_id, db=connection, audiences=wanted, dpop_jkt=jkt)
     except tokens.TokenError as exc:
         raise RunPlaneError(f"token_{exc.reason}", 409 if exc.status >= 400 else exc.status,
