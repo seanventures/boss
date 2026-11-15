@@ -79,8 +79,8 @@ def test_the_go_stage_pins_a_release_and_checks_it_per_architecture():
     # without the per-run environment.
     goenv = re.search(r"printf '([^']*)' \\\n\s*> /opt/toolchains/go/go.env", go)
     assert goenv, "the stage rewrites $GOROOT/go.env"
-    assert goenv.group(1).split("\\n")[:3] == [
-        "GOPROXY=https://proxy.golang.org", "GOSUMDB=sum.golang.org", "GOTOOLCHAIN=local"]
+    assert goenv.group(1).split("\\n") == [
+        "GOPROXY=https://proxy.golang.org", "GOSUMDB=sum.golang.org", "GOTOOLCHAIN=local", ""]
     assert """printf '{"go": {"go": "%s"}}\\n' "$GO_VERSION" > /opt/toolchains/manifest.json""" in go
 
 
@@ -463,6 +463,51 @@ def test_the_language_code_moves_away_from_is_not_requested(brief, source, targe
                                    "Migrate the billing service to Go"])
 def test_the_language_code_moves_to_is_requested(brief):
     assert "go" in stacks.languages_named(brief), brief
+
+
+#: Re-review of #135: a later language in the sentence is not a migration target, and "to"
+#: alone is no migration. Each of these asks for Go; with Go off, each must stop the build.
+GO_IS_WHAT_IS_BUILT = [
+    "Build the backend in Go to serve the React app",
+    "Build a Go service to replace the legacy Java one",
+    "Build a Go API to replace our Python one",
+    "A Go proxy to the Express backend",
+    "Build a Go worker that moves jobs to the Node queue",
+    "Move from Python to Go for the gateway",
+    "Migrate from Java to Go",
+]
+
+
+@pytest.mark.parametrize("brief", GO_IS_WHAT_IS_BUILT)
+def test_go_is_detected_whatever_else_the_sentence_names(brief, go_off):
+    assert "go" in stacks.languages_named(brief), stacks.languages_named(brief)
+    verdict = stacks.check_build(brief + "\n\n---\n\nspec")
+    assert not verdict.ok and "go" in verdict.off, brief
+
+
+@pytest.mark.parametrize("brief,expected", [
+    ("Rewrite our Go codebase in Node", ["node"]),
+    ("Port our Go service to Python (FastAPI)", ["python"]),
+    ("We use Go internally; build the dashboard in React", ["node"]),
+    ("Build a Go service to replace the legacy Java one", ["go"]),
+    ("Build a Go API to replace our Python one", ["go"]),
+    ("Move from Python to Go for the gateway", ["go"]),
+    ("Migrate from Java to Go", ["go"]),
+])
+def test_exactly_the_built_language_is_named(brief, expected):
+    assert stacks.languages_named(brief) == expected, brief
+
+
+@pytest.mark.parametrize("text", ["go vet ./... must pass", "`go vet ./...` must pass",
+                                  "go test ./... and go vet ./... must be clean"])
+def test_a_path_or_code_span_does_not_end_the_sentence(text):
+    assert "go" in stacks.languages_named(text), text
+
+
+def test_a_bare_go_in_a_stack_array_is_go():
+    assert "go" in stacks.languages_named('{"stack": ["go", "react", "postgres"]}')
+    assert "go" in stacks.languages_named('languages: ["golang"]')
+    assert "go" not in stacks.languages_named('allowed: ["go", "make", "npm"]')
 
 
 @pytest.mark.parametrize("brief", [

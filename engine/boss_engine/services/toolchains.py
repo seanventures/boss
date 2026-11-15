@@ -210,7 +210,7 @@ def sandbox_env(home: Path | str) -> dict[str, str]:
     home = str(home)
     return {"GOPATH": f"{home}/go", "GOMODCACHE": f"{home}/go/pkg/mod",
             "GOCACHE": f"{home}/.cache/go-build", "GOPROXY": GOPROXY, "GOSUMDB": GOSUMDB,
-            "GOTOOLCHAIN": "local", "GOTELEMETRY": "off", "GOFLAGS": "-modcacherw",
+            "GOTOOLCHAIN": "local", "GOFLAGS": "-modcacherw",
             # Nothing skips the proxy or the checksum database, whatever a project's own
             # environment or go.work says. Empty, not unset: an empty value overrides go env -w.
             # Not -mod=readonly: building a Go change means `go get` / `go mod tidy` updating

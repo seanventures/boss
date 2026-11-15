@@ -323,20 +323,26 @@ def _start_go(service: Service, path: Path) -> Optional[list[str]]:
 #: "go vet", "go test ./...", go.mod — never "go to", "go live", "go-to-market".
 _GO_NOT_LANGUAGE = (r"(?![\s-]*(?:to|back|ahead|live|through|for|into|out|over|away|and|or|"
                     r"beyond|further|wrong|down|up|public|here|there|on|off|with|by)\b)")
+#: After a preposition that already says "language" ("in Go", "to Go" after a migration verb),
+#: only the idioms "go back", "go live", "go ahead"… are not the language: "in Go to serve the
+#: app", "to Go for the gateway", "in Go with Gin" are.
+_GO_NOT_LANGUAGE_AFTER_PREP = (r"(?![\s-]*(?:back|ahead|live|through|out|over|away|beyond|"
+                               r"further|wrong|down|up|public|here|there|off)\b)")
 GO_PATTERNS = (
     r"\bgolang\b",
     r"\bgo\s+(?:backend|service|server|api|microservices?|modules?|binary|binaries|app|"
     r"application|code|programming|language|cli|library|package|toolchain|gateway|proxy|"
-    r"daemon|codebase|project|1\.\d+)\b",
-    r"\b(?:in|using|with|written in|built in|build in|on|idiomatic|plain|pure|modern)\s+go\b"
-    + _GO_NOT_LANGUAGE,
+    r"daemon|codebase|project|worker|workers|tool|program|1\.\d+)\b",
+    r"\b(?:in|using|written in|built in|build in|idiomatic|plain|pure|modern)\s+go\b"
+    + _GO_NOT_LANGUAGE_AFTER_PREP,
+    r"\b(?:with|on)\s+go\b" + _GO_NOT_LANGUAGE,
     # A parenthesised language tag: "(Go)", "(Go, medium complexity)", "(Go/Gin)".
     r"\(\s*go\s*(?:[,;/)]|\s+\d)",
     r"\bgo\s*(?:\+|/|and)\s*(?:react|vue|svelte|htmx)\b",
     r"\bgin(?:-gonic)?\s+(?:framework|router)\b",
     # Go as the TARGET of a migration: "port the Node service to Go".
     r"\b(?:port\w*|re-?writ\w*|migrat\w*|convert\w*|mov(?:e|es|ed|ing)|translat\w*)\b"
-    r"[^.;\n]{0,60}?\b(?:to|into)\s+go\b" + _GO_NOT_LANGUAGE)
+    r"[^.;\n]{0,60}?\b(?:to|into)\s+go\b" + _GO_NOT_LANGUAGE_AFTER_PREP)
 #: The go command and its files: "go vet", "go test ./...", "go build ./cmd/x", "go mod tidy",
 #: go.mod. Requests only in a sentence that states a requirement (Language.tooling_patterns).
 GO_TOOLING_PATTERNS = (
@@ -441,15 +447,30 @@ _NAME_INVENTORY = re.compile(r"\[\s*\"[\w.+-]{1,24}\"(?:\s*,\s*\"[\w.+-]{1,24}\"
 #: …unless its key says it IS the stack: `"stack": ["go", "react", "postgres"]` is a request.
 _STACK_KEY = re.compile(r"[\"']?(?:stacks?|languages?|frameworks?|runtimes?|backend|frontend|"
                         r"required_stack)[\"']?\s*[:=]\s*$", re.I)
-#: A sentence that moves code FROM a language: what follows "to/into/in <other language>" is the
-#: target. "Rewrite our Go codebase in Node", "Port our Go service to Python (FastAPI)".
-_MIGRATION_VERB = re.compile(r"\b(?:re-?writ\w*|port(?:s|ed|ing)?|migrat\w*|convert\w*|"
-                             r"translat\w*|replac\w*|mov(?:e|es|ed|ing)|away\s+from|from)\b", re.I)
-_TARGET_LEAD = re.compile(r"\b(?:to|into|in|onto|using|with)\s+", re.I)
+#: A language is the SOURCE of a migration only in these shapes, the language right after the
+#: verb (and its determiners), or right after "from" in a sentence with such a verb:
+#:   "Rewrite our Go codebase in Node", "Port our Go service to Python (FastAPI)" — the verb, X,
+#:   then to/into/in and ANOTHER language directly;
+#:   "Migrate from Java to Go", "move away from Python" — "from X" after a migration verb;
+#:   "to replace our Python one", "retire the Java service" — X is what goes away.
+#: Anything else names X as wanted: "Build a Go service to replace the legacy Java one" asks for
+#: Go (and names Java only as what it replaces).
+_MIGRATION_VERBS = (r"re-?writ\w*|port(?:s|ed|ing)?|migrat\w*|convert\w*|translat\w*|"
+                    r"mov(?:e|es|ed|ing)|switch\w*")
+_DETERMINERS = r"(?:(?:our|the|this|that|its|their|my|existing|current|legacy|old|whole|entire|a|an)\s+){0,3}"
+_SOURCE_AFTER_VERB = re.compile(rf"\b(?:{_MIGRATION_VERBS})\s+{_DETERMINERS}$", re.I)
+_SOURCE_AFTER_FROM = re.compile(rf"\b(?:{_MIGRATION_VERBS}|away)\b[^.;\n]{{0,40}}?\bfrom\s+"
+                                rf"{_DETERMINERS}$", re.I)
+_REPLACED = re.compile(rf"\b(?:replac\w*|retir\w*|deprecat\w*|sunset\w*)\s+{_DETERMINERS}$", re.I)
+_TARGET_LEAD = re.compile(r"^\s*(?:(?:code(?:base)?|service|services|app|application|api|backend|"
+                          r"server|project|monolith|stack|implementation|version|one)\s+){0,2}"
+                          r"(?:to|into|in)\s+(?:(?:the|a|an|plain|modern|idiomatic)\s+)?", re.I)
 #: A sentence that states a requirement (for tooling mentions).
 _REQUIREMENT = re.compile(r"\b(?:must|clean|pass(?:es|ing)?|green|requires?|required|should|"
                           r"needs? to|has to|have to)\b", re.I)
-_SENTENCE_END = re.compile(r"[.!?;](?:\s|$)|\n")
+#: Where a sentence ends: never inside a code span or a path ("`go test ./...` must pass").
+_SENTENCE_END = re.compile(r"(?<![./])[.!?;](?=\s|$)|\n")
+_CODE_SPAN = re.compile(r"`[^`\n]*`")
 
 
 # ── The adapter registry (BOSS_OSS_v1 stack recommendations §6-7) ───────────────────────────
@@ -766,14 +787,17 @@ def prompt_block() -> str:
 # ── Reading a stack out of words ────────────────────────────────────────────────────────────
 
 def _sentence(text: str, start: int, end: int) -> tuple[str, str]:
-    """(the sentence before the match, the sentence after it)."""
-    before = text[max(0, start - 200):start]
-    cuts = list(_SENTENCE_END.finditer(before))
-    if cuts:
-        before = before[cuts[-1].end():]
-    after = text[end:end + 200]
-    cut = _SENTENCE_END.search(after)
-    return before, (after[:cut.start()] if cut else after)
+    """(the sentence before the match, the sentence after it). Punctuation inside a code span
+    never ends a sentence (the span is masked, same length, before splitting)."""
+    masked = _CODE_SPAN.sub(lambda m: "`" + "_" * (len(m.group(0)) - 2) + "`", text)
+    lo, hi = max(0, start - 200), end + 200
+    before_m = masked[lo:start]
+    cuts = list(_SENTENCE_END.finditer(before_m))
+    cut_lo = lo + cuts[-1].end() if cuts else lo
+    after_m = masked[end:hi]
+    cut = _SENTENCE_END.search(after_m)
+    cut_hi = end + cut.start() if cut else min(hi, len(text))
+    return text[cut_lo:start], text[end:cut_hi]
 
 
 def _other_language_words(key: Optional[str]) -> list[str]:
@@ -789,18 +813,19 @@ def _other_language_words(key: Optional[str]) -> list[str]:
 
 
 def _is_source(text: str, start: int, end: int, key: Optional[str]) -> bool:
-    """Is the language at text[start:end] what the sentence moves code AWAY from? A migration
-    verb before it, and another language named as the target after it."""
+    """Is the language at text[start:end] what the sentence moves code AWAY from? Only in the
+    explicit shapes above (_SOURCE_AFTER_VERB + a target language right after to/into/in,
+    _SOURCE_AFTER_FROM, _REPLACED) — never because some other language appears later."""
     before, after = _sentence(text, start, end)
-    if not _MIGRATION_VERB.search(before) and not re.match(r"\s*(?:code(?:base)?\s+)?to\b",
-                                                             after, re.I):
+    if _SOURCE_AFTER_FROM.search(before) or _REPLACED.search(before):
+        return True
+    if not _SOURCE_AFTER_VERB.search(before):
         return False
-    lead = _TARGET_LEAD.search(after)
+    lead = _TARGET_LEAD.match(after)
     if lead is None:
         return False
-    target = after[lead.end():lead.end() + 60].lower()
-    return any(re.search(rf"(?<![\w.]){re.escape(w)}(?![\w])", target)
-               for w in _other_language_words(key))
+    target = after[lead.end():].lower()
+    return any(re.match(rf"{re.escape(w)}(?![\w])", target) for w in _other_language_words(key))
 
 
 def _matches(pattern: str, text: str, key: Optional[str] = None, *,
@@ -852,8 +877,23 @@ def languages_named(text: str) -> list[str]:
         patterns = [r"\bjava\b(?!\s*script)" if w == "java" else rf"\b{re.escape(w)}\b"
                     for w in words] + list(lang.patterns)
         if any(_matches(p, body, lang.key) for p in patterns) or any(
-                _matches(p, body, lang.key, requirement=True) for p in lang.tooling_patterns):
+                _matches(p, body, lang.key, requirement=True) for p in lang.tooling_patterns) \
+                or lang.key in _stack_array_languages(body):
             out.append(lang.key)
+    return out
+
+
+def _stack_array_languages(text: str) -> set[str]:
+    """Languages named as bare elements of an array its key calls the stack:
+    `"stack": ["go", "react"]` names Go (a bare "go" is otherwise never the language)."""
+    out: set[str] = set()
+    for m in re.finditer(r"\[([^\[\]\n]{0,400})\]", text):
+        if not _STACK_KEY.search(text[max(0, m.start() - 40):m.start()]):
+            continue
+        for item in re.findall(r"[\"']([^\"']{1,40})[\"']", m.group(1)):
+            key = _normalise_language(item)
+            if key in LANGUAGES:
+                out.add(key)
     return out
 
 

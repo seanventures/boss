@@ -157,7 +157,7 @@ RUN set -eu; \
     mkdir -p /opt/toolchains/go /opt/toolchains/bin; \
     tar -xzf go.tgz -C /opt/toolchains/go --strip-components=1; \
     rm -rf go.tgz /opt/toolchains/go/api /opt/toolchains/go/test; \
-    printf 'GOPROXY=https://proxy.golang.org\nGOSUMDB=sum.golang.org\nGOTOOLCHAIN=local\nGOTELEMETRY=off\n' \
+    printf 'GOPROXY=https://proxy.golang.org\nGOSUMDB=sum.golang.org\nGOTOOLCHAIN=local\n' \
       > /opt/toolchains/go/go.env; \
     ln -s ../go/bin/go /opt/toolchains/bin/go; \
     ln -s ../go/bin/gofmt /opt/toolchains/bin/gofmt; \
