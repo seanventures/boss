@@ -97,3 +97,57 @@ def redact_secrets(text: str) -> str:
 
 def has_pii(text: str) -> bool:
     return bool(redact(text)[1])
+
+
+# ── URL userinfo: one masker for every read view (BOSSAPP-1202) ─────────────────────────────
+#
+# `scheme://user:PASSWORD@host` keeps the user and the host and loses the password:
+# `https://user:***@host/x`, `https://x-access-token:***@github.com/o/r`. A userinfo with no
+# password whose user is itself a token (`https://ghp_…@github.com`) loses the user instead:
+# `https://***@github.com`. Not a URL, so never touched: an scp-style remote
+# (`git@github.com:o/r.git`) and an email address. The password runs to the LAST `@` before the
+# path, so `user:p@ss@host` is masked whole; a percent-encoded one (`p%40ss`) is just text.
+URL_SECRET_MASK = "***"
+_URL_USERINFO = re.compile(
+    r"(?P<scheme>\b[A-Za-z][A-Za-z0-9+.\-]{0,31}://)"
+    r"(?P<user>[^\s:/?#@\"'<>\\]*)"
+    r"(?::(?P<password>[^\s/?#\"'<>\\]*))?"
+    r"@(?=[^\s/?#@\"'<>\\]*(?:[/?#\s\"'<>\\]|$))")
+#: A user name that is really a credential: a provider token prefix, or a long opaque string
+#: (letters AND digits, 24+ chars: a 40-hex classic token, a JWT-ish blob).
+_TOKEN_USER = re.compile(
+    r"^(?:gh[pousr]_|github_pat_|glpat-|xox[abposr]-|sk-|AKIA|ASIA|eyJ)"
+    r"|^(?=[A-Za-z0-9._~%+\-]*[0-9])(?=[A-Za-z0-9._~%+\-]*[A-Za-z])[A-Za-z0-9._~%+\-]{24,}$")
+
+
+def _mask_userinfo(m: "re.Match[str]") -> str:
+    user, password = m.group("user"), m.group("password")
+    if password is not None and password != "":
+        return f"{m.group('scheme')}{user}:{URL_SECRET_MASK}@"
+    if password is None and user and _TOKEN_USER.search(user):
+        return f"{m.group('scheme')}{URL_SECRET_MASK}@"
+    return m.group(0)
+
+
+def mask_url_credentials(text: str) -> str:
+    """`text` with the credential part of every URL's userinfo replaced by `***` (above).
+    Anywhere in the string: a bare URL or one inside free text. Everything else is unchanged."""
+    if not text or "@" not in text or "://" not in text:
+        return text
+    return _URL_USERINFO.sub(_mask_userinfo, text)
+
+
+def mask_url_credentials_in(value, *, _depth: int = 0):
+    """A copy of `value` with `mask_url_credentials` applied to every string at any depth
+    (dict values AND keys, lists, tuples). For READ VIEWS: what an agent receives is not
+    passed through it."""
+    if _depth > 64:
+        return value
+    if isinstance(value, str):
+        return mask_url_credentials(value)
+    if isinstance(value, dict):
+        return {(mask_url_credentials(k) if isinstance(k, str) else k):
+                mask_url_credentials_in(v, _depth=_depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [mask_url_credentials_in(v, _depth=_depth + 1) for v in value]
+    return value
