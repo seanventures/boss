@@ -670,18 +670,32 @@ CREDENTIAL_LOOKUP_ATTEMPTS = 3
 CREDENTIAL_LOOKUP_BACKOFF_SECONDS = (0.25, 0.75)
 
 
-def _lookup_once(settings, name: str) -> tuple[Optional[str], list[tuple[str, bool]]]:
+def _lookup_once(settings, name: str, *, connection=None,
+                 project_id: Optional[str] = None) -> tuple[Optional[str], list[tuple[str, bool]]]:
     """(value, trouble) for one pass over the store. `trouble` lists every way the store
     failed to ANSWER on this pass, each with whether it may clear by itself; empty means the
-    store answered, and a None value then truly means absent."""
+    store answered, and a None value then truly means absent.
+
+    AUDITED (P8-pre S3, BOSSAPP-1061): a reference row stored under the name resolves through
+    `resolve_secret_ref` (secret_backends.resolve_system_ref: scope and status checks, an
+    access row naming the run); a value held by name only is recorded as `store:<key>`."""
     from .secret_backends import (
         SecretNotFound,
         SecretUnavailable,
         backend_for,
         pick_default_backend,
+        record_system_read,
+        resolve_system_ref,
     )
     from .secrets_service import ref_key_for
 
+    keys = (name, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, name))
+    try:
+        value = resolve_system_ref(settings, keys, connection=connection, project_id=project_id)
+    except SecretUnavailable as exc:   # refused, or the reference's store did not answer
+        return None, [(str(exc), bool(getattr(exc, "transient", False)))]
+    if value:
+        return value, []
     trouble: list[tuple[str, bool]] = []
     try:
         kind, passed_over = pick_default_backend(settings)
@@ -693,7 +707,7 @@ def _lookup_once(settings, name: str) -> tuple[Optional[str], list[tuple[str, bo
         return None, [(str(exc), exc.transient)]
     except Exception as exc:  # noqa: BLE001 — e.g. the database is restarting
         return None, [(type(exc).__name__, True)]
-    for key in (name, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, name)):
+    for key in keys:
         try:
             value = store.get(key)
         except SecretNotFound:
@@ -705,12 +719,17 @@ def _lookup_once(settings, name: str) -> tuple[Optional[str], list[tuple[str, bo
             trouble.append((type(exc).__name__, True))
             continue
         if (value or "").strip():
+            record_system_read(settings, key, connection=connection, project_id=project_id)
+            from .run_secret_redaction import register as _register_known
+
+            _register_known(value.strip())
             return value.strip(), []
     return None, trouble
 
 
 def stored_credential(settings, name: str, *, strict: bool = False,
-                      include_env: bool = True) -> Optional[str]:
+                      include_env: bool = True, connection=None,
+                      project_id: Optional[str] = None) -> Optional[str]:
     """A CLI credential: the environment first, then this install's secret store.
 
     Module-level and shared, because two different things shell out to these CLIs. The coding
@@ -734,6 +753,11 @@ def stored_credential(settings, name: str, *, strict: bool = False,
     on either side. A lookup the store did not answer is now made again (bounded), and with
     `strict` a store that still does not answer raises `CredentialStoreUnavailable` instead of
     pretending nothing is stored. Without `strict` the answer stays None, logged as a warning.
+
+    EVERY STORE READ IS AUDITED (P8-pre S3): it goes through secret_backends.resolve_system_ref
+    (THE resolution, as the system principal) or is recorded as `store:<key>` — one
+    secret_access_events row naming the run. `connection` / `project_id`, when the caller holds
+    them, make that row land in the caller's transaction and name the project.
     """
     direct = os.environ.get(name) if include_env else None
     if direct and direct.strip():
@@ -743,7 +767,8 @@ def stored_credential(settings, name: str, *, strict: bool = False,
         if attempt:
             pauses = CREDENTIAL_LOOKUP_BACKOFF_SECONDS
             time.sleep(pauses[min(attempt - 1, len(pauses) - 1)] if pauses else 0)
-        value, trouble = _lookup_once(settings, name)
+        value, trouble = _lookup_once(settings, name, connection=connection,
+                                      project_id=project_id)
         if value:
             return value
         if not trouble:

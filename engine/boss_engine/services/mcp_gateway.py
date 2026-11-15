@@ -45,8 +45,9 @@ propose_followup(title, body)        a run event (code_task.followup_proposed) +
 
 THE SWITCH
 ----------
-BOSS_MCP_GATEWAY=on|off, OFF by default: off, code_task_mcp writes exactly the file it always did
-(test_mcp_gateway_off_is_byte_identical). On, every harness's MCP traffic flows through here.
+BOSS_MCP_GATEWAY=on|off, ON by default (P8-pre S4, BOSSAPP-1061): every harness's MCP traffic
+flows through here and mcp.json carries no upstream credential. Set to a false word (off/0/no/
+false), code_task_mcp writes exactly the file it always did (test_mcp_gateway_off_is_byte_identical).
 
 WHAT IS NOT COVERED
 -------------------
@@ -101,9 +102,18 @@ ERROR_KINDS = ("denied_by_policy", "denied_by_person", "approval_timed_out", "ru
                "tool_failed", "unknown_tool", "bad_arguments")
 
 
+#: The words that turn the gateway OFF. Anything else — unset included — leaves it on.
+OFF_WORDS = ("0", "false", "no", "off")
+
+
 def enabled() -> bool:
-    """BOSS_MCP_GATEWAY: off unless set to a true word."""
-    return (os.environ.get(FLAG) or "").strip().lower() in ("1", "true", "yes", "on")
+    """BOSS_MCP_GATEWAY: ON unless set to a false word (P8-pre S4, BOSSAPP-1061).
+
+    Off by default meant every local run wrote its MCP servers' upstream sign-in into mcp.json,
+    where the agent could read it. On, the file holds gateway URLs and a `boss_mcpgw_` run
+    token only, and every call leaves a receipt. `off` keeps the old file for an operator who
+    needs it."""
+    return (os.environ.get(FLAG) or "").strip().lower() not in OFF_WORDS
 
 
 def _env_seconds(name: str, default: float) -> float:

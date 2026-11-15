@@ -1,8 +1,9 @@
 """BOSSAPP-814: build agents can ask, wait for approval and report mid-run.
 
 The coding harness's MCP traffic flows through BOSS's loopback MCP gateway (mcp_gateway.py)
-when BOSS_MCP_GATEWAY=on. Pinned here:
+unless BOSS_MCP_GATEWAY is set off (on by default since P8-pre S4). Pinned here:
 
+  * ON BY DEFAULT: an unset flag gives the gateway's file (P8pre-T4);
   * OFF is byte-identical: code_task_mcp writes exactly the mcp.json and argv it always did;
   * ON points every server at the gateway (no upstream credential in the file), adds the run's
     `boss_run` tools, and stops disallowing Ask tools (Off/ungranted stay disallowed);
@@ -135,12 +136,9 @@ def held(monkeypatch):
     return servers
 
 
-@pytest.mark.parametrize("flag", [None, "off", "0", ""])
+@pytest.mark.parametrize("flag", ["off", "0", "false", "no", " OFF "])
 def test_mcp_gateway_off_is_byte_identical(held, monkeypatch, flag):
-    if flag is None:
-        monkeypatch.delenv(mcp_gateway.FLAG, raising=False)
-    else:
-        monkeypatch.setenv(mcp_gateway.FLAG, flag)
+    monkeypatch.setenv(mcp_gateway.FLAG, flag)
     harness = code_task_mcp.prepare(None, None, "p", "forge")
     try:
         written = Path(harness.path).read_bytes()
@@ -158,6 +156,33 @@ def test_mcp_gateway_off_is_byte_identical(held, monkeypatch, flag):
         assert code_task_mcp.prepare(None, None, "p", "") is None
     finally:
         harness.cleanup()
+
+
+@pytest.mark.parametrize("flag", [None, "", "on", "1"])
+def test_the_gateway_is_on_by_default(held, monkeypatch, flag):
+    """P8pre-T4 (P8-pre S4, BOSSAPP-1061): with defaults, a local run's mcp.json holds gateway
+    URLs and its boss_mcpgw_ run token only — never an upstream server's sign-in."""
+    if flag is None:
+        monkeypatch.delenv(mcp_gateway.FLAG, raising=False)
+    else:
+        monkeypatch.setenv(mcp_gateway.FLAG, flag)
+    assert mcp_gateway.enabled()
+    gateway = mcp_gateway.McpGateway()
+    mcp_gateway.set_gateway(gateway)
+    try:
+        harness = code_task_mcp.prepare(None, None, "p", "forge", run_id="crun_default")
+        raw = Path(harness.path).read_text()
+        token = harness.gateway_token
+        assert token.startswith(mcp_gateway.TOKEN_PREFIX)
+        base = f"http://127.0.0.1:{gateway.port}/v1/mcp-gateway/{token}/"
+        servers = json.loads(raw)["mcpServers"]
+        assert servers and all(set(v) == {"type", "url"} and v["url"].startswith(base)
+                               for v in servers.values())
+        assert "upstream-own" not in raw and "headers" not in raw
+        harness.cleanup()
+    finally:
+        gateway.stop()
+        mcp_gateway.set_gateway(None)
 
 
 def test_gateway_on_points_every_harness_at_the_gateway(held, monkeypatch):
@@ -456,6 +481,38 @@ def test_the_gateway_proxies_a_server_transparently(world):
     bad = httpx.post(world["base"].replace(world["token"], world["token"][:-2] + "00") + "/fake",
                      json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert bad.status_code == 401
+
+
+def test_a_default_local_run_calls_through_the_gateway_with_receipts(world, monkeypatch):
+    """P8pre-T4: with BOSS_MCP_GATEWAY unset, the mcp.json a local run is handed points at the
+    gateway, and a call made from that file leaves the run's receipt and audit row."""
+    from boss_engine.services import agents as agents_mod
+
+    monkeypatch.delenv(mcp_gateway.FLAG, raising=False)
+    with world["eng"].begin() as c:
+        row = dict(c.execute(text("SELECT * FROM mcp_servers WHERE id = :i"),
+                             {"i": world["server"]["id"]}).mappings().one())
+    row.update(granted_tools=[], provenance={"trusted": True})
+    monkeypatch.setattr(agents_mod, "held_mcp_servers", lambda c, p, r: [row])
+    mcp_gateway.set_gateway(world["gateway"])
+    try:
+        with world["eng"].begin() as c:
+            harness = code_task_mcp.prepare(c, world["settings"], world["pid"], "forge",
+                                            run_id=world["run"])
+        raw = Path(harness.path).read_text()
+        assert harness.gateway_token.startswith(mcp_gateway.TOKEN_PREFIX)
+        servers = json.loads(raw)["mcpServers"]
+        [url] = [v["url"] for k, v in servers.items() if k != mcp_gateway.RUN_SERVER]
+        assert url.startswith(f"http://127.0.0.1:{world['gateway'].port}/v1/mcp-gateway/")
+        assert world["fake"].url not in raw
+        said = _client(world).call_tool(url, "echo", {"text": "default"})
+        assert said == {"tool": "echo", "args": {"text": "default"}}
+        [audit] = _audit(world, "echo")
+        assert audit["decision"] == "allow" and audit["outcome"] == "succeeded"
+        assert audit["run_id"] == world["run"]
+        harness.cleanup()
+    finally:
+        mcp_gateway.set_gateway(None)
 
 
 def test_an_ask_call_parks_until_approved_then_runs(world):

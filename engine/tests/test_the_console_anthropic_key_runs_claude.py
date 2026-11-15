@@ -144,15 +144,30 @@ def test_the_key_is_redacted_from_logs_once_resolved(monkeypatch):
     assert KEY not in redact_text(f"claude exited 1 with env ANTHROPIC_API_KEY={KEY} set")
 
 
-def test_a_guest_vm_run_carries_the_key_as_its_api_key(monkeypatch):
+def test_a_guest_vm_run_on_the_key_is_refused_by_name_not_dropped(monkeypatch):
+    """BOSSAPP-1061 defect 1: the guest has no field for the Anthropic API key (Go's
+    engineEnvToSpec and the in-guest agent never read it), so the key used to be dropped and
+    the guest booted with no credential. Now the contract refuses it by name before submit."""
     from boss_engine.services.governed_code_task_service import _guest_billed, _guest_engine_fields
-    from boss_engine.services.sandbox_contract import build_submit_request
+    from boss_engine.services.sandbox_contract import (
+        ENGINE_ENV_UNKNOWN,
+        EngineEnvRefused,
+        build_submit_request,
+        ensure_engine_env_valid,
+        validate_submit_request,
+    )
 
     _store(monkeypatch, ANTHROPIC_API_KEY=KEY)
     fields = _guest_engine_fields(_settings(), "claude_code", None)
     assert fields == {"engine": "claude_code", "anthropic_api_key": KEY}
-    body = build_submit_request({**fields, "task_id": "crun_x"}, "p")
+    body = build_submit_request({**fields, "task_id": "crun_x", "owner": "o", "repo": "r"}, "p")
     assert body["engine_env"] == {"ANTHROPIC_API_KEY": KEY}
+    problems = validate_submit_request(body)
+    assert problems == [f"{ENGINE_ENV_UNKNOWN}: engine_env ANTHROPIC_API_KEY is not a name the "
+                        "guest reads"]
+    with pytest.raises(EngineEnvRefused) as refused:
+        ensure_engine_env_valid(body)
+    assert refused.value.reason == ENGINE_ENV_UNKNOWN and KEY not in str(refused.value)
     assert _guest_billed({"prompt_tokens": 1}, fields)["billing"] == "metered"
 
 

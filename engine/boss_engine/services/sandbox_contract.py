@@ -74,6 +74,9 @@ def heartbeat_path(sandbox_task_id: str) -> str:
 _ENGINE_ENV_MAP = (
     ("CLAUDE_CODE_OAUTH_TOKEN", "claude_oauth_token"),
     # The console's Anthropic API key, when a claude_code guest runs on it (claude_credential).
+    # NOT a name the guest reads (Go's engineEnvToSpec has no entry, the guest no field): it is
+    # mapped so a claude_code run on the API key reaches validation and is REFUSED by name
+    # (engine_env_unknown) instead of booting a guest with no credential (BOSSAPP-1061 defect 1).
     ("ANTHROPIC_API_KEY", "anthropic_api_key"),
     ("OPENAI_API_KEY", "openai_api_key"),
     ("OPENAI_BASE_URL", "openai_base_url"),
@@ -85,12 +88,71 @@ _ENGINE_ENV_MAP = (
 )
 
 
+#: The engine_env names the guest reads — exactly Go's ``engineEnvToSpec`` keys
+#: (services/sandbox-service/internal/contract/contract.go). Anything else is refused by name.
+GUEST_ENGINE_ENV_NAMES = frozenset({
+    "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
+    "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_API_VERSION",
+    "AZURE_OPENAI_KEY",
+})
+_OPENAI_LANE = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "AZURE_OPENAI_ENDPOINT",
+                "AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_KEY")
+#: Which engine reads which names (Go's ``engineEnvByEngine``). A guest is sent ONLY its own
+#: engine's credential: no OpenAI or Azure key ever reaches a claude_code guest (P8-pre S5).
+#: ``claude_code`` lists ANTHROPIC_API_KEY so the API-key case is carried to validation and
+#: refused there by name, never dropped silently on the way.
+ENGINE_ENV_BY_ENGINE: dict[str, tuple[str, ...]] = {
+    "echo": (),
+    "claude_code": ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
+    "openai": _OPENAI_LANE,
+    "native": _OPENAI_LANE,
+}
+
+ENGINE_ENV_UNKNOWN = "engine_env_unknown"
+ENGINE_ENV_NOT_FOR_ENGINE = "engine_env_not_for_engine"
+
+
+class EngineEnvRefused(ValueError):
+    """A submit body whose engine_env the guest cannot honour. Carries names only, never a
+    value; ``reason`` is ENGINE_ENV_UNKNOWN or ENGINE_ENV_NOT_FOR_ENGINE."""
+
+    def __init__(self, reason: str, problems: list[str]):
+        self.reason = reason
+        self.problems = list(problems)
+        super().__init__("; ".join(problems))
+
+
+def engine_env_for(engine: str, env: dict[str, Any]) -> dict[str, Any]:
+    """Only the selected engine's names. An engine this table does not list is not narrowed."""
+    allowed = ENGINE_ENV_BY_ENGINE.get(str(engine or "").strip().lower())
+    if allowed is None:
+        return dict(env)
+    return {k: v for k, v in env.items() if k in allowed}
+
+
+def engine_env_problems(engine: Any, env: Any) -> list[str]:
+    """Named refusals for engine_env (Go's ``EngineEnvProblems``, same order and wording)."""
+    if not isinstance(env, dict):
+        return []
+    name_of_engine = str(engine or "").strip().lower()
+    allowed = ENGINE_ENV_BY_ENGINE.get(name_of_engine)
+    problems = []
+    for name in sorted(env):
+        if name not in GUEST_ENGINE_ENV_NAMES:
+            problems.append(f"{ENGINE_ENV_UNKNOWN}: engine_env {name} is not a name the guest reads")
+        elif allowed is not None and name not in allowed:
+            problems.append(f"{ENGINE_ENV_NOT_FOR_ENGINE}: engine_env {name} is not read by "
+                            f"engine {name_of_engine}")
+    return problems
+
+
 def build_submit_request(spec: dict[str, Any], tenant_id: Optional[str], *,
                          task_id: Optional[str] = None) -> dict[str, Any]:
     """The versioned submit body: BOSS's flat guest_spec → the sandbox-service submit shape. Model
     creds ride in ``engine_env`` per task (never baked into the guest image)."""
     engine = str(spec.get("engine") or "openai").lower()
-    env = {k: spec[f] for k, f in _ENGINE_ENV_MAP if spec.get(f)}
+    # Only the selected engine's credential rides in engine_env (P8-pre S5).
+    env = engine_env_for(engine, {k: spec[f] for k, f in _ENGINE_ENV_MAP if spec.get(f)})
     tid = task_id or spec.get("task_id") or "crun_unknown"
     return {
         "contract_version": CONTRACT_VERSION,
@@ -173,4 +235,14 @@ def validate_submit_request(body: dict[str, Any]) -> list[str]:
         problems.append("repo.owner and repo.name are required")
     if not isinstance(body.get("engine_env"), dict):
         problems.append("engine_env must be an object")
+    problems += engine_env_problems(body.get("engine"), body.get("engine_env"))
     return problems
+
+
+def ensure_engine_env_valid(body: dict[str, Any]) -> None:
+    """Raise EngineEnvRefused, by name, before a body the guest cannot honour is sent."""
+    problems = engine_env_problems(body.get("engine"), body.get("engine_env"))
+    if problems:
+        reason = (ENGINE_ENV_UNKNOWN if problems[0].startswith(ENGINE_ENV_UNKNOWN + ":")
+                  else ENGINE_ENV_NOT_FOR_ENGINE)
+        raise EngineEnvRefused(reason, problems)

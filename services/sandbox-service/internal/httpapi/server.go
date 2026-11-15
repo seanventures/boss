@@ -5,6 +5,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -13,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seanheiney/boss/services/sandbox-service/internal/backend"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/contract"
+	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/job"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/run"
 )
@@ -22,7 +25,19 @@ type Server struct {
 	Store  *job.Store
 	Token  string
 	Runner *run.Runner // nil = scaffold mode (no execution backend)
-	mux    *http.ServeMux
+	// Fleet is the boss-hostd fleet agent (nil = legacy single-lane only).
+	// When set, health reports the VM manager's real capacity and /v1/vms
+	// lists the host's VMs.
+	Fleet Fleet
+	mux   *http.ServeMux
+}
+
+// Fleet is what the HTTP API needs from the boss-hostd fleet agent.
+type Fleet interface {
+	Capacity() (max, used int)
+	VMs() []hostapi.ReplicaStatus
+	HostID() string
+	Revoked() bool
 }
 
 func New(store *job.Store, token string) *Server {
@@ -32,6 +47,7 @@ func New(store *job.Store, token string) *Server {
 	s.mux.HandleFunc("/v1/sandbox/helpers", s.handleHelpers)
 	s.mux.HandleFunc("/v1/sandbox/tasks", s.handleTasks)
 	s.mux.HandleFunc("/v1/sandbox/tasks/", s.handleTask)
+	s.mux.HandleFunc("/v1/vms", s.handleVMs)
 	return s
 }
 
@@ -82,7 +98,21 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ready := s.Runner != nil && backendLive && !frozen
 	capacity := 0
 	if ready {
-		capacity = 1 // serialized per-task capacity; pooling is a later tier
+		capacity = 1 // the legacy coding lane runs one task per call
+	}
+	available := capacity
+	var fleet map[string]any
+	if s.Fleet != nil {
+		// The legacy fields keep their legacy meaning (the coding lane, one
+		// task per call); the multi-slot VM manager's capacity is reported
+		// under "fleet" only.
+		max, used := s.Fleet.Capacity()
+		free := max - used
+		if free < 0 || s.Fleet.Revoked() {
+			free = 0
+		}
+		fleet = map[string]any{"host_id": s.Fleet.HostID(), "vms": used, "capacity": max,
+			"available": free, "revoked": s.Fleet.Revoked()}
 	}
 	body := map[string]any{
 		"ok":                ready,
@@ -95,10 +125,30 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"reason":            reason,
 		"contract_version":  contract.Version,
 		"capacity":          capacity,
-		"available":         capacity,
+		"available":         available,
 		"running":           s.Store.RunningCount(),
 	}
+	if fleet != nil {
+		body["fleet"] = fleet
+	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// handleVMs lists the fleet VMs on this host (GET /v1/vms).
+func (s *Server) handleVMs(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		writeErr(w, http.StatusUnauthorized, contract.ReasonUnauthorized, "X-Sandbox-Token rejected")
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Fleet == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"vms": []any{}, "fleet": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"vms": s.Fleet.VMs(), "fleet": true, "host_id": s.Fleet.HostID()})
 }
 
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +294,32 @@ func (s *Server) fs(w http.ResponseWriter, r *http.Request, id string) {
 			"only paths under /work are browsable")
 		return
 	}
-	hostPath := filepath.Join(job.TaskDir, filepath.FromSlash(rel))
+	if backend.IsSecretPath(rel) {
+		// P8-pre S2: never serve a guest spec, a git config or a credentials file,
+		// even if one survived the retention scrub.
+		writeErr(w, http.StatusForbidden, contract.ReasonSecretPath,
+			"this path may hold credentials and is not browsable")
+		return
+	}
+	requested := filepath.Join(job.TaskDir, filepath.FromSlash(rel))
+	// A symlink in the guest's repo must not reach outside the retained workspace
+	// (/proc/self/environ, another task's spec.json) nor onto a secret path under
+	// another name: resolve it, keep it under <TaskDir>/work, and check again.
+	hostPath, resolvedRel, err := backend.ResolveWithin(filepath.Join(job.TaskDir, "work"), requested)
+	if err != nil {
+		if errors.Is(err, backend.ErrOutsideRoot) {
+			writeErr(w, http.StatusForbidden, contract.ReasonSecretPath,
+				"this path leaves the retained workspace and is not browsable")
+			return
+		}
+		writeErr(w, http.StatusNotFound, contract.ReasonTaskMissing, "path not found in retained workspace")
+		return
+	}
+	if backend.IsSecretPath("work/" + resolvedRel) {
+		writeErr(w, http.StatusForbidden, contract.ReasonSecretPath,
+			"this path may hold credentials and is not browsable")
+		return
+	}
 	info, err := os.Stat(hostPath)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, contract.ReasonTaskMissing, "path not found in retained workspace")
@@ -258,6 +333,9 @@ func (s *Server) fs(w http.ResponseWriter, r *http.Request, id string) {
 		}
 		out := make([]map[string]any, 0, len(entries))
 		for _, e := range entries {
+			if backend.IsSecretPath(rel + "/" + e.Name()) {
+				continue
+			}
 			out = append(out, map[string]any{"name": e.Name(), "dir": e.IsDir()})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"path": guestPath, "entries": out})

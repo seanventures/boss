@@ -106,9 +106,28 @@ func (r *Runner) execute(ctx context.Context, id string, req backend.RunRequest)
 			r.Store.Fail(id, fmt.Sprintf("sandbox runner panicked: %v", rec), nil)
 		}
 	}()
+	// Whatever the outcome, the task directory is made safe to keep before a
+	// failed or timed-out task is retained and browsable (P8-pre S1/S2): no
+	// spec copies, credential-free .git/config, every file owner-only. For
+	// done, failed and timeout this runs before the runner lands the terminal
+	// status. A cancel is different: Cancel lands "cancelled" first and the
+	// scrub follows when the backend returns, so a poll can briefly see a
+	// cancelled task whose tree is not yet scrubbed (the fs endpoint still
+	// refuses the secret paths, and resolves symlinks, meanwhile).
+	scrubbed := false
+	scrub := func() {
+		if !scrubbed {
+			scrubbed = true
+			backend.ScrubRetained(req.TaskDir)
+			_ = backend.TightenTree(req.TaskDir)
+		}
+	}
+	defer scrub()
 	r.Store.MarkRunning(id, "provisioning")
 	r.Store.MarkRunning(id, "executing")
 	err := r.Backend.Run(ctx, req)
+	result, perr := parseGuestResult(req.ResultPath)
+	scrub()
 	switch {
 	case ctx.Err() == context.Canceled:
 		// MarkCancelled already landed the terminal status.
@@ -120,7 +139,6 @@ func (r *Runner) execute(ctx context.Context, id string, req backend.RunRequest)
 		r.Store.Fail(id, err.Error(), nil)
 		return
 	}
-	result, perr := parseGuestResult(req.ResultPath)
 	if perr != nil {
 		r.Store.Fail(id, perr.Error(), nil)
 		return

@@ -73,10 +73,6 @@ signature: raw r||s (64 bytes), b64url
 - The host also presents its client certificate whenever TLS asks for one. A TLS terminator may
   verify it and forward it as `X-Boss-Client-Cert`; that is the control plane's second accepted
   form.
-  The control plane believes that header only from a peer named in
-  **`BOSS_HOST_CERT_TERMINATORS`** (addresses or CIDRs; **empty by default**, so form 2 is off
-  until an operator names the terminator). A general `BOSS_TRUSTED_PROXIES` peer is not enough.
-  The terminator must strip any inbound `X-Boss-Client-Cert` before it sets its own.
 - Proof interop is verified both ways: a Go-signed proof passes the Python checks, and a
   Python-signed proof passes Go's `pki.VerifyHostProof`.
 
@@ -84,10 +80,6 @@ signature: raw r||s (64 bytes), b64url
 
 - The host renews at **two thirds** of the certificate's lifetime.
 - It renews immediately when a heartbeat answers `"renew": true`.
-- **A renewal supersedes the old certificate at once**: BOSS pins the newest one
-  (`agent_hosts.cert_fingerprint`). A call still signed with the previous key gets
-  **`401 {"detail":{"error":"host_certificate_superseded"}}`**. Retry it on the new connection
-  pool; it is not a revocation.
 - After a renewal the HTTP connection pool is replaced, so no request rides an old certificate.
 
 ### 1.5 Revocation
@@ -119,7 +111,7 @@ Every non-2xx body is FastAPI-shaped: `{"detail": {"error": "<code>", "message":
 | Desired | `GET /v1/hosts/{id}/desired?since=<gen>&wait=<s≤30>` | BossHost | Long-poll. Level-based. |
 | Guest calls | `POST /v1/hosts/{id}/guest-calls` | BossHost | Batched audit, ≤ 1000 rows. |
 | Events | `POST /v1/hosts/{id}/events` | BossHost | **Optional.** A `404` makes the host stop posting events. |
-| Work | `POST /v1/run-plane/hosts/next` | BossHost | **One** outstanding per host (§2.8). Refused **403 `host_only`** when the call carries `X-Boss-Replica`: it came through a guest gateway, and a VM never polls for work. |
+| Work | `POST /v1/run-plane/hosts/next` | BossHost | **One** outstanding per host (§2.8). |
 | Replica map | `PUT /v1/hosts/{id}/replicas` | BossHost | Only after `{"resync": true}` (§2.9). |
 | Run plane | `/v1/run-plane/*` | BossHost | The guest gateway's forward target (§4). |
 | Hand back | `POST /v1/run-plane/runs/{run}/lease` | BossHost + lease headers | `{"hand_back": true, "action": "hand_back"}` (both spellings) (§2.8). |
@@ -211,13 +203,6 @@ changed entries here with the new value; BOSS stores the generation with them. B
 only replicas it has recorded as `serving` (§2.8). A replica entry the host does not hold is
 refused **403 `replica_not_on_host`**. The heartbeat's `replicas` list stays as it is (a full list
 every 2 s; it also lets BOSS mark a stopped replica `gone`) but does **not** store `state_gen`.
-
-**Exactly +1 (control plane, PR #103 review).** BOSS stores an `/observed` push's `state_gen`
-only when it is the stored generation **+ 1**. Any other value (a push lost in between, a
-restarted count) is not stored: the push's states are still applied, the answer carries
-`"resync": true`, and the next `hosts/next` answers `{resync: true}` so the full map repairs
-whatever was missed. So the host advances `state_gen` by one **per push** (a debounced push that
-carries several transitions is one step), never per transition.
 
 **Stopped replicas (host).** When the host stops a VM (no longer desired, spec changed,
 crashloop), the replica is reported with `state: "stopped"` (and the reason) in every heartbeat
