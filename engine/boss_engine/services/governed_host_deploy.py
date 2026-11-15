@@ -820,15 +820,20 @@ def apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
     from .host_key_pin import CHANGED, pinned
 
     from .app_removal import is_removal, remove_on_host
+    from .config_deploy import apply_config, is_config_run
 
     with begin(engine) as c:
         host_id = c.execute(text("SELECT host_id FROM deployment_targets WHERE id = :t"),
                             {"t": row["deployment_target_id"]}).scalar()
     with pinned(engine, host_id) as pin:
         # A REMOVAL (app_removal) is a deployment run of kind `remove`: same lease, ChangeSet,
-        # pinned host key and receipt, a different phase two.
+        # pinned host key and receipt, a different phase two. A CONFIG deployment
+        # (config_deploy, AMEX-G4) is one of kind `config`: files into a directory, kept
+        # previous versions, reload, health check, restore on failure — the same governance.
         if is_removal(row):
             outcome = remove_on_host(engine, settings, row=row, governance=governance)
+        elif is_config_run(row):
+            outcome = apply_config(engine, settings, row=row, governance=governance)
         else:
             outcome = _apply_on_host(engine, settings, row=row, governance=governance,
                                      connector=connector)
@@ -999,11 +1004,13 @@ def _finalize(connection: Connection, settings: Settings, *, row: dict, token: s
     applied = outcome.get("applied") or {}
     if status == "succeeded":
         result = {
-            "provider_ref": f"ssh://{applied.get('host') or row.get('target_ref')}/"
-                            f"{applied.get('app') or row.get('app_name')}",
+            # A config deployment names its own resource (config_deploy.RESOURCE_TYPE).
+            "provider_ref": applied.get("provider_ref") or (
+                f"ssh://{applied.get('host') or row.get('target_ref')}/"
+                f"{applied.get('app') or row.get('app_name')}"),
             "resource_external_id": f"app:{row['deployment_target_id']}",
             "resource_name": row.get("app_name"),
-            "resource_type": "ssh_host.app",
+            "resource_type": applied.get("resource_type") or "ssh_host.app",
             "state": "deleted" if applied.get("operation") == "removed" else "active",
             "health_status": "removed" if applied.get("operation") == "removed" else "healthy",
             "operation": applied.get("operation") or "deployed",

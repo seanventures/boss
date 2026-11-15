@@ -12,6 +12,9 @@ or calendar month):
 * ``role``     — one agent role (scope_id = the role key), in one project or, with no project, in
                  every project of the org
 * ``workflow`` — every run of one workflow definition (scope_id = workflow_definitions.id)
+* ``trigger``  — every run one trigger / intake route starts (scope_id = agent_triggers.id;
+                 P9a-2, boss-eventing-lld.md §7.4: a spent cap pauses the route with the reason)
+* ``deployment`` — every run of one deployed agent (scope_id = agent_deployments.id)
 
 with a warn threshold (``warn_pct``: an event, once per period) and ``hard_stop`` (refuse and stop).
 
@@ -42,7 +45,7 @@ from sqlalchemy import text
 
 from .core import make_id
 
-SCOPES = ("org", "project", "role", "workflow")
+SCOPES = ("org", "project", "role", "workflow", "trigger", "deployment")
 PERIODS = ("day", "month")
 CACHE_SECONDS = 30.0
 
@@ -129,6 +132,16 @@ def set_policy(connection: Any, *, org_id: str, scope_type: str, scope_id: str,
             {"w": scope_id}).scalar()
         if not found or _org_of_project(connection, str(found)) != org_id:
             raise ScopedBudgetError("No such workflow in this org.")
+    elif scope_type == "trigger":
+        found = connection.execute(text(
+            "SELECT project_id FROM agent_triggers WHERE id = :t"), {"t": scope_id}).scalar()
+        if not found or _org_of_project(connection, str(found)) != org_id:
+            raise ScopedBudgetError("No such trigger or route in this org.")
+    elif scope_type == "deployment":
+        found = connection.execute(text(
+            "SELECT project_id FROM agent_deployments WHERE id = :d"), {"d": scope_id}).scalar()
+        if not found or _org_of_project(connection, str(found)) != org_id:
+            raise ScopedBudgetError("No such deployment in this org.")
     connection.execute(text(
         "UPDATE scoped_budget_policies SET status = 'removed', updated_at = now() "
         "WHERE org_id = :o AND scope_type = :t AND scope_id = :s AND period = :per "
@@ -198,6 +211,10 @@ def spent(connection: Any, policy: dict[str, Any], now: Optional[datetime] = Non
         "role": ("l.role = :s AND " + ("l.project_id = :p" if policy.get("project_id") else in_org)),
         "workflow": ("l.act_id IN (SELECT a.act_id FROM agent_acts a JOIN workflow_runs r ON "
                      "r.id = a.workflow_run_id WHERE r.workflow_definition_id = :s)"),
+        # P9a-2: a run's calls carry its run_id (llm_calls.run_id); the run names its trigger
+        # and its deployment (agent_runs.trigger_id / deployment_id).
+        "trigger": "l.run_id IN (SELECT r.id FROM agent_runs r WHERE r.trigger_id = :s)",
+        "deployment": "l.run_id IN (SELECT r.id FROM agent_runs r WHERE r.deployment_id = :s)",
     }[str(policy["scope_type"])]
     money = LLM_MONEY_SQL.replace("included_in_subscription", "l.included_in_subscription") \
         .replace("cost_usd_micros", "l.cost_usd_micros")
@@ -215,8 +232,10 @@ def _workflow_of(connection: Any, workflow_run_id: Optional[str]) -> Optional[st
 
 
 def matching(connection: Any, project_id: str, *, role: Optional[str] = None,
-             workflow_run_id: Optional[str] = None) -> list[dict[str, Any]]:
-    """Every active policy that covers a call in `project_id` by `role` in `workflow_run_id`."""
+             workflow_run_id: Optional[str] = None, trigger_id: Optional[str] = None,
+             deployment_id: Optional[str] = None) -> list[dict[str, Any]]:
+    """Every active policy that covers a call in `project_id` by `role` in `workflow_run_id`,
+    started by `trigger_id`, on `deployment_id`."""
     org_id = _org_of_project(connection, project_id)
     if not org_id:
         return []
@@ -226,10 +245,40 @@ def matching(connection: Any, project_id: str, *, role: Optional[str] = None,
         " scope_type = 'org'"
         " OR (scope_type = 'project' AND scope_id = :p)"
         " OR (scope_type = 'role' AND scope_id = :r AND (project_id IS NULL OR project_id = :p))"
-        " OR (scope_type = 'workflow' AND scope_id = :w))"),
-        {"o": org_id, "p": project_id, "r": str(role or ""), "w": str(workflow or "")}
+        " OR (scope_type = 'workflow' AND scope_id = :w)"
+        " OR (scope_type = 'trigger' AND scope_id = :t)"
+        " OR (scope_type = 'deployment' AND scope_id = :d))"),
+        {"o": org_id, "p": project_id, "r": str(role or ""), "w": str(workflow or ""),
+         "t": str(trigger_id or ""), "d": str(deployment_id or "")}
     ).mappings().all()
     return [dict(r) for r in rows]
+
+
+def route_refusal(connection: Any, project_id: str, *, trigger_id: str,
+                  deployment_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Before an intake route fires (P9a-2, LLD §7.4): the first hard-stop `trigger` or
+    `deployment` policy at or past its cap, in reserve_refusal's shape; else None."""
+    if not _any_active(connection):
+        return None
+    for policy in matching(connection, project_id, trigger_id=trigger_id,
+                           deployment_id=deployment_id):
+        if policy["scope_type"] not in ("trigger", "deployment") or not policy["hard_stop"]:
+            continue
+        used = spent(connection, policy)
+        cap = int(policy["cap_usd_micros"])
+        if used >= cap:
+            from .budget import budget_period
+
+            bounds = budget_period(str(policy["period"]))
+            return {"status": "denied", "refusal": "scoped_cap_exceeded", "transient": False,
+                    "policy_id": policy["id"], "scope_type": policy["scope_type"],
+                    "scope_id": policy["scope_id"], "cap_usd_micros": cap,
+                    "spent_usd_micros": used,
+                    "resets_at": bounds["end"].isoformat() if hasattr(bounds["end"], "isoformat") else None,
+                    "message": (f"{_label(policy)} is spent (${used / 1e6:,.2f} of "
+                                f"${cap / 1e6:,.2f}). Raise it in Govern › Limits, or wait for "
+                                "the period to reset.")}
+    return None
 
 
 def _who() -> tuple[Optional[str], Optional[str]]:
@@ -242,7 +291,9 @@ def _who() -> tuple[Optional[str], Optional[str]]:
 
 def _label(policy: dict[str, Any]) -> str:
     noun = {"org": "the org", "project": "the project", "role": f"agent {policy['scope_id']}",
-            "workflow": f"workflow {policy['scope_id']}"}[str(policy["scope_type"])]
+            "workflow": f"workflow {policy['scope_id']}",
+            "trigger": f"route {policy['scope_id']}",
+            "deployment": f"deployment {policy['scope_id']}"}[str(policy["scope_type"])]
     return f"{noun}'s {policy.get('period') or 'month'}ly budget"
 
 

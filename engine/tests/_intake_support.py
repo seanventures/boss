@@ -48,6 +48,12 @@ def purge(engine, pid: str) -> None:
     with engine.begin() as c:
         for sql in (
             "DELETE FROM agent_trigger_fires WHERE project_id = :p",
+            "DELETE FROM chat_outbox WHERE project_id = :p",
+            "DELETE FROM chat_identity_links WHERE endpoint_id IN "
+            "(SELECT id FROM chat_endpoints WHERE project_id = :p)",
+            "DELETE FROM scoped_budget_policies WHERE scope_id IN "
+            "(SELECT id FROM agent_triggers WHERE project_id = :p)",
+            "DELETE FROM llm_calls WHERE project_id = :p",
             "DELETE FROM agent_triggers WHERE project_id = :p",
             "DELETE FROM intake_events WHERE project_id = :p",
             "DELETE FROM intake_connections WHERE project_id = :p",
@@ -55,6 +61,7 @@ def purge(engine, pid: str) -> None:
             "DELETE FROM agent_runs WHERE project_id = :p",
             "DELETE FROM agent_threads WHERE project_id = :p",
             "DELETE FROM agent_deployments WHERE project_id = :p",
+            "DELETE FROM chat_endpoints WHERE project_id = :p",
             "DELETE FROM events WHERE project_id = :p",
             "DELETE FROM project_members WHERE project_id = :p",
         ):
@@ -177,14 +184,56 @@ def deploy_local_agent(engine, project_id: str, *, key: Optional[str] = None) ->
 
 
 def make_route(engine, project_id: str, deployment_id: str, connection_id: str, *,
-               name: str = "route", concurrency: str = "always_enqueue") -> dict:
+               name: str = "route", concurrency: str = "always_enqueue",
+               config: Optional[dict] = None, priority: int = 100,
+               identity_mode: Optional[str] = None, thread_key: Optional[str] = None,
+               limits: Optional[dict] = None, quiet_hours: Optional[dict] = None) -> dict:
     from boss_engine.services import agent_triggers
 
     with engine.begin() as c:
         return agent_triggers.create(c, project_id=project_id, deployment_id=deployment_id,
                                      kind="intake", actor="ceo", name=name,
                                      concurrency=concurrency, connection_id=connection_id,
-                                     config={"goal": "Handle the event."})
+                                     config={"goal": "Handle the event.", **(config or {})},
+                                     priority=priority, identity_mode=identity_mode,
+                                     thread_key=thread_key, limits=limits,
+                                     quiet_hours=quiet_hours)
+
+
+def attach_chat_endpoint(engine, project_id: str, connection_id: str, *,
+                         team_id: str = "T0TEST") -> str:
+    """A Slack chat endpoint owned by the connection (what a Slack intake connection has, P9a-3):
+    identity links, link prompts and one-line replies go through it."""
+    endpoint_id = f"che_{uuid.uuid4().hex[:10]}"
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO chat_endpoints (id, project_id, kind, name, config, created_by) "
+            "VALUES (:i, :p, 'slack', 'test slack', CAST(:cfg AS JSONB), 'ceo')"),
+            {"i": endpoint_id, "p": project_id, "cfg": json.dumps({"team_id": team_id})})
+        c.execute(text("UPDATE intake_connections SET chat_endpoint_id = :e, "
+                       "config = config || CAST(:cfg AS JSONB) WHERE id = :c"),
+                  {"e": endpoint_id, "c": connection_id, "cfg": json.dumps({"team_id": team_id})})
+    return endpoint_id
+
+
+def make_person(engine, email: str, *, name: str = "Priya", org_id: str = "org_intake",
+                verified: bool = True) -> str:
+    from boss_engine.identity.users import create_user
+
+    with engine.begin() as c:
+        return create_user(c, org_id=org_id, email=email, display_name=name,
+                           email_verified=verified)
+
+
+def link_chat_user(engine, endpoint_id: str, external_user_id: str, principal_id: str) -> str:
+    link_id = f"chl_{uuid.uuid4().hex[:10]}"
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO chat_identity_links (id, endpoint_id, external_user_id, external_name, "
+            " principal_id, person_actor, verified_at, method) VALUES (:i, :e, :u, 'Priya', :p, "
+            " :p, now(), 'code')"),
+            {"i": link_id, "e": endpoint_id, "u": external_user_id, "p": principal_id})
+    return link_id
 
 
 def runs_of(engine, project_id: str) -> list[dict]:

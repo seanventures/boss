@@ -186,7 +186,10 @@ def test_T11_replay_reprocess_fires_only_routes_that_have_not_admitted_and_force
     engine, pid = world
     dep = deploy_local_agent(engine, pid)
     conn = make_connection(engine, pid, "webhook")
-    first = make_route(engine, pid, dep["id"], conn["id"], name="first")
+    # P9a-2: the router stops at the first route that admits; `all_matches` consults both, so
+    # the paused second route is recorded refused (what this replay test is about).
+    first = make_route(engine, pid, dep["id"], conn["id"], name="first",
+                       config={"fanout": "all_matches"})
     second = make_route(engine, pid, dep["id"], conn["id"], name="second")
     with engine.begin() as c:
         agent_triggers.set_paused(c, project_id=pid, trigger_id=second["id"], actor="ceo",
@@ -239,8 +242,12 @@ def test_T11_replay_reprocess_fires_only_routes_that_have_not_admitted_and_force
     assert [m for m in detail["outcome"] if "replay" in m][-1]["by"] == "ceo"
     # admitted + refused (first pass); the fixed route admitted (reprocess; the first route's
     # duplicate writes no row); both routes fired again by force (one admitted, one refused)
-    assert [f["outcome"] for f in detail["fires"]] == ["admitted", "refused", "admitted",
-                                                        "admitted", "refused"]
+    fires = [f["outcome"] for f in detail["fires"]]
+    # a pass fires both routes in ONE transaction (one fired_at), so within a pass the order is
+    # not promised
+    assert sorted(fires[:2]) == ["admitted", "refused"]
+    assert fires[2] == "admitted"
+    assert sorted(fires[3:]) == ["admitted", "refused"]
     with engine.begin() as c:
         unknown = event_intake.replay(c, project_id=pid, ids=["iev_nope"], actor="ceo")
     assert unknown["skipped"] == [{"id": "iev_nope", "reason": "not found in this project"}]

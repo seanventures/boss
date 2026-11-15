@@ -3049,6 +3049,137 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             )
 
     @reg.tool(
+        "create_config_target",
+        "Give a system's CONFIGURATION somewhere to deploy to (AMEX-G4): a config directory on a "
+        "host — an API gateway's tenants/ folder, say — with how it is reloaded (a command run in "
+        "the directory, or an HTTP hook; none when the system watches its directory) and the "
+        "health URL BOSS checks after a reload. One target per app and environment, like any "
+        "deployment target. host_id names a verified Fleet host (files travel over SSH under its "
+        "pinned key); leave it empty for a directory on this machine. It creates the DESTINATION "
+        "and ships nothing — deploy with deploy_config afterwards.",
+        _obj({"app_name": {"type": "string", "description": "the system's name, e.g. 'Northgate Gateway'"},
+              "environment": {"type": "string", "description": "staging | production"},
+              "directory": {"type": "string",
+                            "description": "absolute path of the config directory on the target"},
+              "host_id": {"type": "string",
+                          "description": "optional dh_ of a verified host; empty = this machine"},
+              "reload_command": {"type": "string",
+                                 "description": "optional shell command run in the directory "
+                                                "after the files are written"},
+              "reload_url": {"type": "string",
+                             "description": "optional http(s) URL POSTed after the files are written"},
+              "health_url": {"type": "string",
+                             "description": "the URL that must answer 200 after the reload"},
+              "health_expected_status": {"type": "integer",
+                                         "description": "optional; the status health_url must "
+                                                        "answer (default 200)"}},
+             required=["app_name", "directory", "health_url"]),
+        kind="write",
+        reversibility="grants_authority", permission="deployment_target:manage",
+        exposure=Exposure(tags=("deploy", "config")))
+    def create_config_target(ctx, *, project_id, actor, args):
+        from ..services.config_deploy import ConfigDeployError, create_config_target as _create
+
+        try:
+            with ctx.begin() as c:
+                return _create(
+                    c, ctx.settings, project_id=project_id,
+                    app_name=str(args.get("app_name") or ""),
+                    environment=str(args.get("environment") or "staging"),
+                    directory=str(args.get("directory") or ""),
+                    host_id=(str(args["host_id"]) if args.get("host_id") else None),
+                    reload_command=(str(args["reload_command"]) if args.get("reload_command") else None),
+                    reload_url=(str(args["reload_url"]) if args.get("reload_url") else None),
+                    health_url=(str(args["health_url"]) if args.get("health_url") else None),
+                    health_expected_status=int(args.get("health_expected_status") or 200),
+                    actor=actor)
+        except ConfigDeployError as refused:
+            return {"ok": False, "error": str(refused), "next": refused.action}
+
+    @reg.tool(
+        "deploy_config",
+        "Deploy CONFIGURATION FILES — not a built app — to a config_dir target (AMEX-G4): the "
+        "validated tenant YAML into the gateway's staging directory, say. Each file is written "
+        "to a temp name and renamed into place (atomic), the previous version is kept beside the "
+        "directory for rollback, the target's reload runs, and its health URL is checked; a "
+        "failed reload or health check restores the previous versions. Governed exactly like a "
+        "deploy: a ChangeSet, a budget reservation, a receipt, and a person's approval in "
+        "Approvals — unless the environment's policy (set by a person) runs it without asking. "
+        "`files` maps a destination path (relative to the directory) to its content — a string, "
+        "{text}, {base64}, or an art_ id a CLI step produced; `produced_artifacts` is a "
+        "sandboxed_command step's output (name → art_ id), deployed at the paths it produced. "
+        "Answers {status: planned, deployment_run_id, decision_id}: planned is NOT shipped — a "
+        "workflow step waits on the deployment run.",
+        _obj({"target_id": {"type": "string", "description": "optional exact deptgt_ (a config_dir target)"},
+              "app_name": {"type": "string", "description": "the target's app name, with environment"},
+              "environment": {"type": "string", "description": "staging (default) | production"},
+              "files": {"type": "object",
+                        "description": "destination path → content (string | {text} | {base64} | "
+                                       "art_ id | {artifact_id})",
+                        "additionalProperties": True},
+              "produced_artifacts": {"type": "object",
+                                     "description": "a CLI step's produced_artifacts: name → art_ id",
+                                     "additionalProperties": True},
+              "approval_decision_id": {"type": "string",
+                                       "description": "set by a workflow's step only; leave empty"},
+              "person_required": {"type": "boolean",
+                                  "description": "set by a workflow's step only; leave empty"}},
+             required=[]),
+        kind="write",
+        reversibility="safe", permission="deployment:create",
+        exposure=Exposure(tags=("deploy", "config")))
+    def deploy_config(ctx, *, project_id, actor, args):
+        from ..services.config_deploy import deploy_files
+
+        return deploy_files(
+            ctx.engine, ctx.settings, project_id=project_id, actor=actor,
+            files=(args.get("files") if isinstance(args.get("files"), dict) else None),
+            produced_artifacts=(args.get("produced_artifacts")
+                                if isinstance(args.get("produced_artifacts"), dict) else None),
+            target_id=(str(args["target_id"]) if args.get("target_id") else None),
+            app_name=(str(args["app_name"]) if args.get("app_name") else None),
+            environment=(str(args["environment"]) if args.get("environment") else None),
+            approval_decision_id=(str(args["approval_decision_id"])
+                                  if args.get("approval_decision_id") else None),
+            person_required=args.get("person_required") is True)
+
+    @reg.tool(
+        "promote_config",
+        "Promote the EXACT configuration a succeeded config deployment shipped — the same bytes, "
+        "by sha256 — to the next environment's config_dir target (AMEX-G4): staging → "
+        "production by default. Names the source by deployment_run_id, or by app_name + "
+        "from_environment (the latest succeeded one). Same gates as deploy_config under the "
+        "destination environment's rules: production asks a person in Approvals unless its "
+        "policy says otherwise; dual control is honoured. Planned is NOT shipped.",
+        _obj({"deployment_run_id": {"type": "string",
+                                    "description": "optional deprun_ of the succeeded config deployment"},
+              "app_name": {"type": "string", "description": "the system's name (with from_environment)"},
+              "from_environment": {"type": "string", "description": "where it passed (default staging)"},
+              "environment": {"type": "string", "description": "where it goes (default production)"},
+              "target_id": {"type": "string", "description": "optional exact destination deptgt_"},
+              "approval_decision_id": {"type": "string",
+                                       "description": "set by a workflow's step only; leave empty"},
+              "person_required": {"type": "boolean",
+                                  "description": "set by a workflow's step only; leave empty"}},
+             required=[]),
+        kind="write",
+        reversibility="safe", permission="deployment:create",
+        exposure=Exposure(tags=("deploy", "config")))
+    def promote_config(ctx, *, project_id, actor, args):
+        from ..services.config_deploy import promote
+
+        return promote(
+            ctx.engine, ctx.settings, project_id=project_id, actor=actor,
+            deployment_run_id=(str(args["deployment_run_id"]) if args.get("deployment_run_id") else None),
+            app_name=(str(args["app_name"]) if args.get("app_name") else None),
+            from_environment=str(args.get("from_environment") or "staging"),
+            environment=str(args.get("environment") or "production"),
+            target_id=(str(args["target_id"]) if args.get("target_id") else None),
+            approval_decision_id=(str(args["approval_decision_id"])
+                                  if args.get("approval_decision_id") else None),
+            person_required=args.get("person_required") is True)
+
+    @reg.tool(
         "preflight_deployment_target",
         "Check the machine an app deploys to is reachable and healthy, WITHOUT shipping "
         "anything. Read-only. Run this first when a deployment failed with a connection or "
@@ -9821,6 +9952,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # admitting it here does not by itself hand anybody a shell.
     "run_on_host",
     "redeploy",
+    # Configuration deploys (config_deploy, AMEX-G4): files into a config directory, governed
+    # like a deploy; a promotion ships the same bytes to production under its rules.
+    "deploy_config", "promote_config", "create_config_target",
     # Removing an app: a button the person presses, governed like a deploy (app_removal).
     "remove_app",
     "start_preview",

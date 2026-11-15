@@ -2135,6 +2135,9 @@ class WorkerPollRequest(BaseModel):
     capabilities: list[str]
     max_jobs: int = Field(default=1, ge=1, le=1)
     lease_ttl_seconds: int = Field(default=60, ge=5, le=3600)
+    # P9a-5 (boss-eventing-lld.md §8.2): hold the request up to this long for a job to appear
+    # (an asyncio wait on the API's job hub; no thread, no polling). 0 = answer at once.
+    wait_ms: int = Field(default=0, ge=0, le=25000)
 
 
 class WorkerRegistrationRequest(BaseModel):
@@ -2148,6 +2151,10 @@ class WorkerRegistrationRequest(BaseModel):
 class WorkerPollResponse(BaseModel):
     status: str
     job: Optional[LeasedJob] = None
+    #: True when the API honoured `wait_ms` (a worker that sees False on an idle answer is
+    #: talking to an older API and sleeps its poll interval instead).
+    long_poll: bool = False
+    waited_ms: int = 0
 
 
 class WorkerHeartbeatRequest(BaseModel):
