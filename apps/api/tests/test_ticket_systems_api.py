@@ -573,80 +573,98 @@ def test_a_workflows_own_ticket_text_is_never_taken_for_a_reference():
     assert run_input["ticket"] == "My card was charged twice"
 
 
-# ---- one connection for the org (2026-11-15) ------------------------------------------------
+# ---- shared with the whole org, by a person's choice (2026-11-15) ---------------------------
 # "I added the Jira ticket system but it does not show up": it had been saved under another
-# project, and every reader asked only "this project's tracker". A ticket system is connected
-# once for the org: seen and used from every project, its mappings say where tickets belong.
+# project. A ticket system lives on the project it was added from; a person who manages it there
+# may SHARE it with the whole org. Unshared, another project is told so and never reads it;
+# shared, a member of ONLY that other project reads (receipted) and imports (no token copied).
 
-def test_a_ticket_system_added_in_one_project_is_seen_and_used_from_another(world, client,
-                                                                           engine, jira):
+def test_a_ticket_system_is_used_from_another_project_only_once_shared(world, client, engine,
+                                                                     jira):
+    member_b = world.person("tk-member-b")
+    world.bind(member_b, "operator", project=world.project_b)
     with world.acting_as(world.ctx(world.owner)):
         made = _connect(client, world.project_a, jira)
         assert made.status_code == 201, made.text
         cid = made.json()["connection"]["id"]
+        assert made.json()["connection"]["settings"]["share_with_org"] is False
+        # The catalog says a personal API token starts unshared.
+        jira_item = next(c for c in client.get("/v1/ticket-systems/catalog").json()["items"]
+                         if c["provider"] == "jira")
+        assert jira_item["share_default"] is False
 
-        # Seen from project B, marked as the org's, with where it was added.
+    with world.acting_as(world.ctx(member_b)):
         listed = client.get("/v1/ticket-systems", params={"project_id": world.project_b})
         assert listed.status_code == 200, listed.text
-        shared = [c for c in listed.json()["connections"] if c.get("reach") == "org"
-                  or c.get("managed_from", {}) and c["managed_from"]["connection_id"] == cid]
-        assert shared, listed.json()
-        org_row = next(c for c in listed.json()["connections"] if c["id"] in (cid,)
-                       or (c.get("managed_from") or {}).get("connection_id") == cid)
-        assert org_row["status"] == "connected"
-        if org_row["id"] == cid:
-            assert org_row["reach"] == "org"
-            assert org_row["home_project"]["id"] == world.project_a
+        hint = [c for c in listed.json()["connections"] if c["id"] == cid]
+        assert hint and hint[0]["reach"] == "unshared" and "settings" not in hint[0]
+        refused = client.get("/v1/tickets/resolve",
+                             params={"project_id": world.project_b, "text": f"KAN-{D.STORY}"})
+        assert refused.status_code == 200, refused.text
+        assert refused.json()["tickets"] == []
+        assert refused.json()["errors"][0]["error"] == "not_shared"
+        blocked = client.post(f"/v1/projects/{world.project_b}/tickets/import", json={
+            "provider": "jira", "items": [{"key": "KAN-5"}]})
+        assert blocked.status_code == 404, blocked.text   # nothing reachable by that name here
+        # Only its home's managers may share it.
+        tried = client.patch(f"/v1/ticket-systems/{cid}", json={"share_with_org": True})
+        assert tried.status_code in (403, 404), tried.text
+
+    with world.acting_as(world.ctx(world.owner)):
+        shared = client.patch(f"/v1/ticket-systems/{cid}", json={"share_with_org": True})
+        assert shared.status_code == 200, shared.text
+        assert shared.json()["connection"]["settings"]["share_with_org"] is True
+
+    with world.acting_as(world.ctx(member_b)):
+        listed = client.get("/v1/ticket-systems", params={"project_id": world.project_b})
+        org_row = next(c for c in listed.json()["connections"] if c["id"] == cid)
+        assert org_row["reach"] == "org" and org_row["status"] == "connected"
+        assert org_row["home_project"]["id"] == world.project_a
         own_only = client.get("/v1/ticket-systems",
                               params={"project_id": world.project_b, "scope": "project"})
         assert cid not in {c["id"] for c in own_only.json()["connections"]}
-
-        # New work in project B: the key resolves to its card, and says where it belongs.
         found = client.get("/v1/tickets/resolve",
                            params={"project_id": world.project_b, "text": f"KAN-{D.STORY}"})
-        assert found.status_code == 200, found.text
         ticket = found.json()["tickets"][0]
         assert ticket["key"] == f"KAN-{D.STORY}" and ticket["title"] == "Add Apple Pay"
         assert ticket["maps_to"]["project_id"] == world.project_a
-
-        # A key no connected project knows is still LOOKED UP, and said to be absent there.
+        assert ticket["connection_reach"] == "org"
         absent = client.get("/v1/tickets/resolve",
                             params={"project_id": world.project_b, "text": "LEND-142"})
-        assert absent.status_code == 200, absent.text
-        assert absent.json()["tickets"] == []
         error = absent.json()["errors"][0]
         assert error["error"] == "not_found", error
         assert "LEND-142 was not found in" in error["message"] and jira.base in error["message"]
-        # ...but a key-shaped word inside a sentence never is.
         words = client.get("/v1/tickets/resolve", params={
             "project_id": world.project_b, "text": "Fix the UTF-8 bug in the export"})
         assert words.json()["errors"] == [] and words.json()["tickets"] == []
-
-        # Import into B through the org's connection: B gets its own record of it (a USED
-        # mirror), the binding stays in B, and the home's mapping edits never cut it off.
         # A body id is confined to its project, so the card names the system instead.
-        assert ticket["connection_reach"] == "org"
         foreign = client.post(f"/v1/projects/{world.project_b}/tickets/import", json={
             "connection_id": cid, "items": [{"key": "KAN-5"}]})
         assert foreign.status_code == 404
         imported = client.post(f"/v1/projects/{world.project_b}/tickets/import", json={
             "provider": "jira", "items": [{"key": "KAN-5"}]})
         assert imported.status_code == 200, imported.text
-        assert [i["key"] for i in imported.json()["imported"] + imported.json()["already_in_boss"]
-                ] == ["KAN-5"]
+    with world.acting_as(world.ctx(world.owner)):
         mapped = client.patch(f"/v1/ticket-systems/{cid}", json={"mappings": [
             {"external_project": "KAN", "boss_project_id": world.project_a, "default": True}]})
         assert mapped.status_code == 200, mapped.text
     with engine.connect() as db:
         mirror = db.execute(text(
-            "SELECT id, status, configuration->>'mirror_of' AS home FROM work_tracker_providers "
+            "SELECT id, status, configuration FROM work_tracker_providers "
             "WHERE project_id = :p AND provider_key = 'jira'"),
             {"p": world.project_b}).mappings().one()
         bound = db.execute(text(
             "SELECT project_id FROM work_tracker_bindings WHERE provider_id = :m AND "
             "external_key = 'KAN-5'"), {"m": mirror["id"]}).scalar()
-    assert mirror["home"] == cid and mirror["status"] == "active"
+        reads = db.execute(text(
+            "SELECT result FROM receipts WHERE project_id = :p AND "
+            "effect_kind = 'ticket.cross_project_read'"), {"p": world.project_b}).scalars().all()
+    config = mirror["configuration"]
+    assert config["mirror_of"] == cid and mirror["status"] == "active"
+    assert not {"secret_ref_id", "api_token", "last4", "fingerprint"} & set(config), config
     assert bound == world.project_b
+    assert reads and {r["connection_id"] for r in reads} == {cid}
+    assert all(r["project_id"] == world.project_b for r in reads)
 
 
 def test_another_org_never_sees_the_connection_and_new_work_says_connect(engine, client, world,
@@ -655,7 +673,8 @@ def test_another_org_never_sees_the_connection_and_new_work_says_connect(engine,
     other.owner = other.person("tk-other-owner")
     other.bind(other.owner, "owner")
     with world.acting_as(world.ctx(world.owner)):
-        assert _connect(client, world.project_a, jira).status_code == 201
+        made = _connect(client, world.project_a, jira, settings={"share_with_org": True})
+        assert made.status_code == 201, made.text
     with other.acting_as(other.ctx(other.owner)):
         listed = client.get("/v1/ticket-systems", params={"project_id": other.project_a})
         assert listed.status_code == 200, listed.text

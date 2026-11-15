@@ -62,9 +62,11 @@ def test_the_built_in_roles_are_the_reviewed_sizes():
     # (every human role; delegable), issue join tokens / cordon / revoke / reconcile it (owner
     # and admin, step-up), and act as an enrolled agent host (system_only: the new fixed role
     # system_host, held by sys_host alone).
-    assert len(Permission) == 210
+    # +1 ticket:read (2026-11-15): look up, search and browse tickets — what every agent preset
+    # holds instead of integration:read. Owner, admin, operator, viewer, auditor; delegable.
+    assert len(Permission) == 211
     sizes = {role: len(perms) for role, perms in ROLE_PERMISSIONS.items()}
-    assert sizes == {"owner": 202, "admin": 193, "operator": 99, "viewer": 50, "auditor": 64,
+    assert sizes == {"owner": 203, "admin": 194, "operator": 100, "viewer": 51, "auditor": 65,
                      "system_worker": 3, "system_collector": 1, "system_scim": 1,
                      "system_self_installer": 2, "system_host": 1}
 
@@ -129,4 +131,4 @@ def test_a_catalogue_that_breaks_a_rule_is_refused(mutate, message):
 
 
 def test_the_source_loads():
-    assert len(load().permissions) == 210
+    assert len(load().permissions) == 211

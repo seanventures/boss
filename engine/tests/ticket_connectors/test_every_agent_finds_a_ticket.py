@@ -1,4 +1,5 @@
-"""EVERY AGENT FINDS A NAMED TICKET, FROM ANY PROJECT OF THE ORG (2026-11-15).
+"""EVERY AGENT FINDS A NAMED TICKET — through its project's own ticket system, or one SHARED
+with the whole org (2026-11-15).
 
 Operator: "Agents are not working as expected - it is supposed to find the ticket from jira".
 Helm, asked about a key from New work in HelpDesk Laptop, called only `recall` and said "BOSS has
@@ -6,8 +7,9 @@ no connector to pull a ticket by ID". Three causes, each pinned here against the
 the test DB:
 
   * the Jira connection lived on another project, and every reader asked only "this project's
-    tracker" -> a ticket system is ORG-LEVEL (services/ticket_reach): read, searched and
-    imported from every project of its org, never from another org;
+    tracker" -> a person who manages it may SHARE it with the whole org (services/ticket_reach);
+    unshared, another project is told it exists and is not shared, never handed its tickets;
+    a shared read is receipted, prefers the reader's own sign-in, and never copies the token;
   * `ticket_get` was a deferred tool (find_tools first) and in no agent's fundamentals -> it is
     in the chat core and in `boss.fundamentals`, and the primer says to call it;
   * a key whose project prefix no connection knew was never looked up -> it is tried on every
@@ -112,6 +114,9 @@ def org(eng, fake):
             "status, is_default, configuration, created_by) VALUES (:id, :p, 'jira', 'Jira', "
             "'active', true, CAST(:c AS JSONB), 'test')"),
             {"id": cid, "p": home, "c": json.dumps(config)})
+    from boss_engine.services import ticket_reach
+
+    ticket_reach.clear_cache()
     yield {"home": home, "here": here, "elsewhere": elsewhere, "cid": cid}
     with eng.begin() as c:
         for pid in made:
@@ -155,9 +160,53 @@ def _tool(name: str):
     return build_default_registry().get(name).handler
 
 
-# ── the tools, from a project that did not connect Jira ──────────────────────────────────────
+def _share(eng, cid: str, on: bool = True, **more) -> None:
+    from boss_engine.services import ticket_intake as intake
 
-def test_ticket_get_finds_a_key_from_another_project_and_says_where_it_belongs(eng, org, fake):
+    with eng.begin() as c:
+        row = intake.get_row(c, cid)
+        intake.update_settings_row(c, cid, intake.merge_settings(
+            row["configuration"], {"share_with_org": on, **more}))
+
+
+def _receipts(eng, project_id: str) -> list[dict]:
+    with eng.connect() as c:
+        return [dict(r) for r in c.execute(text(
+            "SELECT effect_kind, effect_scope, result FROM receipts WHERE project_id = :p AND "
+            "effect_kind = 'ticket.cross_project_read' ORDER BY created_at"),
+            {"p": project_id}).mappings().all()]
+
+
+# ── unshared: the old reach, and a plain "not shared" ────────────────────────────────────────
+
+def test_an_unshared_connection_is_not_read_from_another_project(eng, org, fake):
+    got = _tool("ticket_get")(Ctx(eng), project_id=org["here"], actor="usr_test",
+                              args={"ref": STORY})
+    assert got["ok"] is False and got["error"] == "not_shared", got
+    assert "added in BOSS dogfood bootstrap and is not shared with this project" in got["message"]
+    assert not fake.requests(contains="/issue/"), "an unshared connection was read"
+    # Its home still reads it, exactly as before.
+    home = _tool("ticket_get")(Ctx(eng), project_id=org["home"], actor="usr_test",
+                               args={"ref": STORY})
+    assert home["ok"] and home["connection"]["reach"] == "project", home
+    # Import through it from the other project is refused too.
+    done = _tool("ticket_import")(Ctx(eng), project_id=org["here"], actor="usr_test",
+                                  args={"items": [{"key": STORY}], "connection_id": org["cid"]})
+    assert done["ok"] is False and done["error"] == "not_shared", done
+    from boss_engine.services import ticket_intake as intake
+
+    with eng.begin() as c:
+        listed = intake.list_connections(c, org["here"])
+        said = intake.resolve_text(c, org["here"], STORY)
+    hint = [x for x in listed if x["id"] == org["cid"]]
+    assert hint and hint[0]["reach"] == "unshared" and "settings" not in hint[0]
+    assert said["tickets"] == [] and said["errors"][0]["error"] == "not_shared"
+
+
+# ── shared: read from another project, receipted, never a token copied ──────────────────────
+
+def test_a_shared_key_is_read_from_another_project_with_a_receipt(eng, org, fake):
+    _share(eng, org["cid"])
     got = _tool("ticket_get")(Ctx(eng), project_id=org["here"], actor="usr_test",
                               args={"ref": STORY})
     assert got["ok"], got
@@ -166,33 +215,62 @@ def test_ticket_get_finds_a_key_from_another_project_and_says_where_it_belongs(e
     assert got["connection"]["site"] == fake.base and got["connection"]["reach"] == "org"
     assert got["maps_to"]["project_id"] == org["home"]
     assert got["in_this_project"] is False and "BOSS dogfood bootstrap" in got["note"]
-    # A link works the same way.
+    # The connection's home id names it too (LOW 8).
+    by_home = _tool("ticket_get")(Ctx(eng), project_id=org["here"], actor="usr_test",
+                                  args={"ref": STORY, "connection_id": org["cid"]})
+    assert by_home["ok"], by_home
     linked = _tool("ticket_get")(Ctx(eng), project_id=org["here"], actor="usr_test",
                                  args={"ref": f"{fake.base}/browse/KAN-{D.EPIC}"})
     assert linked["ok"] and linked["ticket"]["key"] == f"KAN-{D.EPIC}", linked
+    seen = _receipts(eng, org["here"])
+    assert len(seen) == 3
+    assert seen[0]["result"]["reader"] == "usr_test"
+    assert seen[0]["result"]["connection_id"] == org["cid"]
+    assert seen[0]["result"]["what"] == STORY and seen[0]["result"]["project_id"] == org["here"]
+    # A read in its own home project is not a cross-project read.
+    _tool("ticket_get")(Ctx(eng), project_id=org["home"], actor="usr_test", args={"ref": STORY})
+    assert _receipts(eng, org["home"]) == []
 
 
-def test_an_unknown_key_is_looked_up_and_said_to_be_absent_in_the_site(eng, org, fake):
+def test_an_unknown_key_is_looked_up_once_and_said_to_be_absent(eng, org, fake):
+    _share(eng, org["cid"])
     got = _tool("ticket_get")(Ctx(eng), project_id=org["here"], actor="usr_test",
                               args={"ref": "LEND-142"})
     assert got["ok"] is False and got["error"] == "not_found", got
     assert got["message"] == f"LEND-142 was not found in {fake.base} (Jira)."
-    # A known project, a missing number: the same plain answer.
+    asked = len(fake.requests(contains="LEND-142"))
+    again = _tool("ticket_get")(Ctx(eng), project_id=org["here"], actor="usr_test",
+                                args={"ref": "LEND-142"})
+    assert again["message"] == got["message"] and again.get("cached") is True
+    assert len(fake.requests(contains="LEND-142")) == asked, "the cached answer asked Jira again"
     missing = _tool("ticket_get")(Ctx(eng), project_id=org["here"], actor="usr_test",
                                   args={"ref": "KAN-9999"})
     assert missing["error"] == "not_found" and fake.base in missing["message"], missing
 
 
+def test_the_fan_out_is_capped_most_recently_used_first(eng, org, fake, monkeypatch):
+    """An unknown prefix tries at most MAX_FAN_OUT connections, most recently used first."""
+    from boss_engine.services import ticket_reach
+
+    rows = [{"id": f"r{i}", "provider_key": "jira", "updated_at": f"2026-11-{10 + i:02d}"}
+            for i in range(8)]
+    picked = ticket_reach._key_based(rows, "ZZZ-1")
+    assert [r["id"] for r, _ in picked] == ["r7", "r6", "r5", "r4", "r3"]
+
+
 def test_another_org_never_reaches_the_connection_and_is_told_where_to_connect(eng, org, fake):
     if org["elsewhere"] is None:
         pytest.skip("this build cannot make a second org")
+    _share(eng, org["cid"])
     got = _tool("ticket_get")(Ctx(eng), project_id=org["elsewhere"], actor="usr_test",
                               args={"ref": STORY})
     assert got["ok"] is False and got["error"] == "not_connected", got
     assert "Setup › Ticket systems" in got["next"]
 
 
-def test_search_and_import_work_from_the_other_project(eng, org, fake):
+def test_import_from_the_other_project_copies_no_secret_and_rotation_applies_there(
+        eng, org, fake):
+    _share(eng, org["cid"])
     found = _tool("ticket_search")(Ctx(eng), project_id=org["here"], actor="usr_test",
                                    args={"labels": ["boss"], "open_only": True})
     assert found["ok"] and STORY in {t["key"] for t in found["tickets"]}, found
@@ -205,19 +283,69 @@ def test_search_and_import_work_from_the_other_project(eng, org, fake):
     assert [e["key"] for e in again["already_in_boss"]] == [STORY]
     with eng.connect() as c:
         mirror = c.execute(text(
-            "SELECT id, status, configuration->>'mirror_of' AS home, "
-            "configuration->>'mirror_reason' AS why FROM work_tracker_providers "
+            "SELECT id, status, configuration FROM work_tracker_providers "
             "WHERE project_id = :p AND provider_key = 'jira'"), {"p": org["here"]}).mappings().one()
         bound = c.execute(text("SELECT project_id FROM work_tracker_bindings WHERE "
                                "provider_id = :m AND external_key = :k"),
                           {"m": mirror["id"], "k": STORY}).scalar()
-    assert (mirror["home"], mirror["why"], mirror["status"]) == (org["cid"], "used", "active")
+        vaulted = c.execute(text("SELECT count(*) FROM secret_refs WHERE project_id = :p"),
+                            {"p": org["here"]}).scalar() if _has(c, "secret_refs") else 0
+    config = mirror["configuration"]
+    assert (config["mirror_of"], config["mirror_reason"], mirror["status"]) == \
+        (org["cid"], "used", "active")
+    for secret in ("api_token", "secret_ref_id", "last4", "fingerprint", "credential_ref",
+                   "oauth_client_secret", "webhook_secret_ref"):
+        assert secret not in config, secret
+    assert TOKEN not in json.dumps(config)
+    assert vaulted == 0, "a token was copied into the importing project's vault"
     assert bound == org["here"]
+    # Reads through B's mirror use the HOME's credential: a rotation there applies here.
+    from boss_engine.services import ticket_intake as intake
+    from boss_engine.connectors.tickets import AuthFailed, get_ticket_adapter
+
+    def read_through_mirror():
+        with eng.begin() as c:
+            conn = intake.ticket_connection(c, intake.get_row(c, mirror["id"]))
+            return get_ticket_adapter("jira").get_ticket(conn, STORY)
+
+    assert read_through_mirror().key == STORY
+    with eng.begin() as c:
+        c.execute(text("UPDATE work_tracker_providers SET configuration = configuration || "
+                       "jsonb_build_object('api_token', 'rotated-away') WHERE id = :i"),
+                  {"i": org["cid"]})
+    with pytest.raises(AuthFailed):
+        read_through_mirror()
+    with eng.begin() as c:
+        c.execute(text("UPDATE work_tracker_providers SET configuration = configuration || "
+                       "jsonb_build_object('api_token', CAST(:t AS TEXT)) WHERE id = :i"),
+                  {"i": org["cid"], "t": TOKEN})
+    assert read_through_mirror().key == STORY
+    # Disconnecting at home stops the mirror too.
+    with eng.begin() as c:
+        c.execute(text("UPDATE work_tracker_providers SET status = 'disconnected' WHERE id = :i"),
+                  {"i": org["cid"]})
+    with pytest.raises(Exception):
+        read_through_mirror()
 
 
-def test_new_work_resolves_a_bare_key_in_the_other_project(eng, org, fake):
+def test_the_pick_up_inbox_shows_a_shared_connections_tickets_only_where_mapped(eng, org, fake):
     from boss_engine.services import ticket_intake as intake
 
+    _share(eng, org["cid"], pickup={"label": "boss", "mode": "ask"})
+    with eng.begin() as c:
+        none = intake.waiting(c, org["here"])
+    assert none["tickets"] == [] and none["errors"] == []
+    _share(eng, org["cid"], mappings=[
+        {"external_project": "KAN", "boss_project_id": org["here"], "default": True}])
+    with eng.begin() as c:
+        mapped = intake.waiting(c, org["here"])
+    assert STORY in {t["key"] for t in mapped["tickets"]}, mapped
+
+
+def test_new_work_resolves_a_bare_key_once_shared(eng, org, fake):
+    from boss_engine.services import ticket_intake as intake
+
+    _share(eng, org["cid"])
     with eng.begin() as c:
         seen = intake.resolve_text(c, org["here"], STORY)
         absent = intake.resolve_text(c, org["here"], "LEND-142")
@@ -229,21 +357,29 @@ def test_new_work_resolves_a_bare_key_in_the_other_project(eng, org, fake):
     assert absent["tickets"] == [] and absent["errors"][0]["error"] == "not_found"
     assert sentence == {"refs": [], "tickets": [], "errors": [], "connected": 1}
     shared = [c for c in listed if c["id"] == org["cid"]]
-    assert shared and shared[0]["reach"] == "org"
+    assert shared and shared[0]["reach"] == "org" and shared[0]["settings"]["share_with_org"]
     assert shared[0]["home_project"] == {"id": org["home"], "name": "BOSS dogfood bootstrap"}
 
 
-# ── every agent has it, and is told to use it ────────────────────────────────────────────────
+# ── every agent has it, with its own permission, and is told when to use it ──────────────────
 
-def test_every_agent_holds_the_ticket_reads_and_is_told_to_call_them():
+def test_every_agent_holds_the_ticket_reads_under_ticket_read_only():
+    from boss_engine.identity.permissions_gen import PASSPORT_PRESETS
     from boss_engine.services import agent_baseline as ab
     from boss_engine.tools import build_default_registry
 
     assert {"ticket_get", "ticket_search", "ticket_browse"} <= set(ab.FUNDAMENTALS_TOOLS)
     assert "boss.fundamentals" in ab.BASELINE_SKILLS
-    assert "ticket_get" in ab.PRIMER and "not found" in ab.PRIMER
-    spec = build_default_registry().get("ticket_get")
-    assert "chat" in spec.exposure.core_for
+    assert "ticket_get" in ab.PRIMER and "not found" in ab.PRIMER and "UTF-8" in ab.PRIMER
+    reg = build_default_registry()
+    for name in ("ticket_get", "ticket_search", "ticket_browse"):
+        assert reg.get(name).permission == "ticket:read", name
+    assert "chat" in reg.get("ticket_get").exposure.core_for
+    for preset in PASSPORT_PRESETS.values():
+        assert "ticket:read" in preset.permissions, preset.key
+    # integration:read is NOT handed to every agent for this: only the presets that had it.
+    for key in ("reviewer", "analyst", "writer", "guardian", "archivist", "baseline"):
+        assert "integration:read" not in PASSPORT_PRESETS[key].permissions, key
 
 
 def test_a_cli_chat_turn_is_offered_ticket_get_and_reads_the_ticket(eng, org, fake, monkeypatch):
@@ -254,6 +390,7 @@ def test_a_cli_chat_turn_is_offered_ticket_get_and_reads_the_ticket(eng, org, fa
     from boss_engine.tools.builtin import build_discuss_read_registry
     from tests.test_cli_chat_turn_efficiency import ScriptedCli, _call, _schema_names
 
+    _share(eng, org["cid"])
     monkeypatch.delenv(FLAG, raising=False)
     final = json.dumps({"thought": "t", "final": "KAN-2 is 'Add Apple Pay'."})
     cli = ScriptedCli([_call("ticket_get", {"ref": STORY}), final])

@@ -20,7 +20,7 @@ import { GatedButton, useGate } from "../../components/gated";
 import { SectionLabel } from "../section-label";
 import { ProviderMono, TkEmpty, TkReadState } from "../tickets/ticket-parts";
 import {
-  disconnectTicketSystem, pickupWords, readConnections, testTicketSystem, writesWords,
+  disconnectTicketSystem, pickupWords, readConnectionsAndHidden, readOrgName, saveTicketSettings, shareWords, testTicketSystem, writesWords,
   type Connection, type Read,
 } from "../../lib/tickets";
 import { AddTicketSystem } from "./add-ticket-system";
@@ -31,6 +31,7 @@ export const CONNECTORS_DOC = "https://github.com/seanventures/boss/blob/main/do
 const host = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 const STATUS: Record<Connection["status"], { word: string; tone: string }> = {
   connected: { word: "Connected", tone: "green" }, disconnected: { word: "Disconnected", tone: "red" }, not_connected: { word: "Needs a test", tone: "amber" },
+  not_shared: { word: "Not shared here", tone: "amber" },
 };
 
 /** "LEND → this project": a connection's mappings in words (all of its projects when none). */
@@ -49,7 +50,17 @@ export function TicketSystemsRow({ projectId, focused = false }: { projectId: st
   const [confirm, setConfirm] = useState<Connection | null>(null);
   const manage = useGate("integration:manage", projectId);
 
-  const load = useCallback(async () => { setRead(await readConnections(projectId)); }, [projectId]);
+  const load = useCallback(async () => { setRead(await readConnectionsAndHidden(projectId)); }, [projectId]);
+  const [orgName, setOrgName] = useState("");
+  useEffect(() => { void readOrgName().then(setOrgName); }, []);
+  /** The home card's "Share with the whole org" (integration:manage here, where it lives). */
+  const share = async (c: Connection, on: boolean) => {
+    setSaid(null);
+    const r = await saveTicketSettings(c.id, { share_with_org: on });
+    setSaid(r.ok ? { text: on ? `${c.label} is shared with the whole org.` : `${c.label} is used by this project only.`, tone: "green" }
+                 : { text: r.error ?? "Not saved.", tone: "red" });
+    if (r.ok) void load();
+  };
   useEffect(() => { setRead(null); void load(); }, [load]);
 
   const test = async (c: Connection) => {
@@ -71,7 +82,10 @@ export function TicketSystemsRow({ projectId, focused = false }: { projectId: st
     if (r.ok) void load();
   };
 
-  const items = read?.ok ? read.data : [];
+  const all = read?.ok ? read.data : [];
+  // Another project's connection NOT shared with this one: named, never usable here.
+  const hidden = all.filter((c) => c.reach === "unshared");
+  const items = all.filter((c) => c.reach !== "unshared");
   const live = items.filter((c) => c.status !== "disconnected");
   const names: Record<string, string> = {};
   return (
@@ -94,6 +108,15 @@ export function TicketSystemsRow({ projectId, focused = false }: { projectId: st
             {manage.allowed ? <button type="button" className="tk-btn" data-kind="primary" onClick={() => setDrawer({ mode: "add" })} data-testid="tk-add-empty">
               <Plus size={13} aria-hidden /> Add ticket system</button> : null}
           </TkEmpty>
+        ) : null}
+        {hidden.length ? (
+          <ul className="tk-list" data-testid="tk-unshared">
+            {hidden.map((c) => (
+              <li key={c.id} className="tk-faint" data-testid={`tk-unshared-${c.id}`}
+                  title="Only the project it was added in uses it. A person who manages integrations there can share it with the whole org.">
+                {c.label} was added in {c.home_project?.name ?? "another project"} and is not shared with this project.</li>
+            ))}
+          </ul>
         ) : null}
         {items.length ? (
           <div className="tk-systems" role="table" aria-label="Connected ticket systems" data-testid="tk-systems">
@@ -119,6 +142,13 @@ export function TicketSystemsRow({ projectId, focused = false }: { projectId: st
                   <span role="cell" className="tk-cell" data-label="Projects">
                     {mapWords(c, projectId, names).map((m) => <span key={m} className="tk-mono-text">{m}</span>)}
                     {managed ? <span className="tk-faint">Managed from another project</span> : null}
+                    {!shared && !managed && c.status !== "disconnected" ? (
+                      <label className="tk-share-line" data-testid={`tk-share-${c.id}`} title={shareWords(orgName, c.account)}>
+                        <input type="checkbox" checked={c.settings.share_with_org} disabled={!manage.allowed}
+                               data-testid={`tk-share-toggle-${c.id}`} onChange={(e) => void share(c, e.target.checked)} />
+                        <span className="tk-faint">Share with the whole org</span>
+                      </label>
+                    ) : null}
                     {shared ? <span className="tk-faint" data-testid={`tk-shared-${c.id}`}
                                     title="A ticket system is connected once for the whole organisation: every project can read and import its tickets. Settings live where it was added.">
                       Shared · added in {shared.name}</span> : null}

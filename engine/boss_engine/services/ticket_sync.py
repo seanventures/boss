@@ -1059,7 +1059,9 @@ def _intake_row(db: Any, project_id: str, *, connection_id: Optional[str] = None
     if cid:
         try:
             return reach.reachable_row(db, project_id, cid)
-        except intake.TicketApiError:
+        except intake.TicketApiError as error:
+            if error.code == "not_shared":
+                raise        # say why, rather than "nothing connected"
             return None
     # The project's own first (its default before the rest), then the org-level connections
     # made from the org's other projects (ticket_reach): connected once, usable everywhere.
@@ -1079,12 +1081,14 @@ def ticket_import_items(db: Any, settings: Any, *, project_id: str, items: list[
 
     from . import ticket_reach as reach
 
-    row = _intake_row(db, project_id, connection_id=connection_id, provider=provider)
-    if row is None:
-        raise TicketSyncError("No ticket system is connected in this organisation. Connect one "
-                              "in Setup › Ticket systems.", status=409, code="not_connected")
-    read = intake.read_for_import(db, row, items, person_id=_person(actor))
     try:
+        row = _intake_row(db, project_id, connection_id=connection_id, provider=provider)
+        if row is None:
+            raise TicketSyncError("No ticket system is connected to this project or shared with "
+                                  "the whole org. Connect one in Setup › Ticket systems.",
+                                  status=409, code="not_connected")
+        read = intake.read_for_import(db, row, items, person_id=_person(actor),
+                                      project_id=project_id, reader=actor)
         row = reach.project_row_for(db, settings, project_id, row, actor=actor)
     except intake.TicketApiError as error:
         raise TicketSyncError(error.message, status=error.status, code=error.code) from None

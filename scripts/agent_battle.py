@@ -436,6 +436,9 @@ def deterministic(case: dict, got: dict, calls: list[dict]) -> list[str]:
     looked = checks.get("calls_any") or []
     if looked and not (_names(looked) & called):
         fails.append(f"called none of {looked}")
+    for tool in checks.get("never_calls") or []:
+        if _names([tool]) & called:
+            fails.append(f"called {tool}")
     words = checks.get("mentions_any") or []
     if words and not any(str(w).lower() in str(got.get("reply") or "").lower() for w in words):
         fails.append(f"reply mentions none of {words}")

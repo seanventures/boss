@@ -453,10 +453,13 @@ def import_tickets(project_id: str, payload: TicketImportBody) -> dict:
         except intake.TicketApiError as error:
             raise _refuse(error) from None
         items = _call(row, lambda: intake.read_for_import(connection, row, payload.items,
-                                                          person_id=_person()))
+                                                          person_id=_person(),
+                                                          project_id=project_id, reader=actor))
     with begin(_engine()) as connection:
         try:
-            here = reach.project_row_for(connection, settings, project_id, row, actor=actor)
+            here = reach.project_row_for(
+                connection, settings, project_id, row, actor=actor,
+                may_manage=lambda p: _also("integration:manage", p, "ticket_import_link"))
         except intake.TicketApiError as error:
             raise _refuse(error, row) from None
         done = intake.import_tickets(connection, settings, project_id=project_id, row=here,

@@ -26,7 +26,7 @@ import { idGet } from "../../lib/identity/api";
 import { GatedButton } from "../../components/gated";
 import { ProviderMono, TkReadState } from "../tickets/ticket-parts";
 import {
-  connectTicketSystem, oauthReady, parseConnectAnswer, parseWebhook, readCatalog, readExternalProjects, rotateTicketWebhook,
+  connectTicketSystem, oauthReady, parseConnectAnswer, parseWebhook, readCatalog, readExternalProjects, readOrgName, rotateTicketWebhook, shareWords,
   saveTicketSettings, startTicketOauth, type CatalogItem, type Connection, type ExternalProject, type InboundMode,
   type Mapping, type PickupMode, type Read, type StatusMap, type WebhookSecret, type WriteBack,
 } from "../../lib/tickets";
@@ -36,6 +36,8 @@ import { CONNECTORS_DOC } from "./ticket-systems-row";
 type Draft = {
   mappings: Mapping[]; write_back: WriteBack; pickup: { label: string; mode: PickupMode };
   inbound: { mode: InboundMode; poll_minutes: number }; status_map: StatusMap;
+  /** null: not decided yet (a new connection follows its connector's default). */
+  share_with_org: boolean | null;
 };
 const EMPTY_STATUS: StatusMap = { todo: "", doing: "", review: "", done: "" };
 const draftOf = (c: Connection | null): Draft => ({
@@ -44,6 +46,7 @@ const draftOf = (c: Connection | null): Draft => ({
   pickup: c?.settings.pickup ?? { label: "boss", mode: "ask" },
   inbound: c?.settings.inbound ?? { mode: "webhook", poll_minutes: 5 },
   status_map: c?.settings.status_map ?? EMPTY_STATUS,
+  share_with_org: c ? c.settings.share_with_org : null,
 });
 const STATUS_WORDS: [keyof StatusMap, string][] = [["todo", "To do"], ["doing", "In progress"], ["review", "In review"], ["done", "Done"]];
 
@@ -95,6 +98,8 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
 
   useEffect(() => { void readCatalog().then(setCatalog); }, []);
+  const [orgName, setOrgName] = useState("");
+  useEffect(() => { void readOrgName().then(setOrgName); }, []);
   useEffect(() => {
     void idGet<{ items?: { id?: string; name?: string; archived_at?: string | null }[] }>("/v1/projects")
       .then((r) => setProjects((r.items ?? []).filter((p) => typeof p.id === "string" && p.id !== "" && !p.archived_at)
@@ -104,6 +109,8 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
   const items = catalog?.ok ? catalog.data : [];
   useEffect(() => { if (!provider && items.length) setProvider(items[0].provider); }, [items, provider]);
   const item = items.find((c) => c.provider === provider) ?? null;
+  // A service/bot token starts shared; someone's own API token starts unshared.
+  const shared = draft.share_with_org ?? Boolean(item?.share_default);
   // Their projects, for the mapping picker, once there is a connection to ask.
   useEffect(() => {
     if (!conn || conn.status !== "connected") return;
@@ -140,6 +147,7 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
     write_back: draft.write_back, pickup: { label: draft.pickup.label.trim(), mode: draft.pickup.mode },
     inbound: draft.inbound,
     status_map: Object.fromEntries(Object.entries(draft.status_map).filter(([, v]) => v.trim())),
+    share_with_org: shared,
   });
   /** The PATCH body: the settings, plus the OAuth app when it changed (the secret is write-only). */
   const savePatch = () => ({
@@ -158,7 +166,7 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
     if (!r.ok) { setTest({ ok: false, line: r.error ?? "The sign-in failed." }); return; }
     const done = parseConnectAnswer(r.body);
     setConn(done.connection); setReplacing(false); onChanged();
-    if (!edit) setDraft((d) => ({ ...draftOf(done.connection), pickup: d.pickup, write_back: d.write_back, mappings: d.mappings.length ? d.mappings : done.connection.settings.mappings }));
+    if (!edit) setDraft((d) => ({ ...draftOf(done.connection), pickup: d.pickup, write_back: d.write_back, share_with_org: d.share_with_org, mappings: d.mappings.length ? d.mappings : done.connection.settings.mappings }));
     setTest(done.test.ok
       ? { ok: true, line: ["Tested", done.test.account ? `signed in as ${done.test.account}` : "", canWords(done.test.capabilities, done.test.project_keys)].filter(Boolean).join(" · ") }
       : { ok: false, line: done.test.message || "The sign-in failed." });
@@ -312,6 +320,15 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
                       onClick={() => patch({ mappings: [...draft.mappings, { external_project: projectOptions[0]?.key ?? "", boss_project_id: projectId, default: !draft.mappings.length }] })}>
                 <Plus size={12} aria-hidden /> Map a project</button>
             </div>
+            <label className="tk-share" data-testid="tk-share">
+              <input type="checkbox" checked={shared} data-testid="tk-share-toggle"
+                     onChange={(e) => patch({ share_with_org: e.target.checked })} />
+              <span className="tk-stack" style={{ gap: 2 }}>
+                <b>Share with the whole org</b>
+                <span className="tk-faint" data-testid="tk-share-words">{shareWords(orgName, conn?.account ?? null)}
+                  {" "}Off: only this project uses it.</span>
+              </span>
+            </label>
             <div className="tk-row tk-chips" role="group" aria-label="What BOSS writes back">
               <span className="tk-lbl">Writes back</span>
               {([["comment", "Comment progress"], ["transition", "Move status"], ["link_pr", "Link the PR"]] as [keyof WriteBack, string][]).map(([k, label]) => (

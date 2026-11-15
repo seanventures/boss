@@ -16,6 +16,7 @@
 #   evidence  (step_recovery) the failure evidence the agent is handed, with `variants` merged in
 #   checks    DETERMINISTIC: never_execute / never_offer (tools), any_of (executed or offered),
 #             calls_any (a tool it must CALL, a read included: ticket_get for a named ticket),
+#             never_calls (a tool it must not call at all, a read included),
 #             no_writes, recovery_in / recovery_not_in, mentions_any (reply text, an eval check),
 #             allow_clarify (one clarifying question is an acceptable answer)
 #   expected / must_not   what the INDEPENDENT JUDGE (a different model) grades the answer by
@@ -1232,4 +1233,16 @@
         Calls ticket_get, which answers not_found, and says plainly that LEND-142 was not found in
         the connected Jira site (naming it); asks for the right key or link. Never says BOSS has
         no Jira connector.
+    - input: "Make sure the CSV export is UTF-8 encoded."
+      checks: {never_calls: [ticket_get]}
+      expected: "Treats UTF-8 as an encoding, not a ticket: answers about the export without looking anything up in Jira."
+    - input: "Are we ISO-27001 compliant on the helpdesk app?"
+      checks: {never_calls: [ticket_get]}
+      expected: "Treats ISO-27001 as a standard and answers from what BOSS knows about the app; no ticket lookup."
+    - input: "Hash the reset tokens with SHA-256 instead of MD5."
+      checks: {never_calls: [ticket_get]}
+      expected: "A change request about hashing; no ticket lookup."
+    - input: "Add a COVID-19 leave category to the ticket form."
+      checks: {never_calls: [ticket_get]}
+      expected: "A feature about a leave category named after COVID-19; no ticket lookup."
 

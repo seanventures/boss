@@ -1,4 +1,4 @@
-"""THE TICKET SYSTEMS A PROJECT CAN REACH — a ticket system is connected once, for the org.
+"""THE TICKET SYSTEMS A PROJECT CAN REACH — its own, and the ones SHARED with the whole org.
 
 Operator, 2026-11-15: "I added the Jira ticket system but it does not show up" and "it is
 supposed to find the ticket from jira". The connection had been saved under the project the
@@ -7,43 +7,62 @@ tracker", so from HelpDesk Laptop the card said "No ticket system yet", New work
 key, and the agent answered "BOSS has no connector to pull a ticket by ID".
 
 THE MODEL. A ticket-system connection (a ``work_tracker_providers`` row with
-``configuration.ticket_system``, not a mirror) is ORG-LEVEL: it is stored on the project it was
-added from (its HOME, where its settings and token live and who may manage it), and it is
-visible and usable — read, search, import — from every project of the same organisation. Its
-mappings (their project -> BOSS project) say where inbound tickets go and which BOSS project a
-key belongs to; they no longer decide whether another project can see the connection. Legacy
-tracker rows (the seeded plugin rows, a tracker connected for ticket CREATION) stay per
-project, exactly as before.
+``configuration.ticket_system``, not a mirror) lives on the project it was added from: its HOME,
+where its settings and token are and where it is managed (integration:manage there). It reaches
+other projects only when a person who manages it there turned on SHARE WITH THE WHOLE ORG
+(``settings.share_with_org``), having been told in plain words that everyone in the org and their
+agents then read tickets through it with its owner's token. Legacy rows and new connections with
+a personal token start unshared: nothing is widened silently. An unshared connection reaches
+only its home project (the behaviour before), and another project is told it exists and is not
+shared with it — never handed its tickets.
 
-WRITES KEEP THEIR PROJECT. A binding (work item <-> ticket) keeps a row in its own project, so
-importing a ticket into project B through a connection homed in A first makes B a MIRROR row of
-it (the B1 mechanism; :func:`project_row_for`), marked ``mirror_reason = "used"`` so a later edit
-of A's mappings does not disconnect it. Every existing reader (write-back, the webhook, the
-poller) keeps working unchanged.
+A SHARED READ from another project:
+  * prefers the reader's own sign-in to the system when they linked one (Atlassian OAuth), and
+    falls back to the connection's token;
+  * is receipted (``ticket.cross_project_read``: reader, project, connection, key);
+  * never copies the token. A project that IMPORTS through it gets a MIRROR row (the B1
+    mechanism, :func:`project_row_for`, ``mirror_reason = "used"``) that carries no secret: every
+    read and write-back resolves the credential from the HOME, so rotating or disconnecting it
+    there applies everywhere. Making that mirror needs the connection shared, or
+    integration:manage on the importing project.
 
 ONE LOOKUP for every surface (:func:`lookup`): New work's resolver, the agent's ``ticket_get``
 and the boss MCP. A key whose prefix a connection knows goes to that connection; an unknown
-prefix is tried on every reachable key-based system, so the answer is always "found in <site>,
-maps to <BOSS project>" or "not found in <site>" — never "BOSS has no connector".
+prefix is tried on the reachable key-based systems (in parallel, at most
+:data:`MAX_FAN_OUT`, each under :data:`PER_CONNECTION_SECONDS`, the outcome cached briefly per
+org and key), so the answer is "found in <site>, maps to <BOSS project>", "not found in <site>",
+"not shared with this project", or "nothing connected" — never "BOSS has no connector".
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, wait
+from typing import Any, Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from ..connectors.tickets import NotFound, TicketRef
+from ..connectors.tickets import NotFound, Ticket, TicketRef
 from ..connectors.tickets.refs import KEY_PATTERN, find_urls
 from ..connectors.tickets.registry import REGISTRY
 from . import ticket_intake as intake
 
 logger = logging.getLogger(__name__)
 
-#: How a mirror made by USING an org connection in another project is marked (sync_mirrors keeps
-#: it when the home's mappings change; it is the project's own record of the connection).
+#: How a mirror made by USING a shared connection in another project is marked (sync_mirrors
+#: keeps it when the home's mappings change). It carries no secret.
 USED_MIRROR = "used"
+#: The home row's setting that shares a connection with every project of its org.
+SHARE_KEY = "share_with_org"
+#: An unknown key prefix is tried on at most this many connections (most recently used first),
+#: each read given this long, and the outcome kept this long per (org, key).
+MAX_FAN_OUT = 5
+PER_CONNECTION_SECONDS = 8.0
+CACHE_SECONDS = 180.0
+_CACHE: dict[tuple[str, str], tuple[float, str, str]] = {}
+_CACHE_LOCK = threading.Lock()
 
 
 def org_of(db: Connection, project_id: str) -> Optional[str]:
@@ -56,75 +75,128 @@ def project_name(db: Connection, project_id: str) -> str:
                           {"p": project_id}).scalar() or project_id)
 
 
-def is_org_level(row: dict[str, Any]) -> bool:
-    """A ticket-system HOME row: connected once, for the whole org."""
+def is_shared(row: dict[str, Any]) -> bool:
+    """A ticket-system HOME row a person shared with the whole org (settings.share_with_org)."""
     config = row.get("configuration") or {}
-    return bool(config.get("ticket_system")) and not config.get("mirror_of")
+    if not config.get("ticket_system") or config.get("mirror_of"):
+        return False
+    return bool(intake._stored_settings(config).get(SHARE_KEY))
 
 
 def home_id(row: dict[str, Any]) -> str:
     return str((row.get("configuration") or {}).get("mirror_of") or row["id"])
 
 
+def _org_homes(db: Connection, project_id: str) -> list[dict[str, Any]]:
+    """The connected ticket-system HOME rows of the org's other (unarchived) projects."""
+    org = org_of(db, project_id)
+    if org is None:
+        return []
+    found = db.execute(text(
+        "SELECT t.id, t.project_id, t.provider_key, t.display_name, t.status, t.is_default, "
+        "t.configuration, t.updated_at FROM work_tracker_providers t "
+        "JOIN projects p ON p.id = t.project_id JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE w.org_id = :o AND t.project_id <> :p AND t.status = 'active' "
+        "AND p.archived_at IS NULL "
+        "AND COALESCE(t.configuration->>'ticket_system', '') = 'true' "
+        "AND COALESCE(t.configuration->>'mirror_of', '') = '' "
+        "ORDER BY t.updated_at DESC"), {"o": org, "p": project_id}).mappings().all()
+    out = []
+    for raw in found:
+        if REGISTRY.get(str(raw["provider_key"])) is None:
+            continue
+        row = dict(raw)
+        row["configuration"] = intake._config(raw)
+        if intake.is_connected(row):
+            out.append(row)
+    return out
+
+
 def reachable_rows(db: Connection, project_id: str) -> list[dict[str, Any]]:
     """Every connected ticket system project ``project_id`` can use: its own rows first (as
-    before), then the org-level connections homed in the org's other projects. One connection
-    appears once (a home that already has a mirror here is that mirror). Each row carries
-    ``reach``: ``project`` or ``org``."""
+    before), then the connections homed in the org's other projects that are SHARED with the
+    whole org. One connection appears once. Each row carries ``reach``: ``project`` or ``org``."""
     own = []
     families: set[str] = set()
     for row in intake.project_rows(db, project_id):
         own.append({**row, "reach": "project"})
         families.add(home_id(row))
-    org = org_of(db, project_id)
-    if org is None:
-        return own
-    others = db.execute(text(
-        "SELECT t.id, t.project_id, t.provider_key, t.display_name, t.status, t.is_default, "
-        "t.configuration, t.updated_at FROM work_tracker_providers t "
-        "JOIN projects p ON p.id = t.project_id JOIN workspaces w ON w.id = p.workspace_id "
-        "WHERE w.org_id = :o AND t.project_id <> :p AND t.status = 'active' "
-          "AND p.archived_at IS NULL "
-          "AND COALESCE(t.configuration->>'ticket_system', '') = 'true' "
-          "AND COALESCE(t.configuration->>'mirror_of', '') = '' "
-          "ORDER BY t.updated_at DESC"), {"o": org, "p": project_id}).mappings().all()
-    for raw in others:
-        if REGISTRY.get(str(raw["provider_key"])) is None or str(raw["id"]) in families:
-            continue
-        row = dict(raw)
-        row["configuration"] = intake._config(raw)
-        if intake.is_connected(row):
+    for row in _org_homes(db, project_id):
+        if str(row["id"]) not in families and is_shared(row):
             own.append({**row, "reach": "org"})
             families.add(str(row["id"]))
     return own
 
 
+def unshared_rows(db: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Connections of the org's other projects NOT shared with the whole org (and not this
+    project's own): named to this project so it can say "not shared with this project", never
+    read through."""
+    families = {home_id(r) for r in intake.project_rows(db, project_id)}
+    return [{**row, "reach": "unshared"} for row in _org_homes(db, project_id)
+            if not is_shared(row) and str(row["id"]) not in families]
+
+
 def readable_rows(db: Connection, project_id: str) -> list[dict[str, Any]]:
     """The reachable connections that can READ tickets. GitHub Issues joins only when it was
     connected AS a ticket system (elsewhere it is the repository's own issues)."""
-    out = []
-    for row in reachable_rows(db, project_id):
-        adapter = REGISTRY.get(str(row["provider_key"]))
-        if adapter is None or not adapter.can("read"):
-            continue
-        if row["provider_key"] == "github_issues" and \
-                not row["configuration"].get("ticket_system"):
-            continue
-        out.append(row)
-    return out
+    return [row for row in reachable_rows(db, project_id) if _reads(row)]
+
+
+def _reads(row: dict[str, Any]) -> bool:
+    adapter = REGISTRY.get(str(row["provider_key"]))
+    if adapter is None or not adapter.can("read"):
+        return False
+    return not (row["provider_key"] == "github_issues"
+                and not row["configuration"].get("ticket_system"))
+
+
+def not_shared_error(db: Connection, row: dict[str, Any]) -> intake.TicketApiError:
+    home = project_name(db, str(row["project_id"]))
+    return intake.TicketApiError(
+        "not_shared", f"The {intake.label_of(row)} connection was added in {home} and is not "
+                      "shared with this project. A person who manages integrations there can "
+                      "turn on \"Share with the whole org\" in Setup › Ticket systems.",
+        status=403, home_project=str(row["project_id"]))
 
 
 def reachable_row(db: Connection, project_id: str, connection_id: str) -> dict[str, Any]:
-    """A connection by id, if ``project_id`` can reach it (its own row, or an org-level one in
-    the same org); else the same not-found a foreign id always got."""
+    """A connection by id (its own, or its home's), if ``project_id`` can reach it: its own row,
+    or one shared with the org. An unshared one of another project is refused as not shared."""
     for row in reachable_rows(db, project_id):
-        # By its own id, or by its home's id (the connection as another project knows it).
         if str(connection_id) in (str(row["id"]), home_id(row)):
             return row
     row = intake.get_row(db, connection_id)   # raises not_found for an unknown id
     if row["project_id"] == project_id:       # its own, but not connected right now
         return row
+    for other in unshared_rows(db, project_id):
+        if str(other["id"]) == str(connection_id):
+            raise not_shared_error(db, other)
     raise intake.TicketApiError("not_found", "No such ticket-system connection.", status=404)
+
+
+def audit_read(db: Connection, project_id: str, row: dict[str, Any], what: str, *,
+               reader: Optional[str]) -> None:
+    """A receipt for every read through a connection homed in ANOTHER project: who read, in
+    which project, through which connection, what (a key, or a search)."""
+    if row.get("reach") != "org":
+        return
+    from .core import make_id
+    from .receipts import ReceiptService
+
+    tenant = db.execute(text("SELECT w.org_id, p.workspace_id FROM projects p JOIN workspaces w "
+                             "ON w.id = p.workspace_id WHERE p.id = :p"),
+                        {"p": project_id}).first()
+    if tenant is None:
+        return
+    record = {"reader": str(reader or "agent"), "project_id": project_id,
+              "connection_id": str(row["id"]), "home_project": str(row["project_id"]),
+              "provider": str(row["provider_key"]), "what": str(what)[:300]}
+    with db.begin_nested():
+        ReceiptService().record_completed(
+            db, str(tenant[0]), str(tenant[1]), project_id,
+            f"ticket_read:{make_id('tkr')}", "ticket.cross_project_read",
+            {"connection_id": str(row["id"]), "home_project": str(row["project_id"])}, record)
 
 
 def site_of(row: dict[str, Any]) -> str:
@@ -170,10 +242,10 @@ def _key_shaped(ref: str) -> bool:
     return bool(KEY_PATTERN.fullmatch(ref.strip().upper()))
 
 
-def _owners(db: Connection, rows: list[dict[str, Any]], ref: str, *,
-            person_id: Optional[str]) -> list[tuple[dict[str, Any], TicketRef]]:
-    """The connections a reference belongs to: those that recognise it (a URL of their site, a
-    key whose project they know); for a key no connection knows, every key-based system."""
+def _recognised(db: Connection, rows: list[dict[str, Any]], ref: str, *,
+                person_id: Optional[str]) -> list[tuple[dict[str, Any], TicketRef]]:
+    """The connections that RECOGNISE a reference: a link of their site, or a key whose project
+    they know."""
     owners: list[tuple[dict[str, Any], TicketRef]] = []
     for row in rows:
         adapter = REGISTRY.get(str(row["provider_key"]))
@@ -184,73 +256,159 @@ def _owners(db: Connection, rows: list[dict[str, Any]], ref: str, *,
             continue
         if found:
             owners.append((row, found[0]))
-    if owners or find_urls(ref) or not _key_shaped(ref):
-        return owners
-    key = ref.strip().upper()
-    for row in rows:
-        adapter = REGISTRY.get(str(row["provider_key"]))
-        if getattr(adapter.manifest, "key_refs", False):
-            owners.append((row, TicketRef(str(row["provider_key"]), key=key)))
     return owners
+
+
+def _key_based(rows: list[dict[str, Any]], key: str) -> list[tuple[dict[str, Any], TicketRef]]:
+    """For a key no connection knows the project of: the key-based systems, most recently used
+    first, at most MAX_FAN_OUT."""
+    picked = [r for r in rows
+              if getattr(REGISTRY.get(str(r["provider_key"])).manifest, "key_refs", False)]
+    picked.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+    return [(r, TicketRef(str(r["provider_key"]), key=key)) for r in picked[:MAX_FAN_OUT]]
 
 
 def not_connected(project_id: str) -> dict[str, Any]:
     return {"ok": False, "error": "not_connected",
-            "message": "No ticket system is connected in this organisation, so BOSS cannot read "
-                       "tickets yet.",
+            "message": "No ticket system is connected to this project, and none is shared with "
+                       "the whole organisation, so BOSS cannot read tickets here yet.",
             "next": "Connect one in Setup › Ticket systems (Jira, Plane, GitHub Issues, Linear, "
-                    "Azure DevOps). It is connected once and every project can use it."}
+                    "Azure DevOps), or ask the person who connected one in another project to "
+                    "share it with the whole org."}
+
+
+def _cached(org: str, key: str) -> Optional[tuple[str, str]]:
+    with _CACHE_LOCK:
+        hit = _CACHE.get((org, key))
+        if hit is None or hit[0] < time.monotonic():
+            _CACHE.pop((org, key), None)
+            return None
+        return hit[1], hit[2]
+
+
+def _remember(org: str, key: str, connection_id: str, message: str) -> None:
+    with _CACHE_LOCK:
+        _CACHE[(org, key)] = (time.monotonic() + CACHE_SECONDS, connection_id, message)
+
+
+def clear_cache() -> None:
+    with _CACHE_LOCK:
+        _CACHE.clear()
+
+
+def _read_one(db: Connection, row: dict[str, Any], tref: TicketRef, person_id: Optional[str]
+              ) -> tuple[str, Optional[Ticket], str]:
+    """("found", ticket, "") | ("not_found", None, "") | (<code>, None, <words>)."""
+    adapter = REGISTRY.get(str(row["provider_key"]))
+    try:
+        conn = intake.ticket_connection(db, row, person_id=person_id)
+        return "found", adapter.get_ticket(conn, tref), ""
+    except NotFound:
+        return "not_found", None, ""
+    except Exception as error:  # noqa: BLE001 — typed into words
+        typed = intake.explain(error, label=intake.label_of(row))
+        return typed.code, None, str(typed)
+
+
+def _read_many(db: Connection, owners: list[tuple[dict[str, Any], TicketRef]],
+               person_id: Optional[str]) -> list[tuple[str, Optional[Ticket], str]]:
+    """Each owner read once: in this transaction when there is one, else in parallel, each on
+    its own connection and under PER_CONNECTION_SECONDS (a slow site is a timeout, not a
+    hang)."""
+    if len(owners) <= 1:
+        return [_read_one(db, row, tref, person_id) for row, tref in owners]
+    engine = db.engine
+
+    def one(row: dict[str, Any], tref: TicketRef) -> tuple[str, Optional[Ticket], str]:
+        with engine.begin() as own:
+            return _read_one(own, row, tref, person_id)
+
+    pool = ThreadPoolExecutor(max_workers=min(len(owners), MAX_FAN_OUT))
+    try:
+        futures = [pool.submit(one, row, tref) for row, tref in owners]
+        wait(futures, timeout=PER_CONNECTION_SECONDS)
+        out = []
+        for future in futures:
+            if future.done() and future.exception() is None:
+                out.append(future.result())
+            elif future.done():
+                out.append(("ticket_system_error", None, "the read failed"))
+            else:
+                out.append(("timeout", None, f"no answer within {PER_CONNECTION_SECONDS:.0f}s"))
+        return out
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str] = None,
            full: bool = True, connection_id: Optional[str] = None,
-           provider: Optional[str] = None) -> dict[str, Any]:
-    """ONE TICKET by key or link, from every ticket system ``project_id`` can reach.
+           provider: Optional[str] = None, reader: Optional[str] = None) -> dict[str, Any]:
+    """ONE TICKET by key or link, from the ticket systems ``project_id`` can reach (its own, and
+    ones shared with the whole org).
 
     Found: ``{ok, ticket, connection, maps_to, in_this_project, searched}``. Absent:
     ``{ok: False, error: "not_found", message: "LEND-142 was not found in <site> (Jira)."}``.
-    Nothing connected: ``not_connected`` with the next step. Credentials resolve server-side
-    (the person's own sign-in when they linked one, else the connection's)."""
+    Owned by a connection of another project that is not shared: ``not_shared``. Nothing
+    connected: ``not_connected`` with the next step. Credentials resolve server-side (the
+    reader's own sign-in when they linked one, else the connection's). A read through another
+    project's connection is receipted."""
     said = str(ref or "").strip()
     if not said:
         return {"ok": False, "error": "invalid_ref", "message": "Which ticket? Give its key "
                                                                 "(KAN-12) or its link."}
     rows = readable_rows(db, project_id)
-    if not rows:
-        return not_connected(project_id)
     cid = str(connection_id or "").strip()
     wanted = str(provider or "").strip().lower()
     if cid.startswith("kit:tickets:"):
         wanted, cid = wanted or cid.rsplit(":", 1)[-1], ""
     if cid or wanted:
-        rows = [r for r in rows if (not cid or str(r["id"]) == cid)
+        # By its own id or its home's (as reachable_row), or by its system.
+        rows = [r for r in rows if (not cid or cid in (str(r["id"]), home_id(r)))
                 and (not wanted or str(r["provider_key"]) == wanted)]
-        if not rows:
-            return {"ok": False, "error": "not_connected",
-                    "message": f"No connected ticket system {cid or wanted} is reachable from "
-                               "this project."}
-    owners = _owners(db, rows, said, person_id=person_id)
+    owners = _recognised(db, rows, said, person_id=person_id)
     if not owners:
-        sites = ", ".join(sorted({f"{site_of(r) or intake.label_of(r)} ({intake.label_of(r)})"
-                                  for r in rows}))
-        return {"ok": False, "error": "not_found",
-                "message": f"{said} is not a ticket key or link any connected ticket system "
-                           f"owns. Connected: {sites}.",
-                "searched": [describe(db, r) for r in rows]}
+        # Before guessing: does a connection NOT shared with this project own it?
+        hidden = [r for r in unshared_rows(db, project_id) if _reads(r)
+                  and (not wanted or str(r["provider_key"]) == wanted)]
+        if _recognised(db, hidden, said, person_id=None):
+            row = _recognised(db, hidden, said, person_id=None)[0][0]
+            error = not_shared_error(db, row)
+            return {"ok": False, **error.body()}
+        if not rows:
+            if cid or wanted:
+                return {"ok": False, "error": "not_connected",
+                        "message": f"No connected ticket system {cid or wanted} is reachable "
+                                   "from this project."}
+            if hidden:
+                return {"ok": False, **not_shared_error(db, hidden[0]).body()}
+            return not_connected(project_id)
+        if find_urls(said) or not _key_shaped(said):
+            sites = ", ".join(sorted({f"{site_of(r) or intake.label_of(r)} "
+                                      f"({intake.label_of(r)})" for r in rows}))
+            return {"ok": False, "error": "not_found",
+                    "message": f"{said} is not a ticket key or link any connected ticket system "
+                               f"owns. Connected: {sites}.",
+                    "searched": [describe(db, r) for r in rows]}
+        key = said.upper()
+        org = str(org_of(db, project_id) or "")
+        hit = _cached(org, key)
+        if hit is not None and not hit[0]:
+            return {"ok": False, "error": "not_found", "message": hit[1], "cached": True}
+        owners = _key_based(rows, key)
+        if hit is not None:
+            owners = [o for o in owners if str(o[0]["id"]) == hit[0]] or owners
+        guessed = True
+    else:
+        guessed = False
     searched: list[dict[str, Any]] = []
-    for row, tref in owners:
+    for (row, tref), (result, ticket, words) in zip(owners, _read_many(db, owners, person_id)):
         where = describe(db, row)
-        adapter = REGISTRY.get(str(row["provider_key"]))
-        try:
-            conn = intake.ticket_connection(db, row, person_id=person_id)
-            ticket = adapter.get_ticket(conn, tref)
-        except NotFound:
-            searched.append({**where, "result": "not_found"})
+        if ticket is None:
+            searched.append({**where, "result": result, **({"message": words} if words else {})})
             continue
-        except Exception as error:  # noqa: BLE001 — typed into words
-            typed = intake.explain(error, label=intake.label_of(row))
-            searched.append({**where, "result": typed.code, "message": str(typed)})
-            continue
+        if guessed:
+            _remember(str(org_of(db, project_id) or ""), tref.label(), str(row["id"]), "")
+        audit_read(db, project_id, row, ticket.key or tref.label(), reader=reader or person_id)
         view = intake.ticket_view(ticket, full=full)
         view["connection_id"] = str(row["id"])
         view["in_boss"] = intake.mark([ticket], intake.in_boss_map(
@@ -260,12 +418,14 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
                 "this_project": project_id,
                 "in_this_project": maps_to["project_id"] == project_id,
                 "searched": searched}
-    label = tref.label() if owners else said
+    label = owners[0][1].label() if owners else said
     places = ", ".join(f"{s['site'] or s['label']} ({s['label']})" for s in searched) or "—"
     failed = [s for s in searched if s["result"] != "not_found"]
     if not failed:
-        return {"ok": False, "error": "not_found",
-                "message": f"{label} was not found in {places}.", "searched": searched}
+        message = f"{label} was not found in {places}."
+        if guessed:
+            _remember(str(org_of(db, project_id) or ""), label, "", message)
+        return {"ok": False, "error": "not_found", "message": message, "searched": searched}
     first = failed[0]
     return {"ok": False, "error": first["result"],
             "message": f"{label} could not be read: {first.get('message') or first['result']}"
@@ -273,20 +433,35 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
             "searched": searched}
 
 
+#: What a USED mirror copies from its home: where the site is and how tickets map — never a
+#: credential (a token, a secret reference, a host credential reference, OAuth app secrets).
+_MIRROR_KEEPS = ("base_url", "api_base_url", "web_base_url", "email", "project_key",
+                 "project_identifier", "workspace_slug", "organization", "project", "repository",
+                 "team_key", "issue_type", "settings", "ticket_system", "acts_as")
+
+
 def project_row_for(db: Connection, app_settings: Any, project_id: str, row: dict[str, Any], *,
-                    actor: str) -> dict[str, Any]:
-    """The connection's row IN ``project_id``, made when this project first uses an org-level
-    connection homed elsewhere (a ``used`` mirror: same site, same settings, the token copied
-    into this project's vault like every B1 mirror). Refused when the project already has its
-    own, different connection to that system."""
+                    actor: str, may_manage: Optional[Callable[[str], None]] = None
+                    ) -> dict[str, Any]:
+    """The connection's row IN ``project_id`` (bindings keep a row in their own project), made
+    the first time this project imports through a connection homed elsewhere: a ``used``
+    mirror that carries NO secret — reads and write-back resolve the credential from the home.
+    Allowed when the home is shared with the whole org, or the caller manages integrations
+    here (``may_manage`` raises otherwise). Refused when this project has its own, different
+    connection to that system."""
     found = intake._project_row(db, project_id, row)
-    if found is not None and intake.is_connected(found):
+    if found is not None and found.get("status") == "active" and (
+            intake.is_connected(found) or found["configuration"].get("mirror_of")):
         return found
     home = intake.get_row(db, home_id(row))
     if home["project_id"] == project_id:
         return home
     if org_of(db, home["project_id"]) != org_of(db, project_id):
         raise intake.TicketApiError("not_found", "No such ticket-system connection.", status=404)
+    if not is_shared(home):
+        if may_manage is None:
+            raise not_shared_error(db, home)
+        may_manage(project_id)
     provider = str(home["provider_key"])
     existing = db.execute(text(intake._ROW + " WHERE project_id = :p AND provider_key = :k"),
                           {"p": project_id, "k": provider}).mappings().first()
@@ -300,14 +475,12 @@ def project_row_for(db: Connection, app_settings: Any, project_id: str, row: dic
         from ..config import get_settings
 
         app_settings = get_settings()
-    config = home["configuration"]
-    mirrored = {k: v for k, v in config.items()
-                if k not in ("secret_ref_id", "last4", "fingerprint", "mirror_of",
-                              "webhook_secret_ref", "webhook")}
+    adapter = intake.adapter_for(provider)
+    keeps = set(_MIRROR_KEEPS) | {str(f["name"]) for f in adapter.manifest.auth_fields
+                                  if not f.get("secret")}
+    mirrored = {k: v for k, v in home["configuration"].items() if k in keeps}
     mirrored["mirror_reason"] = USED_MIRROR
-    token = (intake.stored_token(db, app_settings, home) if config.get("secret_ref_id")
-             else str(config.get("api_token") or ""))
-    return intake.store(db, app_settings, project_id=project_id,
-                        adapter=intake.adapter_for(provider), configuration=mirrored,
-                        token=token, outcome={"account": config.get("acts_as")}, actor=actor,
+    return intake.store(db, app_settings, project_id=project_id, adapter=adapter,
+                        configuration=mirrored, token="",
+                        outcome={"account": home["configuration"].get("acts_as")}, actor=actor,
                         mirror_of=str(home["id"]))

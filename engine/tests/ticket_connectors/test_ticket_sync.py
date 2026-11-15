@@ -568,9 +568,9 @@ def test_each_ticket_tool_declares_its_kind_permission_and_surfaces():
     from boss_engine.tools import build_default_registry
 
     reg = build_default_registry()
-    want = {"ticket_get": ("read", "integration:read"),
-            "ticket_search": ("read", "integration:read"),
-            "ticket_browse": ("read", "integration:read"),
+    want = {"ticket_get": ("read", "ticket:read"),
+            "ticket_search": ("read", "ticket:read"),
+            "ticket_browse": ("read", "ticket:read"),
             "ticket_import": ("write", "work_tracker:write"),
             "ticket_comment": ("write", "work_tracker:write"),
             "ticket_transition": ("write", "work_tracker:write")}

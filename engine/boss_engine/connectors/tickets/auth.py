@@ -88,10 +88,14 @@ def validate_auth_kinds(raw: Any, field_names: list[str], hosts: list[str]) -> l
             problems.append(f"{where}: kind '{item['kind']}' repeats")
         seen.add(item["kind"])
         if item["kind"] == "api_token":
-            unknown = set(item) - {"kind", "fields"}
+            # token_owner: "person" (default — someone's own API token) or "service" (a bot or
+            # service-account token). Decides whether "Share with the whole org" starts ticked.
+            unknown = set(item) - {"kind", "fields", "token_owner"}
             fields = item.get("fields")
             if unknown:
                 problems.append(f"{where}: unknown {sorted(unknown)}")
+            if item.get("token_owner", "person") not in ("person", "service"):
+                problems.append(f"{where}.token_owner is person or service")
             if not isinstance(fields, list) or not all(f in field_names for f in fields):
                 problems.append(f"{where}.fields must name auth_fields")
             continue

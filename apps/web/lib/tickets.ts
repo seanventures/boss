@@ -33,14 +33,16 @@ export type TicketSettings = {
   mappings: Mapping[]; write_back: WriteBack; status_map: StatusMap;
   pickup: { label: string; mode: PickupMode }; inbound: { mode: InboundMode; poll_minutes: number };
   project_keys: string[];
+  /** Shared with every project of the org (off unless a person who manages it turned it on). */
+  share_with_org: boolean;
 };
 export type Connection = {
   id: string; project_id: string; provider: string; label: string; icon: string;
-  status: "connected" | "disconnected" | "not_connected"; base_url: string; fields: Record<string, string>;
+  status: "connected" | "disconnected" | "not_connected" | "not_shared"; base_url: string; fields: Record<string, string>;
   account: string | null; last4: string | null; fingerprint: string | null; capabilities: Record<string, boolean>;
   settings: TicketSettings; managed_from: { connection_id: string; project_id: string } | null;
   /** "org": connected once from another project of the org (home_project), usable here too. */
-  reach: "project" | "org"; home_project: { id: string; name: string } | null;
+  reach: "project" | "org" | "unshared"; home_project: { id: string; name: string } | null;
   mirrors: { connection_id: string; project_id: string; status: string }[];
   bindings: { total: number; paused: number };
   /** The connection's own OAuth app for "Connect with Atlassian" (null: the connector has none).
@@ -56,6 +58,8 @@ export type CatalogItem = {
   provider: string; label: string; icon: string; description: string; docs_url: string;
   auth_fields: AuthField[]; oauth: boolean; base_url_field: string; capabilities: Record<string, boolean>;
   status_map_defaults: Partial<StatusMap>; webhook: boolean;
+  /** "Share with the whole org" starts ticked: a service/bot token, not someone's own. */
+  share_default: boolean;
 };
 export type InBoss = { work_item_id: string; run_id: string | null; project_id: string; binding_id: string; sync_status: string } | null;
 export type Ticket = {
@@ -105,6 +109,7 @@ export function parseSettings(v: unknown): TicketSettings {
     pickup: { label: s(pk.label), mode: pk.mode === "auto_start" ? "auto_start" : "ask" },
     inbound: { mode: ib.mode === "poll" || ib.mode === "off" ? ib.mode : "webhook", poll_minutes: n(ib.poll_minutes) ?? 5 },
     project_keys: strs(x.project_keys),
+    share_with_org: x.share_with_org === true,
   };
 }
 
@@ -115,14 +120,14 @@ export function parseConnection(v: unknown): Connection {
   const mf = x.managed_from ? o(x.managed_from) : null;
   return {
     id: s(x.id), project_id: s(x.project_id), provider: s(x.provider), label: s(x.label) || s(x.provider), icon: s(x.icon),
-    status: st === "connected" || st === "disconnected" ? st : "not_connected", base_url: s(x.base_url),
+    status: st === "connected" || st === "disconnected" || st === "not_shared" ? st : "not_connected", base_url: s(x.base_url),
     fields: Object.fromEntries(Object.entries(o(x.fields)).map(([k, val]) => [k, s(val)])),
     account: s(x.account) || null, last4: s(x.last4) || null, fingerprint: s(x.fingerprint) || null,
     capabilities: Object.fromEntries(Object.entries(caps).map(([k, val]) => [k, val === true])),
     settings: parseSettings(x.settings),
     managed_from: mf && s(mf.connection_id) ? { connection_id: s(mf.connection_id), project_id: s(mf.project_id) } : null,
     mirrors: a(x.mirrors).map((m) => ({ connection_id: s(o(m).connection_id), project_id: s(o(m).project_id), status: s(o(m).status) })),
-    reach: s(x.reach) === "org" ? "org" : "project",
+    reach: s(x.reach) === "org" ? "org" : s(x.reach) === "unshared" ? "unshared" : "project",
     home_project: s(o(x.home_project).id) ? { id: s(o(x.home_project).id), name: s(o(x.home_project).name) || s(o(x.home_project).id) } : null,
     bindings: { total: n(o(x.bindings).total) ?? 0, paused: n(o(x.bindings).paused) ?? 0 },
     oauth_app: x.oauth_app && typeof x.oauth_app === "object"
@@ -142,6 +147,7 @@ export function parseCatalogItem(v: unknown): CatalogItem {
                required: y.required !== false, help: s(y.help) };
     }).filter((f) => f.name),
     oauth: a(x.auth_kinds).some((k) => o(k).kind === "oauth2"),
+    share_default: x.share_default === true,
     base_url_field: s(x.base_url_field),
     capabilities: Object.fromEntries(Object.entries(o(x.capabilities)).map(([k, val]) => [k, val === true])),
     status_map_defaults: Object.fromEntries(Object.entries(o(x.status_map_defaults)).map(([k, val]) => [k, s(val)])) as Partial<StatusMap>,
@@ -290,8 +296,22 @@ const conn = (id: string) => `/v1/ticket-systems/${enc(id)}`;
 export const ticketSetupHref = (projectId?: string) =>
   `?area=setup&focus=ticket_systems${projectId ? `&project_id=${enc(projectId)}` : ""}`;
 
+/** What sharing a connection means, in the words the person agrees to. */
+export const shareWords = (org: string, owner: string | null) =>
+  `Everyone in ${org || "your organisation"} and their agents can read tickets through this connection using ${owner ? `${owner}'s` : "its"} token.`;
+/** The organisation's name, for the sharing sentence (GET /v1/auth/options, public). */
+export async function readOrgName(): Promise<string> {
+  try {
+    const r = await fetch("/v1/auth/options", { cache: "no-store" });
+    return r.ok ? s(o(await r.json()).org_name) : "";
+  } catch { return ""; }
+}
 export const readCatalog = () => ticketRead("/v1/ticket-systems/catalog", (v) => a(o(v).items).map(parseCatalogItem).filter((c) => c.provider));
+/** Every connection this project can USE (its own, and ones shared with the whole org). */
 export const readConnections = (projectId: string) =>
+  ticketRead(`/v1/ticket-systems?project_id=${enc(projectId)}`, (v) => a(o(v).connections).map(parseConnection).filter((c) => c.reach !== "unshared"));
+/** The same, plus other projects' connections NOT shared with this one (named only: Setup). */
+export const readConnectionsAndHidden = (projectId: string) =>
   ticketRead(`/v1/ticket-systems?project_id=${enc(projectId)}`, (v) => a(o(v).connections).map(parseConnection));
 export const readExternalProjects = (connectionId: string, q = "") =>
   ticketRead(`${conn(connectionId)}/projects${q ? `?q=${enc(q)}` : ""}`, (v) => a(o(v).projects).map((p) => {

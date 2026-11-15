@@ -48,6 +48,7 @@ function api(over: (url: string, method: string, body: Record<string, unknown>) 
     const o = over(String(url), method, body);
     if (o) return o;
     if (url.startsWith("/v1/ticket-systems/catalog")) return json(CATALOG);
+    if (url.startsWith("/v1/auth/options")) return json({ org_name: "Kaappu Labs" });
     if (url.startsWith("/v1/ticket-systems?project_id=")) return json({ connections: [JIRA] });
     if (url.endsWith("/projects")) return json({ projects: [{ key: "LEND", name: "Lending" }, { key: "OPS", name: "Operations" }] });
     if (url.endsWith("/test")) return json({ connection: JIRA, test: { ok: true, account: "BOSS Bot", project_keys: ["LEND", "OPS"] } });
@@ -99,6 +100,31 @@ describe("Setup › Ticket systems (T1)", () => {
     await click('[data-testid="tk-menu-wtp_home"]');
     expect(($('[data-testid="tk-off-wtp_home"]') as HTMLButtonElement | null)?.disabled
            ?? $('[data-testid="tk-off-wtp_home"]')?.getAttribute("aria-disabled") === "true").toBeTruthy();
+  });
+
+  it("names another project's connection that is NOT shared, and offers nothing to use", async () => {
+    const hidden = { id: "wtp_other", provider: "jira", label: "Jira", status: "not_shared", reach: "unshared",
+                     home_project: { id: "boss-dogfood", name: "BOSS dogfood bootstrap" } };
+    api((url) => (url.startsWith("/v1/ticket-systems?project_id=") ? json({ connections: [hidden] }) : undefined));
+    await mount(<TicketSystemsRow projectId="helpdesk-laptop" />);
+    expect($('[data-testid="tk-unshared-wtp_other"]')?.textContent)
+      .toBe("Jira was added in BOSS dogfood bootstrap and is not shared with this project.");
+    expect($('[data-testid="tk-system-wtp_other"]')).toBeNull();
+    expect($('[data-testid="tk-systems-empty"]')).not.toBeNull();
+  });
+
+  it("the home card shares a connection with the whole org, saying what that means", async () => {
+    const calls = api();
+    await mount(<TicketSystemsRow projectId="p1" />);
+    const toggle = $('[data-testid="tk-share-toggle-wtp_1"]') as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect($('[data-testid="tk-share-wtp_1"]')?.getAttribute("title"))
+      .toBe("Everyone in Kaappu Labs and their agents can read tickets through this connection using BOSS Bot's token.");
+    toggle.click();
+    await settle();
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect([patch.url, patch.body]).toEqual(["/v1/ticket-systems/wtp_1", { share_with_org: true }]);
+    expect($('[data-testid="tk-said"]')?.textContent).toBe("Jira is shared with the whole org.");
   });
 
   it("lists a connection, tests it, opens its settings and disconnects only after confirming", async () => {
@@ -197,9 +223,14 @@ describe("Add a ticket system (T2)", () => {
     await click('[data-testid="tk-wb-link_pr"]');
     await type('[data-testid="tk-pickup-label"]', "boss");
     await type('[data-testid="tk-pickup-mode"]', "auto_start");
+    // Sharing is a choice, in plain words; a personal API token starts unshared.
+    expect(($('[data-testid="tk-share-toggle"]') as HTMLInputElement).checked).toBe(false);
+    expect($('[data-testid="tk-share-words"]')?.textContent)
+      .toContain("Everyone in Kaappu Labs and their agents can read tickets through this connection using BOSS Bot's token.");
     await click('[data-testid="tk-save"]');
     const patch = calls.find((c) => c.method === "PATCH")!;
     expect(patch.url).toBe("/v1/ticket-systems/wtp_1");
+    expect(patch.body.share_with_org).toBe(false);
     expect(patch.body).toMatchObject({ mappings: [{ external_project: "LEND", boss_project_id: "p1", default: true }],
                                        write_back: { comment: true, transition: true, link_pr: false },
                                        pickup: { label: "boss", mode: "auto_start" }, inbound: { mode: "webhook", poll_minutes: 5 } });
@@ -229,6 +260,16 @@ describe("Add a ticket system (T2)", () => {
     await click('[data-testid="tk-save"]');
     const patch = calls.find((c) => c.method === "PATCH")!;
     expect(patch.body).toMatchObject({ status_map: { review: "In Review", doing: "Building" }, inbound: { mode: "poll", poll_minutes: 10 } });
+  });
+
+  it("a connector whose token is a service/bot token starts shared", async () => {
+    const BOT = { items: CATALOG.items.map((c) => (c.provider === "jira" ? { ...c, share_default: true } : c)) };
+    api((url) => (url.startsWith("/v1/ticket-systems?project_id=") ? json({ connections: [] })
+      : url.startsWith("/v1/ticket-systems/catalog") ? json(BOT) : undefined));
+    await mount(<TicketSystemsRow projectId="p1" />);
+    await click('[data-testid="tk-add"]');
+    await click('[data-testid="tk-tile-jira"]');
+    expect(($('[data-testid="tk-share-toggle"]') as HTMLInputElement).checked).toBe(true);
   });
 
   it("a refused sign-in says the API's sentence, and Cancel closes without a write", async () => {

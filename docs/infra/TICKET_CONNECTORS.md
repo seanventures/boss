@@ -231,30 +231,44 @@ The helper also sets timeouts and retries 429 and 5xx responses with backoff. It
 - Jira `startAt`;
 - Plane `next_cursor` / `next_page_results`.
 
-## One connection for the org
+## Sharing a connection with the whole org
 
-A ticket system is connected once, for the whole organisation (2026-11-15). The row is stored on
-the project it was added from (its home: settings, token and who may manage it live there), and
-`services/ticket_reach.py` makes it visible and usable from every project of the same org:
-`GET /v1/ticket-systems?project_id=` lists it with `reach: "org"` and `home_project`
-(`scope=project` lists only the project's own), New work's `/v1/tickets/resolve` reads its keys,
-and the agent tools read, search and import through it. Mappings (their project → BOSS project)
-say which BOSS project a ticket belongs to; they do not decide visibility.
+A ticket-system connection lives on the project it was added from: its home, where its settings
+and token are and where it is managed (`integration:manage` there). It reaches other projects
+only when a person who manages it turns on **Share with the whole org** (`settings.share_with_org`,
+`PATCH /v1/ticket-systems/{id}`). The drawer and the home card say what that means: "Everyone in
+<org> and their agents can read tickets through this connection using <owner>'s token." The
+toggle starts ticked only for a connector whose `api_token` kind declares
+`token_owner: service` (a bot or service-account token; catalog `share_default`); a personal API
+token, and every connection made before this, starts unshared. Nothing widens silently.
 
+`services/ticket_reach.py`:
+
+- **Unshared**: reaches only its home project (the behaviour before). Another project lists it
+  by name only (`reach: "unshared"`, no settings) and a key it owns answers `not_shared` with who
+  can share it. It is never read through from there.
+- **Shared**: every project of the org can look tickets up, search, browse and import through it
+  (`reach: "org"`, `home_project`). Each such read is receipted
+  (`ticket.cross_project_read`: reader, project, connection, key or search). It prefers the
+  reader's own sign-in to the system (Atlassian OAuth) over the shared token. Commenting on or
+  moving a ticket through it stays with its home project. The pick-up inbox shows its labelled
+  tickets in another project only where a mapping sends them there.
+- **Importing into another project** creates that project's mirror row (`mirror_reason: "used"`)
+  so bindings stay in their project. The mirror carries **no secret**: reads and write-back
+  resolve the credential from the home (`ticket_intake.ticket_connection`, `ticket_sync.home_row`),
+  so rotating or disconnecting there applies everywhere. The mirror needs the connection shared,
+  or `integration:manage` on the importing project. Over HTTP a body id is confined to its
+  project, so the import names the `provider` for a connection with `reach: "org"`.
 - **One lookup** (`ticket_reach.lookup`, the `ticket_get` tool, New work): a key whose prefix a
-  connection knows goes there; an unknown prefix is tried on every reachable key-based system; a
-  link goes to its site. The answer is the ticket with its site and BOSS project, or
-  "`<KEY>` was not found in `<site>` (`<system>`)", or `not_connected` with where to connect one.
-  Only words that ARE one key or link fall back this way (`UTF-8` in a sentence never does).
-- **Importing into another project** first gives that project its own row (a mirror with
-  `mirror_reason: "used"`, kept when the home's mappings change), so bindings keep a row in
-  their own project. Over HTTP a body id is confined to its project, so the import names the
-  `provider` for a connection with `reach: "org"`.
-- **Every agent** holds `ticket_get`, `ticket_search` and `ticket_browse` (`boss.fundamentals`),
-  `ticket_get` is in the chat core, and the primer tells every agent to call it when a person
-  names a ticket. Writing to a ticket system stays the `tickets.write` grant.
-- Another org never sees the connection. Browsing a connection's projects and epics is
-  authorised at its home project.
+  connection knows goes there; an unknown prefix is tried on at most 5 reachable key-based
+  systems (most recently used first), in parallel, 8 s each, the outcome cached 3 minutes per
+  org and key; a link goes to its site. Only words that ARE one key or link fall back this way.
+- **Every agent** holds `ticket_get`, `ticket_search` and `ticket_browse` (`boss.fundamentals`)
+  under the `ticket:read` permission (every Passport preset holds it; `integration:read` is not
+  widened). `ticket_get` is in the chat core, and the primer tells agents to call it for a
+  tracker key or link — not for standard names like UTF-8 or ISO-27001.
+- Another org never sees a connection. Browsing a connection's projects and epics is authorised
+  at its home project.
 
 ## Per-connection settings
 
