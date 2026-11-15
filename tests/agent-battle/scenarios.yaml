@@ -337,3 +337,22 @@
   must_not:
     - say the gap does not exist because a first page or a cut list did not show it
     - file a duplicate gap for an id that exists
+
+- id: looks-a-named-ticket-up-in-jira
+  origin: operator 2026-11-15, New work › Ask Helm (HelpDesk Laptop), thread athr_b800b17ff9494bbca8f0
+  surface: talk_to_boss
+  context: >-
+    The org connected Jira (paramg-…atlassian.net, project KAN) earlier that day, from the
+    project the Setup page happened to show. In HelpDesk Laptop the person typed a ticket key into
+    New work and asked Helm about it. Helm called only recall, and ticket_get was not in its
+    chat tools (deferred behind find_tools), not in the fundamentals prompt, and could only read
+    this project's own connection.
+  input: "About new work I'm drafting (ticket or link): LEND-142"
+  expected: >-
+    Looks the key up in every ticket system it can reach (ticket_get) and answers found (title,
+    site, the BOSS project it maps to) or "not found in <site>"; with nothing connected, says
+    where to connect one.
+  must_not:
+    - say BOSS has no connector to pull a ticket by ID
+    - ask the person to paste the ticket before looking it up
+

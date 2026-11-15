@@ -11,7 +11,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CheckCircle, MagnifyingGlass } from "@phosphor-icons/react";
 
-import { TYPE_WORDS, readConnections, readResolve, workflowFor, type Ticket, type TypedError } from "../../lib/tickets";
+import { TYPE_WORDS, readConnections, readResolve, ticketSetupHref, workflowFor, type Ticket, type TypedError } from "../../lib/tickets";
 import { TicketCard, TkReadState, WorkflowPick } from "../tickets/ticket-parts";
 import "../tickets/ticket-run.css";
 
@@ -19,7 +19,9 @@ import "../tickets/ticket-run.css";
 export const TICKET_REF = /\b[A-Z][A-Z0-9_]{1,9}-\d+\b|https?:\/\/\S+\/\S+|(?:^|\s)#\d+\b/;
 export const hasTicketRef = (words: string) => TICKET_REF.test(words || "");
 
-export type Resolved = { state: "idle" | "reading" | "ready" | "failed"; ticket: Ticket | null; errors: TypedError[]; error: string; denied: boolean };
+export type Resolved = { state: "idle" | "reading" | "ready" | "failed"; ticket: Ticket | null; errors: TypedError[]; error: string; denied: boolean;
+  /** No ticket system can read here: the next step (connect one), shown instead of a card. */
+  notConnected?: string };
 const IDLE: Resolved = { state: "idle", ticket: null, errors: [], error: "", denied: false };
 
 /** Read the words' first ticket, ~600 ms after typing stops, only when they name one. */
@@ -35,7 +37,7 @@ export function useResolvedTicket(projectId: string, words: string, enabled = tr
       void readResolve(projectId, text).then((res) => {
         if (mine !== turn.current) return;
         if (!res.ok) { setR({ state: res.missing ? "idle" : "failed", ticket: null, errors: [], error: res.missing ? "" : res.error, denied: res.denied }); return; }
-        setR({ state: "ready", ticket: res.data.tickets[0] ?? null, errors: res.data.errors, error: "", denied: false });
+        setR({ state: "ready", ticket: res.data.tickets[0] ?? null, errors: res.data.errors, error: "", denied: false, notConnected: res.data.notConnected });
       });
     }, ms);
     return () => clearTimeout(t);
@@ -44,8 +46,8 @@ export function useResolvedTicket(projectId: string, words: string, enabled = tr
 }
 
 /** The card under the box: the ticket BOSS read, with the workflow its type calls for. */
-export function NewWorkTicket({ resolved, workflow, onWorkflow }: {
-  resolved: Resolved; workflow: string; onWorkflow: (v: string) => void;
+export function NewWorkTicket({ resolved, workflow, onWorkflow, projectId }: {
+  resolved: Resolved; workflow: string; onWorkflow: (v: string) => void; projectId?: string;
 }) {
   if (resolved.state === "idle") return null;
   if (resolved.state === "reading" && !resolved.ticket) {
@@ -55,6 +57,14 @@ export function NewWorkTicket({ resolved, workflow, onWorkflow }: {
     return <TkReadState read={{ ok: false, error: resolved.error, code: "", status: 0, denied: resolved.denied, missing: false }} what="Reading the ticket" testid="px-nw-ticket" />;
   }
   const t = resolved.ticket;
+  if (!t && resolved.notConnected) {
+    return (
+      <p className="tk-error" role="alert" data-testid="px-nw-ticket-connect">
+        No ticket system is connected, so BOSS cannot read that ticket yet.{" "}
+        <a className="tk-linkbtn" href={ticketSetupHref(projectId)} title={resolved.notConnected} data-testid="px-nw-ticket-connect-link">Connect a ticket system</a>
+      </p>
+    );
+  }
   if (!t) {
     return resolved.errors.length ? (
       <p className="tk-error" role="alert" data-testid="px-nw-ticket-errors">
@@ -70,6 +80,9 @@ export function NewWorkTicket({ resolved, workflow, onWorkflow }: {
         <span className="tk-faint">· picked from {TYPE_WORDS[t.type]}</span>
       </span>
       <span className="tk-spacer" />
+      {t.maps_to && projectId && t.maps_to.project_id !== projectId ? (
+        <span className="tk-faint" data-testid="px-nw-ticket-maps" title="Its ticket system maps this project key to another BOSS project. Start brings it here.">Maps to {t.maps_to.name}</span>
+      ) : null}
       {t.in_boss ? <span className="tk-tag" data-tone="green" data-testid="px-nw-ticket-in-boss" title="BOSS already has this ticket; Start starts its work item">Already in BOSS</span> : null}
       <span className="tk-ok" style={{ fontSize: "var(--fs-meta)" }} data-testid="px-nw-ticket-updates"><CheckCircle size={12} weight="fill" aria-hidden /> Updates {t.key}</span>
       {resolved.errors.length ? <span className="tk-faint" data-testid="px-nw-ticket-errors">{resolved.errors.length} other reference{resolved.errors.length === 1 ? "" : "s"} could not be read</span> : null}

@@ -11,12 +11,11 @@ import React, { useCallback, useEffect, useState } from "react";
 import { ArrowSquareOut, Ticket as TicketIcon } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { readConnections, saveTicketSettings, type Connection, type Mapping, type Read } from "../../lib/tickets";
+import { readConnections, saveTicketSettings, ticketSetupHref, type Connection, type Mapping, type Read } from "../../lib/tickets";
 import { ProviderMono, TkEmpty, TkReadState } from "../tickets/ticket-parts";
 import { Ico } from "./kit";
 import "../tickets/ticket-run.css";
 
-const SETUP_HREF = "?area=setup&focus=ticket_systems";
 
 /** The mappings after making `key` this project's default (other projects' mappings untouched). */
 export function withDefault(mappings: Mapping[], projectId: string, key: string): Mapping[] {
@@ -37,13 +36,13 @@ export function TicketSystemCard({ projectId }: { projectId: string }) {
         <Ico icon={TicketIcon} c="blue" />
         <h2 id="px-set-tickets">Ticket system</h2>
         <span className="px-spacer" />
-        <a className="px-more px-linkbtn" href={SETUP_HREF} data-testid="px-set-tickets-manage"
+        <a className="px-more px-linkbtn" href={ticketSetupHref(projectId)} data-testid="px-set-tickets-manage"
            title="Sign-in, write-back, the new-ticket rule and webhooks live in Repo and models">Manage in Repo and models › Ticket systems <ArrowSquareOut size={11} aria-hidden /></a>
       </div>
       {!read || !read.ok ? <TkReadState read={read} what="Ticket systems" onRetry={load} testid="px-set-tickets" />
         : !list.length ? (
           <TkEmpty title="No ticket system yet" line="Connect Jira, Plane or GitHub Issues once; then paste a key anywhere." testid="px-set-tickets-empty">
-            <a className="tk-btn" href={SETUP_HREF} data-testid="px-set-tickets-connect">Connect one</a>
+            <a className="tk-btn" href={ticketSetupHref(projectId)} data-testid="px-set-tickets-connect">Connect one</a>
           </TkEmpty>
         ) : (
           <ul className="tk-list">{list.map((c) => <ConnectionLine key={c.id} c={c} projectId={projectId} onSaved={load} />)}</ul>

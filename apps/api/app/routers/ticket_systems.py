@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from boss_engine.connectors.tickets import STATUS_CATEGORIES, TICKET_TYPES, TicketRef
 from boss_engine.identity import P, Scope, permit
 from boss_engine.services import ticket_intake as intake
+from boss_engine.services import ticket_reach as reach
 
 from ..db import begin, get_engine
 
@@ -65,7 +66,12 @@ class TicketImportItem(BaseModel):
 
 class TicketImportBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    connection_id: str = Field(min_length=1, max_length=200)
+    #: A connection of THIS project (a body id is confined to the project). For an org-level
+    #: connection added from another project, name its ``provider`` instead (ticket_reach).
+    connection_id: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    provider: Optional[str] = Field(default=None, min_length=1, max_length=40,
+                                    description="The ticket system (jira, plane, ...) when the "
+                                                "connection was added from another project")
     items: list[TicketImportItem] = Field(min_length=1, max_length=50)
     actor: Optional[str] = None
 
@@ -160,12 +166,15 @@ def ticket_system_catalog() -> dict:
 
 @router.get("/v1/ticket-systems")
 @permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
-def list_ticket_systems(project_id: str) -> dict:
-    """The project's connections, each with its status, mappings and settings."""
+def list_ticket_systems(project_id: str,
+                        scope: str = Query("all", pattern="^(all|project)$")) -> dict:
+    """The project's connections, each with its status, mappings and settings: its own, then
+    (``scope=all``, the default) every org-level connection made from another project of the
+    org, marked ``reach: "org"`` with its ``home_project`` — connected once, usable everywhere."""
     with begin(_engine()) as connection:
         _reader(connection, project_id)
-        return {"project_id": project_id,
-                "connections": intake.list_connections(connection, project_id)}
+        return {"project_id": project_id, "scope": scope,
+                "connections": intake.list_connections(connection, project_id, scope=scope)}
 
 
 @router.post("/v1/ticket-systems", status_code=201)
@@ -439,15 +448,42 @@ def import_tickets(project_id: str, payload: TicketImportBody) -> dict:
     with begin(_engine()) as connection:
         actor = _writer(connection, project_id, payload.actor)
         try:
-            row = intake.get_row(connection, payload.connection_id, project_id=project_id)
+            # Its own connection, or an org-level one homed in another project (ticket_reach).
+            row = _import_row(connection, project_id, payload)
         except intake.TicketApiError as error:
             raise _refuse(error) from None
         items = _call(row, lambda: intake.read_for_import(connection, row, payload.items,
-                                                          person_id=_person()))
+                                                          person_id=_person(),
+                                                          project_id=project_id, reader=actor))
     with begin(_engine()) as connection:
-        done = intake.import_tickets(connection, settings, project_id=project_id, row=row,
+        try:
+            here = reach.project_row_for(
+                connection, settings, project_id, row, actor=actor,
+                may_manage=lambda p: _also("integration:manage", p, "ticket_import_link"))
+        except intake.TicketApiError as error:
+            raise _refuse(error, row) from None
+        done = intake.import_tickets(connection, settings, project_id=project_id, row=here,
                                      items=items, actor=actor)
-    return {"project_id": project_id, "connection_id": payload.connection_id, **done}
+    return {"project_id": project_id, "connection_id": here["id"], **done}
+
+
+def _import_row(connection, project_id: str, payload: TicketImportBody) -> dict:
+    if payload.connection_id:
+        return reach.reachable_row(connection, project_id, payload.connection_id)
+    from boss_engine.services import ticket_sync
+
+    wanted = str(payload.provider or "").strip().lower()
+    if not wanted:
+        raise intake.TicketApiError("invalid_request", "Name the connection (connection_id) or "
+                                                       "the ticket system (provider).")
+    row = ticket_sync._intake_row(connection, project_id, provider=wanted)
+    if row is None:
+        why = reach.nothing_reachable(connection, project_id, provider=wanted)
+        if why["error"] == "not_shared":
+            raise intake.TicketApiError("not_shared", why["message"], status=403)
+        raise intake.TicketApiError("not_found", f"No connected {intake.label_of(wanted)} is "
+                                                 "reachable from this project.", status=404)
+    return row
 
 
 @router.get("/v1/projects/{project_id}/tickets/waiting")

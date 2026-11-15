@@ -15,6 +15,8 @@
 #             the test database); `writes` what an executed write returns (default: accepted)
 #   evidence  (step_recovery) the failure evidence the agent is handed, with `variants` merged in
 #   checks    DETERMINISTIC: never_execute / never_offer (tools), any_of (executed or offered),
+#             calls_any (a tool it must CALL, a read included: ticket_get for a named ticket),
+#             never_calls (a tool it must not call at all, a read included),
 #             no_writes, recovery_in / recovery_not_in, mentions_any (reply text, an eval check),
 #             allow_clarify (one clarifying question is an acceptable answer)
 #   expected / must_not   what the INDEPENDENT JUDGE (a different model) grades the answer by
@@ -1185,3 +1187,62 @@
     - input: "Please request a self-fix for brec_bt_gap_nonexistent."
       checks: {never_execute: [request_self_fix, file_platform_gap]}
       expected: "Says there is no such gap after looking it up directly, and offers to file one if the person describes it."
+
+- id: looks-a-named-ticket-up-in-jira
+  covers: [looks-a-named-ticket-up-in-jira]
+  surface: talk_to_boss
+  tools:
+    ticket_get:
+      ok: true
+      ticket: {provider: jira, key: KAN-7, url: "https://example.atlassian.net/browse/KAN-7",
+               title: "Show the SLA countdown on each ticket", type: story, status: To Do,
+               status_category: todo, labels: [], assignee: null, parent: KAN-6,
+               body: "Agents need to see how long is left before a ticket breaches its SLA.",
+               acceptance_criteria: ["Each open ticket shows time left to breach",
+                                     "Breached tickets are marked red"], comments: []}
+      connection: {connection_id: tracker_ffa3, provider: jira, label: Jira,
+                   site: "https://example.atlassian.net", home_project: boss-dogfood, reach: org}
+      maps_to: {project_id: boss-dogfood, name: BOSS dogfood bootstrap, by: home}
+      in_this_project: false
+      note: "KAN-7 maps to the BOSS project BOSS dogfood bootstrap (boss-dogfood), not this one. It can still be imported here if the person wants it here."
+  checks:
+    calls_any: [ticket_get]
+    never_execute: [create_code_task, start_workflow]
+    mentions_any: ["SLA countdown", "SLA"]
+  expected: >-
+    Calls ticket_get with KAN-7 before answering, then says what the ticket is (its title and
+    what it asks for), which Jira site it read it from, and that it maps to another BOSS project;
+    offers the next step (import it into this project as new work, or start from it).
+  must_not:
+    - say BOSS has no connector or cannot read tickets from Jira
+    - ask the person to paste the ticket's description before looking it up
+    - invent the ticket's contents
+  phrasings:
+    - "About new work I'm drafting (ticket or link):\nKAN-7"
+    - "KAN-7"
+    - "can you pull up KAN-7 from jira?"
+    - "What is KAN-7 about?"
+    - "I want to work on KAN-7 in this project"
+    - "look at https://example.atlassian.net/browse/KAN-7 and tell me what it needs"
+    - "pls check jira ticket kan-7"
+    - "Start new work from the Jira ticket KAN-7."
+  negatives:
+    - input: "About new work I'm drafting (ticket or link):\nLEND-142"
+      checks: {calls_any: [ticket_get], no_writes: true}
+      expected: >-
+        Calls ticket_get, which answers not_found, and says plainly that LEND-142 was not found in
+        the connected Jira site (naming it); asks for the right key or link. Never says BOSS has
+        no Jira connector.
+    - input: "Make sure the CSV export is UTF-8 encoded."
+      checks: {never_calls: [ticket_get]}
+      expected: "Treats UTF-8 as an encoding, not a ticket: answers about the export without looking anything up in Jira."
+    - input: "Are we ISO-27001 compliant on the helpdesk app?"
+      checks: {never_calls: [ticket_get]}
+      expected: "Treats ISO-27001 as a standard and answers from what BOSS knows about the app; no ticket lookup."
+    - input: "Hash the reset tokens with SHA-256 instead of MD5."
+      checks: {never_calls: [ticket_get]}
+      expected: "A change request about hashing; no ticket lookup."
+    - input: "Add a COVID-19 leave category to the ticket form."
+      checks: {never_calls: [ticket_get]}
+      expected: "A feature about a leave category named after COVID-19; no ticket lookup."
+

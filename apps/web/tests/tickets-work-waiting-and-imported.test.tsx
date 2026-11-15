@@ -78,7 +78,7 @@ describe("Waiting for BOSS", () => {
     expect($('[data-testid="tk-waiting"] h2')?.textContent).toContain("Jira LEND, label “boss” · 2");
     expect($('[data-testid="tk-waiting-err"]')?.textContent).toContain("slow down");
     expect($('[data-testid="tk-waiting-start-LEND-120"]')?.textContent).toBe("Plan first");
-    expect($('[data-testid="tk-waiting-rule"]')?.getAttribute("href")).toBe("?area=setup&focus=ticket_systems");
+    expect($('[data-testid="tk-waiting-rule"]')?.getAttribute("href")).toMatch(/^\?area=setup&focus=ticket_systems&project_id=./); // keeps the project (2026-11-15)
     click('[data-testid="tk-waiting-start-LEND-151"]');
     await settle();
     const imp = calls.find((c) => c.url === "/v1/projects/p1/tickets/import")!;

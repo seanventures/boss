@@ -215,3 +215,8 @@ a.tk-key:hover { text-decoration: underline; }
 /* Hosted inside the New work modal and the chat, whose own paragraph rules would otherwise win. */
 .tk-card p.tk-body, .tk-card p.tk-also, .tk-card .tk-ac li { font-size: var(--fs-body); line-height: 1.5; }
 .tk-card h3.tk-title { font-size: var(--fs-title); }
+
+/* "Share with the whole org" (connect drawer + the home card): one checkbox, its meaning in words. */
+.tk-share { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; cursor: pointer; }
+.tk-share input { margin-top: 3px; }
+.tk-share-line { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }

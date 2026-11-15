@@ -69,6 +69,8 @@ ERROR_STATUS = {
     "auth_failed": 424, "not_found": 404, "rate_limited": 429, "host_not_allowed": 422,
     "capability_not_supported": 422, "invalid_ref": 422, "invalid_settings": 422,
     "invalid_request": 422, "conflict": 409, "upstream_error": 502,
+    # BOSS refuses: the connection exists in another project and is not shared with this one.
+    "not_shared": 403,
 }
 
 
@@ -135,7 +137,7 @@ DEFAULT_WRITE_BACK = {"comment": True, "transition": True, "link_pr": True}
 DEFAULT_INBOUND = {"mode": "webhook", "poll_minutes": 5}
 #: Settings keys a PATCH may name (the API's shape, plus two advanced contract fields).
 PATCHABLE = ("mappings", "write_back", "status_map", "pickup", "inbound",
-             "acceptance_criteria_field", "epic_label")
+             "acceptance_criteria_field", "epic_label", "share_with_org")
 
 
 def _config(row: Any) -> dict[str, Any]:
@@ -178,6 +180,8 @@ def public_settings(configuration: dict[str, Any],
         "project_keys": list(effective["project_keys"]),
         "acceptance_criteria_field": effective["acceptance_criteria_field"],
         "epic_label": effective["epic_label"],
+        # Shared with every project of the org (ticket_reach). Off unless a person turned it on.
+        "share_with_org": saved.get("share_with_org") is True,
     }
 
 
@@ -243,6 +247,10 @@ def merge_settings(configuration: dict[str, Any], patch: dict[str, Any]) -> dict
             if not isinstance(minutes, int) or isinstance(minutes, bool) or not 1 <= minutes <= 1440:
                 raise _bad("inbound.poll_minutes is a whole number from 1 to 1440.")
             out["poll_interval_s"] = minutes * 60
+    if "share_with_org" in patch:
+        if not isinstance(patch["share_with_org"], bool):
+            raise _bad("share_with_org is true or false.")
+        out["share_with_org"] = patch["share_with_org"]
     for name in ("acceptance_criteria_field", "epic_label"):
         if name in patch:
             if not isinstance(patch[name], str) or len(patch[name]) > 100:
@@ -319,12 +327,31 @@ def is_connected(row: dict[str, Any]) -> bool:
 
 def ticket_connection(db: Connection, row: dict[str, Any], *, person_id: Optional[str] = None,
                       app_settings: Any = None) -> TicketConnection:
+    """The connection a row reads through. A MIRROR reads with its HOME's configuration and
+    credential, resolved in the home project (a mirror carries no token of its own that could
+    outlive a rotation or a disconnect there). A read through a connection SHARED from another
+    project prefers the reader's own sign-in when they linked one, over the shared token."""
     if row.get("status") != "active":
         raise TicketApiError("conflict", "This connection is disconnected. Connect it again "
                                          "first.", status=409)
-    return TicketConnection(str(row["provider_key"]), row["configuration"],
-                            project_id=str(row["project_id"]), db=db, app_settings=app_settings,
-                            person_id=person_id)
+    source = row
+    home = str(row["configuration"].get("mirror_of") or "")
+    if home and home != str(row["id"]):
+        try:
+            found = get_row(db, home)
+        except TicketApiError:
+            found = None
+        if found is None or found.get("status") != "active":
+            raise TicketApiError("conflict", "The connection this project uses was disconnected "
+                                             "where it was added. Connect it again there.",
+                                 status=409)
+        source = found
+    config = dict(source["configuration"])
+    if row.get("reach") == "org" and str(config.get("credential_policy") or "") == "shared":
+        config["credential_policy"] = "per_user_fallback"
+    return TicketConnection(str(source["provider_key"]), config,
+                            project_id=str(source["project_id"]), db=db,
+                            app_settings=app_settings, person_id=person_id)
 
 
 def label_of(row_or_provider: Any) -> str:
@@ -344,7 +371,12 @@ def catalog() -> list[dict[str, Any]]:
                     "base_url_field": entry["base_url_field"],
                     "capabilities": entry["capabilities"],
                     "status_map_defaults": entry["status_mapping_defaults"],
-                    "webhook": bool(entry["capabilities"].get("webhook"))})
+                    "webhook": bool(entry["capabilities"].get("webhook")),
+                    # "Share with the whole org" starts ticked only for a service/bot token; a
+                    # personal API token is someone's own access and starts unticked.
+                    "share_default": any(k.get("kind") == "api_token"
+                                         and k.get("token_owner") == "service"
+                                         for k in entry["auth_kinds"])})
     return out
 
 
@@ -518,8 +550,34 @@ def project_rows(db: Connection, project_id: str, *, include_disconnected: bool 
     return out
 
 
-def list_connections(db: Connection, project_id: str) -> list[dict[str, Any]]:
-    return [serialize(db, row) for row in project_rows(db, project_id, include_disconnected=True)]
+def list_connections(db: Connection, project_id: str, *, scope: str = "all"
+                     ) -> list[dict[str, Any]]:
+    """The connections the Setup card lists for a project: its own (connected, or disconnected
+    here), then (``scope=all``) the ones homed in the org's other projects that are SHARED with
+    the whole org (ticket_reach), and — named only, never read through — the ones that exist
+    there but are NOT shared, so a person sees why a key from them does not resolve here.
+    ``scope="project"`` lists only the project's own rows."""
+    from . import ticket_reach as reach
+
+    own = project_rows(db, project_id, include_disconnected=True)
+    out = [{**serialize(db, row), "reach": "project"} for row in own]
+    if scope == "project":
+        return out
+    seen = {reach.home_id(row) for row in own if is_connected(row)}
+    for row in reach.reachable_rows(db, project_id):
+        if row.get("reach") != "org" or str(row["id"]) in seen:
+            continue
+        view = serialize(db, row)
+        view["reach"] = "org"
+        view["home_project"] = {"id": row["project_id"],
+                                "name": reach.project_name(db, str(row["project_id"]))}
+        out.append(view)
+    for row in reach.unshared_rows(db, project_id):
+        out.append({"id": row["id"], "provider": row["provider_key"],
+                    "label": label_of(row), "status": "not_shared", "reach": "unshared",
+                    "home_project": {"id": row["project_id"],
+                                     "name": reach.project_name(db, str(row["project_id"]))}})
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -749,7 +807,10 @@ def sync_mirrors(db: Connection, app_settings: Any, home: dict[str, Any], *, act
                     outcome={"account": config.get("acts_as")}, actor=actor,
                     mirror_of=str(home["id"]), secret_meta=secret_meta)
         out.append({"connection_id": row["id"], "project_id": target})
+    # A mirror a project made by USING the org-level connection (ticket_reach) is not a mapping's
+    # and stays when the mappings change.
     stale = db.execute(text(_ROW + " WHERE configuration->>'mirror_of' = :h AND status = 'active' "
+                                   "AND COALESCE(configuration->>'mirror_reason', '') <> 'used' "
                                    "AND NOT (project_id = ANY(:keep))"),
                        {"h": home["id"], "keep": mapped}).mappings().all()
     for row in stale:
@@ -955,15 +1016,10 @@ def intake_rows(db: Connection, project_id: str) -> list[dict[str, Any]]:
     """The connections whose references BOSS resolves in a project's text: every connected
     ticket system that can read. GitHub Issues joins only when it was connected AS a ticket
     system — elsewhere it is the repository's own issues, already shown as the issue chip."""
-    out = []
-    for row in project_rows(db, project_id):
-        adapter = REGISTRY.get(str(row["provider_key"]))
-        if adapter is None or not adapter.can("read"):
-            continue
-        if row["provider_key"] == "github_issues" and not row["configuration"].get("ticket_system"):
-            continue
-        out.append(row)
-    return out
+    from . import ticket_reach as reach
+
+    # Org-level: a ticket system connected from any project of the org is read here too.
+    return reach.readable_rows(db, project_id)
 
 
 def find_refs(db: Connection, project_id: str, said: str, *,
@@ -987,8 +1043,32 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
                  ) -> dict[str, Any]:
     """Previews of the tickets ``said`` names (/v1/tickets/resolve). A reference that fails is
     reported with its typed error; the others still resolve."""
-    refs = find_refs(db, project_id, said, person_id=person_id)
+    from . import ticket_reach as reach
+
+    rows = reach.readable_rows(db, project_id)
+    refs = find_refs(db, project_id, said, person_id=person_id) if rows else []
     tickets, errors = [], []
+    if not refs:
+        # A key no connection knows the project of (LEND-142 typed into New work), or a link:
+        # still LOOKED UP in every reachable system, so the card says "found" or "not found in
+        # <site>" instead of nothing. Nothing connected: say so, with where to connect one.
+        named = _first_named(said)
+        if named:
+            found = reach.lookup(db, project_id, named, person_id=person_id)
+            if found.get("error") == "not_connected" and not rows:
+                return {"refs": [], "tickets": [], "errors": [], "connected": 0,
+                        "not_connected": found}
+            if found.get("ok"):
+                view = dict(found["ticket"])
+                view["maps_to"] = found["maps_to"]
+                view["connection_reach"] = found["connection"]["reach"]
+                return {"refs": [{"connection_id": view["connection_id"],
+                                  "provider": view["provider"], "key": view["key"]}],
+                        "tickets": [view], "errors": [], "connected": len(rows)}
+            return {"refs": [], "tickets": [], "connected": len(rows),
+                    "errors": [{"ref": named, "error": found.get("error"),
+                                "message": found.get("message")}]}
+        return {"refs": [], "tickets": [], "errors": [], "connected": len(rows)}
     for row, ref in refs[:max(1, limit)]:
         try:
             conn = ticket_connection(db, row, person_id=person_id)
@@ -1002,9 +1082,20 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
         view = ticket_view(ticket, in_boss=None, full=True)
         view["connection_id"] = row["id"]
         view["in_boss"] = mark([ticket], in_boss_map(db, family_ids(db, row)))[0]["in_boss"]
+        view["maps_to"] = reach.mapped_project(db, row, ticket.key or ref.label())
+        view["connection_reach"] = row.get("reach") or "project"
+        reach.audit_read(db, project_id, row, ticket.key or ref.label(), reader=person_id)
         tickets.append(view)
     return {"refs": [{"connection_id": row["id"], "provider": ref.provider, **ref.to_dict()}
-                     for row, ref in refs], "tickets": tickets, "errors": errors}
+                     for row, ref in refs], "tickets": tickets, "errors": errors,
+            "connected": len(rows)}
+
+
+def _first_named(said: str) -> Optional[str]:
+    """The words when they ARE one ticket reference: exactly one link, or exactly one key of
+    any prefix (``LEND-142``). A key inside a sentence is still recognised only for a project a
+    connection knows (find_refs), so "fix the UTF-8 bug" never asks Jira for UTF-8."""
+    return _reference(str(said or "").strip()) if isinstance(said, str) else None
 
 
 def fetch(db: Connection, row: dict[str, Any], ref: Any, *,
@@ -1091,7 +1182,9 @@ def _named_ref(db: Connection, project_id: str, named: Any, *,
         if cid:
             if not ref:
                 raise TicketApiError("invalid_ref", "Name the ticket by its key or link.")
-            return get_row(db, cid, project_id=project_id), ref
+            from . import ticket_reach as reach
+
+            return reach.reachable_row(db, project_id, cid), ref
         named = ref
     found = find_refs(db, project_id, str(named or "").strip()[:2000], person_id=person_id)
     return found[0] if found else None
@@ -1158,6 +1251,13 @@ def bind_run(db: Connection, *, project_id: str, run_id: str, ticket: dict[str, 
         return None
     try:
         row = _project_row(db, project_id, get_row(db, cid))
+        if row is None:
+            # An org-level connection homed in another project: this project's own record of
+            # it is made on first use, so the binding keeps a row in its own project.
+            from . import ticket_reach as reach
+
+            row = reach.project_row_for(db, None, project_id, reach.reachable_row(
+                db, project_id, cid), actor=actor)
     except TicketApiError:
         return None
     if row is None:
@@ -1300,7 +1400,8 @@ def _wanted(item: Any, name: str) -> Any:
 
 
 def read_for_import(db: Connection, row: dict[str, Any], items: Iterable[Any], *,
-                    person_id: Optional[str] = None) -> list[tuple[Ticket, list[Ticket]]]:
+                    person_id: Optional[str] = None, project_id: Optional[str] = None,
+                    reader: Optional[str] = None) -> list[tuple[Ticket, list[Ticket]]]:
     """The tickets an import names (``{key, with_children}`` each, a key or a link), read from
     their system: each ticket and, ``with_children``, its children. The ONE read behind
     ``POST /v1/projects/{id}/tickets/import`` and the ``ticket_import`` agent tool (B2)."""
@@ -1315,6 +1416,10 @@ def read_for_import(db: Connection, row: dict[str, Any], items: Iterable[Any], *
         children = list(adapter.list_children(conn, ticket.ref)) \
             if _wanted(item, "with_children") else []
         out.append((ticket, children))
+        if project_id:
+            from . import ticket_reach as reach
+
+            reach.audit_read(db, project_id, row, ticket.key, reader=reader or person_id)
     return out
 
 
@@ -1412,7 +1517,13 @@ def waiting(db: Connection, project_id: str, *, person_id: Optional[str] = None,
         if not label:
             continue
         projects = [m["external_project"] for m in settings["mappings"]
-                    if m["boss_project_id"] == project_id] or [None]
+                    if m["boss_project_id"] == project_id]
+        if not projects:
+            if row.get("reach") == "org":
+                # A connection SHARED from another project: only the tickets its mappings send
+                # HERE wait here; without one, none of its tickets are this project's to pick up.
+                continue
+            projects = [None]
         marks = in_boss_map(db, family_ids(db, row))
         try:
             conn = ticket_connection(db, row, person_id=person_id)

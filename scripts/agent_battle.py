@@ -430,6 +430,15 @@ def deterministic(case: dict, got: dict, calls: list[dict]) -> list[str]:
         writes = [c["tool"] for c in calls if c["executed"] and c["tool"] not in _BENIGN_WRITES]
         if writes:
             fails.append(f"wrote on a question: {writes}")
+    # A READ the agent must make (a write is any_of's): `ticket_get` before answering about a
+    # named ticket — answering "BOSS cannot read tickets" without asking is the failure.
+    called = {c["tool"] for c in calls}
+    looked = checks.get("calls_any") or []
+    if looked and not (_names(looked) & called):
+        fails.append(f"called none of {looked}")
+    for tool in checks.get("never_calls") or []:
+        if _names([tool]) & called:
+            fails.append(f"called {tool}")
     words = checks.get("mentions_any") or []
     if words and not any(str(w).lower() in str(got.get("reply") or "").lower() for w in words):
         fails.append(f"reply mentions none of {words}")

@@ -206,7 +206,7 @@ describe("Project settings › Ticket system", () => {
     });
     await mountAs(<TicketSystemCard projectId={P} />, "owner");
     await settle();
-    expect(tid("px-set-tickets-manage")!.getAttribute("href")).toBe("?area=setup&focus=ticket_systems");
+    expect(tid("px-set-tickets-manage")!.getAttribute("href")).toMatch(/^\?area=setup&focus=ticket_systems&project_id=./); // keeps the project (2026-11-15)
     expect((tid("px-set-ticket-pick-tc_1") as HTMLSelectElement).value).toBe("LEND");
     await choose(tid("px-set-ticket-pick-tc_1"), "CARD");
     await click(tid("px-set-ticket-save-tc_1"));
@@ -231,7 +231,7 @@ describe("Project settings › Ticket system", () => {
     await mountAs(<TicketSystemCard projectId={P} />, "owner");
     await settle();
     expect(tid("px-set-tickets-empty")).not.toBeNull();
-    expect(tid("px-set-tickets-connect")!.getAttribute("href")).toBe("?area=setup&focus=ticket_systems");
+    expect(tid("px-set-tickets-connect")!.getAttribute("href")).toMatch(/^\?area=setup&focus=ticket_systems&project_id=./); // keeps the project (2026-11-15)
     unmount();
     stubFetch(() => ({ status: 403, body: { detail: "Needs “View integrations”, ask an Admin." } }));
     await mountAs(<TicketSystemCard projectId={P} />, "owner");

@@ -105,7 +105,9 @@ def test_its_passport_reads_and_never_steers_or_writes_a_pull_request():
     preset = PASSPORT_PRESETS["acceptor"]
     perms = set(preset.permissions)
     assert {"repository:read", "github:read", "code_task:read", "preview:read",
-            "integration:read", "sandbox:read"} <= perms
+            "ticket:read", "sandbox:read"} <= perms
+    # It reads tickets through ticket:read (2026-11-15), not the wider integration:read.
+    assert "integration:read" not in perms
     for never in ("code_task:steer", "code_task:create", "code_task:retry", "github:sync",
                   "work_tracker:write", "deployment:create", "meeting:convene",
                   "security_scan:run", "secret:lease", "preview:manage"):

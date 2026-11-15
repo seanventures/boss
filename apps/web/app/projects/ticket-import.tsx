@@ -42,7 +42,7 @@ export function TicketImportPage({ ctx, conns }: { ctx: PxCtx; conns: Read<Conne
     return <div className="tk-page" data-testid="tk-import">{crumb}<h1 className="tk-h1">Import work</h1>
       <TkReadState read={conns} what="Ticket systems" testid="tk-imp-conns" rows={3} /></div>;
   }
-  if (!conn) return <div className="tk-page" data-testid="tk-import">{crumb}<h1 className="tk-h1">Import work</h1><NoTicketSystem testid="tk-imp-none" /></div>;
+  if (!conn) return <div className="tk-page" data-testid="tk-import">{crumb}<h1 className="tk-h1">Import work</h1><NoTicketSystem testid="tk-imp-none" projectId={pid} /></div>;
   return <ImportBody key={conn.id} ctx={ctx} conn={conn} conns={list} crumb={crumb} onConn={setConnId} label={label} project={project} pid={pid} />;
 }
 
@@ -117,7 +117,7 @@ function ImportBody({ ctx, conn, conns, crumb, onConn, label, project, pid }: {
     if (!picks.length || busy) return;
     setBusy(true); setErr("");
     try {
-      const r = await importTickets(pid, conn.id, picks.map((p) => ({ key: p.ticket.key, with_children: p.with_children })));
+      const r = await importTickets(pid, conn, picks.map((p) => ({ key: p.ticket.key, with_children: p.with_children })));
       if (!r.ok) { setErr(r.error ?? "Nothing was imported."); return; }
       // The imported items come back on the work list itself (origin "ticket_import"), so the
       // Work tab's Ready to start (T9) is drawn from the API, on any browser, after any reload.

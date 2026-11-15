@@ -727,7 +727,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
           <div className="px-nw-main px-nw-top">
             {kinds}
             {showWords || wordsOpen ? box_ : folded}
-            <NewWorkTicket resolved={resolved} workflow={tkWorkflow} onWorkflow={setTkWorkflow} />
+            <NewWorkTicket resolved={resolved} workflow={tkWorkflow} onWorkflow={setTkWorkflow} projectId={pid} />
             {kind === "ticket" && !tk ? (
               <RecognisesLine projectId={ctx.demo ? undefined : pid} onBrowse={() => { onClose(); ctx.tab("work", { tickets: "import" }); }} />
             ) : null}

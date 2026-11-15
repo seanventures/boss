@@ -19,6 +19,7 @@ import { ArrowSquareOut, CheckCircle, XCircle } from "@phosphor-icons/react";
 
 import type { Ability, Provider, ProviderField } from "../../lib/kit-types";
 import { kitApi } from "../../lib/kit-api";
+import { ticketSetupHref } from "../../lib/tickets";
 import { GatedButton } from "../../components/gated";
 import { showToast } from "../client-forms";
 import { REPO_HREF } from "./ability-card";
@@ -126,7 +127,7 @@ export function ConnectionSection(props: {
     <div className="kit-conn-tickets" data-testid="kit-conn-tickets">
       <div className="kit-row" data-testid="kit-conn-tickets-setup">
         <span>Ticket systems live in Repo and models</span>
-        <a className="kit-btn kit-btn-primary kit-btn-sm" href={`?area=setup&focus=ticket_systems&project_id=${encodeURIComponent(props.projectId)}`}
+        <a className="kit-btn kit-btn-primary kit-btn-sm" href={ticketSetupHref(props.projectId)}
            data-tip="Jira, Plane, GitHub Issues, Linear, Azure DevOps: sign-in, which tickets go where, what BOSS writes back"
            data-testid="kit-conn-tickets-open">Open Repo and models › Ticket systems <ArrowSquareOut size={12} /></a>
       </div>

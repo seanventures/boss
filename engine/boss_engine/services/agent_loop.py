@@ -334,6 +334,8 @@ def _append_bundle_tools(
         for tool in offered_by.get(skill_id, ()):
             if skill_id.startswith("knowledge.") and not offers_tool(stage_scope, tool):
                 continue          # outside this stage's knowledge scope: not offered at all
+            if any(held == tool for _spec, held in offered.values()):
+                continue          # two bundles name it (ticket_get: fundamentals + tickets.read)
             found = bundle_tool_spec(skill_id, tool, edition="community")
             if found is None:
                 continue
