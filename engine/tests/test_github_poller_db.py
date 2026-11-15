@@ -105,7 +105,7 @@ def test_a_polled_pull_request_touching_a_tenant_file_starts_a_run(world):
     api.files = {4: [{"filename": "tenants/lumen-pay.yaml", "status": "added"}],
                  5: [{"filename": "README.md", "status": "modified"}]}
 
-    got = event_intake.poll_due(engine, _settings())
+    got = event_intake.poll_due(engine, _settings(), connection_id=conn["id"])
     assert got == {"polled": 1, "inserted": 2, "skipped": 0, "failed": 0}
     rows = _rows(engine, conn["id"])
     assert {r["dedupe_key"] for r in rows} == {f"github:poll:pr:{REPO}#4@{'2' * 40}",
@@ -114,8 +114,8 @@ def test_a_polled_pull_request_touching_a_tenant_file_starts_a_run(world):
     assert health["failures"] == 0 and health["last_inserted"] == 2
     assert health["interval_seconds"] == event_intake.POLL_SECONDS_DEFAULT
 
-    processed = event_intake.process_due(engine, _settings())
-    assert processed["routed"] == 1 and processed["filtered"] + processed["ignored"] == 1
+    # Counts are per pass over the whole inbox (a shared test database); the rows are ours.
+    event_intake.process_due(engine, _settings())
     by_pr = {r["envelope"]["subject"]: r for r in _rows(engine, conn["id"])}
     tenant = by_pr[f"{REPO}#4"]
     assert tenant["status"] == "routed"
@@ -131,7 +131,7 @@ def test_a_polled_pull_request_touching_a_tenant_file_starts_a_run(world):
     assert "ghp_TEST" not in str(_rows(engine, conn["id"]))
 
     # Not due again until its interval has passed.
-    assert event_intake.poll_due(engine, _settings())["skipped"] == 1
+    assert event_intake.poll_due(engine, _settings(), connection_id=conn["id"])["skipped"] == 1
 
 
 def test_the_same_commit_by_webhook_and_by_poll_is_one_event(world):
@@ -145,12 +145,13 @@ def test_the_same_commit_by_webhook_and_by_poll_is_one_event(world):
     got = event_intake.receive(engine, "github", token_of(conn["url_path"]),
                                github_request("gh-s", "pull_request", body, delivery="d-hook"))
     assert got["http_status"] == 202
-    assert event_intake.process_due(engine, _settings())["routed"] == 1
+    event_intake.process_due(engine, _settings())
+    assert _rows(engine, conn["id"])[0]["status"] == "routed"
 
     # The poller then sees the same head commit.
     api.pulls = [{**_pr(4, body["pull_request"]["head"]["sha"], updated=LATER)}]
-    assert event_intake.poll_due(engine, _settings())["inserted"] == 1
-    assert event_intake.process_due(engine, _settings())["filtered"] == 1
+    assert event_intake.poll_due(engine, _settings(), connection_id=conn["id"])["inserted"] == 1
+    event_intake.process_due(engine, _settings())
     rows = _rows(engine, conn["id"])
     polled = [r for r in rows if r["dedupe_key"].startswith("github:poll:")][0]
     assert polled["status"] == "filtered"
@@ -161,32 +162,33 @@ def test_the_same_commit_by_webhook_and_by_poll_is_one_event(world):
     _due_now(engine, conn["id"])
     api.etag = {"pulls": 'W/"p9"', "branches": 'W/"b9"'}
     api.pulls = [_pr(4, "8" * 40, updated=LATER)]
-    assert event_intake.poll_due(engine, _settings())["inserted"] == 1
-    assert event_intake.process_due(engine, _settings())["routed"] == 1
+    assert event_intake.poll_due(engine, _settings(), connection_id=conn["id"])["inserted"] == 1
+    event_intake.process_due(engine, _settings())
+    assert _rows(engine, conn["id"])[-1]["status"] == "routed"
     assert len(runs_of(engine, pid)) == 2
 
 
 def test_one_poller_per_connection_and_a_refusal_backs_off(world):
     engine, pid, api = world
     conn = _create(engine, pid, config={"repository": REPO})
-    assert event_intake.poll_due(engine, _settings())["polled"] == 1      # the baseline
+    assert event_intake.poll_due(engine, _settings(), connection_id=conn["id"])["polled"] == 1      # the baseline
     _due_now(engine, conn["id"])
     # Another worker holds this connection's cursor: this one skips it.
     with engine.connect() as other:
         tx = other.begin()
         other.execute(text("SELECT 1 FROM intake_cursors WHERE connection_id = :c "
                            "FOR UPDATE"), {"c": conn["id"]})
-        got = event_intake.poll_due(engine, _settings())
+        got = event_intake.poll_due(engine, _settings(), connection_id=conn["id"])
         tx.rollback()
     assert got["polled"] == 0 and got["skipped"] == 1
 
     api.answer = (401, {"message": "Bad credentials"}, {})
-    got = event_intake.poll_due(engine, _settings())
+    got = event_intake.poll_due(engine, _settings(), connection_id=conn["id"])
     assert got["failed"] == 1
     health = _health(engine, conn["id"])
     assert health["failures"] == 1 and health["last_error"].startswith("auth_failed")
-    assert event_intake.poll_due(engine, _settings())["skipped"] == 1, "backing off"
+    assert event_intake.poll_due(engine, _settings(), connection_id=conn["id"])["skipped"] == 1, "backing off"
     api.answer = None
     _due_now(engine, conn["id"])
-    assert event_intake.poll_due(engine, _settings())["polled"] == 1
+    assert event_intake.poll_due(engine, _settings(), connection_id=conn["id"])["polled"] == 1
     assert _health(engine, conn["id"])["failures"] == 0

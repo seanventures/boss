@@ -59,6 +59,16 @@ Publishing refuses a workflow, naming the step, when:
   approval gate, timer or sub-workflow step. Those steps have no attempts of their own.
 - A value is outside its range, or `retry_backoff` has a field it does not know.
 
-A step reached only through an error path can bind only the outputs of steps that finished
-before the failing step. It cannot bind the failing step's output, because that step did not
-produce one.
+## The error path reads what the failed step said
+
+A step reached through an error path can bind the **failed** step's output too, the same way
+it binds any step's output: `{"from_step": "validate", "field": "log_tail"}`. A command step
+that exited non-zero keeps its `exit_code`, `log_tail` and what it produced, so the error path
+can post the validator's report instead of losing it. In the run context the failed step is
+marked `step_status: failed`, so it is never mistaken for a result. A condition after the error
+step reads it as any condition does: `{"path": "steps.validate.output.exit_code", "op": "eq",
+"value": 1}`.
+
+Only a failure that has finished and taken its error path is read. An attempt that will be
+retried is not an answer yet. If the failed step recorded no such field (it failed before its
+command ran), the binding fails and says which field is missing.

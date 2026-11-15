@@ -39,3 +39,38 @@ Open **Other ways** under Connect GitHub only if the app route can't work for yo
 
 - **GitHub Enterprise Server without apps, an offline install, or an organisation that blocks apps:** paste a fine-grained access token. **Create token** opens GitHub with the two permissions BOSS needs ticked. A token expires on the date you choose, and builds stop when it does, so pick the longest expiry your organisation allows. Setup shows the expiry date ahead of time.
 - **Already connected with a token?** Nothing changes. Your install keeps using it.
+
+## Events from a repository GitHub cannot reach
+
+An event route (a pull request opened, a branch pushed) normally gets GitHub's webhook at
+`/v1/intake/github/<token>`. An install on a laptop or behind a firewall has no address GitHub
+can reach. For those, create the GitHub intake connection in **poll** mode:
+
+```json
+{"kind": "github", "mode": "poll", "name": "tenants",
+ "config": {"repository": "owner/name", "poll_seconds": 30},
+ "secrets": {"api_token": "<optional; else the project's GitHub connection is used>"}}
+```
+
+- One poller per connection, on any number of workers: it reads the repository's open pull
+  requests and branch heads every `poll_seconds` (default 30, at least 15) with conditional
+  requests, so an unchanged repository costs nothing against GitHub's rate limit.
+- A new or moved pull request head becomes `com.github.pull_request.opened` /
+  `.synchronize`, and a moved branch becomes `com.github.push`: the same envelopes the
+  webhook gives, so the same routes and filters match. The first poll records what is already
+  there and only reports pull requests updated after the connection was made.
+- A poll connection still accepts the webhook if you add one (give it a `webhook_secret`). A
+  commit that arrives both ways is one event.
+- A refused token or a rate limit backs the poller off (at most 15 minutes) and shows on the
+  connection's health. The token never reaches an agent.
+
+To route only pull requests that touch some files, filter on their changed files (BOSS fetches
+the list only when a route asks for it):
+`{"field": "data.changed_files", "op": "glob", "value": "tenants/*.yaml"}` (`*` stays in one
+folder, `**` spans folders).
+
+`gh webhook forward --repo owner/name --events pull_request --url
+http://127.0.0.1:8000/v1/intake/github/<token> --secret <webhook secret>` (a GitHub CLI
+extension) forwards real deliveries to a laptop. Use it only to record a demo: it is in beta,
+one forwarder per repository, needs repository admin, and stops when the terminal closes. Poll
+mode is the supported path.

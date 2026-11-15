@@ -1270,7 +1270,7 @@ def _insert_polled(connection: Connection, row: Mapping[str, Any], raw: StoredRa
 
 
 def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = None,
-             holder: str = HOLDER) -> dict:
+             holder: str = HOLDER, connection_id: Optional[str] = None) -> dict:
     """Poll every active `poll` connection that is due. ONE POLLER PER CONNECTION: its cursor
     row is locked `FOR UPDATE SKIP LOCKED` for the poll, so two workers never poll one
     connection (the other skips it), and a crash releases the lock with the transaction. The
@@ -1286,8 +1286,9 @@ def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = Non
     out = {"polled": 0, "inserted": 0, "skipped": 0, "failed": 0}
     with begin(engine) as c:
         rows = [dict(r) for r in c.execute(text(
-            "SELECT * FROM intake_connections WHERE mode = 'poll' AND status = 'active'"
-        )).mappings()]
+            "SELECT * FROM intake_connections WHERE mode = 'poll' AND status = 'active' "
+            "AND (CAST(:only AS TEXT) IS NULL OR id = :only)"), {"only": connection_id}
+        ).mappings()]
     for crow in rows:
         health = _json(crow.get("health"), {}) or {}
         state = dict(health.get("poll") or {})

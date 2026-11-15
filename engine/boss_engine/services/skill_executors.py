@@ -816,8 +816,20 @@ def execute_sandboxed_command(
     timeout = int(config.get("timeout_seconds") or 300)
     isolation = {"provider": grade["provider"], "strong": grade["strong"]}
     if grade["provider"] in NON_STRONG_PROVIDERS:
-        from .local_fenced import LocalFenceUnavailable, LocalFencedSandbox, keep_produced
+        from .local_fenced import (LocalFenceUnavailable, LocalFencedSandbox,
+                                   check_local_binaries, keep_produced)
 
+        # THE PINNED IMAGE IS NOT USED HERE (AMEX-G12): the command runs on the worker's own
+        # filesystem. The CLIs it needs are declared (`local_binaries`) and checked against the
+        # operator's allow-list before anything runs; the run records which ran, with hashes.
+        try:
+            local = check_local_binaries(context.settings, config.get("local_binaries"))
+        except LocalFenceUnavailable as exc:
+            raise SandboxIsolationUnavailable(
+                f"{skill_key} runs a command and cannot be executed here: {exc}") from exc
+        path_prefix = [entry["path"] if entry["kind"] == "directory"
+                       else os.path.dirname(entry["path"]) for entry in local]
+        path_prefix += [p + "/bin" for p in path_prefix if os.path.isdir(p + "/bin")]
         try:
             fenced = LocalFencedSandbox(context.settings, task_id=task_id, files=files,
                                         project_id=context.project_id)
@@ -828,7 +840,7 @@ def execute_sandboxed_command(
             # The file inputs' placeholders are their paths inside the fenced workdir.
             command = build_sandbox_command(str(config.get("command") or ""),
                                             {**inputs, **fenced.inputs}, workdir=str(fenced.workdir))
-            result = fenced.run(command, timeout=timeout)
+            result = fenced.run(command, timeout=timeout, path_prefix=path_prefix)
             produced = {entry["name"]: entry.get("path") or entry["name"]
                         for entry in (config.get("outputs") or [])}
             found = fenced.produced_files(config.get("outputs") or [])
@@ -849,6 +861,9 @@ def execute_sandboxed_command(
                 "output_truncated": bool(result.truncated),
                 # NON-STRONG, SAID ON THE RUN: a pool uid behind iptables, not a separate kernel.
                 "isolation": isolation,
+                # PROVENANCE, SAID ON THE RUN: the image was not used; these worker CLIs were.
+                "image_used": False,
+                "local_binaries": local,
             }
         finally:
             fenced.teardown()
