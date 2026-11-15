@@ -270,12 +270,28 @@ def test_the_tool_reaches_only_the_projects_own_deployments(gateway, eng, projec
 
 
 
-def test_community_reaches_only_the_projects_own_deployments(gateway, eng, project):
-    """AMEX-G8 (BOSSAPP-1166): Community runs contract tests, bound to the project's hosts.
+def _target(c, project_id, health_url, created_by):
+    import uuid
 
-    Community has no egress network policy, so the guard is the policy: the project's own
-    deployment hosts answer, and a public host — which a paid edition may reach — is refused
-    before anything is sent. A project with no deployment hosts is refused outright."""
+    from sqlalchemy import text
+
+    c.execute(text(
+        "INSERT INTO deployment_targets (id, project_id, app_name, repo, environment, "
+        "target_kind, target_ref, domains, health_checks, created_by) VALUES (:i, :p, :a, "
+        "'r', 'staging', 'config_dir', 'local:/srv/x', CAST(:d AS JSONB), CAST(:h AS JSONB), :by)"),
+        {"i": f"deptgt_{uuid.uuid4().hex[:10]}", "p": project_id,
+         "a": f"gw-{uuid.uuid4().hex[:6]}", "d": json.dumps([health_url]),
+         "h": json.dumps([{"url": health_url}]), "by": created_by})
+
+
+def test_community_reaches_only_the_exact_urls_of_targets_a_person_made(gateway, eng, project,
+                                                                          dead_port):
+    """AMEX-G8 (BOSSAPP-1166): Community runs contract tests, bound to the project's targets.
+
+    Community has no egress network policy, so the guard is the policy: the exact scheme, host
+    and port of a deployment target a PERSON created. Another port on the same host (the BOSS
+    API on localhost), a public host, and a target an agent created are refused before
+    anything is sent."""
     from boss_engine.config import get_settings
     from boss_engine.tools.builtin import build_default_registry
 
@@ -291,24 +307,74 @@ def test_community_reaches_only_the_projects_own_deployments(gateway, eng, proje
     none_yet = tool.handler(C(), project_id=project, actor="a", args=args)
     assert none_yet["ok"] is False and "has none" in none_yet["error"]
     with eng.begin() as c:
+        # An AGENT's target adds nothing; a host registered for SSH has no port, adds nothing.
+        _target(c, project, gateway + "/healthz", "agent:deploy-lead")
         add_deployment_host(c, project, "127.0.0.1")
+    still = tool.handler(C(), project_id=project, actor="a", args=args)
+    assert still["ok"] is False and "has none" in still["error"]
+    with eng.begin() as c:
+        _target(c, project, gateway + "/healthz", "executive_console")      # a person
     out = tool.handler(C(), project_id=project, actor="a", args=args)
     assert out["ok"] and out["passed"] == 1, out
-    public = tool.handler(C(), project_id=project, actor="a",
-                          args={"cases": [{"url": "http://8.8.8.8/"}]})
-    assert public["ok"] and public["failed"] == 1
-    assert "not one of this project's deployment targets" in public["cases"][0]["failures"][0]
+    for url in (f"http://127.0.0.1:{dead_port}/", "http://8.8.8.8/",
+                gateway.replace("http://", "https://") + "/healthz"):
+        refused = tool.handler(C(), project_id=project, actor="a",
+                               args={"cases": [{"url": url}]})
+        assert refused["ok"] and refused["failed"] == 1
+        case = refused["cases"][0]
+        assert "not one of this project's deployment targets" in case["failures"][0], case
+        assert case["ms"] == 0, "nothing was sent"
 
 
-def test_project_only_checks_every_redirect_hop(gateway):
-    from boss_engine.services.contract_tests import HostRefused, check_host
+def test_project_only_matches_scheme_host_and_port_on_every_hop(gateway):
+    port = int(gateway.rsplit(":", 1)[1])
+    origins = frozenset({("http", "127.0.0.1", port)})
+    assert ct.check_host(gateway + "/x", project_only=True, origins=origins) == ["127.0.0.1"]
+    for url in ("http://127.0.0.1:1/", "http://8.8.8.8/", f"https://127.0.0.1:{port}/"):
+        with pytest.raises(ct.HostRefused, match="Community"):
+            ct.check_host(url, project_only=True, origins=origins)
+    with pytest.raises(ct.HostRefused, match="metadata"):
+        ct.check_host("http://169.254.169.254/", project_only=True,
+                      origins=frozenset({("http", "169.254.169.254", 80)}))
+    # A redirect off the origin is refused like a first request.
+    out = ct.run_cases([{"url": gateway + "/to-private"}], project_only=True, origins=origins)
+    assert out["cases"][0]["failures"][0].startswith("refused a redirect")
+    out = ct.run_cases([{"url": gateway + "/to-health", "expect_json": {"$.status": "ok"}}],
+                       project_only=True, origins=origins)
+    assert out["passed"] == 1, out["cases"]
 
-    with pytest.raises(HostRefused, match="Community"):
-        check_host("http://8.8.8.8/", frozenset({"127.0.0.1"}), project_only=True)
-    check_host(gateway + "/x", frozenset({"127.0.0.1"}), project_only=True)
-    # Metadata stays refused even when a project names it.
-    with pytest.raises(HostRefused, match="metadata"):
-        check_host("http://169.254.169.254/", frozenset({"169.254.169.254"}), project_only=True)
+
+def test_dns_is_resolved_once_and_the_checked_address_is_the_one_connected(gateway,
+                                                                          monkeypatch):
+    """DNS rebinding: the name answers 127.0.0.1 when checked and something else after. The
+    request connects to the address that was checked, never to a second lookup's answer."""
+    from boss_engine.identity import http as safe_http
+
+    port = int(gateway.rsplit(":", 1)[1])
+    answers = iter([["127.0.0.1"], ["169.254.169.254"], ["169.254.169.254"]])
+    lookups: list = []
+    monkeypatch.setattr(safe_http, "_resolve",
+                        lambda host, p: lookups.append(host) or next(answers))
+    connected: list = []
+    real_open = safe_http._open_connection
+    monkeypatch.setattr(safe_http, "_open_connection",
+                        lambda scheme, host, ip, p, t: connected.append(ip) or
+                        real_open(scheme, host, ip, p, t))
+    origins = frozenset({("http", "rebind.test", port)})
+    out = ct.run_cases([{"url": f"http://rebind.test:{port}/healthz"}], project_only=True,
+                       origins=origins)
+    assert out["passed"] == 1, out["cases"]
+    assert lookups == ["rebind.test"] and connected == ["127.0.0.1"]
+    # A name that resolves to the metadata address is refused even when it is an origin.
+    out = ct.run_cases([{"url": f"http://rebind.test:{port}/healthz"}], project_only=True,
+                       origins=origins)
+    assert "metadata" in out["cases"][0]["failures"][0]
+
+
+def test_a_case_keeps_its_own_host_header(gateway):
+    out = ct.run_cases([{"url": gateway + "/healthz", "headers": {"Host": "lumen.demo"}}],
+                       allowed_private=LOCAL)
+    assert out["passed"] == 1, out["cases"]
 
 
 def test_the_capability_is_catalogued_and_judged():

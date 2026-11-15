@@ -491,18 +491,41 @@ def test_two_runs_in_flight_each_promote_only_what_they_staged(eng, project, gat
         packet = _run(c, a["deployment_id"])["release_packet"]
     assert packet["workflow_run_id"] == "wfr_tenant_a", "the deployment names the run that made it"
 
-    run_a = {"run_id": "wfr_tenant_a", "steps": {"deploy_staging": a, "validate": {"exit_code": 0}}}
+    spec = {"entry_step": "validate", "steps": [
+        {"id": "validate", "kind": "capability", "binding": {"custom_step": "step_gwlint"}},
+        {"id": "deploy_staging", "kind": "capability",
+         "binding": {"capability": "config_deploy"}},
+        {"id": "relay", "kind": "capability", "binding": {"custom_step": "step_mcp_relay"}},
+        {"id": "retry_staging", "kind": "capability",
+         "binding": {"capability": "config_deploy"}},
+    ]}
+    run_a = {"run_id": "wfr_tenant_a", "steps": {
+        "deploy_staging": a, "validate": {"exit_code": 0},
+        # A custom (MCP) step's output may SAY it is a config deploy of B's bundle: forged.
+        "relay": {**b, "capability": "config_deploy"},
+        # A config_deploy step that FAILED into its error path is not a staging result.
+        "retry_staging": {**b, "step_status": "failed"}}}
     binding = {"app_name": "Northgate Gateway", "from_environment": "staging",
                "environment": "production"}
-    # The runner: no id, another run's id, or a hash that disagrees — refused, settled.
+
+    def bind(context, inputs):
+        with eng.begin() as c:
+            return _bound_promotion(c, context, inputs, spec=spec)
+
+    # The runner: no id, another run's id (however it is dressed up), a hash that disagrees.
     with pytest.raises(SettledCapabilityError, match="needs the deployment"):
-        _bound_promotion(run_a, binding)
+        bind(run_a, binding)
     with pytest.raises(SettledCapabilityError, match="not deployed by this run"):
-        _bound_promotion(run_a, {**binding, "deployment_id": b["deployment_id"]})
+        bind(run_a, {**binding, "deployment_id": b["deployment_id"]})
     with pytest.raises(SettledCapabilityError, match="not the one"):
-        _bound_promotion(run_a, {**binding, "deployment_id": a["deployment_id"],
-                                 "bundle_sha256": b["bundle_sha256"]})
-    bound = _bound_promotion(run_a, {**binding, "deployment_id": a["deployment_id"]})
+        bind(run_a, {**binding, "deployment_id": a["deployment_id"],
+                     "bundle_sha256": b["bundle_sha256"]})
+    # A real config_deploy step whose output names B's deployment: the database says B's run
+    # planned it, so A cannot promote it.
+    forged = {**run_a, "steps": {**run_a["steps"], "deploy_staging": b}}
+    with pytest.raises(SettledCapabilityError, match="not planned by this workflow run"):
+        bind(forged, {**binding, "deployment_id": b["deployment_id"]})
+    bound = bind(run_a, {**binding, "deployment_id": a["deployment_id"]})
     assert bound["deployment_run_id"] == a["deployment_id"]
     assert bound["bundle_sha256"] == a["bundle_sha256"] and "deployment_id" not in bound
 
@@ -520,6 +543,9 @@ def test_two_runs_in_flight_each_promote_only_what_they_staged(eng, project, gat
     assert no_source["status"] == "failed" and "own staging step" in no_source["reason"]
     crossed = promote("wfr_tenant_a", {**binding, "deployment_id": b["deployment_id"],
                                        "bundle_sha256": a["bundle_sha256"]})
+    assert crossed["status"] == "failed" and "not planned by this workflow run" in crossed["reason"]
+    crossed = promote("wfr_tenant_b", {**binding, "deployment_id": b["deployment_id"],
+                                       "bundle_sha256": a["bundle_sha256"]})
     assert crossed["status"] == "failed" and "different bundle" in crossed["reason"]
     # `deployment_id` is read (it was silently dropped before) and A ships A's bytes.
     promoted = promote("wfr_tenant_a", {**bound, "target_id": production["target_id"]})
@@ -528,3 +554,6 @@ def test_two_runs_in_flight_each_promote_only_what_they_staged(eng, project, gat
     assert promoted["bundle_sha256"] == a["bundle_sha256"] != b["bundle_sha256"]
     alias = promote("", {"deployment_id": b["deployment_id"], "target_id": production["target_id"]})
     assert alias["status"] == "planned" and alias["promoted_from"] == b["deployment_id"]
+    # Outside a workflow too, the source is named, never "the latest for the app".
+    guessed = promote("", binding)
+    assert guessed["status"] == "failed" and "Name the deployment" in guessed["reason"]

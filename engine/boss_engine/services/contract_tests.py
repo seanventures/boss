@@ -18,11 +18,8 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
-import socket
 import time
 import urllib.parse
-import urllib.error
-import urllib.request
 from typing import Any, Iterable, Mapping, Optional
 
 #: The methods a case may use. Anything else is a typo, refused before a request is made.
@@ -53,72 +50,98 @@ def _blocked_hosts() -> tuple[str, ...]:
     return tuple(_BLOCKED_HOSTS)
 
 
-def _addresses(host: str) -> list[ipaddress._BaseAddress]:
+def _addresses(host: str, port: int = 0) -> list[str]:
+    """DNS, ONCE per request: the addresses checked are the addresses connected to (pinned), so
+    a name that answers differently a moment later (DNS rebinding) changes nothing."""
+    from ..identity import http as safe_http
+
     try:
-        return [ipaddress.ip_address(host)]
+        return [str(ipaddress.ip_address(host))]
     except ValueError:
         pass
     try:
-        infos = socket.getaddrinfo(host, None)
+        return [a.split("%", 1)[0] for a in safe_http._resolve(host, port or 80)]
     except OSError:
         return []          # does not resolve: the request fails as "did not answer"
-    out = []
-    for info in infos:
-        try:
-            out.append(ipaddress.ip_address(info[4][0].split("%", 1)[0]))
-        except ValueError:
-            continue
-    return out
+
+
+def _default_port(scheme: str) -> int:
+    return 443 if scheme == "https" else 80
+
+
+def origin_of(url: str) -> Optional[tuple[str, str, int]]:
+    """(scheme, host, port) of an http(s) URL — what the Community allow-list matches."""
+    parts = urllib.parse.urlsplit(url or "")
+    scheme = (parts.scheme or "").lower()
+    host = (parts.hostname or "").lower().rstrip(".")
+    if scheme not in ("http", "https") or not host:
+        return None
+    try:
+        port = parts.port or _default_port(scheme)
+    except ValueError:
+        return None
+    return scheme, host, int(port)
 
 
 def check_host(url: str, allowed_private: frozenset[str] = frozenset(), *,
-               project_only: bool = False) -> None:
-    """THE SSRF GUARD, for the first request and every redirect hop.
+               project_only: bool = False,
+               origins: frozenset[tuple[str, str, int]] = frozenset()) -> list[str]:
+    """THE SSRF GUARD, for the first request and every redirect hop. Returns the addresses the
+    request may connect to — the ones it was checked against (pinned).
 
     A contract test sends whatever method, headers and body a caller writes, and returns the
     answer — so where it may send is the whole security question. Metadata and link-local hosts
-    are refused always (the shared connector rule, `connectors/tickets/http.check_host`).
-    Loopback, private and otherwise non-public addresses — by literal or by what the name
-    resolves to — are refused unless the host is one of `allowed_private`: the project's OWN
-    deployment targets and hosts, resolved by the caller from the database, never from the
-    arguments.
+    are refused always (the shared connector rule, `connectors/tickets/http.check_host`), by
+    name or by any address the name resolves to.
 
-    `project_only` (Community, AMEX-G8): public hosts are refused too, so EVERY request — and
-    every redirect hop — goes to one of the project's own deployment hosts. Community has no
-    egress network policy, so the guard itself is the policy: a step can test what this
-    project deploys and nothing else."""
-    parts = urllib.parse.urlsplit(url or "")
-    host = (parts.hostname or "").lower().rstrip(".")
-    if not host or (parts.scheme or "").lower() not in ("http", "https"):
+    Paid editions: loopback, private and otherwise non-public addresses are refused unless the
+    host is one of `allowed_private` (the project's own deployment targets and hosts, from the
+    database, never from the arguments).
+
+    `project_only` (Community, AMEX-G8): Community has no egress network policy, so the guard
+    is the policy. The request's exact ORIGIN — scheme, host AND port — must be one of
+    `origins`: the URLs of deployment targets a PERSON created (`project_origins`). Another
+    port on the same host (the BOSS API on localhost), a public host, or a target an agent
+    created is refused."""
+    origin = origin_of(url)
+    if origin is None:
         raise HostRefused(f"{url!r} is not an http(s) URL.")
-    addresses = _addresses(host)
-    if host in _blocked_hosts() or any(a.is_link_local for a in addresses):
+    scheme, host, port = origin
+    addresses = _addresses(host, port)
+    parsed = []
+    for raw in addresses:
+        try:
+            parsed.append(ipaddress.ip_address(raw))
+        except ValueError:
+            continue
+    if host in _blocked_hosts() or any(a.is_link_local for a in parsed) or \
+            any(raw in _blocked_hosts() for raw in addresses):
         raise HostRefused(f"{host} is a metadata or link-local address; a contract test never "
                           "sends there.")
-    if host in allowed_private:
-        return
     if project_only:
-        raise HostRefused(
-            f"{host} is not one of this project's deployment targets or hosts. In Community a "
-            "contract test reaches only the project's own deployments; add the host as a "
-            "deployment target (its health URL) or a deployment host first.")
-    if any(not a.is_global for a in addresses) or host in ("localhost",):
+        if origin not in origins:
+            raise HostRefused(
+                f"{scheme}://{host}:{port} is not one of this project's deployment targets. In "
+                "Community a contract test reaches only the exact scheme, host and port of a "
+                "deployment target a person created (its health or public URL).")
+        return addresses
+    if host in allowed_private:
+        return addresses
+    from ..identity import http as safe_http
+
+    if host == "localhost" or not addresses or \
+            any(not safe_http._is_public(raw) for raw in addresses):
+        if not addresses:
+            return addresses          # does not resolve: "did not answer", nothing sent
         raise HostRefused(
             f"{host} is a loopback or private address and not one of this project's "
             "deployment targets. A contract test reaches the project's own deployments and "
             "public hosts only.")
+    return addresses
 
 
-class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
-    """Every redirect hop goes through the same guard as the first request."""
-
-    def __init__(self, allowed_private: frozenset[str], project_only: bool = False):
-        self.allowed_private = allowed_private
-        self.project_only = project_only
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
-        check_host(newurl, self.allowed_private, project_only=self.project_only)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+#: Redirect hops one case follows, each checked like the first request.
+MAX_REDIRECTS = 5
 
 
 def _one_case(index: int, raw: Any, base_url: str, shared_headers: Mapping[str, str]) -> dict[str, Any]:
@@ -204,40 +227,80 @@ def json_path(value: Any, path: str) -> tuple[bool, Any]:
     return True, current
 
 
+def _exchange(url: str, method: str, headers: Mapping[str, str], body: Optional[bytes],
+              addresses: list[str], host_header: str, timeout_s: float
+              ) -> tuple[int, dict[str, str], bytes]:
+    """One HTTP exchange with a PINNED address: connect to an address the guard checked, never
+    to whatever the name resolves to now. TLS still verifies the certificate against the name."""
+    from ..identity import http as safe_http
+
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower().rstrip(".")
+    port = parts.port or _default_port(scheme)
+    target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+    deadline = time.monotonic() + timeout_s
+    last: Optional[BaseException] = None
+    for ip in safe_http._candidates(addresses):
+        try:
+            sock = safe_http._open_connection(scheme, host, ip, port, timeout_s)
+        except OSError as error:
+            last = error
+            continue
+        try:
+            return safe_http._http_exchange(sock, method, host_header, target, headers, body,
+                                            deadline)
+        finally:
+            sock.close()
+    raise ConnectionError(f"could not connect to {host}:{port}"
+                          + (f" ({type(last).__name__})" if last else ""))
+
+
 def _send(case: dict[str, Any], timeout_s: float,
           allowed_private: frozenset[str] = frozenset(),
-          project_only: bool = False) -> dict[str, Any]:
-    request = urllib.request.Request(case["url"], data=case["body"], method=case["method"],
-                                     headers=case["headers"])
+          project_only: bool = False,
+          origins: frozenset[tuple[str, str, int]] = frozenset()) -> dict[str, Any]:
     started = time.time()
-    try:
-        check_host(case["url"], allowed_private, project_only=project_only)
-    except HostRefused as refused:
-        return {"status": None, "ms": 0, "headers": {}, "body": "",
-                "error": f"refused: {refused}", "refused": True}
-    opener = urllib.request.build_opener(_CheckedRedirects(allowed_private, project_only))
-    try:
-        with opener.open(request, timeout=timeout_s) as response:  # noqa: S310 — host checked
-            raw = response.read(BODY_EXCERPT * 4)
-            return {"status": int(response.status), "ms": round((time.time() - started) * 1000),
-                    "headers": {k.lower(): v for k, v in response.headers.items()},
-                    "body": raw.decode("utf-8", errors="replace"), "error": None}
-    except urllib.error.HTTPError as error:
-        raw = error.read(BODY_EXCERPT * 4) if hasattr(error, "read") else b""
-        return {"status": int(error.code), "ms": round((time.time() - started) * 1000),
-                "headers": {k.lower(): v for k, v in (error.headers or {}).items()},
-                "body": raw.decode("utf-8", errors="replace"), "error": None}
-    except HostRefused as refused:
-        return {"status": None, "ms": round((time.time() - started) * 1000), "headers": {},
-                "body": "", "error": f"refused a redirect: {refused}", "refused": True}
-    except Exception as error:  # noqa: BLE001 — unreachable is a RESULT, not a crash
-        cause = getattr(error, "reason", None)
-        if isinstance(cause, HostRefused):
-            return {"status": None, "ms": round((time.time() - started) * 1000),
-                    "headers": {}, "body": "", "error": f"refused a redirect: {cause}",
-                    "refused": True}
-        return {"status": None, "ms": round((time.time() - started) * 1000), "headers": {},
-                "body": "", "error": f"{type(error).__name__}: {str(error)[:300]}"}
+    url, method, body = case["url"], case["method"], case["body"]
+    headers = {k: v for k, v in case["headers"].items() if k.lower() != "host"}
+    asked_host = next((v for k, v in case["headers"].items() if k.lower() == "host"), None)
+    first = origin_of(url)
+
+    def elapsed() -> int:
+        return round((time.time() - started) * 1000)
+
+    for hop in range(MAX_REDIRECTS + 1):
+        try:
+            addresses = check_host(url, allowed_private, project_only=project_only,
+                                   origins=origins)
+        except HostRefused as refused:
+            word = "refused" if hop == 0 else "refused a redirect"
+            return {"status": None, "ms": 0 if hop == 0 else elapsed(), "headers": {}, "body": "",
+                    "error": f"{word}: {refused}", "refused": True}
+        parts = urllib.parse.urlsplit(url)
+        # The case's own Host header (a virtual host on the gateway) holds while the request
+        # stays on the origin it was written for.
+        host_header = (asked_host if asked_host and origin_of(url) == first
+                       else parts.netloc)
+        try:
+            if not addresses:
+                raise ConnectionError(f"{parts.hostname} does not resolve")
+            status, answer_headers, raw = _exchange(url, method, headers, body, addresses,
+                                                    host_header, timeout_s)
+        except Exception as error:  # noqa: BLE001 — unreachable is a RESULT, not a crash
+            return {"status": None, "ms": elapsed(), "headers": {}, "body": "",
+                    "error": f"{type(error).__name__}: {str(error)[:300]}"}
+        location = answer_headers.get("location")
+        if status in (301, 302, 303, 307, 308) and location and hop < MAX_REDIRECTS:
+            url = urllib.parse.urljoin(url, location)
+            if status in (301, 302, 303) and method not in ("GET", "HEAD"):
+                method, body = "GET", None
+                headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+            continue
+        return {"status": int(status), "ms": elapsed(), "headers": answer_headers,
+                "body": raw[:BODY_EXCERPT * 4].decode("utf-8", errors="replace"), "error": None}
+    return {"status": None, "ms": elapsed(), "headers": {}, "body": "",
+            "error": f"more than {MAX_REDIRECTS} redirects"}
 
 
 def _judge(case: dict[str, Any], answer: dict[str, Any]) -> list[str]:
@@ -294,14 +357,15 @@ def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
               headers: Optional[Mapping[str, str]] = None,
               allowed_private: Iterable[str] = (),
               deadline_s: Optional[float] = None,
-              project_only: bool = False) -> dict[str, Any]:
+              project_only: bool = False,
+              origins: Iterable[tuple[str, str, int]] = ()) -> dict[str, Any]:
     """Run every case and say, per case and in total, what passed.
 
     Returns `ok: False` with an `error` when the cases cannot be run as written (not a list, a
     bad method, a path with no base_url) — nothing is sent then. Otherwise `ok` is True and the
     verdict is in `failed`: the tool ran; whether the contract held is the step's judgement
-    (workflow_outcomes.contract_test). `project_only` refuses every host that is not in
-    `allowed_private`, public ones included (`check_host`).
+    (workflow_outcomes.contract_test). `project_only` refuses every request whose scheme, host
+    and port are not one of `origins` (`check_host`).
     """
     if isinstance(cases, str):
         try:
@@ -326,6 +390,8 @@ def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
         return {"ok": False, "error": str(error)}
 
     allowed = frozenset(str(h).lower().rstrip(".") for h in allowed_private if h)
+    allowed_origins = frozenset((str(o[0]).lower(), str(o[1]).lower().rstrip("."), int(o[2]))
+                                for o in origins if o)
     # THE TURN'S CLOCK: no case is sent after `deadline_s`, and none waits past it.
     ends = time.monotonic() + float(deadline_s) if deadline_s else None
     results: list[dict[str, Any]] = []
@@ -337,7 +403,8 @@ def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
                             "failures": ["not sent: out of time for this turn"],
                             "error": None, "body_excerpt": ""})
             continue
-        answer = _send(case, max(1.0, min(float(timeout), left)), allowed, project_only)
+        answer = _send(case, max(1.0, min(float(timeout), left)), allowed, project_only,
+                       allowed_origins)
         failures = _judge(case, answer)
         results.append({
             "name": case["name"], "method": case["method"], "url": case["url"],
@@ -392,4 +459,47 @@ def project_deployment_hosts(db: Any, project_id: str) -> frozenset[str]:
     return frozenset(h for h in hosts if h not in _blocked_hosts())
 
 
-__all__ = ["CaseError", "HostRefused", "check_host", "project_deployment_hosts", "MAX_CASES", "METHODS", "json_path", "results_table", "run_cases"]
+def project_origins(db: Any, project_id: str) -> frozenset[tuple[str, str, int]]:
+    """COMMUNITY'S ALLOW-LIST (AMEX-G8): the exact (scheme, host, port) of the URLs of this
+    project's deployment targets that a PERSON created — health checks, domains, public URL.
+    A target an agent created adds nothing: an agent that could add a target could otherwise
+    point a contract test anywhere. A bare domain allows https:443 and http:80 on that name;
+    a registered SSH host has no port, so it is not an origin."""
+    from sqlalchemy import text
+
+    from .agent_identity import is_person
+
+    try:
+        with db.begin_nested():
+            rows = db.execute(text(
+                "SELECT domains, health_checks, public_url, created_by FROM deployment_targets "
+                "WHERE project_id = :p"), {"p": project_id}).mappings().all()
+    except Exception:  # noqa: BLE001 — a schema without the columns allows nothing
+        return frozenset()
+    out: set[tuple[str, str, int]] = set()
+    for row in rows:
+        if not is_person(str(row["created_by"] or ""), db, project_id):
+            continue
+        urls: list[str] = []
+        for d in (row["domains"] if isinstance(row["domains"], list) else []):
+            urls.append(str((d.get("url") or d.get("host") or d.get("domain"))
+                            if isinstance(d, dict) else d or ""))
+        for h in (row["health_checks"] if isinstance(row["health_checks"], list) else []):
+            urls.append(str(h.get("url") or "") if isinstance(h, dict) else str(h or ""))
+        urls.append(str(row["public_url"] or ""))
+        for raw in urls:
+            raw = raw.strip()
+            if not raw:
+                continue
+            if "://" in raw:
+                origin = origin_of(raw)
+                if origin:
+                    out.add(origin)
+            else:
+                host = raw.split("/", 1)[0].lower().rstrip(".")
+                if host and ":" not in host:
+                    out.update({("https", host, 443), ("http", host, 80)})
+    return frozenset(o for o in out if o[1] not in _blocked_hosts())
+
+
+__all__ = ["CaseError", "HostRefused", "check_host", "origin_of", "project_deployment_hosts", "project_origins", "MAX_CASES", "METHODS", "json_path", "results_table", "run_cases"]

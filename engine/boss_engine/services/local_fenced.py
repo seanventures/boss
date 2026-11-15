@@ -96,13 +96,78 @@ def binary_roots(settings: Any) -> list[str]:
     return roots
 
 
-def _sha256_file(path: str, cap: int = 512 * 1024 * 1024) -> Optional[str]:
+#: A local CLI tree is hashed file by file; past these it is not a CLI, and is refused.
+MAX_TREE_FILES = 20_000
+MAX_TREE_BYTES = 1024 * 1024 * 1024
+
+
+def _is_pool_uid(uid: int) -> bool:
+    from . import sandbox_identity
+
+    return sandbox_identity.UID_BASE <= int(uid) < sandbox_identity.UID_BASE + \
+        sandbox_identity.UID_COUNT
+
+
+def _writable_problem(path: str, st: os.stat_result, *, ancestor: bool = False) -> Optional[str]:
+    """Why a run's pool uid could change `path`, or None. Owned by a pool uid, or writable by a
+    group or by everyone. An ANCESTOR directory that is world-writable WITH the sticky bit
+    (/tmp) is allowed: nobody can rename or replace an entry they do not own there."""
+    import stat as _stat
+
+    if _is_pool_uid(st.st_uid):
+        return f"{path} belongs to a sandbox user (uid {st.st_uid}), which can change it"
+    sticky = bool(st.st_mode & _stat.S_ISVTX)
+    if st.st_mode & 0o002 and not (ancestor and sticky):
+        return f"{path} is writable by every user on this worker"
+    if st.st_mode & 0o020 and not (ancestor and sticky):
+        return f"{path} is writable by its group"
+    return None
+
+
+def _tree_digest(root: str) -> tuple[str, Optional[str]]:
+    """(sha256 over every regular file's relative path and bytes, problem). Every file and
+    directory under `root` is held to the same rule as the root (`_writable_problem`)."""
+    digest = hashlib.sha256()
+    files = 0
+    total = 0
+    for here, dirs, names in os.walk(root, followlinks=False):
+        dirs.sort()
+        for name in sorted(dirs):
+            full = os.path.join(here, name)
+            problem = _writable_problem(full, os.lstat(full))
+            if problem:
+                return "", problem
+        for name in sorted(names):
+            full = os.path.join(here, name)
+            st = os.lstat(full)
+            problem = _writable_problem(full, st)
+            if problem:
+                return "", problem
+            files += 1
+            if files > MAX_TREE_FILES:
+                return "", f"{root} holds more than {MAX_TREE_FILES} files"
+            rel = os.path.relpath(full, root)
+            digest.update(rel.encode("utf-8", "surrogateescape") + b"\0")
+            if os.path.islink(full):
+                digest.update(b"link:" + os.readlink(full).encode("utf-8", "surrogateescape"))
+                continue
+            with open(full, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    total += len(chunk)
+                    if total > MAX_TREE_BYTES:
+                        return "", f"{root} is larger than {MAX_TREE_BYTES} bytes"
+                    digest.update(chunk)
+            digest.update(b"\0")
+    return digest.hexdigest(), None
+
+
+def _sha256_file(path: str) -> Optional[str]:
     digest = hashlib.sha256()
     size = 0
     with open(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             size += len(chunk)
-            if size > cap:
+            if size > MAX_TREE_BYTES:
                 return None
             digest.update(chunk)
     return digest.hexdigest()
@@ -112,9 +177,12 @@ def check_local_binaries(settings: Any, paths: Any) -> list[dict[str, Any]]:
     """THE IMAGE IS NOT WHAT RUNS HERE (AMEX-G12, BOSSAPP-1170). Under `local_fenced` a skill's
     command runs on the worker's filesystem, so the CLIs it declares (`local_binaries`) must
     each resolve — symlinks followed — under a root the operator allow-listed
-    (BOSS_LOCAL_FENCED_BINARIES), exist, and not be writable by everyone (the pool uid could
-    otherwise swap the tool another run trusts). Returns the provenance the run records: each
-    path, its kind, and a file's sha256. Raises LocalFenceUnavailable naming the one fix."""
+    (BOSS_LOCAL_FENCED_BINARIES) and exist; and NOTHING a run's sandbox user could change may
+    stand in the way (review of #125): the path, every file under it, and every directory
+    above it must not be owned by a pool uid nor writable by a group or by everyone. Returns
+    the provenance the run records — each path, its kind and its sha256 (a directory's over
+    every file) — hashed now, at exec time, and checked again after the command
+    (`binaries_changed`). Raises LocalFenceUnavailable naming the one fix."""
     declared = [str(p) for p in (paths or []) if str(p or "").strip()]
     if not declared:
         return []
@@ -136,16 +204,37 @@ def check_local_binaries(settings: Any, paths: Any) -> list[dict[str, Any]]:
             raise LocalFenceUnavailable(
                 f"{path} does not exist on this worker. Mount the CLI there (read-only), or run "
                 "the skill on a microVM substrate, where its pinned image is used.")
-        mode = os.stat(real).st_mode
-        if mode & 0o002:
-            raise LocalFenceUnavailable(
-                f"{path} is writable by every user on this worker, so a command could replace "
-                "the tool another run trusts. Mount it read-only (or chmod o-w).")
+        fix = (" A run's sandbox user could replace the tool another run trusts: mount it "
+               "read-only, owned by root, with no group or world write (chmod go-w).")
+        problem = _writable_problem(real, os.stat(real))
+        parent = os.path.dirname(real)
+        while not problem and parent and parent != os.path.dirname(parent):
+            problem = _writable_problem(parent, os.stat(parent), ancestor=True)
+            parent = os.path.dirname(parent)
+        if problem:
+            raise LocalFenceUnavailable(problem + "." + fix)
         if os.path.isdir(real):
-            found.append({"path": path, "kind": "directory"})
+            digest, problem = _tree_digest(real)
+            if problem:
+                raise LocalFenceUnavailable(problem + "." + fix)
+            found.append({"path": path, "kind": "directory", "sha256": digest})
         else:
             found.append({"path": path, "kind": "file", "sha256": _sha256_file(real)})
     return found
+
+
+def binaries_changed(settings: Any, recorded: list[dict[str, Any]]) -> list[str]:
+    """The declared CLIs whose bytes differ now from what `check_local_binaries` hashed."""
+    changed = []
+    for entry in recorded or []:
+        try:
+            again = check_local_binaries(settings, [entry["path"]])[0]
+        except LocalFenceUnavailable:
+            changed.append(entry["path"])
+            continue
+        if again.get("sha256") != entry.get("sha256"):
+            changed.append(entry["path"])
+    return changed
 
 
 def safe_relative_path(name: Any) -> str:

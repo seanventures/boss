@@ -744,8 +744,8 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
             target_id: Optional[str] = None, approval_decision_id: Optional[str] = None,
             person_required: bool = False, workflow_run_id: Optional[str] = None,
             expected_bundle_sha256: Optional[str] = None) -> dict[str, Any]:
-    """`promote_config`: the exact bundle a SUCCEEDED config deployment shipped (by id, or the
-    latest for app + from_environment) planned to the next environment's config target.
+    """`promote_config`: the exact bundle a SUCCEEDED config deployment shipped (named by its
+    id — never "the latest for the app") planned to the next environment's config target.
 
     INSIDE A WORKFLOW RUN (`workflow_run_id`, set by the runner) the source is never guessed
     (AMEX-G9, BOSSAPP-1167): the id AND the bundle hash its staging step recorded are
@@ -761,20 +761,15 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
                 raise ConfigDeployError(
                     "A workflow promotes only the deployment its own staging step shipped.",
                     "Bind deployment_id and bundle_sha256 from this run's config_deploy step.")
-            if deployment_run_id:
-                src = c.execute(text("SELECT * FROM deployment_runs WHERE id = :i AND project_id = :p"),
-                                {"i": deployment_run_id, "p": project_id}).mappings().first()
-            else:
-                app = str(app_name or "").strip()
-                if not app:
-                    raise ConfigDeployError("Name what to promote: a deployment_run_id, or app_name.",
-                                            "list_deployments shows the config deployments.")
-                src = c.execute(
-                    text("SELECT * FROM deployment_runs WHERE project_id = :p AND target_kind = :k "
-                         "AND lower(app_name) = :a AND lower(environment) = :e AND status = 'succeeded' "
-                         "ORDER BY finished_at DESC NULLS LAST, created_at DESC LIMIT 1"),
-                    {"p": project_id, "k": TARGET_KIND, "a": app.lower(),
-                     "e": str(from_environment or "staging").lower()}).mappings().first()
+            # NAMED, NEVER GUESSED (review of #125): "the latest succeeded deployment for the
+            # app" is how two tenants in flight promoted each other's file, from a chat or an
+            # MCP call as much as from a workflow. The caller names the deployment run.
+            if not deployment_run_id:
+                raise ConfigDeployError(
+                    "Name the deployment to promote (its deployment_run_id).",
+                    "list_deployments shows the succeeded config deployments.")
+            src = c.execute(text("SELECT * FROM deployment_runs WHERE id = :i AND project_id = :p"),
+                            {"i": deployment_run_id, "p": project_id}).mappings().first()
             if not src or not is_config_run(src):
                 raise ConfigDeployError("No config deployment to promote.",
                                         f"Deploy the files to {from_environment} first and let it succeed.")
@@ -783,6 +778,10 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
                     f"The {src['environment']} deployment is {src['status']}, not succeeded.",
                     "Only configuration that passed its health check in the lower environment is promoted.")
             packet = _loads(src["release_packet"], {}) or {}
+            if workflow_run_id and str(packet.get("workflow_run_id") or "") != workflow_run_id:
+                raise ConfigDeployError(
+                    f"Deployment {src['id']} was not planned by this workflow run.",
+                    "A workflow promotes only the deployment its own staging step shipped.")
             artifact_id = str(packet.get("bundle_artifact_id") or src.get("release_artifact_id") or "")
             bundle = load_bundle(c, project_id, artifact_id)
             if bundle_sha256(bundle) != str(src.get("commit_ref") or ""):

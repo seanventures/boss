@@ -168,7 +168,8 @@ def test_glob_over_a_plain_path_and_a_missing_field():
                                  "value": "*"}).matches({"data": {"changed_files": None}})
 
 
-@pytest.mark.parametrize("bad", ["", "/etc/*", "a//b", [], ["x"] * 17, "x" * 300, 5])
+@pytest.mark.parametrize("bad", ["", "/etc/*", "a//b", [], ["x"] * 17, "x" * 300, 5,
+                                 "tenants/[abc", "tenants/[]", "tenants/[!]", "[z-a]*"])
 def test_a_bad_glob_is_refused_when_saved(bad):
     with pytest.raises(f.FilterError):
         f.compile_filter({"field": "data.changed_files", "op": "glob", "value": bad})

@@ -346,12 +346,12 @@ def _gwlint_tree(tmp_path):
     return root, root / "gwlint"
 
 
-def _run_gwlint(monkeypatch, settings, declared):
+def _run_gwlint(monkeypatch, settings, declared, command="gwlint validate *.yaml"):
     from boss_engine.services import skill_definitions
 
     skill = {"skill_key": "gwlint_validate", "enabled": True, "inputs": [],
              "config": {"image": "ghcr.io/northgate/gwlint@sha256:" + "0" * 64,
-                        "command": "gwlint validate *.yaml", "timeout_seconds": 30,
+                        "command": command, "timeout_seconds": 30,
                         "outputs": [], **({"local_binaries": declared} if declared else {})}}
     monkeypatch.setattr(skill_definitions, "get_skill", lambda c, p, k: dict(skill))
     monkeypatch.setattr(skill_executors, "_as_held", lambda context, s: s)
@@ -367,7 +367,9 @@ def test_a_declared_cli_under_an_allowed_root_runs_and_is_recorded(fence, monkey
     out = _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)), [str(tree)])
     assert out["exit_code"] == 0 and "gwlint ok validate lumen-pay.yaml" in out["log_tail"]
     assert out["image_used"] is False
-    assert out["local_binaries"] == [{"path": str(tree), "kind": "directory"}]
+    [recorded] = out["local_binaries"]
+    assert recorded["path"] == str(tree) and recorded["kind"] == "directory"
+    assert len(recorded["sha256"]) == 64, "a directory is hashed over every file"
     cli = tree / "bin" / "gwlint"
     out = _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)), [str(cli)])
     import hashlib
@@ -392,6 +394,7 @@ def test_a_missing_or_world_writable_cli_is_refused(fence, monkeypatch, tmp_path
     with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="writable"):
         _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)),
                     [str(tree / "bin" / "gwlint")])
+    (tree / "bin" / "gwlint").chmod(0o755)
     # A symlink cannot smuggle a path out of the allowed root.
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -415,3 +418,31 @@ def test_local_binaries_are_validated_when_the_skill_is_authored():
         with pytest.raises(sd.SkillDefinitionError, match="local_binaries"):
             sd.validate_config("sandboxed_command",
                                {"image": image, "command": "x", "local_binaries": bad}, [])
+
+
+def test_nothing_a_sandbox_user_could_change_stands_in_the_way(fence, monkeypatch, tmp_path):
+    """Review of #125: not only the file's own write bit. A file deep in the tree, a parent
+    directory, or anything owned by a pool uid would let one run swap the tool another trusts."""
+    root, tree = _gwlint_tree(tmp_path)
+    settings = _settings(local_fenced_binaries=str(root))
+    (tree / "lib").mkdir()
+    (tree / "lib" / "rules.js").write_text("module.exports = {}\n")
+    (tree / "lib" / "rules.js").chmod(0o664)
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="group"):
+        _run_gwlint(monkeypatch, settings, [str(tree)])
+    (tree / "lib" / "rules.js").chmod(0o644)
+    (tree / "bin").chmod(0o777)
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="every user"):
+        _run_gwlint(monkeypatch, settings, [str(tree / "bin" / "gwlint")])
+    (tree / "bin").chmod(0o755)
+    monkeypatch.setattr(local_fenced, "_is_pool_uid", lambda uid: uid == os.getuid())
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="sandbox user"):
+        _run_gwlint(monkeypatch, settings, [str(tree)])
+
+
+def test_a_cli_changed_while_it_ran_is_refused(fence, monkeypatch, tmp_path):
+    root, tree = _gwlint_tree(tmp_path)
+    cli = tree / "bin" / "gwlint"
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="changed while"):
+        _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)), [str(tree)],
+                    command=f"echo '# swapped' >> {cli}")

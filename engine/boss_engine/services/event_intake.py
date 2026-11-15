@@ -1092,14 +1092,23 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                 head_key = str(ev.data.get("head_key") or "")
                 if head_key and conversation and not force_n:
                     by = str(ev.data.get("delivered_by") or "webhook")
+                    # Across the project's connections of this kind too: a webhook connection
+                    # and a poll connection on one repository see the same commit once. The
+                    # lock is per repository and commit, so two connections cannot both pass.
+                    c.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                              {"k": f"{conn.project_id}:{conn.kind}:{head_key}"})
                     twin = c.execute(text("""
-                        SELECT id FROM intake_events
-                         WHERE connection_id = :c AND id <> :id
-                           AND status IN ('routed', 'filtered', 'ignored', 'digest', 'refused')
-                           AND envelope -> 'data' ->> 'head_key' = :k
-                           AND COALESCE(envelope -> 'data' ->> 'delivered_by', 'webhook') <> :by
+                        SELECT e.id FROM intake_events e
+                          JOIN intake_connections ic ON ic.id = e.connection_id
+                         WHERE ic.project_id = :p AND ic.kind = :kind AND e.id <> :id
+                           AND e.status IN ('routed', 'filtered', 'ignored', 'digest', 'refused')
+                           AND e.envelope -> 'data' ->> 'head_key' = :k
+                           AND (e.connection_id <> :c OR
+                                COALESCE(e.envelope -> 'data' ->> 'delivered_by', 'webhook')
+                                <> :by)
                          LIMIT 1"""),
-                        {"c": conn.id, "id": event_id, "k": head_key, "by": by}).scalar()
+                        {"p": conn.project_id, "kind": conn.kind, "c": conn.id,
+                         "id": event_id, "k": head_key, "by": by}).scalar()
                     if twin:
                         filtered_reason = f"the same commit already arrived as {twin}"
                         all_outcomes.append({"filtered": filtered_reason, "event": ev.id,
@@ -1239,6 +1248,10 @@ POLL_SECONDS_MIN = 15
 #: The longest a failing connection waits between polls.
 POLL_BACKOFF_MAX_SECONDS = 900
 POLL_STREAM_KEY = "poll"
+#: A cursor not advanced for this long belongs to a connection that was dormant (paused, or
+#: its workers down): its next poll is a fresh BASELINE at now, not a replay of everything
+#: that moved meanwhile.
+POLL_DORMANT_SECONDS = 3600
 
 
 def poll_seconds(config: Mapping[str, Any]) -> int:
@@ -1304,7 +1317,7 @@ def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = Non
             c.execute(text("""
                 INSERT INTO intake_cursors (connection_id, stream_key, cursor, cursor_time)
                 VALUES (:c, :k, NULL, :since) ON CONFLICT DO NOTHING"""),
-                {"c": crow["id"], "k": POLL_STREAM_KEY, "since": crow.get("created_at") or now})
+                {"c": crow["id"], "k": POLL_STREAM_KEY, "since": now})
         with begin(engine) as c:
             cur = c.execute(text("""
                 SELECT * FROM intake_cursors WHERE connection_id = :c AND stream_key = :k
@@ -1313,9 +1326,24 @@ def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = Non
             if cur is None:
                 out["skipped"] += 1          # another worker is polling this connection now
                 continue
+            # DUE IS DECIDED UNDER THE LOCK: another worker may have polled between the read
+            # above and taking the lock.
+            crow = dict(c.execute(text("SELECT * FROM intake_connections WHERE id = :c"),
+                                  {"c": crow["id"]}).mappings().first() or crow)
+            state = dict((_json(crow.get("health"), {}) or {}).get("poll") or {})
+            due = _event_time(state.get("next_poll_at"))
+            if due is not None and due > now:
+                out["skipped"] += 1
+                continue
             conn = to_intake_connection(c, settings, crow)
-            cursor = Cursor(stream_key=POLL_STREAM_KEY, value=cur.get("cursor"),
-                            cursor_time=_iso(cur.get("cursor_time")))
+            last = _event_time(cur.get("updated_at"))
+            if cur.get("cursor") and last is not None and \
+                    (now - last).total_seconds() > POLL_DORMANT_SECONDS:
+                cursor = Cursor(stream_key=POLL_STREAM_KEY, value=None,
+                                cursor_time=now.isoformat())      # dormant: a new baseline
+            else:
+                cursor = Cursor(stream_key=POLL_STREAM_KEY, value=cur.get("cursor"),
+                                cursor_time=_iso(cur.get("cursor_time")))
             try:
                 with c.begin_nested():
                     result = adapter.poll(conn, cursor, PROCESSOR_BATCH)
@@ -1330,7 +1358,7 @@ def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = Non
                              last_poll_at=now.isoformat(),
                              next_poll_at=(now + timedelta(seconds=wait)).isoformat(),
                              holder=holder[:80])
-                c.execute(text("UPDATE intake_cursors SET last_error = :e, updated_at = now() "
+                c.execute(text("UPDATE intake_cursors SET last_error = :e "
                                "WHERE connection_id = :c AND stream_key = :k"),
                           {"e": state["last_error"], "c": crow["id"], "k": POLL_STREAM_KEY})
                 c.execute(text("UPDATE intake_connections SET health = health || "
@@ -1345,10 +1373,10 @@ def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = Non
             nxt = result.next_cursor
             c.execute(text("""
                 UPDATE intake_cursors SET cursor = :v, cursor_time = COALESCE(:t, cursor_time),
-                       last_error = NULL, resync_required = false, updated_at = now()
+                       last_error = NULL, resync_required = false, updated_at = :now
                  WHERE connection_id = :c AND stream_key = :k"""),
                 {"v": nxt.value, "t": _event_time(nxt.cursor_time), "c": crow["id"],
-                 "k": POLL_STREAM_KEY})
+                 "k": POLL_STREAM_KEY, "now": now})
             state = {"failures": 0, "last_error": None, "last_poll_at": now.isoformat(),
                      "next_poll_at": (now + timedelta(seconds=interval)).isoformat(),
                      "last_found": len(result.deliveries), "last_inserted": inserted,

@@ -192,3 +192,53 @@ def test_one_poller_per_connection_and_a_refusal_backs_off(world):
     _due_now(engine, conn["id"])
     assert event_intake.poll_due(engine, _settings(), connection_id=conn["id"])["polled"] == 1
     assert _health(engine, conn["id"])["failures"] == 0
+
+
+def test_a_dormant_connection_starts_again_from_a_baseline(world):
+    engine, pid, api = world
+    conn = _create(engine, pid, config={"repository": REPO})
+    assert event_intake.poll_due(engine, _settings(), connection_id=conn["id"])["polled"] == 1
+    with engine.begin() as c:
+        c.execute(text("UPDATE intake_cursors SET updated_at = now() - interval '2 days' "
+                       "WHERE connection_id = :c"), {"c": conn["id"]})
+    _due_now(engine, conn["id"])
+    # While it slept, a PR opened (updated before now): a baseline, not a replay.
+    api.etag = {"pulls": 'W/"p5"', "branches": 'W/"b5"'}
+    api.pulls = [_pr(6, "6" * 40, updated="2026-01-01T00:00:00Z")]
+    got = event_intake.poll_due(engine, _settings(), connection_id=conn["id"])
+    assert got["polled"] == 1 and got["inserted"] == 0
+    # …and it is followed from there.
+    _due_now(engine, conn["id"])
+    api.etag = {"pulls": 'W/"p6"', "branches": 'W/"b6"'}
+    api.pulls = [_pr(6, "7" * 40, updated=LATER)]
+    assert event_intake.poll_due(engine, _settings(),
+                                 connection_id=conn["id"])["inserted"] == 1
+
+
+def test_two_connections_on_one_repository_see_a_commit_once(world):
+    engine, pid, api = world
+    dep = deploy_local_agent(engine, pid)
+    hook = _create(engine, pid, mode="push", config={"repository": REPO},
+                   secrets={"webhook_secret": "gh-s"})
+    poll = _create(engine, pid, config={"repository": REPO})
+    for conn in (hook, poll):
+        make_route(engine, pid, dep["id"], conn["id"], config={"match": TENANT_FILTER})
+    api.files = {4: [{"filename": "tenants/lumen-pay.yaml", "status": "added"}]}
+    body = github_pr_opened(4, repo=REPO)
+    event_intake.receive(engine, "github", token_of(hook["url_path"]),
+                         github_request("gh-s", "pull_request", body, delivery="d-two"))
+    event_intake.process_due(engine, _settings())
+    api.pulls = [_pr(4, body["pull_request"]["head"]["sha"], updated=LATER)]
+    assert event_intake.poll_due(engine, _settings(), connection_id=poll["id"])["inserted"] == 1
+    event_intake.process_due(engine, _settings())
+    [polled] = _rows(engine, poll["id"])
+    assert polled["status"] == "filtered"
+    assert len(runs_of(engine, pid)) == 1
+
+
+def test_the_install_wide_token_never_reads_an_unbound_repository(world):
+    engine, pid, api = world
+    conn = _create(engine, pid, config={"repository": REPO})
+    settings = _settings().model_copy(update={"github_token": "ghp_INSTALL_WIDE"})
+    event_intake.poll_due(engine, settings, connection_id=conn["id"])
+    assert api.calls and all("Authorization" not in h for _, h in api.calls)

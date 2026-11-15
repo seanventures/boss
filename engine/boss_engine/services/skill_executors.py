@@ -817,7 +817,7 @@ def execute_sandboxed_command(
     isolation = {"provider": grade["provider"], "strong": grade["strong"]}
     if grade["provider"] in NON_STRONG_PROVIDERS:
         from .local_fenced import (LocalFenceUnavailable, LocalFencedSandbox,
-                                   check_local_binaries, keep_produced)
+                                   binaries_changed, check_local_binaries, keep_produced)
 
         # THE PINNED IMAGE IS NOT USED HERE (AMEX-G12): the command runs on the worker's own
         # filesystem. The CLIs it needs are declared (`local_binaries`) and checked against the
@@ -841,6 +841,13 @@ def execute_sandboxed_command(
             command = build_sandbox_command(str(config.get("command") or ""),
                                             {**inputs, **fenced.inputs}, workdir=str(fenced.workdir))
             result = fenced.run(command, timeout=timeout, path_prefix=path_prefix)
+            # THE BYTES THAT RAN are the bytes hashed: checked again after the command, so a
+            # tool swapped while it ran is a refusal, never a recorded success.
+            moved = binaries_changed(context.settings, local)
+            if moved:
+                raise SandboxIsolationUnavailable(
+                    f"{skill_key}: {', '.join(moved)} changed while the command ran; its result "
+                    "is not kept. Mount the CLI read-only.")
             produced = {entry["name"]: entry.get("path") or entry["name"]
                         for entry in (config.get("outputs") or [])}
             found = fenced.produced_files(config.get("outputs") or [])

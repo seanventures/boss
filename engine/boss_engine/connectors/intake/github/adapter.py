@@ -15,7 +15,7 @@ push       `data.changed_files` is built from the commits in the payload when Gi
 pull_request  `data.changed_files` is fetched LAZILY (AMEX-G11, BOSSAPP-1169): `enrich` marks it
            pending, and the router asks `load_lazy` for it only when a route's filter reads it —
            GET /pulls/{n}/files, paginated, capped at MAX_CHANGED_FILES, with the connection's
-           API token or the project's GitHub connection — so a route can filter
+           API token or the project's binding of that repository — so a route can filter
            `{"field": "data.changed_files", "op": "glob", "value": "tenants/*.yaml"}`.
 poll       (AMEX-G1, BOSSAPP-1175) for an install GitHub cannot reach: `poll` lists the
            repository's open pull requests and branch heads since the cursor and turns each new
@@ -494,14 +494,16 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
 
 
 def _headers(conn: IntakeConnection, repo: str) -> dict[str, str]:
-    """GitHub request headers with the connection's API token, or else the project's own
-    GitHub connection for that repository (github_connections.github_token_for). Never handed
-    to an agent, never logged."""
+    """GitHub request headers with the connection's own API token, or else the token of THIS
+    PROJECT'S binding of exactly this repository (`token_for_repository`). Never the
+    install-wide BOSS_GITHUB_TOKEN, never another repository's token (review of #125): a
+    connection can name any repository, and an unbound one is read anonymously or not at all.
+    Never handed to an agent, never logged."""
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "boss-intake"}
     token = conn.secret("api_token")
     if not token and conn.db is not None and conn.project_id:
         try:
-            from ....services.github_connections import github_token_for
+            from ....services.github_connections import GitHubConnectionService
 
             owner, _, name = repo.partition("/")
             settings = conn.app_settings
@@ -510,8 +512,9 @@ def _headers(conn: IntakeConnection, repo: str) -> dict[str, str]:
 
                 settings = get_settings()
             with conn.db.begin_nested():
-                token = github_token_for(conn.db, settings, conn.project_id, owner, name)
-        except Exception:  # noqa: BLE001 — no token: a public repository still answers
+                token = GitHubConnectionService(settings).token_for_repository(
+                    conn.db, project_id=conn.project_id, owner=owner, repo=name) or ""
+        except Exception:  # noqa: BLE001 — no binding: a public repository still answers
             token = ""
     if token:
         headers["Authorization"] = f"Bearer {token}"

@@ -4134,7 +4134,7 @@ def _perform_capability(
     if key == "promote_config":
         # PROMOTED IS WHAT THIS RUN STAGED (AMEX-G9, BOSSAPP-1167). Never "the latest staging
         # deploy for the app": with two tenants in flight that is the other tenant's bundle.
-        inputs = _bound_promotion(context, inputs)
+        inputs = _bound_promotion(connection, context, inputs)
     # Under the run's recorded authority (the step's agent for that person), never the worker's.
     with _step_authority(ctx, connection, project_id, context, step, step_actor):
         if key == "deploy" and context.get("approval_decision_id"):
@@ -4155,7 +4155,9 @@ def _perform_capability(
             output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
         finally:
             WORKFLOW_RUN_ID.reset(run_token)
-    result = {"capability": key, "tool": capability.tool, **output,
+    # The step's own facts are written AFTER the tool's output: a tool (or anything it relays)
+    # cannot rename the capability a step ran (review of #125 — a forged `capability` field).
+    result = {**output, "capability": key, "tool": capability.tool,
               "ran_as": {**ran_as, "tool": capability.tool,
                          "skills_offered": [], "skills_used": []},
               # Kept on the step run: the step's output is replaced when it parks.
@@ -4181,28 +4183,39 @@ def _perform_capability(
     return _settle_started_work(capability, key, result)
 
 
-def _bound_promotion(context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def _bound_promotion(connection: Connection, context: dict[str, Any], inputs: dict[str, Any],
+                     spec: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """`promote_config` inputs bound to THIS run's own config deployment, or a refusal.
 
-    The deployment to promote must be one a `config_deploy` step of this same run produced —
-    read from the run's own step outputs on the server, not from what the binding says — and
-    the bundle hash that step recorded travels with it, so the tool refuses a source whose
-    bytes are not exactly those (`config_deploy.promote`). A missing id, an id from another
-    run, or a hash that disagrees is SETTLED: the same inputs refuse the same way every time.
+    WHICH STEPS COUNT is read from the run's SPEC: a step whose template is a `config_deploy`
+    capability, and that succeeded. Never from an output field — a custom step's output (an
+    MCP tool's answer) can say anything, including `"capability": "config_deploy"`. Then the
+    DATABASE must agree: the deployment run exists, succeeded, was planned by this very
+    workflow run (`release_packet.workflow_run_id`, stamped on the server), and shipped the
+    hash that step recorded. The hash travels to the tool, which checks the bytes again
+    (`config_deploy.promote`). Every refusal is SETTLED: the same inputs refuse the same way.
     """
+    run_id = str(context.get("run_id") or "").strip()
     given = str(inputs.get("deployment_id") or inputs.get("deployment_run_id") or "").strip()
-    staged: dict[str, str] = {}
-    for output in (context.get("steps") or {}).values():
-        if not isinstance(output, dict) or output.get("capability") != "config_deploy":
-            continue
-        dep = str(output.get("deployment_id") or output.get("deployment_run_id") or "").strip()
-        if dep:
-            staged[dep] = str(output.get("bundle_sha256") or "").strip()
     if not given:
         raise SettledCapabilityError(
             "promote_config needs the deployment to promote: bind deployment_id from this run's "
             "config_deploy step ({\"from_step\": \"<staging step>\", \"field\": "
             "\"deployment_id\"}). It never falls back to the latest deployment for the app.")
+    if spec is None:
+        spec = workflows._run_spec(connection, run_id)
+    produced = context.get("steps") or {}
+    staged: dict[str, str] = {}
+    for sid, template in workflows._step_map(spec).items():
+        if template.get("kind") != "capability" or \
+                (template.get("binding") or {}).get("capability") != "config_deploy":
+            continue
+        output = produced.get(sid)
+        if not isinstance(output, dict) or output.get("step_status") == "failed":
+            continue
+        dep = str(output.get("deployment_id") or output.get("deployment_run_id") or "").strip()
+        if dep:
+            staged[dep] = str(output.get("bundle_sha256") or "").strip()
     if given not in staged:
         raise SettledCapabilityError(
             f"deployment {given} was not deployed by this run, so this run cannot promote it. "
@@ -4217,6 +4230,18 @@ def _bound_promotion(context: dict[str, Any], inputs: dict[str, Any]) -> dict[st
         raise SettledCapabilityError(
             f"the bundle hash given ({stated[:12]}…) is not the one deployment {given} shipped "
             f"({expected[:12]}…). Nothing was promoted.")
+    row = connection.execute(text(
+        "SELECT status, commit_ref, release_packet ->> 'workflow_run_id' AS workflow_run_id "
+        "FROM deployment_runs WHERE id = :i"), {"i": given}).mappings().first()
+    if row is None or not run_id or str(row["workflow_run_id"] or "") != run_id:
+        raise SettledCapabilityError(
+            f"deployment {given} was not planned by this workflow run, so this run cannot "
+            "promote it.")
+    if str(row["status"]) != "succeeded" or str(row["commit_ref"] or "") != expected:
+        raise SettledCapabilityError(
+            f"deployment {given} is {row['status']} with bundle "
+            f"{str(row['commit_ref'] or '')[:12]}…, not the succeeded {expected[:12]}… this run "
+            "recorded. Nothing was promoted.")
     bound = {k: v for k, v in inputs.items() if k != "deployment_id"}
     return {**bound, "deployment_run_id": given, "bundle_sha256": expected}
 

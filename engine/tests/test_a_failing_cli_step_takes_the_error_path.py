@@ -345,3 +345,28 @@ def test_a_failure_still_being_retried_is_not_an_answer(eng, project, monkeypatc
                        "output=CAST(:o AS JSONB) WHERE workflow_run_id=:r AND step_id='validate'"),
                   {"o": '{"exit_code": 1}', "r": run["id"]})
         assert "validate" not in runner._run_context(c, run["id"])["steps"]
+
+
+@pytest.mark.parametrize("fail_on_exit", [True, False])
+def test_every_tail_is_redacted_on_failure_and_on_success(eng, project, monkeypatch,
+                                                          fail_on_exit):
+    """Review of #125: `stderr_tail` (and any `*_tail`) reached the run unscrubbed, and a
+    successful step's output was not scrubbed at all — yet the error path and every later step
+    read it."""
+    from boss_engine.services import run_secret_redaction
+
+    secret = f"sk-live-{uuid.uuid4().hex}"
+    run_secret_redaction.register(secret, run_id=f"other-run-{uuid.uuid4().hex[:6]}")
+    leaked = {"status": "succeeded",
+              "result": {**EXITED["result"], "log_tail": f"token {secret}",
+                         "stderr_tail": f"curl: auth {secret}", "trace_tail": secret}}
+    _wire(monkeypatch, leaked)
+    with eng.begin() as c:
+        step_key = _authored(c, project, f"gwlint_{uuid.uuid4().hex[:6]}",
+                             fail_on_exit=fail_on_exit)
+        run = _start(c, project, _publish(c, project, step_key)["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        validate = _rows(c, run["id"])["validate"]
+    assert validate["status"] == ("failed" if fail_on_exit else "succeeded")
+    for field in ("log_tail", "stderr_tail", "trace_tail"):
+        assert secret not in validate["output"][field], field

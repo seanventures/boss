@@ -183,7 +183,8 @@ def _promotion_binding_is_its_own_test(monkeypatch):
     test_two_runs_in_flight_each_promote_only_what_they_staged. Here promote_config is one
     capability among all, in a one-step workflow with no staging step, and what is under test
     is how its failures stop the run."""
-    monkeypatch.setattr(runner, "_bound_promotion", lambda context, inputs: inputs)
+    monkeypatch.setattr(runner, "_bound_promotion",
+                        lambda connection, context, inputs, spec=None: inputs)
 
 
 def _required(key: str) -> dict:

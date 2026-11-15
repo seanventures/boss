@@ -401,15 +401,24 @@ def _segment_tokens(segment: str) -> list[tuple[str, Any]]:
                 tokens.append(("star", None))
         elif ch == "?":
             tokens.append(("any", None))
-        elif ch == "[" and "]" in segment[i + 2:] or (ch == "[" and segment[i + 1:i + 2] == "]"):
-            close = segment.index("]", i + 2)
+        elif ch == "[":
+            # A class: `[abc]`, `[a-z]`, `[!x]`. A `]` right after `[` (or `[!`) is a member.
+            start = i + 1 + (1 if segment[i + 1:i + 2] in ("!", "^") else 0)
+            close = segment.find("]", start + 1)
+            if close < 0:
+                raise FilterError(f"glob {segment!r} has a [ with no closing ].")
             body = segment[i + 1:close]
             negated = body[:1] in ("!", "^")
             body = body[1:] if negated else body
+            if not body:
+                raise FilterError(f"glob {segment!r} has an empty [] class.")
             ranges = []
             k = 0
             while k < len(body):
                 if k + 2 < len(body) and body[k + 1] == "-":
+                    if body[k] > body[k + 2]:
+                        raise FilterError(f"glob {segment!r} has a backwards range "
+                                          f"{body[k]}-{body[k + 2]}.")
                     ranges.append((body[k], body[k + 2]))
                     k += 3
                 else:
