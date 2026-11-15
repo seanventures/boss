@@ -97,7 +97,8 @@ class _Beat:
 
 
 def drive(handle: RunHandle, package: dict, *, drain: Optional[Callable[[], bool]] = None,
-          heartbeat_seconds: float = HEARTBEAT_SECONDS) -> dict:
+          heartbeat_seconds: float = HEARTBEAT_SECONDS,
+          tap: Optional[Callable[[dict], None]] = None) -> dict:
     """Drive one leased run to its outcome and settle it on the run plane. Returns the
     settlement, or {"fenced": True} when another executor holds the run now (nothing more is
     written: the fence refused it)."""
@@ -110,7 +111,7 @@ def drive(handle: RunHandle, package: dict, *, drain: Optional[Callable[[], bool
         build = RUNNERS.get(name)
         if build is None:
             raise RuntimeError(f"no runtime runner {name!r} for agent run {run['id']}")
-        store = RemoteCheckpointStore(handle, thread_id=fctx.get("thread_id"))
+        store = RemoteCheckpointStore(handle, thread_id=fctx.get("thread_id"), tap=tap)
         spec = dataclasses.replace(
             build(package, handle), run_id=str(run["id"]), project_id=str(run["project_id"]),
             persist=True, store=store, thread_id=fctx.get("thread_id"), drain=drain,

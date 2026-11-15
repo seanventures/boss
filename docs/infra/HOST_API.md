@@ -15,6 +15,14 @@ Where the LLD left a choice open, this document records the choice. Every choice
 
 **Contract version:** `1.1`. Changes are additive, and each side ignores fields it does not know.
 
+**1.1 (P8b-9/11, `p8/b-tls-d11`, BOSSAPP-1076/1078): the agent CA, the replica's TLS listener
+and AP-D11.** A replica's boss-runtime generates its serving key in the VM and sends only a CSR to
+`POST /v1/run-plane/replica/cert` (through the guest gateway, which adds the host proof and
+`X-Boss-Replica`); it serves the Agent Protocol and A2A on VIP:443 and asks
+`POST /v1/run-plane/admit` (the PDP) for every request. `strong_isolation(deployment)` is now
+derived from the facts below; the heartbeat stores the host's verdict as `isolation_ok` (§10).
+The guest sets `tcp_syncookies=1` and a 4096 SYN/accept backlog. No new host-side call.
+
 **1.1 (P8b-10, `p8/b-lbd`, BOSSAPP-1077): the IPVS directors.** `boss-lbd` (Go, `cmd/boss-lbd`,
 `internal/lbd`) enrols through the host enrol path with a join token issued for `role:
 director`, long-polls **its own desired state** (§9.2: every VIP with its SERVING real servers,
@@ -138,6 +146,8 @@ Every non-2xx body is FastAPI-shaped: `{"detail": {"error": "<code>", "message":
 | Replica map | `PUT /v1/hosts/{id}/replicas` | BossHost | Only after `{"resync": true}` (§2.9). |
 | Run plane | `/v1/run-plane/*` | BossHost | The guest gateway's forward target (§4). |
 | Hand back | `POST /v1/run-plane/runs/{run}/lease` | BossHost + lease headers | `{"hand_back": true, "action": "hand_back"}` (both spellings) (§2.8). |
+| Serving cert | `POST /v1/run-plane/replica/cert` | BossHost + `X-Boss-Replica` | The guest's CSR, forwarded as-is (§10.1). |
+| Trust | `GET /v1/run-plane/replica/trust` | BossHost + `X-Boss-Replica` | JWKS, CA bundles, revoked serials, the signed card (§10.2). |
 
 ### 2.1 Enrol
 
@@ -1192,6 +1202,71 @@ the second PR #120 review):
 | T13 | **~1 600 new TLS connections/s** through one director from a single client (client-bound: `openssl s_time`; IPVS counted 8 471 conns, 0 outgoing packets); `ip_vs_conn` is merged into kmalloc on 6.8 (≈ 320 B per entry → ~300 MB per million connections, as §2.8 estimated) |
 | VRRP + lease | group 0 MASTER on A, group 1 on B (lease file = the CP's rules, 2 s TTL, 0.5 s renewals); **split brain** (A→B adverts cut 12 s): the stray MASTER held the VIP ≈ 2.5 s (from 3.4 s to 5.9 s), then FAULT, latched, one MASTER entry, no flapping; **failover**: A's keepalived SIGKILLed with its VRRP child first (node death) → B owns the VIP after **3.41–3.58 s** (3 runs; VRRP master-down), a keepalived stop 0.62 s |
 | Push auth | another host's replica, a director certificate, a non-fleet certificate, an unknown `vm_ip`: all `403`, IPVS unchanged |
+
+## 10. The agent CA, the replica's TLS listener and AP-D11 (P8b-9/11; LLD §3.13.2, §3.17)
+
+### 10.1 The agent CA (D7)
+
+- **Separate from the fleet CA.** `agent_ca` holds a BOSS agent root (10 y) and two intermediates
+  (5 y, pathlen 0): **serving** (replica certificates) and **caller** (service-account client
+  certificates). Keys are sealed with a key derived from the vault KEK (`agent-ca/v1`).
+- **Issuance** (`POST /v1/run-plane/replica/cert {csr_pem}`): BOSS checks the replica is desired
+  (on this host, wanted running, live microvm deployment), the host attests for serving (ready,
+  not revoked, heartbeat < 10 s, and on Firecracker `kvm_live` + `firecracker_live`), and the
+  image is signed or active and not revoked (a Firecracker replica must pin one). Answer:
+  `{certificate_pem, chain_pem, serial, not_after, renew_after, dns_names, ip_addresses, renews}`.
+- **The certificate:** 24 h, `serverAuth`, SAN DNS `<agent>.<project>.agents.<domain>`
+  (`BOSS_AGENT_DNS_DOMAIN`, default the trust domain; or the deployment's `hostname`), the VIP as
+  an IP SAN, and `spiffe://<td>/deployment/<d>/replica/<r>`. Renew at two thirds with a **new
+  key**; the previous certificate stays valid until it expires (no dropped connections).
+- **Revocation:** short life + immediate withdraw. Revoking a host revokes its replicas'
+  certificates; `POST /v1/fleet/agent-certs/{serial}/revoke` revokes one; unexpired revoked
+  serials are listed at `GET /v1/pki/agent-ca` (public: both bundles, the root's SHA-256).
+- **Published to callers:** the signed A2A card of a microvm agent names the CA
+  (`bossAgentCa: {url, root_sha256}`, an `mtlsSecurityScheme`, and the `https://<dns>/a2a`
+  interface); `/v1/agents/{id}/jwks` carries `boss_agent_ca`.
+- **Caller certificates** (`POST /v1/pki/caller-certs`, `service_account_key:manage`): a service
+  account's client certificate, ≤ 30 days, `clientAuth`. It is registered as one of the account's
+  credentials (`identity_api_credentials`, scope `agent:invoke`), so suspension, revocation and
+  the PDP's live check apply to it as to a key.
+- **Options, not built:** ACME (a publicly trusted certificate per deployment, for callers that
+  cannot pin) and a customer-supplied CA with BOSS as a sub-CA.
+
+### 10.2 The listener (`engine/boss_engine/runtime/listener.py`)
+
+- `boss-runtime --listen VIP:443`: TLS 1.2+ ends in the VM. mTLS is **optional**
+  (`CERT_OPTIONAL` against the caller bundle); a bearer is verified **locally** (a BOSS key's
+  checksum; a JWT's EdDSA signature against the cached JWKS, unexpired). No credential, or one
+  that fails, is `401` before BOSS is asked.
+- **Authorisation is never local:** every request calls `POST /v1/run-plane/admit` with
+  `{caller: <Authorization>, client_cert: <PEM>, op, surface}`; `op` is `invoke` (admit + lease
+  to this replica), `thread`, `read`, `cancel` or `answer`. BOSS authenticates the forwarded
+  credential and re-runs the PDP (`agent:invoke`) each time; `surface: a2a` also runs the D11
+  exposure check. A token and a certificate naming different callers are refused.
+- **Routes:** the shared library `protocols/agent_serving.py`, the same handlers the control plane
+  serves in-process (`/threads`, `/threads/{t}/runs[/stream|/wait]`, `/runs/{stream,wait}`,
+  `/threads/{t}/runs/{r}[/stream|/cancel]`, `/a2a`, `/.well-known/agent-card.json`; `/v1` is
+  optional). A run leased here is driven in one of the inbox's slots; SSE goes back on the same
+  connection (chunked, `Connection: close`).
+- **Limits:** 256 concurrent connections (the excess closed at accept), a 4096 backlog with
+  `TCP_DEFER_ACCEPT`, a 10 s handshake and 30 s header deadline, a 1 MiB body.
+
+### 10.3 AP-D11: `strong_isolation(deployment)` (`services/strong_isolation.py`)
+
+True only when **all** hold, read at request time, with no flag: `runtime: microvm`, live, not
+frozen (`BOSS_MICROVM_CLAIMS_FROZEN`); `vm_mode` set, and `per_run` when `expose.public` (D5); at
+least one serving replica, and every serving replica's host on Firecracker with `kvm_live`,
+`firecracker_live`, `jailer_on`, `seccomp_default`, `strict_secrets`, `net_policy_ok`, no
+`facts.fallback_tap` (D15), a heartbeat under 10 s old; the image pinned, signed and active; each
+serving replica holding a valid serving certificate and untainted (D17).
+
+- **Lapse → close:** A2A for a write-capable agent is checked on every request, so it closes on the
+  next one. The heartbeat stores `agent_hosts.isolation_ok` and bumps the directors when it flips;
+  the scheduler's sweep clears it for a host silent > 10 s (`host_events: attestation_lapsed`).
+  A deployment exposed over A2A with write tools (`isolation_required`) is fed to the directors
+  only with members whose host attests now, holding a valid certificate.
+- **`runtime: local` is unchanged:** always false.
+- **Host side (asks):** report `fallback_tap: true` in `facts` while the D15 tap is on.
 
 ## Decisions
 

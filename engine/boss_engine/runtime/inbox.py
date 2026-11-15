@@ -79,6 +79,29 @@ class Inbox:
         thread.start()
         return {"ok": True}
 
+    def start_local(self, run_id: str, target: Callable[[], Any]) -> Optional[str]:
+        """A run the VM's own TLS listener admitted (already leased to this replica, P8b-9):
+        driven in a slot like a run the host handed over. Returns a refusal reason or None."""
+        if self.drain.is_set():
+            return "draining"
+        with self._lock:
+            if run_id in self._running:
+                return "duplicate"
+            if len(self._running) >= self.total_slots:
+                return "no_free_slot"
+
+            def run() -> None:
+                try:
+                    target()
+                finally:
+                    with self._lock:
+                        self._running.pop(run_id, None)
+
+            thread = threading.Thread(target=run, daemon=True, name=f"run-{run_id[-8:]}")
+            self._running[run_id] = thread
+        thread.start()
+        return None
+
     def _drive(self, work: dict) -> None:
         result: dict = {"run_id": work["run_id"]}
         try:
