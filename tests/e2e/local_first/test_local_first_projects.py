@@ -169,7 +169,7 @@ def test_a_new_app_with_a_github_repo_boss_makes(person: Person):
 
 def test_no_github_credential_is_said_with_its_one_fix(person: Person):
     """No App that can create repos: the default is this machine, and choosing GitHub says why
-    not in the engine's words, with the one fix (Repo and models)."""
+    not in the engine's words, with the one fix (Setup)."""
     p = person
     dev(github="none")
     _new_app(p, IDEA_LOCAL, unique("No app"))
@@ -179,7 +179,7 @@ def test_no_github_credential_is_said_with_its_one_fix(person: Person):
     said = p.tid("ap-newrepo-check").inner_text()
     assert "no GitHub credential" in said and "Administration" in said, said
     fix = p.tid("ap-newrepo-fix")
-    assert "Repo and models" in fix.inner_text() and "focus=repository" in (fix.get_attribute("href") or "")
+    assert "Setup" in fix.inner_text() and "focus=repository" in (fix.get_attribute("href") or "")
     assert p.tid("ap-create").is_disabled()
     p.check("no credential")
     p.tid("ap-where-local").click()

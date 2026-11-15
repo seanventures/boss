@@ -26,9 +26,9 @@ Save your recovery codes. Keep the link, `.env`, keys and backups private. [Cons
 
 ## 2. Connect one repository and one model
 
-In **Repo and models**, select a GitHub repository you own or are authorized to change. Use the connection flow and review the permissions GitHub actually granted. Choose a non-production repository for your first attempt. Never paste a token into a task description.
+In **Setup**, select a GitHub repository you own or are authorized to change. Use the connection flow and review the permissions GitHub actually granted. Choose a non-production repository for your first attempt. Never paste a token into a task description.
 
-![Actual installed Repo and models page with repository and model setup still pending.](assets/screenshots/setup-28d75d69.jpg){ .boss-walk-shot }
+![Actual installed Setup page with repository and model setup still pending.](assets/screenshots/setup-28d75d69.jpg){ .boss-walk-shot }
 
 This unedited screen shows a new Owner's setup page on the disposable RC8-image baseline. The listed model routes need login; their presence is not a working provider connection. [Capture details](assets/screenshots/provenance.json)
 

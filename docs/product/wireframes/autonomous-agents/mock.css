@@ -2317,7 +2317,7 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   justify-content: center;
 }
-/* Repo and models: amber while setup is unfinished, red while a check is failing. */
+/* Setup: amber while setup is unfinished, red while a check is failing. */
 .bx-nav-badge[data-tone="amber"] { background: var(--amber); color: #1a1205; }
 .bx-nav-badge[data-tone="red"] { background: var(--red); color: #fff; }
 

@@ -56,9 +56,9 @@ def _ctx(*steps: dict[str, Any], offline: bool = True) -> wp.Context:
 
 
 SDK = EngineRoute("implement", "claude_agent_sdk", "claude-sonnet-5", "setup-anthropic",
-                  "pinned in Repo and models")
+                  "pinned in Setup")
 SDK_REVIEW = EngineRoute("review_code", "claude_agent_sdk", "claude-sonnet-5",
-                         "setup-anthropic", "pinned in Repo and models")
+                         "setup-anthropic", "pinned in Setup")
 CHAT = EngineRoute("chat", "claude_code", None, "anthropic_claude_code", "auto: subscription")
 
 
@@ -98,7 +98,7 @@ def test_the_model_check_reports_the_build_route_not_the_chat_answer(routed):
     found = wp.check_model(_ctx(_step("build", "build")), {})
     assert found["verdict"] == "ready", found
     assert ("build: implement, review_code → claude_agent_sdk / claude-sonnet-5 via "
-            "setup-anthropic (pinned in Repo and models)") in found["evidence"]
+            "setup-anthropic (pinned in Setup)") in found["evidence"]
     assert "claude_code" not in found["evidence"]
 
 
@@ -139,7 +139,7 @@ def test_a_missing_sandbox_binary_will_fail_naming_the_package(routed, monkeypat
     found = wp.check_engine(_ctx(), _step("build", "build"))
     assert found["verdict"] == "will_fail"
     assert "build: implement, review_code → claude_agent_sdk / claude-sonnet-5 via " \
-           "setup-anthropic (pinned in Repo and models)" in found["evidence"]
+           "setup-anthropic (pinned in Setup)" in found["evidence"]
     assert "claude_agent_sdk needs socat" in found["evidence"]
     assert "apt-get install socat" in found["fix"]["action"]
 
@@ -302,5 +302,5 @@ def test_build_routes_reads_the_pipelines_lane_engines_and_the_job_pin(monkeypat
                                        "setup-anthropic", "metered"))
     routes = es.build_routes(object(), S(), "p1", {"title": "t"}, ("implement",))
     assert routes[0].describe() == ("implement → claude_agent_sdk / claude-sonnet-5 via "
-                                    "setup-anthropic (pinned in Repo and models)")
+                                    "setup-anthropic (pinned in Setup)")
     assert seen["spec"] == {"title": "t"}

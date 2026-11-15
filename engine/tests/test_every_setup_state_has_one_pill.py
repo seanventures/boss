@@ -1,4 +1,4 @@
-"""Every state Repo and models can show has exactly one way of being said.
+"""Every state Setup can show has exactly one way of being said.
 
 The page had five verdicts for one question and they disagreed. Now the server says every state
 through one catalogue (setup_pills), and this is the class-level guard: a state the checks can

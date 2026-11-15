@@ -329,7 +329,7 @@ def test_verify_says_workflows_is_waiting_until_the_installation_accepts_it(env)
 
 
 def test_verify_says_whether_the_app_can_create_repositories(env):
-    """BOSSAPP-1160: Repo and models called the App "Connected" while it lacked `administration`,
+    """BOSSAPP-1160: Setup called the App "Connected" while it lacked `administration`,
     the permission that creates repositories. verify records each flow's answer; the pill goes
     amber with the exact fix; a personal account can never create through an App."""
     _connect_app(env)                                           # installed on acme (an Organization)

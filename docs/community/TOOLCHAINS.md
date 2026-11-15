@@ -33,7 +33,7 @@ tells you to turn the scanners off first.
 Every later `boss update` and `boss upgrade` keeps the setting, because the installer builds
 with that `.env`.
 
-**Setup › Repo and models › Toolchains** shows which toolchains this install has. A toolchain
+**Setup › Toolchains** shows which toolchains this install has. A toolchain
 that is off shows the command that turns it on.
 
 ## Why a build stage, and not a volume or a second image

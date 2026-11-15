@@ -3324,7 +3324,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 return {"ok": False,
                         "error": (f"no repository connected on {pid}"
                                   + (f" for {wanted}" if wanted else "")
-                                  + " — connect one in Repo and models first."),
+                                  + " — connect one in Setup first."),
                         "href": "/?area=setup&focus=repository"}
             try:
                 found = setup_actions.check_repository(c, ctx.settings, pid, target, actor=actor)
@@ -3477,7 +3477,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         exposure=Exposure(tags=("setup", "models")))
     def diagnose_setup(ctx, *, project_id, actor, args):
         # ONE SOURCE WITH THE PAGE. This assembled its own picture from setup_status, raw
-        # github_connections rows and CLI detection, so the chat and Repo and models could
+        # github_connections rows and CLI detection, so the chat and Setup could
         # disagree about the same install. It now returns `setup_view.build` — the page's own
         # state — plus the last check of each row and the fixes in order.
         pid = args.get("project_id") or project_id
@@ -3493,7 +3493,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                                    "href": "/?area=setup&focus=repository"})
         if not view["repository"]["repos"]:
             next_steps.append({"row": "repository", "state": "Not connected",
-                               "fix": "Paste a GitHub token in Repo and models.",
+                               "fix": "Paste a GitHub token in Setup.",
                                "href": "/?area=setup&focus=repository"})
         for model in view["models"]:
             if model["pill"]["tone"] in ("red", "amber"):
@@ -5148,7 +5148,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
     # their repositories were "blocked, and not something I can fix from here": its only add
     # tool demanded a `connection_id` and list_github_connections (per project) showed none —
     # while the org's one GitHub App connection reached all three repositories. The console's
-    # path is the registry (Settings › Repo and models › Repositories, then the project's
+    # path is the registry (Settings › Setup › Repositories, then the project's
     # Repositories): these tools call the same services as those routes, so there is one way to
     # add a repository and the agent can take it.
     @reg.tool(
@@ -5189,7 +5189,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "allow_repository",
         "Allow (or, allowed=false, disallow) one repository of the org's registry for BOSS — "
-        "the console's tick in Settings › Repo and models › Repositories. Allowing runs the "
+        "the console's tick in Settings › Setup › Repositories. Allowing runs the "
         "read / write / pull-request checks; disallowing takes it out of EVERY project of the "
         "org. Org-wide: the GitHub connection is the org's, not a project's. `repository` is "
         "owner/name or the registry id from list_org_repositories.",

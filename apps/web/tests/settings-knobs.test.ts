@@ -261,7 +261,7 @@ describe("supplied photographs replace the drawings", () => {
 });
 
 describe("choosing a model per job", () => {
-  // Who does what lives in Repo and models (app/setup/jobs-row.tsx): one picker per job whose
+  // Who does what lives in Setup (app/setup/jobs-row.tsx): one picker per job whose
   // options are the server's — only working sources and their models — saved engine and model
   // together. Behaviour is covered in tests/setup-renders-server-pills.test.tsx and
   // tests/setup-one-press-one-effect.test.tsx; these hold the shape.

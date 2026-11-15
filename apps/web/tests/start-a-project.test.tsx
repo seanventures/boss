@@ -335,7 +335,7 @@ describe("screen 2 — Add a project › Existing · repo or folder (wireframe 0
     const calls = api();
     const go = vi.fn();
     await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
-    // The accounts are read-only chips; + account goes to Repo and models (contract §15).
+    // The accounts are read-only chips; + account goes to Setup (contract §15).
     expect($$('[data-testid="import-accounts"] .spj-acct').map((b) => b.textContent!.trim())).toEqual(["acme", "globex"]);
     expect(tid("import-add-account")!.textContent).toBe("+ account");
     expect(new URLSearchParams(tid("import-add-account")!.getAttribute("href")!.split("?")[1]).get("area")).toBe("setup");

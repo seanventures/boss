@@ -970,9 +970,9 @@ def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refus
     hint = (f" BOSS's own triage reads it as: {str(triage.get('cause') or headline)[:200]} → "
             f"{_DOING.get(suggests, suggests)}." if suggests and suggests != ASK_PERSON else "")
     # Out of credit is not a missing connection: say the provider's cause, and where to add credit.
-    tail = ("Add credit there (or connect a different model in Repo and models) so BOSS's "
+    tail = ("Add credit there (or connect a different model in Setup) so BOSS's "
             "agent can decide this itself." if out_of_credit else
-            "Connect a model in Repo and models so BOSS's agent can decide this itself.")
+            "Connect a model in Setup so BOSS's agent can decide this itself.")
     lead = f" {why}." if out_of_credit else ""
     return {"action": ASK_PERSON, "cause": str(triage.get("cause") or headline)[:300],
             "reasoning": why,

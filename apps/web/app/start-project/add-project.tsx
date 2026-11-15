@@ -23,7 +23,7 @@
  *                      lands on the project. A refusal opens the same checklist inline and the
  *                      button becomes Start anyway.
  *
- * Models and GitHub accounts are global: shown read-only, linked to Repo and models.
+ * Models and GitHub accounts are global: shown read-only, linked to Setup.
  */
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -504,7 +504,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
     : door === "new" && words < MIN_WORDS ? "Type a few words about the app first"
     : door === "existing" && !repoId && !pickedFolder ? "Pick a repo or a folder first"
     : door === "existing" && pickedFolder && !folder?.exists && !viaGitHub ? (folder || folderError ? "Pick a folder that exists" : "Reading the folder…")
-    : door === "existing" && bring === "github" && !ghRepoRow ? `Allow ${ghOfFolder} in Repo and models, or copy it here`
+    : door === "existing" && bring === "github" && !ghRepoRow ? `Allow ${ghOfFolder} in Setup, or copy it here`
     : door === "existing" && viaGitHub && usedBy(ghRepoRow!).length && !shared.includes(ghRepoRow!.id) ? `${ghOfFolder} is already in ${usedBy(ghRepoRow!)[0].name}: open it, or copy the folder here`
     : ghBlocked ? `GitHub can’t make ${repoCheck!.full_name}: see Code`
     : door === "new" && plan.where === "github_new" && !plan.newRepo.owner ? "Pick the GitHub owner (Code)"
@@ -810,8 +810,8 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                 </>
               ) : (
                 <>
-                  {account ? <span className="npx-tag" title="The GitHub account is global — Repo and models"><User size={11} aria-hidden />{account}</span> : null}
-                  <a className="npx-link-chip" href={addAccount} data-testid="ap-add-account" title="Connect another account — opens Repo and models › GitHub (global)">+ account</a>
+                  {account ? <span className="npx-tag" title="The GitHub account is global — Setup"><User size={11} aria-hidden />{account}</span> : null}
+                  <a className="npx-link-chip" href={addAccount} data-testid="ap-add-account" title="Connect another account — opens Setup › GitHub (global)">+ account</a>
                 </>
               )}
             </div>
@@ -859,7 +859,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                   </React.Fragment>
                 );
               })}
-              {kind === "repo" && registry && !repoRows.length ? <p className="npx-faint npx-pad">No repo matches. <a className="npx-link" href={addAccount}>Allow more in Repo and models ›</a></p> : null}
+              {kind === "repo" && registry && !repoRows.length ? <p className="npx-faint npx-pad">No repo matches. <a className="npx-link" href={addAccount}>Allow more in Setup ›</a></p> : null}
               {localRows.length ? <div className="npx-grp"><Laptop size={12} aria-hidden />This machine</div> : null}
               {localRows.map((f, j) => {
                 const i = repoRows.length + j;
@@ -1032,7 +1032,7 @@ function BringChoice({ source, github, inRegistry, choices, bring, onBring, git,
           return (
             <button key={b} type="button" role="radio" aria-checked={bring === b} className="npx-bring-opt" data-testid={`ap-bring-${b}`}
                     data-blocked={blocked || undefined} onClick={() => onBring(b)}
-                    title={blocked ? `${github} is not allowed for BOSS yet: allow it in Repo and models` : label[b].s}>
+                    title={blocked ? `${github} is not allowed for BOSS yet: allow it in Setup` : label[b].s}>
               {label[b].icon}<span><b>{label[b].t}</b><small>{blocked ? "not allowed yet" : label[b].s}</small></span>
               {bring === b ? <Check size={13} weight="bold" className="npx-ok" aria-hidden /> : null}
             </button>
@@ -1040,7 +1040,7 @@ function BringChoice({ source, github, inRegistry, choices, bring, onBring, git,
         })}
       </div>
       {bring === "github" && !inRegistry ? (
-        <p className="npx-faint npx-small" data-testid="ap-bring-allow">{github} isn’t allowed for BOSS yet · <a className="npx-link" href={allowHref}>Allow it in Repo and models ›</a></p>
+        <p className="npx-faint npx-small" data-testid="ap-bring-allow">{github} isn’t allowed for BOSS yet · <a className="npx-link" href={allowHref}>Allow it in Setup ›</a></p>
       ) : null}
       {bring === "github" && inUse ? inUse : null}
       {bring === "copy" && git ? (

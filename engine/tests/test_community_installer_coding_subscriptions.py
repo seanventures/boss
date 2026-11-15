@@ -22,7 +22,7 @@ class _Response(io.BytesIO):
 
 
 def _view(provider, state="working"):
-    """What POST /v1/setup/models answers: the whole Repo and models view."""
+    """What POST /v1/setup/models answers: the whole Setup view."""
     return {"models": [{"provider": provider, "source_id": f"src-{provider}",
                         "pill": {"state": state, "label": "Working" if state == "working"
                                  else "Login expired"}}]}
@@ -32,7 +32,7 @@ def _view(provider, state="working"):
 def test_the_installer_asks_boss_to_prove_the_connection_with_a_live_turn(
         monkeypatch, capsys, provider):
     """Recorded unproved, a wrong Claude credential looked connected until a workflow failed on
-    it with a 401 (boss-1). The installer uses Repo and models' own connect, which answers one
+    it with a 401 (boss-1). The installer uses Setup's own connect, which answers one
     reserved, receipted test turn before the row says Working."""
     sent = []
 

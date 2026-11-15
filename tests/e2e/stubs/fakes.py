@@ -587,7 +587,7 @@ def make_servers(port: int, smtp_port: int, state_dir: Optional[Path] = None,
         bound["git"] = GitRemotes(state_dir / "git")
         bound["github"] = GitHubFake(bound["git"], world)
         bound["device"] = DeviceFlowFake()
-        # The probes' full-access profile (github_probes.py), so Repo and models' Read / Write /
+        # The probes' full-access profile (github_probes.py), so Setup's Read / Write /
         # Pull-request checks pass on a repository picked after "Sign in with GitHub".
         bound["device"].fixed_token = "ghp_e2e_full"
     http = ThreadingHTTPServer((host, port), type("BoundHandler", (Handler,), bound))

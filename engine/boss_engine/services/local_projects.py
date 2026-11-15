@@ -466,7 +466,7 @@ def machine_checks(c: Any, settings: Any, project_id: str, *, fix: bool = True, 
         model_ok = False
         model_words = (f"This machine is offline and the configured model ({engine or 'remote'}) is "
                        "remote, so a build cannot run. An offline build needs a local engine "
-                       "(for example Ollama): set it in Repo and models, or reconnect.")
+                       "(for example Ollama): set it in Setup, or reconnect.")
     checks.append({"key": "model", "ok": model_ok, "label": "Model", "words": model_words})
     if fixed:
         emit_event(c, project_id, "project.local_checks_fixed", actor, "project", project_id,

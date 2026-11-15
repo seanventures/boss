@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * Repo and models, simplified: ① GitHub (the one sign-in) ② Repos ③ Model ④ Try it, and everything
+ * Setup, simplified: ① GitHub (the one sign-in) ② Repos ③ Model ④ Try it, and everything
  * else folded under Advanced — with every old row still on the page (parity), and a deep link to an
  * Advanced row opening the fold.
  */

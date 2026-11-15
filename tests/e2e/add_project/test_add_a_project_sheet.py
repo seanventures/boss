@@ -277,7 +277,7 @@ def test_repo_search_arrows_enter_and_add_account(person: Person):
     p.box.press("Shift+Enter")
     p.box.press_sequentially("start with the SLA bugs")
     assert "start with the SLA bugs" in p.tid("ap-note").inner_text()
-    # + account opens Repo and models (global)
+    # + account opens Setup (global)
     href = p.tid("ap-add-account").get_attribute("href") or ""
     assert "area=setup" in href and "focus=repository" in href and "new_project" not in href
     p.check("repo picked")

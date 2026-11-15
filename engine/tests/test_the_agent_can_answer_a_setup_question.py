@@ -86,7 +86,7 @@ def test_the_build_says_which_source_it_is():
 
 def test_one_call_answers_the_whole_setup_question():
     """What the agent had to assemble from events, source and three broken tools: now the very
-    view Repo and models renders, plus the fixes in order with a console link each."""
+    view Setup renders, plus the fixes in order with a console link each."""
     spec = _tool("diagnose_setup")
     assert spec.kind == "read"
     # And the agent that answers questions actually has it.

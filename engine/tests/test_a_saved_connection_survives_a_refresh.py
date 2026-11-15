@@ -9,7 +9,7 @@ Connect button, and `setup_status` counted a model as connected only when a cred
 reference had been stored. A subscription has no credential to store a reference to, so the
 one thing the operator had actually finished was the one thing the screen never showed.
 
-Repo and models now renders one server view (setup_view); these tests read that view.
+Setup now renders one server view (setup_view); these tests read that view.
 
 These tests run against a real database rather than reading the source, because the defect was
 in what a query returned, and a test that greps for the clause would have passed the moment the
@@ -37,7 +37,7 @@ class _Settings:
 
 @pytest.fixture()
 def connection(entitlement_tables, setup_tables):
-    # The shared stubs (conftest): the rows Repo and models reads.
+    # The shared stubs (conftest): the rows Setup reads.
     engine = create_engine("sqlite+pysqlite:///:memory:")
     with engine.begin() as conn:
         setup_tables(conn)

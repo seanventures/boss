@@ -116,7 +116,7 @@ export function openDockAbout(o: DockOpening): void {
 /**
  * WHO IS ANSWERING, AS THE DOCK HEAD SAYS IT. One definition for "no role": BOSS in general.
  *
- * The incident (boss-1 console walk, 2026-10-02): Repo and model's "Ask BOSS about this step"
+ * The incident (boss-1 console walk, 2026-10-02): Setup's "Ask BOSS about this step"
  * opens with `role: null` — the contract above says that asks BOSS in general — and the shell
  * mapped `agent=general` to the Deployment Manager, heading and roleName both. A question about
  * connecting a repository went to the role whose subject is hosts and rollbacks. A door that

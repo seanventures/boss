@@ -1848,7 +1848,7 @@ echo -e "${GREEN}${BOLD}  ✓ BOSS Community is running.${NC}"
 echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
 echo ""
 if [[ "$WITH_WEB" -eq 1 ]]; then
-  # THE ADDRESS IS WHERE SETUP FINISHES: Repo and models — paste a GitHub token, connect a
+  # THE ADDRESS IS WHERE SETUP FINISHES: Setup — paste a GitHub token, connect a
   # model, open a first pull request. The public origin when there is one.
   if [[ -n "$CONSOLE_ORIGIN" ]]; then
     echo -e "  ${BOLD}Finish setup${NC}     ${CONSOLE_ORIGIN%/}/?area=setup"

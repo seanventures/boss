@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * Tooltips, not paragraphs — Repo and models held to the Studio's copy budget, by rendering.
+ * Tooltips, not paragraphs — Setup held to the Studio's copy budget, by rendering.
  * No visible run over six words outside a tooltip, placeholder or the operator's own text; no
  * <p> inside the board; none of the words that narrate BOSS's plumbing instead of the
  * operator's state.
@@ -53,7 +53,7 @@ describe("the board stays within the copy budget", () => {
     ];
     const none = { key: "knowledge.embedding_model", configured: false, permission: "model_provider:manage",
                    budget_category: "knowledge", search: false, providers,
-                   reason: "meaning-based search is off: no embedding model is set (Setup › Repo and models › Embedding model)" };
+                   reason: "meaning-based search is off: no embedding model is set (Setup › Embedding model)" };
     const failed = { ...none, configured: true, provider: "azure", label: "Azure OpenAI", model: "embed-small",
                      dimension: 1536, has_key: true,
                      check: { state: "failed" as const, error: "AuthenticationError: 401 the key was refused by the provider" },

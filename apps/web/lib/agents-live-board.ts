@@ -87,7 +87,7 @@ export type AttentionItem = {
   contentHash?: string;
   preview?: string;
   riskTier?: number;
-  /** Readiness: where it is fixed; `focus` lands on the Repo and models row (`?focus=`). */
+  /** Readiness: where it is fixed; `focus` lands on the Setup row (`?focus=`). */
   fix?: { area: string; label: string; focus?: string; view?: string };
   at?: string;
   /** The build this is about, when its subject is a code task (factory spec §4.2.1, §6.5). */

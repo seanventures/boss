@@ -112,7 +112,7 @@ describe("the machine checks (BOSSAPP-924)", () => {
            { key: "network", label: "network", ok: "true", words: "Offline: GitHub is not reachable." },
            { key: "model", label: "model", ok: "false", words: "offline and remote" }],
     fixed: ["made the local repository", "made the first commit"], online: false,
-    cant: [{ key: "model", line: "Offline: the model is remote — connect a local engine in Repo and models", href: "?project_id=p&area=setup&focus=models", link: "Repo and models" }],
+    cant: [{ key: "model", line: "Offline: the model is remote — connect a local engine in Setup", href: "?project_id=p&area=setup&focus=models", link: "Setup" }],
   };
 
   it("parses five dots in order, an unknown one grey", () => {
@@ -135,7 +135,7 @@ describe("the machine checks (BOSSAPP-924)", () => {
     expect(html).toMatch(/data-ok="false"[^>]*data-testid="ob-dot-model"|data-testid="ob-dot-model"[^>]*data-ok="false"/);
     expect(html).toContain('data-testid="ob-machine-fixed"');
     expect(html).toContain('data-testid="ob-machine-cant"');
-    expect(html).toContain("Repo and models ›");
+    expect(html).toContain("Setup ›");
     const css = readFileSync(join(ROOT, "app/projects/onboarding.css"), "utf8");
     const mine = css.slice(css.indexOf("BOSSAPP-924"));
     expect(mine).not.toMatch(/font-size:\s*\d/);

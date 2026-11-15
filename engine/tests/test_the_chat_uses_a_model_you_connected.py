@@ -91,7 +91,7 @@ def test_claude_first_when_both_are_connected(connection):
 
 
 def test_a_connected_subscription_beats_a_stale_environment_key(connection):
-    """Repo and models' one resolver (model_routing.resolve_job): a key in the install's
+    """Setup's one resolver (model_routing.resolve_job): a key in the install's
     environment answers only when nothing is connected. An operator who connects a
     subscription in the console is never overridden by a leftover OPENAI_API_KEY — Claude
     Code's "stale key overrides subscription" trap, avoided."""

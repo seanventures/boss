@@ -286,7 +286,7 @@ def _client(conn: TicketConnection, adapter: Any) -> tuple[str, Optional[str]]:
     secret = secret or (os.environ.get(f"{prefix}_SECRET") or "").strip() or None
     if not client_id:
         raise OAuthError("not_configured", f"{adapter.display_name} sign-in is not set up: add "
-                         "the app's Client ID and Client secret in Repo and models › Ticket "
+                         "the app's Client ID and Client secret in Setup › Ticket "
                          f"systems › {adapter.display_name} › Settings.",
                          provider=adapter.provider_key)
     return client_id, secret

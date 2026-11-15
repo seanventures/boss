@@ -105,7 +105,7 @@ that requirement explicitly:
 services: [postgres]
 ```
 
-In Repo and models, choose **Always** to give every build a database, or **Never** to disable
+In Setup, choose **Always** to give every build a database, or **Never** to disable
 it for the project, including when the repository declares it. The project setting is
 `build_services`: `auto` (default), `always` or `never`; the older `postgres` value means Always.
 

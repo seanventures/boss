@@ -588,7 +588,7 @@ def test_refusals_say_what_to_do(client, engine, model, seated, monkeypatch):
         "project_id": PROJECT, "actor": ACTOR, "message": "hi"})
     assert refused.status_code == 409
     assert refused.json()["detail"] == {"code": "needs_model",
-                                        "message": "Needs a model. Connect one in Repo and models."}
+                                        "message": "Needs a model. Connect one in Setup."}
     monkeypatch.setattr(agent_converse, "model_ready", lambda *_a, **_k: True)
 
     monkeypatch.setattr(budget.BudgetGovernor, "quote",

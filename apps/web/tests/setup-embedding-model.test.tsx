@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /**
- * Setup › Repo and models › Embedding model: ONE for the org, in the Models step (operator
- * decisions 2026-10-22/23: "why is it not in Repo and models, so all projects can use it?").
+ * Setup › Embedding model: ONE for the org, in the Models step (operator
+ * decisions 2026-10-22/23: "why is it not in Setup, so all projects can use it?").
  *
  * The row sits in the Models step, never under Advanced, and `focus=embedding_model` lands on
  * it. Azure asks for one URL (the endpoint or the whole Target URI) and the key: the deployment
@@ -36,7 +36,7 @@ const PROVIDERS = [
 const NONE: EmbeddingModel = {
   key: "knowledge.embedding_model", configured: false, permission: "model_provider:manage",
   budget_category: "knowledge", search: false, providers: PROVIDERS,
-  scope: "org", reason: "meaning-based search is off: no embedding model is set (Setup › Repo and models › Embedding model)",
+  scope: "org", reason: "meaning-based search is off: no embedding model is set (Setup › Embedding model)",
 };
 const URI = "https://boss-kg.cognitiveservices.azure.com/openai/deployments/text-embedding-3-small/embeddings?api-version=2023-05-15";
 const WORKING: EmbeddingModel = {

@@ -124,7 +124,7 @@ export function ProblemNote({ problem, onClose }: { problem: ConverseProblem; on
           : problem.code === "busy" ? "Still answering" : "Not sent"}
       </span>
       <span className="ag-fail-acts">
-        {needsModel ? <a className="ag-link" href="/?area=setup&focus=models" title={NEEDS_MODEL}>Repo and models ↗</a> : null}
+        {needsModel ? <a className="ag-link" href="/?area=setup&focus=models" title={NEEDS_MODEL}>Setup ↗</a> : null}
         {problem.code === "budget" ? <a className="ag-link" href="/?area=budget">Budget ↗</a> : null}
         {onClose ? <button type="button" className="ag-icon-btn" aria-label="Dismiss" onClick={onClose}>×</button> : null}
       </span>

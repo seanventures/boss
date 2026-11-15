@@ -52,18 +52,18 @@ Route: `?area=projects&first_run=1` when no project has a repo. Rail: Projects a
 - [ ] **00a-14** Strip node 4 `Helm onboards` (compass icon), todo. Pass when the caption names the real captain.
 - [ ] **00a-15** Strip node 5 `First PR` (pull-request icon), todo. Pass when it renders faint.
 - [ ] **00a-16** Strip wires: done→done wires are green, done→now wires go from green to teal, the rest are grey. Pass when the wire colours follow the node states.
-- [ ] **00a-17** Caption `About 10 minutes · change anything later in Repo and models`. Pass when "Repo and models" is present and links to the Repo and models page.
+- [ ] **00a-17** Caption `About 10 minutes · change anything later in Setup`. Pass when "Setup" is present and links to the Setup page.
 - [ ] **00a-18** Three step cards in one row (3 columns at desktop). Pass when the order is Step 1, Step 2, Step 3.
 - [ ] **00a-19** Step 1 card: teal icon tile (GitHub logo, large), blue tag `Step 1`, title `Connect GitHub`, sub "Pick the repos the crew may work on.". Pass when all four render.
 - [ ] **00a-20** Step 1 action. **(approved change)** Pass when:
-  - if GitHub is not connected, a primary `Connect` button (plug icon) opens Repo and models › GitHub, never an inline picker;
-  - if it is connected, the card shows ✓, the account name and `Manage ›` linking to Repo and models;
-  - if the status cannot be read, the card shows a neutral `Check in Repo and models ›` and never a false ✓.
+  - if GitHub is not connected, a primary `Connect` button (plug icon) opens Setup › GitHub, never an inline picker;
+  - if it is connected, the card shows ✓, the account name and `Manage ›` linking to Setup;
+  - if the status cannot be read, the card shows a neutral `Check in Setup ›` and never a false ✓.
 - [ ] **00a-21** Step 2 card: violet icon tile (brain), tag `Step 2`, title `Add a model`, sub "A subscription, an API key, or a local model.". Pass when all four render.
 - [ ] **00a-22** Step 2 action. **(approved change)** Pass when:
-  - if no model is configured, the `Add model` button (plus icon) opens Repo and models (models), never an inline picker;
+  - if no model is configured, the `Add model` button (plus icon) opens Setup (models), never an inline picker;
   - if one is configured, the card shows ✓, the model's name and `Manage ›`;
-  - if the status cannot be read, the card shows the neutral `Check in Repo and models ›`.
+  - if the status cannot be read, the card shows the neutral `Check in Setup ›`.
 - [ ] **00a-23** Step 3 card: green icon tile (folder-plus), tag `Step 3`, title `Add a project`. Pass when they render.
 - [ ] **00a-24** Step 3 button `Existing repo` (git-branch icon). Pass when it opens screen 03 with "Existing · repo or folder" selected.
 - [ ] **00a-25** Step 3 button `From an idea` (lightbulb icon). Pass when it opens screen 03 with "New · from an idea" selected.
@@ -86,7 +86,7 @@ Route: `?area=projects&first_run=1` when no project has a repo. Rail: Projects a
 **States**
 - Loading: skeleton of the hero and 3 cards, with no ✓ shown before the status is known.
 - Empty: this screen is itself the empty state.
-- Error (status unreadable): neutral "Check in Repo and models ›" on each card, never a false ✓.
+- Error (status unreadable): neutral "Check in Setup ›" on each card, never a false ✓.
 - Needs you: the first step not yet done is the single primary action.
 
 ---
@@ -100,13 +100,13 @@ Breadcrumb: `Projects / First project`.
 - [ ] **00b-03** Guide card header: icon tile (signpost), title `Your first project`, and a mono counter at the right. **(approved change)** Pass when the counter counts only the project steps (from Add project on) and uses real progress.
 - [ ] **00b-04** **(approved change)** A read-only `Workspace ready` row sits above the checklist. It shows `GitHub ✓` (with the login and repo count, e.g. "paramg · 14 repos") and `Model ✓` (e.g. "Claude · subscription"), each linking to its global page (Setup › GitHub, Setup › Models). Pass when the row is read-only, uses the real status, and offers no picker.
 - [ ] **00b-05** **(approved change)** The wireframe's guide steps `Connect GitHub` and `Add a model` are not checklist steps on this page. Pass when the checklist starts at `Add project`.
-- [ ] **00b-06** **(approved change)** If GitHub or the model is missing, the `Only you can` card shows a card linking to the global page. Pass when removing the model makes that card appear, with a link to Repo and models.
+- [ ] **00b-06** **(approved change)** If GitHub or the model is missing, the `Only you can` card shows a card linking to the global page. Pass when removing the model makes that card appear, with a link to Setup.
 - [ ] **00b-07** Guide step `Add project`: done ✓ (green filled circle), sub = the repo name (`helpdesk-ai-demo`). Pass when the real repo name is shown.
 - [ ] **00b-08** Guide step `Helm onboards`: `now` (teal tint and border, compass icon), sub `Discover · 2 of 4`. Pass when the sub shows the real onboarding stage and count.
 - [ ] **00b-09** Guide step `Ready for work`: todo (list-checks icon), sub "checks the agent runs". Pass when it renders and turns `now` or done as onboarding moves.
 - [ ] **00b-10** Guide step `First work`: todo (pull-request icon), sub `suggested → your PR`. Pass when it renders and turns done when the first PR opens.
 - [ ] **00b-11** Guide connector: the line between steps is green after a done step. Pass when the connector colour follows the states.
-- [ ] **00b-12** **(approved change)** The guide footer's `+ another account` / `+ another model` links are not on this page. Pass when they are absent; adding accounts and models happens on Repo and models.
+- [ ] **00b-12** **(approved change)** The guide footer's `+ another account` / `+ another model` links are not on this page. Pass when they are absent; adding accounts and models happens on Setup.
 - [ ] **00b-13** Live card: teal radial background, teal icon tile (compass), title `Helm is reading your repo`, blue `live` tag with a pulsing teal dot, and a mono elapsed timer (`1m 52s`) at the right. Pass when the timer counts real elapsed time (`elapsed_s`).
 - [ ] **00b-14** Diagram, Helm node: a large blue circle with Helm's live face (the `working` state) and the caption `Helm`. Pass when the face is the kit's working avatar and it pulses.
 - [ ] **00b-15** Diagram, node `Stack found` (done, green, ✓) with mono sub `FastAPI · React`. Pass when the sub is the real stack.
@@ -161,7 +161,7 @@ Breadcrumb: `Projects / First project`.
 - [ ] **01-16** Rail order and labels, exactly:
   - Platform: Command Center.
   - Run: Projects, Code Tasks, Agents at work, Workflows, Agent Studio, Knowledge Graph, Approvals (badge), Infra, Observability, Self-fixes.
-  - Settings: Repo and models, Skills & MCP, Govern, Identity.
+  - Settings: Setup, Skills & MCP, Govern, Identity.
 
   Each item has its Phosphor icon (squares-four, folders, code, robot, flow-arrow, users-three, graph, seal-check, hard-drives, pulse, wrench, database, puzzle-piece, scales, identification-card). Pass when the order, labels and icons match, minus any items the edition allowlist hides.
 - [ ] **01-17** Each rail item's tooltip reads "Label — purpose", as in `shell.js` (e.g. "Projects — Every project: its work, crew, repo and deploys"). Pass on hover.
@@ -236,7 +236,7 @@ A sheet over Projects. Breadcrumb `Projects / Add project`.
 - [ ] **03-06** Close ✕. Pass when ✕, Esc and Back all close the sheet.
 - [ ] **03-07** Three columns, with step numbers in circles: `1 Pick it`, `2 Helm reads it`, `3 Name & captain`. Pass when the columns render in order.
 - [ ] **03-08** Column 1 source switch: `GitHub` (GitHub icon, selected) / `Folder on host` (folder-open). Pass when both sources list real repos or folders.
-- [ ] **03-09** Account chip `paramg` (user icon) with a `+ account` link. **(approved change)** Pass when the chip shows the connected account read-only and `+ account` opens Repo and models › GitHub, never an inline account picker.
+- [ ] **03-09** Account chip `paramg` (user icon) with a `+ account` link. **(approved change)** Pass when the chip shows the connected account read-only and `+ account` opens Setup › GitHub, never an inline account picker.
 - [ ] **03-10** Search box with a magnifier, placeholder `Search repos`. Pass when typing filters the list.
 - [ ] **03-11** Repo rows: git-branch icon, mono name, and a faint mono age at the right (`3h`, `12d`, `1mo`). Pass when the names and ages of the last push are real.
 - [ ] **03-12** The selected repo row is highlighted (`aria-selected`). Pass when clicking a row selects it and starts column 2.
@@ -264,7 +264,7 @@ A sheet over Projects. Breadcrumb `Projects / Add project`.
 
 **States**
 - Loading: the repo list shows a skeleton.
-- Empty (no repos): "No repos yet · Connect on Repo and models ›" **(approved change)**.
+- Empty (no repos): "No repos yet · Connect on Setup ›" **(approved change)**.
 - Error: a failed access check shows red with the reason and `Re-check`.
 - Needs you: missing access is an amber row with its action.
 
@@ -606,7 +606,7 @@ Breadcrumb `Projects / HelpDesk AI Demo / Onboarding`.
 - [ ] **10-17** Check `Workflow picked` ✓, `Minor feature`, Helm. Pass when it is real.
 - [ ] **10-18** Check `Staging host` running (teal pulse), `checking :8004`, Beacon live. Pass when it is real.
 - [ ] **10-19** Check `App secret`, amber `!`, `OPENAI_API_KEY — only you`, amber `Add`. Pass when Add opens the write-only value entry, and the item is also in Needs you and on the bell.
-- [ ] **10-20** **(approved change)** The model check is read-only: Models shows ✓ from the global setting, or links to Repo and models if missing, with no picker. Pass when no model picker appears.
+- [ ] **10-20** **(approved change)** The model check is read-only: Models shows ✓ from the global setting, or links to Setup if missing, with no picker. Pass when no model picker appears.
 - [ ] **10-21** Each check line shows the agent doing it. Pass on every line.
 - [ ] **10-22** Card `Backlog proposed` (violet list-numbers), with Marshal's face (tooltip "Ranked by Marshal, Chief of Staff") and "by Marshal". Pass when it renders.
 - [ ] **10-23** Backlog item 1 `Fix 6 failing tests`, sub CI (x-circle), red `bug` tag. Pass when it is real.
@@ -877,7 +877,7 @@ Rail: Observability active. Breadcrumb `Observability / Apps`.
   - Approvals.
 
   Pass when an independent tester ticks the parity list for each.
-- [ ] **X-71** **Get started parity.** Every row of the README "Get started today" table has its new home. Pass when it holds. **(approved change)** Model and account rows go to Repo and models.
+- [ ] **X-71** **Get started parity.** Every row of the README "Get started today" table has its new home. Pass when it holds. **(approved change)** Model and account rows go to Setup.
 - [ ] **X-72** **Models and GitHub are global (§15).** **(approved change)** No project page offers a model or account picker. Their status is read-only, with links to Setup › Models, Setup › GitHub and Setup › Advanced. Pass when inspection finds no picker on any project screen.
 - [ ] **X-73** **No raw ids or enums.** No raw `project_id`, `wi_…`, `dec_…`, `tgt_…`, UUID or enum (`needs_you`, `engineering_captain`, `not_started`) is visible. Pass when every label is in words.
 - [ ] **X-74** **No truncated sentences.** Ellipsis is used only for names and paths in rows, and the full text is in the tooltip or drawer. Sentences, notes and answers are never cut. Pass when it holds.

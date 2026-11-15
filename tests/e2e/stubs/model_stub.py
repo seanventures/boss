@@ -40,7 +40,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import model_probes  # noqa: E402  (Repo and models' key modes: sk-stub-401/402/404/429)
+import model_probes  # noqa: E402  (Setup's key modes: sk-stub-401/402/404/429)
 from typing import Any, Optional
 
 HERE = Path(__file__).resolve().parent
@@ -328,7 +328,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": {"message": f"no route {path}"}})
 
     def _key_mode(self, method: str, path: str) -> bool:
-        """Repo and models' key modes (model_probes.py): sk-stub-401/402/404/429 answer as a
+        """Setup's key modes (model_probes.py): sk-stub-401/402/404/429 answer as a
         provider would. True when one answered."""
         key = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip() \
             or (self.headers.get("x-api-key") or "")

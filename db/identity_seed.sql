@@ -158,7 +158,7 @@ INSERT INTO identity_permissions (key, resource, action, title, description, cat
   ('changeset:approve', 'changeset', 'approve', 'Approve infra changesets', 'Approve and apply an infrastructure changeset.', 'Deploy and infra', 'project', true, false, true, false, false, 1),
   ('cicd:read', 'cicd', 'read', 'View CI/CD', 'See CI/CD catalogue and status.', 'Deploy and infra', 'project', false, false, false, false, false, 1),
   ('cicd:manage', 'cicd', 'manage', 'Manage CI/CD', 'Generate, validate and run CI/CD pipelines.', 'Deploy and infra', 'project', false, false, false, false, false, 1),
-  ('setup:read', 'setup', 'read', 'View setup', 'See the Repo and models checklist.', 'Models, spend and policy', 'project', false, false, false, false, false, 1),
+  ('setup:read', 'setup', 'read', 'View setup', 'See the Setup checklist.', 'Models, spend and policy', 'project', false, false, false, false, false, 1),
   ('setup:manage', 'setup', 'manage', 'Manage setup', 'Choose the repo, models and coding agents during setup.', 'Models, spend and policy', 'project', true, false, false, false, false, 1),
   ('setup:check', 'setup', 'check', 'Check setup', 'Re-check GitHub access and ask each model one tiny question.', 'Models, spend and policy', 'project', false, false, false, false, false, 1),
   ('model_provider:read', 'model_provider', 'read', 'View model providers', 'See model sources, providers, usage, health and SLOs.', 'Models, spend and policy', 'project', false, true, false, false, false, 1),

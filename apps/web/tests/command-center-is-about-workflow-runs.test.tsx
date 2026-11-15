@@ -30,11 +30,11 @@ const refusal = {
   id: "dec_9", kind: "approval", decision_kind: "refusal", decision_id: "dec_9",
   title: "Model capacity refused", detail: "No model had credit.", what_to_do: "Add credit, then Retry the step.",
   role_key: null, actions: [{ action: "reject", label: "Dismiss", tone: "reject", effect: "e", needs: [] }],
-  answers: [], decide_inline: false, fix: { area: "setup", label: "Fix in Repo and models" }, at: null,
+  answers: [], decide_inline: false, fix: { area: "setup", label: "Fix in Setup" }, at: null,
 };
 const setupGap = {
   id: "ready:github", kind: "readiness", title: "Connect a repository", detail: "",
-  fix: { area: "setup", label: "Fix in Repo and models", focus: "repository" }, actions: [], answers: [],
+  fix: { area: "setup", label: "Fix in Setup", focus: "repository" }, actions: [], answers: [],
   decide_inline: false, at: null,
 };
 const DATA = parseCommandCenterView(view({
@@ -86,7 +86,7 @@ describe("what needs you", () => {
     expect(html).not.toContain('data-testid="ag-att-approve"');
   });
 
-  it("a setup gap is listed, and lands on its row in Repo and models", () => {
+  it("a setup gap is listed, and lands on its row in Setup", () => {
     expect(html).toContain("Connect a repository");
     expect(html).toContain("area=setup&amp;focus=repository");
   });

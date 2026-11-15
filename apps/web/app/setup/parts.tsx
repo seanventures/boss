@@ -28,7 +28,7 @@ export const BoardContext = createContext<SetupCtx | null>(null);
 
 export function useBoard(): SetupCtx {
   const ctx = useContext(BoardContext);
-  if (!ctx) throw new Error("useBoard outside the Repo and models board");
+  if (!ctx) throw new Error("useBoard outside the Setup board");
   return ctx;
 }
 

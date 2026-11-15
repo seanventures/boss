@@ -747,7 +747,7 @@ def provider_for_project(connection: Any, settings: Any, project_id: str) -> str
 
 def routed_models(connection: Any, settings: Any, project_id: str) -> tuple[str, ...]:
     """THE RUN'S MODEL ALLOWLIST: every model name this project's routing names for any job
-    (Setup › Repo and models: build, review, chat, decisions, hard, routine), so a handle can
+    (Setup: build, review, chat, decisions, hard, routine), so a handle can
     call those and nothing else. Read from the project's own settings only (model_routing's
     knobs) — never a credential-store or network lookup on the lease path. Empty when the
     project names none (Auto, the CLI's own default model): then any model of the provider is

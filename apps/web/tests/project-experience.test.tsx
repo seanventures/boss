@@ -179,7 +179,7 @@ describe("Projects (screen 2)", () => {
 describe("the first run (screens 0a, 0b) keeps every Get started item", () => {
   const setupGo = (id: string) => new URLSearchParams(tid(id)!.getAttribute("href")!.split("?")[1]);
 
-  it("0a: a fresh install gets the three steps; GitHub and the model go to Repo and models, never a picker here", async () => {
+  it("0a: a fresh install gets the three steps; GitHub and the model go to Setup, never a picker here", async () => {
     engine((c) => (c.path === "/v1/projects/summary" ? { body: { items: [] } } : (c.path === "/v1/setup" || c.path === "/api/setup") ? { body: setupView(false) } : undefined));
     at("area=projects");
     await mountAs(<ProjectsHome projectId={P} actor="ceo" projects={[]} />);
@@ -187,7 +187,7 @@ describe("the first run (screens 0a, 0b) keeps every Get started item", () => {
     expect(tid("px-first-run")!.dataset.step).toBe("1");
     expect(tid("px-fr-github")!.dataset.state).toBe("todo");
     expect(tid("px-fr-model")!.dataset.state).toBe("todo");
-    // The first step not done is the primary action; each goes to its section of Repo and models.
+    // The first step not done is the primary action; each goes to its section of Setup.
     expect(tid("px-fr-github-go")!.dataset.kind).toBe("primary");
     expect(tid("px-fr-model-go")!.dataset.kind).toBeUndefined();
     expect([setupGo("px-fr-github-go").get("area"), setupGo("px-fr-github-go").get("focus")]).toEqual(["setup", "repository"]);
@@ -198,7 +198,7 @@ describe("the first run (screens 0a, 0b) keeps every Get started item", () => {
     await press(tid("px-fr-idea")); expect(params().get("new_project")).toBe("idea");
     await press(tid("px-fr-sample")); expect(params().get("new_project")).toBe("sample");
     expect([setupGo("px-fr-quick-pr").get("area"), setupGo("px-fr-quick-pr").get("focus")]).toEqual(["welcome", "try"]);
-    // What happens to each piece of work, as a flow; Repo and models is one link away.
+    // What happens to each piece of work, as a flow; Setup is one link away.
     expect($$("[data-testid='px-fr-flow'] .px-fl-n").map((n) => n.textContent)).toEqual(["Idea", "Plan", "You approve", "Build", "Review", "Pull request", "Live preview"]);
     expect(setupGo("px-fr-setup").get("area")).toBe("setup");
   });
@@ -230,13 +230,13 @@ describe("the first run (screens 0a, 0b) keeps every Get started item", () => {
     expect(tid("px-first-run")!.dataset.status).toBe("failed");
     for (const id of ["github", "model"]) {
       expect(tid(`px-fr-${id}`)!.dataset.state).toBe("unknown");
-      expect(tid(`px-fr-${id}-check`)!.textContent).toBe("Check in Repo and models ›");
+      expect(tid(`px-fr-${id}-check`)!.textContent).toBe("Check in Setup ›");
       expect(tid(`px-fr-${id}-done`)).toBeNull();
     }
     expect(tid("px-fr-existing")!.dataset.kind).toBe("primary");
   });
 
-  it("0a: coming back from Repo and models re-reads the status (no manual refresh)", async () => {
+  it("0a: coming back from Setup re-reads the status (no manual refresh)", async () => {
     let connected = false;
     engine((c) => (c.path === "/v1/projects/summary" ? { body: { items: [] } } : c.path === "/api/setup" ? { body: setupView(connected) } : undefined));
     at("area=projects");
@@ -266,7 +266,7 @@ describe("the first run (screens 0a, 0b) keeps every Get started item", () => {
     expect(tid("px-ob-live")).not.toBeNull();
     expect(tid("px-ob-live-ready")).not.toBeNull();
     expect(tid("px-guide-you-secrets")!.textContent).toContain("App secret");
-    // Configured workspace chips MANAGE in Repo and models; they never open an add sheet (PX-30).
+    // Configured workspace chips MANAGE in Setup; they never open an add sheet (PX-30).
     expect(setupGo("px-guide-ws-github").get("open")).toBeNull();
     expect(tid("px-guide-marshal")!.getAttribute("title")).toBe("Ranked by Marshal");
     // "Start when ready" waits for Ready (4 of 6 here), then starts the engine's own first work.

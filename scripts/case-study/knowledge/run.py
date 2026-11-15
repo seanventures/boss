@@ -951,7 +951,7 @@ def setup(args, *, client=None, host=None, out: Callable[[str], None] = print,
                   if dry else "the BOSS GitHub App cannot reach it: ") + APP_STEP.format(app=app, repo=t["repo"], url=url))
         elif not item.get("allowed"):
             if dry:
-                step("app", t["repo"], "would", "reachable; allow it for BOSS (Repo and models › Repositories)")
+                step("app", t["repo"], "would", "reachable; allow it for BOSS (Setup › Repositories)")
             else:
                 item = client.allow_repo(any_project["id"], item["id"])
                 by_name[t["repo"].lower()] = item

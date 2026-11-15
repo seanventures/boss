@@ -8,7 +8,7 @@
  *
  * Remove is refused while an app uses the repository (409 in_use: its message names the apps);
  * Several → One is refused while an app has several components (409 apps_use_several). The add
- * picker lists only repositories allowed in Repo and models, and says how many more are not.
+ * picker lists only repositories allowed in Setup, and says how many more are not.
  * Owner/Admin write (repository:manage, step-up). `?area=code_tasks&view=repositories`.
  */
 import React, { useCallback, useEffect, useState } from "react";
@@ -201,7 +201,7 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
               ))}
             </select>
             <span className="mr-ui-sub" data-testid="mr-prj-add-tip">
-              Lists only repositories allowed in <a className="mr-ui-link" href={registryLink}>Repo and models</a>
+              Lists only repositories allowed in <a className="mr-ui-link" href={registryLink}>Setup</a>
               {notAllowed ? <>, {notAllowed} more there {notAllowed === 1 ? "is" : "are"} not allowed.</> : "."}
             </span>
           </div>
@@ -212,9 +212,9 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
             <div className="mr-ui-note" data-testid="mr-prj-no-registry" style={{ marginTop: 12 }}>
               <Info size={15} aria-hidden />
               {view.items.length ? (
-                <div>The repository allow-list isn&apos;t set up, so there is nothing more to add. This project&apos;s repositories work through its GitHub connection. To add others, set up the list in <a className="mr-ui-link" href={registryLink}>Repo and models › Repositories</a>.</div>
+                <div>The repository allow-list isn&apos;t set up, so there is nothing more to add. This project&apos;s repositories work through its GitHub connection. To add others, set up the list in <a className="mr-ui-link" href={registryLink}>Setup › Repositories</a>.</div>
               ) : (
-                <div>No repository is allowed for BOSS yet. Tick them in <a className="mr-ui-link" href={registryLink}>Repo and models › Repositories</a>.</div>
+                <div>No repository is allowed for BOSS yet. Tick them in <a className="mr-ui-link" href={registryLink}>Setup › Repositories</a>.</div>
               )}
             </div>
           ) : null}

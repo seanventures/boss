@@ -1,4 +1,4 @@
-"""Models are the ORG's: set once in Setup › Repo and models, every project of the org uses them.
+"""Models are the ORG's: set once in Setup, every project of the org uses them.
 
 Filming the banking case study (2026-10-24), the four northpeak-bank-* projects answered "BOSS
 needs a connected model … none is answering": the providers, keys and the chat/code/review model
@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 #: The org_settings key prefix for a model knob, and the row naming the org's model home.
 PREFIX = "models."
 HOME_KEY = "models.home"
-PLACE = "Setup › Repo and models › Models"
+PLACE = "Setup › Models"
 SCOPES = ("org", "project")
 
 #: The knobs that are the org's (project_settings.KNOBS keys). Everything that says WHICH model or

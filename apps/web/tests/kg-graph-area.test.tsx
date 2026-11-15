@@ -4,7 +4,7 @@
  * THE GRAPH AREA NEVER OPENS UNSTYLED (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.1, §5.8).
  *
  * Its three tabs (Graph · Rules review · Settings) each open on a designed body: with no
- * repository the Graph tab is the "Connect a repository" card linking to Repo and models; Rules
+ * repository the Graph tab is the "Connect a repository" card linking to Setup; Rules
  * review is the queue or its empty card; Settings is the knowledge settings moved from
  * Reliability. Deep links pick the tab. Every state is in tests/kg-states.test.tsx.
  */

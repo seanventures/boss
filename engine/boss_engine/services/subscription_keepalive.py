@@ -68,7 +68,7 @@ def _raise_login_card(conn, project_id: str, source_id: str, provider: str) -> N
     core.create_blocking_decision(
         conn, project_id, None, question,
         {"action": CARD_ACTION, "source_id": source_id,
-         "recommended": "Sign in again in Setup › Repo and models; agent turns on this "
+         "recommended": "Sign in again in Setup; agent turns on this "
                         "subscription wait until you do.",
          "why_a_person": "Only the account's owner can sign in to it."},
         {},

@@ -18655,7 +18655,7 @@ def _deprecated(response: Response, successor: str) -> None:
 
 
 def _setup_failure(error) -> HTTPException:
-    """A Repo and models refusal, as the old routes phrased it: a sentence, or a decision."""
+    """A Setup refusal, as the old routes phrased it: a sentence, or a decision."""
     detail = error.detail
     if detail.get("state") == "needs_consent":
         return HTTPException(status_code=409, detail={
@@ -18792,7 +18792,7 @@ def _store_decision_key(project_id: str, actor: str, api_key: str, accept: bool)
 @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_decisions_key(payload: DecisionModelKeyBody) -> dict:
     """Decisions › TypeSafe Jev › Add key: proved with one governed decision, then stored.
-    Answers with the Repo and models view."""
+    Answers with the Setup view."""
     from boss_engine.services import setup_view
 
     payload = payload.payload()
@@ -18807,7 +18807,7 @@ def setup_decisions_key(payload: DecisionModelKeyBody) -> dict:
 @app.post("/v1/setup/embedding-model")
 @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_embedding_model(payload: open_bodies.EmbeddingModelBody) -> dict:
-    """Setup › Repo and models › Embedding model: store the ORG's slot, which every project of
+    """Setup › Embedding model: store the ORG's slot, which every project of
     the org uses (the key into the vault at org scope, never returned; `url` may be the whole
     Azure Target URI), check it with one tiny embedding through the gateway (budget category
     `knowledge`, receipted; the dimension is learned from the reply), and answer with the Repo
@@ -18848,9 +18848,9 @@ def setup_embedding_model(payload: open_bodies.EmbeddingModelBody) -> dict:
 @app.post("/v1/setup/embedding-model/check")
 @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_embedding_model_check(payload: open_bodies.OpenProjectBody) -> dict:
-    """Setup › Repo and models › Embedding model › Check: one tiny embedding through the gateway
+    """Setup › Embedding model › Check: one tiny embedding through the gateway
     on the org's slot, its real reply or error stored and shown (an older install's project slot
-    is promoted to the org on the way). Answers with the Repo and models view."""
+    is promoted to the org on the way). Answers with the Setup view."""
     from boss_engine.services import setup_view
     from boss_engine.services.knowledge import embedding_slot
 
@@ -18873,7 +18873,7 @@ def setup_embedding_model_check(payload: open_bodies.OpenProjectBody) -> dict:
 @app.delete("/v1/setup/embedding-model")
 @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(query="project_id"))
 def setup_embedding_model_clear(project_id: str) -> dict:
-    """Setup › Repo and models › Embedding model › Remove: the org's slot and its key go;
+    """Setup › Embedding model › Remove: the org's slot and its key go;
     meaning-based search is off in every project of the org."""
     from boss_engine.services import setup_view
     from boss_engine.services.knowledge import embedding_slot
@@ -19426,7 +19426,7 @@ def easy_connect_github_to_project(
 
     Two ways in: name an environment variable that holds a PAT or App private key, or send a
     pasted `token`, which is written through to the secret store and only its reference kept.
-    Repo and models uses POST /v1/setup/repository/token and /select instead, which also
+    Setup uses POST /v1/setup/repository/token and /select instead, which also
     list the token's repositories and prove read, write and pull-request access.
     """
     with begin(engine) as connection:

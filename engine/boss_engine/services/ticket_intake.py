@@ -575,8 +575,34 @@ def list_connections(db: Connection, project_id: str, *, scope: str = "all"
     for row in reach.unshared_rows(db, project_id):
         out.append({"id": row["id"], "provider": row["provider_key"],
                     "label": label_of(row), "status": "not_shared", "reach": "unshared",
-                    "home_project": {"id": row["project_id"],
-                                     "name": reach.project_name(db, str(row["project_id"]))}})
+                    "home_project": reach.home_view(db, str(row["project_id"]))})
+    return out
+
+
+def list_org_connections(db: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Setup › Ticket systems › All: every connection of the org (ticket_reach.org_connections)
+    as the console lists it — where it was added, whose token (the account BOSS acts as), shared
+    or not, its mappings, its status. Never a token; the caller adds ``can_manage``."""
+    from . import ticket_reach as reach
+
+    names: dict[str, str] = {}
+
+    def name(pid: str) -> str:
+        if pid not in names:
+            names[pid] = reach.project_name(db, pid)
+        return names[pid]
+
+    out = []
+    for row in reach.org_connections(db, project_id):
+        view = serialize(db, row)
+        view["reach"] = "project" if str(row["project_id"]) == project_id else (
+            "org" if row["shared"] else "unshared")
+        view["usable_here"] = row["usable_here"]
+        view["home_project"] = reach.home_view(db, str(row["project_id"]))
+        view["project_names"] = {pid: name(pid) for pid in (
+            str(m.get("boss_project_id") or "") for m in view["settings"].get("mappings") or [])
+            if pid}
+        out.append(view)
     return out
 
 
@@ -1066,8 +1092,14 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
                                   "provider": view["provider"], "key": view["key"]}],
                         "tickets": [view], "errors": [], "connected": len(rows)}
             return {"refs": [], "tickets": [], "connected": len(rows),
-                    "errors": [{"ref": named, "error": found.get("error"),
+                    "errors": [{**{k: v for k, v in found.items() if k != "ok"},
+                                "ref": named, "error": found.get("error"),
                                 "message": found.get("message")}]}
+        # A key in a sentence ("Implement KAN-12") that only a connection NOT shared with this
+        # project knows: say so, with its way out, instead of nothing.
+        hidden = reach.unshared_ref(db, project_id, said)
+        if hidden:
+            return {"refs": [], "tickets": [], "errors": [hidden], "connected": len(rows)}
         return {"refs": [], "tickets": [], "errors": [], "connected": len(rows)}
     for row, ref in refs[:max(1, limit)]:
         try:

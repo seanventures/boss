@@ -1328,7 +1328,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           // Try it (one change, one PR), not "start a new one" over the existing code.
           <span className="np-empty" data-testid="np-no-apps">
             Nothing built here yet. To change a connected repository, use{" "}
-            <a href="?area=setup&focus=try" data-testid="np-no-apps-try">Try it in Repo and models</a>;
+            <a href="?area=setup&focus=try" data-testid="np-no-apps-try">Try it in Setup</a>;
             or start a new app.
           </span>
         ) : null}

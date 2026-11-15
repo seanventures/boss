@@ -97,7 +97,7 @@ def test_banner_shows_the_logo_whats_new_and_the_checklist_with_fixes():
     assert "██████╗" in text and "┣━━━┫" in text
     assert "What's new" in text and "Monitoring and alerting" in text
     assert "✓ API reachable" in text and "✗ Embedding model" in text
-    assert "fix Console: Setup › Repo and models › Embedding model." in text
+    assert "fix Console: Setup › Embedding model." in text
 
 
 def test_a_streamed_reply_is_markdown_block_by_block_with_highlighted_code():

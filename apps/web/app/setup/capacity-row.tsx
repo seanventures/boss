@@ -604,7 +604,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
                   onClick={async () => {
                     setDisconnecting(false);
                     await actions.after(await post(`/v1/entitlements/sources/${encodeURIComponent(id)}/disconnect`,
-                                                   { project_id: projectId, reason: "Disconnected in Repo and models.", actor: actions.who },
+                                                   { project_id: projectId, reason: "Disconnected in Setup.", actor: actions.who },
                                                    "Disconnect session", `setup:cap:${id}`), "Session disconnected");
                   }}>Disconnect</GatedButton>
           <button type="button" className="su-link" onClick={() => setDisconnecting(false)}>Keep</button>

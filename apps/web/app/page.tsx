@@ -631,7 +631,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     (p) => p.id === askedProjectId && p.orgId === selectedOrg.org_id) ?? null;
   const activeProjectId = otherProject ? otherProject.id : selectedOrg.project_id;
   // FIRST SIGN-IN LANDS WHERE THE WORK IS. With no `area` asked for and setup not ready, the
-  // console opens on Repo and models; once ready the default is the Command Center as before.
+  // console opens on Setup; once ready the default is the Command Center as before.
   // The same read feeds the rail badge, so the two cannot disagree.
   // Who may open what at this project is read alongside the setup summary, not after it.
   const identityP = loadIdentityCached(activeProjectId);
@@ -1454,7 +1454,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {/* REPO AND MODELS: where BOSS writes code and what it thinks with, one board over
             one server view (app/setup/setup-board.tsx). Outgoing email lives in Skills and MCP. */}
         {shows("setup") ? (
-        <section className="panel-stack" data-area="setup" aria-label="Repo and models">
+        <section className="panel-stack" data-area="setup" aria-label="Setup">
           {/* Setup › Events (P9a-7): `&events=<tab>` shows what wakes the agents instead of the board. */}
           <SetupArea projectId={activeProjectId} actor={activeActorId} initialEvents={resolvedSearchParams.events || ""} />
         </section>

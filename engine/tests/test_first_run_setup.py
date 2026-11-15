@@ -161,7 +161,7 @@ def _env_settings(**extra):
 
 def test_an_install_configured_the_old_way_is_not_told_it_is_unconfigured(conn):
     """Measured on the live deployment: no github_connections row, and it has been opening pull
-    requests against example-user/boss-sandbox for weeks. Repo and models shows that repository
+    requests against example-user/boss-sandbox for weeks. Setup shows that repository
     as a row with the chip `From install` — never an empty form."""
     view = setup_view.build_basics(conn, _env_settings(), "p")
     [repo] = view["repository"]["repos"]

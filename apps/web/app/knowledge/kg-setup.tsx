@@ -339,11 +339,11 @@ function ImportStep({ w, setup, archived, onChanged }: {
         ) : null}
       </div>
       <p className="kg-quiet">
-        Lists the repositories allowed for BOSS in <a className="inf-link" href={registry} data-testid="kg-import-registry">Repo and models</a>
+        Lists the repositories allowed for BOSS in <a className="inf-link" href={registry} data-testid="kg-import-registry">Setup</a>
         {view?.not_allowed_count ? `, ${view.not_allowed_count} more there ${view.not_allowed_count === 1 ? "is" : "are"} not allowed yet` : ""}.
       </p>
       {view && view.registry_in_use === false && !repos.length ? (
-        <p className="kg-quiet" data-testid="kg-import-no-registry">No repository is allowed for BOSS yet. Tick one in Repo and models › Repositories, then add it here.</p>
+        <p className="kg-quiet" data-testid="kg-import-no-registry">No repository is allowed for BOSS yet. Tick one in Setup › Repositories, then add it here.</p>
       ) : null}
       {msg ? <p className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-import-msg">{msg.text}</p> : null}
     </div>

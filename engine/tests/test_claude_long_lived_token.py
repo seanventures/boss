@@ -240,7 +240,7 @@ def test_a_database_store_refusal_is_shown_in_boss_words(monkeypatch):
         cc.sign_in_store(_Engine(), Settings(), "p", "operator")(TOKEN, valid_days=365)
 
 
-# ── what Repo and models says ───────────────────────────────────────────────────────────────
+# ── what Setup says ───────────────────────────────────────────────────────────────
 
 def test_the_row_says_which_credential_runs(monkeypatch):
     monkeypatch.setattr(cc, "long_lived_token_info", lambda _c, _p: {

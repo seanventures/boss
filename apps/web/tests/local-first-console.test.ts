@@ -53,13 +53,13 @@ describe("where a new app's code lives", () => {
 
   it("gives each GitHub refusal its one fix", () => {
     expect(repoCheckFix(check({ ok: true }))).toBeNull();
-    expect(repoCheckFix(check({ reason: "no_github_credential" }))).toMatchObject({ label: "Repo and models", external: false });
+    expect(repoCheckFix(check({ reason: "no_github_credential" }))).toMatchObject({ label: "Setup", external: false });
     expect(repoCheckFix(check({ reason: "no_admin_permission" }))!.href).toContain("focus=repository");
     const personal = repoCheckFix(check({ reason: "personal_account", full_name: "me/shop" }))!;
     expect(personal.external).toBe(true);
     expect(personal.href).toBe("https://github.com/new?owner=me&name=shop&visibility=private");
     expect(repoCheckFix(check({ reason: "exists" }))).toBeNull();
-    expect(repoCheckFix({ ok: false, full_name: "acme/x", error: "github_not_connected" })!.label).toBe("Repo and models");
+    expect(repoCheckFix({ ok: false, full_name: "acme/x", error: "github_not_connected" })!.label).toBe("Setup");
   });
 });
 
@@ -123,7 +123,7 @@ const owner = (over: Partial<OwnerCredential>): OwnerCredential =>
 describe("the new repo's owner picker (BOSSAPP-1160)", () => {
   const app = owner({ login: "paramg", can_create: true, verified: true, via: "paramg (access token, Acme Shop)", via_kind: "connection" });
   const cannot = owner({ login: "paramg-kaapppu", can_create: false, words: "BOSS has no GitHub credential that can create repositories in paramg-kaapppu.",
-                         fixes: ["Replace the token for paramg-kaapppu with one holding the repo scope (Repo and models)"] });
+                         fixes: ["Replace the token for paramg-kaapppu with one holding the repo scope (Setup)"] });
   const org = owner({ login: "acme", type: "Organization", can_create: true, verified: false, via: "GitHub App (server settings)", via_kind: "env_app" });
 
   it("lists only the owners a credential can create in, and chips which one", () => {
@@ -136,11 +136,11 @@ describe("the new repo's owner picker (BOSSAPP-1160)", () => {
   });
 
   it("when none can, keeps every known owner listed and names the exact fix per owner", () => {
-    const appOnPerson = owner({ login: "paramg", can_create: false, fixes: ["Add a personal access token with the repo scope for paramg (Repo and models)"] });
+    const appOnPerson = owner({ login: "paramg", can_create: false, fixes: ["Add a personal access token with the repo scope for paramg (Setup)"] });
     expect(creatingOwners([appOnPerson, cannot], ["from-registry"])).toEqual(["paramg", "paramg-kaapppu", "from-registry"]);
     expect(ownerFixLines([appOnPerson, cannot])).toEqual([
-      { login: "paramg", fix: "Add a personal access token with the repo scope for paramg (Repo and models)" },
-      { login: "paramg-kaapppu", fix: "Replace the token for paramg-kaapppu with one holding the repo scope (Repo and models)" },
+      { login: "paramg", fix: "Add a personal access token with the repo scope for paramg (Setup)" },
+      { login: "paramg-kaapppu", fix: "Replace the token for paramg-kaapppu with one holding the repo scope (Setup)" },
     ]);
     expect(ownerFixLines([owner({ login: "x", can_create: false, fixes: [], words: "no credential" })])).toEqual([{ login: "x", fix: "no credential" }]);
   });

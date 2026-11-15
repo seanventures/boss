@@ -1,4 +1,4 @@
-"""The e2e fakes answer Repo and models' probes the way GitHub and a provider would.
+"""The e2e fakes answer Setup's probes the way GitHub and a provider would.
 
 GitHub by token profile (stubs/github_probes.py, from engine/tests/fixtures/github_probe_*.json)
 and providers by key value (stubs/model_probes.py) — the same answers the API and engine tests

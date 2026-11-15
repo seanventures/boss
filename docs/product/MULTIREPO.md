@@ -19,7 +19,7 @@ project Acme Shop, app Storefront = contracts (`acme/contracts`) → backend (`a
 ## Screens (one surface per job)
 | # | Screen | Where | Job |
 |---|--------|-------|-----|
-| 1 | Repo and models › Repositories | Settings | Registry: all repos the App installation reaches; tick = allowed; Read/Write/PRs checks; filters All/Allowed/Needs a fix/Not allowed. Untick removes from every project (running work keeps its grant until it ends). Archived repos cannot be ticked. |
+| 1 | Setup › Repositories | Settings | Registry: all repos the App installation reaches; tick = allowed; Read/Write/PRs checks; filters All/Allowed/Needs a fix/Not allowed. Untick removes from every project (running work keeps its grant until it ends). Archived repos cannot be ticked. |
 | 2 | Project › Repositories | Factory › Projects › project | Pick from allowed repos, give each a role hint (Contracts/Backend/Frontend/Deploy config). One repo / Several repos switch. Remove is blocked while an app uses it. |
 | 3 | New project › Where the code lives | Workflows composer (replaces "Lives in") | One repo (default, today's behaviour) or Several repos: component → repository rows with suggestions and build order. Shown only when the workflow needs a repository (existing readiness rule). |
 | 4 | App › Components | Factory › Apps › app | Components left-to-right in dependency order: repo, path, live version, ships to, needs. Deploy config row. Recent changes as one row per change set. |

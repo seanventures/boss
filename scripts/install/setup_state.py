@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What Repo and models says about this install, for the installer card and `boss open`.
+"""What Setup says about this install, for the installer card and `boss open`.
 
 Reads GET /v1/setup (which never touches the network itself). The API key arrives in the
 environment (BOSS_API_KEY), never argv, and is never printed.

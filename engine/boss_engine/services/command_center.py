@@ -454,7 +454,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "fix_area": "setup",
             # Lands on the row that needs it (`?area=setup&focus=<row>`), not the page top.
             "fix_focus": gap.get("focus"),
-            "fix_label": "Fix in Repo and models",
+            "fix_label": "Fix in Setup",
             "actions": [],
             "at": None,
         })
@@ -661,7 +661,7 @@ def needs_you_count(connection, settings, project_id: str,
 
 def setup_gaps(connection: Any, settings: Any, project_id: str, *,
                out: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
-    """What Repo and models says still stops work: unfinished rows, failing rows, and a token
+    """What Setup says still stops work: unfinished rows, failing rows, and a token
     that stops working within three days. Read from the same view the page renders, so the
     Command Center and the page cannot disagree (and nothing here calls GitHub).
 
@@ -699,5 +699,5 @@ def setup_gaps(connection: Any, settings: Any, project_id: str, *,
             "id": "expiring", "done": False, "focus": "repository",
             "title": f"Token expires in {days} day{'s' if days != 1 else ''}",
             "detail": "Builds stop when it expires. Make a new token now.",
-            "what_to_do": "Paste a new token in Repo and models before it expires."})
+            "what_to_do": "Paste a new token in Setup before it expires."})
     return gaps

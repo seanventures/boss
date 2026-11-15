@@ -127,15 +127,15 @@ From `apps/web/app/setup/welcome.tsx` and `lib/setup-stepper.ts`.
 | Step 1 Connect GitHub (done state "Connected as X · N repos") | 0a step-1 card; 0b guide step 1 shows the login and repo count |
 | "Add another account" | 0b guide footer `+ another account`; Add a project › Pick it › `+ account` |
 | Step 2 Add a model (subscription / API key / local) | 0a step-2 card; 0b guide step 2 |
-| "Add another model" | 0b guide footer `+ another model`; Repo and models (unchanged) |
+| "Add another model" | 0b guide footer `+ another model`; Setup (unchanged) |
 | Step 3 Try a sample project / "Start the sample" | 0a step-3 `Try a sample`; Add a project header `Try a sample` |
 | Last sample run pill, its PR link, "Open run" on failure | The sample becomes a project (Hello World on screen 2); its run and PR are rows on its Work tab |
 | "Or open one small PR" (TryRow quick PR) | 0a step-3 `One small PR`; New work on any project |
 | Import an existing repo | 0a `Existing repo`; Add a project › Existing |
 | Start a new app from an idea | 0a `From an idea`; Add a project › New |
 | Flow line Idea → Plan → Build → Review → PR → Live preview | 0a "What happens to each piece of work" diagram; Helm's plan strip in New work |
-| Link to Repo and models | Rail (unchanged); 0a note "change anything later" |
-| Stepper's collapsed "Who does what" / Budget defaults | Unchanged in Repo and models; per-project crew on 3 (Crew) and Overview |
+| Link to Setup | Rail (unchanged); 0a note "change anything later" |
+| Stepper's collapsed "Who does what" / Budget defaults | Unchanged in Setup; per-project crew on 3 (Crew) and Overview |
 | Command Center first-run help rows | Replaced by 0a when there are no projects; Command Center keeps its cross-project role |
 
 ## Parity: project settings that move to Project › Settings
@@ -151,7 +151,7 @@ Each old home keeps working and shows one line, "Moved to Project › Settings".
 | Captain & squad | Agent Studio (roster); no per-project captain today | Settings › Captain & squad | Overview captain card; header chip |
 | Autonomy level | Govern › Autonomy (`agent-ops/autonomy-panel.tsx`, org-wide) | Settings › Autonomy & budget (this project) | Govern keeps org caps + "set per project" links |
 | Ambient budget | Govern (spend caps) | Settings › Autonomy & budget (this project's week) | Overview cost tile |
-| Repo bindings | Repo and models; Knowledge Graph import (`PUT /v1/projects/{id}/repos/{repo}`) | Settings › Repos | Repo & knowledge |
+| Repo bindings | Setup; Knowledge Graph import (`PUT /v1/projects/{id}/repos/{repo}`) | Settings › Repos | Repo & knowledge |
 | Notifications | Communications (org outbox); alert contact points in Observability | Settings › Notifications (this project's routing) | Observability keeps contact points |
 
 Factory → Code Tasks keeps everything: the same area id `code_tasks`, the Builds/Apps tabs, cockpit and links. Only the

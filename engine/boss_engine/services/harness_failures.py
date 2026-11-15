@@ -63,7 +63,7 @@ GENERIC_PATTERNS: tuple[FailurePattern, ...] = (
                    r"credit balance is too low|insufficient[_ ]credits?|insufficient_quota"
                    r"|out of credits",
                    "add credit to the account {engine} bills, or connect another source in "
-                   "Repo and models, then retry",
+                   "Setup, then retry",
                    in_tool_results=False),
     FailurePattern("cli_crashed",
                    r"segmentation fault|core dumped|javascript heap out of memory"
@@ -255,7 +255,7 @@ def classify(text: object, *, engine: Optional[str] = None, where: str = "engine
             who = provider_name(engine)
             whose = f"the {who}" if who != "the model" else name
             return HarnessVerdict(name, "auth_refused", _clean(raw),
-                                  f"reconnect {whose} in Repo and models, then retry", where)
+                                  f"reconnect {whose} in Setup, then retry", where)
     return None
 
 

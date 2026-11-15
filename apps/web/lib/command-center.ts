@@ -49,7 +49,7 @@ export type NeedsYouItem = {
   detail: string;
   what_to_do?: string | null;
   fix_area?: string | null;
-  /** Where in that area: Repo and models lands on the row (`focus=repository|models`). */
+  /** Where in that area: Setup lands on the row (`focus=repository|models`). */
   fix_focus?: string | null;
   fix_label?: string | null;
   decision_id?: string | null;
@@ -237,7 +237,7 @@ export function attentionFromNeedsYou(item: NeedsYouItem): AttentionItem {
     decideInline: false,
     contentHash: item.content_hash ?? undefined,
     riskTier: typeof item.risk_tier === "number" ? item.risk_tier : undefined,
-    fix: item.fix_area ? { area: item.fix_area, label: item.fix_label ?? "Fix in Repo and models",
+    fix: item.fix_area ? { area: item.fix_area, label: item.fix_label ?? "Fix in Setup",
                            ...(item.fix_focus ? { focus: item.fix_focus } : {}) } : undefined,
     at: item.at ?? undefined,
     ...(item.finding_id ? { findingId: item.finding_id } : {}),

@@ -87,7 +87,7 @@ describe("Screen 1 — Get started is its own place", () => {
     expect(q(container, "su-row-repository")).toBeNull();
   });
 
-  it("Connect GitHub and Add a model deep-link into Repo and models, in place", async () => {
+  it("Connect GitHub and Add a model deep-link into Setup, in place", async () => {
     fakeApi(firstRun());
     const seen = navigations();
     const { container } = await mount(firstRun(), "?area=welcome", "welcome");
@@ -110,13 +110,13 @@ describe("Screen 1 — Get started is its own place", () => {
   });
 });
 
-describe("Repo and models never shows the Welcome", () => {
+describe("Setup never shows the Welcome", () => {
   it("a new install's Setup is the 1 GitHub · 2 Repos · 3 Model stepper, with a way back", async () => {
     fakeApi(firstRun());
     const seen = navigations();
     const { container } = await mount(firstRun());
     expect(q(container, "su-welcome")).toBeNull();
-    expect(container.querySelector("h1")!.textContent).toBe("Repo and models");
+    expect(container.querySelector("h1")!.textContent).toBe("Setup");
     expect(q(container, "su-row-repository")).not.toBeNull();
     expect(q(container, "su-row-models")).not.toBeNull();
     expect(q(container, "su-row-try")).toBeNull();

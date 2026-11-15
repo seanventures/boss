@@ -1,4 +1,4 @@
-"""What GitHub answers Repo and models' token and repository probes, per token profile.
+"""What GitHub answers Setup's token and repository probes, per token profile.
 
 The fake GitHub (github_fake.py), the API tests and the engine tests all answer the probes from
 here, so they cannot disagree about what a read-only token or an expired one looks like. The
@@ -38,7 +38,7 @@ def _load(profile: str) -> dict[str, Any]:
     return json.loads((FIXTURES / f"github_probe_{profile}.json").read_text())
 
 
-#: The head branch Repo and models' pull-request probe names (setup_checks.probe_repository).
+#: The head branch Setup's pull-request probe names (setup_checks.probe_repository).
 PROBE_HEAD = "boss-setup-check-"
 
 

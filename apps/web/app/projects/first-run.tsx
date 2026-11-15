@@ -13,7 +13,7 @@
  *   Or open one small PR                   step-3 "One small PR" → Get started's quick-PR row
  *   Import a repo / New app from an idea   step-3 Existing repo / From an idea
  *   Flow Idea → … → Live preview           "What happens to each piece of work"
- *   Link to Repo and models                "change anything later in Repo and models"
+ *   Link to Setup                "change anything later in Setup"
  *
  * 0a while a step is open; 0b (the guide beside Helm's live onboarding) once a project with a
  * repo exists and the URL asks for the first run (`&first_run=1`).
@@ -38,7 +38,7 @@ import { welcomeState, type WelcomeState } from "../setup/welcome";
 import { Face, Flow, Ico, Journey, STATE_WORD, Said, openAddProject, usePxUrl } from "./kit";
 import { LiveDiagram, clockWords, useElapsed } from "./onboarding";
 
-/** Repo and models, at GitHub or Models: `add` opens its add sheet (a step still to do); a
+/** Setup, at GitHub or Models: `add` opens its add sheet (a step still to do); a
  *  configured one is MANAGED there (PX-30: "Manage ›" never opens an add sheet). */
 const setupHref = (focus: "repository" | "models", add = true) => pxHref(`?area=setup&focus=${focus}${add ? "&open=add" : ""}`);
 const QUICK_PR = "?area=welcome&focus=try";
@@ -54,8 +54,8 @@ const FLOW = [
 
 export type WorkspaceStatus = { state: WelcomeState | null; view: SetupView | null; status: "loading" | "ready" | "failed" };
 
-/** GitHub and the model are WORKSPACE settings (Setup › Repo and models), never a project's: these
- *  screens only read them, from the same view Repo and models draws, and send you there to change
+/** GitHub and the model are WORKSPACE settings (Setup), never a project's: these
+ *  screens only read them, from the same view Setup draws, and send you there to change
  *  them. Read again when you come back (focus, the tab showing again, Back in the console). */
 export function useWelcome(projectId: string): WorkspaceStatus {
   const { status: signin } = useSignin();
@@ -85,7 +85,7 @@ const MODE_WORDS: Record<string, string> = { subscription: "subscription", meter
 const modelWords = (s: WelcomeState) => [s.model.label, s.model.kind ? MODE_WORDS[s.model.kind] ?? s.model.kind : null].filter(Boolean).join(" · ");
 const githubWords = (s: WelcomeState) => ["Connected", s.github.login, `${s.github.repos} repo${s.github.repos === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
 
-/** One workspace step's card: configured (read-only, Manage ›), to do (a button to Repo and models),
+/** One workspace step's card: configured (read-only, Manage ›), to do (a button to Setup),
  *  or unknown (status can't be read: a neutral link, never a false "Configured"). */
 function WorkspaceDoor({ id, step, title, icon, tone, known, loading, done, doneText, todoText, todoLabel, focus, primary }: {
   id: string; step: number; title: string; icon: typeof Brain; tone: "teal" | "violet"; known: boolean; loading: boolean; done: boolean;
@@ -101,7 +101,7 @@ function WorkspaceDoor({ id, step, title, icon, tone, known, loading, done, done
       {!known ? (
         <>
           <p className="px-faint" role="status">{loading ? "Checking…" : "Couldn't read this just now."}</p>
-          {loading ? null : <a className="px-btn" data-kind="ghost" data-size="s" href={href} data-testid={`px-fr-${id}-check`}>Check in Repo and models ›</a>}
+          {loading ? null : <a className="px-btn" data-kind="ghost" data-size="s" href={href} data-testid={`px-fr-${id}-check`}>Check in Setup ›</a>}
         </>
       ) : done ? (
         <>
@@ -148,7 +148,7 @@ export function FirstRun({ projectId, cards }: { projectId: string; actor: strin
         <h1 id="px-fr-title">Add your first project</h1>
         <p>Point the crew at a repo or an idea. Helm, your captain, reads it, gets it ready, and suggests the first piece of work.</p>
         <Journey nodes={strip} testid="px-fr-strip" onOpen={(n) => { if (n.href) navigateTo(n.href); else if (n.key === "project") openAddProject("1"); }} />
-        <small className="px-faint">About 10 minutes · change anything later in <a href={pxHref("?area=setup")} data-testid="px-fr-setup">Repo and models</a></small>
+        <small className="px-faint">About 10 minutes · change anything later in <a href={pxHref("?area=setup")} data-testid="px-fr-setup">Setup</a></small>
       </section>
 
       <div className="px-grid px-g3">
@@ -285,14 +285,14 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
       <div className="px-guide">
         <section className="px-card" aria-labelledby="px-g-title">
           <div className="px-card-h"><Ico icon={Signpost} c="blue" /><h2 id="px-g-title">Your first project</h2><span className="px-more px-mono px-faint">{done} / {steps.length}</span></div>
-          {/* WORKSPACE READY: GitHub and the model are workspace settings (Setup › Repo and models),
+          {/* WORKSPACE READY: GitHub and the model are workspace settings (Setup),
               never a project's — shown read-only here, each a link to its own page. */}
           <div className="px-row px-wrap" data-testid="px-guide-workspace" style={{ marginBottom: 8, fontSize: ".6rem" }}>
             <span className="px-lbl">Workspace</span>
-            <a className="px-chip" href={setupHref("repository", !(known && s.github.done))} data-testid="px-guide-ws-github" title="GitHub accounts live in Setup › Repo and models"
+            <a className="px-chip" href={setupHref("repository", !(known && s.github.done))} data-testid="px-guide-ws-github" title="GitHub accounts live in Setup"
                style={{ color: known && s.github.done ? "var(--green)" : "var(--amber)" }}>
               <GithubLogo size={11} aria-hidden /> {!known ? "GitHub ?" : s.github.done ? `GitHub ✓ ${s.github.login ?? ""} · ${s.github.repos} repo${s.github.repos === 1 ? "" : "s"}` : "GitHub — connect"}</a>
-            <a className="px-chip" href={setupHref("models", !(known && s.model.done))} data-testid="px-guide-ws-model" title="Models live in Setup › Repo and models"
+            <a className="px-chip" href={setupHref("models", !(known && s.model.done))} data-testid="px-guide-ws-model" title="Models live in Setup"
                style={{ color: known && s.model.done ? "var(--green)" : "var(--amber)" }}>
               <Brain size={11} aria-hidden /> {!known ? "Model ?" : s.model.done ? `Model ✓ ${modelWords(s)}` : "Model — add"}</a>
           </div>

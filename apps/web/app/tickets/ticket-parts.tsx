@@ -7,10 +7,10 @@
  * of a read (loading, empty, error in words, permission denied). Classes are tk-*, tokens only.
  */
 import React from "react";
-import { ArrowSquareOut, CheckCircle, LockSimple, ShieldWarning, Ticket as TicketIcon, WarningCircle } from "@phosphor-icons/react";
+import { ArrowRight, ArrowSquareOut, CheckCircle, LockSimple, ShareNetwork, ShieldWarning, Ticket as TicketIcon, UserCircle, WarningCircle } from "@phosphor-icons/react";
 
 import {
-  START_WORKFLOWS, TYPE_WORDS, monogram, workflowWords, type Read, type Ticket,
+  START_WORKFLOWS, TYPE_WORDS, askOwnerWords, monogram, shareHref, workflowWords, type NotShared, type Read, type Ticket,
 } from "../../lib/tickets";
 import "./tickets.css";
 
@@ -148,6 +148,7 @@ export function TkReadState<T>({ read, what, onRetry, rows = 2, testid = "tk-sta
     );
   }
   if (read.ok) return null;
+  if (read.sharedFrom) return <NotSharedLine info={read.sharedFrom} testid={`${testid}-not-shared`} />;
   if (read.denied) {
     return <div className="tk-denied" role="note" data-testid={`${testid}-denied`}><LockSimple size={13} aria-hidden /> {read.error}</div>;
   }
@@ -156,5 +157,35 @@ export function TkReadState<T>({ read, what, onRetry, rows = 2, testid = "tk-sta
       <WarningCircle size={13} aria-hidden /> {what}: {read.error}
       {onRetry ? <> <button type="button" className="tk-linkbtn" onClick={onRetry} data-testid={`${testid}-retry`}>Try again</button></> : null}
     </div>
+  );
+}
+
+/**
+ * A ticket system another project has and has NOT shared with this one, said with its way out
+ * (operator, 2026-11-15: "why are you not showing the jira ticket system that was added?"):
+ * "Jira is in BOSS dogfood bootstrap · Share it", where Share it opens Setup › Ticket systems ›
+ * All with that connection's sharing asked, one press from done. A person who cannot manage it
+ * there is told whom to ask instead of being sent to a switch they cannot press.
+ */
+export function NotSharedLine({ info, projectId, onShare, testid = "tk-not-shared", compact = false }: {
+  info: NotShared; projectId?: string; onShare?: (connectionId: string) => void; testid?: string; compact?: boolean;
+}) {
+  const here = typeof window === "undefined" ? "" : window.location.search;
+  const pid = projectId ?? (new URLSearchParams(here).get("project_id") || undefined);
+  return (
+    <span className="tk-not-shared" data-testid={testid} data-compact={compact || undefined}>
+      {compact ? null : <span>{info.label} is in <b>{info.home.name}</b></span>}
+      {compact ? null : <span aria-hidden className="tk-dot">·</span>}
+      {info.can_manage ? (
+        <a className="tk-share-it" href={shareHref(here, pid, info.connection_id)} data-testid={`${testid}-share`}
+           title={`Share ${info.label} from ${info.home.name} with the whole org, so this project can use it.`}
+           onClick={onShare ? (e) => { e.preventDefault(); onShare(info.connection_id); } : undefined}>
+          <ShareNetwork size={13} aria-hidden /> Share it <ArrowRight size={12} aria-hidden /></a>
+      ) : (
+        <span className="tk-ask-owner" data-testid={`${testid}-ask`}
+              title={`Only a person who manages integrations in ${info.home.name} can share it.`}>
+          <UserCircle size={13} aria-hidden /> {askOwnerWords(info.home)}</span>
+      )}
+    </span>
   );
 }

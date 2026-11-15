@@ -247,7 +247,7 @@ export function ownerFixLines(owners: OwnerCredential[] | null): { login: string
   return owners.map((o) => ({ login: o.login, fix: o.fixes[0] ?? o.words }));
 }
 
-/** The one fix for a GitHub refusal: Repo and models for a missing credential or permission;
+/** The one fix for a GitHub refusal: Setup for a missing credential or permission;
  *  GitHub's own new-repository page for a personal account (an App cannot create there). */
 export function repoCheckFix(check: { ok: boolean; full_name?: string; reason?: string; error?: string } | null): { label: string; href: string; external: boolean } | null {
   if (!check || check.ok) return null;
@@ -258,7 +258,7 @@ export function repoCheckFix(check: { ok: boolean; full_name?: string; reason?: 
              href: `https://github.com/new?owner=${encodeURIComponent(owner ?? "")}&name=${encodeURIComponent(repo ?? "")}&visibility=private` };
   }
   if (reason === "no_github_credential" || reason === "no_admin_permission" || reason === "github_not_connected") {
-    return { label: "Repo and models", href: "?area=setup&focus=repository", external: false };
+    return { label: "Setup", href: "?area=setup&focus=repository", external: false };
   }
   return null;
 }

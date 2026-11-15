@@ -208,7 +208,7 @@ JOURNEY_SELECTORS: tuple[tuple[str, str, str], ...] = (
     ("live_gate", "app/agents/mission-row.tsx", "ag-mission-${mission.runId}"),
     ("live_gate", "app/agents/mission-row.tsx", "ag-mission-you-${mission.runId}"),
     ("live_gate", "app/agents/attention-card.tsx", "ag-att-${item.id}"),
-    # Repo and models (setup spec §7.7): the board, its rows and its connect forms.
+    # Setup (setup spec §7.7): the board, its rows and its connect forms.
     ("setup_first_run", "app/setup/setup-board.tsx", "su-board"),
     ("setup_first_run", "app/setup/setup-board.tsx", "su-verdict"),
     ("setup_first_run", "app/setup/repository-row.tsx", "su-token-input"),
@@ -1576,7 +1576,7 @@ def live_gate(page, ctx: Context, goto: Callable[[str], None]) -> str:
             f"approved; {done_before}→{done_after} steps done; pill {pill_before}→{pill_after}")
 
 
-# ----------------------------------------------------------------------------- Repo and models
+# ----------------------------------------------------------------------------- Setup
 SETUP_FULL_TOKEN = "ghp_e2e_full"                     # stubs/github_probes.py profiles
 SETUP_READ_ONLY_TOKEN = "ghp_e2e_contents_read_only"
 

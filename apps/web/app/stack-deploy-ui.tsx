@@ -270,7 +270,7 @@ function RepoSelect({ repos, suggested, value, onChange }: {
       <label>
         Repository
         <span className="detail" data-testid="stack-no-repos">
-          No repository is registered, connect one under Repo and models.
+          No repository is registered, connect one under Setup.
         </span>
         <input type="hidden" name="repository" value="" />
       </label>

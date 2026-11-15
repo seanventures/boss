@@ -863,7 +863,7 @@ class _FakeBoss:
                 if self.path == "/v1/setup/models" and body.get("kind") == "subscription":
                     outer.sources.append({"source_id": outer.SUBSCRIPTION_SOURCES[body["provider"]],
                                           "connection_status": "connected"})
-                    # Repo and models' connect proves it with one governed test turn, then
+                    # Setup's connect proves it with one governed test turn, then
                     # answers with the whole view.
                     return self._reply(200, {"models": [
                         {"provider": body["provider"], "pill": {"state": "working"}}]})

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * Repo and models › Models holds what System Configuration › AI Capacity did (spec §2.3,
+ * Setup › Models holds what System Configuration › AI Capacity did (spec §2.3,
  * P-S-46, P-S-47, P-S-49; operator decision §11.2), in ONE list with no second key form: every
  * source with its state, `Store credential` (with the secret backend) for a source with no key,
  * `Replace key` (the Add a model drawer) for one that is a Models row, `Start official session` /
@@ -52,7 +52,7 @@ const writes = (calls: Rec[]) => calls.filter((x) => x.method !== "GET" && x.bod
 /** A row's ⋯ menu, opened. */
 async function menu(row: HTMLElement) { await click(q(row, "su-model-menu")); }
 
-describe("Capacity on Repo and models", () => {
+describe("Capacity on Setup", () => {
   it("lists every source with its state, and links Broker skills into Skills", async () => {
     api(withAnthropicRow());
     mounted = await mountBoard(withAnthropicRow());

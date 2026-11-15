@@ -1,4 +1,4 @@
-"""Every state Repo and models can show, and the one way each is said.
+"""Every state Setup can show, and the one way each is said.
 
 The page used to have five verdicts for one question — a header chip, step ticks, card badges,
 table dots and a sentence under each form — and they disagreed, because each card judged for

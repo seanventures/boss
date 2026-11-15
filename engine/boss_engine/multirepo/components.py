@@ -192,7 +192,7 @@ def validate(db: Any, project_id: str, components: list[dict[str, Any]]) -> list
         full = bindings[bid]["full_name"]
         refused = registry.mint_allowed(db, org_id, [full])
         if refused:
-            raise MultiRepoError(409, "not_allowed", f"{full} is not allowed in Repo and models.")
+            raise MultiRepoError(409, "not_allowed", f"{full} is not allowed in Setup.")
         kind = str(raw.get("kind") or "code")
         if kind not in KINDS:
             raise MultiRepoError(422, "bad_kind", f"{name}: a component is code or deploy config.")

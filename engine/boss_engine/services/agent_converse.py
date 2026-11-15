@@ -91,7 +91,7 @@ STOPPED = {"kind": "stopped", "headline": "Stopped.", "action": "Ask again when 
 
 _CITE = re.compile(r"\[act:(act_[A-Za-z0-9_]+)\]")
 _MENTION = re.compile(r"@([a-z0-9_]+)")
-NEEDS_MODEL_MESSAGE = "Needs a model. Connect one in Repo and models."
+NEEDS_MODEL_MESSAGE = "Needs a model. Connect one in Setup."
 
 
 class ConverseError(Exception):

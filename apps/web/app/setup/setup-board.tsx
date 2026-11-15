@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Repo and models, one board, one state.
+ * Setup, one board, one state.
  *
  * WHY THIS REPLACED setup-ui.tsx. The old page was forms that performed actions, so its state was
  * whatever the last form said: eight GETs on load, five verdicts that disagreed, a paragraph per
@@ -20,7 +20,7 @@
  */
 import { GatedButton, useGate } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowClockwise } from "@phosphor-icons/react";
+import { ArrowClockwise, Cpu, GitBranch, Lightning, SlidersHorizontal, Ticket } from "@phosphor-icons/react";
 
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import {
@@ -43,6 +43,8 @@ import { ToolchainsRow } from "./toolchains-row";
 import { GatewaysRow } from "./gateways-row";
 import { PoolsRow } from "./pools-row";
 import { TicketSystemsRow } from "./ticket-systems-row";
+import { SetupSection } from "./setup-section";
+import { accountsOf } from "./setup-blocks";
 import { EventsRow } from "../events/events-row";
 import { SharingAsk } from "../improve/sharing-ask";
 import { CiWorkflowsToggle } from "./ci-workflows-toggle";
@@ -136,7 +138,7 @@ function navigate(area: "welcome" | "setup"): void {
 
 /**
  * Three layouts over one server view (BOSSAPP-808):
- *  - `"setup"` (area=setup, "Repo and models"): the 1 GitHub, 2 Repos, 3 Model stepper while a
+ *  - `"setup"` (area=setup, "Setup"): the 1 GitHub, 2 Repos, 3 Model stepper while a
  *    repository or a model is missing, then the board, GitHub accounts, Repositories, Models , 
  *    with every earlier row and setting under Advanced settings. Never the Welcome.
  *  - `"welcome"` (area=welcome, "Get started"): the 3-step Welcome. Its steps deep-link into Setup.
@@ -283,6 +285,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   useEffect(() => {
     if (params.focus && ADVANCED_ROWS.includes(params.focus)) setClassicOpen(true);
   }, [params.focus]);
+  // The Ticket systems section's folded line, from the row's own read.
+  const [ticketWords, setTicketWords] = useState("");
   // Get started's "Add a model" opens the Models block's drawer once; closing it is final.
   const [modelAddDone, setModelAddDone] = useState(false);
   // BUDGET LIVES IN GOVERN: an old `focus=budget` link goes straight to Govern › Limits, never to a
@@ -320,7 +324,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   if (!view || !ctx) {
     return (
       <div className="su-board" data-testid="su-board">
-        <header className="su-head"><h1>Repo and models</h1></header>
+        <header className="su-head"><h1>Setup</h1></header>
         {error ? (
           <div className="su-line" role="alert" data-testid="su-load-error">
             <span className="su-pill su-tone-red" title={error} data-tip={error}>
@@ -353,7 +357,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   const shift = (n: number | null) => (n && signinShown ? n + 1 : n);
 
   // EVERY SETTING NOT SHOWN ON THE BOARD, one plain line each: the classic board folds them under
-  // Advanced; Repo and models' board lists them under Advanced settings, and nothing else.
+  // Advanced; Setup's board lists them under Advanced settings, and nothing else.
   const advancedItems = (
     <>
           <div className="su-adv-item" ref={ref("github_app")}><Why id="github_app" /><GitHubAccessRow /></div>
@@ -387,7 +391,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   const classicBody = (nested: boolean) => (
     <>
         <header className="su-head">
-          {!nested ? <h1>Repo and models</h1> : null}
+          {!nested ? <h1>Setup</h1> : null}
           <span className={`su-pill su-verdict su-tone-${view.verdict.tone}`} data-testid="su-verdict"
                 title={view.verdict.tip} data-tip={view.verdict.tip}>
             <Dot tone={view.verdict.tone} />{view.verdict.label}
@@ -497,7 +501,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
       <BoardContext.Provider value={ctx}>
         <div className="su-board" data-testid="su-board" data-layout="setup">
           <header className="su-head">
-            <h1>Repo and models</h1>
+            <h1>Setup</h1>
             <span className={`su-pill su-verdict su-tone-${view.verdict.tone}`} data-testid="su-setup-verdict"
                   title={view.verdict.tip} data-tip={view.verdict.tip}>
               <Dot tone={view.verdict.tone} />{view.verdict.label}
@@ -516,14 +520,24 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
               Test all
             </GatedButton>
           </header>
+          {/* ONE FOLD PER TOPIC (operator, 2026-11-15): Repos, Models, Ticket systems, Events,
+              each a line of state when folded (setup-section.tsx). */}
+          <SetupSection id="repos" title="Repos" icon={<GitBranch size={16} />} summary={repoSummary(view)}
+                        tone={repoTone(view)} attention={repoTone(view) !== "green"}
+                        focused={focus === "repository" || focus === "github" || blockOpen === "account"}>
           <div ref={ref("repository")} className="su-stack">
             <SetupBlocks onAdvanced={openAdvanced} initialOpen={blockOpen === "account" ? "account" : null}
                          key={blockOpen ?? "none"} />
           </div>
+          </SetupSection>
           {/* ONE MODELS SECTION (operator, 2026-11-05: "We have two areas to add model"): the
               full list, each model's status, its one fix, Details and ⋯, Claude's "pays with" , 
               then the org's embedding model and who does what. Nothing about models is repeated
               under Advanced settings. */}
+          <SetupSection id="models" title="Models" icon={<Cpu size={16} />} summary={modelSummary(view)}
+                        tone={modelTone(view)} attention={modelTone(view) !== "green"}
+                        focused={focus === "models" || focus === "capacity" || focus === "embedding_model"
+                          || Boolean(params.add) || Boolean(params.source) || blockOpen === "model"}>
           <ModelsRow block ref={ref("models")} mode="done" step={null}
                      focused={focus === "models" || focus === "capacity"}
                      add={params.add ?? modelAdd} source={params.source}
@@ -544,15 +558,25 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
               }
             }} />
           </ModelsRow>
-          <div ref={ref("ticket_systems")}><TicketSystemsRow projectId={projectId} focused={focus === "ticket_systems"} /></div>
-          <div><EventsRow projectId={projectId} /></div>
+          </SetupSection>
+          <SetupSection id="ticket_systems" title="Ticket systems" icon={<Ticket size={16} />} summary={ticketWords || "…"}
+                        tone={ticketWords.includes("not shared") ? "amber" : ticketWords === "None yet" ? "grey" : "green"}
+                        focused={focus === "ticket_systems"}>
+            <div ref={ref("ticket_systems")}><TicketSystemsRow projectId={projectId} focused={focus === "ticket_systems"} onSummary={setTicketWords} /></div>
+          </SetupSection>
+          <SetupSection id="events" title="Events" icon={<Lightning size={16} />} summary="Slack, GitHub or a webhook wakes an agent"
+                        focused={focus === "events"}>
+            <div ref={ref("events")}><EventsRow projectId={projectId} /></div>
+          </SetupSection>
           <details className="su-advanced su-advanced-all" data-testid="su-advanced-all" ref={classicRef}
                    open={classicOpen}
                    onToggle={(e) => setClassicOpen((e.currentTarget as HTMLDetailsElement).open)}>
             <summary className="su-advanced-summary" data-testid="su-advanced-all-toggle"
                      title="The org's GitHub App, repo registry, CI, builds, routing, budget, public URL."
                      data-tip="The org's GitHub App, repo registry, CI, builds, routing, budget, public URL.">
+              <span className="su-sec-icon" aria-hidden><SlidersHorizontal size={16} /></span>
               Advanced settings
+              <span className="su-sec-sum">GitHub App, CI, builds, routing, public URL</span>
             </summary>
             <div className="su-board su-board-inner su-adv-list">
               {signinShown ? (
@@ -586,3 +610,26 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
     </BoardContext.Provider>
   );
 }
+
+// ── the folded lines (one per section, setup-section.tsx) ────────────────────────────────────
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+const worst = (tones: string[]): "green" | "amber" | "red" | "grey" =>
+  tones.includes("red") ? "red" : tones.includes("amber") ? "amber" : tones.length ? "green" : "grey";
+
+/** "2 repos · 1 GitHub account" — or what is missing. */
+export function repoSummary(view: SetupView): string {
+  const repos = view.repository.repos.length;
+  const accounts = accountsOf(view).length;
+  if (!repos && !accounts) return "No GitHub account yet";
+  if (!repos) return `${plural(accounts, "GitHub account")} · no repo yet`;
+  return `${plural(repos, "repo")} · ${plural(accounts || 1, "GitHub account")}`;
+}
+export const repoTone = (view: SetupView) => worst(view.repository.repos.map((r) => r.pill.tone));
+
+/** "Claude Sonnet · 2 more" — or "No model yet". */
+export function modelSummary(view: SetupView): string {
+  const models = view.models;
+  if (!models.length) return "No model yet";
+  return `${models[0].label}${models.length > 1 ? ` · ${models.length - 1} more` : ""}`;
+}
+export const modelTone = (view: SetupView) => worst(view.models.map((m) => m.pill.tone));

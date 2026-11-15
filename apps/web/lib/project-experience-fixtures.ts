@@ -304,7 +304,7 @@ export const FX_SETTINGS = {
     { key: "autonomy", label: "Autonomy & budget", icon: "gauge", moved_from: "Govern",
       items: [{ label: "Autonomy", value: "Ask before merge", sub: "level 1", href: "?area=agent_ops" }, { label: "Budget", value: "$50 / week", sub: "28% used", href: "?area=budget" }],
       actions: [{ label: "Change in Govern", href: "?area=budget", requires: "" }] },
-    { key: "repos", label: "Repositories", icon: "git", moved_from: "Repo and models",
+    { key: "repos", label: "Repositories", icon: "git", moved_from: "Setup",
       items: [{ label: "paramg/helpdesk-ai-demo", value: "main", sub: "read · branch · PR", href: "https://github.com/paramg/helpdesk-ai-demo" }],
       actions: [{ label: "Add repo", href: "?area=setup&focus=repository", requires: "" }] },
     { key: "notifications", label: "Notifications", icon: "bell", moved_from: "",

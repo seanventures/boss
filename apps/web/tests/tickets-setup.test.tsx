@@ -10,9 +10,9 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { tileLine } from "../app/setup/add-ticket-system";
-import { TicketSystemsRow } from "../app/setup/ticket-systems-row";
+import { TicketSystemsRow, ticketSummary } from "../app/setup/ticket-systems-row";
 import { ConnectionSection } from "../app/skills/connection-section";
-import { codeWords, oauthReady, parseConnection, pickupWords, writesWords } from "../lib/tickets";
+import { askOwnerWords, codeWords, oauthReady, parseConnection, pickupWords, writesWords } from "../lib/tickets";
 import { $, $$, mount, settle, unmount } from "./_helpers/live-render";
 
 const JIRA = {
@@ -69,7 +69,7 @@ const type = async (sel: string, value: string) => {
 };
 const click = async (sel: string) => { ($(sel) as HTMLElement).click(); await settle(); };
 
-afterEach(() => { unmount(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { unmount(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
 
 describe("words", () => {
   it("says write-back and the pick-up rule in one line each, and a code as a sentence", () => {
@@ -94,44 +94,119 @@ describe("Setup › Ticket systems (T1)", () => {
     api((url) => (url.startsWith("/v1/ticket-systems?project_id=") ? json({ connections: [shared] }) : undefined));
     await mount(<TicketSystemsRow projectId="helpdesk-laptop" />);
     expect($('[data-testid="tk-systems-empty"]')).toBeNull();
-    expect($('[data-testid="tk-shared-wtp_home"]')?.textContent).toContain("added in BOSS dogfood bootstrap");
-    expect($('[data-testid="tk-system-wtp_home"]')?.textContent).toContain("KAN → BOSS dogfood bootstrap");
+    expect($('[data-testid="tk-shared-wtp_home"]')?.textContent?.trim()).toBe("Shared");
+    expect($('[data-testid="tk-shared-from-wtp_home"]')?.textContent).toBe("added in BOSS dogfood bootstrap");
+    // Nothing maps here: say where its tickets land; the whole mapping is the tooltip.
+    expect($('[data-testid="tk-maps-wtp_home"]')?.textContent).toBe("None · lands in BOSS dogfood bootstrap");
+    expect($('[data-testid="tk-maps-wtp_home"]')?.getAttribute("title")).toBe("KAN → BOSS dogfood bootstrap");
+    // The one door says a REAL key of the connection, never a made-up LEND-142.
+    expect($('[data-testid="tk-where-key"]')?.textContent).toBe("KAN-12");
+    expect($('[data-testid="tk-where-new"]')?.getAttribute("href")).toBe("?area=project&project_id=helpdesk-laptop&tab=work&compose=1");
     expect(parseConnection(shared).reach).toBe("org");
     await click('[data-testid="tk-menu-wtp_home"]');
     expect(($('[data-testid="tk-off-wtp_home"]') as HTMLButtonElement | null)?.disabled
            ?? $('[data-testid="tk-off-wtp_home"]')?.getAttribute("aria-disabled") === "true").toBeTruthy();
   });
 
-  it("names another project's connection that is NOT shared, and offers nothing to use", async () => {
-    const hidden = { id: "wtp_other", provider: "jira", label: "Jira", status: "not_shared", reach: "unshared",
-                     home_project: { id: "boss-dogfood", name: "BOSS dogfood bootstrap" } };
-    api((url) => (url.startsWith("/v1/ticket-systems?project_id=") ? json({ connections: [hidden] }) : undefined));
-    await mount(<TicketSystemsRow projectId="helpdesk-laptop" />);
-    expect($('[data-testid="tk-unshared-wtp_other"]')?.textContent)
-      .toBe("Jira was added in BOSS dogfood bootstrap and is not shared with this project.");
-    expect($('[data-testid="tk-system-wtp_other"]')).toBeNull();
-    expect($('[data-testid="tk-systems-empty"]')).not.toBeNull();
+  // 2026-11-15: "I dont see anything … why are you not showing the jira ticket system that was
+  // added ?" — the org HAS a Jira; the project was told "No ticket system yet". Now the headline
+  // is the org's connection, with its one way out.
+  const HIDDEN = { id: "wtp_other", provider: "jira", label: "Jira", status: "not_shared", reach: "unshared",
+                   home_project: { id: "boss-dogfood", name: "BOSS dogfood bootstrap", owners: ["Param G", "Sean"] } };
+
+  it("a project with none of its own headlines the org's unshared one, and Share it opens its switch", async () => {
+    const calls = api((url) => {
+      if (url.startsWith("/v1/ticket-systems?project_id=")) return json({ connections: [{ ...HIDDEN, can_manage: true }] });
+      if (url.startsWith("/v1/ticket-systems/org?")) return json({ connections: [{ ...JIRA, id: "wtp_other", project_id: "boss-dogfood",
+        reach: "unshared", usable_here: false, can_manage: true, home_project: HIDDEN.home_project, project_names: { p1: "Lending" } }] });
+      return undefined;
+    });
+    window.history.replaceState(null, "", "/?org=org_boss&area=setup&project_id=northgate&focus=ticket_systems");
+    await mount(<TicketSystemsRow projectId="northgate" />);
+    expect($('[data-testid="tk-systems-empty"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("No ticket system yet");
+    expect($('[data-testid="tk-org-headline"]')?.textContent).toBe("Jira is connected in BOSS dogfood bootstrap, not shared here yet");
+    const link = $('[data-testid="tk-unshared-wtp_other-share"]') as HTMLAnchorElement;
+    expect(link.textContent?.trim()).toBe("Share it");
+    // The deep link keeps who you are and where you are, and names the connection.
+    expect(link.getAttribute("href")).toBe("?org=org_boss&area=setup&focus=ticket_systems&project_id=northgate&tk=all&share=wtp_other");
+    expect($('[data-testid="tk-add-empty"]')?.textContent).toBe("or add another ticket system");
+    // Pressed here, it switches to All in org with the share asked: one press from done.
+    await click('[data-testid="tk-unshared-wtp_other-share"]');
+    await settle();
+    expect($('[data-testid="tk-view-all"]')?.getAttribute("aria-selected")).toBe("true");
+    expect($('[data-testid="tk-system-wtp_other"]')?.getAttribute("data-spot")).toBe("true");
+    expect($('[data-testid="tk-share-confirm"]')?.textContent).toContain("Everyone in Kaappu Labs and their agents can read tickets");
+    expect(new URLSearchParams(window.location.search).get("share")).toBe("wtp_other");
+    await click('[data-testid="tk-share-yes"]');
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect([patch.url, patch.body]).toEqual(["/v1/ticket-systems/wtp_other", { share_with_org: true }]);
   });
 
-  it("the home card shares a connection with the whole org, saying what that means", async () => {
-    const calls = api();
+  it("a person who cannot manage it there is told whom to ask, never sent to a switch", async () => {
+    api((url) => (url.startsWith("/v1/ticket-systems?project_id=") ? json({ connections: [{ ...HIDDEN, can_manage: false }] }) : undefined));
+    await mount(<TicketSystemsRow projectId="northgate" />);
+    expect($('[data-testid="tk-org-headline"]')?.textContent).toBe("Jira is connected in BOSS dogfood bootstrap, not shared here yet");
+    expect($('[data-testid="tk-unshared-wtp_other-share"]')).toBeNull();
+    expect($('[data-testid="tk-unshared-wtp_other-ask"]')?.textContent?.trim())
+      .toBe("Ask Param G or Sean (owner of BOSS dogfood bootstrap) to share it");
+    expect(askOwnerWords({ id: "x", name: "Ops", owners: [] })).toBe("Ask an owner of Ops to share it");
+  });
+
+  it("All in org lists every connection with where it was added and whose token, managed per row", async () => {
+    api((url) => (url.startsWith("/v1/ticket-systems/org?") ? json({ connections: [
+      { ...JIRA, id: "wtp_mine", reach: "project", usable_here: true, can_manage: true, home_project: { id: "p1", name: "Lending", owners: [] } },
+      { ...JIRA, id: "wtp_theirs", project_id: "ops", reach: "unshared", usable_here: false, can_manage: false, last4: null,
+        home_project: { id: "ops", name: "Ops", owners: ["Dana"] }, settings: { ...JIRA.settings, mappings: [{ external_project: "OPS", boss_project_id: "ops", default: true }] },
+        project_names: { ops: "Ops" } },
+    ] }) : undefined));
+    window.history.replaceState(null, "", "/?area=setup&tk=all");
     await mount(<TicketSystemsRow projectId="p1" />);
-    const toggle = $('[data-testid="tk-share-toggle-wtp_1"]') as HTMLInputElement;
-    expect(toggle.checked).toBe(false);
-    expect($('[data-testid="tk-share-wtp_1"]')?.getAttribute("title"))
-      .toBe("Everyone in Kaappu Labs and their agents can read tickets through this connection using BOSS Bot's token.");
-    toggle.click();
-    await settle();
+    expect($('[data-testid="tk-home-wtp_mine"]')?.textContent).toContain("This project");
+    expect($('[data-testid="tk-home-wtp_mine"]')?.textContent).toContain("as BOSS Bot");
+    expect($('[data-testid="tk-home-wtp_theirs"]')?.textContent).toContain("Ops");
+    expect($('[data-testid="tk-system-wtp_theirs"]')?.textContent).toContain("OPS → Ops (default)");
+    // Sharing is one control in its own column; a row the viewer cannot manage is locked, with whom to ask.
+    expect(($('[data-testid="tk-share-wtp_mine"]') as HTMLButtonElement).disabled).toBe(false);
+    expect(($('[data-testid="tk-share-wtp_theirs"]') as HTMLButtonElement).disabled).toBe(true);
+    expect($('[data-testid="tk-share-wtp_theirs"]')?.getAttribute("title")).toBe("Ask Dana to change who can use it.");
+    expect($('[data-testid="tk-org-ask-wtp_theirs-ask"]')?.textContent?.trim()).toBe("Ask Dana (owner of Ops) to share it");
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("sharing is a pill on the row whose press asks in whose-token words, then switches it", async () => {
+    const calls = api();
+    window.history.replaceState(null, "", "/");
+    await mount(<TicketSystemsRow projectId="p1" />);
+    const pill = $('[data-testid="tk-share-wtp_1"]') as HTMLButtonElement;
+    expect(pill.textContent?.trim()).toBe("This project only");
+    expect(pill.getAttribute("aria-pressed")).toBe("false");
+    expect(pill.getAttribute("title"))
+      .toBe("Only this project uses it. Press to share: Everyone in Kaappu Labs and their agents can read tickets through this connection using BOSS Bot's token.");
+    await click('[data-testid="tk-share-wtp_1"]');
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+    expect($('[data-testid="tk-share-confirm"]')?.textContent)
+      .toContain("Everyone in Kaappu Labs and their agents can read tickets through this connection using BOSS Bot's token.");
+    await click('[data-testid="tk-share-yes"]');
     const patch = calls.find((c) => c.method === "PATCH")!;
     expect([patch.url, patch.body]).toEqual(["/v1/ticket-systems/wtp_1", { share_with_org: true }]);
     expect($('[data-testid="tk-said"]')?.textContent).toBe("Jira is shared with the whole org.");
+  });
+
+  it("the folded section's line says what is there", () => {
+    const c = parseConnection({ ...JIRA, settings: { ...JIRA.settings, share_with_org: true,
+      mappings: [{ external_project: "KAN", boss_project_id: "a", default: true }, { external_project: "SAM", boss_project_id: "b" }] } });
+    expect(ticketSummary([c], [])).toBe("Jira · shared · 2 projects mapped");
+    expect(ticketSummary([], [parseConnection(HIDDEN)])).toBe("Jira in BOSS dogfood bootstrap · not shared here");
+    expect(ticketSummary([], [])).toBe("None yet");
   });
 
   it("lists a connection, tests it, opens its settings and disconnects only after confirming", async () => {
     const calls = api();
     await mount(<TicketSystemsRow projectId="p1" />);
     expect($('[data-testid="tk-system-wtp_1"]')?.textContent).toContain("northpeak.atlassian.net");
-    expect($('[data-testid="tk-system-wtp_1"]')?.textContent).toContain("LEND → this project (default)");
+    expect($('[data-testid="tk-maps-wtp_1"]')?.textContent).toBe("LEND");
+    expect($('[data-testid="tk-maps-wtp_1"]')?.getAttribute("title")).toBe("LEND → this project (default)");
     expect($('[data-testid="tk-pickup-wtp_1"]')?.textContent).toBe("Label “boss” → ask first");
     expect($('[data-testid="tk-where"]')).not.toBeNull();
     expect(document.body.textContent).not.toContain("whsec");

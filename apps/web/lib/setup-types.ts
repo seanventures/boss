@@ -1,5 +1,5 @@
 /**
- * Repo and models: the frozen contract with GET /v1/setup (apps/api/app/schemas_setup.py).
+ * Setup: the frozen contract with GET /v1/setup (apps/api/app/schemas_setup.py).
  *
  * The server decides every pill — label, tone, tooltip, action — so the console only renders.
  * Nothing in apps/web computes a tone from a state (tests/setup-renders-server-pills.test.tsx).
@@ -241,7 +241,7 @@ export type SetupView = {
   /** "Build speed": parallel sub-agents per build (project setting build_speed). Absent on an older API. */
   build_speed?: { key: string; mode: "balanced" | "fastest"; parallelism: number; machine: number;
                   asks?: Record<string, number>; source: "project" | "default"; permission: string } | null;
-  /** Setup › Repo and models › Embedding model, the org's (knowledge/embedding_slot.py). Absent on an older API. */
+  /** Setup › Embedding model, the org's (knowledge/embedding_slot.py). Absent on an older API. */
   embedding_model?: EmbeddingModel | null;
   /** Whose models these are (org_models.view): the org's, its model home, this project's pins. */
   models_scope?: ModelsScope | null;
@@ -294,7 +294,7 @@ export type SetupRepository = {
   pill: Pill | null;
 };
 
-/** Setup › Repo and models › Models is the org's: set once, every project uses it. */
+/** Setup › Models is the org's: set once, every project uses it. */
 export type ModelsScope = {
   scope: "org" | "project";
   org_id: string | null;
@@ -376,5 +376,5 @@ export type RowKey = "github" | "repository" | "models" | "capacity" | "jobs" | 
   /** Advanced: the rows folded under it (`focus=` opens the fold on that row). */
   | "advanced" | "github_app" | "repositories" | "ci" | "build_database" | "build_speed" | "toolchains" | "public_url"
   | "embedding_model"
-  /** Setup › Ticket systems (BOSSAPP-1047): on the board, never folded. */
-  | "ticket_systems";
+  /** Setup › Ticket systems (BOSSAPP-1047) and Events: sections of the board. */
+  | "ticket_systems" | "events";

@@ -183,6 +183,34 @@ describe("T3 · New work from a ticket", () => {
     expect(tid("px-nw-ticket-errors")!.textContent).toContain("was not found in https://paramg.atlassian.net (Jira)");
   });
 
+  // 2026-11-15: a key the org's Jira has, from a project it is not shared with, says where it is
+  // and the one way out: Share it (a manager there) or whom to ask (anyone else).
+  const NOT_SHARED = { ref: "KAN-7", error: "not_shared", connection_id: "wtp_home", label: "Jira",
+    message: "The Jira connection was added in BOSS dogfood bootstrap and is not shared with this project.",
+    home_project: "boss-dogfood", home_project_name: "BOSS dogfood bootstrap", owners: ["Param G"] };
+
+  it("a key from a ticket system not shared here offers Share it to a person who can", async () => {
+    engine(() => ({ body: { tickets: [], refs: [], connected: 0, errors: [{ ...NOT_SHARED, can_manage: true }] } }));
+    await openModal();
+    await type(tid("px-compose-text"), "KAN-7");
+    await pause();
+    expect(tid("px-nw-ticket-not-shared")!.textContent).toContain("KAN-7: Jira is in BOSS dogfood bootstrap");
+    const link = tid("px-nw-not-shared-share")!;
+    expect(link.textContent!.trim()).toBe("Share it");
+    const href = new URLSearchParams(link.getAttribute("href")!.slice(1));
+    expect(Object.fromEntries(href)).toMatchObject({ area: "setup", focus: "ticket_systems", project_id: P, tk: "all", share: "wtp_home" });
+    expect(tid("px-nw-not-shared-ask")).toBeNull();
+  });
+
+  it("and tells a person who cannot share it whom to ask", async () => {
+    engine(() => ({ body: { tickets: [], refs: [], connected: 0, errors: [{ ...NOT_SHARED, can_manage: false }] } }));
+    await openModal();
+    await type(tid("px-compose-text"), "KAN-7");
+    await pause();
+    expect(tid("px-nw-not-shared-share")).toBeNull();
+    expect(tid("px-nw-not-shared-ask")!.textContent!.trim()).toBe("Ask Param G (owner of BOSS dogfood bootstrap) to share it");
+  });
+
   it("names the system to browse when there is one: Browse Jira", () => {
     expect(browseWords(["Jira"])).toBe("Browse Jira");
     expect(browseWords([])).toBe("Browse tickets");

@@ -10,7 +10,7 @@ There are three credentials, in this order by default ("subscription first"):
       server (subscription_sign_in) and stores what it prints (`store_long_lived_token`);
       (a') the Claude CLI's own login (KIND_CLI_LOGIN, ~8 h, refreshed by claude_login) — the
       fallback when no token is held;
-  (b) the Anthropic API key the operator stored in the console (Repo and models -> Anthropic
+  (b) the Anthropic API key the operator stored in the console (Setup -> Anthropic
       API -> Store credential), read from the secret store exactly as the login is;
   (c) ANTHROPIC_API_KEY from this install's own environment.
 

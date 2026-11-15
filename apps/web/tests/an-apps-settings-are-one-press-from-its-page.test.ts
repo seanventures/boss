@@ -1,7 +1,7 @@
 /** An app's settings are one press from its own page, beside "＋ Add a feature".
  *
  *  They were only behind Factory › Apps › ⋯ › Setup. The operator, told to set two deploy
- *  settings, landed on Repo and models, then on Repositories, and asked for the steps twice. */
+ *  settings, landed on Setup, then on Repositories, and asked for the steps twice. */
 import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";

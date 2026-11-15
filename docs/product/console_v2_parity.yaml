@@ -24,8 +24,8 @@ v2_nav:
   panels: {v1Area: decisions}
   boss: {v1Area: delivery_workflows}
   timeline: {v1Area: activity, label_differs_because: "v2 shows receipts — the recorded effects — not the whole activity log."}
-  infra: {v1Area: infra, label_differs_because: "v2 puts model spend beside hosts and targets; v1 keeps models in Repo and models."}
-  settings: {v1Area: setup, label_differs_because: "/v2/settings redirects to v1 Repo and models, where the repository, models, who does what and the budget live."}
+  infra: {v1Area: infra, label_differs_because: "v2 puts model spend beside hosts and targets; v1 keeps models in Setup."}
+  settings: {v1Area: setup, label_differs_because: "/v2/settings redirects to v1 Setup, where the repository, models, who does what and the budget live."}
 
 overview:
   to: missions
@@ -81,7 +81,7 @@ meetings:
   risk: The meeting room — rounds, debate, synthesis, the drafted PRD and the consensus record — is v1-only; v2 shows only the decision a meeting produced.
 setup:
   to: settings
-  what: /v2/settings redirects to Repo and models (?area=setup).
+  what: /v2/settings redirects to Setup (?area=setup).
   risk: None — v2 has no settings screen of its own any more.
 skills:
   to: settings

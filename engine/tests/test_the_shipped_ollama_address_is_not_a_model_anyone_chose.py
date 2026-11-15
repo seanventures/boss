@@ -1,4 +1,4 @@
-"""boss-1, 2026-11-05: Repo and models listed "Ollama · Can't reach" and counted it as needing
+"""boss-1, 2026-11-05: Setup listed "Ollama · Can't reach" and counted it as needing
 the operator, on a box with no Ollama. The Community compose sets OLLAMA_BASE_URL to the host's
 address, which differs from config.py's default, so it read as a deliberate setting."""
 from boss_engine.config import Settings

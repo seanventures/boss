@@ -685,3 +685,73 @@ def test_another_org_never_sees_the_connection_and_new_work_says_connect(engine,
         assert said.status_code == 200, said.text
         assert said.json()["tickets"] == [] and said.json()["connected"] == 0
         assert "Setup › Ticket systems" in said.json()["not_connected"]["next"]
+
+
+# ---- the org's ticket systems, one global list (operator, 2026-11-15) ----------------------
+# "I think we should show the jira irrespective of the project - inside the project we can filter
+# for that project, this is the global setting." Setup › Ticket systems › All lists every
+# connection of the org, wherever it was added; a project filters to what it can use. Another
+# org sees none of it, and a person who cannot manage a connection's home is told whom to ask.
+
+def test_the_org_list_shows_every_connection_and_another_org_none(world, client, engine, jira):
+    member_b = world.person("tk-org-member-b")
+    world.bind(member_b, "operator", project=world.project_b)
+    with world.acting_as(world.ctx(world.owner)):
+        made = _connect(client, world.project_a, jira)
+        assert made.status_code == 201, made.text
+        cid = made.json()["connection"]["id"]
+        mine = client.get("/v1/ticket-systems/org", params={"project_id": world.project_a})
+        assert mine.status_code == 200, mine.text
+        row = next(c for c in mine.json()["connections"] if c["id"] == cid)
+        assert row["usable_here"] is True and row["can_manage"] is True
+        assert row["reach"] == "project" and row["settings"]["share_with_org"] is False
+        assert row["home_project"]["id"] == world.project_a
+        assert row["last4"]
+
+    with world.acting_as(world.ctx(member_b)):
+        listed = client.get("/v1/ticket-systems/org", params={"project_id": world.project_b})
+        assert listed.status_code == 200, listed.text
+        row = next(c for c in listed.json()["connections"] if c["id"] == cid)
+        # Named, with its site and whom to ask; not usable here, not manageable, no token bits.
+        assert row["usable_here"] is False and row["can_manage"] is False
+        assert row["reach"] == "unshared" and row["base_url"] == jira.base
+        assert row["home_project"]["owners"], row["home_project"]
+        assert row["last4"] is None and row["fingerprint"] is None and row["oauth_app"] is None
+        assert "api_token" not in str(row) and TOKEN not in str(listed.json())
+        # The project list says the same, with whom to ask, and the resolver can say "Share it".
+        hint = next(c for c in client.get("/v1/ticket-systems", params={
+            "project_id": world.project_b}).json()["connections"] if c["id"] == cid)
+        assert hint["can_manage"] is False and hint["home_project"]["owners"]
+        said = client.get("/v1/tickets/resolve",
+                          params={"project_id": world.project_b, "text": f"KAN-{D.STORY}"})
+        error = said.json()["errors"][0]
+        assert error["error"] == "not_shared" and error["can_manage"] is False
+        assert error["home_project"] == world.project_a and error["owners"]
+        assert error["connection_id"] == cid and error["label"] == "Jira"
+        # A key inside a sentence says the same (its prefix is matched locally, nothing is read).
+        sentence = client.get("/v1/tickets/resolve", params={
+            "project_id": world.project_b, "text": f"Please implement KAN-{D.STORY} today"}).json()
+        assert sentence["errors"][0]["error"] == "not_shared", sentence
+        assert sentence["errors"][0]["ref"] == f"KAN-{D.STORY}"
+        # And plain words with a key-like token no connection knows say nothing.
+        assert client.get("/v1/tickets/resolve", params={
+            "project_id": world.project_b, "text": "Fix the UTF-8 bug"}).json()["errors"] == []
+
+    with world.acting_as(world.ctx(world.owner)):
+        shared = client.patch(f"/v1/ticket-systems/{cid}", json={"share_with_org": True})
+        assert shared.status_code == 200, shared.text
+    with world.acting_as(world.ctx(member_b)):
+        row = next(c for c in client.get("/v1/ticket-systems/org", params={
+            "project_id": world.project_b}).json()["connections"] if c["id"] == cid)
+        assert row["usable_here"] is True and row["reach"] == "org"
+
+    other = IdentityWorld.create(engine)
+    other.owner = other.person("tk-org-other-owner")
+    other.bind(other.owner, "owner")
+    with other.acting_as(other.ctx(other.owner)):
+        theirs = client.get("/v1/ticket-systems/org", params={"project_id": other.project_a})
+        assert theirs.status_code == 200, theirs.text
+        assert cid not in {c["id"] for c in theirs.json()["connections"]}
+        # And they cannot ask about a project of another org.
+        assert client.get("/v1/ticket-systems/org",
+                          params={"project_id": world.project_a}).status_code in (403, 404)

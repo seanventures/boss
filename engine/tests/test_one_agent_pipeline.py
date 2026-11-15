@@ -127,7 +127,7 @@ ALLOWED: dict[str, tuple[str, str]] = {
     "engine/boss_engine/services/workspace_perms.py": (
         TRANSPORT, "the workspace-permission decorator wrapped around every engine's run_role"),
     "engine/boss_engine/services/setup_service.py": (
-        WORKER, "Repo and models' CLI probe: a login check and one hello run, never a build"),
+        WORKER, "Setup's CLI probe: a login check and one hello run, never a build"),
     "engine/boss_engine/services/engine_startup.py": (
         WORKER, "the start door's probe: can the engine routing picked actually start"),
     "engine/boss_engine/services/parallel_build.py": (
@@ -288,7 +288,7 @@ CONSTRUCTS_ITS_OWN: dict[str, str] = {
     "engine/boss_engine/services/codex_cli_adapter.py":
         "builds the generic harness it wraps as a chat backend",
     "engine/boss_engine/services/setup_service.py":
-        "Repo and models' CLI probe builds the harness it is probing",
+        "Setup's CLI probe builds the harness it is probing",
     "engine/boss_engine/services/debug_session.py":
         "MIGRATE: constructs ClaudeCodeAgent directly; should take make_code_agent's engine",
 }

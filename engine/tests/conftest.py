@@ -93,7 +93,7 @@ CREATE_SECRET_REFS = (
 )
 
 
-#: What Repo and models reads for the repository row (setup_view), mirroring the real columns.
+#: What Setup reads for the repository row (setup_view), mirroring the real columns.
 CREATE_GITHUB_TABLES = (
     "CREATE TABLE github_connections (id TEXT, project_id TEXT, connection_label TEXT,"
     " auth_method TEXT, credential_ref TEXT, api_base_url TEXT, status TEXT,"
@@ -108,7 +108,7 @@ CREATE_GITHUB_TABLES = (
 
 
 def create_setup_tables(conn) -> None:
-    """The stub schema Repo and models' rows read (`setup_view.build_basics`)."""
+    """The stub schema Setup's rows read (`setup_view.build_basics`)."""
     for statement in CREATE_GITHUB_TABLES:
         conn.execute(text(statement))
 
@@ -202,13 +202,13 @@ def _stub(name: str):
 
 @pytest.fixture()
 def github_probes():
-    """The fake GitHub's answers to Repo and models' probes, per token profile."""
+    """The fake GitHub's answers to Setup's probes, per token profile."""
     return _stub("github_probes")
 
 
 @pytest.fixture()
 def model_probes():
-    """The model stub's answers to Repo and models' one-question check, per key."""
+    """The model stub's answers to Setup's one-question check, per key."""
     return _stub("model_probes")
 
 
