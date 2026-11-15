@@ -50,12 +50,12 @@ func (p *Process) Run(ctx context.Context, r RunRequest) error {
 	agent := p.AgentPath
 	if agent == "" {
 		agent = filepath.Join(r.TaskDir, "in_guest_agent.py")
-		if err := os.WriteFile(agent, EmbeddedGuestAgent, 0o644); err != nil {
+		if err := os.WriteFile(agent, EmbeddedGuestAgent, FileMode); err != nil {
 			return fmt.Errorf("process backend: write guest agent: %w", err)
 		}
 	}
 	workDir := filepath.Join(r.TaskDir, "work")
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
+	if err := os.MkdirAll(workDir, DirMode); err != nil {
 		return fmt.Errorf("process backend: mkdir work: %w", err)
 	}
 
@@ -72,7 +72,7 @@ func (p *Process) Run(ctx context.Context, r RunRequest) error {
 		"BOSS_RESULT_PATH="+r.ResultPath,
 		"BOSS_WORKDIR="+filepath.Join(workDir, "repo"),
 	)
-	console, err := os.Create(r.ConsoleLog)
+	console, err := os.OpenFile(r.ConsoleLog, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, FileMode)
 	if err != nil {
 		return fmt.Errorf("process backend: open console log: %w", err)
 	}

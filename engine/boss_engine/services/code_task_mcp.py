@@ -18,12 +18,12 @@ WHAT IS LEFT OUT, AND WHY
 The file carries resolved auth headers, so it is written 0600 in a private temporary directory
 and removed when the run ends (`HarnessMcp.cleanup`).
 
-WITH THE MCP GATEWAY (BOSS_MCP_GATEWAY=on, BOSSAPP-814 — mcp_gateway.py). Every server in the
+WITH THE MCP GATEWAY (BOSS_MCP_GATEWAY, ON by default since P8-pre S4 — mcp_gateway.py). Every server in the
 file is `http://127.0.0.1:<port>/v1/mcp-gateway/<run token>/<server>`, with no upstream sign-in
 in it, plus `boss_run` (the run's own ask/report tools). Ask tools and unreviewed servers are no
 longer left out: the gateway parks each such call on a decision a person answers. Off and
-ungranted tools stay `--disallowedTools`. Off (the default), the file is byte for byte what it
-was before the gateway existed.
+ungranted tools stay `--disallowedTools`. Set off, the file is byte for byte what it was before
+the gateway existed.
 """
 from __future__ import annotations
 
@@ -203,7 +203,7 @@ def prepare(connection: Connection, settings: Any, project_id: str,
     An agent holding nothing usable gets `--strict-mcp-config` and no config at all, so the
     harness does not fall back on whatever its own home directory configures.
 
-    BOSS_MCP_GATEWAY=on (mcp_gateway): every server in the file is the gateway, and every
+    BOSS_MCP_GATEWAY on (the default; mcp_gateway): every server in the file is the gateway, and every
     session — run as an agent or not — also gets the run's own `boss_run` tools (ask a person,
     report blocked/progress, propose a follow-up). Off: exactly the file it always wrote."""
     from . import mcp_gateway

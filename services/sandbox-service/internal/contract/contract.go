@@ -6,6 +6,7 @@ package contract
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -31,6 +32,16 @@ const (
 	ReasonBackendUnavailable  = "sandbox_backend_unavailable"
 	ReasonPreviewUnsupported  = "preview_not_supported"
 	ReasonCancelled           = "cancelled_by_request"
+	// ReasonEngineEnvUnknown names an engine_env entry neither side maps to a
+	// guest field (P8-pre S5). A name the guest cannot read used to be dropped
+	// silently (the Anthropic API key, defect 1); now the submit is refused.
+	ReasonEngineEnvUnknown = "engine_env_unknown"
+	// ReasonEngineEnvNotForEngine names a known credential sent to a guest whose
+	// engine never reads it (an OpenAI or Azure key on a claude_code guest).
+	ReasonEngineEnvNotForEngine = "engine_env_not_for_engine"
+	// ReasonSecretPath: the fs endpoint never serves spec.json, .git/config or
+	// *credentials* paths of a retained workspace (P8-pre S2).
+	ReasonSecretPath = "secret_path_refused"
 )
 
 // SubmitRequest is the typed POST /v1/sandbox/tasks body.
@@ -155,6 +166,7 @@ func ValidateSubmit(req SubmitRequest) []string {
 	if req.EngineEnv == nil {
 		problems = append(problems, "engine_env must be an object")
 	}
+	problems = append(problems, EngineEnvProblems(req.Engine, req.EngineEnv)...)
 	if !IsEcho(req) {
 		if strings.TrimSpace(req.Repo.Owner) == "" || strings.TrimSpace(req.Repo.Name) == "" {
 			problems = append(problems, "repo.owner and repo.name are required")
@@ -190,6 +202,56 @@ var engineEnvToSpec = map[string]string{
 	"AZURE_OPENAI_DEPLOYMENT":  "azure_deployment",
 	"AZURE_OPENAI_API_VERSION": "azure_api_version",
 	"AZURE_OPENAI_KEY":         "azure_key",
+}
+
+// engineEnvByEngine lists, per guest engine, the engine_env names that engine
+// reads. Python's sandbox_contract.ENGINE_ENV_BY_ENGINE is the same table: a
+// guest is sent only its own engine's credential (P8-pre S5).
+var engineEnvByEngine = map[string][]string{
+	"echo":        {},
+	"claude_code": {"CLAUDE_CODE_OAUTH_TOKEN"},
+	"openai": {"OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "AZURE_OPENAI_ENDPOINT",
+		"AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_KEY"},
+	"native": {"OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "AZURE_OPENAI_ENDPOINT",
+		"AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_KEY"},
+}
+
+func engineReads(engine, name string) bool {
+	names, known := engineEnvByEngine[strings.ToLower(strings.TrimSpace(engine))]
+	if !known {
+		return true // an engine this table does not list is not narrowed here
+	}
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// EngineEnvProblems refuses, with a named reason, every engine_env name the
+// guest cannot read and every credential not meant for this engine. Names
+// only: a value never appears in a problem.
+func EngineEnvProblems(engine string, env map[string]string) []string {
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var problems []string
+	for _, name := range names {
+		if _, ok := engineEnvToSpec[name]; !ok {
+			problems = append(problems, fmt.Sprintf(
+				"%s: engine_env %s is not a name the guest reads", ReasonEngineEnvUnknown, name))
+			continue
+		}
+		if !engineReads(engine, name) {
+			problems = append(problems, fmt.Sprintf(
+				"%s: engine_env %s is not read by engine %s", ReasonEngineEnvNotForEngine, name,
+				strings.ToLower(strings.TrimSpace(engine))))
+		}
+	}
+	return problems
 }
 
 // TimeoutSeconds coerces the submit body's `timeout` (number, numeric string
@@ -243,6 +305,9 @@ func GuestSpec(req SubmitRequest) map[string]any {
 		spec["token"] = req.GitToken
 	}
 	for envName, field := range engineEnvToSpec {
+		if !engineReads(engine, envName) {
+			continue // never stage another engine's credential (P8-pre S1/S5)
+		}
 		if v, ok := req.EngineEnv[envName]; ok && v != "" {
 			spec[field] = v
 		}

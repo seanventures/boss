@@ -173,12 +173,19 @@ def _env_key(settings: Any) -> str:
             or (os.environ.get(STORED_KEY_NAME) or "").strip())
 
 
-def _store_lookup(settings: Any, name: str) -> str:
+def _store_lookup(settings: Any, name: str, connection: Any = None,
+                  project_id: Optional[str] = None) -> str:
     """The install's secret store only (never the environment); raises
-    CredentialStoreUnavailable when the store did not answer."""
+    CredentialStoreUnavailable when the store did not answer.
+
+    Through `stored_credential`, i.e. through `resolve_secret_ref` as the system principal
+    (P8-pre S3): every read writes a secret_access_events row naming the run, and a reference
+    scoped to another person or agent is refused."""
     from .cli_harness import stored_credential
 
-    return stored_credential(settings, name, strict=True, include_env=False) or ""
+    where = ({"connection": connection, "project_id": project_id}
+             if connection is not None else {})
+    return stored_credential(settings, name, strict=True, include_env=False, **where) or ""
 
 
 def _subscription_token(settings: Any, connection: Any, project_id: Optional[str]) -> str:
@@ -190,7 +197,7 @@ def _subscription_token(settings: Any, connection: Any, project_id: Optional[str
         ref = _project_ref(connection, project_id, token=True)
         if ref:
             return _resolve_ref(connection, settings, ref, project_id)
-    return _store_lookup(settings, TOKEN_NAME)
+    return _store_lookup(settings, TOKEN_NAME, connection, project_id)
 
 
 def _project_ref(connection: Any, project_id: str, *, token: bool) -> Optional[str]:
@@ -242,7 +249,7 @@ def _stored_key(settings: Any, connection: Any, project_id: Optional[str]) -> st
         ref = _project_ref(connection, project_id, token=False)
         if ref:
             return _resolve_ref(connection, settings, ref, project_id)
-    return _store_lookup(settings, STORED_KEY_NAME)
+    return _store_lookup(settings, STORED_KEY_NAME, connection, project_id)
 
 
 def resolve_claude_credential(settings: Any, *, connection: Any = None,

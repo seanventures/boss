@@ -23,6 +23,8 @@ GET_NOT_READ = {
     "telemetry:share": "the outbound share bundle (it is what leaves the install)",
     "agent:invoke": "a deployed agent's threads and runs are read by whoever may run it (the Agent "
                     "Protocol; a runs-only service account holds agent:invoke alone, AP-P3)",
+    "fleet:host": "an enrolled agent host reads its own desired state and its runs' checkpoints, "
+                  "answers and tools over the run plane (P8a); no person holds it",
     "role_binding:assign": "a project's bindings, for the Admin who manages that project's access "
                            "(role_binding:read is org-only)",
 }

@@ -211,6 +211,12 @@ def install_pair(tmp_path: Path) -> tuple[Path, str, str, dict[str, str], Path]:
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    # Free disk as df -Pk prints it: upgrade.sh checks the disk before it builds (storage
+    # hygiene layer 1), and the machine running the tests is not what is under test here.
+    df = bin_dir / "df"
+    df.write_text("#!/bin/sh\necho 'Filesystem 1024-blocks Used Available Capacity Mounted on'\n"
+                  "echo \"/dev/test 999999999 1 ${BOSS_TEST_FREE_KB:-900000000} 1% /\"\n")
+    df.chmod(0o755)
     docker = bin_dir / "docker"
     docker.write_text(
         "#!/usr/bin/env bash\n"

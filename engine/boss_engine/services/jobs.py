@@ -155,6 +155,16 @@ def stopped_run_reason(
     return f"{table[:-1]} {run_id} is {status}; not queueing further work for it"
 
 
+def _run_placement(connection: Connection, run_id: str) -> dict[str, Any]:
+    """`{"runtime": "microvm", "deployment_id": ...}` for a run of a microvm deployment, else {}."""
+    row = connection.execute(
+        text("SELECT finalize_ctx->>'runtime', finalize_ctx->>'deployment_id' FROM agent_runs "
+             "WHERE id = :r"), {"r": run_id}).first()
+    if row is None or row[0] != "microvm":
+        return {}
+    return {"runtime": "microvm", "deployment_id": row[1]}
+
+
 def enqueue_job(
     connection: Connection,
     project_id: str,
@@ -207,6 +217,17 @@ def enqueue_job(
         from boss_engine.identity import runs as _identity_runs
 
         on_behalf_of = _identity_runs.original_build_authority(connection, str(payload["run_id"]))
+    if kind in ("agent.run", "agent.resume") and (payload or {}).get("run_id") \
+            and "runtime" not in (payload or {}):
+        # WHERE AN AGENT RUN EXECUTES IS THE RUN'S, NOT THE ENQUEUER'S (P8a): every job of a run
+        # admitted on a `runtime: microvm` deployment — its first job, a resume after a person
+        # answered, a retry — carries the run's placement, so no local worker ever claims it.
+        payload = {**(payload or {}), **_run_placement(connection, str(payload["run_id"]))}
+    # WHERE IT MAY BE CLAIMED (boss-eventing-lld.md §8.2): 'deployment:<id>' only by that
+    # deployment's hosts (run_plane.claim_for_host); NULL (local) by local workers.
+    target = (f"deployment:{payload['deployment_id']}"
+              if (payload or {}).get("runtime") == "microvm" and payload.get("deployment_id")
+              else None)
     job_payload, identity_columns = _identity_lineage.stamp_job_row(payload, on_behalf_of, kind=kind)
     boundary = resolve_job_data_boundary(
         connection, task_id, job_payload, data_boundary
@@ -250,7 +271,7 @@ def enqueue_job(
                 allocation_id, kind, priority, priority_score, workload_class,
                 resource_units, status, payload, data_boundary, max_attempts,
                 attempt, run_after, dedupe_key, on_behalf_of, grant_id, chain, on_behalf_system,
-                role_key
+                role_key, target
             )
             VALUES (
                 :id, :project_id, :task_id, :work_item_id, :tracker_binding_id,
@@ -258,7 +279,7 @@ def enqueue_job(
                 :workload_class, :resource_units, 'queued',
                 CAST(:payload AS JSONB), :data_boundary, :max_attempts,
                 0, :run_after, :dedupe_key, :on_behalf_of, :grant_id, CAST(:chain AS JSONB), :on_behalf_system,
-                :role_key
+                :role_key, :target
             )
             ON CONFLICT (project_id, dedupe_key)
               WHERE dedupe_key IS NOT NULL
@@ -288,6 +309,7 @@ def enqueue_job(
             "dedupe_key": dedupe_key,
             **identity_columns,
             "role_key": (str(role_key or (payload or {}).get("role_key") or "").strip() or None),
+            "target": target,
         },
     ).mappings().first()
     created = row is not None
@@ -627,6 +649,10 @@ class JobLeaseService:
             FROM jobs
             WHERE kind IN :capabilities
               AND """ + projects_archive.live_sql("jobs.project_id") + """
+              -- A RUN OF A `runtime: microvm` DEPLOYMENT IS NEVER A LOCAL WORKER'S (P8a): its
+              -- job's target is 'deployment:<id>', claimed only by that deployment's hosts
+              -- through the run plane (services/run_plane.claim_for_host).
+              AND target IS NULL
               AND (
                 (run_after <= :now_utc
                  AND (
@@ -748,6 +774,8 @@ class JobLeaseService:
                     if verdict is not None and not verdict.admitted:
                         self._defer_for_host_capacity(connection, candidate, verdict)
                         continue
+                    if verdict is not None:
+                        self._note_disk_recovered(connection, candidate, verdict)
             allocated, allocation_reason = (
                 self.work_orchestration.reserve_job_slot(
                     connection,
@@ -1669,7 +1697,7 @@ class JobLeaseService:
                 SELECT id, project_id, task_id, work_item_id, tracker_binding_id,
                        allocation_id, kind, payload, status, attempt, max_attempts,
                        data_boundary, workload_class, resource_units, lease_owner,
-                       lease_token_hash, lease_expires_at
+                       lease_token_hash, lease_expires_at, fence_epoch
                 FROM jobs
                 WHERE id = :job_id
                 FOR UPDATE
@@ -2564,7 +2592,16 @@ class JobLeaseService:
                 previous = json.loads(previous)
             except ValueError:
                 previous = {}
-        message = f"Queued: waiting for room on this machine ({verdict.shortfall})."
+        disk_low = bool(getattr(verdict, "disk_low", False))
+        if disk_low:
+            # THE DISK, NOT THE BUILD, IS THE PROBLEM (BOSSAPP-1150): say so on the run, and
+            # that BOSS resumes by itself; `boss prune` and the backups directory are where
+            # the space usually is.
+            message = (f"Queued: {verdict.shortfall}. BOSS resumes on its own once space is "
+                       "back; free some (boss prune; old backups) to resume sooner.")
+        else:
+            message = f"Queued: waiting for room on this machine ({verdict.shortfall})."
+        capacity = verdict.capacity or {}
         connection.execute(
             text(
                 """
@@ -2581,6 +2618,7 @@ class JobLeaseService:
                     "code": "host_capacity", "deferred_reason": "host_capacity",
                     "message": message, "shortfall": verdict.shortfall,
                     "slots": verdict.slots, "in_flight": verdict.in_flight,
+                    "disk_low": disk_low,
                 }),
             },
         )
@@ -2589,7 +2627,35 @@ class JobLeaseService:
                        "admission", "job", candidate["id"],
                        {"kind": candidate["kind"], "shortfall": verdict.shortfall,
                         "slots": verdict.slots, "in_flight": verdict.in_flight,
-                        "level": verdict.level})
+                        "level": verdict.level, "disk_low": disk_low})
+        if disk_low and not (previous or {}).get("disk_low"):
+            # Once per episode: the first poll that finds the disk below the floor.
+            emit_event(connection, candidate["project_id"], "host.disk_low",
+                       "admission", "job", candidate["id"],
+                       {"kind": candidate["kind"], "reason": verdict.shortfall,
+                        "free_gb": capacity.get("disk_free_gb"),
+                        "used_pct": capacity.get("disk_used_pct"),
+                        "floor_gb": _disk_floor_gb(), "resumes": "automatically"})
+
+    def _note_disk_recovered(self, connection: Connection, candidate, verdict) -> None:
+        """A job held for low disk is about to be leased: the disk is back above the floor.
+        Recorded once, on the job that waited, so the episode has an end as well as a start."""
+        previous = candidate.get("last_error") or {}
+        if isinstance(previous, str):
+            try:
+                previous = json.loads(previous)
+            except ValueError:
+                previous = {}
+        if not (isinstance(previous, dict) and previous.get("disk_low")):
+            return
+        capacity = getattr(verdict, "capacity", None) or {}
+        try:
+            emit_event(connection, candidate["project_id"], "host.disk_recovered",
+                       "admission", "job", candidate["id"],
+                       {"kind": candidate["kind"], "free_gb": capacity.get("disk_free_gb"),
+                        "floor_gb": _disk_floor_gb()})
+        except Exception:  # noqa: BLE001 — a note, never a reason to hold the lease
+            pass
 
     def _hash_token(self, token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -3058,3 +3124,10 @@ def _key_words(value):
     from .decision_words import key_words
 
     return key_words(value)
+
+
+def _disk_floor_gb() -> float:
+    """The build disk floor the admission gate applied (BOSS_BUILD_DISK_FLOOR_GB)."""
+    from .admission import build_disk_floor_gb
+
+    return build_disk_floor_gb()

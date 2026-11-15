@@ -25,9 +25,14 @@ def _server(client, engine, name, *, tier=0, tools=("resolve", "docs", "publish"
     return made
 
 
-def test_the_harness_gets_the_agents_servers_with_ask_tools_disallowed(client, engine):
+def test_the_harness_gets_the_agents_servers_with_ask_tools_disallowed(client, engine, monkeypatch):
+    """The direct file, as BOSS_MCP_GATEWAY=off still writes it (the gateway is on by default
+    since P8-pre S4: test_by_default_the_harness_gets_the_gateway_and_no_upstream_sign_in)."""
     from boss_engine.config import get_settings
+    from boss_engine.services import mcp_gateway
     from boss_engine.services.code_task_mcp import prepare
+
+    monkeypatch.setenv(mcp_gateway.FLAG, "off")
 
     name = f"docs{uuid.uuid4().hex[:5]}"
     server = _server(client, engine, name)
@@ -58,9 +63,49 @@ def test_the_harness_gets_the_agents_servers_with_ask_tools_disallowed(client, e
     assert not os.path.exists(harness.path), "the file with the token outlived the run"
 
 
-def test_an_agent_holding_nothing_gets_no_config(engine):
+def test_by_default_the_harness_gets_the_gateway_and_no_upstream_sign_in(client, engine,
+                                                                        monkeypatch):
+    """P8pre-T4 (P8-pre S4): with defaults, the mcp.json holds gateway URLs and the run's
+    boss_mcpgw_ token only; the upstream server's own sign-in never reaches the file."""
     from boss_engine.config import get_settings
+    from boss_engine.services import mcp_gateway
     from boss_engine.services.code_task_mcp import prepare
+
+    monkeypatch.delenv(mcp_gateway.FLAG, raising=False)
+    name = f"docs{uuid.uuid4().hex[:5]}"
+    server = _server(client, engine, name)
+    client.post("/v1/role-mcp-servers", json={"project_id": PROJECT, "actor": "ceo",
+                                              "role_key": "backend_engineer",
+                                              "mcp_server_id": server["id"],
+                                              "tools": ["resolve", "publish"]})
+    gateway = mcp_gateway.McpGateway()
+    mcp_gateway.set_gateway(gateway)
+    try:
+        with engine.begin() as c:
+            harness = prepare(c, get_settings(), PROJECT, "backend_engineer", run_id="crun_t4")
+        raw = open(harness.path).read()
+        assert SECRET not in raw and "headers" not in raw
+        token = harness.gateway_token
+        assert token.startswith(mcp_gateway.TOKEN_PREFIX)
+        base = f"http://127.0.0.1:{gateway.port}/v1/mcp-gateway/{token}/"
+        config = json.loads(raw)["mcpServers"]
+        assert name in config and mcp_gateway.RUN_SERVER in config
+        assert all(v == {"type": "http", "url": base + k} for k, v in config.items())
+        blocked = harness.argv()[harness.argv().index("--disallowedTools") + 1].split(",")
+        # Ask (publish) now parks at the gateway; outside the grant (docs) stays refused.
+        assert f"mcp__{name}__docs" in blocked and f"mcp__{name}__publish" not in blocked
+        harness.cleanup()
+    finally:
+        gateway.stop()
+        mcp_gateway.set_gateway(None)
+
+
+def test_an_agent_holding_nothing_gets_no_config(engine, monkeypatch):
+    from boss_engine.config import get_settings
+    from boss_engine.services import mcp_gateway
+    from boss_engine.services.code_task_mcp import prepare
+
+    monkeypatch.setenv(mcp_gateway.FLAG, "off")       # with the gateway it gets boss_run only
 
     with engine.begin() as c:
         c.execute(text("DELETE FROM role_mcp_servers WHERE project_id=:p AND role_key='cto'"),

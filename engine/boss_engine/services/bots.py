@@ -130,8 +130,12 @@ def fire_and_lease(connection: Any, trigger_id: str, *, settings: Any, **fire_kw
     got = agent_triggers.fire(connection, trigger_id, **fire_kwargs)
     if got.get("outcome") != "admitted" or not got.get("job_id"):
         return got
-    project_id = connection.execute(text("SELECT project_id FROM jobs WHERE id = :j"),
-                                    {"j": got["job_id"]}).scalar()
+    project_id, target = connection.execute(text(
+        "SELECT project_id, target FROM jobs WHERE id = :j"), {"j": got["job_id"]}).one()
+    if target:
+        # A run TARGETED at a microvm deployment's replicas (P8a, jobs.target) is never leased
+        # here: its hosts claim it through the run plane. The caller gets it queued.
+        return {**got, "remote": True}
     leased = JobLeaseService(settings).lease_owned_job(
         connection, project_id=str(project_id), job_id=str(got["job_id"]),
         worker_id=INLINE_WORKER, lease_ttl_seconds=3600)
@@ -179,6 +183,8 @@ def run_inline(engine: Any, settings: Any, trigger_id: str, *,
         got = fire_and_lease(c, trigger_id, settings=settings, **fire_kwargs)
     if got.get("outcome") != "admitted":
         return {"fired": False, **got}
+    if got.get("remote"):
+        return {"fired": True, "run_id": got.get("run_id"), "status": "queued", **got}
     token = _INLINE_UNIT.set(unit)
     try:
         return {"fired": True, **execute_leased(engine, settings, got)}

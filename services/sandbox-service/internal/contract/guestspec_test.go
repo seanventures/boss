@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -78,5 +79,37 @@ func TestTimeoutSecondsCoercion(t *testing.T) {
 func TestCancelledIsTerminal(t *testing.T) {
 	if !IsTerminal(StatusCancelled) {
 		t.Fatal("cancelled is a terminal status (Python _TERMINAL includes it)")
+	}
+}
+
+// P8pre-T5 / S1: a claude_code guest spec stages only its own engine's
+// credential; an OpenAI or Azure key is never written into its work drive.
+func TestGuestSpecStagesOnlyTheSelectedEnginesCredential(t *testing.T) {
+	req := SubmitRequest{ContractVersion: Version, TaskID: "crun_x", Engine: "claude_code",
+		Repo: RepoSpec{Owner: "o", Name: "r"},
+		EngineEnv: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "tok", "OPENAI_API_KEY": "k",
+			"AZURE_OPENAI_KEY": "az"}}
+	spec := GuestSpec(req)
+	for _, field := range []string{"openai_api_key", "azure_key"} {
+		if _, ok := spec[field]; ok {
+			t.Fatalf("claude_code guest spec carries %s", field)
+		}
+	}
+	if spec["claude_oauth_token"] != "tok" {
+		t.Fatalf("claude token missing: %v", spec["claude_oauth_token"] != nil)
+	}
+	problems := ValidateSubmit(req)
+	if len(problems) != 2 || !strings.HasPrefix(problems[0], ReasonEngineEnvNotForEngine+": engine_env AZURE_OPENAI_KEY") {
+		t.Fatalf("problems=%v", problems)
+	}
+	open := SubmitRequest{ContractVersion: Version, TaskID: "crun_y", Engine: "openai",
+		Repo:      RepoSpec{Owner: "o", Name: "r"},
+		EngineEnv: map[string]string{"OPENAI_API_KEY": "k", "SOMETHING_ELSE": "v"}}
+	problems = ValidateSubmit(open)
+	if len(problems) != 1 || !strings.HasPrefix(problems[0], ReasonEngineEnvUnknown+": engine_env SOMETHING_ELSE") {
+		t.Fatalf("problems=%v", problems)
+	}
+	if GuestSpec(open)["openai_api_key"] != "k" {
+		t.Fatal("openai guest must keep its own key")
 	}
 }

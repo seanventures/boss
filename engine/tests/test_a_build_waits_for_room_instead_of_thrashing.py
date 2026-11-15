@@ -160,11 +160,48 @@ def test_the_profile_moves_toward_what_builds_really_peak_at(pg):
 
 def test_nothing_running_means_one_build_may_run():
     """A small or busy machine runs one build at a time, never none forever (review)."""
-    small = Capacity(total_mb=4000, available_mb=2100, cores=2, disk_free_gb=4.5,
+    small = Capacity(total_mb=4000, available_mb=2100, cores=2, disk_free_gb=12.0,
                      load_per_core=1.6)
     assert admission.decide(small, CODE, in_flight=0, slots=1).admitted
     assert not admission.decide(small, CODE, in_flight=0, slots=1, level=admission.L3).admitted
     assert not admission.decide(small, CODE, in_flight=1, slots=2).admitted
+
+
+def test_a_disk_below_the_floor_holds_even_the_one_build_that_may_run():
+    """Memory pressure slows a build; a full disk breaks the database every build stands on
+    (storage hygiene layer 1, BOSSAPP-1150). The floor is never waived by in_flight == 0,
+    nor by "build anyway", and the refusal names the floor and the setting."""
+    low = Capacity(total_mb=15991, available_mb=13029, cores=8, disk_free_gb=4.5)
+    held = admission.decide(low, CODE, in_flight=0, slots=4)
+    assert not held.admitted and held.disk_low
+    assert "4.5 GB of disk free" in held.shortfall and "8 GB" in held.shortfall
+    assert "BOSS_BUILD_DISK_FLOOR_GB" in held.shortfall
+    forced = admission.decide(low, CODE, in_flight=0, slots=1, level=admission.L2, force_one=True)
+    assert not forced.admitted and forced.disk_low
+    # at or above the floor the hold lifts on its own — nothing to reset
+    back = admission.decide(Capacity(**{**low.__dict__, "disk_free_gb": 8.0, "notes": []}),
+                            CODE, in_flight=0, slots=4)
+    assert back.admitted and not back.disk_low
+
+
+def test_the_disk_floor_is_a_setting(monkeypatch):
+    monkeypatch.setenv("BOSS_BUILD_DISK_FLOOR_GB", "20")
+    assert admission.build_disk_floor_gb() == 20.0
+    tight = Capacity(total_mb=15991, available_mb=13029, cores=8, disk_free_gb=16.0)
+    assert not admission.decide(tight, CODE, in_flight=0, slots=4).admitted
+    monkeypatch.setenv("BOSS_BUILD_DISK_FLOOR_GB", "not a number")
+    assert admission.build_disk_floor_gb() == admission.DEFAULT_BUILD_DISK_FLOOR_GB
+    monkeypatch.delenv("BOSS_BUILD_DISK_FLOOR_GB")
+    assert admission.decide(tight, CODE, in_flight=0, slots=4).admitted
+    # an explicit floor wins over the environment (the API passes none; tests and the doctor may)
+    assert admission.decide(tight, CODE, in_flight=0, slots=4, disk_floor_gb=30).disk_low
+
+
+def test_the_fullest_build_path_is_the_disk_figure(tmp_path):
+    missing = str(tmp_path / "not-mounted-here")
+    snap = admission.disk_snapshot([str(tmp_path), missing])
+    assert snap and snap["free_gb"] > 0 and 0 <= snap["used_pct"] <= 100
+    assert admission.disk_snapshot([missing]) == {}
 
 
 def test_build_anyway_runs_one_even_under_critical_pressure_but_not_sustained():

@@ -95,12 +95,14 @@ BACKUP_DIR=""
 WEB_MODE=""
 DRY_RUN=0
 ROLLBACK=1
+DISK_CHECK=1
 WITHOUT=()
 
 usage() {
   cat <<'EOF'
 Usage: upgrade.sh [--dir INSTALL_DIR] [--ref REF] [--channel stable|rc] [--backup-dir PATH]
                   [--web | --no-web] [--dry-run] [--no-rollback] [--without SFX]...
+                  [--skip-disk-check]
 
 Without --ref, an install stays on the channel it was installed from:
   release  moves to the newest published release tag (v*), never to main
@@ -120,6 +122,15 @@ If the new release fails to start, the previous release is put back and
 started again (data volumes are kept). --no-rollback leaves it as it is.
 The images running before the upgrade are kept as prev-<tag>: `boss rollback`
 (rollback.sh) puts that release back later, without a build.
+
+DISK CHECK (storage hygiene layer 1). Before anything is built, the free space on this host
+and on Docker's own disk is measured against what the upgrade will need: about
+BOSS_UPGRADE_FULL_BUILD_GB (35) for a full rebuild when the Docker build cache is cold, about
+BOSS_UPGRADE_INCREMENTAL_BUILD_GB (5) when it is warm, plus the BOSS_DISK_FLOOR_GB (20) that
+must stay free. Below that the upgrade refuses, in plain words, and nothing changes.
+--skip-disk-check (or BOSS_DISK_CHECK=off in .env) goes ahead regardless. After a successful
+upgrade, prune.sh removes BOSS image tags other than the new release and its prev-<tag>
+rollback point, and caps the build cache (BOSS_BUILD_CACHE_CAP_GB, 10).
 
 LOCAL BOSS SELF-FIXES (docs/product/BOSS_FIXES_ITSELF.md §6.4) live on a separate stack ref
 over the release, never on the checkout's HEAD, so the fast-forward rule still applies to the
@@ -142,6 +153,7 @@ while [[ $# -gt 0 ]]; do
       WEB_MODE="$1"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --no-rollback) ROLLBACK=0; shift ;;
+    --skip-disk-check) DISK_CHECK=0; shift ;;
     --without)
       [[ "${2:-}" =~ ^sfx_[0-9a-f]{6,40}$ ]] || { echo '--without needs a self-fix id (sfx_...)' >&2; exit 2; }
       WITHOUT+=("$2"); shift 2 ;;
@@ -286,6 +298,131 @@ keep_previous_images() {
   echo "Kept the running images as prev-$tag; boss rollback puts $CURRENT_REF back without a build." >&2
 }
 
+# DISK-AWARE ADMISSION (storage hygiene layer 1, BOSSAPP-1150). An upgrade that starts on a
+# nearly full disk stops half way with the old images gone and the new ones unfinished (the
+# operator's deploy stopped at 7 GiB free, 2026-11-14). So before anything is built: measure
+# the free space where this install and its backups live AND on Docker's own disk (on Docker
+# Desktop a separate virtual disk; the host can have room while it is full), estimate what the
+# build will take, and refuse — in plain words, with nothing changed — when either is short.
+env_or_dotenv() {
+  local value="${!1:-}"
+  [[ -n "$value" ]] || value="$(grep -m 1 "^$1=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+  value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
+  value="${value#[\"\']}"; value="${value%[\"\']}"
+  printf '%s\n' "${value:-$2}"
+}
+# >>> boss_disk_admission
+# Pure. $1 host free GB; $2 Docker-disk free GB or "" (unknown); $3 build cache GB or "";
+# $4 1 when the current BOSS images exist; $5 floor GB; $6 full-rebuild GB; $7 incremental GB.
+# Prints one line: "ok ..." or "refuse ...". Exit 1 on refuse.
+boss_disk_verdict() {
+  LC_ALL=C awk -v host="$1" -v dock="$2" -v cache="$3" -v images="$4" \
+                -v floor="$5" -v full="$6" -v incr="$7" 'BEGIN {
+    if (images == 1 && cache != "" && cache + 0 >= 1) {
+      need = incr + 0; what = sprintf("an incremental build (about %g GB; the Docker build cache holds %.1f GB)", incr, cache)
+    } else if (images == 1) {
+      need = full + 0; what = sprintf("a full rebuild (about %g GB; the Docker build cache is cold)", full)
+    } else {
+      need = full + 0; what = sprintf("a full build (about %g GB; no BOSS images here yet)", full)
+    }
+    total = need + floor
+    fix = "Free space (boss prune; old backups under the backups directory), lower BOSS_DISK_FLOOR_GB, or pass --skip-disk-check. Nothing changed."
+    if (host + 0 < total) {
+      printf "refuse Not enough disk for this upgrade: this host has %.1f GB free, and %s plus the %g GB floor (BOSS_DISK_FLOOR_GB) needs at least %g GB. %s\n", host, what, floor, total, fix
+      exit 1
+    }
+    if (dock != "" && dock + 0 < total) {
+      printf "refuse Not enough disk for this upgrade: Docker'"'"'s own disk has %.1f GB free, and %s plus the %g GB floor (BOSS_DISK_FLOOR_GB) needs at least %g GB. On Docker Desktop raise the virtual disk size (Settings > Resources) or run boss prune. %s\n", dock, what, floor, total, fix
+      exit 1
+    }
+    if (dock == "") {
+      printf "ok Disk: this host has %.1f GB free; Docker'"'"'s own disk could not be measured. %s plus the %g GB floor needs %g GB.\n", host, what, floor, total
+    } else {
+      printf "ok Disk: this host has %.1f GB free, Docker'"'"'s disk %.1f GB; %s plus the %g GB floor needs %g GB.\n", host, dock, what, floor, total
+    }
+  }'
+}
+# <<< boss_disk_admission
+# Free GB on the filesystem holding $1 (walking up to an existing parent), or "" if unknown.
+free_gb_at() {
+  local path="$1" kb
+  while [[ ! -e "$path" && "$path" != / && "$path" != . && -n "$path" ]]; do path="$(dirname "$path")"; done
+  kb="$(df -Pk "$path" 2>/dev/null | awk 'NR==2 {print $4}')" || return 0
+  if [[ "$kb" =~ ^[0-9]+$ ]]; then awk -v kb="$kb" 'BEGIN { printf "%.1f", kb / 1048576 }'; fi
+  return 0
+}
+# Free GB on Docker's own disk: a local Linux daemon's root directory, else measured from inside
+# a container of the current API image (Docker Desktop's VM); "" when neither can be read.
+docker_free_gb() {
+  local d=(docker) root os kb
+  docker info >/dev/null 2>&1 || d=(sudo -n docker)
+  IFS='|' read -r root os <<< "$("${d[@]}" info --format '{{.DockerRootDir}}|{{.OperatingSystem}}' 2>/dev/null || true)"
+  if [[ "$(uname -s)" == Linux && "$root" == /* && -d "$root" && "$os" != *"Docker Desktop"* ]]; then
+    free_gb_at "$root"; return 0
+  fi
+  kb="$("${d[@]}" run --rm --pull never --entrypoint df "boss-community-api:$1" -Pk / 2>/dev/null </dev/null | awk 'NR==2 {print $4}')" || true
+  if [[ "$kb" =~ ^[0-9]+$ ]]; then awk -v kb="$kb" 'BEGIN { printf "%.1f", kb / 1048576 }'; fi
+  return 0
+}
+# Docker's build cache in GB, from `docker system df` ("Build Cache  12.3GB"); "" when unknown.
+build_cache_gb() {
+  local d=(docker) size
+  docker info >/dev/null 2>&1 || d=(sudo -n docker)
+  size="$("${d[@]}" system df --format '{{.Type}}|{{.Size}}' 2>/dev/null | awk -F'|' '$1 ~ /Build Cache/ {print $2; exit}')" || true
+  [[ -n "$size" ]] || return 0
+  LC_ALL=C awk -v s="$size" 'BEGIN {
+    n = s; gsub(/[^0-9.]/, "", n); u = s; gsub(/[0-9. ]/, "", u); u = tolower(u)
+    if (n == "") exit
+    if (u == "b") n /= 1e9; else if (u == "kb") n /= 1e6; else if (u == "mb") n /= 1e3
+    else if (u == "tb") n *= 1e3
+    printf "%.1f", n }'
+  return 0
+}
+has_current_images() {
+  local d=(docker)
+  docker info >/dev/null 2>&1 || d=(sudo -n docker)
+  if "${d[@]}" image inspect "boss-community-api:$1" >/dev/null 2>&1; then echo 1; else echo 0; fi
+  return 0
+}
+disk_check() {
+  local tag host dock cache images floor full incr verdict backups
+  tag="$(image_tag)"
+  floor="$(env_or_dotenv BOSS_DISK_FLOOR_GB 20)"
+  full="$(env_or_dotenv BOSS_UPGRADE_FULL_BUILD_GB 35)"
+  incr="$(env_or_dotenv BOSS_UPGRADE_INCREMENTAL_BUILD_GB 5)"
+  for n in "$floor" "$full" "$incr"; do
+    [[ "$n" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "BOSS_DISK_FLOOR_GB, BOSS_UPGRADE_FULL_BUILD_GB and BOSS_UPGRADE_INCREMENTAL_BUILD_GB must be numbers of GB (got '$n'); nothing changed." >&2; exit 2; }
+  done
+  backups="${BACKUP_DIR:-${BOSS_BACKUP_DIR:-$HOME/boss-backups}}"
+  host="$(free_gb_at "$INSTALL_DIR")"
+  local backups_free; backups_free="$(free_gb_at "$backups")"
+  if [[ -n "$backups_free" ]] && { [[ -z "$host" ]] || awk -v a="$backups_free" -v b="$host" 'BEGIN { exit !(a + 0 < b + 0) }'; }; then
+    host="$backups_free"
+  fi
+  if [[ -z "$host" ]]; then
+    echo 'Disk: free space on this host could not be measured; going ahead without the disk check.' >&2
+    return 0
+  fi
+  dock="$(docker_free_gb "$tag")"
+  cache="$(build_cache_gb)"
+  images="$(has_current_images "$tag")"
+  if verdict="$(boss_disk_verdict "$host" "$dock" "$cache" "$images" "$floor" "$full" "$incr")"; then
+    echo "${verdict#ok }"
+  else
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      echo "Would refuse: ${verdict#refuse }"
+    else
+      echo "${verdict#refuse }" >&2
+      exit 1
+    fi
+  fi
+}
+if [[ "$DISK_CHECK" -eq 1 && "$(env_or_dotenv BOSS_DISK_CHECK on)" != off ]]; then
+  disk_check
+else
+  echo 'Disk check skipped (--skip-disk-check / BOSS_DISK_CHECK=off).'
+fi
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf 'Would keep the running images as prev-%s (for boss rollback).\n' "$(image_tag)"
   printf 'Would back up %s, then rerun the installer from %s (%s → %s).\n' "$INSTALL_DIR" "$REF" "$OLD_COMMIT" "$NEW_COMMIT"
@@ -348,5 +485,12 @@ if [[ -n "$STACK_REF" && -f "$SELF_FIX" ]]; then
   if ! python3 "$SELF_FIX" --dir "$INSTALL_DIR" restack --to "$REF" ${without_args[@]+"${without_args[@]}"} </dev/null; then
     echo 'The new release runs without the local BOSS fixes; see the line above. BOSS re-ports them.' >&2
   fi
+fi
+# IMAGE AND BUILD-CACHE RETENTION (BOSSAPP-1147): the new release runs, so only its images and
+# the prev-<tag> rollback point stay; the build cache is capped. Best effort, from the new
+# checkout's prune.sh (an older release without it simply skips this).
+if [[ -x "$INSTALL_DIR/scripts/install/prune.sh" ]]; then
+  bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" </dev/null ||
+    echo 'Old images and build cache were not pruned; run boss prune later.' >&2
 fi
 printf 'Upgrade complete: %s → %s (%s)\n' "$OLD_COMMIT" "$NEW_COMMIT" "$REF"

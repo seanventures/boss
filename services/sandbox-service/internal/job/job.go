@@ -5,6 +5,7 @@ package job
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +114,12 @@ func (s *Store) FirecrackerLive() bool {
 // Admit decides whether a submit may create work. Fail-closed with a named reason.
 func (s *Store) Admit(req contract.SubmitRequest) (reason, message string) {
 	if problems := contract.ValidateSubmit(req); len(problems) > 0 {
+		// An engine_env refusal carries its own named reason (P8-pre S5).
+		for _, named := range []string{contract.ReasonEngineEnvUnknown, contract.ReasonEngineEnvNotForEngine} {
+			if strings.HasPrefix(problems[0], named+":") {
+				return named, problems[0]
+			}
+		}
 		return contract.ReasonContractInvalid, problems[0]
 	}
 	if contract.IsEcho(req) {

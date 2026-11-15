@@ -307,9 +307,13 @@ class MicroVMProvider:
     def _submit_body(self, spec: dict, tenant_id: Optional[str]) -> dict:
         """Map BOSS's internal flat guest_spec -> the versioned sandbox-service submit body (#99
         contract). Model creds ride in engine_env (per task, never baked into the guest image)."""
-        from .sandbox_contract import build_submit_request
+        from .sandbox_contract import build_submit_request, ensure_engine_env_valid
         task_id = spec.get("task_id") or make_id("crun")
-        return build_submit_request(spec, tenant_id, task_id=task_id)
+        body = build_submit_request(spec, tenant_id, task_id=task_id)
+        # Refused here, by name, rather than by the sandbox-service after a round trip — and
+        # never sent on with a credential the guest would drop (P8-pre S5).
+        ensure_engine_env_valid(body)
+        return body
 
     def run_code_task(self, spec: dict, *, tenant_id: Optional[str] = None):
         """Dispatch the task to the sandbox-service over the async §2 contract

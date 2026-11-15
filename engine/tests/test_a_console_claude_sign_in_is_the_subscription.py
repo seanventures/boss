@@ -17,7 +17,7 @@ def _login(tmp_path, monkeypatch, *, present=True, mode=0o600):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv(cc.TOKEN_NAME, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-out-of-credit")
-    monkeypatch.setattr(cc, "_store_lookup", lambda _s, _n: "")
+    monkeypatch.setattr(cc, "_store_lookup", lambda _s, _n, *_where: "")
     if present:
         path = tmp_path / ".credentials.json"
         path.write_text('{"claudeAiOauth": {"subscriptionType": "max"}}')

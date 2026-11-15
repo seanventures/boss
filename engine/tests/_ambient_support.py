@@ -14,6 +14,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine, text
 
+from ._pg_foreign_keys import tables_referencing
+
 PG_URL = os.environ.get("BOSS_TEST_DATABASE_URL", "")
 
 AMBIENT_TABLES = ("work_item_messages", "work_item_links", "ambient_autonomy",
@@ -77,13 +79,7 @@ def purge(eng, pid: str) -> None:
             pass
         # Whatever else a story wrote under the project (a demo loader touches many stores):
         # every table whose project_id references projects, a few passes for chained keys.
-        referencing = list(c.execute(text(
-            "SELECT DISTINCT tc.table_name FROM information_schema.table_constraints tc "
-            "JOIN information_schema.key_column_usage k ON k.constraint_name = tc.constraint_name "
-            "JOIN information_schema.constraint_column_usage u "
-            "  ON u.constraint_name = tc.constraint_name "
-            "WHERE tc.constraint_type = 'FOREIGN KEY' AND u.table_name = 'projects' "
-            "AND k.column_name = 'project_id'")).scalars())
+        referencing = tables_referencing(c, "projects", column="project_id")
         for _ in range(3):
             for table in referencing:
                 try:

@@ -12987,7 +12987,11 @@ LANGUAGE plpgsql AS $$
 BEGIN
   PERFORM pg_notify('boss_events', json_build_object(
     'id', NEW.id, 'project_id', NEW.project_id, 'event_type', NEW.event_type,
-    'entity_type', NEW.entity_type, 'entity_id', NEW.entity_id)::text);
+    'entity_type', NEW.entity_type, 'entity_id', NEW.entity_id,
+    -- P8a: an agent run's deployment, so a host's hosts/next wakes only for its own runs
+    -- (boss-agent-hosts-lld.md §3.13.0) without reading the row.
+    'deployment_id', CASE WHEN NEW.event_type IN ('agent.run_admitted', 'agent.run_queued')
+                          THEN NEW.data->>'deployment_id' END)::text);
   RETURN NULL;
 END $$;
 DO $$ BEGIN
@@ -14581,3 +14585,243 @@ CREATE INDEX IF NOT EXISTS idx_agent_subagent_notifications_parent
 -- the thread's own agent (agent_role). Every transfer is an agent_acts 'handoff' act.
 ALTER TABLE agent_threads ADD COLUMN IF NOT EXISTS active_agent TEXT;
 -- ================================ end AP-P7 ==
+
+-- ================================ P8a: agent hosts, the fleet and the run plane ==============
+-- docs: boss-agent-hosts-lld.md §3.1 (data model), §3.2 (host API), §3.13 (run plane), §3.14.1
+-- (placement). BOSSAPP-1063 (epic BOSSAPP-1060). Everything here is additive: `runtime` defaults
+-- to 'local' and a local deployment behaves exactly as before.
+
+-- PLACEMENT PER DEPLOYMENT (FR-1, FR-2). `local` is today's worker path; `microvm` places the
+-- deployment's VMs on enrolled KVM hosts run by boss-hostd. `vm_mode` 'replica' is the activated
+-- mode; 'per_run' is built but refused while BOSS_MICROVM_CLAIMS_FROZEN (operator, 2026-11-14).
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS runtime TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS vm_mode TEXT;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS replicas INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS resources JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS image_digest TEXT;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS placement JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS vip INET;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS vip_ports INTEGER[];
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS hostname TEXT;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS routing TEXT NOT NULL DEFAULT 'ipvs';
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS strict_secrets BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS placement_state TEXT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_deployments_runtime_check') THEN
+    ALTER TABLE agent_deployments ADD CONSTRAINT agent_deployments_runtime_check
+      CHECK (runtime IN ('local', 'microvm'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_deployments_vm_mode_check') THEN
+    ALTER TABLE agent_deployments ADD CONSTRAINT agent_deployments_vm_mode_check
+      CHECK (vm_mode IS NULL OR vm_mode IN ('replica', 'per_run'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_deployments_routing_check') THEN
+    ALTER TABLE agent_deployments ADD CONSTRAINT agent_deployments_routing_check
+      CHECK (routing IN ('ipvs', 'bgp', 'cloud_l4'));
+  END IF;
+END $$;
+-- The placement each applied version ran with (the version's runtime, per history row).
+ALTER TABLE agent_deployment_history ADD COLUMN IF NOT EXISTS runtime TEXT;
+ALTER TABLE agent_deployment_history ADD COLUMN IF NOT EXISTS vm_mode TEXT;
+
+-- ONE-TIME JOIN TOKENS (§3.2.2): issued by a person in the console, shown once, stored hashed,
+-- spent by the first enrol that presents one.
+CREATE TABLE IF NOT EXISTS agent_host_join_tokens (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  pool TEXT NOT NULL DEFAULT 'default',
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  used_by_host TEXT,
+  revoked_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_host_join_tokens_org ON agent_host_join_tokens (org_id, created_at DESC);
+
+-- THE FLEET INVENTORY, org-scoped. The attestation columns come from the heartbeat and feed the
+-- AP-D11 predicate (§3.17.4). `desired_generation` moves on every change to the host's desired
+-- state; the host reports the generation it converged to as `observed_generation`.
+CREATE TABLE IF NOT EXISTS agent_hosts (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  pool TEXT NOT NULL DEFAULT 'default',
+  hostname TEXT NOT NULL DEFAULT '',
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  backend TEXT NOT NULL DEFAULT 'firecracker' CHECK (backend IN ('firecracker', 'process')),
+  cert_fingerprint TEXT,
+  cert_not_after TIMESTAMPTZ,
+  kvm_live BOOLEAN NOT NULL DEFAULT false,
+  firecracker_live BOOLEAN NOT NULL DEFAULT false,
+  jailer_on BOOLEAN NOT NULL DEFAULT false,
+  seccomp_default BOOLEAN NOT NULL DEFAULT false,
+  smt_off BOOLEAN NOT NULL DEFAULT false,
+  ksm_off BOOLEAN NOT NULL DEFAULT false,
+  swap_off BOOLEAN NOT NULL DEFAULT false,
+  strict_secrets BOOLEAN NOT NULL DEFAULT true,
+  net_policy_ok BOOLEAN NOT NULL DEFAULT false,
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  capacity JSONB NOT NULL DEFAULT '{}'::jsonb,
+  allocatable JSONB NOT NULL DEFAULT '{}'::jsonb,
+  pressure JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'ready'
+    CHECK (status IN ('ready', 'cordoned', 'draining', 'unreachable', 'retired')),
+  vm_prefix CIDR,
+  bgp_state TEXT,
+  last_heartbeat_at TIMESTAMPTZ,
+  desired_generation BIGINT NOT NULL DEFAULT 1,
+  observed_generation BIGINT NOT NULL DEFAULT 0,
+  enrolled_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  revoked_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_hosts_org ON agent_hosts (org_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_hosts_fingerprint ON agent_hosts (cert_fingerprint)
+  WHERE cert_fingerprint IS NOT NULL;
+-- One live host per VM address block in an org (enrol allocates under an advisory lock).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_hosts_vm_prefix ON agent_hosts (org_id, vm_prefix)
+  WHERE vm_prefix IS NOT NULL AND revoked_at IS NULL;
+
+-- ONE ROW PER VM (§3.1). A serving replica row is an IPVS real server (P8b) or an ECMP member
+-- (P8e). `generation` is the host desired generation that last changed the row.
+CREATE TABLE IF NOT EXISTS agent_replicas (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  deployment_id TEXT NOT NULL REFERENCES agent_deployments(id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL REFERENCES agent_hosts(id) ON DELETE CASCADE,
+  vm_id TEXT NOT NULL,
+  vm_mode TEXT NOT NULL DEFAULT 'replica' CHECK (vm_mode IN ('replica', 'per_run')),
+  vm_ip INET,
+  image_digest TEXT,
+  agent_version INTEGER,
+  desired_state TEXT NOT NULL DEFAULT 'running' CHECK (desired_state IN ('running', 'stopped')),
+  observed_state TEXT NOT NULL DEFAULT 'pending',
+  generation BIGINT NOT NULL DEFAULT 0,
+  slots INTEGER NOT NULL DEFAULT 4,
+  busy INTEGER NOT NULL DEFAULT 0,
+  rs_weight INTEGER NOT NULL DEFAULT 1,
+  tainted BOOLEAN NOT NULL DEFAULT false,
+  last_seen_at TIMESTAMPTZ,
+  restarts INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_replicas_host ON agent_replicas (host_id, desired_state);
+CREATE INDEX IF NOT EXISTS idx_agent_replicas_deployment ON agent_replicas (deployment_id, desired_state);
+
+-- VIP allocation (D8) and image provenance (§3.5); snapshots are a stub until P8b.
+CREATE TABLE IF NOT EXISTS vip_pool (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  cidr CIDR NOT NULL,
+  family TEXT NOT NULL DEFAULT 'ipv4' CHECK (family IN ('ipv4', 'ipv6')),
+  routing TEXT NOT NULL DEFAULT 'ipvs' CHECK (routing IN ('ipvs', 'bgp', 'cloud_l4')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, cidr)
+);
+CREATE TABLE IF NOT EXISTS vm_images (
+  digest TEXT PRIMARY KEY,
+  org_id TEXT,
+  kernel_digest TEXT,
+  flavour TEXT NOT NULL DEFAULT 'agent' CHECK (flavour IN ('agent', 'coder')),
+  signature TEXT,
+  sbom_ref TEXT,
+  status TEXT NOT NULL DEFAULT 'candidate' CHECK (status IN ('candidate', 'active', 'revoked')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS vm_snapshots (
+  id TEXT PRIMARY KEY,
+  host_id TEXT NOT NULL REFERENCES agent_hosts(id) ON DELETE CASCADE,
+  snapshot_key TEXT NOT NULL,
+  clean_attested BOOLEAN NOT NULL DEFAULT false,
+  size_bytes BIGINT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (host_id, snapshot_key)
+);
+
+-- THE BOSS FLEET CA (§3.2.2): one per install; its key is sealed by the identity vault.
+CREATE TABLE IF NOT EXISTS fleet_ca (
+  id TEXT PRIMARY KEY,
+  cert_pem TEXT NOT NULL,
+  key_sealed TEXT NOT NULL,
+  install_domain TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Every certificate the CA issued: host client certs (24 h), host SVID intermediates, replica
+-- certs (P8b). Revoking a host refuses its next renewal and every call it makes.
+CREATE TABLE IF NOT EXISTS agent_certs (
+  serial TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('host', 'host_svid', 'replica')),
+  host_id TEXT,
+  deployment_id TEXT,
+  replica_id TEXT,
+  fingerprint TEXT NOT NULL,
+  subject TEXT NOT NULL DEFAULT '',
+  public_key_pem TEXT NOT NULL DEFAULT '',
+  not_after TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_certs_host ON agent_certs (host_id, kind, not_after DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_certs_fingerprint ON agent_certs (fingerprint);
+
+-- PER-CALL AUDIT (§3.19, FR-13): one row per guest-originated call, written by boss-hostd in
+-- batches. Never a body, a query string or a handle: only its fingerprint. (host_id, call_id)
+-- makes a retried batch idempotent.
+CREATE TABLE IF NOT EXISTS guest_calls (
+  id BIGSERIAL PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  host_id TEXT NOT NULL,
+  call_id TEXT NOT NULL,
+  at TIMESTAMPTZ NOT NULL,
+  vm_id TEXT,
+  run_id TEXT,
+  epoch BIGINT,
+  deployment_id TEXT,
+  route TEXT NOT NULL CHECK (route IN ('model', 'git', 'api', 'mcp', 'run_plane', 'connect')),
+  dest_host TEXT,
+  method TEXT,
+  path_template TEXT,
+  status INTEGER,
+  bytes_in BIGINT NOT NULL DEFAULT 0,
+  bytes_out BIGINT NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  handle_fp TEXT,
+  verdict TEXT NOT NULL DEFAULT 'allow' CHECK (verdict IN ('allow', 'deny')),
+  rule_id TEXT,
+  rejected_by TEXT,
+  trace_id TEXT,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (host_id, call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_guest_calls_run ON guest_calls (run_id, at);
+CREATE INDEX IF NOT EXISTS idx_guest_calls_org_at ON guest_calls (org_id, at DESC);
+
+-- Host lifecycle and watchdog/doctor actions (§3.1): enrol, renew, revoke, cordon, fence.
+CREATE TABLE IF NOT EXISTS host_events (
+  id BIGSERIAL PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  host_id TEXT,
+  vm_id TEXT,
+  kind TEXT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  actor TEXT NOT NULL DEFAULT 'operator',
+  trace_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_host_events_host ON host_events (host_id, created_at DESC);
+-- The generation of the host's replica-state map BOSS last stored (§3.13.0 REVISION): a poll
+-- whose state_gen differs is answered {resync:true}, and the host PUTs its full map once.
+ALTER TABLE agent_hosts ADD COLUMN IF NOT EXISTS replica_state_gen BIGINT NOT NULL DEFAULT 0;
+-- WHERE A JOB MAY BE CLAIMED (boss-eventing-lld.md §8.2): NULL = a local worker's (as before);
+-- 'deployment:<id>' = only that microvm deployment's hosts, through POST /v1/run-plane/hosts/next.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS target TEXT;
+CREATE INDEX IF NOT EXISTS idx_jobs_target_claimable ON jobs (target, priority, created_at)
+  WHERE target IS NOT NULL AND status IN ('queued', 'failed_retryable', 'leased', 'running');
+-- ================================ end P8a ==
