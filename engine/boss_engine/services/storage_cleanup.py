@@ -666,7 +666,8 @@ def run_api_tool(engine: Any, connection: Any, tool: str, args: Mapping[str, Any
         return _drop_scratch_dbs(engine, connection, int(args.get("ttl_hours") or 24), dry_run=dry_run,
                                  expected=expected)
     if tool == "storage.drop_partitions":
-        return _drop_partitions(engine, connection, int(args.get("keep_days") or 30), dry_run=dry_run)
+        return _drop_partitions(engine, connection, int(args.get("keep_days") or 30), dry_run=dry_run,
+                                expected=expected)
     raise ValueError(f"{tool} is not an API-side tool")
 
 
@@ -742,41 +743,19 @@ def _drop_scratch_dbs(engine: Any, connection: Any, ttl_hours: int, *, dry_run: 
     return dropped, size if dropped else 0
 
 
-_TELEMETRY_TABLES = ("events", "watch_ticks", "anomaly_signals", "metrics_scrapes", "receipts")
+def _drop_partitions(engine: Any, connection: Any, keep_days: int, *, dry_run: bool,
+                     expected: Optional[Sequence[str]] = None) -> tuple[list[str], int]:
+    """Telemetry past its retention, now rather than on the hourly clock (ST-8,
+    telemetry_retention): expired monthly partitions of `events` dropped whole (audit events
+    archived first), the rest by batched deletes, every table under its own per-table policy and
+    floor. The dry run's items are stable names (`partition:events_2026_08`, `rows:receipts`), so
+    the real run carries the same plan_hash and touches only those. `keep_days` is the old single
+    knob and is not used: the per-table days live in the `telemetry` rule's `tables` map."""
+    from . import telemetry_retention
 
-
-def _drop_partitions(engine: Any, connection: Any, keep_days: int, *, dry_run: bool) -> tuple[list[str], int]:
-    """Telemetry past its retention: the Layer 1 retention pass (resource_reaper.prune_tables,
-    activity_retention) run now rather than on its own clock. The dry run lists the tables and
-    their sizes; the real run reports rows removed."""
-    items, size = [], 0
-    for table in _TELEMETRY_TABLES:
-        try:
-            exists = connection.execute(text("SELECT to_regclass(:t)"), {"t": table}).scalar()
-            if not exists:
-                continue
-            bytes_ = int(connection.execute(text("SELECT pg_total_relation_size(:t)"), {"t": table}).scalar() or 0)
-            items.append(f"table:{table}")
-            size += bytes_
-        except Exception:  # noqa: BLE001
-            continue
-    if dry_run:
-        return items, size
-    before = size
-    try:
-        from . import resource_reaper
-
-        resource_reaper.prune_tables(engine)
-    except Exception:  # noqa: BLE001 — the reaper's own pass is best effort
-        _log.info("telemetry retention pass failed", exc_info=True)
-    after = 0
-    for item in items:
-        try:
-            after += int(connection.execute(text("SELECT pg_total_relation_size(:t)"),
-                                            {"t": item.split(":", 1)[1]}).scalar() or 0)
-        except Exception:  # noqa: BLE001
-            continue
-    return items, max(0, before - after)
+    del connection, keep_days
+    report = telemetry_retention.sweep(engine, dry_run=dry_run, only=expected)
+    return list(report["items"]), int(report["bytes"] or 0)
 
 
 __all__ = ["ASK_AGAIN_AFTER", "DRY_RUN_FRESH_FOR", "SCRATCH_PREFIX", "TERMINAL", "TOOLS", "TOOL_BY_NAME",

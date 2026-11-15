@@ -148,6 +148,13 @@ type Summary = {
   level: "ok" | "warn" | "critical" | "floor";
   rules: Rule[];
   last_cleanup: { incident_id: string; at: string; freed_gb: number; cause_key: string|null } | null;
+  // ST-8 (BOSSAPP-1153, services/telemetry_retention.py): telemetry tables' share of the
+  // database (partitions summed) and the last retention sweep. null when not readable.
+  telemetry: { bytes: number; gb: number; db_bytes: number; share_pct: number|null;
+               tables: { table: string; bytes: number; gb: number; keep_days: number|null; partitioned: boolean }[];
+               last_sweep: { at: string; rows: number; bytes: number; partitions: string[]; archived: number;
+                             errors: string[]; receipt_id: string|null;
+                             tables: { policy: string; rows: number; bytes: number; days: number }[] } | null } | null;
   open_incident_id: string | null;
   hosts: Array<{ host_id: string; host_label: string; free_pct: number; days_until_full: number|null;
                  level: string; spark: number[] }>;   // every host with samples

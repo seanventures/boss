@@ -34,7 +34,7 @@ DEFAULT_RULES: dict[str, dict[str, Any]] = {
     "images": {"keep_versions": 2},             # current + prev-<tag> (upgrade.sh)
     "build_cache": {"cap_gb": 10},              # docker builder prune --keep-storage
     "logs": {"max_size_mb": 50, "max_file": 3}, # compose logging caps (Layer 1) + truncate
-    "telemetry": {"keep_days": 30},             # tick/event partitions
+    "telemetry": {"keep_days": 30, "tables": {}},  # per-table days: telemetry_retention.POLICIES
     "scratch_db": {"ttl_hours": 24},            # boss_scratch_* databases
     "kg_derived": {"unused_days": 14},
     "docker_trim": {"enabled": True},
@@ -74,7 +74,8 @@ def rule_label(kind: str, rule: Mapping[str, Any]) -> str:
     if kind == "logs":
         return f"{r.get('max_size_mb', 50)} MB × {r.get('max_file', 3)}"
     if kind == "telemetry":
-        return f"keep {r.get('keep_days', 30)} days"
+        # Per-table days since ST-8 (telemetry_retention.POLICIES; overrides in `tables`).
+        return "7–90 days per table"
     if kind == "scratch_db":
         return f"drop after {r.get('ttl_hours', 24)} h"
     if kind == "kg_derived":

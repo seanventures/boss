@@ -127,7 +127,27 @@ export type StorageSummary = {
   openIncidentId: string | null;
   hosts: HostStorageRow[];
   docker: { unreclaimedGb: number } | null;
+  /** ST-8: the telemetry tables' share of the database and the last retention sweep. */
+  telemetry: TelemetryShare | null;
 };
+
+export type TelemetrySweep = { at: string; rows: number; bytes: number; partitions: string[]; archived: number; errors: string[]; receiptId: string | null };
+export type TelemetryShare = {
+  gb: number; sharePct: number | null;
+  tables: { table: string; gb: number; keepDays: number | null; partitioned: boolean }[];
+  lastSweep: TelemetrySweep | null;
+};
+
+export function parseTelemetry(w: unknown): TelemetryShare | null {
+  if (!w || typeof w !== "object" || Array.isArray(w)) return null;
+  const o = obj(w);
+  const last = obj(o.last_sweep);
+  return {
+    gb: num(o.gb), sharePct: optNum(o.share_pct),
+    tables: arr(o.tables).map((t) => { const x = obj(t); return { table: str(x.table), gb: num(x.gb), keepDays: optNum(x.keep_days), partitioned: x.partitioned === true }; }).filter((t) => t.table),
+    lastSweep: str(last.at) ? { at: str(last.at), rows: num(last.rows), bytes: num(last.bytes), partitions: strs(last.partitions), archived: num(last.archived), errors: strs(last.errors), receiptId: optStr(last.receipt_id) } : null,
+  };
+}
 
 // ── parse ───────────────────────────────────────────────────────────────────────────────────
 
@@ -373,6 +393,7 @@ export function parseSummary(w: unknown): StorageSummary | null {
     openIncidentId: optStr(o.open_incident_id),
     hosts: arr(o.hosts).map((h) => { const x = obj(h); return { hostId: str(x.host_id), label: str(x.host_label) || str(x.host_id), freePct: num(x.free_pct), fullInDays: optNum(x.days_until_full), level: str(x.level, "ok"), spark: arr(x.spark).map((v) => num(v)) }; }).filter((h) => h.hostId),
     docker: unreclaimed && unreclaimed.gb > 0 ? { unreclaimedGb: unreclaimed.gb } : null,
+    telemetry: parseTelemetry(o.telemetry),
   };
 }
 
