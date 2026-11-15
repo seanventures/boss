@@ -159,8 +159,14 @@ def cleanup_project(engine, project_id: str, host_ids: list) -> None:
                       "project_members"):
             with c.begin_nested():
                 c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": project_id})
-        with c.begin_nested():
-            c.execute(text("DELETE FROM projects WHERE id = :p"), {"p": project_id})
+        for table in ("artifacts", "projects"):
+            try:
+                with c.begin_nested():
+                    c.execute(text(f"DELETE FROM {table} WHERE "
+                                   f"{'id' if table == 'projects' else 'project_id'} = :p"),
+                              {"p": project_id})
+            except Exception:  # noqa: BLE001 — a row another table still holds stays; harmless
+                pass
 
 
 def join_token(engine, org_id: str, **kw: Any) -> str:

@@ -253,9 +253,23 @@ def authenticate(creds: RequestCredentials, *, db: Any = None) -> Optional[AuthC
     if db is None:
         from ..db import begin
 
+        if _host_proof(creds):
+            # AN AGENT HOST'S CALL (P8a, the run plane's hot path): its proof is verified by ONE
+            # statement (the pinned certificate and the single-use jti together), so it runs in
+            # autocommit — no BEGIN/COMMIT round trips around it (P8a-T5).
+            from ..db import get_engine
+
+            with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                return _authenticate(creds, conn)
         with begin() as conn:
             return _authenticate(creds, conn, memo=True)
     return _authenticate(creds, db)
+
+
+def _host_proof(creds: RequestCredentials) -> bool:
+    scheme, _, value = creds.headers.get("authorization", "").partition(" ")
+    return scheme.lower() == "bosshost" and bool(value.strip()) and not creds.cookies.get(
+        SESSION_COOKIE)
 
 
 def _authenticate(creds: RequestCredentials, db: Any, *, memo: bool = False) -> Optional[AuthContext]:

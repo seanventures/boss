@@ -290,14 +290,27 @@ _HOST_SQL = text("""
      WHERE c.fingerprint = :f AND c.kind = 'host' AND c.not_after > now()""")
 
 
+_PINNED_AND_SPENT = text("""
+    WITH spent AS (
+      INSERT INTO identity_dpop_replay (jkt, jti, expires_at) VALUES (:k, :j, :e)
+      ON CONFLICT (jkt, jti) DO NOTHING RETURNING 1)
+    SELECT c.host_id, c.org_id, c.fingerprint, c.public_key_pem, h.status, h.revoked_at,
+           c.revoked_at AS cert_revoked_at, EXISTS (SELECT 1 FROM spent) AS fresh
+      FROM agent_certs c JOIN agent_hosts h ON h.id = c.host_id
+     WHERE c.fingerprint = :f AND c.kind = 'host' AND c.not_after > now()""")
+
+
 def _pinned(db: Any, fingerprint: str) -> tuple[HostIdentity, str]:
-    row = db.execute(_HOST_SQL, {"f": fingerprint}).mappings().first()
+    return _host_of(db.execute(_HOST_SQL, {"f": fingerprint}).mappings().first())
+
+
+def _host_of(row: Any) -> tuple[HostIdentity, str]:
     if row is None:
         raise FleetAuthError("host_certificate_unknown")
     if (row["revoked_at"] is not None or row["cert_revoked_at"] is not None
             or row["status"] == "retired"):
         raise FleetAuthError("host_revoked", 403)
-    return (HostIdentity(str(row["host_id"]), str(row["org_id"]), fingerprint,
+    return (HostIdentity(str(row["host_id"]), str(row["org_id"]), str(row["fingerprint"]),
                          str(row["status"])), str(row["public_key_pem"]))
 
 
@@ -329,7 +342,6 @@ def verify_proof(db: Any, token: str, *, htm: str, path: str,
                  now: Optional[float] = None) -> HostIdentity:
     """The `BossHost` proof (module doc, form 1). Raises FleetAuthError."""
     from ..identity import jwks
-    from ..identity.dpop import DPoPError, _remember
 
     try:
         parsed = jwks.split(token)
@@ -345,9 +357,7 @@ def verify_proof(db: Any, token: str, *, htm: str, path: str,
         fingerprint = jwks.b64u_decode(x5t).hex()
     except jwks.JoseError as exc:
         raise FleetAuthError("proof_no_certificate") from exc
-    host, public_pem = _pinned(db, fingerprint)
-    _verify_signature(public_pem, str(header.get("alg") or ""), parsed.signing_input,
-                      parsed.signature)
+    # Everything that needs no database first, so a malformed or stale proof costs no query.
     if str(claims.get("htm") or "").upper() != htm.upper():
         raise FleetAuthError("proof_htm")
     if claims.get("htu") != path:
@@ -360,10 +370,20 @@ def verify_proof(db: Any, token: str, *, htm: str, path: str,
     jti = claims.get("jti")
     if not isinstance(jti, str) or not (16 <= len(jti) <= 128):
         raise FleetAuthError("proof_jti")
-    try:
-        _remember(db, f"host:{fingerprint}", jti, at, iat=iat)
-    except DPoPError as exc:
-        raise FleetAuthError("proof_replay") from exc
+    # ONE STATEMENT: the pinned certificate and the jti's single use (the DPoP replay cache).
+    # A jti is spent even when the signature then fails — a forged proof cannot be retried
+    # with the same jti, which costs an honest host nothing (every proof has a fresh one).
+    expires = _dt.datetime.fromtimestamp(
+        max(at, iat) + PROOF_MAX_AGE_SECONDS + 2 * PROOF_SKEW_SECONDS, _dt.timezone.utc)
+    row = db.execute(_PINNED_AND_SPENT, {"f": fingerprint, "k": f"host:{fingerprint}",
+                                         "j": jti, "e": expires}).mappings().first()
+    host, public_pem = _host_of(row)
+    _verify_signature(public_pem, str(header.get("alg") or ""), parsed.signing_input,
+                      parsed.signature)
+    if not row["fresh"]:
+        raise FleetAuthError("proof_replay")
+    if secrets.randbelow(200) == 0:
+        db.execute(text("DELETE FROM identity_dpop_replay WHERE expires_at < now()"))
     return host
 
 

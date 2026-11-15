@@ -234,9 +234,15 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                 "X-Boss-Run-Token, X-Boss-Fence-Epoch").body()) from exc
 
     def _run_call(request: Request, run_id: str, lease: run_plane.LeaseRef,
-                  fn: Callable[..., dict], **kw: Any) -> dict:
+                  fn: Callable[..., dict], *, one_statement: bool = False, **kw: Any) -> dict:
+        """A fenced run call in its own transaction — or, for the hot writes whose fence and
+        write are ONE statement (run_plane._LEASE_HELD), in autocommit: no BEGIN/COMMIT trips."""
         host = _host(request)
         try:
+            if one_statement:
+                with engine.connect().execution_options(
+                        isolation_level="AUTOCOMMIT") as connection:
+                    return fn(connection, _settings(), host.host_id, run_id, lease, **kw)
             with begin(engine) as connection:
                 return fn(connection, _settings(), host.host_id, run_id, lease, **kw)
         except Exception as error:  # noqa: BLE001
@@ -392,7 +398,8 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                           x_boss_fence_epoch: Optional[str] = Header(default=None)
                           ) -> dict[str, Any]:
         lease = _lease(x_boss_replica, x_boss_job, x_boss_run_token, x_boss_fence_epoch)
-        return _run_call(request, run_id, lease, run_plane.put_checkpoint, row=body.row)
+        return _run_call(request, run_id, lease, run_plane.put_checkpoint, row=body.row,
+                         one_statement=True)
 
     @router.get("/v1/run-plane/runs/{run_id}/checkpoint-writes")
     @permit(P.FLEET_HOST, scope=Scope.org())
@@ -414,7 +421,8 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                      x_boss_run_token: Optional[str] = Header(default=None),
                      x_boss_fence_epoch: Optional[str] = Header(default=None)) -> dict[str, Any]:
         lease = _lease(x_boss_replica, x_boss_job, x_boss_run_token, x_boss_fence_epoch)
-        return _run_call(request, run_id, lease, run_plane.put_write, row=body.row)
+        return _run_call(request, run_id, lease, run_plane.put_write, row=body.row,
+                         one_statement=True)
 
     @router.post("/v1/run-plane/runs/{run_id}/interrupts")
     @permit(P.FLEET_HOST, scope=Scope.org())

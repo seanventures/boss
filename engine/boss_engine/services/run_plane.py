@@ -57,10 +57,19 @@ def fenced(message: str = "this run's lease is held by someone else now") -> Run
     return RunPlaneError("fenced", 409, message)
 
 
+_JOBS: dict = {}
+
+
 def _jobs(settings: Any) -> Any:
+    """One JobLeaseService per settings object (it builds four services; the run plane's hot
+    path must not rebuild them on every call)."""
     from .jobs import JobLeaseService
 
-    return JobLeaseService(settings)
+    key = id(settings)
+    found = _JOBS.get(key)
+    if found is None or found.settings is not settings:
+        found = _JOBS[key] = JobLeaseService(settings)
+    return found
 
 
 def _ttl(value: Any) -> int:
@@ -128,15 +137,24 @@ def fence(connection: Any, settings: Any, host_id: str, run_id: str, lease: Leas
     return row
 
 
-def replica_for_any(connection: Any, host_id: str, replica_id: str) -> dict:
+#: replica id -> its host. A replica is created on one host and never moves (a re-placement is a
+#: NEW replica row), so the pair is immutable and safe to remember for the process's life.
+_REPLICA_HOST: dict = {}
+
+
+def replica_for_any(connection: Any, host_id: str, replica_id: str) -> None:
     """As replica_for, for calls under a lease the replica already holds: a replica being
     drained (wanted stopped) may still settle and hand back what it runs."""
-    row = connection.execute(text(
-        "SELECT id, host_id, deployment_id FROM agent_replicas WHERE id = :r"),
-        {"r": replica_id}).mappings().first()
-    if row is None or row["host_id"] != host_id:
+    host = _REPLICA_HOST.get(replica_id)
+    if host is None:
+        host = connection.execute(text("SELECT host_id FROM agent_replicas WHERE id = :r"),
+                                  {"r": replica_id}).scalar()
+        if host is not None:
+            if len(_REPLICA_HOST) > 100_000:
+                _REPLICA_HOST.clear()
+            _REPLICA_HOST[replica_id] = host
+    if host is None or host != host_id:
         raise RunPlaneError("replica_not_on_host", 403, "that replica is not placed on this host")
-    return dict(row)
 
 
 # ── Leasing: next, admit ────────────────────────────────────────────────────────────────────
@@ -284,7 +302,6 @@ def admit(connection: Any, settings: Any, host_id: str, replica_id: str, *, call
     replica that holds the active run (`held_by`), per the thread's double-text policy."""
     from ..identity import authn, authz
     from ..identity.scope import ResolvedScope
-    from . import agent_protocol
 
     replica = replica_for(connection, host_id, replica_id)
     project_id = str(replica["project_id"])
@@ -305,6 +322,21 @@ def admit(connection: Any, settings: Any, host_id: str, replica_id: str, *, call
         raise RunPlaneError("caller_forbidden", 403,
                             f"the caller may not run this agent ({decision.reason})")
     actor = ctx.principal.id
+    from ..identity import lineage
+
+    # The run is the CALLER's (the job it enqueues acts on their behalf), never the host's.
+    with lineage.acting(ctx):
+        return _admit_as_caller(connection, settings, replica, ctx=ctx, actor=actor,
+                                project_id=project_id, input=input, thread_id=thread_id,
+                                double_text=double_text, traceparent=traceparent, ttl=ttl)
+
+
+def _admit_as_caller(connection: Any, settings: Any, replica: dict, *, ctx: Any, actor: str,
+                     project_id: str, input: Any, thread_id: Optional[str],
+                     double_text: Optional[str], traceparent: Optional[str], ttl: Any) -> dict:
+    from . import agent_protocol
+
+    replica_id = str(replica["id"])
     try:
         if thread_id:
             agent_protocol.get_thread(connection, project_id, thread_id)
@@ -400,33 +432,97 @@ def after_commit(engine: Any, run_id: str) -> None:
 
 # ── Checkpoints ─────────────────────────────────────────────────────────────────────────────
 
+#: THE FENCE AS ONE SQL PREDICATE, for the two hot writes (a checkpoint, a pending write): what
+#: jobs.require_active_lease checks (owner, token hash, leased or running, not expired), plus the
+#: epoch and the run, FOR UPDATE — in the SAME statement as the write, so the lease row is locked
+#: and re-checked (READ COMMITTED re-evaluates it after any concurrent reclaim) before anything
+#: is written. A statement that finds no lease writes nothing, and the precise refusal then comes
+#: from `fence` itself. test_p8a_run_plane's agreement test holds the two to the same answers.
+_LEASE_HELD = """
+    SELECT id FROM jobs
+     WHERE id = :job AND lease_owner = :owner AND lease_token_hash = :token_hash
+       AND status IN ('leased', 'running') AND lease_expires_at > now()
+       AND fence_epoch = :epoch AND payload->>'run_id' = :run
+     FOR UPDATE"""
+
+
+def _lease_params(lease: LeaseRef, run_id: str) -> dict:
+    import hashlib
+
+    return {"job": lease.job_id, "owner": owner_of(lease.replica_id), "epoch": int(lease.epoch),
+            "token_hash": hashlib.sha256(lease.token.encode("utf-8")).hexdigest(), "run": run_id}
+
+
+def _refused(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef) -> None:
+    """The one-statement write found no lease: say exactly why (fence raises), never write."""
+    fence(connection, settings, host_id, run_id, lease)
+    raise fenced()
+
+
 def put_checkpoint(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
                    row: dict) -> dict:
-    """One checkpoint row, fenced, with the run's agent_runs mirror (what PgCheckpointStore with
-    AgentRunRow does on the worker)."""
-    from ..kernel.durable import PgCheckpointStore
+    """One checkpoint row with the run's agent_runs mirror (what PgCheckpointStore with
+    AgentRunRow does on the worker), fenced, in ONE statement (one round trip; P8a-T5)."""
     from ..kernel.state import RunState
-    from .agent_run_worker import AgentRunRow
 
-    fence(connection, settings, host_id, run_id, lease)
     if str(row.get("run")) != run_id:
         raise RunPlaneError("wrong_run", 400, "a run writes only its own checkpoints")
-    state = RunState.from_checkpoint(json.loads(row["state"]) if isinstance(row["state"], str)
-                                     else row["state"])
-    AgentRunRow(connection).save(state)
-    PgCheckpointStore.insert_checkpoint(connection, {**row, "state": row["state"] if isinstance(
-        row["state"], str) else json.dumps(row["state"], default=str)})
+    replica_for_any(connection, host_id, lease.replica_id)
+    blob = row["state"] if isinstance(row["state"], str) else json.dumps(row["state"],
+                                                                         default=str)
+    state = RunState.from_checkpoint(json.loads(blob))
+    safe = lambda value: json.dumps(value, default=str)  # noqa: E731
+    # The mirror's columns are agent_run_worker.AgentRunRow.save's; the insert is
+    # PgCheckpointStore.insert_checkpoint's (test_p8a_run_plane checks both stay in step).
+    held = connection.execute(text(f"""
+        WITH lease AS ({_LEASE_HELD}),
+        mirror AS (
+          UPDATE agent_runs SET status = :s, messages = CAST(:m AS JSONB), step = :st,
+                 pending = CAST(:p AS JSONB), output_text = :o, usage = CAST(:u AS JSONB),
+                 updated_at = now()
+           WHERE id = :run AND EXISTS (SELECT 1 FROM lease) RETURNING 1),
+        written AS (
+          INSERT INTO agent_checkpoints (checkpoint_id, run_id, thread_id, parent_checkpoint_id,
+              ns, step, source, phase, status, state, state_bytes, durability, metadata)
+          SELECT :id, :run, :thread, :parent, :ns, CAST(:step AS INTEGER), :source, :phase,
+                 :status, CAST(:state AS JSONB), CAST(:bytes AS INTEGER), :mode,
+                 CAST(:meta AS JSONB)
+           WHERE EXISTS (SELECT 1 FROM lease)
+          ON CONFLICT (checkpoint_id) DO NOTHING RETURNING 1)
+        SELECT EXISTS (SELECT 1 FROM lease)"""),
+        {**row, **_lease_params(lease, run_id), "state": blob, "s": state.status,
+         "m": safe(state.openai_messages()), "st": int(state.step),
+         "p": safe(state.pending) if state.pending else None, "o": state.final_text,
+         "u": safe(state.usage.as_adapter_usage())}).scalar()
+    if not held:
+        _refused(connection, settings, host_id, run_id, lease)
     return {"checkpoint_id": row["id"]}
 
 
 def put_write(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
               row: dict) -> dict:
-    from ..kernel.durable import PgCheckpointStore
-
-    fence(connection, settings, host_id, run_id, lease)
+    """One pending write (a 'started' marker or a result), fenced, in one statement."""
     if str(row.get("run")) != run_id:
         raise RunPlaneError("wrong_run", 400, "a run writes only its own pending writes")
-    PgCheckpointStore.upsert_write(connection, row)
+    replica_for_any(connection, host_id, lease.replica_id)
+    held = connection.execute(text(f"""
+        WITH lease AS ({_LEASE_HELD}),
+        written AS (
+          INSERT INTO agent_checkpoint_writes (checkpoint_id, call_id, run_id, step, idx, tool,
+              idempotency, idempotency_key, status, result, rendered)
+          SELECT :ckpt, :call, :run, CAST(:step AS INTEGER), CAST(:idx AS INTEGER), :tool, :idem,
+                 :key, :status, CAST(:result AS JSONB), :rendered
+           WHERE EXISTS (SELECT 1 FROM lease)
+          ON CONFLICT (checkpoint_id, call_id) DO UPDATE SET
+            status = EXCLUDED.status, result = EXCLUDED.result, rendered = EXCLUDED.rendered,
+            idempotency = COALESCE(EXCLUDED.idempotency, agent_checkpoint_writes.idempotency),
+            idempotency_key = COALESCE(EXCLUDED.idempotency_key,
+                                       agent_checkpoint_writes.idempotency_key),
+            updated_at = now()
+          RETURNING 1)
+        SELECT EXISTS (SELECT 1 FROM lease)"""), {**row, **_lease_params(lease, run_id)}).scalar()
+    if not held:
+        _refused(connection, settings, host_id, run_id, lease)
     return {"call_id": row["call"], "status": row["status"]}
 
 
