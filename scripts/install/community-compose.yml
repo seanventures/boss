@@ -513,6 +513,10 @@ services:
       BOSS_TOOLCHAIN_REGISTRY: ${BOSS_TOOLCHAIN_REGISTRY:-}
       BOSS_SANDBOX_ROOT_PATH: /var/lib/boss/sandboxes
       BOSS_EGRESS_URL: ${BOSS_EGRESS_URL:-http://egress:8090}
+      # The central streaming model gateway (P8b S10): what the API hands agent hosts as
+      # desired-state `endpoints.model_gateway`, and where the local lane's thin client goes
+      # when BOSS_MODEL_PROXY_VIA_GATEWAY is on.
+      BOSS_MODEL_GATEWAY_URL: ${BOSS_MODEL_GATEWAY_URL:-http://model-gateway:8092}
       # BOSS-RUNNER (BOSSAPP-828): set to http://runner:8095 (and start the `runner` profile) to let
       # the runner sidecar own coding-agent processes, so an API restart re-attaches to in-flight
       # turns instead of re-running them. Empty (the default): turns run in this container as before.
@@ -817,6 +821,10 @@ services:
       # default org/workspace/project an agent run falls back to, exactly as the API has them.
       BOSS_AGENT_RUNS_ON_WORKERS: ${BOSS_AGENT_RUNS_ON_WORKERS:-1}
       BOSS_EGRESS_URL: ${BOSS_EGRESS_URL:-http://egress:8090}
+      # The central streaming model gateway (P8b S10): what the API hands agent hosts as
+      # desired-state `endpoints.model_gateway`, and where the local lane's thin client goes
+      # when BOSS_MODEL_PROXY_VIA_GATEWAY is on.
+      BOSS_MODEL_GATEWAY_URL: ${BOSS_MODEL_GATEWAY_URL:-http://model-gateway:8092}
       BOSS_EGRESS_CONNECT_PROXY: ${BOSS_EGRESS_CONNECT_PROXY:-http://egress:8091}
       BOSS_EGRESS_SERVICE_KEY_FILE: /var/lib/boss/identity/egress-service.key
       BOSS_DEFAULT_ORG_ID: ${BOSS_DEFAULT_ORG_ID:-org_boss}
@@ -1028,6 +1036,11 @@ services:
       BOSS_EGRESS_PORT: "8090"
       BOSS_EGRESS_CONNECT_PORT: "8091"
       BOSS_EGRESS_CONNECT_ALLOW: ${BOSS_EGRESS_CONNECT_ALLOW:-}
+      # STRICT-SECRETS MODE (P8b S10, LLD §3.11): "1" removes the model providers from the
+      # CONNECT allowlist, so the only path to a model is the injecting model gateway. Set it
+      # on an install whose agents run on strict microVM hosts; the local lane's coding CLIs
+      # already reach their model through the loopback proxy, not this tunnel.
+      BOSS_EGRESS_STRICT_SECRETS: ${BOSS_EGRESS_STRICT_SECRETS:-}
       BOSS_GITHUB_APP_ID: ${BOSS_GITHUB_APP_ID:-}
       BOSS_GITHUB_APP_INSTALLATION_ID: ${BOSS_GITHUB_APP_INSTALLATION_ID:-}
     volumes:

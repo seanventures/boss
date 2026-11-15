@@ -334,9 +334,11 @@ class MicroVMProvider:
 
     def _model_handle(self, spec: dict, tenant_id: Optional[str], task_id: str) -> dict:
         """A `boss_mdl_` handle for the task's run, when a database is reachable: bound to the
-        run at epoch 0 (the sandbox-service names the VM when it boots; the guest gateway binds
-        it on first use). Without one the guest has no model and fails closed, visibly."""
-        from .streaming_model_gateway import guest_handles
+        run at its job's CURRENT fence epoch (the lease stamps code_task_runs.fence_epoch before
+        this provider runs) and allow-listed to the task's model; the VM is unknown until the
+        sandbox-service boots it, so the gateway binds the handle to the first VM that redeems
+        it. Without one the guest has no model and fails closed, visibly."""
+        from .streaming_model_gateway import current_epoch, guest_handles
 
         project_id = str(spec.get("project_id") or "")
         if not project_id:
@@ -354,9 +356,12 @@ class MicroVMProvider:
                     "WHERE p.id = :p"), {"p": project_id}).scalar()
                 if not org:
                     return {}
+                epoch = current_epoch(connection, str(task_id))
+                model = str(spec.get("model") or "").strip()
                 return guest_handles(connection, self.settings, org_id=str(org),
-                                     project_id=project_id, run_id=str(task_id), epoch=0,
-                                     vm_id=None, provider=provider)
+                                     project_id=project_id, run_id=str(task_id),
+                                     epoch=0 if epoch is None else epoch, vm_id=None,
+                                     provider=provider, models=(model,) if model else ())
         except Exception as exc:  # noqa: BLE001 — no handle: the guest fails closed
             log.warning("no model handle for %s: %s", task_id, type(exc).__name__)
             return {}

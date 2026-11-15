@@ -218,3 +218,49 @@ def test_the_work_item_a_host_claims_carries_the_guests_model_handle(eng, monkey
             assert mdl not in str(package), "the package never repeats the handle"
     finally:
         plane.close()
+
+
+def test_a_code_task_handle_carries_the_jobs_epoch_and_binds_to_its_first_vm(eng, world):
+    """Review round 2 (P8b-T8 for code tasks): MicroVMProvider mints the handle with the job's
+    CURRENT fence epoch (never 0) and no VM; the first VM to redeem it binds it, and a second
+    VM is a replay. The task's call is therefore not fenced."""
+    from boss_engine.config import Settings
+    from boss_engine.services.sandbox_provider import MicroVMProvider
+
+    crun = f"crun_{uuid.uuid4().hex[:8]}"
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO jobs (id, project_id, kind, status, payload, fence_epoch) "
+            "VALUES (:j, :p, 'code.task', 'leased', CAST(:pl AS JSONB), 2)"),
+            {"j": f"job_{crun}", "p": world["project"], "pl": f'{{"run_id": "{crun}"}}'})
+    try:
+        provider = MicroVMProvider.__new__(MicroVMProvider)
+        provider.settings = Settings()
+        handles = provider._model_handle({"project_id": world["project"], "engine": "claude_code",
+                                          "model": "claude-sonnet-4-5"}, "t", crun)
+        assert handles.get("mdl", "").startswith(smg.TOKEN_PREFIX), handles
+        with eng.begin() as c:
+            row = c.execute(text("SELECT fence_epoch, vm_id, models FROM model_gateway_handles "
+                                 "WHERE token_hash = :h"),
+                            {"h": smg.hash_handle(handles["mdl"])}).mappings().one()
+        assert row["fence_epoch"] == 2 and row["vm_id"] is None
+        assert list(row["models"]) == ["claude-sonnet-4-5"]
+        gw = _gateway(eng)
+        first = smg.Caller(host_id=world["host_id"], org_id=world["org"], vm_id="vm_first",
+                           run_id=crun, epoch=2)
+        with eng.begin() as c:
+            bound = gw.resolve(c, first, handles["mdl"])      # not fenced: the job is at 2
+        assert bound.vm_id == "vm_first"
+        with eng.begin() as c:
+            assert c.execute(text("SELECT vm_id FROM model_gateway_handles WHERE token_hash = :h"),
+                             {"h": smg.hash_handle(handles["mdl"])}).scalar() == "vm_first"
+            gw.resolve(c, first, handles["mdl"])              # the same VM, again: fine
+        with eng.begin() as c, pytest.raises(smg.Refused) as replay:
+            gw.resolve(c, smg.Caller(host_id=world["host_id"], org_id=world["org"],
+                                     vm_id="vm_second", run_id=crun, epoch=2), handles["mdl"])
+        assert replay.value.reason == "handle_replay"
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM model_gateway_handles WHERE run_id = :r"), {"r": crun})
+            c.execute(text("DELETE FROM host_events WHERE detail->>'run_id' = :r"), {"r": crun})
+            c.execute(text("DELETE FROM jobs WHERE id = :j"), {"j": f"job_{crun}"})

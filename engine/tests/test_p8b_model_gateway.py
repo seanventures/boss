@@ -25,6 +25,7 @@ import datetime as dt
 import json
 import tracemalloc
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -576,3 +577,231 @@ def test_python_and_go_agree_on_the_contracts_credential_rules():
                    sc.CONTRACT_LEGACY_REFUSED):
         assert f'"{reason}"' in go, reason
     assert 'const Version = "1.1"' in go and 'const LegacyVersion = "1.0"' in go
+
+
+# ── review round 2: aborted streams, Bedrock event streams, allowlists, wiring ───────────────
+
+def test_an_abandoned_stream_is_settled_with_what_was_read_not_released():
+    """A client that disconnects mid-answer was still answered by the provider: the usage read
+    so far is settled; only an upstream error, or a stream that never produced a byte, releases
+    the reservation."""
+    class Budget:
+        def __init__(self) -> None:
+            self.settled, self.failed = [], []
+
+        def reserve(self, project_id, run_id, model):
+            return ("gate", ("r", "c"))
+
+        def settle(self, held, usage):
+            self.settled.append(dict(usage))
+
+        def fail(self, held, error):
+            self.failed.append(str(error))
+
+    chunks = [b'data: {"type":"message_start","message":{"usage":{"input_tokens":30}}}\n\n'] + [
+        b'data: {"type":"content_block_delta","delta":{"text":"x"}}\n\n' for _ in range(20)] + [
+        b'data: {"type":"message_delta","usage":{"output_tokens":99}}\n\n']
+    up = FakeUpstream(chunks)
+    budget = Budget()
+    audit = FakeAudit()
+    app = _app(_gateway(up, budget=budget, audit=audit))
+
+    async def abandon():
+        body = json.dumps({"model": "m"}).encode()
+        scope = {"type": "http", "http_version": "1.1", "method": "POST", "scheme": "http",
+                 "path": "/anthropic/v1/messages", "raw_path": b"/anthropic/v1/messages",
+                 "query_string": b"", "root_path": "", "server": ("test", 80),
+                 "client": ("127.0.0.1", 1), "headers": [
+                     (k.encode(), v.encode()) for k, v in {
+                         **HOST_HEADERS, smg.HANDLE_HEADER: HANDLE,
+                         "content-type": "application/json",
+                         "content-length": str(len(body))}.items()]}
+        sent = {"body": False}
+
+        async def receive():
+            if not sent["body"]:
+                sent["body"] = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await asyncio.Event().wait()
+
+        got = []
+
+        async def send(message):
+            if message["type"] == "http.response.body" and message.get("body"):
+                got.append(message["body"])
+                if len(got) == 5:
+                    raise ConnectionResetError("client went away")
+
+        with pytest.raises(Exception):
+            await app(scope, receive, send)
+        return got
+
+    got = asyncio.run(abandon())
+    assert len(got) == 5 and up.closed
+    assert budget.failed == [], "an abandoned stream is not a free call"
+    (usage,) = budget.settled
+    assert usage["prompt_tokens"] == 30, "what the provider had already said is charged"
+    assert usage["completion_tokens"] == 0, "the final delta never arrived: nothing invented"
+    row = audit.rows[-1]
+    assert row["verdict"] == "allow" and row["rejected_by"] == "client_disconnected"
+    assert 0 < row["bytes_out"] < sum(len(c) for c in chunks)
+
+
+def _eventstream_frame(event_type: str, payload: bytes) -> bytes:
+    import struct
+    import zlib
+
+    name = b":event-type"
+    header = bytes([len(name)]) + name + bytes([7]) + struct.pack(">H", len(event_type)) + \
+        event_type.encode()
+    total = 12 + len(header) + len(payload) + 4
+    prelude = struct.pack(">II", total, len(header))
+    prelude += struct.pack(">I", zlib.crc32(prelude))
+    body = prelude + header + payload
+    return body + struct.pack(">I", zlib.crc32(body))
+
+
+def test_bedrock_event_streams_are_accounted_from_their_frames():
+    import base64
+
+    reader = smg.UsageReader("application/vnd.amazon.eventstream")
+    frames = (_eventstream_frame("messageStart", b'{"role":"assistant"}')
+              + _eventstream_frame("contentBlockDelta", b'{"delta":{"text":"hi"}}')
+              + _eventstream_frame("metadata", b'{"usage":{"inputTokens":41,"outputTokens":7}}'))
+    # fed in awkward pieces: a frame boundary never lines up with a chunk boundary
+    for i in range(0, len(frames), 7):
+        reader.feed(frames[i:i + 7])
+    assert reader.finish() == {"input_tokens": 41, "output_tokens": 7}
+    assert reader.buf == b"", "no frame is held past the chunk in flight"
+    # invoke-with-response-stream wraps the model's own events in base64 `bytes`
+    reader = smg.UsageReader("application/vnd.amazon.eventstream")
+    inner = json.dumps({"type": "message_stop", "amazon-bedrock-invocationMetrics": {
+        "inputTokenCount": 12, "outputTokenCount": 5}}).encode()
+    start = json.dumps({"type": "message_start", "message": {
+        "model": "claude-on-bedrock", "usage": {"input_tokens": 12}}}).encode()
+    reader.feed(_eventstream_frame("chunk", json.dumps(
+        {"bytes": base64.b64encode(start).decode()}).encode()))
+    reader.feed(_eventstream_frame("chunk", json.dumps(
+        {"bytes": base64.b64encode(inner).decode()}).encode()))
+    found = reader.finish()
+    assert found["input_tokens"] == 12 and found["output_tokens"] == 5
+    assert found["model"] == "claude-on-bedrock"
+    # garbage is not a frame: reading stops, nothing is invented, nothing is held
+    reader = smg.UsageReader("application/vnd.amazon.eventstream")
+    reader.feed(b"\x00\x00\x00\x05" + b"garbage " * 4)
+    assert reader.finish() == {} and reader.buf == b""
+
+
+def test_a_handle_is_allow_listed_to_the_runs_routed_models(monkeypatch):
+    from boss_engine.services import model_routing
+
+    class Conn:
+        def execute(self, *a, **k):
+            raise RuntimeError("no database in this unit test")
+
+    resolutions = {"build": "claude-sonnet-4-5", "review": "claude-opus-4-1", "chat": None,
+                   "decisions": "claude-sonnet-4-5", "hard": "auto", "routine": ""}
+    monkeypatch.setattr(model_routing, "resolve_job",
+                        lambda c, s, p, job: SimpleNamespace(model=resolutions.get(job)))
+    assert smg.routed_models(Conn(), None, "p_1") == ("claude-sonnet-4-5", "claude-opus-4-1")
+    minted: dict = {}
+
+    def fake_issue(connection, **kw):
+        minted.update(kw)
+        return smg.TOKEN_PREFIX + "m" * 64
+
+    monkeypatch.setattr(smg, "issue_handle", fake_issue)
+    monkeypatch.setattr(smg, "credential_ref_for", lambda c, s, p, prov: "env:ANTHROPIC_API_KEY")
+    monkeypatch.setattr(smg, "provider_for_project", lambda c, s, p: "anthropic")
+    out = smg.guest_handles(Conn(), None, org_id="o", project_id="p_1", run_id="r", epoch=4,
+                            vm_id=None)
+    assert out["mdl_provider"] == "anthropic"
+    assert minted["models"] == ("claude-sonnet-4-5", "claude-opus-4-1") and minted["epoch"] == 4
+    # a caller that names the task's model pins exactly that
+    smg.guest_handles(Conn(), None, org_id="o", project_id="p_1", run_id="r", epoch=4,
+                      vm_id=None, models=("gpt-5",))
+    assert minted["models"] == ("gpt-5",)
+    # and the gateway refuses a model off the list before a byte goes upstream
+    up = FakeUpstream([b"x"])
+    gw = _gateway(up, handle=_handle(models=("claude-sonnet-4-5", "claude-opus-4-1")))
+    with TestClient(_app(gw)) as client:
+        h = {**HOST_HEADERS, smg.HANDLE_HEADER: HANDLE}
+        off = client.post("/anthropic/v1/messages", json={"model": "claude-haiku-4"}, headers=h)
+        assert off.status_code == 403 and off.json()["error"]["code"] == "model_not_allowed"
+        assert up.calls == []
+        assert client.post("/anthropic/v1/messages", json={"model": "claude-opus-4-1"},
+                           headers=h).status_code == 200
+
+
+def test_the_handles_endpoint_reads_the_runs_epoch_and_takes_no_upstream(monkeypatch):
+    from boss_engine.identity import tokens
+
+    minted: dict = {}
+
+    class Result:
+        def scalar(self):
+            return "org_1"
+
+    class Conn:
+        def execute(self, *a, **k):
+            return Result()
+
+    class Engine:
+        @contextlib.contextmanager
+        def begin(self):
+            yield Conn()
+
+    def fake_issue(connection, **kw):
+        minted.update(kw)
+        return smg.TOKEN_PREFIX + "n" * 64
+
+    monkeypatch.setattr(smg, "issue_handle", fake_issue)
+    monkeypatch.setattr(smg, "current_epoch", lambda c, run_id: 7)
+    monkeypatch.setattr(tokens, "egress_service_key_ok", lambda presented: presented == "svc")
+    gw = _gateway(FakeUpstream([b"x"]))
+    gw.engine = Engine()
+    import sys
+
+    sys.path.insert(0, str(ROOT / "apps" / "model-gateway"))
+    from boss_model_gateway.app import build_app
+
+    with TestClient(build_app(engine=Engine(), settings=object(), gateway=gw)) as client:
+        body = {"provider": "anthropic", "project_id": "p_1", "run_id": "crun_9",
+                "credential_ref": "env:ANTHROPIC_API_KEY", "upstream": "https://evil.example",
+                "epoch": 0}
+        assert client.post("/_boss/handles", json=body).status_code == 401
+        resp = client.post("/_boss/handles", json=body, headers={"X-Boss-Egress-Key": "svc"})
+    assert resp.status_code == 200 and resp.json()["handle"].startswith(smg.TOKEN_PREFIX)
+    assert minted["epoch"] == 7, "the run's current epoch, read by the gateway"
+    assert "upstream" not in minted or minted["upstream"] is None
+
+
+def test_compose_hands_hosts_the_gateway_url_and_exposes_strict_mode():
+    import re
+
+    compose = (ROOT / "scripts" / "install" / "community-compose.yml").read_text()
+
+    def env_of(service: str) -> str:
+        start = compose.index(f"\n  {service}:\n")
+        nxt = re.search(r"\n  [a-z-]+:\n", compose[start + 1:])
+        return compose[start:start + 1 + (nxt.start() if nxt else len(compose))]
+
+    for service in ("api", "worker", "model-gateway"):
+        assert "BOSS_MODEL_GATEWAY_URL: ${BOSS_MODEL_GATEWAY_URL:-http://model-gateway:8092}" in \
+            env_of(service), service
+    assert "BOSS_EGRESS_STRICT_SECRETS: ${BOSS_EGRESS_STRICT_SECRETS:-}" in env_of("egress")
+    gateway = env_of("model-gateway")
+    assert 'command: ["python", "-m", "boss_model_gateway"]' in gateway
+    assert "max-size:" in gateway and "/_boss/healthz" in gateway
+    assert "ports:" not in gateway, "only the compose network reaches the gateway"
+
+
+def test_the_pooled_client_is_one_per_process():
+    async def scenario():
+        a = smg._client()
+        b = smg._client()
+        assert a is b
+        await smg.close_client()
+        assert smg._CLIENT is None
+
+    asyncio.run(scenario())

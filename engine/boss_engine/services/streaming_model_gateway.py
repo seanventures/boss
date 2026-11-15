@@ -401,6 +401,9 @@ class UsageReader:
     def __init__(self, content_type: str) -> None:
         content_type = (content_type or "").lower()
         self.sse = "text/event-stream" in content_type
+        #: Bedrock streams (`converse-stream`, `invoke-with-response-stream`) are AWS
+        #: event-stream frames; their `metadata` / `chunk` payloads carry the usage.
+        self.eventstream = "vnd.amazon.eventstream" in content_type
         #: Only a JSON answer is kept (bounded) to read its `usage`; any other body type has
         #: no usage to read and is relayed without a byte retained.
         self.json = not self.sse and "json" in content_type
@@ -415,6 +418,9 @@ class UsageReader:
             *lines, self.buf = self.buf.split(b"\n")
             for line in lines:
                 self._sse_line(line)
+        elif self.eventstream:
+            self.buf += chunk
+            self.buf = self._eventstream_frames(self.buf)
         elif self.json and self.kept < _USAGE_KEEP:
             self.parts.append(chunk[: _USAGE_KEEP - self.kept])
             self.kept += len(chunk)
@@ -438,11 +444,55 @@ class UsageReader:
             if isinstance(event.get("model"), str):
                 self.found["model"] = event["model"]
 
+    def _eventstream_frames(self, buf: bytes) -> bytes:
+        """Consume every complete AWS event-stream frame in `buf` (prelude: total length,
+        headers length, CRC; headers; payload; CRC) and return the unconsumed tail. A frame's
+        JSON payload is read for `usage` (converse-stream `metadata`) or, for a `chunk`, its
+        base64 `bytes` decoded and read (invoke-with-response-stream: the model's own usage and
+        `amazon-bedrock-invocationMetrics`). Never more than one frame is held."""
+        import struct
+
+        while len(buf) >= 12:
+            total, header_len = struct.unpack(">II", buf[:8])
+            if total < 16 or header_len > total - 16:
+                return b""          # not a frame: stop reading usage from this stream
+            if len(buf) < total:
+                return buf
+            payload = buf[12 + header_len: total - 4]
+            buf = buf[total:]
+            self._eventstream_payload(payload)
+        return buf
+
+    def _eventstream_payload(self, payload: bytes) -> None:
+        try:
+            event = json.loads(payload or b"null")
+        except ValueError:
+            return
+        if not isinstance(event, dict):
+            return
+        self._take(event.get("usage"))
+        encoded = event.get("bytes")
+        if isinstance(encoded, str):
+            try:
+                inner = json.loads(base64.b64decode(encoded))
+            except (ValueError, TypeError):
+                return
+            if isinstance(inner, dict):
+                self._take(inner.get("usage"))
+                self._take(inner.get("amazon-bedrock-invocationMetrics"))
+                message = inner.get("message")
+                if isinstance(message, dict):
+                    self._take(message.get("usage"))
+                    if isinstance(message.get("model"), str):
+                        self.found["model"] = message["model"]
+
     def _take(self, usage: Any) -> None:
         if not isinstance(usage, dict):
             return
-        names = {"input_tokens": ("input_tokens", "prompt_tokens", "inputTokens"),
-                 "output_tokens": ("output_tokens", "completion_tokens", "outputTokens"),
+        names = {"input_tokens": ("input_tokens", "prompt_tokens", "inputTokens",
+                                  "inputTokenCount"),
+                 "output_tokens": ("output_tokens", "completion_tokens", "outputTokens",
+                                   "outputTokenCount"),
                  "cache_read_input_tokens": ("cache_read_input_tokens",
                                              "cacheReadInputTokens"),
                  "cache_creation_input_tokens": ("cache_creation_input_tokens",
@@ -458,6 +508,8 @@ class UsageReader:
     def finish(self) -> dict[str, Any]:
         if self.sse:
             self._sse_line(self.buf)
+        elif self.eventstream:
+            self._eventstream_frames(self.buf)
         elif self.json:
             try:
                 body = json.loads(b"".join(self.parts) or b"null")
@@ -574,6 +626,19 @@ def load_handle(connection: Any, raw: str) -> Optional[Handle]:
                   revoked_at=row["revoked_at"])
 
 
+def bind_vm(connection: Any, token_hash: str, vm_id: str) -> str:
+    """Bind an unbound handle to the VM that first redeems it; returns the VM it is bound to
+    (another VM's, if a race bound it first — the caller then treats that as a replay)."""
+    from sqlalchemy import text
+
+    connection.execute(text(
+        "UPDATE model_gateway_handles SET vm_id = :v WHERE token_hash = :h AND vm_id IS NULL"),
+        {"h": token_hash, "v": vm_id})
+    return str(connection.execute(text(
+        "SELECT vm_id FROM model_gateway_handles WHERE token_hash = :h"), {"h": token_hash}
+    ).scalar() or vm_id)
+
+
 def revoke_handle(connection: Any, token_hash: str, reason: str) -> None:
     from sqlalchemy import text
 
@@ -674,16 +739,39 @@ def provider_for_project(connection: Any, settings: Any, project_id: str) -> str
     return "anthropic"
 
 
+def routed_models(connection: Any, settings: Any, project_id: str) -> tuple[str, ...]:
+    """THE RUN'S MODEL ALLOWLIST: every model name this project's routing names for any job
+    (Setup › Repo and models: build, review, chat, decisions, hard, routine), so a handle can
+    call those and nothing else. Empty when the project names none (Auto, the CLI's own default
+    model): then any model of the provider is allowed — a name BOSS never chose cannot be pinned."""
+    try:
+        from .model_routing import JOB_KNOBS, resolve_job
+
+        names: list[str] = []
+        for job in JOB_KNOBS:
+            try:
+                model = resolve_job(connection, settings, project_id, job).model
+            except Exception:  # noqa: BLE001 — one job's knob unreadable: the others still count
+                continue
+            if model and str(model).strip() and str(model).lower() != "auto":
+                names.append(str(model).strip())
+        return tuple(dict.fromkeys(names))
+    except Exception:  # noqa: BLE001
+        return ()
+
+
 def guest_handles(connection: Any, settings: Any, *, org_id: str, project_id: str, run_id: str,
                   epoch: int, vm_id: Optional[str], deployment_id: Optional[str] = None,
                   provider: Optional[str] = None, models: Iterable[str] = ()) -> dict[str, str]:
     """The `handles` a guest gets for its run (contract v1.1 `handles`, the work item's
-    `handles`): today `mdl`, with the provider it is for. Empty when the project has no
-    readable model source."""
+    `handles`): today `mdl`, with the provider it is for, allow-listed to `models` — the run's
+    routed models when the caller names none. Empty when the project has no readable model
+    source."""
     provider = provider or provider_for_project(connection, settings, project_id)
     ref = credential_ref_for(connection, settings, project_id, provider)
     if not ref:
         return {}
+    models = tuple(models) or routed_models(connection, settings, project_id)
     raw = issue_handle(connection, org_id=org_id, project_id=project_id, run_id=run_id,
                        epoch=epoch, vm_id=vm_id, provider=provider, credential_ref=ref,
                        models=models, deployment_id=deployment_id)
@@ -946,22 +1034,49 @@ class Caller:
 AsyncUpstream = Callable[[str, str, Mapping[str, str], bytes], Any]
 
 
+_CLIENT: Any = None
+_CLIENT_LOCK = threading.Lock()
+
+
+def _client() -> Any:
+    """ONE pooled httpx client per process (keep-alive to every upstream; no TLS handshake per
+    call, §2.15.5). Created on first use; `close_client()` at shutdown."""
+    global _CLIENT
+    import httpx
+
+    with _CLIENT_LOCK:
+        if _CLIENT is None:
+            _CLIENT = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=30.0, read=900.0, write=120.0, pool=30.0),
+                follow_redirects=False,
+                limits=httpx.Limits(max_connections=256, max_keepalive_connections=64,
+                                    keepalive_expiry=120.0))
+        return _CLIENT
+
+
+async def close_client() -> None:
+    global _CLIENT
+    with _CLIENT_LOCK:
+        client, _CLIENT = _CLIENT, None
+    if client is not None:
+        await client.aclose()
+
+
 @contextlib.asynccontextmanager
 async def httpx_upstream(method: str, url: str, headers: Mapping[str, str], body: bytes
                          ) -> AsyncIterator[tuple[int, dict, AsyncIterator[bytes]]]:
-    """The default upstream: one streamed httpx request; `aiter_raw` yields each chunk as it
-    arrives, and the response is closed when the relay ends, however it ends."""
+    """The default upstream: one streamed request on the pooled client; `aiter_raw` yields each
+    chunk as it arrives, and the response is closed when the relay ends, however it ends."""
     import httpx
 
-    timeout = httpx.Timeout(connect=30.0, read=900.0, write=120.0, pool=30.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-        request = client.build_request(method, httpx.URL(url), headers=dict(headers),
-                                       content=body or None)
-        response = await client.send(request, stream=True)
-        try:
-            yield response.status_code, dict(response.headers), response.aiter_raw()
-        finally:
-            await response.aclose()
+    client = _client()
+    request = client.build_request(method, httpx.URL(url), headers=dict(headers),
+                                   content=body or None)
+    response = await client.send(request, stream=True)
+    try:
+        yield response.status_code, dict(response.headers), response.aiter_raw()
+    finally:
+        await response.aclose()
 
 
 def presented_handle(headers: Mapping[str, str]) -> str:
@@ -1086,6 +1201,10 @@ class ModelGateway:
         if caller.org_id and handle.org_id != caller.org_id:
             self._replay(connection, caller, handle, "another_org")
         if not caller.direct:
+            if handle.vm_id is None and caller.vm_id:
+                # A code task's handle is minted before its VM exists (sandbox_provider): it is
+                # BOUND ON FIRST USE to the VM that redeems it, and enforced from then on (T8).
+                handle.vm_id = bind_vm(connection, handle.token_hash, caller.vm_id)
             if handle.vm_id and caller.vm_id and handle.vm_id != caller.vm_id:
                 self._replay(connection, caller, handle, "another_vm")
             if caller.run_id and handle.run_id != caller.run_id:
@@ -1236,10 +1355,17 @@ class ModelGateway:
                 await cm.__aexit__(None, None, None)
                 usage = as_ledger_usage(reader.finish(), model=model)
                 audit.update(bytes_out=sent, duration_ms=int((time.monotonic() - started) * 1000))
+                if not ok:
+                    audit["rejected_by"] = "client_disconnected"
                 self.audit.put(audit)
-                await self._settle(held, usage, ok=ok and int(status) < 400,
+                # A stream the client abandoned WAS answered by the provider as far as it got:
+                # what was read is settled (the tokens read from the stream so far), never
+                # released as if nothing had been sent. Only an upstream error, or a stream
+                # that never produced a byte, releases the reservation.
+                await self._settle(held, usage, ok=int(status) < 400 and (ok or sent > 0),
                                    handle=handle, status=int(status), model=model,
-                                   latency_ms=audit["duration_ms"])
+                                   latency_ms=audit["duration_ms"],
+                                   error=None if ok else "client_disconnected")
 
         return StreamingResponse(relay(), status_code=int(status), headers=passthrough)
 
@@ -1265,7 +1391,7 @@ class ModelGateway:
             log.warning("a model-call reservation could not be released")
 
     async def _settle(self, held: Any, usage: dict, *, ok: bool, handle: Handle, status: int,
-                      model: str, latency_ms: int) -> None:
+                      model: str, latency_ms: int, error: Optional[str] = None) -> None:
         from starlette.concurrency import run_in_threadpool
 
         if held is not None and self.budget:
@@ -1274,18 +1400,20 @@ class ModelGateway:
                     await run_in_threadpool(self.budget.settle, held, usage)
                 else:
                     await run_in_threadpool(self.budget.fail, held,
-                                            RuntimeError(f"upstream answered {status}"))
+                                            RuntimeError(error or f"upstream answered {status}"))
             except Exception:  # noqa: BLE001
                 log.warning("a model-call reservation could not be settled")
         if self.ledger:
             try:
-                await run_in_threadpool(self.ledger, handle, usage, ok, status, model, latency_ms)
+                await run_in_threadpool(self.ledger, handle, usage, ok, status, model, latency_ms,
+                                        error)
             except Exception:  # noqa: BLE001
                 log.warning("a model-call ledger row could not be written")
 
     def _ledger_row(self, handle: Handle, usage: dict, ok: bool, status: int, model: str,
-                    latency_ms: int) -> None:
-        """One llm_calls row per call, through the one recording seam (BOSSAPP-998)."""
+                    latency_ms: int, error: Optional[str] = None) -> None:
+        """One llm_calls row per call, through the one recording seam (BOSSAPP-998). A stream
+        the client abandoned is still a charged call (ok, with the usage read so far)."""
         from .llm_telemetry import record_llm_call, set_llm_context
         from .openai_adapter import estimate_cost_usd_micros
 
@@ -1295,8 +1423,9 @@ class ModelGateway:
             record_llm_call(engine_name="model_gateway", usage=usage,
                             cost_usd_micros=estimate_cost_usd_micros(usage) if ok else 0,
                             latency_ms=latency_ms, ok=ok,
-                            error=None if ok else f"upstream_{status}", stage="gateway",
-                            project_id=handle.project_id, connection=connection, capacity=False)
+                            error=error if ok else (error or f"upstream_{status}"),
+                            stage="gateway", project_id=handle.project_id,
+                            connection=connection, capacity=False)
 
 
 # ── The local lane's thin client ──────────────────────────────────────────────────────────────
@@ -1324,6 +1453,8 @@ class GatewayClient:
         key = tokens.egress_service_key()
         if not key:
             raise RuntimeError("no service key for the model gateway")
+        # The gateway reads the run's CURRENT fence epoch itself and never takes an upstream
+        # from a caller: a handle names a reference and a run, nothing more.
         resp = httpx.post(gateway_url() + "/_boss/handles", headers={"X-Boss-Egress-Key": key},
                           json={"provider": provider, "project_id": project_id, "run_id": run_id,
                                 "credential_ref": credential_ref, "models": list(models),
@@ -1343,4 +1474,5 @@ __all__ = ["ADAPTERS", "ANTHROPIC", "AZURE_OPENAI", "BEDROCK", "CREDENTIAL_HEADE
            "current_epoch", "dropped_header", "fingerprint", "gateway_url", "guest_handles",
            "hash_handle", "httpx_upstream", "is_ours", "issue_handle", "load_handle",
            "outbound_headers", "path_template", "presented_handle", "refusal_body",
-           "revoke_handle", "revoke_run", "sigv4_headers", "upstream_for"]
+           "revoke_handle", "revoke_run", "routed_models", "sigv4_headers", "upstream_for",
+           "bind_vm", "close_client"]

@@ -69,12 +69,16 @@ def build_app(engine: Optional[Any] = None, *, settings: Any = None,
                         {"p": str(data["project_id"])}).scalar()
                     if not org:
                         raise KeyError("project")
+                    # The run's CURRENT epoch, read here (never the caller's word); never an
+                    # upstream of the caller's choosing (the provider's own API, or the
+                    # operator's gateway through the credential reference).
+                    run_id = str(data["run_id"])
+                    epoch = smg.current_epoch(connection, run_id)
                     return smg.issue_handle(
                         connection, org_id=str(org), project_id=str(data["project_id"]),
-                        run_id=str(data["run_id"]), epoch=int(data.get("epoch") or 0),
+                        run_id=run_id, epoch=0 if epoch is None else epoch,
                         vm_id=None, provider=str(data["provider"]),
                         credential_ref=str(data["credential_ref"]),
-                        upstream=data.get("upstream") or None,
                         models=[str(m) for m in (data.get("models") or [])],
                         ttl_seconds=int(data.get("ttl_seconds") or smg.HANDLE_TTL_SECONDS))
 
@@ -93,6 +97,7 @@ def build_app(engine: Optional[Any] = None, *, settings: Any = None,
             yield
         finally:
             gateway.audit.stop()
+            await smg.close_client()
 
     app = Starlette(routes=[
         Route("/_boss/healthz", healthz, methods=["GET"]),

@@ -532,14 +532,15 @@ host connects to the guest's CID; guest-initiated port 7105 on the host side is 
 
 The central model gateway (`apps/model-gateway`, `boss_engine.services.streaming_model_gateway`)
 is the only process that holds a provider key. The host forwards a guest's model call to
-`endpoints.model_gateway` (an absolute URL; absent → `503 gateway_unconfigured`) and the answer
-streams back chunk by chunk. **The Go side must send, on every model forward:**
+`endpoints.model_gateway` (an absolute URL the API takes from `BOSS_MODEL_GATEWAY_URL`; absent →
+`503 gateway_unconfigured`) and the answer streams back chunk by chunk. **The model rules carry
+`HostProof: true`, so the Go gateway sends, on every model forward:**
 
 | What | How | Why |
 |---|---|---|
-| The HOST's identity | `Authorization: BossHost <proof>` (§1.3) over the **gateway's** method and path (`htu` = the forwarded path, e.g. `/anthropic/v1/messages`) | the gateway answers only enrolled hosts (`fleet_ca.verify_proof`: pinned certificate, 60 s, jti spent once). Set `HostAuth: true` on the model rules, as the run-plane rule has |
+| The HOST's identity | `Authorization: BossHost <proof>` (§1.3) over the **gateway's** method and path (`htu` = the forwarded path, e.g. `/anthropic/v1/messages`), while the connection still presents the VM's SVID | the gateway answers only enrolled hosts (`fleet_ca.verify_proof`: pinned certificate, 60 s, jti spent once) |
 | The guest's handle | `X-Boss-Handle: boss_mdl_…` — the value the guest presented in `x-api-key` / `Authorization: Bearer` / `Proxy-Authorization`, **moved** here after the strip | the gateway binds it to `(run, epoch, vm)` in Postgres; it never goes upstream |
-| The host's word on the VM, run and epoch | `X-Boss-Vm`, `X-Boss-Run`, `X-Boss-Fence-Epoch`, `X-Boss-Deployment` from the socket's binding | a handle whose row names another VM or run is a **replay**: revoked, `host_events(handle_replay)`, `401 handle_replay`; an epoch that is not the handle's, or not the run's current one in Postgres, is `409 fenced` within that one request |
+| The host's word on the VM, run and epoch | `X-Boss-Vm`, `X-Boss-Run`, `X-Boss-Fence-Epoch`, `X-Boss-Deployment` from the socket's binding | a handle minted before its VM existed (a code task) is **bound to the first VM that redeems it**; from then on a handle whose row names another VM or run is a **replay**: revoked, `host_events(handle_replay)`, `401 handle_replay`; an epoch that is not the handle's, or not the run's current one in Postgres, is `409 fenced` within that one request |
 | The run assertion | `Boss-Run-Assertion` (§4.2 step 5), unchanged | its `run`, `vm` and `epoch` must agree with the headers above (`409 assertion_mismatch`). Signature verification against the SVID chain follows when the host forwards the SVID leaf (S13) |
 | The guest's path and query | `/<provider>/<path>` exactly as the guest sent it, under the gateway's base URL; no double prefix | the gateway pins each provider's inference paths (`403 not_a_model_path`) and reads the model from the body or path (`403 model_not_allowed`) |
 | A trace id | `traceparent`, when the guest sent one | the `guest_calls` row the gateway writes carries it |
@@ -560,11 +561,18 @@ handle_revoked | handle_expired | handle_replay | foreign_provider`, `402 spend_
 `OPENAI_BASE_URL` = `endpoints.model` + `/<provider>`; `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` =
 `handles.mdl`. Nothing else: no key, no token, no login file.
 
+**Follow-ups (P8b):** the gateway listens on plain HTTP inside the compose network today; the mTLS listener (host client certificate verified against the fleet CA, SVID chain check of `Boss-Run-Assertion`, S13) lands with the central-gateway TLS work. Until then the BossHost proof is the host's authentication.
+
 **Per call, the gateway** reserves the run's budget (`BudgetGovernor` via `model_routing.governed`,
 one reservation per call, settled with the usage read from the provider's own stream), reads the
 key through `resolve_secret_ref` as `sys_model_gateway` (re-read when the reference rotates),
 writes one `llm_calls` row and one `guest_calls` row (`route = model`, `rejected_by =
-model_gateway:<reason>` on a refusal; batched, never on the request path). In strict mode the
+model_gateway:<reason>` on a refusal, `client_disconnected` on an abandoned stream; batched, never
+on the request path). A stream the guest abandons is still settled with the usage read so far —
+only an upstream error, or a stream that never produced a byte, releases the reservation. Bedrock
+streams (`converse-stream`, `invoke-with-response-stream`) are accounted from their event-stream
+`metadata` / `chunk` frames. The handle's model allowlist is the run's routed models (Setup › Repo
+and models, every job); a project on Auto names none, so any model of the provider is allowed. In strict mode the
 model hosts leave boss-egress's CONNECT allowlist (`BOSS_EGRESS_STRICT_SECRETS=1`), so the
 injecting route is the only path to a model.
 
@@ -758,6 +766,6 @@ Python control plane as it was built.
 - The VIP on `tunl0` in the guest.
 - Director registration and withdraw (weight 0), with IPVS `--tun-type gre` (§5.1).
 - The TLS self-check before `serving`.
-- The egress and MCP gateway routes (the model gateway is live: §4.6; the Go side adds `HostAuth`
-  and `X-Boss-Handle` on the model rules).
+- The egress and MCP gateway routes (the model gateway is live: §4.6, with the model rules
+  already carrying `HostProof` and `X-Boss-Handle`); the gateways' mTLS listeners.
 - Per-run DPoP-bound tokens held by the host.
