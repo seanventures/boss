@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -213,7 +213,17 @@ def _authored_facts(
         "mcp": ({"mcp_server_id": str(config.get("mcp_server_id") or ""),
                  "mcp_tool": str(config.get("tool_name") or "")}
                 if behaviour == "mcp_tool" else {}),
+        # WHETHER A NON-ZERO EXIT FAILS THE STEP (AMEX-G3): a sandboxed_command's own setting,
+        # read here so the runner asks the catalogue, never the store. None for every other
+        # behaviour — nothing to judge.
+        "fail_on_exit": (_fail_on_exit(config) if behaviour == "sandboxed_command" else None),
     }
+
+
+def _fail_on_exit(config: Mapping[str, Any]) -> bool:
+    from .skill_definitions import as_flag
+
+    return as_flag(config.get("fail_on_exit"), default=True)
 
 
 def authored_specs(
@@ -268,6 +278,7 @@ def authored_specs(
                 # when nothing but the tier decides. agent_loop's skill branch reads it.
                 "requires_person": facts["requires_person"],
                 "usable": facts["usable"],
+                "fail_on_exit": facts["fail_on_exit"],
                 **facts["mcp"],
                 # The operator's own switch, kept apart from `enabled` below so a screen can
                 # say whether a skill is off because somebody turned it off or because what it

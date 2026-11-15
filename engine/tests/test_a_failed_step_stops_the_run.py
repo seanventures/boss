@@ -589,6 +589,12 @@ def test_a_recorded_failure_shape_is_what_the_tool_returns(eng, project):
     closed.close()
 
     tools = {spec.name: spec for spec in build_default_registry().specs()}
+    # The Down server stands in for this project's own deployment: contract_test reaches a
+    # loopback host only when it is one of the project's deployment hosts (AMEX-G7 review).
+    from .amex_workflow_fixtures import add_deployment_host
+
+    with eng.begin() as c:
+        add_deployment_host(c, project, "127.0.0.1")
 
     class RealCtx:
         def __init__(self, edition):
@@ -608,6 +614,20 @@ def test_a_recorded_failure_shape_is_what_the_tool_returns(eng, project):
                 call("http_probe", {"url": f"http://127.0.0.1:{dead_port}/", "timeout_s": 2}),
                 call("http_probe", {"url": "http://127.0.0.1:9/"}, edition="community"),
             ],
+            # AMEX-G7: cases that cannot run; a case the Down server fails; Community's refusal.
+            "contract_test": [
+                call("contract_test", {"cases": []}),
+                call("contract_test", {"cases": [
+                    {"name": "health", "method": "GET",
+                     "url": f"http://127.0.0.1:{server.server_port}/healthz",
+                     "expect_status": 200}]}),
+                call("contract_test", {"cases": [{"url": "http://127.0.0.1:9/"}]},
+                     edition="community"),
+            ],
+            # AMEX-G5/G6: this project has no repository bound.
+            "github_comment": [call("github_comment", {"number": 1, "body": "report"})],
+            "fix_pr": [call("github_open_fix_pr",
+                            {"title": "fix", "path": "tenants/x.yaml", "content": "a: 1\n"})],
             "teardown_preview": [call("stop_preview", {"preview_id": "prv_missing"})],
             "deploy": [call("deploy_app", {"run_id": "crun_missing", "environment": "staging"})],
             "redeploy": [call("redeploy", {"run_id": "crun_missing"})],

@@ -28,6 +28,14 @@ export type ConsentGithub = {
   summary: string;
 };
 
+/** Repositories BOSS keeps on this machine (local-first projects): named, never GitHub access. */
+export type ConsentLocal = {
+  repo: string;
+  repos: string[];
+  /** "on this machine" (engine identity/consent.py LOCAL_SUMMARY). */
+  summary: string;
+};
+
 export type ConsentRequest = {
   /** "workflow_run" | "schedule" for a workflow or a schedule; absent for a build. */
   scope: string | null;
@@ -39,6 +47,8 @@ export type ConsentRequest = {
   permissions: string[];
   projects: string[];
   github: ConsentGithub | null;
+  /** The run's repositories on this machine (BOSSAPP-1163), sent back as `local`. */
+  local: ConsentLocal | null;
   durations: ConsentDuration[];
   max_days: number | null;
   /** A multi-repo app's repositories for this run, when the API sent them. */
@@ -55,6 +65,8 @@ export type GrantCreateBody = {
   task_run_id?: string;
   days?: number;
   github?: Record<string, unknown>;
+  /** `{repos}` on this machine (grants._validate_local). */
+  local?: { repos: string[] };
   purpose: string;
 };
 
@@ -88,6 +100,11 @@ export function consentFromBody(raw: unknown): ConsentRequest | null {
       .filter(([, v]) => typeof v === "string")) as Record<string, string>,
     summary: str(gh.summary),
   } : null;
+  const lo = b.local && typeof b.local === "object" ? b.local as Record<string, unknown> : null;
+  const localRepos = lo ? (strs(lo.repos).length ? strs(lo.repos) : (str(lo.repo) ? [str(lo.repo)] : [])) : [];
+  const local: ConsentLocal | null = lo && localRepos.length
+    ? { repo: str(lo.repo) || localRepos[0], repos: localRepos, summary: str(lo.summary) || "on this machine" }
+    : null;
   const durations = (Array.isArray(b.durations) ? b.durations : []).flatMap((d): ConsentDuration[] => {
     if (!d || typeof d !== "object") return [];
     const x = d as Record<string, unknown>;
@@ -103,6 +120,7 @@ export function consentFromBody(raw: unknown): ConsentRequest | null {
     permissions: strs(b.permissions),
     projects: strs(b.projects),
     github,
+    local,
     // A task grant needs a run id to be claimed by; without one, only the standing choice works.
     durations: durations.filter((d) => d.kind === "standing" || taskRunId),
     max_days: typeof b.max_days === "number" ? b.max_days : null,
@@ -138,6 +156,9 @@ export function grantBodyFor(request: ConsentRequest, duration: ConsentDuration)
   if (duration.kind === "task" && request.task_run_id) body.task_run_id = request.task_run_id;
   if (duration.kind === "standing" && typeof duration.days === "number") body.days = duration.days;
   if (request.github && request.github.repos.length) body.github = { repos: [...request.github.repos], ...request.github.permissions };
+  // A repository on this machine is granted as `local`: without it the grant covered nothing the
+  // follow-up build named, and Request changes answered 409 for good (BOSSAPP-1163).
+  if (request.local && request.local.repos.length) body.local = { repos: [...request.local.repos] };
   return body;
 }
 

@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -218,7 +218,40 @@ def validate_config(behaviour: str, config: dict[str, Any], inputs: Iterable[str
         # it was given, and most media work needs no network at all.
         "network": bool(given.get("network", False)),
         "outputs": outputs,
+        # A NON-ZERO EXIT FAILS THE STEP (AMEX-G3, BOSSAPP-1139). The executor returned
+        # `exit_code` and the workflow runner read only the invocation's own status, so a
+        # validator that exited 1 — "violations found", the one thing it exists to say — went
+        # green and the run carried on to deploy. ON for every skill authored from here; a
+        # skill that reports through its output instead sets it off. Skills authored before
+        # the flag existed were given an explicit `false` by the schema (db/schema.sql), so
+        # nothing changed under a running workflow.
+        "fail_on_exit": as_flag(given.get("fail_on_exit"), default=True),
     }
+
+
+def as_flag(value: Any, *, default: bool) -> bool:
+    """A boolean the author may have written as a string ("false", "0", "no")."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def fails_on_exit(skill: Optional[Mapping[str, Any]]) -> bool:
+    """Whether this authored skill's non-zero exit code is a failed step.
+
+    Read from the stored config, so a definition saved before the flag existed (and given its
+    explicit `false` by the schema) keeps today's behaviour, and one that has never been through
+    either — a row written by hand — is treated as the author of a new skill would expect."""
+    if not skill:
+        return False
+    config = skill.get("config") if isinstance(skill, Mapping) else None
+    if not isinstance(config, Mapping):
+        return False
+    return as_flag(config.get("fail_on_exit"), default=True)
 
 
 def _row(row: Any) -> dict[str, Any]:
@@ -480,7 +513,16 @@ def prepare_skill(
         if problems:
             raise SkillDefinitionError(
                 f"{problems[0]['message']} (line {problems[0]['line']}).")
-    parsed_config = validate_config(behaviour, config or {},
+    config = dict(config or {})
+    if behaviour == "sandboxed_command" and "fail_on_exit" not in config and exists:
+        # AN EDIT KEEPS WHAT IS STORED. A form or a script that does not send the flag must not
+        # turn a backfilled `false` into the new-skill default `true` (AMEX-G3 review).
+        stored = connection.execute(
+            text("SELECT config->'fail_on_exit' FROM skill_definitions "
+                 "WHERE project_id = :p AND skill_key = :k"),
+            {"p": project_id, "k": key}).scalar()
+        config["fail_on_exit"] = False if stored is None else stored
+    parsed_config = validate_config(behaviour, config,
                                     [entry["name"] for entry in parsed_inputs])
     if behaviour == "mcp_tool":
         parsed_config = _resolve_mcp_binding(connection, project_id, parsed_config)
