@@ -300,89 +300,132 @@ def _compose_volume(name, key, labels=None, created=None):
             "labels": {**base, **(labels or {})}}
 
 
+OLD_PG_TEST = "boss-community_boss_community_pg_test"            # retired, pre-label keys
+OLD_CACHE = "boss-community_boss_community_toolchain_cache"
+NEW_PG_TEST = "boss-community_boss_community_pg_test_v2"         # their labelled successors
+NEW_CACHE = "boss-community_boss_community_toolchain_cache_v2"
+OURS = {"boss.install_id": "inst_abc"}
+
+
 def test_an_unlabelled_boss_volume_is_reported_not_ignored(env, keypair, docker):
-    """A rebuildable BOSS volume made before the labels existed cannot be judged: the dry run
-    names it as needing a relabel (never an item), and the reading counts it. Data volumes of the
-    same project are neither items nor reported."""
+    """A retired pre-label BOSS volume (or a current one made without this install's id) cannot
+    be judged: the dry run names it as needing a relabel (never an item), and the reading counts
+    it. Labelled `_v2` volumes and data volumes are not reported."""
     priv, pub = keypair
     docker.volumes += [
-        _compose_volume("boss-community_boss_community_pg_test", "boss_community_pg_test",
-                        {"owner": "boss", "kind": "test"}),
+        _compose_volume(OLD_PG_TEST, "boss_community_pg_test", {"owner": "boss", "kind": "test"}),
+        _compose_volume(NEW_PG_TEST, "boss_community_pg_test_v2", {**OURS, "boss.kind": "test"}),
+        _compose_volume(NEW_CACHE, "boss_community_toolchain_cache_v2", {"boss.install_id": "", "boss.kind": "cache"}),
         _compose_volume("boss-community_boss_community_pg", "boss_community_pg"),
-        _compose_volume("boss-community_boss_community_toolchain_cache", "boss_community_toolchain_cache",
-                        {"boss.install_id": "inst_abc", "boss.kind": "cache"}),
     ]
+    docker.containers = [{"id": "c-api", "name": "boss-community-api-1", "state": "running", "volumes": [NEW_CACHE],
+                          "labels": {"com.docker.compose.project": "boss-community", "com.docker.compose.service": "api"}}]
     dry = steward.perform(env, _job(priv, env, "remove_orphan_volumes",
                                     {"install_id": "inst_abc", "dry_run": True, "older_than_hours": 24}), pub, runner=docker)
-    # the labelled, dangling cache volume is a candidate; the unlabelled test one and data are not
-    assert sorted(dry["items"]) == ["boss-community_boss_community_toolchain_cache", "boss_tmp_1"]
-    assert dry["needs_relabel"] == ["boss-community_boss_community_pg_test"]
-    assert steward.collect(env, runner=docker)["by_type"]["volumes_needs_relabel_n"] == 1.0
+    # the labelled, dangling test volume is a candidate; the retired one and data are not
+    assert sorted(dry["items"]) == [NEW_PG_TEST, "boss_tmp_1"]
+    assert dry["needs_relabel"] == [OLD_PG_TEST, NEW_CACHE]
+    assert steward.collect(env, runner=docker)["by_type"]["volumes_needs_relabel_n"] == 2.0
     assert steward.NEEDS_RELABEL == "unlabelled BOSS volume — needs relabel"
 
 
-def test_relabel_recreates_only_unused_rebuildable_boss_volumes(env, docker):
-    """THE UPGRADE STEP: Docker cannot relabel a volume, so an unlabelled REBUILDABLE BOSS volume
-    is removed when nothing uses it and Compose recreates it labelled. A running user, a container
-    outside BOSS, or a BOSS service Compose would not recreate keeps it, reported. A data volume
-    is never touched, whatever its labels."""
+def test_relabel_removes_only_unused_retired_or_unlabelled_boss_volumes(env, docker):
+    """THE UPGRADE STEP: the services moved to the labelled `_v2` volumes; a retired pre-label
+    volume is removed once nothing mounts it. A running user, a container outside BOSS, or a BOSS
+    service Compose would not recreate keeps it, reported. It never stops a service, and a data
+    volume is never touched, whatever its labels."""
     docker.volumes += [
-        _compose_volume("boss-community_boss_community_pg_test", "boss_community_pg_test", {"kind": "test"}),
-        _compose_volume("boss-community_boss_community_toolchain_cache", "boss_community_toolchain_cache"),
+        _compose_volume(OLD_PG_TEST, "boss_community_pg_test", {"kind": "test"}),
+        _compose_volume(OLD_CACHE, "boss_community_toolchain_cache"),
+        _compose_volume(NEW_CACHE, "boss_community_toolchain_cache_v2", {**OURS, "boss.kind": "cache"}),
         _compose_volume("boss-community_boss_community_pg", "boss_community_pg"),
         _compose_volume("boss-community_boss_community_backups", "boss_community_backups"),
     ]
     boss = {"com.docker.compose.project": "boss-community"}
     docker.containers = [
-        # db-test stopped: Compose recreates it on `boss dev up`, so it may go with its volume
+        # db-test stopped on the old volume: Compose recreates it on `boss dev up`, so it may go
         {"id": "c-dbtest", "name": "boss-community-db-test-1", "state": "exited",
-         "volumes": ["boss-community_boss_community_pg_test"], "labels": {**boss, "com.docker.compose.service": "db-test"}},
-        # the API runs with the toolchain cache mounted: in use, left alone
+         "volumes": [OLD_PG_TEST], "labels": {**boss, "com.docker.compose.service": "db-test"}},
+        # an API not yet recreated still runs on the old cache: in use, left alone
         {"id": "c-api", "name": "boss-community-api-1", "state": "running",
-         "volumes": ["boss-community_boss_community_toolchain_cache", "boss-community_boss_community_pg"],
+         "volumes": [OLD_CACHE, "boss-community_boss_community_pg"],
          "labels": {**boss, "com.docker.compose.service": "api"}},
     ]
+    calls = []
+    docker.on_call = calls.append
     seen = steward.relabel_volumes(env, docker, apply=False)
-    assert {r["volume"]: r["action"] for r in seen} == {
-        "boss-community_boss_community_pg_test": "would_relabel",
-        "boss-community_boss_community_toolchain_cache": "skipped"}
+    assert {r["volume"]: r["action"] for r in seen} == {OLD_PG_TEST: "would_relabel", OLD_CACHE: "skipped"}
     assert docker.removed == [], "a dry run changes nothing"
 
     done = {r["volume"]: r for r in steward.relabel_volumes(env, docker)}
-    assert done["boss-community_boss_community_pg_test"]["action"] == "relabelled"
-    assert done["boss-community_boss_community_toolchain_cache"]["action"] == "skipped"
-    assert steward.NEEDS_RELABEL in done["boss-community_boss_community_toolchain_cache"]["reason"]
-    assert "boss-community-api-1" in done["boss-community_boss_community_toolchain_cache"]["reason"]
-    assert docker.removed == [("container", "c-dbtest"), ("volume", "boss-community_boss_community_pg_test")]
+    assert done[OLD_PG_TEST]["action"] == "relabelled"
+    assert done[OLD_CACHE]["action"] == "skipped"
+    assert steward.NEEDS_RELABEL in done[OLD_CACHE]["reason"]
+    assert "boss-community-api-1" in done[OLD_CACHE]["reason"]
+    assert docker.removed == [("container", "c-dbtest"), ("volume", OLD_PG_TEST)]
     names = {v["name"] for v in docker.volumes}
-    assert {"boss-community_boss_community_pg", "boss-community_boss_community_backups",
-            "boss-community_boss_community_toolchain_cache"} <= names, "data and in-use volumes stay"
+    assert {"boss-community_boss_community_pg", "boss-community_boss_community_backups", OLD_CACHE, NEW_CACHE} <= names
 
-    # a stopped container outside BOSS holding the cache: still not ours to remove
-    docker.containers = [{"id": "c-x", "name": "someones-tool", "state": "exited",
-                          "volumes": ["boss-community_boss_community_toolchain_cache"], "labels": {}}]
+    # the API moved to the labelled cache: the old one is free and goes
+    docker.containers[0]["volumes"] = [NEW_CACHE, "boss-community_boss_community_pg"]
+    after = {r["volume"]: r for r in steward.relabel_volumes(env, docker)}
+    assert after == {OLD_CACHE: after[OLD_CACHE]} and after[OLD_CACHE]["action"] == "relabelled"
+    assert NEW_CACHE in {v["name"] for v in docker.volumes}, "the labelled successor stays"
+    assert steward.unlabelled_boss_volumes(env, docker) == [], "nothing left to report"
+
+    # a stopped container outside BOSS holding a retired volume: still not ours to remove
+    docker.volumes.append(_compose_volume(OLD_CACHE, "boss_community_toolchain_cache"))
+    docker.containers = [{"id": "c-x", "name": "someones-tool", "state": "exited", "volumes": [OLD_CACHE], "labels": {}}]
     again = {r["volume"]: r for r in steward.relabel_volumes(env, docker)}
-    assert again["boss-community_boss_community_toolchain_cache"]["action"] == "skipped"
-    assert "someones-tool" in again["boss-community_boss_community_toolchain_cache"]["reason"]
+    assert again[OLD_CACHE]["action"] == "skipped" and "someones-tool" in again[OLD_CACHE]["reason"]
     assert ("container", "c-x") not in docker.removed
 
-    # no install id: nothing is recreated (it would come back labelled with nothing)
+    # no install id: nothing is removed (a recreated volume would be labelled with nothing)
     env.install_id = ""
     assert steward.relabel_volumes(env, docker)[0]["action"] == "skipped"
+    assert not any(c[1:2] in (["stop"], ["kill"], ["compose"]) for c in calls), "never stops a service"
+
+
+def test_relabel_re_reads_the_volume_at_the_moment_of_removal(env, docker):
+    """Between listing and removal the name can come to mean something else (a volume of another
+    project, or a data key, made under the same name): the step re-reads the volume's Compose
+    project and key just before `volume rm`, and leaves it when either no longer qualifies."""
+    docker.volumes.append(_compose_volume(OLD_PG_TEST, "boss_community_pg_test"))
+    v = docker.volumes[-1]
+
+    def swap_after_listing(argv):
+        # after the list and the who-uses-it check, before the removal-time re-read
+        if argv[1:2] == ["ps"] and any(x.startswith(f"volume={OLD_PG_TEST}") for x in argv):
+            v["labels"]["com.docker.compose.volume"] = "boss_community_pg"
+
+    docker.on_call = swap_after_listing
+    out = steward.relabel_volumes(env, docker)
+    assert out == [{"volume": OLD_PG_TEST, "action": "skipped", "reason": "no longer a rebuildable BOSS volume"}]
+    assert docker.removed == []
+
+    v["labels"]["com.docker.compose.volume"] = "boss_community_pg_test"
+
+    def other_project(argv):
+        if argv[1:2] == ["ps"] and any(x.startswith(f"volume={OLD_PG_TEST}") for x in argv):
+            v["labels"]["com.docker.compose.project"] = "someone-else"
+
+    docker.on_call = other_project
+    assert steward.relabel_volumes(env, docker)[0]["action"] == "skipped"
+    assert docker.removed == []
 
 
 def test_relabel_volumes_from_the_command_line(env, docker, monkeypatch, capsys):
     """What upgrade.sh and `boss dev up` run; --dry-run says what would change and changes nothing."""
-    docker.volumes.append(_compose_volume("boss-community_boss_community_pg_test", "boss_community_pg_test"))
+    docker.volumes.append(_compose_volume(OLD_PG_TEST, "boss_community_pg_test"))
     monkeypatch.setattr(steward, "run_cmd", docker)
     monkeypatch.setenv("BOSS_STEWARD_STATE", str(env.state_dir))   # never the laptop's ~/.boss
     argv = ["--install-dir", str(env.install_dir), "--backup-dir", str(env.backup_root), "--relabel-volumes"]
     assert steward.main([*argv, "--dry-run"]) == 0
-    assert "boss-community_boss_community_pg_test: would_relabel" in capsys.readouterr().out
+    assert f"{OLD_PG_TEST}: would_relabel" in capsys.readouterr().out
     assert docker.removed == []
     assert steward.main(argv) == 0
     assert "relabelled" in capsys.readouterr().out
-    assert docker.removed == [("volume", "boss-community_boss_community_pg_test")]
+    assert docker.removed == [("volume", OLD_PG_TEST)]
 
 
 def _real_backup(root, stamp: str, pid: int, *, install_id="inst_abc", age_days: float, size=4096,

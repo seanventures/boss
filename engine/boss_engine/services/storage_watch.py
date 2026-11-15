@@ -385,6 +385,13 @@ def prune(connection: Any) -> int:
 
 # ── the reading the console and the agent see ───────────────────────────────────────────────
 
+def volume_reading(sample: Mapping[str, Any]) -> dict[str, Any]:
+    """The helper's two volume figures (by_type keys the bar does not draw)."""
+    bt = sample.get("by_type") or {}
+    return {"reclaimable_gb": round(_f(bt.get("volumes_reclaimable")) or 0.0, 2),
+            "needs_relabel": int(_f(bt.get("volumes_needs_relabel_n")) or 0)}
+
+
 def by_type_rows(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
     total = _f(sample.get("total_gb")) or 0.0
     free = _f(sample.get("free_gb")) or 0.0
@@ -480,6 +487,9 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
             "last_cleanup": last, "open_incident_id": (open_incident or {}).get("id"),
             # ST-8: telemetry tables' share of the database and the last retention sweep.
             "telemetry": telemetry,
+            # BOSSAPP-1193: what the orphan-volume job could really free, and how many BOSS
+            # volumes it cannot judge until `--relabel-volumes` has removed them.
+            "volumes": volume_reading(sample),
             "hosts": host_rows}
 
 

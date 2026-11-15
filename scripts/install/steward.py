@@ -58,12 +58,16 @@ LABEL = "boss.install_id"
 KIND_LABEL = "boss.kind"
 REBUILDABLE_VOLUME_KINDS = ("test", "cache", "scratch", "build")
 #: The rebuildable volumes of BOSS's own Compose project (scripts/install/community-compose.yml
-#: `volumes:` key → boss.kind). Docker cannot add a label to an existing volume, so an install
-#: whose volume predates its labels has it unlabelled until the volume is recreated:
-#: `--relabel-volumes` does that when nothing uses it, and until then the helper reports it as
-#: NEEDS_RELABEL instead of passing over it in silence. Data volumes are deliberately not here
-#: and carry no boss.* labels (see the compose file). A guard test keeps this equal to Compose.
-REBUILDABLE_COMPOSE_VOLUMES = {"boss_community_pg_test": "test", "boss_community_toolchain_cache": "cache"}
+#: `volumes:` key → boss.kind), labelled from creation. Data volumes are deliberately not here and
+#: carry no boss.* labels (see the compose file). A guard test keeps this equal to Compose.
+REBUILDABLE_COMPOSE_VOLUMES = {"boss_community_pg_test_v2": "test", "boss_community_toolchain_cache_v2": "cache"}
+#: Rebuildable keys of earlier releases, replaced by the labelled `_v2` keys above. Docker cannot
+#: add a label to an existing volume, and Compose asks "Recreate (data will be lost)?" when the
+#: labels of one change, so the labels came with a NEW key instead: the services move to it on
+#: their next `up` and the old volume is left unmounted and unlabelled. `--relabel-volumes`
+#: removes it once nothing mounts it; until then the helper reports it as NEEDS_RELABEL instead
+#: of passing over it in silence. It never stops a service to get there.
+RETIRED_COMPOSE_VOLUMES = {"boss_community_pg_test": "test", "boss_community_toolchain_cache": "cache"}
 #: Stopped containers `--relabel-volumes` may remove to free a rebuildable volume: Compose
 #: recreates them on the next `up` (`boss dev up` for db-test). Any other user keeps the volume.
 RELABEL_REMOVABLE_SERVICES = ("db-test",)
@@ -552,8 +556,9 @@ def volume_sizes(env: Env, runner: Callable) -> dict[str, float]:
 
 
 def unlabelled_boss_volumes(env: Env, runner: Callable) -> list[str]:
-    """Volumes of BOSS's own Compose project that should carry a rebuildable boss.kind and this
-    install's id but do not (made before the labels existed). Never removed by a job — reported."""
+    """Rebuildable volumes of BOSS's own Compose project the label gate cannot pass: a retired
+    pre-label key, or a current one missing this install's id or its kind. Never removed by a
+    job — reported, and removed by `--relabel-volumes` once nothing mounts it."""
     res = runner([*env.docker, "volume", "ls", "--filter", f"label={COMPOSE_PROJECT_LABEL}={env.compose_project}",
                   "--format", "{{json .}}"])
     out = []
@@ -566,8 +571,10 @@ def unlabelled_boss_volumes(env: Env, runner: Callable) -> list[str]:
         labels = _labels_of(row)
         if not name or labels.get(COMPOSE_PROJECT_LABEL, env.compose_project) != env.compose_project:
             continue
-        want = REBUILDABLE_COMPOSE_VOLUMES.get(labels.get(COMPOSE_VOLUME_LABEL, ""))
-        if want and (not env.install_id or labels.get(LABEL) != env.install_id or labels.get(KIND_LABEL) != want):
+        key = labels.get(COMPOSE_VOLUME_LABEL, "")
+        want = REBUILDABLE_COMPOSE_VOLUMES.get(key)
+        if key in RETIRED_COMPOSE_VOLUMES or (want and (not env.install_id or labels.get(LABEL) != env.install_id
+                                                        or labels.get(KIND_LABEL) != want)):
             out.append(name)
     return sorted(out)
 
@@ -684,14 +691,25 @@ def _containers_using(env: Env, runner: Callable, volume: str) -> list[dict[str,
     return rows
 
 
+def _relabel_words(key: str, *, done: bool) -> str:
+    if key in RETIRED_COMPOSE_VOLUMES:
+        return ("removed: retired; its labelled successor is in use" if done
+                else "retired (its labelled successor replaces it): would be removed")
+    kind = REBUILDABLE_COMPOSE_VOLUMES.get(key, "")
+    return (f"removed; the next compose up recreates it with boss.kind={kind}" if done
+            else f"would be removed; the next compose up recreates it with boss.kind={kind}")
+
+
 def relabel_volumes(env: Env, runner: Callable = run_cmd, *, apply: bool = True) -> list[dict[str, str]]:
-    """THE UPGRADE STEP for labels (BOSSAPP-1193; upgrade.sh and `boss dev up` run it). Docker
-    cannot relabel a volume, so a REBUILDABLE BOSS volume made before its labels existed is
-    removed when nothing uses it, and Compose recreates it, labelled, on the next `up`. Only
-    volumes of this install's Compose project named in REBUILDABLE_COMPOSE_VOLUMES qualify; a
-    data volume is never one of them. A volume a running container uses, or that a container
-    outside BOSS (or a BOSS service Compose would not recreate) holds, is left as it is and
-    reported NEEDS_RELABEL. Never raises."""
+    """THE UPGRADE STEP for labels (BOSSAPP-1193; upgrade.sh and `boss dev up` run it, after the
+    services have moved to the labelled `_v2` volumes). Docker cannot relabel a volume, so a
+    REBUILDABLE BOSS volume the gate cannot pass — a retired pre-label key, or a current key made
+    without this install's id — is removed when nothing uses it (a current one comes back,
+    labelled, on the next `up`). Only keys in RETIRED_COMPOSE_VOLUMES / REBUILDABLE_COMPOSE_VOLUMES
+    of this install's Compose project qualify; a data volume is never one of them. A volume a
+    running container uses, or that a container outside BOSS (or a BOSS service Compose would not
+    recreate) holds, is left as it is and reported NEEDS_RELABEL. Never stops a service; never
+    raises."""
     out: list[dict[str, str]] = []
     if not env.install_id:
         return [{"volume": "*", "action": "skipped",
@@ -713,19 +731,19 @@ def relabel_volumes(env: Env, runner: Callable = run_cmd, *, apply: bool = True)
             # THE GATE, AGAIN, at the moment of removal: still BOSS's, still a rebuildable key.
             key = _inspect_label(env, runner, "volume", name, COMPOSE_VOLUME_LABEL)
             if (_inspect_label(env, runner, "volume", name, COMPOSE_PROJECT_LABEL) != env.compose_project
-                    or key not in REBUILDABLE_COMPOSE_VOLUMES):
+                    or key not in {**REBUILDABLE_COMPOSE_VOLUMES, **RETIRED_COMPOSE_VOLUMES}):
                 out.append({"volume": name, "action": "skipped", "reason": "no longer a rebuildable BOSS volume"})
                 continue
             if not apply:
                 out.append({"volume": name, "action": "would_relabel",
-                            "reason": f"recreated by the next compose up with boss.kind={REBUILDABLE_COMPOSE_VOLUMES[key]}"})
+                            "reason": _relabel_words(key, done=False)})
                 continue
             for u in users:  # stopped db-test only (checked above); compose recreates it
                 runner([*env.docker, "rm", u["id"]], timeout=60)
             res = runner([*env.docker, "volume", "rm", name], timeout=120)
             if res.returncode == 0:
                 out.append({"volume": name, "action": "relabelled",
-                            "reason": f"removed; the next compose up recreates it with boss.kind={REBUILDABLE_COMPOSE_VOLUMES[key]}"})
+                            "reason": _relabel_words(key, done=True)})
             else:
                 out.append({"volume": name, "action": "skipped",
                             "reason": f"{NEEDS_RELABEL} (docker volume rm: {(res.stderr or '').strip()[:120]})"})

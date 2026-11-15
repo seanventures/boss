@@ -81,26 +81,58 @@ def test_only_the_listed_volumes_say_they_are_rebuildable():
     assert said == set(steward.REBUILDABLE_COMPOSE_VOLUMES)
 
 
+def test_labels_come_with_a_new_key_never_on_an_existing_one():
+    """Compose hashes a volume's labels; changing them on an existing volume makes it ask
+    "Recreate (data will be lost)?" on every `up`. So a rebuildable volume got its labels under a
+    new `_v2` key, the old key is gone from Compose, and the steward knows it as retired."""
+    for old, kind in steward.RETIRED_COMPOSE_VOLUMES.items():
+        assert old not in VOLUMES, f"{old} is retired: no service may mount it again"
+        assert steward.REBUILDABLE_COMPOSE_VOLUMES.get(f"{old}_v2") == kind, old
+    text = (ROOT / "scripts" / "install" / "community-compose.yml").read_text()
+    for old in steward.RETIRED_COMPOSE_VOLUMES:
+        assert f"- {old}:" not in text, f"a service still mounts the retired {old}"
+
+
 def test_the_upgrade_and_dev_up_run_the_relabel_step():
-    """Docker cannot relabel a volume: existing installs get theirs recreated by the steward's
-    --relabel-volumes, best effort, from upgrade.sh (after the new release runs) and `boss dev up`
-    (before db-test starts)."""
+    """Existing installs: the steward's --relabel-volumes removes the retired volumes once the
+    services have moved off them, best effort — from upgrade.sh after the installer, and from
+    `boss dev up` after db-test has moved."""
     upgrade = (ROOT / "scripts" / "install" / "upgrade.sh").read_text()
     step = upgrade.index("--relabel-volumes </dev/null")
-    assert step < upgrade.index("Upgrade complete:"), "after the installer, before the final line"
+    assert upgrade.index('bash "$FETCHED_INSTALLER"') < step < upgrade.index("Upgrade complete:")
     assert "echo 'BOSS volume labels were not checked" in upgrade[step:], "a failure never fails the upgrade"
     boss = (ROOT / "scripts" / "install" / "boss.sh").read_text()
-    assert boss.index("--relabel-volumes") < boss.index("compose --profile dev up -d db-test")
+    up = boss.index("compose --profile dev up -d db-test </dev/null")
+    assert boss.index("--relabel-volumes", up) > up, "after db-test has moved to the labelled volume"
+    # the id the volume is labelled with exists before Compose first creates it
+    assert boss.index('set_env_value BOSS_INSTALL_ID "inst_$(openssl rand -hex 8)"') < up
+
+
+def test_boss_scripts_never_let_compose_ask_a_question():
+    """Compose's only question here is "Recreate (data will be lost)?". Every compose call in
+    boss.sh that could create a volume (up, create, run, start, restart) reads stdin from
+    /dev/null, so no operator is ever asked it by BOSS's own scripts."""
+    import re
+
+    boss = (ROOT / "scripts" / "install" / "boss.sh").read_text()
+    for line in boss.splitlines():
+        code = line.split("#", 1)[0]
+        if re.search(r"\bcompose\b.*\b(up|create|run|start|restart|stop)\b", code) and "exec" not in code:
+            assert "</dev/null" in code, line
 
 
 def test_the_plan_takes_the_measured_reclaimable_figure_not_every_volume_on_the_disk():
     """`volumes_gb` is every volume Docker holds, data included; planning the orphan-volume step
-    on it promised space the helper may never remove. The step is planned on the helper's
-    measured `volumes_reclaimable`, or to name volumes that need a relabel."""
-    from boss_engine.services import storage_cleanup
+    on it promised space the helper may never remove. The step is planned only on the helper's
+    measured `volumes_reclaimable`; a volume that needs a relabel is shown on the Storage card,
+    not turned into a step no job can act on."""
+    from boss_engine.services import storage_cleanup, storage_watch
 
     applies = storage_cleanup.TOOL_BY_NAME["storage.remove_orphan_volumes"].applies
     assert not applies({"volumes_gb": 50.0, "by_type": {"volumes": 50.0}}, {})
     assert not applies({"volumes_gb": 50.0, "by_type": {"volumes_reclaimable": 0.0}}, {})
     assert applies({"volumes_gb": 50.0, "by_type": {"volumes_reclaimable": 2.5}}, {})
-    assert applies({"volumes_gb": 50.0, "by_type": {"volumes_reclaimable": 0.0, "volumes_needs_relabel_n": 1.0}}, {})
+    assert not applies({"volumes_gb": 50.0, "by_type": {"volumes_reclaimable": 0.0, "volumes_needs_relabel_n": 1.0}}, {})
+    assert storage_watch.volume_reading({"by_type": {"volumes_reclaimable": 2.5, "volumes_needs_relabel_n": 2.0}}) \
+        == {"reclaimable_gb": 2.5, "needs_relabel": 2}
+    assert storage_watch.volume_reading({}) == {"reclaimable_gb": 0.0, "needs_relabel": 0}

@@ -114,12 +114,9 @@ def _alloc_unused(s: Mapping[str, Any]) -> float:
 def _volumes_reclaimable(s: Mapping[str, Any]) -> float:
     """What the orphan-volume job could really free: the helper's measured figure (ours, of a
     rebuildable kind, dangling, old enough). `volumes_gb` is every volume on the disk, data ones
-    included, so it is never the reason to plan this step (BOSSAPP-1193)."""
+    included, so it is never the reason to plan this step (BOSSAPP-1193). A volume that needs a
+    relabel is not a reason either — no job can remove it; the Storage card names it."""
     return _f((s.get("by_type") or {}).get("volumes_reclaimable"))
-
-
-def _volumes_need_relabel(s: Mapping[str, Any]) -> float:
-    return _f((s.get("by_type") or {}).get("volumes_needs_relabel_n"))
 
 
 TOOLS: tuple[ToolDef, ...] = (
@@ -134,7 +131,7 @@ TOOLS: tuple[ToolDef, ...] = (
             args_of=lambda s, r: {"idle_minutes": IDLE_IN_TRANSACTION_MINUTES}),
     ToolDef("storage.remove_orphan_volumes", "Remove orphan volumes", "host", "safe",
             "remove_orphan_volumes", None,
-            applies=lambda s, r: _volumes_reclaimable(s) > 0.1 or _volumes_need_relabel(s) > 0,
+            applies=lambda s, r: _volumes_reclaimable(s) > 0.1,
             args_of=lambda s, r: {"older_than_hours": 24}),
     ToolDef("storage.cap_logs", "Cap container logs", "host", "safe", "cap_logs", "logs",
             applies=lambda s, r: _f(s.get("logs_gb")) > 0.1,

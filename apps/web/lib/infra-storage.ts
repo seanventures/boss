@@ -129,6 +129,8 @@ export type StorageSummary = {
   docker: { unreclaimedGb: number } | null;
   /** ST-8: the telemetry tables' share of the database and the last retention sweep. */
   telemetry: TelemetryShare | null;
+  /** BOSSAPP-1193: what orphan-volume cleanup could free, and BOSS volumes it cannot judge yet. */
+  volumes: { reclaimableGb: number; needsRelabel: number } | null;
 };
 
 export type TelemetrySweep = { at: string; rows: number; bytes: number; partitions: string[]; archived: number; errors: string[]; receiptId: string | null };
@@ -394,6 +396,9 @@ export function parseSummary(w: unknown): StorageSummary | null {
     hosts: arr(o.hosts).map((h) => { const x = obj(h); return { hostId: str(x.host_id), label: str(x.host_label) || str(x.host_id), freePct: num(x.free_pct), fullInDays: optNum(x.days_until_full), level: str(x.level, "ok"), spark: arr(x.spark).map((v) => num(v)) }; }).filter((h) => h.hostId),
     docker: unreclaimed && unreclaimed.gb > 0 ? { unreclaimedGb: unreclaimed.gb } : null,
     telemetry: parseTelemetry(o.telemetry),
+    volumes: o.volumes && typeof o.volumes === "object"
+      ? { reclaimableGb: num(obj(o.volumes).reclaimable_gb), needsRelabel: Math.max(0, Math.floor(num(obj(o.volumes).needs_relabel))) }
+      : null,
   };
 }
 

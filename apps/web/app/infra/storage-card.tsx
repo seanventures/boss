@@ -92,6 +92,11 @@ function TrendForecast({ s }: { s: StorageSummary }) {
   );
 }
 
+/** BOSSAPP-1193: BOSS volumes the cleanup cannot judge until they are relabelled. */
+export function relabelWords(n: number): string {
+  return n === 1 ? "1 unlabelled BOSS volume — needs relabel" : `${n} unlabelled BOSS volumes — need relabel`;
+}
+
 /** ST-8: how much of the database is telemetry, and what the last retention sweep removed. */
 export function telemetryWords(t: TelemetryShare): { share: string; sweep: string } {
   const share = `${gb(t.gb)}${t.sharePct !== null ? ` · ${Math.round(t.sharePct)} % of the database` : ""}`;
@@ -230,6 +235,13 @@ export function StorageCardView({ s, projectId, orgId, sample, pendingDecisionId
           {!segs.length ? <li className="sc-faint">No reading by type yet.</li> : null}
         </ul>
         {s.telemetry ? <TelemetryRow t={s.telemetry} /> : null}
+        {s.volumes && s.volumes.needsRelabel > 0 ? (
+          <div className="sc-telemetry" data-testid="sc-relabel">
+            <span className="ia-chip" data-tone="amber" data-testid="sc-relabel-chip"
+              title="BOSS volumes made before cleanup labels existed. Cleanup cannot judge them, so it leaves them alone; they are removed once nothing uses them (next upgrade, or boss dev up).">
+              <Warning size={11} aria-hidden />{relabelWords(s.volumes.needsRelabel)}</span>
+          </div>
+        ) : null}
       </section>
 
       <section className="sc-card">

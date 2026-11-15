@@ -136,7 +136,7 @@ services:
   #   docker compose -f scripts/install/community-compose.yml --env-file .env --profile dev up -d db-test
   #   export BOSS_TEST_DATABASE_URL=postgresql+psycopg://boss:$BOSS_DB_PASSWORD@localhost:55700/boss_test
   # Opt-in (profile `dev`): an install that never runs tests never starts it. Its data is a
-  # volume of its own (boss_community_pg_test), so `boss_test` and the API shards' databases
+  # volume of its own (boss_community_pg_test_v2), so `boss_test` and the API shards' databases
   # survive a restart and a `docker compose down` of the stack; it is labelled kind=test with a
   # 24 h TTL for everything created inside it, so the Infra Agent's cleanup may remove the whole
   # volume when space is short and nothing is lost that a test run does not recreate.
@@ -191,7 +191,7 @@ services:
       # URL tells which server it is at a glance, and the suites' live-server guard can too.
       - "127.0.0.1:${BOSS_TEST_POSTGRES_PORT:-55700}:5432"
     volumes:
-      - boss_community_pg_test:/var/lib/postgresql/data
+      - boss_community_pg_test_v2:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U boss -d boss_test"]
       interval: 3s
@@ -675,7 +675,7 @@ services:
       # The bundled Grafana's per-app dashboards (bundled_monitoring.write_dashboards).
       - boss_community_grafana_dashboards:/var/lib/boss/grafana-dashboards
       # Per-project Maven/Gradle downloads the build sandbox keeps between runs (toolchains).
-      - boss_community_toolchain_cache:/var/lib/boss/toolchain-cache
+      - boss_community_toolchain_cache_v2:/var/lib/boss/toolchain-cache
       # BOSS's own source for self-fix builds, read-only (`boss self-fix seed` fills it on the
       # host; install.sh creates the directory so Docker never makes it as root).
       - ../../.boss/selfsrc:/var/lib/boss/selfsrc:ro
@@ -962,7 +962,7 @@ services:
       # The bundled Grafana's per-app dashboards (bundled_monitoring.write_dashboards).
       - boss_community_grafana_dashboards:/var/lib/boss/grafana-dashboards
       # Per-project Maven/Gradle downloads the build sandbox keeps between runs (toolchains).
-      - boss_community_toolchain_cache:/var/lib/boss/toolchain-cache
+      - boss_community_toolchain_cache_v2:/var/lib/boss/toolchain-cache
       # BOSS's own source for self-fix builds, read-only (`boss self-fix seed` fills it on the
       # host; install.sh creates the directory so Docker never makes it as root).
       - ../../.boss/selfsrc:/var/lib/boss/selfsrc:ro
@@ -1236,7 +1236,7 @@ services:
       - boss_community_runner:/var/lib/boss/runner
       - boss_community_sandboxes:/var/lib/boss/sandboxes
       - boss_community_repos:/var/lib/boss/repos
-      - boss_community_toolchain_cache:/var/lib/boss/toolchain-cache
+      - boss_community_toolchain_cache_v2:/var/lib/boss/toolchain-cache
       - boss_community_build_services_secret:/run/boss-build-services
       - boss_community_cli_home:/home/boss/.codex
       - boss_community_claude_home:/home/boss/.claude
@@ -1310,9 +1310,12 @@ services:
 #     hashes a volume's labels and, when they change on an existing volume, asks "Recreate (data
 #     will be lost)?" on a terminal; adding a label to the live database's volume would put that
 #     question to an operator on every upgrade. Unlabelled is never removable, which is the point.
-# A label change on an existing volume needs the volume recreated: `steward.py --relabel-volumes`
-# (run by upgrade.sh and `boss dev up`) does that for the rebuildable ones below when nothing uses
-# them, and the helper reports any it could not as "unlabelled BOSS volume — needs relabel".
+# The same hash is why a rebuildable volume gets its labels under a NEW key (`_v2`), never on its
+# old one: Compose creates the new volume labelled, the services move to it on their next `up`,
+# and no one is ever asked anything. The old keys (boss_community_pg_test,
+# boss_community_toolchain_cache) are retired: `steward.py --relabel-volumes` (upgrade.sh and
+# `boss dev up`, after the services have moved) removes them once nothing mounts them, and the
+# helper reports one it could not as "unlabelled BOSS volume — needs relabel".
 # steward.REBUILDABLE_COMPOSE_VOLUMES lists the rebuildable ones; a guard test keeps both equal.
 volumes:
   boss_community_cli_home:
@@ -1323,7 +1326,8 @@ volumes:
   boss_community_pg:
   # The dev/test Postgres (profile `dev`). Labelled so cleanup knows it is BOSS's, a test
   # volume, and rebuildable: a test run recreates whatever it needs (storage hygiene, ST-6).
-  boss_community_pg_test:
+  # `_v2`: the labelled successor of boss_community_pg_test (BOSSAPP-1193, see above).
+  boss_community_pg_test_v2:
     labels:
       owner: boss
       kind: test
@@ -1336,7 +1340,8 @@ volumes:
   boss_community_artifacts:
   boss_community_identity:
   # Per-project Maven/Gradle downloads: a cache, refilled by the next build that needs it.
-  boss_community_toolchain_cache:
+  # `_v2`: the labelled successor of boss_community_toolchain_cache (BOSSAPP-1193, see above).
+  boss_community_toolchain_cache_v2:
     labels:
       boss.install_id: ${BOSS_INSTALL_ID:-}
       boss.kind: cache

@@ -258,7 +258,7 @@ def test_toolchains_are_opt_in_in_the_image_and_compose():
     assert not re.search(r"\|\s*(ba)?sh\b", java), "a download is never piped into a shell"
     compose = (ROOT / "scripts" / "install" / "community-compose.yml").read_text()
     assert compose.count("BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}") == 4
-    assert compose.count("boss_community_toolchain_cache:/var/lib/boss/toolchain-cache") == 2
+    assert compose.count("boss_community_toolchain_cache_v2:/var/lib/boss/toolchain-cache") == 2
     boss_sh = (ROOT / "scripts" / "install" / "boss.sh").read_text()
     assert "toolchains) cmd_toolchains" in boss_sh
 

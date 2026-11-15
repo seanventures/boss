@@ -470,17 +470,25 @@ cmd_dev() {
   port="$(env_value BOSS_TEST_POSTGRES_PORT)"; port="${port:-55700}"
   case "$action" in
     up)
-      # A test-Postgres volume made before its labels (BOSSAPP-1193) is recreated, labelled, while
-      # db-test is stopped: it is rebuildable, and the Infra Agent can only clean what is labelled.
+      # The test Postgres's volume is labelled with this install's id (BOSSAPP-1193), so the id
+      # must exist, and stay the same, before Compose first creates it. install.sh writes one; an
+      # install from before it existed gets one here, in the installer's format.
+      if [[ -z "$(env_value BOSS_INSTALL_ID)" ]]; then
+        set_env_value BOSS_INSTALL_ID "inst_$(openssl rand -hex 8)"
+      fi
+      # Never a question from Compose (stdin is not a terminal): BOSS's own scripts must not put
+      # "Recreate (data will be lost)?" to an operator.
+      compose --profile dev up -d db-test </dev/null
+      # db-test now runs on the labelled volume; the pre-label one it left is removed once
+      # nothing mounts it (data volumes are never touched).
       if [[ -f "$INSTALL_DIR/scripts/install/steward.py" ]] && command -v python3 >/dev/null 2>&1; then
         python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --relabel-volumes </dev/null || true
       fi
-      compose --profile dev up -d db-test
       printf 'Test Postgres is up. Point the suites at it:\n'
       printf '  export BOSS_TEST_DATABASE_URL=postgresql+psycopg://boss:$BOSS_DB_PASSWORD@localhost:%s/boss_test\n' "$port"
       printf '(BOSS_DB_PASSWORD is in %s/.env; never paste it into a chat or a ticket.)\n' "$INSTALL_DIR" ;;
     down)
-      compose --profile dev stop db-test ;;
+      compose --profile dev stop db-test </dev/null ;;
     sweep-test-db|test-db-preflight)
       # Inside the compose network the test server is db-test:5432. --url overrides, e.g. for a
       # bench database on another server the tests were pointed at.
@@ -1377,7 +1385,7 @@ cmd_self_fix() {
       # The installer's own key (sys_self_installer): written 0600 beside .env, never printed.
       local key_file="$INSTALL_DIR/.boss/self-installer.key" key
       mkdir -p "$INSTALL_DIR/.boss" && chmod 700 "$INSTALL_DIR/.boss"
-      key="$(compose exec -T -u boss api python -m boss_engine.identity.cli self-installer-key --quiet)" ||
+      key="$(compose exec -T -u boss api python -m boss_engine.identity.cli self-installer-key --quiet </dev/null)" ||
         die "BOSS did not issue a key. Is the api service running (boss status)?"
       [[ "$key" == boss_sak_* ]] || die "BOSS did not issue a key."
       (umask 077 && printf '%s\n' "$key" > "$key_file")

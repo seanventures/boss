@@ -65,7 +65,7 @@ the live BOSS (~9 GB of them on one laptop), and one slow test query spilled 11 
 files next to the real data. Three rules now hold, all in `engine/boss_engine/dev/test_databases.py`:
 
 **1. A second Postgres for dev and test.** The `db-test` compose service (profile `dev`, same
-image as `db`, port **55700**, volume `boss_community_pg_test` labelled `owner=boss kind=test
+image as `db`, port **55700**, volume `boss_community_pg_test_v2` labelled `owner=boss kind=test
 ttl=24h`) is where test databases belong. It runs with `max_locks_per_transaction=1024`,
 `temp_file_limit=1GB` and a `statement_timeout` of 60 s for every connection.
 

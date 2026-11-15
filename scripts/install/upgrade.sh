@@ -495,9 +495,10 @@ if [[ -x "$INSTALL_DIR/scripts/install/prune.sh" ]]; then
 fi
 # VOLUME LABELS (BOSSAPP-1193): the Infra Agent removes an orphan volume only when it carries
 # this install's boss.install_id and a rebuildable boss.kind, and Docker cannot add a label to a
-# volume that exists. The new checkout's steward recreates BOSS's REBUILDABLE volumes that
-# predate their labels (the test Postgres, the toolchain cache) when no container uses them;
-# Compose makes them again, labelled, on the next `up`. Data volumes are never touched. One it
+# volume that exists. So the rebuildable volumes got labelled `_v2` keys, and the installer has
+# just moved the services onto them; the new checkout's steward now removes the retired,
+# unlabelled ones (the old toolchain cache; the old test Postgres once db-test has moved too)
+# when no container uses them. It never stops a service and never touches a data volume. One it
 # cannot free is reported by the Infra Agent as "unlabelled BOSS volume — needs relabel". Best
 # effort: an older release without the step simply skips it.
 if [[ -f "$INSTALL_DIR/scripts/install/steward.py" ]] && command -v python3 >/dev/null 2>&1 &&
