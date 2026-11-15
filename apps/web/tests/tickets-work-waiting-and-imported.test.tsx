@@ -184,3 +184,62 @@ describe("Ready to start (from the work list, origin ticket_import)", () => {
     expect($('[data-testid="tk-imported-said"]')?.textContent).toBe("This work item did not come from a ticket.");
   });
 });
+
+const READINESS = {
+  ready: false,
+  checked: [{ key: "repository", label: "A repository BOSS can push to", fix: "Connect GitHub in Repo and models.", area: "setup", href: "/?area=setup&focus=repository",
+              needed_by: [{ step_id: "build", label: "Build" }], first_step: "build", first_step_label: "Build", after_a_person: false, ok: false, detail: "no repo" }],
+  missing: [{ key: "repository", label: "A repository BOSS can push to", fix: "Connect GitHub in Repo and models.", area: "setup", href: "/?area=setup&focus=repository",
+              needed_by: [{ step_id: "build", label: "Build" }], first_step: "build", first_step_label: "Build", after_a_person: false, ok: false, detail: "no repo" }],
+};
+
+describe("a ticket start the project is not ready for (console walk)", () => {
+  it("Ready to start shows the project's checklist and starts anyway with exactly the keys ticked", async () => {
+    let refuse = true;
+    const calls = stub((url) => {
+      if (!url.endsWith("/start-from-ticket")) return null;
+      if (refuse) { refuse = false; return json({ detail: { message: "This workflow cannot run here yet; 1 thing is missing.", readiness: READINESS } }, 409); }
+      return json({ run_id: "r1" });
+    });
+    await mount(<ImportedSection ctx={withWork([ready("wi_9", "LEND-9", "task")])} />);
+    click('[data-testid="tk-imported-start-LEND-9"]');
+    await settle();
+    // The shared refusal (StartRefusal), not the API's sentence alone.
+    expect($('[data-testid="start-refusal"]')?.textContent).toContain("Start LEND-9, not started. 1 thing missing.");
+    expect($('[data-testid="dw-readiness-missing-repository"]')).not.toBeNull();
+    expect(($('[data-testid="start-refusal-anyway"]') as HTMLButtonElement).disabled).toBe(true);
+    click('[data-testid="dw-readiness-start-anyway"]');
+    await settle();
+    click('[data-testid="start-refusal-anyway"]');
+    await settle();
+    const sent = calls.filter((c) => c.url === "/v1/work-items/wi_9/start-from-ticket").map((c) => c.body);
+    expect(sent).toEqual([{ project_id: "p1", workflow_key: "minor_feature" },
+                          { project_id: "p1", workflow_key: "minor_feature", start_anyway: ["repository"] }]);
+    expect($('[data-testid="start-refusal"]')).toBeNull();
+    expect($('[data-testid="tk-imported-said"]')?.textContent).toContain("Started LEND-9");
+  });
+
+  it("Waiting for BOSS does the same for a labelled ticket, and Not now puts it away", async () => {
+    stub((url) => {
+      if (url.includes("/tickets/waiting")) return json({ tickets: [tk("LEND-151", "story")], errors: [] });
+      if (url.endsWith("/tickets/import")) return json({ imported: [{ key: "LEND-151", work_item_id: "wi_151" }], already_in_boss: [] });
+      if (url.endsWith("/start-from-ticket")) return json({ detail: { message: "Not ready.", readiness: READINESS } }, 409);
+      return null;
+    });
+    await mount(<WaitingSection ctx={ctx()} conns={[CONN]} />);
+    click('[data-testid="tk-waiting-start-LEND-151"]');
+    await settle();
+    expect($('[data-testid="start-refusal"]')?.textContent).toContain("Start LEND-151, not started.");
+    click('[data-testid="start-refusal-dismiss"]');
+    await settle();
+    expect($('[data-testid="start-refusal"]')).toBeNull();
+  });
+
+  it("a card shows the ticket's whole title, not the list's short name", async () => {
+    stub(() => null);
+    const item = { ...ready("wi_e", "KAN-6", "epic"), label: "KAN-6 BOSS walk", title: "KAN-6 BOSS walk: ticket import epic" } as unknown as WorkItem;
+    await mount(<ImportedSection ctx={withWork([item])} />);
+    expect($('[data-testid="tk-imported-KAN-6"] h3')?.textContent).toBe("BOSS walk: ticket import epic");
+  });
+});
+

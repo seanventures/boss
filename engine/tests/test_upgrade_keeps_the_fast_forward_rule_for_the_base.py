@@ -105,7 +105,10 @@ def _release(world, name: str, edit: dict[str, str], message: str = "release 2")
 def _upgrade(world, *args: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "BOSS_SELF_FIX_DOCKER": str(world["docker"]),
            "FAKE_DOCKER_STATE": str(world["state"]), "BOSS_SELF_FIX_API": "http://127.0.0.1:9",
-           "BOSS_SELF_INSTALLER_KEY": "boss_sak_test", "HOME": str(world["tmp"])}
+           "BOSS_SELF_INSTALLER_KEY": "boss_sak_test", "HOME": str(world["tmp"]),
+           # upgrade.sh checks the real disk before it builds (storage hygiene layer 1); the
+           # machine running the tests is not what is under test here.
+           "BOSS_DISK_CHECK": "off"}
     return subprocess.run(["bash", str(ROOT / "scripts/install/upgrade.sh"), "--dir",
                            str(world["install"]), *args], capture_output=True, text=True,
                           env=env, timeout=180)

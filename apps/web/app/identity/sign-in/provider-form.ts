@@ -173,6 +173,43 @@ export function createBody(f: ProviderForm, reservedId?: string | null): Record<
 }
 
 /** The PATCH body: only what changed (an empty object means nothing to save). */
+/**
+ * What a TEST BEFORE ADDING needs (POST /v1/identity/providers/test, a dry run): only what reaches
+ * the IdP — the issuer (or tenant) for OIDC, the sign-in URL and certificate for SAML. Not the
+ * client ID or secret: discovery needs neither. "" when it can run.
+ */
+export function draftTestMissing(f: ProviderForm): string {
+  if (f.kind === "microsoft" && f.tenant.trim() === "") return "Add your tenant id to test";
+  if (f.kind === "saml") {
+    if (f.issuer.trim() === "") return "Add the IdP entity ID to test";
+    if (!/^https:\/\/\S+$/.test(f.saml_sso_url.trim())) return "Add the https sign-in URL to test";
+    if (f.saml_certificate.trim() === "") return "Paste the signing certificate to test";
+    return "";
+  }
+  if (needsIssuer(f.kind) && !/^https?:\/\/\S+$/.test(f.issuer.trim())) return "Add the issuer URL to test";
+  if (f.kind === "okta" && oktaIssuerProblem(f.issuer) !== "") return oktaIssuerProblem(f.issuer);
+  return "";
+}
+
+/** The dry-run Test's body: the Add body without any secret (a test never sends or keeps one). */
+export function draftTestBody(f: ProviderForm): Record<string, unknown> {
+  const body = createBody(f, null);
+  delete body.client_secret;
+  delete body.client_private_key;
+  if (typeof body.name !== "string" || body.name === "") body.name = KINDS.find((k) => k.kind === f.kind)?.label ?? "Draft";
+  return body;
+}
+
+/** The dry-run Test's answer in a few words. */
+export function draftTestWords(r: { ok?: boolean; error?: string; detail?: string; checked?: string }): string {
+  if (r.ok === true) {
+    return r.checked === "configuration" ? "Looks right · certificate and sign-in URL read"
+      : r.checked === "discovery" ? "Test passed · BOSS reached the issuer and read its keys" : "Test passed";
+  }
+  if (r.error === "invalid_provider" && typeof r.detail === "string" && r.detail !== "") return r.detail;
+  return testFailureWords(r.error);
+}
+
 export function patchBody(p: ProviderDetail, f: ProviderForm): Record<string, unknown> {
   const was = formOf(p);
   const out: Record<string, unknown> = {};
@@ -221,8 +258,11 @@ export function providerRefusal(code: string, detail: string | null): string {
 /** POST …/test answers {ok:false, error:<sso code>}: what to check, in a few words. */
 export function testFailureWords(code: string | null | undefined): string {
   switch (code) {
+    // `_failed` is a non-200 answer (a mistyped Okta org answers 404): the commonest miss, and it
+    // fell through to "check the settings" before the dry-run Test made it visible.
+    case "discovery_failed": return "No sign-in settings at that address · check the issuer URL";
     case "discovery_invalid": case "discovery_refused": return "Can't read the issuer · check the URL";
-    case "jwks_invalid": case "jwks_refused": return "Can't read its signing keys";
+    case "jwks_failed": case "jwks_invalid": case "jwks_refused": return "Can't read its signing keys";
     case "issuer_mismatch": return "The issuer doesn't match";
     case "provider_misconfigured": return "Settings incomplete";
     case "alg_not_allowed": return "Unsupported signing algorithm";
@@ -247,7 +287,10 @@ export function idpUrls(origin: string | null | undefined, p: { id: string | nul
   }
   if (!p.id) return null;
   const base = `${o}/v1/auth/sso/${encodeURIComponent(p.id)}`;
-  const urls = [{ label: "Redirect URL", value: `${base}/callback`, tip: "Paste into your IdP's allowed redirect URLs" }];
+  // Okta's own words for the field (its app's General tab says "Sign-in redirect URIs"), so the
+  // label on the copy row is the label the admin is looking for in Okta.
+  const redirectLabel = p.kind === "okta" ? "Sign-in redirect URI" : "Redirect URL";
+  const urls = [{ label: redirectLabel, value: `${base}/callback`, tip: "Paste into your IdP's allowed redirect URLs" }];
   if (p.protocol === "oidc" && p.kind && FULL_OIDC.has(p.kind)) {
     urls.push(
       { label: "Initiate login URI", value: `${base}/start`, tip: "Lets the IdP's dashboard tile start a sign-in" },

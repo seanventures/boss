@@ -64,14 +64,14 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 @dataclass(frozen=True)
 class Policy:
-    keep_hourly: int = 24
+    keep_hourly: int = 6
     keep_daily: int = 7
     keep_weekly: int = 4
     keep_monthly: int = 6
 
     @classmethod
     def from_settings(cls, settings: Any) -> "Policy":
-        return cls(keep_hourly=int(getattr(settings, "backup_keep_hourly", 24)),
+        return cls(keep_hourly=int(getattr(settings, "backup_keep_hourly", 6)),
                    keep_daily=int(getattr(settings, "backup_keep_daily", 7)),
                    keep_weekly=int(getattr(settings, "backup_keep_weekly", 4)),
                    keep_monthly=int(getattr(settings, "backup_keep_monthly", 6)))

@@ -6,7 +6,7 @@
 
 /* add: pick a kind */
 .idn-sso-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.89474rem, 1fr)); gap: 8px; }
-.idn-sso-kind { display: flex; align-items: center; justify-content: center; min-height: 52px; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--idn-well); color: var(--ink); font: inherit; font-size: 0.73684rem; cursor: pointer; transition: border-color 120ms, background 120ms; }
+.idn-sso-kind { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 52px; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--idn-well); color: var(--ink); font: inherit; font-size: 0.73684rem; cursor: pointer; transition: border-color 120ms, background 120ms; }
 .idn-sso-kind:hover, .idn-sso-kind:focus-visible { border-color: color-mix(in srgb, var(--teal) 70%, transparent); background: color-mix(in srgb, var(--teal) 8%, transparent); outline: none; }
 
 /* the form */
@@ -46,3 +46,5 @@
 .idn-sso-guide summary { cursor: pointer; font-weight: 600; color: var(--ink); }
 .idn-sso-guide ol { margin: 8px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 5px; line-height: 1.45; }
 .idn-sso-guide p { margin: 4px 0; }
+/* The Add form's dry-run Test result (provider-sheet.tsx): one line above the footer. */
+.idn-sso-tested { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; }

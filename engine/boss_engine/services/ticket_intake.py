@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sqlalchemy import text
@@ -354,6 +355,113 @@ def _counts(db: Connection, ids: list[str]) -> dict[str, int]:
     return {"total": int(row["total"] or 0), "paused": int(row["paused"] or 0)}
 
 
+def _oauth_kind(manifest: Any) -> Optional[dict[str, Any]]:
+    """The connector's per-person OAuth sign-in (Jira: "Connect with Atlassian"), or None."""
+    for kind in (manifest.to_dict().get("auth_kinds") or []):
+        if isinstance(kind, dict) and kind.get("kind") == "oauth2":
+            return kind
+    return None
+
+
+def oauth_callback_url(db: Connection) -> str:
+    """Where the provider sends a person back after "Connect with Atlassian": the install's
+    public origin + the callback path, the same address the sign-in sends as redirect_uri
+    (routers/ticket_sync._callback_url). "" when the install has no public origin yet (a console
+    on this machine then uses the address it was opened on)."""
+    from ..connectors.tickets.auth import CALLBACK_PATH
+    from ..identity.authn_support import origin_of, public_origin
+
+    base = origin_of(os.environ.get("BOSS_PUBLIC_URL") or "")
+    if not base:
+        try:
+            base = public_origin(db) or ""
+        except Exception:  # noqa: BLE001 — no identity tables: the console shows its own origin
+            base = ""
+    return f"{base}{CALLBACK_PATH}" if base else ""
+
+
+def oauth_app_view(db: Connection, config: dict[str, Any], manifest: Any) -> Optional[dict[str, Any]]:
+    """The connection's own OAuth app as Settings shows it (setup guide Part 2): the client id,
+    whether a secret is stored (never the secret), whether the host's BOSS_<PROVIDER>_OAUTH_*
+    settings supply one instead, and the callback URL to paste into the provider's app. None
+    for a connector without a per-person sign-in."""
+    if _oauth_kind(manifest) is None:
+        return None
+    prefix = f"BOSS_{str(manifest.key).upper()}_OAUTH_CLIENT"
+    client_id = str(config.get("oauth_client_id") or "").strip()
+    return {"client_id": client_id, "secret_set": bool(config.get("oauth_client_secret_ref")),
+            "from_host": not client_id and bool((os.environ.get(f"{prefix}_ID") or "").strip()),
+            "callback_url": oauth_callback_url(db)}
+
+
+def _retire_secret_ref(db: Connection, app_settings: Any, secret_ref_id: str, *, actor: str) -> None:
+    """Revoke a stored secret reference and delete its value from the backend that holds it.
+    Best effort on the store (a vault that does not answer leaves a revoked, unresolvable
+    reference, which is the same to BOSS); nothing when there is no reference."""
+    from .secret_backends import SecretNotFound, backend_for
+
+    if not secret_ref_id:
+        return
+    row = db.execute(text(
+        "UPDATE secret_refs SET status = 'revoked', revoked_at = now(), revoked_by = :a "
+        "WHERE id = :i AND status <> 'revoked' RETURNING ref_key, storage_backend, ref_kind"),
+        {"a": actor, "i": secret_ref_id}).mappings().first()
+    if row is None:
+        return
+    try:
+        backend_for(str(row["storage_backend"] or row["ref_kind"]), app_settings).delete(str(row["ref_key"]))
+    except SecretNotFound:
+        pass
+    except Exception as exc:  # noqa: BLE001 — revoked in BOSS either way
+        logger.warning("could not delete the ticket OAuth client secret from its store: %s", type(exc).__name__)
+
+
+def set_oauth_app(db: Connection, app_settings: Any, row: dict[str, Any], given: Any, *,
+                  actor: str) -> None:
+    """Store the connection's OAuth app from Settings: ``{client_id, client_secret}``. The id
+    is configuration; the secret goes to the secret backend (the row keeps its reference, as
+    for the API token). A blank secret keeps the stored one; a blank client id removes the app
+    (and its secret reference), so the host's settings apply again."""
+    from .secret_backends import default_secret_backend
+    from .secrets_service import put_secret
+
+    if not isinstance(given, dict) or set(given) - {"client_id", "client_secret"} or \
+            any(not isinstance(v, str) for v in given.values()):
+        raise _bad("oauth_app takes a client_id and a client_secret, each text.")
+    adapter = adapter_for(str(row["provider_key"]))
+    if _oauth_kind(adapter.manifest) is None:
+        raise _bad(f"{adapter.manifest.label} has no per-person sign-in to set up.")
+    client_id = given.get("client_id")
+    secret = (given.get("client_secret") or "").strip()
+    if client_id is not None and len(client_id.strip()) > 300:
+        raise _bad("oauth_app.client_id is at most 300 characters.")
+    if len(secret) > 4000:
+        raise _bad("oauth_app.client_secret is at most 4000 characters.")
+    changes: dict[str, Any] = {}
+    if client_id is not None:
+        changes["oauth_client_id"] = client_id.strip()
+        if not client_id.strip():
+            # Removing the app removes its secret too: the reference is revoked and the value
+            # deleted from the store it was written to, so nothing resolvable is left behind.
+            _retire_secret_ref(db, app_settings, str(row["configuration"].get("oauth_client_secret_ref") or ""),
+                               actor=actor)
+            changes["oauth_client_secret_ref"] = ""
+    if secret:
+        if client_id is not None and not client_id.strip():
+            raise _bad("Add the client ID with its secret.")
+        written = put_secret(db, app_settings, project_id=str(row["project_id"]),
+                             name=f"ticket_{adapter.provider_key}_oauth_client_secret",
+                             value=secret, secret_kind="client_secret",
+                             backend=default_secret_backend(app_settings), actor=actor)
+        changes["oauth_client_secret_ref"] = written["secret_ref_id"]
+    if not changes:
+        return
+    db.execute(text(
+        "UPDATE work_tracker_providers SET configuration = COALESCE(configuration, '{}'::jsonb) "
+        "|| CAST(:c AS JSONB), updated_at = now() WHERE id = :i"),
+        {"c": json.dumps(changes), "i": row["id"]})
+
+
 def serialize(db: Connection, row: dict[str, Any]) -> dict[str, Any]:
     """One connection as the console shows it (T1/T2). Never a token: ``last4`` and a keyed
     fingerprint only."""
@@ -386,6 +494,7 @@ def serialize(db: Connection, row: dict[str, Any]) -> dict[str, Any]:
         "capabilities": dict(adapter.ticket_capabilities),
         "settings": public_settings(config, adapter.status_defaults()),
         "managed_from": managed_from, "mirrors": mirrors,
+        "oauth_app": oauth_app_view(db, config, manifest),
         "bindings": _counts(db, family_ids(db, row)),
         "updated_at": updated.isoformat() if hasattr(updated, "isoformat") else updated,
     }
@@ -888,7 +997,9 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
             errors.append({"connection_id": row["id"], "ref": ref.label(),
                            **explain(error, label=label_of(row)).body()})
             continue
-        view = ticket_view(ticket, in_boss=None)
+        # The FULL read (criteria, comments, attachments): get_ticket already fetched them, and
+        # New work's card promises "title, acceptance criteria, comments" (setup guide, T3).
+        view = ticket_view(ticket, in_boss=None, full=True)
         view["connection_id"] = row["id"]
         view["in_boss"] = mark([ticket], in_boss_map(db, family_ids(db, row)))[0]["in_boss"]
         tickets.append(view)

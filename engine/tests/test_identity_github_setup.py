@@ -328,6 +328,40 @@ def test_verify_says_workflows_is_waiting_until_the_installation_accepts_it(env)
     assert view["state"] == "accepted"
 
 
+def test_verify_says_whether_the_app_can_create_repositories(env):
+    """BOSSAPP-1160: Repo and models called the App "Connected" while it lacked `administration`,
+    the permission that creates repositories. verify records each flow's answer; the pill goes
+    amber with the exact fix; a personal account can never create through an App."""
+    _connect_app(env)                                           # installed on acme (an Organization)
+    with env.db() as c:
+        out = github_setup.verify(c, "org_boss")
+        mode = github_setup.mode(c, "org_boss")
+    create = out["flows"]["create_repository"]
+    assert out["flows"]["build"]["ok"] is True
+    assert create["ok"] is False and create["missing"] == ["administration"]
+    assert "Can create repos: no (missing: administration)" in create["words"]
+    assert create["fix_url"] == "https://github.test/organizations/acme/settings/apps/boss-test/permissions"
+    assert mode["verdict"]["tone"] == "amber" and "can't create repos" in mode["verdict"]["label"]
+    assert mode["app"]["verified"]["flows"]["create_repository"]["ok"] is False      # kept on the row
+    env.hub.granted = {**github_setup.APP_PERMISSIONS, "administration": "write"}   # accepted on GitHub
+    with env.db() as c:
+        out = github_setup.verify(c, "org_boss")
+        mode = github_setup.mode(c, "org_boss")
+        perms = github_setup.installation_permissions(c, "4242")
+    assert out["flows"]["create_repository"] == {"ok": True, "missing": [], "words": "Can create repos: yes.", "fix_url": None, "reason": ""}
+    assert mode["verdict"]["tone"] == "green"
+    assert perms is not None and perms["administration"] == "write"
+    # The same App installed on a PERSON: GitHub has no endpoint for it, whatever was granted.
+    env.hub.installs = {"4242": "paramg"}
+    with env.db() as c:
+        out = github_setup.verify(c, "org_boss")
+        mode = github_setup.mode(c, "org_boss")
+    person = out["flows"]["create_repository"]
+    assert person["ok"] is False and person["reason"] == "personal_account" and person["missing"] == []
+    assert "not for personal accounts" in person["words"] and "repo scope for paramg" in person["words"]
+    assert mode["verdict"]["tone"] == "green", "GitHub's rule, nothing to grant: never amber"
+
+
 def test_verify_says_when_the_app_was_uninstalled_on_github(env):
     _connect_app(env)
     env.hub.installs = {}

@@ -872,6 +872,14 @@ class GitHubConnectionService:
             )
             capabilities = self._capabilities(granted)
             status = "passed" if not missing else "failed"
+            # WHAT EACH FLOW CAN DO (BOSSAPP-1160). The repository-level answer above says what
+            # the token may do IN this repository; creating a repository needs a permission no
+            # repository can grant (a classic token's `repo` scope, an App's `administration`).
+            # Recorded beside it so Repo and models says "can create repos: no (missing:
+            # administration)" instead of green — and never fails the test: builds do not create.
+            flows = self._flow_permissions(connection, project_id, github_connection)
+            granted = sorted(set(granted) | set(flows["granted"]))
+            missing = sorted(set(missing) | set(flows["missing"]))
             safe_result = {
                 "status": status,
                 "repository": returned_full_name,
@@ -887,6 +895,8 @@ class GitHubConnectionService:
                 "granted_permissions": granted,
                 "missing_permissions": missing,
                 "capabilities": capabilities,
+                "can_create_repos": flows["can_create"],
+                "flow_words": flows["words"],
             }
             self.receipts.mark_succeeded(
                 connection,
@@ -948,6 +958,29 @@ class GitHubConnectionService:
                 "repository_binding": binding,
                 "detail": {"status": "failed", "message": safe_error["message"]},
             }
+
+    def _flow_permissions(self, connection: Connection, project_id: str,
+                          github_connection: dict[str, Any]) -> dict[str, Any]:
+        """The connection's FLOW permissions (repo_creation.FLOW_PERMISSIONS) from GitHub's own
+        answer about ITS token (the adapter may have pushed with the App's instead):
+        {granted, missing, can_create, words}. Only a personal access token says its scopes; the
+        App's are verified by github_setup.verify. Never raises."""
+        empty = {"granted": [], "missing": [], "can_create": None, "words": ""}
+        if github_connection.get("auth_method") != "personal_access_token":
+            return empty
+        try:
+            from .repo_creation import pat_abilities
+
+            token = self.token_for_connection(connection, project_id=project_id,
+                                              connection_id=str(github_connection["id"]))
+            if not token:
+                return empty
+            got = pat_abilities(token, api_base=str(github_connection.get("api_base_url") or "https://api.github.com"))
+            return {"granted": list(got.get("granted") or []), "missing": list(got.get("missing") or []),
+                    "can_create": got.get("can_create"), "words": str(got.get("words") or "")}
+        except Exception:  # noqa: BLE001 — the repository test stands on its own
+            logger.debug("github: the token's flow permissions were not read", exc_info=True)
+            return empty
 
     def ensure_env_credential_ref(
         self,
@@ -1083,28 +1116,53 @@ class GitHubConnectionService:
 
                 with connection.begin_nested():
                     return github_setup.control_plane_token(connection, owner, repo)
-            record = None
-            if hasattr(self.secret_refs, "get_by_credential_ref"):
-                try:
-                    record = self.secret_refs.get_by_credential_ref(
-                        connection, project_id=project_id, credential_ref=ref,
-                    )
-                except SecretRefNotFoundError:
-                    record = None
-            if record is None:
-                kind, _, key = str(ref).partition(":")
-                record = {"ref_kind": kind, "ref_key": key}
-                for item in self.secret_refs.list_secret_refs(
-                        connection, project_id, status="active", limit=200):
-                    if item.get("ref_kind") == kind and item.get("ref_key") == key:
-                        record = item
-                        break
-            return self._resolve_secret(record, connection)
+            return self._resolve_connection_secret(connection, project_id, ref)
         except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
             # A bound connection whose secret cannot be read here is not a reason to fail the
             # build: the environment may still have a usable token.
             logger.debug("github: could not resolve the registered credential: %s", error)
             return None
+
+    def token_for_connection(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        connection_id: str,
+    ) -> Optional[str]:
+        """The token ONE connection holds, by its id — no repository needed (BOSSAPP-1160: a
+        personal access token creates repositories under its own account, before any binding
+        exists). The Setup App's reference (`identity_github:app`) is not a token of its own; it
+        answers None here (repo_creation mints the App's token through github_setup)."""
+        try:
+            ref = self._credential_ref(connection, project_id, connection_id)
+            if str(ref) == "identity_github:app":
+                return None
+            return self._resolve_connection_secret(connection, project_id, ref)
+        except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
+            logger.debug("github: could not resolve the connection's credential: %s", error)
+            return None
+
+    def _resolve_connection_secret(self, connection: Connection, project_id: str, ref: str) -> str:
+        """A connection's SecretRef pointer → its value (never logged). The one lookup both the
+        repository path and the connection path use."""
+        record = None
+        if hasattr(self.secret_refs, "get_by_credential_ref"):
+            try:
+                record = self.secret_refs.get_by_credential_ref(
+                    connection, project_id=project_id, credential_ref=ref,
+                )
+            except SecretRefNotFoundError:
+                record = None
+        if record is None:
+            kind, _, key = str(ref).partition(":")
+            record = {"ref_kind": kind, "ref_key": key}
+            for item in self.secret_refs.list_secret_refs(
+                    connection, project_id, status="active", limit=200):
+                if item.get("ref_kind") == kind and item.get("ref_key") == key:
+                    record = item
+                    break
+        return self._resolve_secret(record, connection)
 
     def store_token_credential(
         self,
@@ -1885,6 +1943,9 @@ class GitHubConnectionService:
             "required_permissions": row["required_permissions"] or [],
             "granted_permissions": row["granted_permissions"] or [],
             "missing_permissions": row["missing_permissions"] or [],
+            # BOSSAPP-1160: can this connection make repositories? From the recorded flow
+            # permissions; None until a test said (an untested or fine-grained token).
+            "can_create_repos": can_create_repos(row["granted_permissions"], row["missing_permissions"]),
             "account_login": row["account_login"],
             "metadata": row["metadata"] or {},
             "last_test_status": row["last_test_status"],
@@ -1932,6 +1993,18 @@ class GitHubConnectionService:
             "created_at": row["created_at"].isoformat(),
             "updated_at": row["updated_at"].isoformat(),
         }
+
+
+def can_create_repos(granted: Any, missing: Any) -> dict[str, Any]:
+    """{ok: True|False|None, missing: [...]} from a connection's recorded permissions: `ok` is
+    None until a test recorded the flow permission (BOSSAPP-1160)."""
+    granted_set = {str(p) for p in (granted or [])}
+    missing_set = {str(p) for p in (missing or [])}
+    if "administration" in granted_set:
+        return {"ok": True, "missing": []}
+    if "administration" in missing_set:
+        return {"ok": False, "missing": ["administration"]}
+    return {"ok": None, "missing": []}
 
 
 def github_token_for(connection: Connection, settings: Settings, project_id: str, owner: str,

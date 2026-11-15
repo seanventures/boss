@@ -11,6 +11,7 @@
  * `last4` and a fingerprint only.
  */
 import { obsWrite, type WriteResult } from "../app/observability/obs-write";
+import { asReadiness, type Readiness } from "../app/workflow-readiness-ui";
 
 type R = Record<string, unknown>;
 const o = (v: unknown): R => (v && typeof v === "object" && !Array.isArray(v) ? (v as R) : {});
@@ -40,7 +41,14 @@ export type Connection = {
   settings: TicketSettings; managed_from: { connection_id: string; project_id: string } | null;
   mirrors: { connection_id: string; project_id: string; status: string }[];
   bindings: { total: number; paused: number };
+  /** The connection's own OAuth app for "Connect with Atlassian" (null: the connector has none).
+   *  Never the secret: whether one is stored, and the callback URL to paste into the app. */
+  oauth_app: OAuthApp | null;
 };
+export type OAuthApp = { client_id: string; secret_set: boolean; from_host: boolean; callback_url: string };
+/** Whether "Connect with Atlassian" can start: an app is set on the connection or on the host. */
+export const oauthReady = (c: Connection | null): boolean =>
+  c?.oauth_app != null && (c.oauth_app.client_id !== "" || c.oauth_app.from_host);
 export type AuthField = { name: string; label: string; placeholder: string; secret: boolean; required: boolean; help: string };
 export type CatalogItem = {
   provider: string; label: string; icon: string; description: string; docs_url: string;
@@ -109,6 +117,10 @@ export function parseConnection(v: unknown): Connection {
     managed_from: mf && s(mf.connection_id) ? { connection_id: s(mf.connection_id), project_id: s(mf.project_id) } : null,
     mirrors: a(x.mirrors).map((m) => ({ connection_id: s(o(m).connection_id), project_id: s(o(m).project_id), status: s(o(m).status) })),
     bindings: { total: n(o(x.bindings).total) ?? 0, paused: n(o(x.bindings).paused) ?? 0 },
+    oauth_app: x.oauth_app && typeof x.oauth_app === "object"
+      ? { client_id: s(o(x.oauth_app).client_id), secret_set: o(x.oauth_app).secret_set === true,
+          from_host: o(x.oauth_app).from_host === true, callback_url: s(o(x.oauth_app).callback_url) }
+      : null,
   };
 }
 
@@ -309,7 +321,7 @@ export const connectTicketSystem = (projectId: string, input: ConnectInput): Pro
   obsWrite("/v1/ticket-systems", { project_id: projectId, ...input }, press("new", "Connect"));
 export const testTicketSystem = (id: string): Promise<WriteResult> => obsWrite(`${conn(id)}/test`, {}, press(`${id}:test`, "Test"));
 /** Change settings: only what is named changes (mappings, write_back, status_map, pickup, inbound). */
-export const saveTicketSettings = (id: string, patch: Partial<Record<keyof TicketSettings, unknown>>): Promise<WriteResult> =>
+export const saveTicketSettings = (id: string, patch: Partial<Record<keyof TicketSettings | "oauth_app", unknown>>): Promise<WriteResult> =>
   obsWrite(conn(id), patch as R, press(`${id}:save`, "Save"), "PATCH");
 export const disconnectTicketSystem = (id: string): Promise<WriteResult> => obsWrite(conn(id), {}, press(`${id}:off`, "Disconnect"), "DELETE");
 /** Create or rotate the inbound webhook: the URL and secret come back ONCE. */
@@ -349,19 +361,31 @@ export const parseWebhook = (v: unknown): WebhookSecret => {
  * (a work item + binding), then started on the workflow its type calls for (or the one picked).
  */
 export async function importAndStart(projectId: string, t: Pick<Ticket, "key" | "connection_id" | "in_boss" | "type">, workflowKey?: string,
-): Promise<{ ok: boolean; error: string | null; workItemId: string; runId: string; note: string }> {
+                                     startAnyway: readonly string[] = [],
+): Promise<{ ok: boolean; error: string | null; workItemId: string; runId: string; note: string; readiness: Readiness | null }> {
   let workItemId = t.in_boss?.work_item_id ?? "";
   if (!workItemId) {
     const imp = await importTickets(projectId, t.connection_id, [{ key: t.key, with_children: t.type === "epic" }]);
-    if (!imp.ok) return { ok: false, error: imp.error, workItemId: "", runId: "", note: "" };
+    if (!imp.ok) return { ok: false, error: imp.error, workItemId: "", runId: "", note: "", readiness: null };
     const done = parseImport(imp.body);
     workItemId = (done.imported.find((r) => r.key === t.key) ?? done.already_in_boss.find((r) => r.key === t.key) ?? done.imported[0])?.work_item_id ?? "";
-    if (!workItemId) return { ok: false, error: `${t.key} was not imported.`, workItemId: "", runId: "", note: "" };
+    if (!workItemId) return { ok: false, error: `${t.key} was not imported.`, workItemId: "", runId: "", note: "", readiness: null };
   }
-  const st = await startFromTicket(workItemId, { project_id: projectId, workflow_key: workflowKey || workflowFor(t.type) });
-  if (!st.ok) return { ok: false, error: st.error, workItemId, runId: "", note: "" };
+  const st = await startFromTicket(workItemId, { project_id: projectId, workflow_key: workflowKey || workflowFor(t.type),
+                                                 ...(startAnyway.length ? { start_anyway: [...startAnyway] } : {}) });
+  if (!st.ok) return { ok: false, error: st.error, workItemId, runId: "", note: "", readiness: refusalReadiness(st.refusal) };
   const b = o(st.body);
-  return { ok: true, error: null, workItemId, runId: s(b.run_id) || s(o(b.run).id), note: s(b.note) };
+  return { ok: true, error: null, workItemId, runId: s(b.run_id) || s(o(b.run).id), note: s(b.note), readiness: null };
+}
+
+/**
+ * The project checklist a refused start carried (409 `{detail: {message, readiness}}`), or null.
+ * A ticket start is refused like any other start when the project lacks a repo or a deploy
+ * target; the console shows the checklist with "Start anyway" ticks, never only the sentence.
+ */
+export function refusalReadiness(refusal: unknown): Readiness | null {
+  const detail = o(o(refusal).detail);
+  return asReadiness(detail.readiness ?? o(refusal).readiness);
 }
 
 /** A pending "the ticket changed while BOSS was building" card (T6). */

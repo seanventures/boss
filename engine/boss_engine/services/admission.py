@@ -11,7 +11,7 @@ when ALL hold:
 
     MemAvailable − reserve ≥ the job's request      reserve = max(1 GB, 15% of RAM)
     memory PSI full avg60 < 5
-    free disk ≥ 5 GB
+    free disk ≥ BOSS_BUILD_DISK_FLOOR_GB (8 GiB; a hard hold, see DEFAULT_BUILD_DISK_FLOOR_GB)
     load per core < 1.5
     heavy jobs leased or running < "Builds at once"
     the degradation level is below L2
@@ -37,7 +37,15 @@ from sqlalchemy import text
 from .concurrency_governance import admit_or_reject
 from .workload_profiles import HEAVY_JOB_KINDS, Profile, load as load_profile, profile_for_job
 
-MIN_FREE_DISK_GB = 5.0
+#: DISK FLOOR (storage hygiene layer 1, BOSSAPP-1150). A build on a nearly full disk does not
+#: slow down like one short of memory: it fills the disk, and a full disk takes Postgres down
+#: with it. So the floor is a hard hold — never waived by "nothing is running, so one may run"
+#: — configurable as BOSS_BUILD_DISK_FLOOR_GB (default 8 GiB), and the hold is said on the run
+#: and recorded as a `host.disk_low` event; the next poll with room above the floor admits.
+DEFAULT_BUILD_DISK_FLOOR_GB = 8.0
+#: Where builds write: the container root (Docker's own disk) and the BOSS data volumes; the
+#: least free of the paths that exist is the figure. BOSS_BUILD_DISK_PATHS overrides (comma-separated).
+DEFAULT_DISK_PATHS = ("/", "/var/lib/boss")
 MAX_PSI_FULL_AVG60 = 5.0
 MAX_LOAD_PER_CORE = 1.5
 MAX_SLOTS = 8
@@ -71,20 +79,46 @@ class Capacity:
         return max(0.0, self.available_mb - self.reserve_mb)
 
 
-def sample() -> Capacity:
-    """What this API container can see right now (Linux /proc and cgroup v2)."""
+def build_disk_floor_gb() -> float:
+    """BOSS_BUILD_DISK_FLOOR_GB, or the default; a value that is not a number is the default."""
+    import os
+
+    raw = (os.environ.get("BOSS_BUILD_DISK_FLOOR_GB") or "").strip()
+    try:
+        value = float(raw) if raw else DEFAULT_BUILD_DISK_FLOOR_GB
+    except ValueError:
+        return DEFAULT_BUILD_DISK_FLOOR_GB
+    return max(0.0, value)
+
+
+def disk_snapshot(paths: Optional[list[str]] = None) -> dict[str, float]:
+    """{free_gb, used_pct} of the fullest of `paths` that exist (statvfs only: this runs on
+    every lease poll). Empty when none can be read."""
+    import os
     import shutil
 
+    if paths is None:
+        raw = (os.environ.get("BOSS_BUILD_DISK_PATHS") or "").strip()
+        paths = [p.strip() for p in raw.split(",") if p.strip()] or list(DEFAULT_DISK_PATHS)
+    out: dict[str, float] = {}
+    for path in paths:
+        try:
+            usage = shutil.disk_usage(path)
+        except OSError:
+            continue
+        free_gb = round(usage.free / 1e9, 1)
+        if not out or free_gb < out["free_gb"]:
+            out = {"free_gb": free_gb,
+                   "used_pct": round(100 * usage.used / usage.total, 1) if usage.total else 0.0}
+    return out
+
+
+def sample() -> Capacity:
+    """What this API container can see right now (Linux /proc and cgroup v2)."""
     from .self_observability import cpu_snapshot, memory_snapshot
 
     mem, cpu = memory_snapshot(), cpu_snapshot()
-    # statvfs only: this runs on every lease poll, so never walk the preview trees here.
-    try:
-        usage = shutil.disk_usage("/")
-        disk = {"free_gb": round(usage.free / 1e9, 1),
-                "used_pct": round(100 * usage.used / usage.total, 1) if usage.total else 0.0}
-    except OSError:
-        disk = {}
+    disk = disk_snapshot()
     total = float(mem.get("host_total_mb") or 0.0)
     available = float(mem.get("host_available_mb") or 0.0)
     limit = mem.get("limit_mb")
@@ -141,6 +175,8 @@ class Decision:
     level: int = L0
     shortfall: Optional[str] = None
     capacity: Optional[dict[str, Any]] = None
+    #: True when free disk is below the floor: the hold no one-at-a-time rule waives.
+    disk_low: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -150,8 +186,18 @@ def _gb(mb: float) -> str:
     return f"{mb / 1024:.1f} GB"
 
 
+def disk_shortfall(cap: Capacity, floor_gb: Optional[float] = None) -> Optional[str]:
+    """The disk hold in the operator's words, or None when free disk is at or above the floor."""
+    floor = build_disk_floor_gb() if floor_gb is None else float(floor_gb)
+    if cap.disk_free_gb >= floor:
+        return None
+    return (f"{cap.disk_free_gb:.1f} GB of disk free where builds run; builds wait until at "
+            f"least {floor:g} GB is free (BOSS_BUILD_DISK_FLOOR_GB)")
+
+
 def decide(cap: Capacity, profile: Profile, *, in_flight: int, slots: int,
-           level: int = L0, force_one: bool = False) -> Decision:
+           level: int = L0, force_one: bool = False,
+           disk_floor_gb: Optional[float] = None) -> Decision:
     """Pure: admit or defer one heavy job. Every refusal says what is short, in GB."""
     problems: list[str] = []
     if cap.total_mb > 0 and cap.spare_mb < profile.request_mb:
@@ -159,8 +205,9 @@ def decide(cap: Capacity, profile: Profile, *, in_flight: int, slots: int,
     if cap.psi_full_avg60 >= MAX_PSI_FULL_AVG60:
         problems.append(f"the machine waited on memory {cap.psi_full_avg60:.0f}% of the last "
                         "minute")
-    if cap.disk_free_gb < MIN_FREE_DISK_GB:
-        problems.append(f"{cap.disk_free_gb:.1f} GB of disk free (needs {MIN_FREE_DISK_GB:.0f})")
+    disk_low = disk_shortfall(cap, disk_floor_gb)
+    if disk_low:
+        problems.append(disk_low)
     if cap.load_per_core >= MAX_LOAD_PER_CORE:
         problems.append(f"CPU load {cap.load_per_core:.1f} per core")
     if level >= L2:
@@ -168,8 +215,9 @@ def decide(cap: Capacity, profile: Profile, *, in_flight: int, slots: int,
     # NOTHING RUNNING MEANS ONE MAY RUN. A small or busy machine runs one build at a time
     # rather than none forever. Critical pressure (L2) still holds it — unless the operator
     # chose "one at a time" / "build anyway" on the card (force_one); sustained critical (L3)
-    # and a nearly full disk hold even that.
-    if problems and in_flight == 0 and cap.disk_free_gb >= 1.0 and (
+    # holds even that. A DISK BELOW THE FLOOR ALWAYS HOLDS: memory pressure slows a build, a
+    # full disk breaks the database every build stands on (BOSSAPP-1150).
+    if problems and not disk_low and in_flight == 0 and (
             level < L2 or (force_one and level < L3)):
         problems = []
     backpressure = {"admit_new_work": not problems, "reason": "; ".join(problems)}
@@ -181,7 +229,7 @@ def decide(cap: Capacity, profile: Profile, *, in_flight: int, slots: int,
                      f"{in_flight} of {slots} builds at once already running")
     return Decision(admitted=bool(verdict["admitted"]), reason=str(verdict["reason"]),
                     code=str(verdict["code"]), slots=slots, in_flight=in_flight, level=level,
-                    shortfall=shortfall,
+                    shortfall=shortfall, disk_low=bool(disk_low) and not verdict["admitted"],
                     capacity={k: v for k, v in asdict(cap).items() if k != "notes"})
 
 

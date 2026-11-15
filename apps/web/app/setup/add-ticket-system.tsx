@@ -19,13 +19,14 @@
  * Save connects (with the settings) when nothing is stored yet, else PATCHes only the settings.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowSquareOut, Check, CopySimple, Plus, PuzzlePiece, Trash, WarningCircle } from "@phosphor-icons/react";
+import { ArrowSquareOut, Check, CopySimple, Key, Plus, PuzzlePiece, Trash, UserCircle, WarningCircle } from "@phosphor-icons/react";
 
-import { CheckRow, Field, FormError, FormGrid } from "../../components/form-kit";
+import { Field, FormError, FormGrid } from "../../components/form-kit";
+import { idGet } from "../../lib/identity/api";
 import { GatedButton } from "../../components/gated";
 import { ProviderMono, TkReadState } from "../tickets/ticket-parts";
 import {
-  connectTicketSystem, parseConnectAnswer, parseWebhook, readCatalog, readExternalProjects, rotateTicketWebhook,
+  connectTicketSystem, oauthReady, parseConnectAnswer, parseWebhook, readCatalog, readExternalProjects, rotateTicketWebhook,
   saveTicketSettings, startTicketOauth, type CatalogItem, type Connection, type ExternalProject, type InboundMode,
   type Mapping, type PickupMode, type Read, type StatusMap, type WebhookSecret, type WriteBack,
 } from "../../lib/tickets";
@@ -54,6 +55,19 @@ function canWords(caps: Record<string, boolean>, keys: string[]): string {
   return bits.filter(Boolean).join(" · ");
 }
 
+/**
+ * A provider tile's second line: the description's lead ("Atlassian Jira Cloud"), or — when that
+ * lead only repeats the tile's name ("GitHub Issues" under "GitHub Issues") — what it is for
+ * ("track work next to the code").
+ */
+export function tileLine(c: Pick<CatalogItem, "label" | "description">): string {
+  const parts = c.description.split("—").map((x) => x.trim().replace(/\.$/, ""));
+  const lead = parts[0] ?? "";
+  if (lead.toLowerCase() !== c.label.trim().toLowerCase()) return lead;
+  const rest = parts[1] ?? "";
+  return rest === "" ? lead : rest.charAt(0).toUpperCase() + rest.slice(1);
+}
+
 function copy(text: string) {
   try { void navigator.clipboard?.writeText(text); } catch { /* no clipboard */ }
 }
@@ -74,8 +88,19 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<"" | "test" | "save" | "hook" | "oauth">("");
   const [adv, setAdv] = useState(false);
+  // "Connect with Atlassian": the connection's own OAuth app (Settings › Client ID / Client secret).
+  const [appId, setAppId] = useState(given?.oauth_app?.client_id ?? "");
+  const [appSecret, setAppSecret] = useState("");
+  // The BOSS projects a mapping may target (this one first); another needs integration:manage there.
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
 
   useEffect(() => { void readCatalog().then(setCatalog); }, []);
+  useEffect(() => {
+    void idGet<{ items?: { id?: string; name?: string; archived_at?: string | null }[] }>("/v1/projects")
+      .then((r) => setProjects((r.items ?? []).filter((p) => typeof p.id === "string" && p.id !== "" && !p.archived_at)
+        .map((p) => ({ id: p.id as string, name: typeof p.name === "string" && p.name !== "" ? p.name : (p.id as string) }))))
+      .catch(() => setProjects([]));
+  }, []);
   const items = catalog?.ok ? catalog.data : [];
   useEffect(() => { if (!provider && items.length) setProvider(items[0].provider); }, [items, provider]);
   const item = items.find((c) => c.provider === provider) ?? null;
@@ -109,11 +134,17 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
     secrets: secret && secretField ? { [secretField.name]: secret } : {},
     ...(withSettings ? { settings: settingsPatch() } : {}),
   });
+  const appChanged = appSecret !== "" || appId.trim() !== (conn?.oauth_app?.client_id ?? "");
   const settingsPatch = () => ({
     mappings: draft.mappings.filter((m) => m.external_project.trim()).map((m) => ({ ...m, external_project: m.external_project.trim() })),
     write_back: draft.write_back, pickup: { label: draft.pickup.label.trim(), mode: draft.pickup.mode },
     inbound: draft.inbound,
     status_map: Object.fromEntries(Object.entries(draft.status_map).filter(([, v]) => v.trim())),
+  });
+  /** The PATCH body: the settings, plus the OAuth app when it changed (the secret is write-only). */
+  const savePatch = () => ({
+    ...settingsPatch(),
+    ...(appChanged ? { oauth_app: { client_id: appId.trim(), ...(appSecret !== "" ? { client_secret: appSecret } : {}) } } : {}),
   });
 
   /** Test BOSS's sign-in: the API tests first and stores only when it passes. */
@@ -145,9 +176,11 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
       onSaved(`${item?.label ?? "Ticket system"} connected.`);
       return;
     }
+    if (appSecret !== "" && appId.trim() === "") { setErr("Add the client ID with its secret."); return; }
     setBusy("save");
-    const r = await saveTicketSettings(conn.id, settingsPatch());
+    const r = await saveTicketSettings(conn.id, savePatch());
     setBusy("");
+    setAppSecret("");
     if (!r.ok) { setErr(r.error ?? "Not saved."); return; }
     onSaved(`${conn.label} saved.`);
   };
@@ -186,7 +219,7 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
                         data-testid={`tk-tile-${c.provider}`} title={c.description}
                         onClick={() => { setProvider(c.provider); setTest(null); setErr(null); setValues({}); setSecret(""); }}>
                   <ProviderMono provider={c.provider} size={24} />
-                  <span><b>{c.label}</b><small>{c.description.split(/[—.]/)[0].trim()}</small></span>
+                  <span><b>{c.label}</b><small>{tileLine(c)}</small></span>
                 </button>
               ))}
               {catalog?.ok ? (
@@ -217,8 +250,8 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
                 </Field>
               ))}
               {secretField ? (conn && !replacing ? (
-                <Field label={secretField.label} tip="Stored in BOSS's vault; never shown again">
-                  <input aria-label={secretField.label} value={`Set${conn.last4 ? `, …${conn.last4}` : ""}`} readOnly data-testid="tk-secret-set" />
+                <Field label={secretField.label} tip="Stored in BOSS's vault; never shown again, not even in part">
+                  <input aria-label={secretField.label} value="Stored in BOSS's vault" readOnly data-testid="tk-secret-set" />
                 </Field>
               ) : (
                 <Field label={secretField.label} tip={secretField.help || "Write-only: stored in BOSS's vault, never shown again"}>
@@ -231,9 +264,9 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
                              disabled={busy === "test"} title="BOSS tests the sign-in first; nothing is stored unless it passes"
                              onClick={() => void signIn()}>{busy === "test" ? "Testing…" : conn && !replacing ? "Test again" : "Test sign-in"}</GatedButton>
                 {conn && !replacing && secretField ? (
-                  <button type="button" className="su-link" onClick={() => setReplacing(true)} data-testid="tk-secret-replace">Replace {secretField.label.toLowerCase()}</button>
+                  <button type="button" className="su-link" onClick={() => setReplacing(true)} data-testid="tk-secret-replace">Replace {secretField.label}</button>
                 ) : null}
-                {secretField?.help ? <span className="tk-faint" title={secretField.help}>Where to get one</span> : null}
+                {secretField && secretField.help !== "" ? <span className="tk-faint" data-testid="tk-secret-help">{secretField.help}</span> : null}
               </div>
             </FormGrid>
             {test ? (
@@ -241,12 +274,8 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
                 {test.ok ? <Check size={13} weight="bold" aria-hidden /> : <WarningCircle size={13} aria-hidden />} {test.line}</div>
             ) : null}
             {item?.oauth ? (
-              <div className="tk-oauth" data-testid="tk-oauth">
-                <GatedButton permission="connection:use_own" projectId={projectId} className="su-btn su-btn-sm" data-testid="tk-oauth-start"
-                             disabled={!conn || busy === "oauth"} title={conn ? "Sign in as yourself; BOSS acts as you in Jira" : "Save the bot sign-in first; then each person can connect"}
-                             onClick={() => void oauth()}>Connect with Atlassian</GatedButton>
-                <span className="tk-faint" title="Each person can also sign in as themselves (Okta SSO works through Atlassian). BOSS falls back to the token above.">Or each person signs in</span>
-              </div>
+              <OAuthAppSection conn={conn} projectId={projectId} label={item.label} appId={appId} onAppId={setAppId}
+                               appSecret={appSecret} onAppSecret={setAppSecret} busy={busy === "oauth"} onConnect={() => void oauth()} />
             ) : null}
           </section>
         ) : null}
@@ -268,8 +297,12 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
                            onChange={(e) => patch({ mappings: draft.mappings.map((x, j) => (j === i ? { ...x, external_project: e.target.value } : x)) })} />
                   )}
                   <span aria-hidden>→</span>
-                  <span className="tk-map-to" title="A mapping onto another BOSS project is set from that project's Setup">
-                    {m.boss_project_id === projectId ? "This project" : m.boss_project_id}</span>
+                  <select aria-label={`BOSS project for mapping ${i + 1}`} value={m.boss_project_id} data-testid={`tk-map-to-${i}`} className="tk-map-to"
+                          title="The BOSS project its tickets go to. Another project needs your Manage integrations there."
+                          onChange={(e) => patch({ mappings: draft.mappings.map((x, j) => (j === i ? { ...x, boss_project_id: e.target.value } : x)) })}>
+                    {!projects.some((p) => p.id === m.boss_project_id) ? <option value={m.boss_project_id}>{m.boss_project_id === projectId ? "This project" : m.boss_project_id}</option> : null}
+                    {projects.map((p) => <option key={p.id} value={p.id}>{p.id === projectId ? `${p.name} (this project)` : p.name}</option>)}
+                  </select>
                   <button type="button" className="su-icon-btn" aria-label={`Remove mapping ${i + 1}`} data-testid={`tk-map-remove-${i}`}
                           onClick={() => patch({ mappings: draft.mappings.filter((_, j) => j !== i) })}><Trash size={13} /></button>
                 </div>
@@ -297,7 +330,7 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
               <select aria-label="When a ticket gets the label" value={draft.pickup.mode} data-testid="tk-pickup-mode"
                       title="Ask me first: a card in Decisions and the Work tab. Start automatically: BOSS imports and starts it."
                       onChange={(e) => patch({ pickup: { ...draft.pickup, mode: e.target.value as PickupMode } })}>
-                <option value="ask">ask me first</option><option value="auto_start">start automatically</option></select>
+                <option value="ask">Ask me first</option><option value="auto_start">Start automatically</option></select>
             </div>
 
             <details className="tk-adv" open={adv} onToggle={(e) => setAdv((e.currentTarget as HTMLDetailsElement).open)} data-testid="tk-adv">
@@ -353,5 +386,60 @@ export function AddTicketSystem({ projectId, connection: given, onClose, onSaved
         </div>
       </div>
     </Drawer>
+  );
+}
+
+/**
+ * "CONNECT WITH ATLASSIAN" (setup guide Part 2): each person signs in to the ticket system as
+ * themselves. It needs the connection's own OAuth app — Client ID and Client secret, pasted from
+ * the provider's developer console — and the provider needs BOSS's callback URL. Shown on the
+ * Settings drawer once the bot sign-in is saved (the app belongs to a connection); the secret is
+ * write-only (the API keeps a reference, never shows it back).
+ */
+export function OAuthAppSection({ conn, projectId, label, appId, onAppId, appSecret, onAppSecret, busy, onConnect }: {
+  conn: Connection | null; projectId: string; label: string; appId: string; onAppId: (v: string) => void;
+  appSecret: string; onAppSecret: (v: string) => void; busy: boolean; onConnect: () => void;
+}) {
+  const app = conn?.oauth_app ?? null;
+  const ready = oauthReady(conn);
+  const brand = /jira/i.test(label) ? "Atlassian" : label;
+  let callback = app?.callback_url ?? "";
+  if (callback === "") {
+    try { callback = `${window.location.origin}/v1/ticket-systems/oauth/callback`; } catch { callback = "/v1/ticket-systems/oauth/callback"; }
+  }
+  const why = !conn ? "Save the bot sign-in first; then add the app and each person can connect"
+    : !ready ? `Add the ${brand} app's Client ID and Client secret below, then Save` : `Sign in as yourself; BOSS acts as you in ${label}`;
+  return (
+    <div className="tk-oauth" data-testid="tk-oauth">
+      <div className="tk-row">
+        <UserCircle size={16} aria-hidden />
+        <b className="tk-oauth-title">Connect with {brand}</b>
+        <span className="tk-faint">Each person acts as themselves. Without it, BOSS uses the token above.</span>
+      </div>
+      {conn ? (
+        <FormGrid label={`${brand} app`} testId="tk-oauth-app">
+          <Field label="Client ID" tip={`From your ${brand} developer app › Settings`}>
+            <input aria-label="Client ID" value={appId} autoComplete="off" onChange={(e) => onAppId(e.target.value)} data-testid="tk-oauth-client-id"
+                   placeholder={app?.from_host ? "Set on this server" : ""} />
+          </Field>
+          <Field label="Client secret" tip="Write-only: stored in BOSS's vault, never shown again">
+            <input aria-label="Client secret" type="password" autoComplete="new-password" value={appSecret} onChange={(e) => onAppSecret(e.target.value)}
+                   placeholder={app?.secret_set ? "Stored, type to replace" : ""} data-testid="tk-oauth-client-secret" />
+          </Field>
+          <div className="fk-wide tk-oauth-callback">
+            <span className="tk-lbl" title={`Paste this into the ${brand} app › Authorization › Callback URL`}>Callback URL</span>
+            <code data-testid="tk-oauth-callback">{callback}</code>
+            <button type="button" className="su-icon-btn" aria-label="Copy the callback URL" data-testid="tk-oauth-callback-copy"
+                    onClick={() => copy(callback)}><CopySimple size={13} /></button>
+          </div>
+        </FormGrid>
+      ) : null}
+      <div className="tk-row">
+        <GatedButton permission="connection:use_own" projectId={projectId} className="su-btn su-btn-sm" data-testid="tk-oauth-start"
+                     disabled={!conn || !ready || busy} title={why} onClick={onConnect}>
+          <Key size={13} aria-hidden /> Connect with {brand}</GatedButton>
+        {conn && !ready ? <span className="tk-faint" data-testid="tk-oauth-why">{why}</span> : null}
+      </div>
+    </div>
   );
 }

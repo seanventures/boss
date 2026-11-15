@@ -347,7 +347,9 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
       // FROM A TICKET: one press imports it (unless BOSS has it) and starts it from the ticket.
       try {
         if (!tkGate.allowed) { setSaid({ text: tkGate.reason, tone: "red" }); return; }
-        const r = await importAndStart(pid, tk, tkWorkflow || undefined);
+        const r = await importAndStart(pid, tk, tkWorkflow || undefined, startAnyway);
+        // NOT READY: the same checklist and "Start anyway" ticks as a start without a ticket.
+        if (!r.ok && r.readiness) { setRefusal(r.readiness); return; }
         if (!r.ok) { setSaid({ text: r.error ?? "It didn't start.", tone: "red" }); return; }
         writeDraft(pid, null);
         onDone({ runId: r.runId || undefined, said: `Started from ${tk.key}.${r.note ? ` ${r.note}` : ""}`, tab: "work" });
@@ -727,7 +729,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
             {showWords || wordsOpen ? box_ : folded}
             <NewWorkTicket resolved={resolved} workflow={tkWorkflow} onWorkflow={setTkWorkflow} />
             {kind === "ticket" && !tk ? (
-              <RecognisesLine onBrowse={() => { onClose(); ctx.tab("work", { tickets: "import" }); }} />
+              <RecognisesLine projectId={ctx.demo ? undefined : pid} onBrowse={() => { onClose(); ctx.tab("work", { tickets: "import" }); }} />
             ) : null}
             {briefState ? (
               <BriefCard state={briefState} agent={helm} heading="Task" rows={rows} editing={editing} confirmed={confirmed}

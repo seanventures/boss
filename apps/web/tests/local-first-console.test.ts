@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { bringChoices, defaultWhere, doorOf, nextFreeName, repoCheckFix, repoSlug, type RepoCheck } from "../lib/add-project";
+import { bringChoices, creatingOwners, defaultWhere, doorOf, nextFreeName, ownerChip, ownerFixLines, repoCheckFix, repoSlug, type OwnerCredential, type RepoCheck } from "../lib/add-project";
 import { publishSteps } from "../lib/local-first";
 import { createFresh, stepFromParam } from "../lib/start-project";
 
@@ -112,5 +112,43 @@ describe("Try a sample, again and again", () => {
     expect(create.mock.calls.map((c) => c[0])).toEqual(["Hello World", "Hello World 2", "Hello World 3"]);
     const never = vi.fn(async () => { throw Object.assign(new Error("taken"), { exists: true }); });
     await expect(createFresh("Hello World", {}, never as never, async () => new Set())).rejects.toThrow(/taken/);
+  });
+});
+
+// ── who can make the new repo (BOSSAPP-1160) ────────────────────────────────────────────────
+
+const owner = (over: Partial<OwnerCredential>): OwnerCredential =>
+  ({ login: "paramg", type: "User", can_create: false, verified: false, via: null, via_kind: null, words: "", fixes: [], ...over });
+
+describe("the new repo's owner picker (BOSSAPP-1160)", () => {
+  const app = owner({ login: "paramg", can_create: true, verified: true, via: "paramg (access token, Acme Shop)", via_kind: "connection" });
+  const cannot = owner({ login: "paramg-kaapppu", can_create: false, words: "BOSS has no GitHub credential that can create repositories in paramg-kaapppu.",
+                         fixes: ["Replace the token for paramg-kaapppu with one holding the repo scope (Repo and models)"] });
+  const org = owner({ login: "acme", type: "Organization", can_create: true, verified: false, via: "GitHub App (server settings)", via_kind: "env_app" });
+
+  it("lists only the owners a credential can create in, and chips which one", () => {
+    expect(creatingOwners([app, cannot, org])).toEqual(["paramg", "acme"]);
+    expect(ownerChip([app, cannot, org], "paramg")).toBe("will create as paramg (access token, Acme Shop)");
+    expect(ownerChip([app, cannot, org], "PARAMG")).toBe("will create as paramg (access token, Acme Shop)");
+    expect(ownerChip([app, cannot, org], "acme")).toBe("will try as GitHub App (server settings)");
+    expect(ownerChip([app, cannot, org], "paramg-kaapppu")).toBeNull();
+    expect(ownerFixLines([app, cannot, org])).toEqual([]);
+  });
+
+  it("when none can, keeps every known owner listed and names the exact fix per owner", () => {
+    const appOnPerson = owner({ login: "paramg", can_create: false, fixes: ["Add a personal access token with the repo scope for paramg (Repo and models)"] });
+    expect(creatingOwners([appOnPerson, cannot], ["from-registry"])).toEqual(["paramg", "paramg-kaapppu", "from-registry"]);
+    expect(ownerFixLines([appOnPerson, cannot])).toEqual([
+      { login: "paramg", fix: "Add a personal access token with the repo scope for paramg (Repo and models)" },
+      { login: "paramg-kaapppu", fix: "Replace the token for paramg-kaapppu with one holding the repo scope (Repo and models)" },
+    ]);
+    expect(ownerFixLines([owner({ login: "x", can_create: false, fixes: [], words: "no credential" })])).toEqual([{ login: "x", fix: "no credential" }]);
+  });
+
+  it("before the answer arrives the registry's accounts stand in; nothing known lists nothing", () => {
+    expect(creatingOwners(null, ["paramg"])).toEqual(["paramg"]);
+    expect(creatingOwners([], [])).toEqual([]);
+    expect(ownerChip(null, "paramg")).toBeNull();
+    expect(ownerFixLines(null)).toEqual([]);
   });
 });

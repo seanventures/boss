@@ -242,6 +242,30 @@ class GitHubAppAdapter:
         }
         return jwt.encode(payload, pem, algorithm="RS256")
 
+    # -- the installation's account -----------------------------------------
+    def installation_account(self, installation_id: Optional[str] = None) -> Optional[dict]:
+        """Who the App is installed on ({login, type, permissions}), from GET
+        /app/installations/{id} with the App JWT; None when GitHub did not answer. Repo creation
+        (BOSSAPP-1160) needs it: an installation creates only in its own account, never in a
+        person's."""
+        inst = installation_id or self.settings.github_app_installation_id
+        if not inst:
+            return None
+        try:
+            headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self._app_jwt()}",
+                       "X-GitHub-Api-Version": "2022-11-28"}
+            with httpx.Client(timeout=15) as client:
+                resp = client.get(f"{self.api_base_url}/app/installations/{inst}", headers=headers)
+            if resp.status_code != 200:
+                return None
+            data = resp.json() or {}
+            account = data.get("account") if isinstance(data.get("account"), dict) else {}
+            return {"login": str(account.get("login") or ""), "type": str(account.get("type") or ""),
+                    "permissions": {str(k): str(v) for k, v in (data.get("permissions") or {}).items()}}
+        except Exception:  # noqa: BLE001 — unknown is an answer
+            logger.debug("github_app: the installation's account was not read", exc_info=True)
+            return None
+
     # -- installation token -------------------------------------------------
     def installation_token(
         self,
