@@ -22,6 +22,7 @@ import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
 import { STRIP_NOTICE_SLOT } from "./strip-notice";
 import { InfraStripBanner } from "./infra/infra-strip-banner";
+import { InfraIncidentProvider } from "../lib/infra-storage";
 import { useFullPage } from "./workflows/full-page";
 import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { useDetailsDismiss } from "../lib/details-dismiss";
@@ -428,7 +429,11 @@ export default function ConsoleShell(props: ConsoleShellProps) {
       stub={identity?.stub ?? false}
       unavailable={identity ? (identity.unavailable ?? false) : true}
     >
-      <ConsoleShellInner {...props} />
+      {/* ONE POLL of the Infra Agent's incident for the whole page (BOSSAPP-1156): the strip, the
+          Command Center card and Storage read it from here. */}
+      <InfraIncidentProvider projectId={scope.projectId ?? scope.project}>
+        <ConsoleShellInner {...props} />
+      </InfraIncidentProvider>
       <ConsentHost />
     </IdentityProvider>
   );

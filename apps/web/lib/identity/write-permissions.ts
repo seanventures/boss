@@ -38,6 +38,7 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/infra-storage.ts#cleanNow": "autonomy:manage",               // POST /v1/infra/storage/clean
   "lib/infra-storage.ts#setRuleEnabled": "autonomy:manage",         // PUT /v1/infra/storage/rules
   "lib/infra-storage.ts#answerStorageDelete": "decision:approve",   // POST /v1/decisions/{id}/approve|reject (kind storage_delete)
+  "lib/infra-storage.ts#replanStorageStep": "autonomy:manage",      // POST /v1/infra/storage/incidents/{id}/replan
 
   // lib/agent-world.ts — an agent's persona, lifecycle, memories, persona test
   "lib/agent-world.ts#savePersona": "agent:update",               // PATCH /v1/agents/{role}

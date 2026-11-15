@@ -59,6 +59,9 @@ describe("the Storage card", () => {
     expect($('[data-testid="storage-card"]')!.dataset.tone).toBe("red");
     expect($('[data-testid="sc-alert"]')!.textContent).toContain("under the 15 % critical line");
     unmount();
+    await mount(<StorageCardView s={{ ...s, freePct: 15, freeGb: 72 }} projectId="p1" {...noop} />);
+    expect($('[data-testid="sc-alert"]')!.textContent).toContain("15 % free, at the 15 % critical line");
+    unmount();
     await mount(<StorageCardView s={{ ...s, freePct: 9, freeGb: 43 }} projectId="p1" {...noop} />);
     expect($('[data-testid="sc-alert"]')!.textContent).toContain("10 % hard floor");
     expect($('[data-testid="sc-alert"]')!.textContent).toContain("Builds and upgrades wait");
@@ -79,7 +82,7 @@ describe("the Storage card", () => {
     expect(onRule).toHaveBeenCalledWith(expect.objectContaining({ id: "r_backups", enabled: true }));
     await click($('[data-testid="sc-clean"]'));
     expect(onClean).toHaveBeenCalled();
-    expect($('[data-testid="sc-change-thresholds"]')!.getAttribute("href")).toContain("area=budget");
+    expect($('[data-testid="sc-thresholds-note"]')).not.toBeNull();
   });
 
   it("scales segments and lines to the disk", () => {

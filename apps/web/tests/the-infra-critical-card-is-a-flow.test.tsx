@@ -92,6 +92,9 @@ describe("the Command Center", () => {
     expect(card).toBeGreaterThan(0);
     expect(card).toBeLessThan(src.indexOf("{nowCards}"));
     expect(src).toMatch(/withInfraStatus\(statusOf\(/);
+    // The view's own field wins (contract §9); the shell's single poll is the fallback.
+    expect(src).toMatch(/view\?\.infraIncident/);
+    expect(codeOnly(join(__dirname, "../app/ConsoleShell.tsx"))).toContain("<InfraIncidentProvider");
     const ok = { paused: false, hidden: false, reachable: true, hostCritical: false, reduced: false };
     expect(motionOf(ok)).toBe("full");
     expect(motionOf({ ...ok, infraIncident: true })).toBe("none");

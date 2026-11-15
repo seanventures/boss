@@ -168,8 +168,12 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const hostCritical = !!view?.host.show && view.host.severity === "critical";
   // THE INFRA AGENT'S INCIDENT (BOSSAPP-1156): the critical card above the Now cards, the status
   // line says so (between budget_stopped and host_critical), and the page's motion stops.
+  // The view carries it (contract §9); an API without the field yet falls back to the shell's one
+  // poll of /incidents/current (useInfraIncident reads the shared provider, never a second poll).
   const infra = useInfraIncident(projectId);
-  const infraIncident = infra.incident && infra.incident.status !== "resolved" ? infra.incident : null;
+  const fromView = view?.infraIncident;
+  const open = fromView !== undefined ? fromView : infra.incident;
+  const infraIncident = open && open.status !== "resolved" ? open : null;
   const motion = motionOf({ paused: !live, hidden: !visible, reachable, hostCritical, reduced, infraIncident: !!infraIncident });
   const host = useHostAdvice(projectId, 60_000, view?.host ?? { show: false });
   const now = useNow(30_000);

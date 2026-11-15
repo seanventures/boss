@@ -25,7 +25,7 @@
  * that says so, so the screens can be walked against the wireframes before a host helper runs.
  * Always labelled "Sample data".
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { clampWords, type NodeType, type StripNode } from "./ambient";
 import type { Permission } from "./identity/permissions.gen";
@@ -472,8 +472,10 @@ export function withInfraStatus<S extends { key: string; text: string; tone: str
 const DEMO_KEY = "boss.infra_demo";
 const MODES = new Set<DemoMode>(["1", "asking", "resolved", "quiet"]);
 
-/** `?infra_demo=` wins; otherwise what this tab remembered. "" when off. */
+/** `?infra_demo=` wins; otherwise what this tab remembered. "" when off — and ALWAYS "" in a
+ *  production build: the sample never stands in for a real host there, and nothing is remembered. */
 export function infraDemoMode(search = typeof window === "undefined" ? "" : window.location.search): DemoMode | "" {
+  if (process.env.NODE_ENV === "production") return "";
   const q = new URLSearchParams(search).get("infra_demo");
   if (q !== null) {
     const mode = (q === "" ? "1" : q) as DemoMode;
@@ -518,9 +520,27 @@ export const storagePatch = (hostId?: string | null) => ({ area: "budget", tab: 
 
 export type IncidentState = { incident: StorageIncident | null; hold: HoldStatus | null; error: string | null; loading: boolean; refresh: () => void; sample: boolean };
 
+/** ONE POLL PER PAGE: the shell polls once and hands the answer down; every surface under it (the
+ *  strip, the Command Center card, Storage) reads the context instead of polling again. A
+ *  component mounted without the provider (a test, a page outside the shell) polls on its own. */
+const InfraIncidentContext = createContext<(IncidentState & { projectId: string | null }) | null>(null);
+
+export function InfraIncidentProvider({ projectId, children }: { projectId: string | null; children: React.ReactNode }) {
+  const state = usePolledIncident(projectId);
+  const value = useMemo(() => ({ ...state, projectId }), [state, projectId]);
+  return React.createElement(InfraIncidentContext.Provider, { value }, children);
+}
+
 /** The open storage incident, polled every 10 s (an SSE `storage.*` event restarts the poll
  *  through notifyChanged; lib/console-refresh.ts). `incident` is null when every host is fine. */
 export function useInfraIncident(projectId: string | null): IncidentState {
+  const shared = useContext(InfraIncidentContext);
+  // The shared poll serves the same project; a different project (or no provider) polls itself.
+  const own = usePolledIncident(shared && shared.projectId === projectId ? null : projectId);
+  return shared && shared.projectId === projectId ? shared : own;
+}
+
+function usePolledIncident(projectId: string | null): IncidentState {
   const demo = useDemoMode();
   const [tick, setTick] = useState(0);
   const polled = usePolled(projectId && !demo ? currentIncidentUrl(projectId) : null, parseCurrent, () => INCIDENT_POLL_MS);
@@ -533,10 +553,12 @@ export function useInfraIncident(projectId: string | null): IncidentState {
     return () => clearInterval(t);
   }, [demo]);
   const refresh = useCallback(() => { if (demo) setTick((n) => n + 1); else polled.refresh(); }, [demo, polled]);
-  if (demo) return { incident: openIncident(local), hold: local?.hold ?? null, error: null, loading: false, refresh, sample: true };
   // A 404 from an API without the router yet is "no incident", not an error strip.
   const missing = polled.error !== null && /404|405|not found/i.test(polled.error);
-  return { incident: openIncident(polled.data), hold: polled.data?.hold ?? null, error: missing ? null : polled.error, loading: polled.loading, refresh, sample: false };
+  return useMemo<IncidentState>(() => (demo
+    ? { incident: openIncident(local), hold: local?.hold ?? null, error: null, loading: false, refresh, sample: true }
+    : { incident: openIncident(polled.data), hold: polled.data?.hold ?? null, error: missing ? null : polled.error, loading: polled.loading, refresh, sample: false }),
+  [demo, local, polled.data, polled.error, polled.loading, missing, refresh]);
 }
 
 export type SummaryState = { summary: StorageSummary | null; error: string | null; loading: boolean; refresh: () => void; sample: boolean };
@@ -578,6 +600,7 @@ export const ACKNOWLEDGE_PERMISSION: Permission = "system:operate";
 export const CLEAN_PERMISSION: Permission = "autonomy:manage";
 export const RULES_PERMISSION: Permission = "autonomy:manage";
 export const STORAGE_DELETE_PERMISSION: Permission = "decision:approve";
+export const REPLAN_PERMISSION: Permission = "autonomy:manage";
 
 const sampleWrite = (): WriteResult => ({ ok: true, status: 200, body: { sample: true }, error: null });
 
@@ -600,15 +623,24 @@ export async function setRuleEnabled(rule: RetentionRule, enabled: boolean): Pro
                   { scope: `storage:rule:${rule.id}`, label: enabled ? "Turn on" : "Turn off" }, "PUT");
 }
 
-export type DeleteAnswer = { action: "approve"; makeRule: boolean; args: Record<string, string | number | boolean> | null } | { action: "reject"; note: string };
+/** "Keep 20 instead" (autonomy:manage, step-up): the tier 3 step is dry-run again with these
+ *  arguments and re-asked; the person then approves the NEW card. POST …/incidents/{id}/replan. */
+export async function replanStorageStep(incidentId: string, tool: string, args: Record<string, string | number | boolean>): Promise<WriteResult> {
+  if (infraDemoMode()) return sampleWrite();
+  return obsWrite(`/v1/infra/storage/incidents/${encodeURIComponent(incidentId)}/replan`, { tool, args },
+                  { scope: `storage:${incidentId}:replan`, label: "Re-plan" });
+}
+
+export type DeleteAnswer = { action: "approve"; makeRule: boolean } | { action: "reject"; note: string };
 
 /** The tier 3 card's one tap. Approve binds to the plan hash the dry run produced (an expired one
- *  is re-planned and re-asked by the API); `args` carries an alternative ("Keep 20 instead"). The
- *  person is the session's, never a literal actor (tests/agent-writes-carry-the-signed-in-actor). */
+ *  is re-planned and re-asked by the API) and carries `make_rule`. An alternative ("Keep 20
+ *  instead") is NOT an approve: it is `replanStorageStep`, after which the agent asks again with a
+ *  new card. The person is the session's, never a literal actor. */
 export async function answerStorageDelete(decisionId: string, _actor: string, ask: StorageAsk, answer: DeleteAnswer): Promise<WriteResult> {
   if (infraDemoMode()) return sampleWrite();
   if (answer.action === "approve") {
-    const body = { content_hash: ask.planHash, plan_hash: ask.planHash, make_rule: answer.makeRule, ...(answer.args ? { args: answer.args } : {}) };
+    const body = { content_hash: ask.planHash, plan_hash: ask.planHash, make_rule: answer.makeRule };
     return obsWrite(`/v1/decisions/${encodeURIComponent(decisionId)}/approve`, body, { scope: `decision:${decisionId}`, label: "Delete" });
   }
   return obsWrite(`/v1/decisions/${encodeURIComponent(decisionId)}/reject`, { note: answer.note }, { scope: `decision:${decisionId}`, label: "Not now" });

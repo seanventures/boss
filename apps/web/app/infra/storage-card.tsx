@@ -11,7 +11,7 @@
  * (docs/infra/INFRA_AGENT_API.md §4); hand-drawn SVG like observability/spark.tsx. Tokens only.
  */
 import React, { useId, useState } from "react";
-import { ArrowRight, Bell, Broom, Clock, Cpu, Database, HardDrives, Laptop, PencilSimple, Shield, TrendUp, Warning } from "@phosphor-icons/react";
+import { ArrowRight, Bell, Broom, Clock, Cpu, Database, HardDrives, Laptop, Shield, TrendUp, Warning } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import {
@@ -155,8 +155,8 @@ export function StorageCardView({ s, projectId, orgId, sample, pendingDecisionId
         <div className="sc-alert" role="status" data-tone={tone} data-testid="sc-alert">
           {tone === "red" ? <Warning size={14} weight="bold" aria-hidden /> : <Bell size={14} weight="bold" aria-hidden />}
           {atFloor ? <><b>{Math.round(s.freePct)} % free, at the {s.thresholds.floorPct} % hard floor.</b> Builds and upgrades wait until the Infra Agent frees space.</>
-            : tone === "red" ? <><b>{Math.round(s.freePct)} % free, under the {s.thresholds.criticalPct} % critical line.</b> The Infra Agent is on it; see the Command Center.</>
-            : <><b>{Math.round(s.freePct)} % free, under the {s.thresholds.warnPct} % notice.</b> The Infra Agent runs the safe cleanup early; nothing is paused.</>}
+            : tone === "red" ? <><b>{Math.round(s.freePct)} % free, {s.freePct < s.thresholds.criticalPct ? "under" : "at"} the {s.thresholds.criticalPct} % critical line.</b> The Infra Agent is on it; see the Command Center.</>
+            : <><b>{Math.round(s.freePct)} % free, {s.freePct < s.thresholds.warnPct ? "under" : "at"} the {s.thresholds.warnPct} % notice.</b> The Infra Agent runs the safe cleanup early; nothing is paused.</>}
           {pendingLink}
         </div>
       ) : pendingDecisionId ? (
@@ -215,8 +215,7 @@ export function StorageCardView({ s, projectId, orgId, sample, pendingDecisionId
           <span className="ia-chip" data-tone="red"><Shield size={11} aria-hidden />Hard floor {s.thresholds.floorPct} %</span>
           <span className="ia-chip" data-tone="green"><Broom size={11} aria-hidden />Resume at {s.thresholds.targetPct} %</span>
           <span className="sc-spacer" />
-          <StripLink patch={{ area: "budget", tab: "board", focus: "storage_thresholds", incident: null }} orgId={orgId} className="sc-link" testId="sc-change-thresholds">
-            <PencilSimple size={12} aria-hidden /> Change thresholds</StripLink>
+          <span className="sc-faint" data-testid="sc-thresholds-note" title="PUT /v1/infra/storage/rules carries thresholds; the editor is a follow-up (INFRA_CONSOLE_GAPS.md)">Set by the install</span>
         </div>
       </section>
 

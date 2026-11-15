@@ -82,6 +82,15 @@ describe("the storage incident wire", () => {
   });
 });
 
+describe("the Command Center view", () => {
+  it("carries infra_incident when the API sends it, and leaves it undefined when it does not", async () => {
+    const { parseCommandCenterView } = await import("../lib/command-center-view");
+    expect(parseCommandCenterView({ project_id: "p", infra_incident: { id: "si_1", status: "critical" } }).infraIncident?.id).toBe("si_1");
+    expect(parseCommandCenterView({ project_id: "p", infra_incident: null }).infraIncident).toBeNull();
+    expect(parseCommandCenterView({ project_id: "p" }).infraIncident).toBeUndefined();
+  });
+});
+
 describe("the tier 3 question", () => {
   it("is read from the decision's recommendation", () => {
     const ask = demoDecision("dec_storage_backups_1")!;

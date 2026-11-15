@@ -26,6 +26,9 @@ describe("the storage strip", () => {
     expect(strip.getAttribute("role")).toBe("alert");
     expect(strip.getAttribute("aria-live")).toBe("assertive");
     expect(strip.dataset.state).toBe("flashing");
+    // The figures that move with every poll do not re-announce.
+    expect($('[data-testid="infra-strip-sub"]')!.getAttribute("aria-live")).toBe("off");
+    expect($('[data-testid="infra-strip-meta"]')!.getAttribute("aria-live")).toBe("off");
     expect($('[data-testid="infra-strip-head"]')!.textContent).toBe("Storage critical on laptop-boss · Infra Agent is cleaning");
     expect($('[data-testid="infra-strip-sub"]')!.textContent).toContain("14 runs paused at a checkpoint");
     expect($('[data-testid="infra-strip-meta"]')!.textContent).toMatch(/GB freed/);
@@ -38,6 +41,11 @@ describe("the storage strip", () => {
     expect($('[data-testid="infra-strip-watch"]')!.getAttribute("href")).toContain("area=overview");
     // The pulse is on the dot, the strip's own class carries the ground pulse.
     expect(strip.querySelector(".ia-pulse")).not.toBeNull();
+  });
+
+  it("marks sample data inside the words, so the marker is on screen at every width", async () => {
+    await mount(<InfraStripBannerView incident={incident} actor="alice" acked={false} onAcknowledge={() => {}} busy={false} sample />);
+    expect($('[data-testid="infra-strip-head"] [data-testid="infra-strip-sample"]')).not.toBeNull();
   });
 
   it("shrinks to a quiet status line after Acknowledge and stays until the incident resolves", async () => {

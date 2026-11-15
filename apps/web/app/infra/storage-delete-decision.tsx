@@ -18,7 +18,7 @@ import { Archive, Database, HardDrives, Lock, Pause, Prohibit, Sparkle, Trash } 
 
 import { GatedButton } from "../../components/gated";
 import { CheckRow } from "../../components/form-kit";
-import { STORAGE_DELETE_PERMISSION, answerStorageDelete, clock, gb, parseAsk, useStorageAsk, type StorageAsk } from "../../lib/infra-storage";
+import { REPLAN_PERMISSION, STORAGE_DELETE_PERMISSION, answerStorageDelete, clock, gb, parseAsk, replanStorageStep, useStorageAsk, type StorageAsk } from "../../lib/infra-storage";
 import { AgentAvatar } from "../agent-avatar";
 import { useNow } from "../agents/live-util";
 import { showToast } from "../client-forms";
@@ -85,16 +85,30 @@ export function StorageDeleteDecision({ ask, projectId, actor, why, onAnswered, 
   const [makeRule, setMakeRule] = useState<boolean>(!!ask.rule && ask.rule.preticked);
   const now = useNow(30_000);
   const [busy, setBusy] = useState<string | null>(null);
-  const [done, setDone] = useState<"approved" | "rejected" | null>(null);
+  const [done, setDone] = useState<"approved" | "rejected" | "replanned" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const send = async (which: "delete" | "later" | number) => {
+  // An alternative re-plans the step (a new dry run, a NEW card to approve); it never approves.
+  const replan = async (i: number) => {
+    if (busy || !ask.incidentId) return;
+    const alt = ask.alternatives[i];
+    setBusy(`alt-${i}`);
+    setError(null);
+    const r = await replanStorageStep(ask.incidentId, ask.tool, { ...ask.args, ...alt.args });
+    setBusy(null);
+    if (!r.ok) { setError(r.error ?? "Not re-planned."); return; }
+    setDone("replanned");
+    showToast("success", `${alt.label}: the Infra Agent is counting again and will ask with the new list`);
+    notifyChanged("decisions", { decision_id: ask.decisionId });
+  };
+
+  const send = async (which: "delete" | "later") => {
     if (busy) return;
-    setBusy(String(which));
+    setBusy(which);
     setError(null);
     const r = which === "later"
       ? await answerStorageDelete(ask.decisionId, actor, ask, { action: "reject", note: "Not now · ask again in 1 h" })
-      : await answerStorageDelete(ask.decisionId, actor, ask, { action: "approve", makeRule, args: typeof which === "number" ? ask.alternatives[which].args : null });
+      : await answerStorageDelete(ask.decisionId, actor, ask, { action: "approve", makeRule });
     setBusy(null);
     if (!r.ok) { setError(r.error ?? "Not sent."); return; }
     const what = which === "later" ? "rejected" : "approved";
@@ -106,8 +120,10 @@ export function StorageDeleteDecision({ ask, projectId, actor, why, onAnswered, 
 
   if (done) {
     return (
-      <div className="sdd-said" data-testid="sdd-said" role="status">
-        {done === "approved" ? `Approved${makeRule ? " · the rule is now Layer 1, automatic from now on" : ""}. Work resumes when free space is back above ${ask.targetPct} %.` : "Not now. Runs stay paused; the Infra Agent asks again in 1 h or if space falls further."}
+      <div className="sdd-said" data-testid="sdd-said" role="status" data-done={done}>
+        {done === "approved" ? `Approved${makeRule ? " · the rule is now Layer 1, automatic from now on" : ""}. Work resumes when free space is back above ${ask.targetPct} %.`
+          : done === "replanned" ? "Re-planning. The Infra Agent runs the dry run again with your numbers and asks once more, with the new list; runs stay paused until then."
+          : "Not now. Runs stay paused; the Infra Agent asks again in 1 h or if space falls further."}
       </div>
     );
   }
@@ -189,15 +205,16 @@ export function StorageDeleteDecision({ ask, projectId, actor, why, onAnswered, 
                        disabled={busy !== null} onClick={() => void send("delete")} title="Deletes exactly the list above. Logged with your name.">
             <Trash size={14} weight="bold" aria-hidden /> {deleteLabel(ask)}
           </GatedButton>
-          {ask.alternatives.map((alt, i) => (
-            <GatedButton key={alt.label} permission={STORAGE_DELETE_PERMISSION} projectId={projectId} className="sdd-btn" data-testid="sdd-alternative"
-                         disabled={busy !== null} onClick={() => void send(i)}
-                         title={`Re-plans with ${Object.entries(alt.args).map(([k, v]) => `${k} = ${String(v)}`).join(", ")}, then deletes the rest`}>
+          {/* Alternatives need the incident to re-plan against; a card without one offers none. */}
+          {ask.incidentId ? ask.alternatives.map((alt, i) => (
+            <GatedButton key={alt.label} permission={REPLAN_PERMISSION} projectId={projectId} className="sdd-btn" data-testid="sdd-alternative"
+                         disabled={busy !== null} onClick={() => void replan(i)}
+                         title={`Re-plans with ${Object.entries(alt.args).map(([k, v]) => `${k} = ${String(v)}`).join(", ")}: a new dry run, then a new card to approve`}>
               {alt.label}
             </GatedButton>
-          ))}
-          <button type="button" className="sdd-btn" data-testid="sdd-later" disabled={busy !== null} onClick={() => void send("later")}
-                  title="Runs stay paused. The Infra Agent asks again in 1 h or if space falls further.">Not now</button>
+          )) : null}
+          <GatedButton permission={STORAGE_DELETE_PERMISSION} projectId={projectId} className="sdd-btn" data-testid="sdd-later" disabled={busy !== null} onClick={() => void send("later")}
+                       title="Runs stay paused. The Infra Agent asks again in 1 h or if space falls further.">Not now</GatedButton>
           <span className="sdd-foot"><Lock size={11} aria-hidden /> Logged with your name · passkey step-up</span>
         </div>
         {error ? <div className="fk-err" role="alert" data-testid="sdd-error">{error}</div> : null}
