@@ -231,6 +231,24 @@ def _resolve_issuer(body: ProviderBody) -> Optional[str]:
     return sso_oidc.normalize_issuer(body.issuer) if body.protocol == "oidc" else body.issuer
 
 
+def _certificates_parse(pems: list[str]) -> bool:
+    """Every certificate is an X.509 certificate (PEM; a bare base64 body is accepted, as IdPs
+    show it that way). Used by the dry-run Test only; saving keeps its own checks."""
+    from cryptography import x509
+
+    for pem in pems:
+        body = (pem or "").strip()
+        if not body:
+            return False
+        if "-----BEGIN" not in body:
+            body = "-----BEGIN CERTIFICATE-----\n" + "".join(body.split()) + "\n-----END CERTIFICATE-----"
+        try:
+            x509.load_pem_x509_certificate(body.encode("ascii"))
+        except (ValueError, UnicodeEncodeError):
+            return False
+    return True
+
+
 def _preset_defaults(body: ProviderBody, issuer: Optional[str]) -> tuple[list[str], Optional[str]]:
     """The scopes and groups claim a preset fills in when the admin left them blank (Okta:
     openid email profile groups on the org server, groups claim `groups`)."""
@@ -679,6 +697,49 @@ def build_identity_sso_router() -> APIRouter:
                 emit(db, org_id=provider.org_id, event_type="sso.provider.deleted", outcome=Outcome.SUCCESS,
                      ctx=ctx, target_type="identity_provider", target_id=provider_id)
                 return JSONResponse({"deleted": True})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.post("/v1/identity/providers/test")
+    @permit(P.IDENTITY_PROVIDER_MANAGE)
+    def test_draft_provider(body: ProviderBody, request: Request):
+        """TEST BEFORE ADDING (a dry run): the Add form's values, checked the way Test checks a
+        saved provider — OIDC: the issuer's discovery document and its signing keys; SAML: an
+        https sign-in URL and a certificate that parses. Nothing is stored, no secret is read
+        or kept, and nothing is audited as a change. Okta setup used to offer Test only after
+        Add provider (BOSSAPP-1048)."""
+        try:
+            with begin() as db:
+                current_context(request, db)       # the caller must be a signed-in admin
+            try:
+                issuer = _resolve_issuer(body)
+            except ValueError as exc:
+                return JSONResponse({"ok": False, "error": "invalid_provider", "detail": str(exc)})
+            if body.protocol == "saml":
+                if not (body.saml_sso_url or "").startswith("https://"):
+                    return JSONResponse({"ok": False, "error": "invalid_provider",
+                                         "detail": "SAML needs an https sign-in URL"})
+                if not body.saml_certificates or not _certificates_parse(body.saml_certificates):
+                    return JSONResponse({"ok": False, "error": "invalid_provider",
+                                         "detail": "SAML needs the IdP's signing certificate (PEM)"})
+                return JSONResponse({"ok": True, "checked": "configuration"})
+            draft = sso_oidc.Provider(
+                id="idp_draft", org_id="", protocol=body.protocol, preset=body.preset,
+                name=body.name, issuer=issuer, client_id=body.client_id,
+                client_secret_vault_item_id=None, scopes=tuple(body.scopes), allowed_algs=(),
+                saml_sp_entity_id=None, saml_certificates=(), domains=(), jit_mode="off",
+                trust_idp_mfa=False, enforce_sso=False, groups_claim=None, status="disabled")
+            # Its own caches for the one call: a dry run of an arbitrary issuer must neither read
+            # a stale answer from a saved provider's cache nor leave a key in it (unbounded keys).
+            with sso_oidc.isolated_caches():
+                try:
+                    doc = sso_oidc.discovery(draft)
+                    if body.protocol == "oidc":
+                        sso_oidc._jwks(doc["jwks_uri"])
+                except SsoError as exc:
+                    return JSONResponse({"ok": False, "error": exc.code})
+            return JSONResponse({"ok": True, "checked": "discovery" if body.protocol == "oidc" else "preset",
+                                 "issuer": issuer})
         except AuthnError as exc:
             return refusal(exc)
 

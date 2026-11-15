@@ -1091,6 +1091,7 @@
 "DELETE /v1/identity/projects/{project_id}/role-bindings/{binding_id}": ["permit role_binding:assign @ project(path=project_id)", "OA"]
 "GET /v1/identity/providers": ["permit identity_provider:read @ org", "OAU"]
 "POST /v1/identity/providers": ["permit identity_provider:manage @ org", "O"]
+"POST /v1/identity/providers/test": ["permit identity_provider:manage @ org", "O"]
 "DELETE /v1/identity/providers/{provider_id}": ["permit identity_provider:manage @ org", "O"]
 "GET /v1/identity/providers/{provider_id}": ["permit identity_provider:read @ org", "OAU"]
 "PATCH /v1/identity/providers/{provider_id}": ["permit identity_provider:manage @ org", "O"]

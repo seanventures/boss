@@ -26,7 +26,9 @@
 
 .tk-log { display: flex; flex-direction: column; gap: 6px; }
 .tk-log ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
-.tk-log li { display: grid; grid-template-columns: 3.2rem minmax(0, 1fr); gap: 8px; overflow-wrap: anywhere; }
+.tk-log li { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px; overflow-wrap: anywhere; }
+/* The time never wraps: a 12-hour "06:07 PM" broke over two lines in a 3.2rem column. */
+.tk-log li > .tk-mono-text { white-space: nowrap; }
 .tk-log li[data-status="failed"] { color: var(--red); }
 .tk-log-why { color: var(--red); }
 .tk-log p { margin: 0; }

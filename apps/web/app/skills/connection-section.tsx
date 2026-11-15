@@ -125,10 +125,10 @@ export function ConnectionSection(props: {
   return (
     <div className="kit-conn-tickets" data-testid="kit-conn-tickets">
       <div className="kit-row" data-testid="kit-conn-tickets-setup">
-        <span>Ticket systems live in Setup</span>
+        <span>Ticket systems live in Repo and models</span>
         <a className="kit-btn kit-btn-primary kit-btn-sm" href={`?area=setup&focus=ticket_systems&project_id=${encodeURIComponent(props.projectId)}`}
            data-tip="Jira, Plane, GitHub Issues, Linear, Azure DevOps: sign-in, which tickets go where, what BOSS writes back"
-           data-testid="kit-conn-tickets-open">Open Setup › Ticket systems <ArrowSquareOut size={12} /></a>
+           data-testid="kit-conn-tickets-open">Open Repo and models › Ticket systems <ArrowSquareOut size={12} /></a>
       </div>
       <details className="kit-conn-fold" data-testid="kit-conn-tickets-fold">
         <summary>Connect from here instead</summary>

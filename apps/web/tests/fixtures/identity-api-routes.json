@@ -161,6 +161,7 @@
   "DELETE /v1/identity/projects/{project_id}/role-bindings/{binding_id}",
   "GET /v1/identity/providers",
   "POST /v1/identity/providers",
+  "POST /v1/identity/providers/test",
   "DELETE /v1/identity/providers/{provider_id}",
   "GET /v1/identity/providers/{provider_id}",
   "PATCH /v1/identity/providers/{provider_id}",

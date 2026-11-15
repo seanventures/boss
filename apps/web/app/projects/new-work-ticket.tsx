@@ -11,7 +11,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CheckCircle, MagnifyingGlass } from "@phosphor-icons/react";
 
-import { TYPE_WORDS, readResolve, workflowFor, type Ticket, type TypedError } from "../../lib/tickets";
+import { TYPE_WORDS, readConnections, readResolve, workflowFor, type Ticket, type TypedError } from "../../lib/tickets";
 import { TicketCard, TkReadState, WorkflowPick } from "../tickets/ticket-parts";
 import "../tickets/ticket-run.css";
 
@@ -77,8 +77,23 @@ export function NewWorkTicket({ resolved, workflow, onWorkflow }: {
   );
 }
 
+/** "Browse Jira" when the project has one connected ticket system, "Browse tickets" otherwise. */
+export function browseWords(labels: readonly string[]): string {
+  return labels.length === 1 ? `Browse ${labels[0]}` : "Browse tickets";
+}
+
 /** "BOSS recognises: LEND-142 · …/browse/LEND-142 · #311" and the way to browse instead. */
-export function RecognisesLine({ onBrowse }: { onBrowse: () => void }) {
+export function RecognisesLine({ onBrowse, projectId }: { onBrowse: () => void; projectId?: string }) {
+  // The setup guide says "Browse Jira": name the system when there is exactly one.
+  const [labels, setLabels] = useState<string[]>([]);
+  useEffect(() => {
+    if (projectId === undefined || projectId === "") return;
+    let alive = true;
+    void readConnections(projectId).then((r) => {
+      if (alive && r.ok) setLabels(r.data.filter((c) => c.status === "connected" && c.capabilities.browse !== false).map((c) => c.label));
+    });
+    return () => { alive = false; };
+  }, [projectId]);
   return (
     <p className="tk-recog" data-testid="px-nw-recognises">
       <span>BOSS recognises</span>
@@ -86,7 +101,7 @@ export function RecognisesLine({ onBrowse }: { onBrowse: () => void }) {
       <span className="tk-spacer" />
       <button type="button" className="tk-linkbtn" onClick={onBrowse} data-testid="px-nw-browse"
               title="Browse your ticket system's projects and epics, and import from there">
-        <MagnifyingGlass size={12} aria-hidden /> Don&apos;t know the key? Browse tickets</button>
+        <MagnifyingGlass size={12} aria-hidden /> Don&apos;t know the key? {browseWords(labels)}</button>
     </p>
   );
 }
