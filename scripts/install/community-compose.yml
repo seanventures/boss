@@ -1176,12 +1176,9 @@ services:
     volumes:
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_identity:/var/lib/boss/identity:ro
-    # P8 log caps: a streaming service logs per call; never let its log fill the disk.
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
+    # P8 log caps: a streaming service logs per call; never let its log fill the disk. The same
+    # cap as every other service (BOSSAPP-1191), so one setting governs them all.
+    logging: *boss-logging
     healthcheck:
       test:
         - CMD
@@ -1304,6 +1301,19 @@ services:
     ports:
       - "127.0.0.1:${BOSS_WEB_PORT:-3000}:3000"
 
+# VOLUME LABELS (BOSSAPP-1193). The Infra Agent's host helper (scripts/install/steward.py) removes
+# an orphan volume only when it carries `boss.install_id` = this install AND a REBUILDABLE
+# `boss.kind` (test, cache, scratch, build). So:
+#   * a REBUILDABLE volume below carries both labels: losing it costs a rebuild, never data;
+#   * a DATA volume (the database, uploads, repos, backups, credentials, anything a person made)
+#     carries NO boss.* labels on purpose, so no job can ever name it. Compose (2.3x and later)
+#     hashes a volume's labels and, when they change on an existing volume, asks "Recreate (data
+#     will be lost)?" on a terminal; adding a label to the live database's volume would put that
+#     question to an operator on every upgrade. Unlabelled is never removable, which is the point.
+# A label change on an existing volume needs the volume recreated: `steward.py --relabel-volumes`
+# (run by upgrade.sh and `boss dev up`) does that for the rebuildable ones below when nothing uses
+# them, and the helper reports any it could not as "unlabelled BOSS volume — needs relabel".
+# steward.REBUILDABLE_COMPOSE_VOLUMES lists the rebuildable ones; a guard test keeps both equal.
 volumes:
   boss_community_cli_home:
   boss_community_build_services_secret:
@@ -1318,12 +1328,18 @@ volumes:
       owner: boss
       kind: test
       ttl: 24h
+      boss.install_id: ${BOSS_INSTALL_ID:-}
+      boss.kind: test
   boss_community_prometheus:
   boss_community_grafana:
   boss_community_grafana_dashboards:
   boss_community_artifacts:
   boss_community_identity:
+  # Per-project Maven/Gradle downloads: a cache, refilled by the next build that needs it.
   boss_community_toolchain_cache:
+    labels:
+      boss.install_id: ${BOSS_INSTALL_ID:-}
+      boss.kind: cache
   # Project toolchain images pushed by Capture (the `toolchains` profile's registry).
   boss_community_toolchain_registry:
   # Local projects' bare repositories and GitHub mirrors: their only copy until published.

@@ -32,7 +32,11 @@ def database():
     docker('image', 'inspect', 'postgres:16-alpine')  # no network pull
     name = 'bossfinance' + uuid.uuid4().hex[:10]
     volume = name + '-data'
-    docker('volume', 'create', '--label', 'boss.qualification=' + name, volume)
+    # A test volume: rebuildable, so the Infra Agent may remove it if this run dies before its
+    # teardown (BOSSAPP-1193); it is ours only on an install whose id is in the environment.
+    docker('volume', 'create', '--label', 'boss.qualification=' + name, '--label', 'boss.kind=test',
+           *(['--label', 'boss.install_id=' + os.environ['BOSS_INSTALL_ID']]
+             if os.environ.get('BOSS_INSTALL_ID') else []), volume)
     engine = None
     resource = None
     try:

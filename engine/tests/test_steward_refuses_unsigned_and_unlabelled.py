@@ -70,27 +70,52 @@ def _job(priv, env, verb, args, *, host_id=None, expires_in=600, key_id="k1", ta
 
 
 class FakeDocker:
-    """`docker` as the steward drives it: images/volumes with labels; rm records what went."""
+    """`docker` as the steward drives it: images/volumes with labels (and sizes only `system df
+    -v` knows, as on a real daemon), containers that use volumes; rm records what went."""
 
-    def __init__(self, images, volumes):
+    def __init__(self, images, volumes, containers=None):
         self.images, self.volumes, self.removed = images, volumes, []
+        self.containers = containers or []   # {"id", "name", "state", "volumes", "labels"}
+        self.on_call = None                  # a test's hook, called with argv before each answer
+
+    @staticmethod
+    def _label_filters(a):
+        return [a[i + 1][len("label="):].partition("=") for i, x in enumerate(a)
+                if x == "--filter" and i + 1 < len(a) and a[i + 1].startswith("label=")]
 
     def __call__(self, argv, timeout=120.0):
+        if self.on_call:
+            self.on_call(argv)
         a = argv[1:]
-        out = ""
+        out, rc = "", 0
         if a[:1] == ["images"]:
             label = next((x.split("=", 2)[2] for x in a if x.startswith("label=")), None)
             rows = [i for i in self.images if label is None or i["labels"].get("boss.install_id") == label]
             out = "\n".join(json.dumps({"Repository": i["repo"], "Tag": i["tag"], "ID": i["id"], "Size": i["size"]}) for i in rows)
         elif a[:2] == ["volume", "ls"]:
-            label = next((x.split("=", 2)[2] for x in a if x.startswith("label=")), None)
-            rows = [v for v in self.volumes if label is None or v["labels"].get("boss.install_id") == label]
-            out = "\n".join(json.dumps({"Name": v["name"], "Size": "1GB"}) for v in rows)
+            rows = [v for v in self.volumes
+                    if all(v["labels"].get(k) == val for k, _, val in self._label_filters(a))
+                    and ("dangling=true" not in a or not any(v["name"] in c["volumes"] for c in self.containers))]
+            # a real `docker volume ls` prints "N/A" for the size
+            out = "\n".join(json.dumps({"Name": v["name"], "Size": "N/A",
+                                        "Labels": ",".join(f"{k}={x}" for k, x in v["labels"].items())})
+                            for v in rows)
         elif a[:2] == ["volume", "inspect"]:
             name = a[-1]
             v = next(v for v in self.volumes if v["name"] == name)
             # {{index .Labels "<key>"}} reads that label; {{.CreatedAt}} the birth
             out = v["labels"].get(a[3].split('"')[1], "") if "Labels" in a[3] else v["created"]
+        elif a[:2] == ["system", "df"] and "-v" in a:
+            out = json.dumps({"Images": [], "Containers": [], "BuildCache": [],
+                              "Volumes": [{"Name": v["name"], "Size": v.get("size", "1GB")} for v in self.volumes]})
+        elif a[:1] == ["ps"] and any(x.startswith("volume=") for x in a):
+            vol = next(x for x in a if x.startswith("volume="))[len("volume="):]
+            out = "\n".join(json.dumps({"ID": c["id"], "Names": c["name"], "State": c["state"],
+                                        "Labels": ",".join(f"{k}={x}" for k, x in c["labels"].items())})
+                            for c in self.containers if vol in c["volumes"])
+        elif a[:1] == ["rm"]:
+            self.removed.append(("container", a[-1]))
+            self.containers = [c for c in self.containers if c["id"] != a[-1]]
         elif a[:2] == ["image", "inspect"]:
             ref = a[-1]
             i = next((i for i in self.images if f"{i['repo']}:{i['tag']}" == ref or i["id"] == ref), None)
@@ -98,7 +123,11 @@ class FakeDocker:
         elif a[:1] == ["ps"]:
             out = "boss-community-api:v1"
         elif a[:2] == ["volume", "rm"]:
-            self.removed.append(("volume", a[-1]))
+            if any(a[-1] in c["volumes"] for c in self.containers):
+                rc = 1     # Docker refuses to remove a volume a container still references
+            else:
+                self.removed.append(("volume", a[-1]))
+                self.volumes = [v for v in self.volumes if v["name"] != a[-1]]
         elif a[:1] == ["rmi"]:
             self.removed.append(("image", a[-1]))
         elif a[:2] == ["system", "df"]:
@@ -107,7 +136,7 @@ class FakeDocker:
                 {"Type": "Build Cache", "Size": "18GB", "Reclaimable": "18GB"},
                 {"Type": "Local Volumes", "Size": "4GB", "Reclaimable": "4GB"},
                 {"Type": "Containers", "Size": "600MB", "Reclaimable": "0B"}])
-        return subprocess.CompletedProcess(argv, 0, out, "")
+        return subprocess.CompletedProcess(argv, rc, out, "")
 
 
 @pytest.fixture()
@@ -119,7 +148,8 @@ def docker():
                 {"repo": "boss-community-api", "tag": "v0", "id": "sha3", "size": "5GB", "labels": {"boss.install_id": "inst_abc"}},
                 {"repo": "wordpress", "tag": "latest", "id": "sha4", "size": "1GB", "labels": {}},
                 {"repo": "boss-community-api", "tag": "v-other", "id": "sha5", "size": "5GB", "labels": {"boss.install_id": "inst_other"}}],
-        volumes=[{"name": "boss_tmp_1", "labels": {"boss.install_id": "inst_abc", "boss.kind": "test"}, "created": old},
+        volumes=[{"name": "boss_tmp_1", "labels": {"boss.install_id": "inst_abc", "boss.kind": "test"}, "created": old,
+                  "size": "2.5GB"},
                  # ours, but a DATA volume (a stopped preview's database) and one with no kind
                  {"name": "boss_preview_pgdata", "labels": {"boss.install_id": "inst_abc", "boss.kind": "data"},
                   "created": old},
@@ -190,20 +220,169 @@ def test_helper_label_gate_volumes(env, keypair, docker):
 def test_a_labelled_data_volume_is_never_removed_even_when_a_job_names_it(env, keypair, docker):
     """ST-14: the install label says WHOSE a volume is; `boss.kind` says WHAT it holds. A data
     volume (or one with no kind) left dangling — a stopped preview's database, an install brought
-    down for a day — is irreversible: not a candidate, and a real run re-reads the labels, so one
-    whose kind changed after the dry run is refused, not removed."""
+    down for a day — is irreversible: not a candidate, and a real run re-reads the labels at the
+    moment of removal, so one whose kind changed after the plan was checked is left alone."""
     priv, pub = keypair
+    args = {"install_id": "inst_abc", "dry_run": True, "older_than_hours": 24}
+    dry = steward.perform(env, _job(priv, env, "remove_orphan_volumes", args), pub, runner=docker)
+    assert dry["items"] == ["boss_tmp_1"]
+    assert "boss_preview_pgdata" not in dry["items"] and "boss_unkinded" not in dry["items"]
+
+    # How many times one plan reads boss_tmp_1's kind: the real run plans twice (the plan-hash
+    # check, then the verb's own list) and then reads it once more, just before `volume rm`.
+    reads = []
+
+    def count(argv):
+        if argv[1:3] == ["volume", "inspect"] and "boss.kind" in argv[4] and argv[-1] == "boss_tmp_1":
+            reads.append(1)
+
+    docker.on_call = count
+    steward.verb_remove_orphan_volumes(env, args, dry_run=True, runner=docker)
+    per_plan = len(reads)
+    assert per_plan >= 1
+
+    # The kind flips to data AFTER both plans have read it (so the plan hash still matches) and
+    # BEFORE the removal-time re-check: only that re-check can stop the removal.
+    reads.clear()
+
+    def flip_after_planning(argv):
+        # the first docker call after both plans' last read of the kind (its answer was "test")
+        if len(reads) == 2 * per_plan and docker.volumes[0]["labels"]["boss.kind"] == "test":
+            docker.volumes[0]["labels"]["boss.kind"] = "data"
+        count(argv)
+
+    docker.on_call = flip_after_planning
+    out = steward.perform(env, _job(priv, env, "remove_orphan_volumes",
+                                    {**args, "dry_run": False, "plan_hash": dry["plan_hash"]}), pub, runner=docker)
+    assert out["ok"], out              # the plan-hash check passed: the plans saw kind=test
+    assert len(reads) == 2 * per_plan + 1, "the real run re-read the kind once more, at removal"
+    assert out["items"] == [] and out["bytes"] == 0
+    assert docker.removed == [], "the removal-time re-check refused the volume that turned into data"
+
+
+def test_a_preview_volume_is_not_rebuildable(env, keypair, docker):
+    """A preview runs the app's own database; a reviewer may have typed data into it. Labelled
+    boss.kind=preview, dangling and old, it is still never a candidate (BOSSAPP-1193)."""
+    priv, pub = keypair
+    old = datetime(2026, 11, 1, tzinfo=timezone.utc).isoformat()
+    docker.volumes.append({"name": "boss_preview_app_db", "created": old,
+                           "labels": {"boss.install_id": "inst_abc", "boss.kind": "preview"}})
     dry = steward.perform(env, _job(priv, env, "remove_orphan_volumes",
                                     {"install_id": "inst_abc", "dry_run": True, "older_than_hours": 24}), pub, runner=docker)
-    assert "boss_preview_pgdata" not in dry["items"] and "boss_unkinded" not in dry["items"]
-    # the kind flips to data after the dry run: the real run re-reads it and refuses
-    docker.volumes[0]["labels"]["boss.kind"] = "data"
-    out = steward.perform(env, _job(priv, env, "remove_orphan_volumes",
-                                    {"install_id": "inst_abc", "dry_run": False, "older_than_hours": 24,
-                                     "plan_hash": dry["plan_hash"]}), pub, runner=docker)
-    assert not out["ok"] and "changed since the dry run" in out["error"]
+    assert dry["items"] == ["boss_tmp_1"]
+    real = steward.perform(env, _job(priv, env, "remove_orphan_volumes",
+                                     {"install_id": "inst_abc", "dry_run": False, "older_than_hours": 24,
+                                      "plan_hash": dry["plan_hash"]}), pub, runner=docker)
+    assert ("volume", "boss_preview_app_db") not in docker.removed
+
+
+def test_orphan_volume_sizes_are_measured_so_planned_and_freed_bytes_are_real(env, keypair, docker):
+    """`docker volume ls` prints no size: the dry run's bytes and the freed bytes come from
+    `docker system df -v`, measured before removal (the job used to report 0 GB freed)."""
+    priv, pub = keypair
+    args = {"install_id": "inst_abc", "dry_run": True, "older_than_hours": 24}
+    dry = steward.perform(env, _job(priv, env, "remove_orphan_volumes", args), pub, runner=docker)
+    assert dry["items"] == ["boss_tmp_1"] and dry["bytes"] == int(2.5e9)
+    real = steward.perform(env, _job(priv, env, "remove_orphan_volumes",
+                                     {**args, "dry_run": False, "plan_hash": dry["plan_hash"]}), pub, runner=docker)
+    assert real["ok"] and real["items"] == ["boss_tmp_1"] and real["bytes"] == int(2.5e9)
+    # the reading: what a job could really free, not every volume on the disk
+    docker.volumes.append({"name": "boss_tmp_2", "created": datetime(2026, 11, 1, tzinfo=timezone.utc).isoformat(),
+                           "size": "1.5GB", "labels": {"boss.install_id": "inst_abc", "boss.kind": "cache"}})
+    sample = steward.collect(env, runner=docker)
+    assert sample["volumes_gb"] == 4.0, "the disk figure stays the whole of Docker's volumes"
+    assert sample["by_type"]["volumes_reclaimable"] == 1.5
+
+
+def _compose_volume(name, key, labels=None, created=None):
+    base = {"com.docker.compose.project": "boss-community", "com.docker.compose.volume": key}
+    return {"name": name, "created": created or datetime(2026, 11, 1, tzinfo=timezone.utc).isoformat(),
+            "labels": {**base, **(labels or {})}}
+
+
+def test_an_unlabelled_boss_volume_is_reported_not_ignored(env, keypair, docker):
+    """A rebuildable BOSS volume made before the labels existed cannot be judged: the dry run
+    names it as needing a relabel (never an item), and the reading counts it. Data volumes of the
+    same project are neither items nor reported."""
+    priv, pub = keypair
+    docker.volumes += [
+        _compose_volume("boss-community_boss_community_pg_test", "boss_community_pg_test",
+                        {"owner": "boss", "kind": "test"}),
+        _compose_volume("boss-community_boss_community_pg", "boss_community_pg"),
+        _compose_volume("boss-community_boss_community_toolchain_cache", "boss_community_toolchain_cache",
+                        {"boss.install_id": "inst_abc", "boss.kind": "cache"}),
+    ]
+    dry = steward.perform(env, _job(priv, env, "remove_orphan_volumes",
+                                    {"install_id": "inst_abc", "dry_run": True, "older_than_hours": 24}), pub, runner=docker)
+    # the labelled, dangling cache volume is a candidate; the unlabelled test one and data are not
+    assert sorted(dry["items"]) == ["boss-community_boss_community_toolchain_cache", "boss_tmp_1"]
+    assert dry["needs_relabel"] == ["boss-community_boss_community_pg_test"]
+    assert steward.collect(env, runner=docker)["by_type"]["volumes_needs_relabel_n"] == 1.0
+    assert steward.NEEDS_RELABEL == "unlabelled BOSS volume — needs relabel"
+
+
+def test_relabel_recreates_only_unused_rebuildable_boss_volumes(env, docker):
+    """THE UPGRADE STEP: Docker cannot relabel a volume, so an unlabelled REBUILDABLE BOSS volume
+    is removed when nothing uses it and Compose recreates it labelled. A running user, a container
+    outside BOSS, or a BOSS service Compose would not recreate keeps it, reported. A data volume
+    is never touched, whatever its labels."""
+    docker.volumes += [
+        _compose_volume("boss-community_boss_community_pg_test", "boss_community_pg_test", {"kind": "test"}),
+        _compose_volume("boss-community_boss_community_toolchain_cache", "boss_community_toolchain_cache"),
+        _compose_volume("boss-community_boss_community_pg", "boss_community_pg"),
+        _compose_volume("boss-community_boss_community_backups", "boss_community_backups"),
+    ]
+    boss = {"com.docker.compose.project": "boss-community"}
+    docker.containers = [
+        # db-test stopped: Compose recreates it on `boss dev up`, so it may go with its volume
+        {"id": "c-dbtest", "name": "boss-community-db-test-1", "state": "exited",
+         "volumes": ["boss-community_boss_community_pg_test"], "labels": {**boss, "com.docker.compose.service": "db-test"}},
+        # the API runs with the toolchain cache mounted: in use, left alone
+        {"id": "c-api", "name": "boss-community-api-1", "state": "running",
+         "volumes": ["boss-community_boss_community_toolchain_cache", "boss-community_boss_community_pg"],
+         "labels": {**boss, "com.docker.compose.service": "api"}},
+    ]
+    seen = steward.relabel_volumes(env, docker, apply=False)
+    assert {r["volume"]: r["action"] for r in seen} == {
+        "boss-community_boss_community_pg_test": "would_relabel",
+        "boss-community_boss_community_toolchain_cache": "skipped"}
+    assert docker.removed == [], "a dry run changes nothing"
+
+    done = {r["volume"]: r for r in steward.relabel_volumes(env, docker)}
+    assert done["boss-community_boss_community_pg_test"]["action"] == "relabelled"
+    assert done["boss-community_boss_community_toolchain_cache"]["action"] == "skipped"
+    assert steward.NEEDS_RELABEL in done["boss-community_boss_community_toolchain_cache"]["reason"]
+    assert "boss-community-api-1" in done["boss-community_boss_community_toolchain_cache"]["reason"]
+    assert docker.removed == [("container", "c-dbtest"), ("volume", "boss-community_boss_community_pg_test")]
+    names = {v["name"] for v in docker.volumes}
+    assert {"boss-community_boss_community_pg", "boss-community_boss_community_backups",
+            "boss-community_boss_community_toolchain_cache"} <= names, "data and in-use volumes stay"
+
+    # a stopped container outside BOSS holding the cache: still not ours to remove
+    docker.containers = [{"id": "c-x", "name": "someones-tool", "state": "exited",
+                          "volumes": ["boss-community_boss_community_toolchain_cache"], "labels": {}}]
+    again = {r["volume"]: r for r in steward.relabel_volumes(env, docker)}
+    assert again["boss-community_boss_community_toolchain_cache"]["action"] == "skipped"
+    assert "someones-tool" in again["boss-community_boss_community_toolchain_cache"]["reason"]
+    assert ("container", "c-x") not in docker.removed
+
+    # no install id: nothing is recreated (it would come back labelled with nothing)
+    env.install_id = ""
+    assert steward.relabel_volumes(env, docker)[0]["action"] == "skipped"
+
+
+def test_relabel_volumes_from_the_command_line(env, docker, monkeypatch, capsys):
+    """What upgrade.sh and `boss dev up` run; --dry-run says what would change and changes nothing."""
+    docker.volumes.append(_compose_volume("boss-community_boss_community_pg_test", "boss_community_pg_test"))
+    monkeypatch.setattr(steward, "run_cmd", docker)
+    monkeypatch.setenv("BOSS_STEWARD_STATE", str(env.state_dir))   # never the laptop's ~/.boss
+    argv = ["--install-dir", str(env.install_dir), "--backup-dir", str(env.backup_root), "--relabel-volumes"]
+    assert steward.main([*argv, "--dry-run"]) == 0
+    assert "boss-community_boss_community_pg_test: would_relabel" in capsys.readouterr().out
     assert docker.removed == []
-    assert steward.REBUILDABLE_VOLUME_KINDS == ("test", "cache", "scratch", "build", "preview")
+    assert steward.main(argv) == 0
+    assert "relabelled" in capsys.readouterr().out
+    assert docker.removed == [("volume", "boss-community_boss_community_pg_test")]
 
 
 def _real_backup(root, stamp: str, pid: int, *, install_id="inst_abc", age_days: float, size=4096,

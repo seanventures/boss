@@ -470,6 +470,11 @@ cmd_dev() {
   port="$(env_value BOSS_TEST_POSTGRES_PORT)"; port="${port:-55700}"
   case "$action" in
     up)
+      # A test-Postgres volume made before its labels (BOSSAPP-1193) is recreated, labelled, while
+      # db-test is stopped: it is rebuildable, and the Infra Agent can only clean what is labelled.
+      if [[ -f "$INSTALL_DIR/scripts/install/steward.py" ]] && command -v python3 >/dev/null 2>&1; then
+        python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --relabel-volumes </dev/null || true
+      fi
       compose --profile dev up -d db-test
       printf 'Test Postgres is up. Point the suites at it:\n'
       printf '  export BOSS_TEST_DATABASE_URL=postgresql+psycopg://boss:$BOSS_DB_PASSWORD@localhost:%s/boss_test\n' "$port"

@@ -50,17 +50,35 @@ TOOL_OF = {"prune_build_cache": "storage.prune_build_cache", "remove_images": "s
            "docker_trim": "storage.docker_trim", "remove_backups": "storage.remove_backups", "du": "storage.du"}
 LABEL = "boss.install_id"
 #: What a labelled volume holds. Only a REBUILDABLE kind is removed by a job: a test database a
-#: run recreates, a cache, a scratch area, a build or preview workspace. A volume of ours with any
-#: other kind — `data`, or no kind at all — may be the only copy of something (a preview's
-#: database, a stopped install's Postgres): irreversible, never removed by the helper (ST-14).
+#: run recreates, a cache, a scratch area, a build workspace. A volume of ours with any other
+#: kind — `data`, `preview`, or no kind at all — may be the only copy of something (a stopped
+#: install's Postgres, a preview app's database a reviewer typed into): irreversible, never
+#: removed by the helper (ST-14). `preview` is NOT rebuildable (BOSSAPP-1193): a preview runs the
+#: app's own Compose, and its database holds whatever a person entered while reviewing it.
 KIND_LABEL = "boss.kind"
-REBUILDABLE_VOLUME_KINDS = ("test", "cache", "scratch", "build", "preview")
+REBUILDABLE_VOLUME_KINDS = ("test", "cache", "scratch", "build")
+#: The rebuildable volumes of BOSS's own Compose project (scripts/install/community-compose.yml
+#: `volumes:` key → boss.kind). Docker cannot add a label to an existing volume, so an install
+#: whose volume predates its labels has it unlabelled until the volume is recreated:
+#: `--relabel-volumes` does that when nothing uses it, and until then the helper reports it as
+#: NEEDS_RELABEL instead of passing over it in silence. Data volumes are deliberately not here
+#: and carry no boss.* labels (see the compose file). A guard test keeps this equal to Compose.
+REBUILDABLE_COMPOSE_VOLUMES = {"boss_community_pg_test": "test", "boss_community_toolchain_cache": "cache"}
+#: Stopped containers `--relabel-volumes` may remove to free a rebuildable volume: Compose
+#: recreates them on the next `up` (`boss dev up` for db-test). Any other user keeps the volume.
+RELABEL_REMOVABLE_SERVICES = ("db-test",)
+COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+COMPOSE_VOLUME_LABEL = "com.docker.compose.volume"
+NEEDS_RELABEL = "unlabelled BOSS volume — needs relabel"
 #: What backup.sh names a backup (`boss-<UTC stamp>-<pid>`, backup_archive.BACKUP_NAME). A
 #: directory is a candidate ONLY when its manifest.json is complete and names THIS install.
 BACKUP_NAME_PREFIX = "boss-"
 #: The cap wins over keep-N / keep-days, but never below this many newest backups
 #: (backup_archive.CAP_FLOOR): a rollback to the release before last stays possible.
 CAP_FLOOR = 3
+#: The orphan-volume job's default age (storage_cleanup asks for 24 h); the reading uses it too,
+#: so the reclaimable figure is what a job would actually remove.
+ORPHAN_AGE_HOURS = 24.0
 #: Pinned so a `docker run` of it is never "whatever :latest is today" (LLD §7.2). Alpine 3.20.3.
 TRIM_IMAGE = "alpine@sha256:beefdbd8a1da6d2915566fde36db9db0b524eb737fc57cd1367effd16dc0d06d"
 DOCKER_RAW_CANDIDATES = (
@@ -220,6 +238,7 @@ class Env:
         self.log_path = Path(log_path or self._env("BOSS_STEWARD_LOG", "") or (self.state_dir / "steward.log"))
         self.docker = docker or ["docker"]
         self.image_tag = self._env("BOSS_COMMUNITY_IMAGE_TAG", "") or self._env("COMPOSE_PROJECT_NAME", "boss-community")
+        self.compose_project = self._env("COMPOSE_PROJECT_NAME", "boss-community")
         #: Build cache is Docker-wide. It is pruned only through a BOSS-owned buildx builder
         #: (BOSS_BUILDX_BUILDER) or on a host that runs nothing but BOSS (BOSS_DEDICATED_HOST=1).
         self.buildx_builder = self._env("BOSS_BUILDX_BUILDER", "")
@@ -427,6 +446,7 @@ def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
     alloc, _apparent = docker_raw(env)
     backups = walk_backups(env)
     docker_used = df["images"] + df["cache"] + df["volumes"] + df["containers"]
+    reclaimable, relabel = _volume_reading(env, runner)
     sample: dict[str, Any] = {
         "host_id": env.host_id, "host_label": env.host_label, "source": "steward", "at": now_iso(),
         "total_gb": gb(usage.total), "free_gb": gb(usage.free),
@@ -440,8 +460,26 @@ def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
         sample["docker_used_gb"] = gb(docker_used)
     sample["by_type"] = {"images": sample["images_gb"], "build_cache": sample["cache_gb"],
                          "volumes": sample["volumes_gb"], "logs": sample["logs_gb"],
-                         "backups": sample["backups_gb"]}
+                         "backups": sample["backups_gb"],
+                         # What the orphan-volume job could really free (measured, ours, rebuildable,
+                         # dangling, past the 24 h age), and how many BOSS volumes it cannot judge
+                         # until they are relabelled. `volumes` above is every volume on the disk.
+                         "volumes_reclaimable": gb(reclaimable),
+                         "volumes_needs_relabel_n": float(len(relabel))}
     return sample
+
+
+def _volume_reading(env: Env, runner: Callable) -> tuple[float, list[str]]:
+    """(measured bytes the orphan-volume job could free now, BOSS volumes needing a relabel).
+    Sizes are measured only when there is a candidate: `docker system df -v` walks every volume."""
+    if not env.install_id:
+        return 0.0, []
+    try:
+        names = _orphan_volumes(env, runner, ORPHAN_AGE_HOURS)
+        sizes = volume_sizes(env, runner) if names else {}
+        return sum(sizes.get(n, 0.0) for n in names), unlabelled_boss_volumes(env, runner)
+    except (Refused, OSError, subprocess.TimeoutExpired):
+        return 0.0, []
 
 
 # ── the verbs (each: dry run → items, bytes; act → items, bytes) ────────────────────────────
@@ -472,8 +510,85 @@ def _inspect_label(env: Env, runner: Callable, kind: str, ref: str, label: str =
 
 def _rebuildable_volume(env: Env, runner: Callable, name: str) -> bool:
     """Ours AND of a rebuildable kind, read from the volume itself at the moment it is asked."""
-    return (_inspect_label(env, runner, "volume", name) == env.install_id
+    return (bool(env.install_id) and _inspect_label(env, runner, "volume", name) == env.install_id
             and _inspect_label(env, runner, "volume", name, KIND_LABEL) in REBUILDABLE_VOLUME_KINDS)
+
+
+def _labels_of(row: dict[str, Any]) -> dict[str, str]:
+    """`docker volume ls --format {{json .}}` prints Labels as "k=v,k=v"."""
+    raw = row.get("Labels")
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    out: dict[str, str] = {}
+    for part in str(raw or "").split(","):
+        k, sep, v = part.partition("=")
+        if sep and k.strip():
+            out[k.strip()] = v.strip()
+    return out
+
+
+def volume_sizes(env: Env, runner: Callable) -> dict[str, float]:
+    """Each local volume's size in bytes, from `docker system df -v` (`docker volume ls` prints
+    none). {} when Docker cannot say: then nothing is claimed as freed."""
+    try:
+        res = runner([*env.docker, "system", "df", "-v", "--format", "{{json .}}"], timeout=600)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if res.returncode != 0:
+        return {}
+    out: dict[str, float] = {}
+    for line in (res.stdout or "").splitlines():
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        rows = data.get("Volumes") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict) and row.get("Name"):
+                out[str(row["Name"])] = _parse_size(str(row.get("Size") or "0"))
+    return out
+
+
+def unlabelled_boss_volumes(env: Env, runner: Callable) -> list[str]:
+    """Volumes of BOSS's own Compose project that should carry a rebuildable boss.kind and this
+    install's id but do not (made before the labels existed). Never removed by a job — reported."""
+    res = runner([*env.docker, "volume", "ls", "--filter", f"label={COMPOSE_PROJECT_LABEL}={env.compose_project}",
+                  "--format", "{{json .}}"])
+    out = []
+    for line in (res.stdout or "").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        name = str(row.get("Name") or "")
+        labels = _labels_of(row)
+        if not name or labels.get(COMPOSE_PROJECT_LABEL, env.compose_project) != env.compose_project:
+            continue
+        want = REBUILDABLE_COMPOSE_VOLUMES.get(labels.get(COMPOSE_VOLUME_LABEL, ""))
+        if want and (not env.install_id or labels.get(LABEL) != env.install_id or labels.get(KIND_LABEL) != want):
+            out.append(name)
+    return sorted(out)
+
+
+def _orphan_volumes(env: Env, runner: Callable, older_h: float) -> list[str]:
+    """Dangling volumes of THIS install, of a rebuildable kind, older than `older_h` hours."""
+    cutoff = time.time() - older_h * 3600
+    names = []
+    for row in _labelled(env, runner, "volume", ["--filter", "dangling=true"]):
+        name = str(row.get("Name") or "")
+        if not name or not _rebuildable_volume(env, runner, name):
+            continue  # a data volume (or one with no kind) is never the helper's to remove
+        ins = runner([*env.docker, "volume", "inspect", "--format", "{{.CreatedAt}}", name])
+        created = (ins.stdout or "").strip()
+        try:
+            if created and parse_iso(created.replace("Z", "+00:00")[:25]).timestamp() > cutoff:
+                continue
+        except ValueError:
+            pass
+        names.append(name)
+    return names
 
 
 def verb_du(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
@@ -536,32 +651,87 @@ def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable)
 
 
 def verb_remove_orphan_volumes(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
-    older_h = float(args.get("older_than_hours") or 24)
-    cutoff = time.time() - older_h * 3600
-    items, size = [], 0.0
-    for row in _labelled(env, runner, "volume", ["--filter", "dangling=true"]):
-        name = str(row.get("Name") or "")
-        if not name or not _rebuildable_volume(env, runner, name):
-            continue  # a data volume (or one with no kind) is never the helper's to remove
-        ins = runner([*env.docker, "volume", "inspect", "--format", "{{.CreatedAt}}", name])
-        created = (ins.stdout or "").strip()
-        try:
-            if created and parse_iso(created.replace("Z", "+00:00")[:25]).timestamp() > cutoff:
-                continue
-        except ValueError:
-            pass
-        items.append(name)
-        size += _parse_size(str(row.get("Size") or "0"))
+    items = _orphan_volumes(env, runner, float(args.get("older_than_hours") or ORPHAN_AGE_HOURS))
+    # Measured, before anything goes: `docker volume ls` has no size, so the dry run's bytes and
+    # the freed bytes come from `docker system df -v` (BOSSAPP-1193; it used to report 0).
+    sizes = volume_sizes(env, runner) if items else {}
     if dry_run:
-        return items, size
-    done = []
+        return items, sum(sizes.get(n, 0.0) for n in items)
+    done, freed = [], 0.0
     for name in items:
         if not _rebuildable_volume(env, runner, name):
             continue  # THE GATE, AGAIN, per volume at the moment of removal
         res = runner([*env.docker, "volume", "rm", name], timeout=120)
         if res.returncode == 0:
             done.append(name)
-    return done, size if done else 0.0
+            freed += sizes.get(name, 0.0)
+    return done, freed
+
+
+def _containers_using(env: Env, runner: Callable, volume: str) -> list[dict[str, str]]:
+    res = runner([*env.docker, "ps", "-a", "--filter", f"volume={volume}", "--format", "{{json .}}"])
+    rows = []
+    for line in (res.stdout or "").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        labels = _labels_of(row)
+        rows.append({"id": str(row.get("ID") or ""), "name": str(row.get("Names") or ""),
+                     "state": str(row.get("State") or "").lower(),
+                     "project": labels.get(COMPOSE_PROJECT_LABEL, ""),
+                     "service": labels.get("com.docker.compose.service", "")})
+    return rows
+
+
+def relabel_volumes(env: Env, runner: Callable = run_cmd, *, apply: bool = True) -> list[dict[str, str]]:
+    """THE UPGRADE STEP for labels (BOSSAPP-1193; upgrade.sh and `boss dev up` run it). Docker
+    cannot relabel a volume, so a REBUILDABLE BOSS volume made before its labels existed is
+    removed when nothing uses it, and Compose recreates it, labelled, on the next `up`. Only
+    volumes of this install's Compose project named in REBUILDABLE_COMPOSE_VOLUMES qualify; a
+    data volume is never one of them. A volume a running container uses, or that a container
+    outside BOSS (or a BOSS service Compose would not recreate) holds, is left as it is and
+    reported NEEDS_RELABEL. Never raises."""
+    out: list[dict[str, str]] = []
+    if not env.install_id:
+        return [{"volume": "*", "action": "skipped",
+                 "reason": "no BOSS_INSTALL_ID in .env: a recreated volume would be labelled with nothing"}]
+    try:
+        names = unlabelled_boss_volumes(env, runner)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [{"volume": "*", "action": "skipped", "reason": f"docker unavailable: {type(exc).__name__}"}]
+    for name in names:
+        try:
+            users = _containers_using(env, runner, name)
+            running = [u["name"] or u["id"] for u in users if u["state"] not in ("exited", "created", "dead")]
+            foreign = [u["name"] or u["id"] for u in users
+                       if u["project"] != env.compose_project or u["service"] not in RELABEL_REMOVABLE_SERVICES]
+            if running or foreign:
+                why = f"in use by {', '.join(running)}" if running else f"held by {', '.join(foreign)}"
+                out.append({"volume": name, "action": "skipped", "reason": f"{NEEDS_RELABEL} ({why})"})
+                continue
+            # THE GATE, AGAIN, at the moment of removal: still BOSS's, still a rebuildable key.
+            key = _inspect_label(env, runner, "volume", name, COMPOSE_VOLUME_LABEL)
+            if (_inspect_label(env, runner, "volume", name, COMPOSE_PROJECT_LABEL) != env.compose_project
+                    or key not in REBUILDABLE_COMPOSE_VOLUMES):
+                out.append({"volume": name, "action": "skipped", "reason": "no longer a rebuildable BOSS volume"})
+                continue
+            if not apply:
+                out.append({"volume": name, "action": "would_relabel",
+                            "reason": f"recreated by the next compose up with boss.kind={REBUILDABLE_COMPOSE_VOLUMES[key]}"})
+                continue
+            for u in users:  # stopped db-test only (checked above); compose recreates it
+                runner([*env.docker, "rm", u["id"]], timeout=60)
+            res = runner([*env.docker, "volume", "rm", name], timeout=120)
+            if res.returncode == 0:
+                out.append({"volume": name, "action": "relabelled",
+                            "reason": f"removed; the next compose up recreates it with boss.kind={REBUILDABLE_COMPOSE_VOLUMES[key]}"})
+            else:
+                out.append({"volume": name, "action": "skipped",
+                            "reason": f"{NEEDS_RELABEL} (docker volume rm: {(res.stderr or '').strip()[:120]})"})
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            out.append({"volume": name, "action": "skipped", "reason": f"{NEEDS_RELABEL} ({type(exc).__name__})"})
+    return out
 
 
 def verb_cap_logs(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
@@ -739,8 +909,13 @@ def perform(env: Env, job: dict, pubkey: dict, *, runner: Callable = run_cmd,
         fn = VERB_FN[verb]
         if dry or verb == "du":
             items, size = fn(env, args, dry_run=True, runner=runner)
-            return {"ok": True, "dry_run": True, "items": items, "bytes": int(size),
-                    "plan_hash": plan_hash(TOOL_OF[verb], env.host_id, args, items)}
+            out = {"ok": True, "dry_run": True, "items": items, "bytes": int(size),
+                   "plan_hash": plan_hash(TOOL_OF[verb], env.host_id, args, items)}
+            if verb == "remove_orphan_volumes":
+                # Not silence: a BOSS volume made before its labels cannot be judged, so it is
+                # named in the plan (never an item, never removed by a job).
+                out["needs_relabel"] = unlabelled_boss_volumes(env, runner)
+            return out
         # A real run: what would go NOW must be exactly what the dry run showed.
         items_now, _ = fn(env, args, dry_run=True, runner=runner)
         expected = plan_hash(TOOL_OF[verb], env.host_id, args, items_now)
@@ -807,6 +982,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--print", action="store_true", help="print the reading and exit (no network)")
     ap.add_argument("--rekey", action="store_true",
                     help="forget the pinned signing key; the next run pins BOSS's current one")
+    ap.add_argument("--relabel-volumes", action="store_true",
+                    help="recreate BOSS's rebuildable volumes that predate their labels, when unused "
+                         "(the upgrade step; data volumes are never touched)")
+    ap.add_argument("--dry-run", action="store_true", help="with --relabel-volumes: say what would change")
     ap.add_argument("--version", action="store_true")
     ns = ap.parse_args(argv)
     if ns.version:
@@ -821,6 +1000,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
     if ns.print:
         print(json.dumps(collect(env), indent=2, default=str))
+        return 0
+    if ns.relabel_volumes:
+        done = relabel_volumes(env, run_cmd, apply=not ns.dry_run)
+        log_line(env, {"host_id": env.host_id, "relabel_volumes": done})
+        for row in done:
+            print(f"{row['volume']}: {row['action']} — {row['reason']}")
         return 0
     report = once(env, sample_only=ns.sample_only)
     print(json.dumps(report, default=str))
