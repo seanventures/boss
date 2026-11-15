@@ -284,6 +284,18 @@ def digest_summary(connection: Connection, route: Mapping[str, Any], *,
             "sample": items[:sample]}
 
 
+def _sweep_key(route: Mapping[str, Any], *, ended: bool) -> str:
+    """The sweep's OWN dedupe key, never the router's 5-minute bucket (a tail run inside the
+    bucket of the last in-window digest would dedupe away and its events be lost): the end of
+    the window for the tail, the last digest stamp for an in-window catch-up."""
+    def iso(value: Any) -> str:
+        return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+    if ended:
+        return f"intake:digest-tail:{route['id']}:{iso(route['digest_until'])}"
+    return f"intake:digest-sweep:{route['id']}:{iso(route.get('digest_last_at'))}"
+
+
 def sweep_digests(engine: Any, *, now: Optional[datetime] = None) -> list[dict]:
     """THE DIGEST TAIL (§7.3). A digest run fires when an event arrives and five minutes passed
     since the last one, so events held in the last window before the storm ends — or before it
@@ -320,7 +332,7 @@ def sweep_digests(engine: Any, *, now: Optional[datetime] = None) -> list[dict]:
                 with c.begin_nested():
                     got = agent_triggers.fire(
                         c, str(route["id"]), actor="intake", payload=summary,
-                        dedupe_key=f"intake:digest:{route['id']}:{int(now.timestamp() // 300)}",
+                        dedupe_key=_sweep_key(route, ended=ended),
                         finalize_extra={"digest": True, "route_reason": "digest run (tail)"})
                 fired.append({"trigger_id": route["id"], **got, "count": summary["count"]})
                 digest_fired(c, str(route["id"]), now=now)

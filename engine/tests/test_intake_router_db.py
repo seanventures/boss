@@ -594,6 +594,32 @@ def test_storm_switches_the_route_to_digest_mode_with_one_coalesced_run_per_five
     assert intake_guards.sweep_digests(engine, now=later) == [], "fired once"
 
 
+def test_the_tail_run_fires_even_when_the_last_digest_ran_in_the_final_five_minutes(world):
+    """Re-review: the tail run has its own dedupe key, so a last in-window digest run in the
+    same 5-minute bucket as the window's end never swallows it."""
+    engine, pid = world
+    dep = deploy_local_agent(engine, pid)
+    conn = make_connection(engine, pid, "webhook")
+    route = make_route(engine, pid, dep["id"], conn["id"], name="alerts", limits={"storm_per_min": 2})
+    for n in range(5):
+        _receive(engine, conn, {"type": "com.grafana.alert", "subject": f"svc-{n}"})
+    got = _process(engine)
+    assert got["routed"] == 2 and got["digest"] == 3
+    digest_fire = next(f for f in _fires(engine, route["id"])
+                       if f["dedupe_key"].startswith("intake:digest:"))
+    bucket = int(digest_fire["dedupe_key"].rsplit(":", 1)[-1])
+    # the window ends inside the SAME 5-minute bucket the last digest run fired in
+    end = datetime.fromtimestamp(bucket * 300 + 298, tz=timezone.utc)
+    with engine.begin() as c:
+        c.execute(text("UPDATE agent_triggers SET digest_until = :u WHERE id = :t"),
+                  {"u": end, "t": route["id"]})
+    tail = intake_guards.sweep_digests(engine, now=end + timedelta(seconds=1))
+    assert len(tail) == 1 and tail[0]["outcome"] == "admitted", tail
+    assert tail[0]["count"] == 2, "the two events held after the last digest run"
+    assert len(runs_of(engine, pid)) == 4                # 2 ordinary + digest + tail
+    assert _trigger(engine, route["id"])["digest_until"] is None
+
+
 def test_the_per_entity_rate_limit_defers_the_next_message_on_a_busy_thread(world):
     engine, pid = world
     dep = deploy_local_agent(engine, pid)
