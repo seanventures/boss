@@ -296,10 +296,13 @@ def build_agent_platform_router(*, engine, require_write_actor: Callable[..., st
 
     @router.post("/v1/agents/{role_key}/triggers/preview-match")
     @permit(P.INTEGRATION_READ, scope=Scope.project(body="project_id"))
-    def preview_match(role_key: str, body: MatchPreviewBody) -> dict[str, Any]:
+    def preview_match(role_key: str, body: MatchPreviewBody, request: Request) -> dict[str, Any]:
         """Which of the connection's recent events a route filter would match, and which leaf
-        held for each (the console shows it before the route is saved). Read-only."""
+        held for each (the console shows it before the route is saved). Read-only. Without
+        user:read the filter runs on the redacted envelope (no email / principal oracle)."""
         from boss_engine.services import intake_router
+
+        from .intake import people_visible
 
         with begin(engine) as connection:
             require_reader(connection, body.project_id)
@@ -312,7 +315,8 @@ def build_agent_platform_router(*, engine, require_write_actor: Callable[..., st
             return {"agent_key": role_key, "connection_id": body.connection_id,
                     **intake_router.preview_match(connection, project_id=body.project_id,
                                                   connection_id=body.connection_id,
-                                                  match=body.match, limit=body.limit)}
+                                                  match=body.match, limit=body.limit,
+                                                  reveal=people_visible(request, connection))}
 
     @router.post("/v1/agents/{role_key}/triggers", status_code=201)
     @permit(P.AGENT_DEPLOY, scope=Scope.project(body="project_id"))

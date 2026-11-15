@@ -374,25 +374,29 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
 
     @router.get("/v1/intake/events")
     @permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
-    def list_intake_events(project_id: str, status: Optional[str] = None,
+    def list_intake_events(project_id: str, request: Request, status: Optional[str] = None,
                            connection_id: Optional[str] = None, q: Optional[str] = None,
                            hours: Optional[int] = None, limit: int = 100,
                            before: Optional[str] = None) -> dict:
         """The stream: newest first, each with its status chip (routed / ignored / filtered /
-        refused / failed / dead / shed / digest), and the chips' counts for the period."""
+        refused / failed / dead / shed / digest), and the chips' counts for the period. The BOSS
+        person behind a chat user is withheld without user:read (people_visible)."""
         with begin(engine) as db:
             require_reader(db, project_id)
             return event_intake.list_events(db, project_id, status=status,
                                             connection_id=connection_id, q=q,
-                                            since_hours=hours, limit=limit, before=before)
+                                            since_hours=hours, limit=limit, before=before,
+                                            reveal=people_visible(request, db))
 
     @router.get("/v1/intake/events/{intake_event_id}")
     @permit(P.INTEGRATION_READ, scope=Scope.of("intake_event", path="intake_event_id"))
-    def get_intake_event(intake_event_id: str) -> dict:
+    def get_intake_event(intake_event_id: str, request: Request) -> dict:
         """One event in full: envelope, guards (screen verdict, loop hops), the raw body, the
-        fires it caused and their runs."""
+        fires it caused and their runs. Who the chat user is in BOSS (principal_id, emails) only
+        with user:read (people_visible); otherwise withheld and `people_redacted: true`."""
         with begin(engine) as db:
-            row = event_intake.get_event(db, intake_event_id)
+            row = event_intake.get_event(db, intake_event_id,
+                                         reveal=people_visible(request, db))
             if row is None:
                 raise HTTPException(status_code=404, detail={"error": "not_found"})
             require_reader(db, str(row.get("project_id") or ""))
@@ -400,12 +404,13 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
 
     @router.get("/v1/intake/dead-letters")
     @permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
-    def list_intake_dead_letters(project_id: str, connection_id: Optional[str] = None,
-                                 limit: int = 100) -> dict:
+    def list_intake_dead_letters(project_id: str, request: Request,
+                                 connection_id: Optional[str] = None, limit: int = 100) -> dict:
         with begin(engine) as db:
             require_reader(db, project_id)
             return event_intake.dead_letters(db, project_id, limit=limit,
-                                             connection_id=connection_id)
+                                             connection_id=connection_id,
+                                             reveal=people_visible(request, db))
 
     @router.post("/v1/intake/events/replay")
     @permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))

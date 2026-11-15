@@ -54,7 +54,7 @@ const DETAIL_ROUTED = {
   outcome: [{ trigger_id: "atrg_1", fire_outcome: "admitted", run_id: "arun_4127", thread_id: "thr_1", reason: "matched route Mentions in #support",
               subject: { kind: "person", mode: "person", method: "sso_email", display: "Priya", principal_id: "usr_p" } }],
   fires: [{ id: "f1", trigger_id: "atrg_1", outcome: "admitted", run_id: "arun_4127", trigger_name: "Mentions in #support", fired_at: iso(59_000) }],
-  raw: { event: { text: "hi" } },
+  raw: { event: { text: "hi" } }, people_redacted: false,
 };
 const DETAIL_REFUSED = {
   ...EVENTS.events[1], dedupe_key: "slack:Ev2", verify_scheme: "slack_v0", envelope: { data: { channel: "C0SUPPORT" } }, screen: {},
@@ -353,6 +353,35 @@ describe("E5 Stream", () => {
     expect($('[data-testid="ev-detail-flow-reply"]')?.getAttribute("data-state")).toBe("done");
     at("/?area=setup&events=stream&ev=iev_2");
     window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+});
+
+describe("E5 Stream · who the chat user is in BOSS (BOSSAPP-1196)", () => {
+  it("with user:read the detail names the linked person", async () => {
+    api();
+    await mount(<EventsHome projectId={PID} place={place("stream", { ev: "iev_1" })} />);
+    const actor = $('[data-testid="ev-detail-actor"]')?.textContent ?? "";
+    expect(actor).toContain("U0PRIYA → Priya");
+    expect($('[data-testid="ev-detail-person-hidden"]')).toBeNull();
+  });
+  it("without user:read the API withholds the person and the detail says name hidden", async () => {
+    const redacted = { ...DETAIL_ROUTED, people_redacted: true, principal_id: null,
+      outcome: DETAIL_ROUTED.outcome.map((o) => ({ ...o, subject: { ...o.subject, principal_id: null } })) };
+    api((url) => (url.startsWith("/v1/intake/events/iev_1") ? json(redacted) : undefined));
+    await mount(<EventsHome projectId={PID} place={place("stream", { ev: "iev_1" })} />);
+    const hidden = $('[data-testid="ev-detail-person-hidden"]');
+    expect(hidden?.textContent).toBe("A BOSS person · name hidden");
+    expect(hidden?.getAttribute("title")).toContain("Owner, Admin or Auditor");
+    expect($('[data-testid="ev-detail-actor"]')?.textContent).not.toContain("usr_p");
+  });
+  it("fails closed: a detail without the flag is treated as withheld", async () => {
+    const { people_redacted: _drop, ...noFlag } = DETAIL_ROUTED;
+    expect(parseEventDetail(noFlag).people_redacted).toBe(true);
+    expect(parseEventDetail(DETAIL_ROUTED).people_redacted).toBe(false);
+    api((url) => (url.startsWith("/v1/intake/events/iev_1") ? json(noFlag) : undefined));
+    await mount(<EventsHome projectId={PID} place={place("stream", { ev: "iev_1" })} />);
+    expect($('[data-testid="ev-detail-person-hidden"]')).not.toBeNull();
+    expect($('[data-testid="ev-detail-actor"]')?.textContent).not.toContain("usr_p");
   });
 });
 

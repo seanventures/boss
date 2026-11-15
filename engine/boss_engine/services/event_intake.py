@@ -1525,6 +1525,47 @@ _EVENT_COLUMNS = ("id, connection_id, project_id, dedupe_key, source_event_id, t
                   "octet_length(raw) AS raw_bytes")
 
 
+# ── who a chat user is in BOSS: one redaction for every intake read (BOSSAPP-1196) ──────────
+
+#: A key whose value ties a chat identity to a BOSS person, or is an email (directory data):
+#: `principal_id` (the event row, each outcome's `subject`), the chat user's email on the
+#: envelope's `bossactor`, any `*email*` field in the raw body or the headers.
+def _person_key(key: Any) -> bool:
+    k = str(key).lower()
+    return k in ("principal_id", "person_actor", "on_behalf_of", "acting") or "email" in k
+
+
+def redact_people(value: Any) -> Any:
+    """A copy of `value` with every person-linking field (`_person_key`) set to None, at any
+    depth: dicts, lists, the envelope, the raw body, each outcome's subject. What a caller
+    without `user:read` gets from every intake read (events, one event, dead letters, the
+    route preview). Nothing else changes: the chat user's own id and display stay."""
+    if isinstance(value, Mapping):
+        return {k: (None if _person_key(k) and v is not None else redact_people(v))
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_people(v) for v in value]
+    return value
+
+
+def _redacted(out: dict, reveal: bool) -> dict:
+    """`out` as the caller may see it, flagged (`people_redacted`) for the console's "name
+    hidden". Fails closed: `reveal` must be exactly True to show the person."""
+    if reveal is True:
+        return {**out, "people_redacted": False}
+    out = redact_people(out)
+    if out.get("raw_base64") is not None:
+        out["raw_base64"] = None          # an opaque body cannot be scrubbed: withheld whole
+    out["people_redacted"] = True
+    return out
+
+
+#: The envelope as text with every person-linking value cut out, for `q` when the caller may
+#: not see people (a search must not be an oracle for an email the answer withholds).
+_SEARCHABLE_REDACTED = (r"""regexp_replace(envelope::text, '"[^"]*(email|principal_id|"""
+                        r"""person_actor|on_behalf_of)[^"]*": ("[^"]*"|null)', '', 'gi')""")
+
+
 def _summary(row: Mapping[str, Any], connections: Mapping[str, Mapping[str, Any]]) -> dict:
     env = _json(row.get("envelope"), {}) or {}
     data = env.get("data") or {}
@@ -1560,9 +1601,10 @@ def _connections_of(connection: Connection, project_id: str) -> dict[str, dict]:
 def list_events(connection: Connection, project_id: str, *, status: Optional[str] = None,
                 connection_id: Optional[str] = None, q: Optional[str] = None,
                 since_hours: Optional[int] = None, limit: int = 100,
-                before: Optional[str] = None) -> dict:
+                before: Optional[str] = None, reveal: bool = False) -> dict:
     """The stream (E5): newest first, with status chips; `q` searches type, subject, actor,
-    the envelope's text and the dedupe key."""
+    the envelope's text and the dedupe key. Without `reveal` (user:read) every person-linking
+    field is withheld (`redact_people`) and `q` does not search them."""
     where = ["project_id = :p"]
     params: dict[str, Any] = {"p": project_id, "n": max(1, min(int(limit), 500))}
     if status:
@@ -1580,15 +1622,17 @@ def list_events(connection: Connection, project_id: str, *, status: Optional[str
         where.append("received_at < :before")
         params["before"] = _event_time(before)
     if q:
+        searched = "envelope::text" if reveal is True else _SEARCHABLE_REDACTED
         where.append("(type ILIKE :q OR subject ILIKE :q OR dedupe_key ILIKE :q OR "
-                     "actor_external_id ILIKE :q OR envelope::text ILIKE :q)")
+                     f"actor_external_id ILIKE :q OR {searched} ILIKE :q)")
         params["q"] = f"%{str(q)[:200]}%"
     rows = connection.execute(text(
         f"SELECT {_EVENT_COLUMNS} FROM intake_events WHERE {' AND '.join(where)} "
         "ORDER BY received_at DESC, id DESC LIMIT :n"), params).mappings().all()
     conns = _connections_of(connection, project_id)
-    return {"events": [_summary(dict(r), conns) for r in rows],
-            "counts": status_counts(connection, project_id, since_hours=since_hours or 24)}
+    return _redacted({"events": [_summary(dict(r), conns) for r in rows],
+                      "counts": status_counts(connection, project_id,
+                                              since_hours=since_hours or 24)}, reveal)
 
 
 def status_counts(connection: Connection, project_id: str, *, since_hours: int = 24) -> dict:
@@ -1604,9 +1648,10 @@ def status_counts(connection: Connection, project_id: str, *, since_hours: int =
 
 
 def get_event(connection: Connection, event_id: str, *, project_id: Optional[str] = None,
-              include_raw: bool = True) -> Optional[dict]:
+              include_raw: bool = True, reveal: bool = False) -> Optional[dict]:
     """One event in full (E5's expanded row): envelope, guards, outcome, the raw body (decoded
-    JSON when it is JSON and small) and the fires it caused."""
+    JSON when it is JSON and small) and the fires it caused. Without `reveal` (user:read) the
+    BOSS person behind the chat user (principal_id, emails) is withheld (`redact_people`)."""
     row = connection.execute(text(
         f"SELECT {_EVENT_COLUMNS}, raw FROM intake_events WHERE id = :id"
         + (" AND project_id = :p" if project_id else "")),
@@ -1638,11 +1683,11 @@ def get_event(connection: Connection, event_id: str, *, project_id: Optional[str
          WHERE f.dedupe_key = :k OR f.dedupe_key LIKE :kr OR f.intake_event_id = :id
          ORDER BY f.fired_at"""),
         {"k": f"intake:{event_id}", "kr": f"intake:{event_id}:r%", "id": event_id}).mappings().all()]
-    return out
+    return _redacted(out, reveal)
 
 
 def dead_letters(connection: Connection, project_id: str, *, limit: int = 100,
-                 connection_id: Optional[str] = None) -> dict:
+                 connection_id: Optional[str] = None, reveal: bool = False) -> dict:
     """E6: what kept failing, why, how many tries, when it first failed; grouped counts per
     connection so the screen can say "Teams: nothing stuck"."""
     params: dict[str, Any] = {"p": project_id, "n": max(1, min(int(limit), 500))}
@@ -1671,7 +1716,8 @@ def dead_letters(connection: Connection, project_id: str, *, limit: int = 100,
         item["first_failed_at"] = _iso(r.get("received_at"))
         item["dead_at"] = _iso(r.get("processed_at"))
         items.append(item)
-    return {"dead_letters": items, "per_connection": sorted(per.values(), key=lambda x: x["name"])}
+    return _redacted({"dead_letters": items,
+                      "per_connection": sorted(per.values(), key=lambda x: x["name"])}, reveal)
 
 
 # ── people links (E7) ──────────────────────────────────────────────────────────────────────────

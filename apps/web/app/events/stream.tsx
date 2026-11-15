@@ -189,7 +189,11 @@ export function EventPanel({ id, projectId }: { id: string; projectId: string })
           <dl className="ev-kv">
             <dt>type</dt><dd>{e.type}</dd>
             <dt>source</dt><dd>{String(env.source || "")}{env.data?.channel ? ` · channel ${String(env.data.channel)}` : ""}</dd>
-            <dt>actor</dt><dd>{e.actor.external_id || "—"}{subject?.kind === "person" ? ` → ${subject.display || subject.principal_id} (${methodWords(subject.method)})` : subject ? ` → ${subject.kind}` : ""}</dd>
+            <dt>actor</dt><dd data-testid="ev-detail-actor">{e.actor.external_id || "—"}{subject?.kind === "person"
+              ? (e.people_redacted || !subject.principal_id
+                ? <> → <span className="ev-faint" title="Who each person is needs “View people” (Owner, Admin or Auditor)" data-testid="ev-detail-person-hidden">A BOSS person · name hidden</span> ({methodWords(subject.method)})</>
+                : ` → ${subject.display || subject.principal_id} (${methodWords(subject.method)})`)
+              : subject ? ` → ${subject.kind}` : ""}</dd>
             {e.conversation_key ? <><dt>thread</dt><dd>{e.conversation_key}</dd></> : null}
             <dt>event</dt><dd>{e.id}{e.duplicates ? ` · ${e.duplicates} repeats` : ""}</dd>
           </dl>
