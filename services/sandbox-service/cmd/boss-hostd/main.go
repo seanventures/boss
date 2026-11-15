@@ -25,6 +25,16 @@
 //	BOSS_HOSTD_STRICT_SECRETS    default true
 //	BOSS_HOSTD_HEADLESS_MAX_SECONDS  default 86400: control plane unreachable this long → stop serving
 //	BOSS_MICROVM_CLAIMS_FROZEN   default true: gates per_run VMs (replicas are on)
+//
+// P8b (snapshots, warm pools, jailer; docs/infra/HOST_API.md §3.4, §8):
+//
+//	BOSS_HOSTD_JAILER_BIN        Firecracker's jailer; set → every VM runs jailed (needs root)
+//	BOSS_HOSTD_JAILER_CHROOT     jail base (default /srv/boss-jail; keep it short)
+//	BOSS_HOSTD_JAILER_UID_BASE   first uid of the per-VM uid/gid pool (default 100000, range 10000)
+//	BOSS_HOSTD_SNAP_DIR          snapshot store (default <state dir>/snapshots)
+//	BOSS_HOSTD_OVERLAY_MIB       per-VM writable overlay drive (default 1024; 0 = none)
+//	BOSS_HOSTD_RUNTIME_VERSION   baked boss-runtime version (part of the snapshot key)
+//	BOSS_HOSTD_REPLICA_SURGE     warm spares per replica shape (default 1)
 package main
 
 import (
@@ -35,6 +45,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -108,10 +119,19 @@ func buildAgent() (*hostd.Agent, error) {
 	var mgr vmm.Manager
 	switch env("BOSS_HOSTD_VM_BACKEND", "process") {
 	case "process":
-		mgr = &vmm.Process{Root: runDir, GuestBin: env("BOSS_HOSTD_GUEST_BIN", "")}
+		mgr = &vmm.Process{Root: runDir, GuestBin: env("BOSS_HOSTD_GUEST_BIN", ""),
+			SnapDir:        env("BOSS_HOSTD_SNAP_DIR", filepath.Join(env("BOSS_HOSTD_STATE_DIR", "/var/lib/boss-hostd"), "snapshots")),
+			RuntimeVersion: env("BOSS_HOSTD_RUNTIME_VERSION", "")}
 	case "firecracker":
-		mgr = &vmm.Firecracker{Root: runDir, Bin: env("BOSS_SANDBOX_FC_BIN", ""),
-			Kernel: env("BOSS_SANDBOX_FC_KERNEL", ""), Rootfs: env("BOSS_HOSTD_FC_ROOTFS", "")}
+		fc := &vmm.Firecracker{Root: runDir, Bin: env("BOSS_SANDBOX_FC_BIN", ""),
+			Kernel: env("BOSS_SANDBOX_FC_KERNEL", ""), Rootfs: env("BOSS_HOSTD_FC_ROOTFS", ""),
+			SnapDir:    env("BOSS_HOSTD_SNAP_DIR", filepath.Join(env("BOSS_HOSTD_STATE_DIR", "/var/lib/boss-hostd"), "snapshots")),
+			OverlayMiB: legacy.EnvInt("BOSS_HOSTD_OVERLAY_MIB", 1024), RuntimeVersion: env("BOSS_HOSTD_RUNTIME_VERSION", "")}
+		if jb := env("BOSS_HOSTD_JAILER_BIN", ""); jb != "" {
+			fc.Jailer = &vmm.Jailer{Bin: jb, ChrootBase: env("BOSS_HOSTD_JAILER_CHROOT", "/srv/boss-jail"),
+				UIDBase: legacy.EnvInt("BOSS_HOSTD_JAILER_UID_BASE", 100000)}
+		}
+		mgr = fc
 	default:
 		return nil, fmt.Errorf("unknown BOSS_HOSTD_VM_BACKEND (want process|firecracker)")
 	}
@@ -128,21 +148,36 @@ func buildAgent() (*hostd.Agent, error) {
 	}
 	host, _ := os.Hostname()
 	return hostd.New(hostd.Config{
-		StateDir:      env("BOSS_HOSTD_STATE_DIR", "/var/lib/boss-hostd"),
-		CPURL:         env("BOSS_HOSTD_CP_URL", ""),
-		PinnedCA:      ca,
-		JoinToken:     join,
-		JoinTokenFile: joinFile,
-		HeadlessMax:   time.Duration(legacy.EnvInt("BOSS_HOSTD_HEADLESS_MAX_SECONDS", 24*3600)) * time.Second,
-		Hostname:      host,
-		Pool:          env("BOSS_HOSTD_POOL", "default"),
-		Manager:       mgr,
-		Net:           nm,
-		ClaimsFrozen:  legacy.EnvBool("BOSS_MICROVM_CLAIMS_FROZEN", true),
-		StrictSecrets: legacy.EnvBool("BOSS_HOSTD_STRICT_SECRETS", true),
-		MaxVMs:        legacy.EnvInt("BOSS_HOSTD_MAX_VMS", 20),
-		TapOwnerUID:   os.Getuid(),
+		StateDir:       env("BOSS_HOSTD_STATE_DIR", "/var/lib/boss-hostd"),
+		CPURL:          env("BOSS_HOSTD_CP_URL", ""),
+		PinnedCA:       ca,
+		JoinToken:      join,
+		JoinTokenFile:  joinFile,
+		HeadlessMax:    time.Duration(legacy.EnvInt("BOSS_HOSTD_HEADLESS_MAX_SECONDS", 24*3600)) * time.Second,
+		Hostname:       host,
+		Pool:           env("BOSS_HOSTD_POOL", "default"),
+		Manager:        mgr,
+		Net:            nm,
+		ClaimsFrozen:   legacy.EnvBool("BOSS_MICROVM_CLAIMS_FROZEN", true),
+		StrictSecrets:  legacy.EnvBool("BOSS_HOSTD_STRICT_SECRETS", true),
+		MaxVMs:         legacy.EnvInt("BOSS_HOSTD_MAX_VMS", 20),
+		TapOwnerUID:    os.Getuid(),
+		RuntimeVersion: env("BOSS_HOSTD_RUNTIME_VERSION", ""),
+		ReplicaSurge:   replicaSurge(),
 	})
+}
+
+// replicaSurge reads BOSS_HOSTD_REPLICA_SURGE ("0" disables the spare).
+func replicaSurge() int {
+	raw := env("BOSS_HOSTD_REPLICA_SURGE", "1")
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 1
+	}
+	if n <= 0 {
+		return -1 // explicit 0: no spare
+	}
+	return n
 }
 
 func netadm(args []string) int {

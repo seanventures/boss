@@ -66,6 +66,10 @@ GUARDED: dict[str, str] = {
     # and `fire` refuses an archived project's event or webhook firing.
     "services/agent_triggers.py::tick": "due",
     "services/bots.py::tick": "tick",
+    # P9a (BOSSAPP-1093): the intake processor claims only live projects' events (`claim` picks
+    # them with live_sql); process_due is the pass over what claim handed it.
+    "services/event_intake.py::claim": "claim",
+    "services/event_intake.py::process_due": "claim",
 }
 
 #: New work refused at its door (ProjectArchived -> 409), checked the same way.
@@ -85,6 +89,8 @@ _RECOVERY = ("recovers work already in flight; any new attempt goes through star
 _TARGETS = "probes only the targets deployment_health.sweep picked, which skips archived projects"
 
 EXEMPT: dict[str, str] = {
+    # P9a: nulls raw bodies and deletes rows past their retention; starts nothing.
+    "services/event_intake.py::sweep_retention": _CLEANUP,
     # AP-P3: the body of focused_agents.tick_due behind BOSS_BOTS_FOCUSED_AGENTS, called after
     # tick_due skipped an archived project.
     "services/bots.py::tick_focused_agents": "focused_agents.tick_due's body; tick_due skips "

@@ -35,3 +35,12 @@ func zombie(pid int) bool {
 	}
 	return strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
 }
+
+// Root is unknown off Linux.
+func Root(int) string { return "" }
+
+// UID is unknown off Linux.
+func UID(int) int { return -1 }
+
+// SeccompMode is unknown off Linux.
+func SeccompMode(int) int { return -1 }

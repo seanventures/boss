@@ -16,12 +16,21 @@ import (
 )
 
 // Process runs boss-vsockd as the stand-in VM (local parity backend).
+//
+// Snapshots here are records only: Snapshot stores the shape's meta.json
+// (after the same hygiene gate) and Restore starts a fresh guest marked
+// restored. That keeps the pool, claim and GC logic above identical on every
+// OS; only Firecracker has memory to save.
 type Process struct {
 	Root     string // per-VM directories live here
 	GuestBin string // boss-vsockd binary
 	// GuestArgs prefixes the guest argv (tests re-exec their own binary).
 	GuestArgs []string
 	GuestEnv  []string
+	// SnapDir is the snapshot store (default <Root>/_snapshots).
+	SnapDir string
+	// RuntimeVersion is part of the snapshot key.
+	RuntimeVersion string
 }
 
 func (p *Process) Name() string { return "process" }
@@ -38,13 +47,45 @@ func (p *Process) Check() error {
 
 func (p *Process) dir(id string) string { return filepath.Join(p.Root, id) }
 
+func (p *Process) store() Store {
+	if p.SnapDir != "" {
+		return Store{Dir: p.SnapDir}
+	}
+	return Store{Dir: filepath.Join(p.Root, "_snapshots")}
+}
+
+func (p *Process) shapeOf(s Spec) Spec {
+	if s.RuntimeVersion == "" {
+		s.RuntimeVersion = p.RuntimeVersion
+	}
+	if s.KernelDigest == "" {
+		s.KernelDigest = "process"
+	}
+	return s
+}
+
 func (p *Process) Create(ctx context.Context, s Spec) (*VM, error) {
+	return p.launch(ctx, s, nil)
+}
+
+func (p *Process) Restore(ctx context.Context, s Spec, snap SnapshotRef) (*VM, error) {
+	if snap.Dir == "" {
+		return nil, ErrNoSnapshot
+	}
+	if got := p.shapeOf(s).Shape(); got != snap.Shape {
+		return nil, fmt.Errorf("snapshot %s is for another shape", snap.Key)
+	}
+	return p.launch(ctx, s, &snap)
+}
+
+func (p *Process) launch(ctx context.Context, s Spec, snap *SnapshotRef) (*VM, error) {
 	if !VMIDPattern.MatchString(s.VMID) {
 		return nil, fmt.Errorf("invalid vm_id %q", s.VMID)
 	}
 	if err := p.Check(); err != nil {
 		return nil, err
 	}
+	s = p.shapeOf(s)
 	dir := p.dir(s.VMID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -56,6 +97,9 @@ func (p *Process) Create(ctx context.Context, s Spec) (*VM, error) {
 	defer console.Close()
 	args := append(append([]string{}, p.GuestArgs...),
 		"--mode=process", "--dir="+dir, "--boss-vm-id="+s.VMID)
+	if snap != nil {
+		args = append(args, "--restored")
+	}
 	cmd := exec.Command(p.GuestBin, args...)
 	cmd.Env = append(os.Environ(), p.GuestEnv...)
 	cmd.Stdout, cmd.Stderr = console, console
@@ -64,6 +108,7 @@ func (p *Process) Create(ctx context.Context, s Spec) (*VM, error) {
 		return nil, err
 	}
 	vm := newVM(s.VMID, cmd.Process.Pid, dir, false)
+	vm.Restored, vm.Snapshot = snap != nil, snap
 	sp := s.Normalized()
 	vm.Spec = &sp
 	_ = writeSpec(dir, s)
@@ -83,12 +128,44 @@ func (p *Process) Create(ctx context.Context, s Spec) (*VM, error) {
 	return vm, nil
 }
 
-func (p *Process) Restore(context.Context, Spec, SnapshotRef) (*VM, error) {
-	return nil, ErrNotImplemented
+// Snapshot applies the hygiene gate and stores the shape record.
+func (p *Process) Snapshot(ctx context.Context, vm *VM) (SnapshotRef, error) {
+	if tainted, why := vm.Tainted(); tainted {
+		return SnapshotRef{}, fmt.Errorf("%w (%s)", ErrTainted, why)
+	}
+	if vm.Spec == nil {
+		return SnapshotRef{}, fmt.Errorf("snapshot: VM has no spec record")
+	}
+	shape := p.shapeOf(*vm.Spec).Shape()
+	st := p.store()
+	if err := os.MkdirAll(st.Dir, 0o700); err != nil {
+		return SnapshotRef{}, err
+	}
+	dir, err := st.Begin(shape)
+	if err != nil {
+		return SnapshotRef{}, err
+	}
+	ref := SnapshotRef{Key: shape.Key(), Shape: shape, Dir: dir, CleanAttested: true, CreatedAt: time.Now().UTC(),
+		SourceVMID: vm.ID, Backend: p.Name()}
+	if err := st.Commit(ref); err != nil {
+		_ = os.RemoveAll(dir)
+		return SnapshotRef{}, err
+	}
+	return ref, nil
 }
-func (p *Process) Snapshot(context.Context, *VM) (SnapshotRef, error) {
-	return SnapshotRef{}, ErrNotImplemented
+
+func (p *Process) FindSnapshot(shape Shape) (SnapshotRef, bool) {
+	if shape.KernelDigest == "" {
+		shape.KernelDigest = "process"
+	}
+	if shape.RuntimeVersion == "" {
+		shape.RuntimeVersion = p.RuntimeVersion
+	}
+	return p.store().Find(shape)
 }
+
+func (p *Process) Snapshots() []SnapshotRef             { return p.store().List() }
+func (p *Process) DeleteSnapshot(ref SnapshotRef) error { return p.store().Delete(ref) }
 
 func (p *Process) Stop(ctx context.Context, vm *VM) error {
 	err := stopProcess(ctx, vm, 500*time.Millisecond)
@@ -111,6 +188,9 @@ func (p *Process) Scan() ([]*VM, error) {
 	for _, pr := range procs {
 		vm := newVM(pr.Flag("boss-vm-id"), pr.PID, pr.Flag("dir"), true)
 		vm.Spec = readSpec(vm.Dir)
+		if vm.Spec != nil && vm.Spec.VMID != "" {
+			vm.ID = vm.Spec.VMID // a claimed warm VM is known by its control-plane id
+		}
 		watchAdopted(vm)
 		out = append(out, vm)
 	}

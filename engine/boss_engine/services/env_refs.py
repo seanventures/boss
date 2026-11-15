@@ -220,12 +220,6 @@ OPERATOR_BASE_URLS: dict[str, tuple[str, ...]] = {
 #: Operator-only: `provider=host1|host2;provider2=host` adds endpoints to a provider.
 HOSTS_VAR = "BOSS_CREDENTIAL_HOSTS"
 
-#: BOSS's OWN services the operator points it at, which carry credentials on BOSS's behalf: the
-#: microVM sandbox service receives the run's model key and git token in its submit body
-#: (sandbox_contract.build_submit_request). Any host credential may go to these, and only the
-#: operator sets them (host env).
-RELAY_URL_VARS: tuple[str, ...] = ("BOSS_SANDBOX_AGENT_URL",)
-
 _NAME_PROVIDER: dict[str, str] = {
     "OPENAI_API_KEY": "openai", "ANTHROPIC_API_KEY": "anthropic", "OPENROUTER_API_KEY": "openrouter",
     "GROQ_API_KEY": "groq", "DEEPSEEK_API_KEY": "deepseek", "GOOGLE_API_KEY": "google",
@@ -289,35 +283,6 @@ def _operator_hosts(provider: str) -> tuple[str, ...]:
         if host:
             hosts.append(host.lower().rstrip("."))
     return tuple(hosts)
-
-
-def _relay_endpoints() -> tuple[tuple[str, Optional[int]], ...]:
-    out = []
-    for var in RELAY_URL_VARS:
-        raw = (os.environ.get(var) or "").strip()
-        if not raw:
-            continue
-        parts = urlsplit(raw)
-        if parts.hostname:
-            try:
-                port = parts.port or (443 if parts.scheme == "https" else 80)
-            except ValueError:
-                continue
-            out.append((parts.hostname.lower().rstrip("."), port))
-    return tuple(out)
-
-
-def _is_relay(url: str) -> bool:
-    relays = _relay_endpoints()
-    if not relays:
-        return False
-    parts = urlsplit(url or "")
-    host = (parts.hostname or "").lower().rstrip(".")
-    try:
-        port = parts.port or (443 if (parts.scheme or "").lower() in ("https", "wss") else 80)
-    except ValueError:
-        return False
-    return (host, port) in relays
 
 
 def _official_and_operator_hosts(binding: Binding) -> tuple[str, ...]:
@@ -384,7 +349,7 @@ def destination_allowed(binding: Binding, url: str) -> bool:
     host = (parts.hostname or "").lower().rstrip(".")
     if not host:
         return False
-    if any(_host_matches(host, p) for p in _operator_hosts(binding.provider)) or _is_relay(url):
+    if any(_host_matches(host, p) for p in _operator_hosts(binding.provider)):
         return True
     if (parts.scheme or "").lower() not in ("https", "wss"):
         return False

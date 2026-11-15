@@ -10,7 +10,10 @@ import (
 )
 
 func netClient() netpol.Manager {
-	if s := os.Getenv("BOSS_E2E_NETADM_SOCKET"); s != "" {
+	switch s := os.Getenv("BOSS_E2E_NETADM_SOCKET"); {
+	case s == "inprocess": // root hostd (jailer): the policy lives in-process
+		return &netpol.Linux{Policy: netpol.Policy{VMPrefix: os.Getenv("BOSS_E2E_VM_PREFIX"), TapOwnerUID: os.Getuid()}}
+	case s != "":
 		return netpol.HelperClient{Socket: s}
 	}
 	return netpol.Noop{}

@@ -110,11 +110,12 @@ func TestSubmitCodingUnfrozenWithoutFirecrackerIs422(t *testing.T) {
 func TestEchoSubmitPollHeartbeatWhileFrozen(t *testing.T) {
 	srv := New(job.NewStore(true), "tok")
 	echo, _ := json.Marshal(map[string]any{
-		"contract_version": "1.0",
+		"contract_version": "1.1",
 		"task_id":          "exercise_echo_api",
 		"engine":           "echo",
 		"test_mode":        true,
-		"engine_env":       map[string]string{},
+		"handles":          map[string]string{},
+		"endpoints":        map[string]string{},
 		"repo":             map[string]string{},
 	})
 	res := doJSON(t, srv, http.MethodPost, "/v1/sandbox/tasks", echo, "tok")

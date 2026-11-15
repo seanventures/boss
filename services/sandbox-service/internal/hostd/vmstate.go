@@ -31,7 +31,8 @@ type vmState struct {
 	servingSince   time.Time // first answered ping of this incarnation
 	busySlots      int       // from the 500 ms ping (local use only)
 	totalSlots     int
-	pending        int // deliveries since the last ping
+	pending        int       // deliveries since the last ping
+	claimStart     time.Time // startVM entry; cleared by the first bootstrap (timing)
 }
 
 // freeSlots is what the host may still deliver to this VM (local only:
