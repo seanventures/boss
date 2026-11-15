@@ -28,6 +28,8 @@ os.environ.setdefault("BOSS_COMMUNITY_SECRET_STORE", "database")
 SEES = {"owner": True, "admin": True, "auditor": True, "operator": False, "viewer": False}
 EMAIL = "priya.raman@northpeak.test"
 PERSON = "usr_priya_1196"
+OTHER = "usr_lead_1199"
+UPN = "ops.lead@corp.test"
 
 
 @pytest.fixture()
@@ -44,7 +46,12 @@ def world(engine):
         conn = event_intake.create_connection(c, project_id=pid, kind="webhook", actor="ceo",
                                               name="hooks", config={}, secrets={}, limits={})
         envelope = {"specversion": "1.0", "id": "e1", "source": "webhook://x", "type": "com.acme.ping",
-                    "data": {"text": "deploy failed", "reporter": {"email": EMAIL}},
+                    "data": {"text": "deploy failed", "reporter": {"email": EMAIL},
+                             # BOSSAPP-1199: the same facts under other names and as plain text
+                             "approval": {"onBehalfOf": {"principalId": OTHER,
+                                                         "userPrincipalName": UPN}},
+                             "assignee": {"mail": UPN, "upn": UPN},
+                             "note": f"escalated by {UPN}"},
                     "bossconnection": conn["id"],
                     "bossactor": {"kind": "user", "external_id": "U0PRIYA", "display": "priya",
                                   "email": EMAIL}}
@@ -91,7 +98,7 @@ def _as(monkeypatch, role: str) -> None:
 
 def _leaks(body) -> bool:
     blob = json.dumps(body)
-    return EMAIL in blob or PERSON in blob
+    return any(secret in blob for secret in (EMAIL, PERSON, OTHER, UPN))
 
 
 @pytest.mark.parametrize("role,sees", sorted(SEES.items()))
@@ -130,6 +137,11 @@ def test_event_list_and_its_search_withhold_the_person(world, monkeypatch, role,
     # A search must not confirm an email the answer withholds.
     found = world.client.get("/v1/intake/events", params={"project_id": world.pid, "q": EMAIL}).json()
     assert len(found["events"]) == (2 if sees else 0)
+    # BOSSAPP-1199: nor any other hidden field (camelCase keys, mail/upn, an address in text);
+    # the search reads the same redact_people output the answer does.
+    for hidden in (OTHER, UPN, "ops.lead", "corp.test", "northpeak"):
+        got = world.client.get("/v1/intake/events", params={"project_id": world.pid, "q": hidden})
+        assert len(got.json()["events"]) == (2 if sees else 0), hidden
     # Ordinary text still searches.
     assert len(world.client.get("/v1/intake/events",
                                 params={"project_id": world.pid, "q": "deploy"}).json()["events"]) == 2
@@ -181,3 +193,32 @@ def test_the_engine_redacts_by_default(world, engine):
     assert shown["principal_id"] == PERSON and shown["people_redacted"] is False
     # A body that is not JSON cannot be scrubbed: withheld whole.
     assert event_intake._redacted({"raw_base64": "AAAA"}, False)["raw_base64"] is None
+
+
+# ── BOSSAPP-1199: what counts as a person field ──────────────────────────────────────────────
+
+@pytest.mark.parametrize("key", ["principal_id", "principalId", "PrincipalID", "principal",
+                                 "onBehalfOf", "on_behalf_of", "person_actor", "personActor",
+                                 "acting", "email", "userEmail", "EMAIL_ADDRESS", "mail", "upn",
+                                 "UPN", "userPrincipalName", "user_principal_name", "user-email"])
+def test_a_person_key_is_matched_whatever_its_case(key):
+    assert event_intake._person_key(key), key
+    assert event_intake.redact_people({key: "x"}) == {key: None}
+
+
+@pytest.mark.parametrize("key", ["display", "external_id", "user", "text", "channel", "mailbox",
+                                 "subject", "kind", "method", "type"])
+def test_an_ordinary_key_is_left_alone(key):
+    assert not event_intake._person_key(key), key
+    assert event_intake.redact_people({key: "plain"}) == {key: "plain"}
+
+
+def test_an_email_shaped_value_is_blanked_under_any_key():
+    got = event_intake.redact_people({
+        "who": "jane.doe@acme.test", "cc": ["Jane <jane@acme.test>", 7, None],
+        "text": "mail <mailto:jane@acme.test|jane@acme.test> please",
+        "deep": [{"x": {"y": "JANE@ACME.TEST"}}], "ok": "no address here", "at": "@here"})
+    assert got["who"] is None and got["cc"][0] == "Jane " and got["cc"][1:] == [7, None]
+    assert "@acme" not in got["text"].lower() and got["text"].startswith("mail ")
+    assert got["deep"] == [{"x": {"y": None}}]
+    assert got["ok"] == "no address here" and got["at"] == "@here"

@@ -716,6 +716,23 @@ def rotate_secret(connection: Connection, *, project_id: str, trigger_id: str,
 
 # ── Firing ─────────────────────────────────────────────────────────────────────────────────────
 
+def _agent_safe(trigger: Mapping[str, Any], payload: Optional[Mapping[str, Any]]
+                ) -> Optional[dict]:
+    """THE PAYLOAD AS THE RUN MAY CARRY IT (BOSSAPP-1199): whatever a trigger hands its run lands
+    in the run's first message ("What arrived") and its finalize_ctx, both readable by anyone
+    who may invoke the agent. So every BOSS-sourced payload (intake routes, the event sink, the
+    digest) passes `event_intake.redact_people`: no principal, no who-acted-for-whom, no email.
+    Who the run acts for is structured run context (`acting`), never text. A signed webhook's
+    body is the sender's own message to this agent, not BOSS directory data: it stays whole."""
+    if not payload:
+        return None
+    if trigger.get("kind") == "webhook":
+        return dict(payload)
+    from .event_intake import redact_people
+
+    return redact_people(dict(payload))
+
+
 def _message(trigger: Mapping[str, Any], extra: Optional[Mapping[str, Any]]) -> str:
     base = _json(trigger.get("input"), {}) or {}
     goal = base.get("goal") or base.get("message") or ""
@@ -814,6 +831,7 @@ def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
             "UPDATE agent_triggers SET skips = skips + 1, last_outcome = 'skipped', "
             "updated_at = now() WHERE id = :t"), {"t": trigger_id})
         return {"outcome": "skipped", "reason": skip_reason, "active_run_id": active}
+    payload = _agent_safe(trigger, payload)
     if messages is None:
         messages = [{"role": "user", "content": _message(trigger, payload)}]
     extra = {"trigger_id": trigger_id, "trigger_kind": trigger["kind"],

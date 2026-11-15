@@ -347,10 +347,14 @@ export function parseRule(v: unknown): Rule {
 export const byOrder = (x: Rule, y: Rule) => x.priority - y.priority || x.id.localeCompare(y.id);
 
 export type PreviewEvent = { id: string; type: string; subject: string; status: string; received_at: string; matched: boolean; text: string; actor: string };
-export type Preview = { ok: boolean; error: string; matched: number; considered: number; events: PreviewEvent[] };
+export type Preview = { ok: boolean; error: string; matched: number; considered: number; events: PreviewEvent[];
+  /** The caller lacks user:read: the preview matched the events with people's fields hidden, so a
+   *  rule on those fields may match live events the preview did not (BOSSAPP-1199). */
+  people_redacted: boolean };
 export const parsePreview = (v: unknown): Preview => {
   const x = o(v);
   return { ok: x.ok !== false, error: s(x.error), matched: n(x.matched), considered: n(x.considered),
+           people_redacted: x.people_redacted === true,
            events: a(x.events).map((e) => ({ id: s(o(e).id), type: s(o(e).type), subject: s(o(e).subject), status: s(o(e).status),
              received_at: s(o(e).received_at), matched: o(e).matched === true, text: s(o(e).text), actor: s(o(e).actor) })) };
 };

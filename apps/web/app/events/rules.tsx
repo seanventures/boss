@@ -199,7 +199,7 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
     const t = window.setTimeout(() => {
       void previewMatch(projectId, actor, e.agent || agents[0]?.key || "", conn.id, match).then((r) => {
         if (n !== seq.current) return;
-        setShown(r.ok ? parsePreview(r.body) : { ok: false, error: r.error || "The preview failed.", matched: 0, considered: 0, events: [] });
+        setShown(r.ok ? parsePreview(r.body) : { ok: false, error: r.error || "The preview failed.", matched: 0, considered: 0, events: [], people_redacted: false });
       });
     }, 400);
     return () => window.clearTimeout(t);
@@ -359,6 +359,12 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
                 <Chip tone={x.matched ? "green" : "grey"}>{x.matched ? "match" : "no"}</Chip>
               </span>
             ))}
+            {shown.people_redacted ? (
+              <span className="ev-faint" data-testid="ev-match-people-hidden"
+                title="People's emails and BOSS accounts were hidden from this preview (seeing them needs “View people”: Owner, Admin or Auditor). A rule on those fields may match live events the preview did not.">
+                People hidden · live results may differ
+              </span>
+            ) : null}
             {!shown.considered ? <span className="ev-faint">No events on {conn.label} yet; the count fills in as they arrive.</span> : null}
           </>
         )}

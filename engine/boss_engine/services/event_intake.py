@@ -32,6 +32,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import secrets as _secrets
 import socket
 import threading
@@ -1527,24 +1528,51 @@ _EVENT_COLUMNS = ("id, connection_id, project_id, dedupe_key, source_event_id, t
 
 # ── who a chat user is in BOSS: one redaction for every intake read (BOSSAPP-1196) ──────────
 
-#: A key whose value ties a chat identity to a BOSS person, or is an email (directory data):
-#: `principal_id` (the event row, each outcome's `subject`), the chat user's email on the
-#: envelope's `bossactor`, any `*email*` field in the raw body or the headers.
+#: A key whose value ties a chat identity to a BOSS person, or is directory data: the
+#: principal (`principal_id`, `principalId`, `principal`), who acted for whom (`person_actor`,
+#: `on_behalf_of`/`onBehalfOf`, `acting`), and any address (`*email*`, `mail`, `upn`,
+#: `userPrincipalName`). Keys are normalised (camelCase and dashes → snake_case) first.
+_PERSON_KEYS = frozenset({"person_actor", "on_behalf_of", "acting", "user_principal_name"})
+_PERSON_KEY_PARTS = frozenset({"mail", "upn", "principal"})
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_ADDRESS = (r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9\-]{1,63}(?:\.[A-Za-z0-9\-]{1,63})*"
+            r"\.[A-Za-z]{2,63}")
+#: An email address anywhere in a string value, whatever its key, with its wrapping (`<a@b>`,
+#: Slack's `<mailto:a@b|a@b>`).
+_EMAIL_IN_TEXT = re.compile(rf"<?(?:mailto:)?{_ADDRESS}(?:\|{_ADDRESS})?>?")
+
+
+def _snake(key: Any) -> str:
+    return _CAMEL.sub("_", str(key)).replace("-", "_").replace(" ", "_").lower()
+
+
 def _person_key(key: Any) -> bool:
-    k = str(key).lower()
-    return k in ("principal_id", "person_actor", "on_behalf_of", "acting") or "email" in k
+    k = _snake(key)
+    return k in _PERSON_KEYS or "email" in k or bool(_PERSON_KEY_PARTS & set(k.split("_")))
+
+
+def _scrub_text(value: str) -> Optional[str]:
+    """A string with every email address cut out; None when the address was all it held."""
+    if not _EMAIL_IN_TEXT.search(value):
+        return value
+    left = _EMAIL_IN_TEXT.sub("", value)
+    return left if left.strip(" <>\"'()[]:;,|") else None
 
 
 def redact_people(value: Any) -> Any:
-    """A copy of `value` with every person-linking field (`_person_key`) set to None, at any
-    depth: dicts, lists, the envelope, the raw body, each outcome's subject. What a caller
-    without `user:read` gets from every intake read (events, one event, dead letters, the
-    route preview). Nothing else changes: the chat user's own id and display stay."""
+    """A copy of `value` with every person-linking field (`_person_key`) set to None and every
+    email address in any string value cut out, at any depth: dicts, lists, the envelope, the
+    raw body, each outcome's subject. What a caller without `user:read` gets from every intake
+    read (events, one event, dead letters, the route preview, the stream search) and what an
+    agent's run gets from any trigger payload. Nothing else changes: the chat user's own id and
+    display stay."""
     if isinstance(value, Mapping):
         return {k: (None if _person_key(k) and v is not None else redact_people(v))
                 for k, v in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [redact_people(v) for v in value]
+    if isinstance(value, str):
+        return _scrub_text(value)
     return value
 
 
@@ -1560,10 +1588,19 @@ def _redacted(out: dict, reveal: bool) -> dict:
     return out
 
 
-#: The envelope as text with every person-linking value cut out, for `q` when the caller may
-#: not see people (a search must not be an oracle for an email the answer withholds).
-_SEARCHABLE_REDACTED = (r"""regexp_replace(envelope::text, '"[^"]*(email|principal_id|"""
-                        r"""person_actor|on_behalf_of)[^"]*": ("[^"]*"|null)', '', 'gi')""")
+def _searchable(row: Mapping[str, Any]) -> str:
+    """What `q` reads for a caller who may not see people: the searched columns and the
+    envelope AFTER `redact_people` — the same redaction the answer gets, so a search is never
+    an oracle for a hidden field and the two cannot drift."""
+    shown = redact_people({"type": row.get("type"), "subject": row.get("subject"),
+                           "dedupe_key": row.get("dedupe_key"),
+                           "actor_external_id": row.get("actor_external_id"),
+                           "envelope": _json(row.get("envelope"), {})})
+    return json.dumps(shown, default=str, ensure_ascii=False).casefold()
+
+
+#: How many candidate rows a redacted search reads before it stops looking for more matches.
+_SEARCH_SCAN_MAX = 5000
 
 
 def _summary(row: Mapping[str, Any], connections: Mapping[str, Mapping[str, Any]]) -> dict:
@@ -1604,7 +1641,7 @@ def list_events(connection: Connection, project_id: str, *, status: Optional[str
                 before: Optional[str] = None, reveal: bool = False) -> dict:
     """The stream (E5): newest first, with status chips; `q` searches type, subject, actor,
     the envelope's text and the dedupe key. Without `reveal` (user:read) every person-linking
-    field is withheld (`redact_people`) and `q` does not search them."""
+    field is withheld (`redact_people`) and `q` searches only what is left (`_searchable`)."""
     where = ["project_id = :p"]
     params: dict[str, Any] = {"p": project_id, "n": max(1, min(int(limit), 500))}
     if status:
@@ -1622,13 +1659,28 @@ def list_events(connection: Connection, project_id: str, *, status: Optional[str
         where.append("received_at < :before")
         params["before"] = _event_time(before)
     if q:
-        searched = "envelope::text" if reveal is True else _SEARCHABLE_REDACTED
+        # SQL narrows to the rows that match anywhere (a superset); without `reveal` each one is
+        # then re-checked against its redacted form (`_searchable`), page by page.
         where.append("(type ILIKE :q OR subject ILIKE :q OR dedupe_key ILIKE :q OR "
-                     f"actor_external_id ILIKE :q OR {searched} ILIKE :q)")
+                     "actor_external_id ILIKE :q OR envelope::text ILIKE :q)")
         params["q"] = f"%{str(q)[:200]}%"
-    rows = connection.execute(text(
-        f"SELECT {_EVENT_COLUMNS} FROM intake_events WHERE {' AND '.join(where)} "
-        "ORDER BY received_at DESC, id DESC LIMIT :n"), params).mappings().all()
+    sql = (f"SELECT {_EVENT_COLUMNS} FROM intake_events WHERE {' AND '.join(where)} "
+           "{after} ORDER BY received_at DESC, id DESC LIMIT :n")
+    if not q or reveal is True:
+        rows = connection.execute(text(sql.format(after="")), params).mappings().all()
+    else:
+        needle = str(q)[:200].casefold()
+        rows, scanned, after = [], 0, ""
+        while len(rows) < params["n"] and scanned < _SEARCH_SCAN_MAX:
+            page = connection.execute(text(sql.format(after=after)), params).mappings().all()
+            scanned += len(page)
+            rows.extend(r for r in page if needle in _searchable(r))
+            if len(page) < params["n"]:
+                break
+            last = page[-1]
+            after = "AND (received_at, id) < (:after_at, :after_id)"
+            params.update({"after_at": last["received_at"], "after_id": last["id"]})
+        rows = rows[:params["n"]]
     conns = _connections_of(connection, project_id)
     return _redacted({"events": [_summary(dict(r), conns) for r in rows],
                       "counts": status_counts(connection, project_id,

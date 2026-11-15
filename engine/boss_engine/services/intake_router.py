@@ -177,6 +177,29 @@ def event_text(event: IntakeEvent) -> str:
     return ""
 
 
+def agent_payload(conn: IntakeConnection, event: IntakeEvent, event_id: str, *,
+                  chat: bool, who: str = "") -> dict[str, Any]:
+    """WHAT THE AGENT'S RUN CARRIES from an intake event (its first message, `finalize_ctx`'s
+    `payload`), BOSSAPP-1199: only what the agent needs — the event id, kind, the words, the
+    channel, the acting person's display name, the screen verdict, and (for a record event, not
+    a chat turn) the record's fields. Never the envelope: the chat user's email, external ids
+    and the BOSS principal behind them stay off anything an `agent:invoke` holder can read in
+    the thread or the run. Who the run acts for travels as structured run context (`acting`,
+    the fire's `subject`), not as text. Every value passes `event_intake.redact_people`."""
+    from . import event_intake
+
+    data = event.data or {}
+    out: dict[str, Any] = {"event_id": event_id, "source": conn.kind, "type": event.type,
+                           "subject": event.subject, "text": event_text(event),
+                           "channel": data.get("channel"),
+                           "from": who or event.bossactor.display or None}
+    if event.bossscreen:
+        out["bossscreen"] = {"verdict": event.bossscreen.get("verdict")}
+    if not chat:
+        out["data"] = data
+    return event_intake.redact_people({k: v for k, v in out.items() if v not in (None, "")})
+
+
 def _addressed(envelope: Mapping[str, Any]) -> bool:
     type_ = str(envelope.get("type") or "").lower()
     if type_.endswith(ADDRESSED_SUFFIXES):
@@ -202,7 +225,11 @@ def chat_messages(route: Mapping[str, Any], conn: IntakeConnection, event: Intak
     if not words:
         return None
     cfg = _json(route.get("config"), {}) or {}
-    who = subject.display or subject.external_id or event.bossactor.display or "a person"
+    from . import event_intake
+
+    # A display name only: never an address (a directory may hand one back as the display).
+    who = event_intake.redact_people(subject.display or subject.external_id
+                                     or event.bossactor.display or "") or "a person"
     lines = [f"This conversation comes from {conn.kind} ({conn.name or conn.id}), route "
              f"{route.get('name') or route['id']}; thread {thread_key or 'the route thread'}.",
              f"You are talking with {who}" + (" (a linked BOSS user; you act for them)."
@@ -656,7 +683,9 @@ def route(connection: Connection, conn: IntakeConnection, event: IntakeEvent,
             fires.append(_decided(target, conn, event_row, dedupe, "refused", refused.reason))
             continue
         messages = chat_messages(target, conn, event, thread_key, subject) if chat else None
-        fires.append(Fire(trigger_id=str(target["id"]), dedupe_key=dedupe, payload=envelope,
+        payload = agent_payload(conn, event, event_id, chat=chat,
+                                who=subject.display or event.bossactor.display)
+        fires.append(Fire(trigger_id=str(target["id"]), dedupe_key=dedupe, payload=payload,
                           thread_id=thread_id, acting=subject.acting, reason=reason, extra=extra,
                           policy=double_text if thread_id else None, messages=messages,
                           owner_grant=subject.kind != "person"))
@@ -797,7 +826,7 @@ def preview_match(connection: Connection, *, project_id: str, connection_id: str
             "people_redacted": reveal is not True}
 
 
-__all__ = ["ADDRESSING", "FANOUT", "FIRE_OUTCOMES", "Fire", "chat_messages", "choose_chat_route",
-           "dedupe_key_for", "reply_target", "route_names",
+__all__ = ["ADDRESSING", "FANOUT", "FIRE_OUTCOMES", "Fire", "agent_payload", "chat_messages",
+           "choose_chat_route", "dedupe_key_for", "reply_target", "route_names",
            "event_text", "fire_all", "is_chat", "preview_match", "render_thread_key", "route",
            "routes_for", "thread_owned"]
