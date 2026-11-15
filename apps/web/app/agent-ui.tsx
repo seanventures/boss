@@ -1096,6 +1096,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // more. Read as a failure it showed "Needs your consent" and started a repair turn. A
       // "Give consent" offer (a call refused for want of consent in the turn) is exactly this.
       const r = await withConsentResult(press);
+      // THE OFFER STANDS WHILE CONSENT IS STILL THE QUESTION (BOSSAPP-1163). The person closed
+      // the sheet without granting: nothing ran, so the button is neither spent nor a failure
+      // to repair. Dropped and repaired, the offer ("Revise decision") was gone from the thread
+      // on the next visit, with a repair turn in its place.
+      const stillAsking = !r.ok ? consentFromBody((r.data as Record<string, unknown> | undefined)?.consent) : null;
+      if (stillAsking) {
+        setMessages((m) => [...m, { role: "assistant", content:
+          `Not run: “${action.label}” needs your consent first. Press it again to give it.` }]);
+        return;
+      }
       const payload = (r.data ?? {}) as Record<string, unknown>;
       const ok = r.ok && payload?.ok !== false;
       // BOSS CHANGED SOMETHING THE OTHER PANELS ARE SHOWING. Clicking "Create the target" here

@@ -132,7 +132,9 @@ class TestTheSuiteCannotReachAnotherSchema:
         from pathlib import Path
 
         confinement = Path("apps/api/tests/schema_confinement.py").read_text()
-        assert "DROP SCHEMA IF EXISTS" in confinement
+        # In batches (BOSSAPP-1162): one DROP SCHEMA CASCADE over ~2100 relations exhausted the
+        # server's lock table when shards ended together, and the schemas stayed behind.
+        assert "drop_schema_in_batches(" in confinement
         assert "atexit.register" in confinement, (
             "the schema is created before any fixture exists and must go away even if "
             "collection fails"

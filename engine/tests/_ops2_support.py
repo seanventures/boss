@@ -15,33 +15,27 @@ from sqlalchemy import create_engine, text
 
 
 def fresh_engine(suffix: str):
-    """(engine, drop) on a new boss_test_ops2_<suffix> database with the schema applied."""
-    import psycopg
-    from sqlalchemy.engine import make_url
-
+    """(engine, drop) on a new boss_scratch_ops2<suffix>_<rand>_<stamp> database with the schema
+    applied. The scratch helper drops it on `drop()`, at exit, and — should both be skipped by
+    a killed process — `boss dev sweep-test-db` does after 24 h, by the stamp in its name."""
     from boss_engine.db import ensure_schema
+    from boss_engine.dev.test_databases import scratch_database
 
     url = os.environ.get("BOSS_TEST_DATABASE_URL", "")
     name = url.rsplit("/", 1)[-1].split("?", 1)[0]
     if not url or "test" not in name:
         pytest.skip("BOSS_TEST_DATABASE_URL must name a disposable boss_test* database")
-    base = make_url(url)
-    admin = base.set(drivername="postgresql", database="postgres").render_as_string(
-        hide_password=False)
-    db = f"boss_test_ops2_{suffix}"
+    scratch = scratch_database(url, f"ops2{suffix}")
     try:
-        with psycopg.connect(admin, autocommit=True) as c:
-            c.execute(f'DROP DATABASE IF EXISTS "{db}" WITH (FORCE)')
-            c.execute(f'CREATE DATABASE "{db}"')
+        scratch_url = scratch.__enter__()
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"cannot create the test database: {type(exc).__name__}")
-    engine = create_engine(base.set(database=db), future=True)
+    engine = create_engine(scratch_url, future=True)
     ensure_schema(engine)
 
     def drop() -> None:
         engine.dispose()
-        with psycopg.connect(admin, autocommit=True) as c:
-            c.execute(f'DROP DATABASE IF EXISTS "{db}" WITH (FORCE)')
+        scratch.__exit__(None, None, None)
 
     return engine, drop
 
