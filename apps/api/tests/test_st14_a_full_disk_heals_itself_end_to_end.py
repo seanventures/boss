@@ -110,7 +110,12 @@ class FakeDocker:
         a = list(argv[1:])
         self.calls.append(a)
         out, rc = "", 0
-        if a[:2] == ["system", "df"]:
+        if a[:2] == ["system", "df"] and "-v" in a:
+            # `docker system df -v`: the only place Docker reports each volume's size
+            out = json.dumps({"Images": [], "Containers": [], "BuildCache": [],
+                              "Volumes": [{"Name": n, "Size": f"{v['bytes'] / GB:g}GB"}
+                                          for n, v in self.volumes.items()]})
+        elif a[:2] == ["system", "df"]:
             out = "\n".join(json.dumps(r) for r in [
                 {"Type": "Images", "Size": f"{self.images_bytes() / GB:g}GB", "Reclaimable": "5GB"},
                 {"Type": "Build Cache", "Size": f"{self.cache / GB:g}GB", "Reclaimable": f"{self.cache / GB:g}GB"},
@@ -418,6 +423,8 @@ def test_a_full_disk_is_noticed_explained_cleaned_safely_asked_resumed_reported_
     assert states["storage.prune_build_cache"] == "done" and docker.cache == 10 * GB
     assert states["storage.remove_images"] == "done"
     assert states["storage.remove_orphan_volumes"] == "done"
+    vol_step = next(s for s in inc["plan"] if s["tool"] == "storage.remove_orphan_volumes")
+    assert vol_step["freed_gb"] == 40.0, "the orphan test volume's measured size, not 0 (BOSSAPP-1193)"
     assert states["storage.drop_scratch_dbs"] == "done"
     assert states["storage.drop_partitions"] == "done", "telemetry past its default rule: tier 2, automatic"
     assert states["storage.remove_backups"] == "ask"

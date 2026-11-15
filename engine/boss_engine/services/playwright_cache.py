@@ -7,7 +7,7 @@ on every upgrade.
 
 Now:
 
-* the browsers live on the toolchain cache volume (`boss_community_toolchain_cache`, mounted at
+* the browsers live on the toolchain cache volume (`boss_community_toolchain_cache_v2`, mounted at
   `toolchains.cache_root()` in the api and worker): `<cache root>/playwright`, owned by BOSS,
   0755 — a build's sandbox uid reads and runs them, and cannot change them (one build can never
   plant a browser another build runs);

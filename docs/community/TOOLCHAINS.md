@@ -72,7 +72,7 @@ removed, which means `jlink` isn't available.
   repository (a company Nexus, JitPack) has to be added to the allowlist by the operator.
 - **Caches are kept per project.** When a build ends, BOSS copies the run's `~/.m2/repository`
   and `~/.gradle/caches/modules-2` into `/var/lib/boss/toolchain-cache/<hash of project id>`.
-  That directory is on the `boss_community_toolchain_cache` volume and is readable only by the
+  That directory is on the `boss_community_toolchain_cache_v2` volume and is readable only by the
   `boss` user. The project's next build starts with a copy of it. A build never gets another
   project's cache, and no two runs share a live directory, because each run works on its own
   copy under its own uid. `BOSS_TOOLCHAIN_CACHE_MAX_MB` (default 2048) caps what is kept for

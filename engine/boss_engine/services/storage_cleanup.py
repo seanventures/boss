@@ -111,6 +111,14 @@ def _alloc_unused(s: Mapping[str, Any]) -> float:
     return max(0.0, _f(a) - _f(u)) if a is not None and u is not None else 0.0
 
 
+def _volumes_reclaimable(s: Mapping[str, Any]) -> float:
+    """What the orphan-volume job could really free: the helper's measured figure (ours, of a
+    rebuildable kind, dangling, old enough). `volumes_gb` is every volume on the disk, data ones
+    included, so it is never the reason to plan this step (BOSSAPP-1193). A volume that needs a
+    relabel is not a reason either — no job can remove it; the Storage card names it."""
+    return _f((s.get("by_type") or {}).get("volumes_reclaimable"))
+
+
 TOOLS: tuple[ToolDef, ...] = (
     ToolDef("storage.prune_build_cache", "Prune build cache", "host", "safe", "prune_build_cache",
             "build_cache", applies=lambda s, r: _f(s.get("cache_gb")) > 0.5,
@@ -122,7 +130,8 @@ TOOLS: tuple[ToolDef, ...] = (
             applies=lambda s, r: _f(s.get("pg_temp_gb")) > 0.1,
             args_of=lambda s, r: {"idle_minutes": IDLE_IN_TRANSACTION_MINUTES}),
     ToolDef("storage.remove_orphan_volumes", "Remove orphan volumes", "host", "safe",
-            "remove_orphan_volumes", None, applies=lambda s, r: _f(s.get("volumes_gb")) > 0.1,
+            "remove_orphan_volumes", None,
+            applies=lambda s, r: _volumes_reclaimable(s) > 0.1,
             args_of=lambda s, r: {"older_than_hours": 24}),
     ToolDef("storage.cap_logs", "Cap container logs", "host", "safe", "cap_logs", "logs",
             applies=lambda s, r: _f(s.get("logs_gb")) > 0.1,
@@ -433,12 +442,20 @@ def _poll(c: Any, engine: Any, inc: dict, plan: list, step: dict, *, actor: str)
         return {"incident_id": inc["id"], "state": "failed", "tool": step["tool"]}
     if step.get("dry"):
         ph = plan_hash(step["tool"], str(inc["host_id"]), step.get("args") or {}, items)
+        # A BOSS volume made before its labels existed: the helper names it instead of passing
+        # over it in silence; it is never an item (BOSSAPP-1193).
+        relabel = [str(v) for v in (result.get("needs_relabel") or [])][:20]
+        note = f"; unlabelled BOSS volume — needs relabel: {', '.join(relabel)}" if relabel else ""
         step.update({"items": len(items), "gb": round(size / 1e9, 3), "plan_hash": ph, "dry": False,
-                     "dry_run_at": _iso(_now()), "detail": f"{len(items)} items, {size / 1e9:.1f} GB"})
+                     "dry_run_at": _iso(_now()), "detail": f"{len(items)} items, {size / 1e9:.1f} GB{note}"})
+        if relabel:
+            step["needs_relabel"] = relabel
         _finish_action(c, step.get("action_id"), status="done", items=len(items), bytes_=size,
-                       result={"items": items[:500]}, plan_hash_=ph)
+                       result={"items": items[:500], **({"needs_relabel": relabel} if relabel else {})},
+                       plan_hash_=ph)
         if not items:
-            step.update({"state": "skipped", "reason": "nothing to do", "ended_at": _iso(_now())})
+            step.update({"state": "skipped", "ended_at": _iso(_now()),
+                         "reason": f"nothing to do{note}"[:200]})
             _save_plan(c, inc["id"], plan)
             return {"incident_id": inc["id"], "state": "nothing_to_do", "tool": step["tool"]}
         if int(step["tier"]) == 3:

@@ -203,10 +203,10 @@ class TestTheLockPreflight:
         assert "temp_file_limit=${BOSS_TEST_PG_TEMP_FILE_LIMIT:-1GB}" in service
         assert "statement_timeout=${BOSS_TEST_PG_STATEMENT_TIMEOUT:-60s}" in service
         assert "${BOSS_TEST_POSTGRES_PORT:-55700}:5432" in service
-        assert "boss_community_pg_test:/var/lib/postgresql/data" in service
+        assert "boss_community_pg_test_v2:/var/lib/postgresql/data" in service
         for label in ("owner: boss", "kind: test", "ttl: 24h"):
             assert label in service
-        volume = compose.split("\n  boss_community_pg_test:\n", 1)[1].split("\n  boss_community_", 1)[0]
+        volume = compose.split("\n  boss_community_pg_test_v2:\n", 1)[1].split("\n  boss_community_", 1)[0]
         for label in ("owner: boss", "kind: test", "ttl: 24h"):
             assert label in volume
 
