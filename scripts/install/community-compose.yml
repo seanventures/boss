@@ -993,6 +993,65 @@ services:
       retries: 12
       start_period: 20s
 
+  # boss-model-gateway (P8b S10, BOSSAPP-1071; boss-agent-hosts-lld.md §3.9): the central
+  # STREAMING model gateway. A microVM guest holds a `boss_mdl_` handle, never a provider key;
+  # boss-hostd forwards its model calls here with the host's identity, and this service attaches
+  # the real key (read through resolve_secret_ref, in memory only), pins the provider's inference
+  # paths, reserves the run's budget per call, writes the ledger and audit rows, and streams the
+  # answer back chunk by chunk (egress buffers whole responses, so the model route is not there).
+  # Same image as egress (the engine's dependencies; apps/model-gateway is copied into it). No
+  # ports are published: only the compose network reaches it. The API tells hosts where it is
+  # through BOSS_MODEL_GATEWAY_URL (desired-state `endpoints.model_gateway`).
+  model-gateway:
+    image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-egress:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
+    pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
+    command: ["python", "-m", "boss_model_gateway"]
+    entrypoint: ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
+    restart: unless-stopped
+    init: true
+    mem_limit: 384m
+    oom_score_adj: -300
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}@db:5432/boss
+      BOSS_EDITION: community
+      PYTHONPATH: /app:/app/engine:/app/apps/model-gateway
+      BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
+      BOSS_EGRESS_SERVICE_KEY_FILE: /var/lib/boss/identity/egress-service.key
+      BOSS_MODEL_GATEWAY_PORT: "8092"
+      BOSS_MODEL_GATEWAY_URL: ${BOSS_MODEL_GATEWAY_URL:-http://model-gateway:8092}
+      # The local lane's thin client (BOSS_MODEL_PROXY_VIA_GATEWAY on the api/worker) presents
+      # its handle directly; off unless the operator turns that lane on.
+      BOSS_MODEL_GATEWAY_DIRECT: ${BOSS_MODEL_GATEWAY_DIRECT:-}
+      # The install's own provider keys, read here and nowhere a guest can see (env:<NAME>
+      # references); a stored reference (secret_ref:<id>) is resolved through the vault.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AWS_REGION: ${AWS_REGION:-}
+    volumes:
+      - boss_community_recovery:/var/lib/boss/recovery:ro
+      - boss_community_identity:/var/lib/boss/identity:ro
+    # P8 log caps: a streaming service logs per call; never let its log fill the disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/_boss/healthz', timeout=5).read()"
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
   # BOSS-RUNNER (BOSSAPP-828, apps/runner): owns coding-agent processes instead of the API, so an
   # API restart (an upgrade) re-attaches to in-flight turns instead of paying for them again. Opt
   # in: `--profile runner` and BOSS_RUNNER_URL=http://runner:8095 in .env. Its outbox and command

@@ -46,9 +46,28 @@ NEVER = ("github.com", "*.github.com", "*.githubusercontent.com", "api.github.co
 MAX_HEADER = 8192
 
 
+#: STRICT-SECRETS MODE (P8b S10, boss-agent-hosts-lld.md §3.11): on a strict host the only path
+#: to a model is the injecting route (the model gateway), so model hosts leave the opaque CONNECT
+#: allowlist — an exfiltrated subscription token or key cannot be used through the tunnel.
+STRICT_ENV = "BOSS_EGRESS_STRICT_SECRETS"
+
+
+def strict_secrets() -> bool:
+    return (os.environ.get(STRICT_ENV) or "").strip().lower() in ("1", "true", "yes")
+
+
+def _model_hosts() -> tuple[str, ...]:
+    from boss_engine.services.streaming_model_gateway import MODEL_HOSTS
+
+    return MODEL_HOSTS
+
+
 def allowlist() -> tuple[str, ...]:
     raw = (os.environ.get("BOSS_EGRESS_CONNECT_ALLOW") or "").strip()
-    return tuple(h.strip().lower() for h in raw.split(",") if h.strip()) if raw else DEFAULT_ALLOW
+    hosts = tuple(h.strip().lower() for h in raw.split(",") if h.strip()) if raw else DEFAULT_ALLOW
+    if strict_secrets():
+        hosts = tuple(h for h in hosts if not _matches(h, _model_hosts()) and h not in _model_hosts())
+    return hosts
 
 
 def _matches(host: str, patterns: Iterable[str]) -> bool:

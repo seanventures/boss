@@ -15,6 +15,8 @@ Providers:
 """
 from __future__ import annotations
 
+import logging
+
 from typing import Optional, Protocol, runtime_checkable
 
 from ..config import Settings
@@ -34,6 +36,9 @@ FIRECRACKER_NOT_ENABLED_MESSAGE = (
     "Firecracker backend is not enabled; the in-repo S1 sandbox-service "
     "scaffold does not run live microVMs (firecracker_not_enabled)."
 )
+
+log = logging.getLogger(__name__)
+
 
 
 class SandboxPlaneError(RuntimeError):
@@ -306,14 +311,55 @@ class MicroVMProvider:
 
     def _submit_body(self, spec: dict, tenant_id: Optional[str]) -> dict:
         """Map BOSS's internal flat guest_spec -> the versioned sandbox-service submit body (#99
-        contract). Model creds ride in engine_env (per task, never baked into the guest image)."""
-        from .sandbox_contract import build_submit_request, ensure_engine_env_valid
+        contract, v1.1): NO credential rides in it. The guest gets handles (`boss_mdl_`,
+        `boss_egr_`), the loopback endpoints boss-hostd serves, and the MCP gateway URLs; the
+        real keys stay in the central gateways (P8b S9/S10). The frozen legacy lane
+        (BOSS_SANDBOX_CONTRACT_LEGACY=1) still builds a v1.0 body, with a deprecation line."""
+        from .sandbox_contract import (build_submit_request, ensure_engine_env_valid,
+                                       ensure_no_raw_credential, legacy_lane_enabled)
         task_id = spec.get("task_id") or make_id("crun")
-        body = build_submit_request(spec, tenant_id, task_id=task_id)
-        # Refused here, by name, rather than by the sandbox-service after a round trip — and
-        # never sent on with a credential the guest would drop (P8-pre S5).
-        ensure_engine_env_valid(body)
+        if legacy_lane_enabled():
+            body = build_submit_request(spec, tenant_id, task_id=task_id, legacy=True)
+            # Refused here, by name, rather than by the sandbox-service after a round trip — and
+            # never sent on with a credential the guest would drop (P8-pre S5).
+            ensure_engine_env_valid(body)
+            return body
+        handles = dict(spec.get("handles") or {})
+        if "mdl" not in handles:
+            handles.update(self._model_handle(spec, tenant_id, task_id))
+        body = build_submit_request(spec, tenant_id, task_id=task_id, handles=handles,
+                                    mcp=spec.get("mcp"))
+        ensure_no_raw_credential(body, strict=True)
         return body
+
+    def _model_handle(self, spec: dict, tenant_id: Optional[str], task_id: str) -> dict:
+        """A `boss_mdl_` handle for the task's run, when a database is reachable: bound to the
+        run at epoch 0 (the sandbox-service names the VM when it boots; the guest gateway binds
+        it on first use). Without one the guest has no model and fails closed, visibly."""
+        from .streaming_model_gateway import guest_handles
+
+        project_id = str(spec.get("project_id") or "")
+        if not project_id:
+            return {}
+        try:
+            from sqlalchemy import text
+
+            from ..db import get_engine
+
+            provider = {"claude_code": "anthropic", "openai": "openai",
+                        "native": "openai"}.get(str(spec.get("engine") or "").lower())
+            with get_engine(self.settings).begin() as connection:
+                org = connection.execute(text(
+                    "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                    "WHERE p.id = :p"), {"p": project_id}).scalar()
+                if not org:
+                    return {}
+                return guest_handles(connection, self.settings, org_id=str(org),
+                                     project_id=project_id, run_id=str(task_id), epoch=0,
+                                     vm_id=None, provider=provider)
+        except Exception as exc:  # noqa: BLE001 — no handle: the guest fails closed
+            log.warning("no model handle for %s: %s", task_id, type(exc).__name__)
+            return {}
 
     def run_code_task(self, spec: dict, *, tenant_id: Optional[str] = None):
         """Dispatch the task to the sandbox-service over the async §2 contract
@@ -422,7 +468,7 @@ def build_echo_submit_body(*, task_id: str = ECHO_EXERCISE_TASK_ID) -> dict:
     Hard-coded ``engine=echo`` + ``test_mode``. Never carries claude_code,
     model credentials, or a coding claim.
     """
-    from .sandbox_contract import CONTRACT_VERSION
+    from .sandbox_contract import CONTRACT_VERSION, DEFAULT_ENDPOINTS
 
     return {
         "contract_version": CONTRACT_VERSION,
@@ -433,7 +479,10 @@ def build_echo_submit_body(*, task_id: str = ECHO_EXERCISE_TASK_ID) -> dict:
         "acceptance_criteria": ["SANDBOX_OK.txt exists"],
         "test_commands": [],
         "repo": {},
-        "engine_env": {},
+        # v1.1 (P8b S9): no credential field, ever; the echo needs no handle either.
+        "handles": {},
+        "endpoints": dict(DEFAULT_ENDPOINTS),
+        "mcp": {"servers": {}},
         "run_mutation": False,
         "resources": {"vcpu": 1, "mem_mb": 512, "timeout_s": 180},
     }

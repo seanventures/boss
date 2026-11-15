@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0",
+  "contract_version": "1.1",
   "task_id": "crun_s1_contract",
   "tenant_id": "default",
   "repo": {
@@ -8,14 +8,22 @@
     "base_branch": "main",
     "work_branch": "boss/code/crun_s1_contract"
   },
-  "git_token": "",
   "instructions": "do X",
   "acceptance_criteria": ["a"],
   "test_commands": ["pytest -q"],
   "engine": "claude_code",
-  "engine_env": {
-    "CLAUDE_CODE_OAUTH_TOKEN": "tok"
+  "handles": {
+    "egr": "boss_egr_example-handle-not-a-credential",
+    "mdl": "boss_mdl_example-handle-not-a-credential"
   },
+  "endpoints": {
+    "model": "http://127.0.0.1:7101",
+    "git": "http://127.0.0.1:7102",
+    "mcp": "http://127.0.0.1:7103",
+    "run_plane": "http://127.0.0.1:7104",
+    "connect": "http://127.0.0.1:7105"
+  },
+  "mcp": {"servers": {}},
   "run_mutation": false,
   "resources": {}
 }

@@ -141,24 +141,33 @@ def test_one_value_in_two_variables_goes_where_either_allows(monkeypatch):
         check_outbound("https://evil.example/v1", {"Authorization": f"Bearer {key}"})
 
 
-def test_the_sandbox_service_receives_the_runs_credentials(monkeypatch):
-    """(3) the microVM submit body carries the model key and the git token to BOSS's own relay."""
+def test_the_sandbox_service_receives_no_credential_and_is_no_longer_a_relay(monkeypatch):
+    """(3) contract v1.1 (P8b S9): the microVM submit body carries handles, never the model key or
+    the git token, so BOSS's sandbox-service is no longer a credential relay — the RELAY_URL_VARS
+    exemption is gone, and a host credential bound for that URL is refused like any other
+    misdirection."""
     model_key = "sk-canary-model-0123456789abcdef"
     git_token = "ghs_canary_git_0123456789abcdef"
     monkeypatch.setenv("OPENAI_API_KEY", model_key)
     register_host_credential(git_token, provider_binding("github"), "A GitHub installation token")
     monkeypatch.setenv("BOSS_SANDBOX_AGENT_URL", "http://sandbox-host:8088")
+    from boss_engine.services import env_refs
     from boss_engine.services.sandbox_contract import build_submit_request
 
+    assert not hasattr(env_refs, "RELAY_URL_VARS"), "no BOSS relay carries a credential any more"
     body = build_submit_request({"owner": "o", "repo": "r", "token": git_token,
-                                 "openai_api_key": model_key}, "t", task_id="crun_1")
+                                 "openai_api_key": model_key,
+                                 "handles": {"egr": "boss_egr_h", "mdl": "boss_mdl_h"}}, "t",
+                                task_id="crun_1")
     import json
 
-    check_outbound("http://sandbox-host:8088/v1/sandbox/tasks", {}, json.dumps(body).encode())
-    # Only that service: another port or host of the same name is not the relay.
-    for elsewhere in ("http://sandbox-host:9999/v1/sandbox/tasks", "http://evil.example:8088/"):
-        with pytest.raises(CredentialMisdirected):
-            check_outbound(elsewhere, {}, json.dumps(body).encode())
+    raw = json.dumps(body).encode()
+    assert model_key not in raw.decode() and git_token not in raw.decode()
+    check_outbound("http://sandbox-host:8088/v1/sandbox/tasks", {}, raw)
+    # A body that DID carry the token is refused for the sandbox URL too: there is no relay.
+    with pytest.raises(CredentialMisdirected):
+        check_outbound("http://sandbox-host:8088/v1/sandbox/tasks", {},
+                       json.dumps({**body, "git_token": git_token}).encode())
 
 
 @pytest.mark.parametrize("name,url", [
