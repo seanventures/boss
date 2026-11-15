@@ -795,7 +795,12 @@ CAPABILITIES: dict[str, Capability] = {
                     "production's approval rules.",
             tool="promote_config",
             risk_tier=3,
-            optional_inputs=("deployment_id", "app_name", "from_environment", "environment",
+            # BOUND TO ITS OWN STAGING STEP (AMEX-G9, BOSSAPP-1167): `deployment_id` comes from
+            # this run's config_deploy step and is required — no "latest staging deploy for the
+            # app" fallback, which crossed two tenants in flight. The runner checks the id is one
+            # this run deployed and passes that step's bundle_sha256 for the tool to verify.
+            required_inputs=("deployment_id",),
+            optional_inputs=("bundle_sha256", "app_name", "from_environment", "environment",
                              "target_id"),
             produces=("deployment_id", "deployed_url", "bundle_sha256"),
             requires_project=("deployment_target",),

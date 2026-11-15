@@ -12,6 +12,17 @@ self       sender.login == our bot login (connection `bot_login`, else the insta
 push       `data.changed_files` is built from the commits in the payload when GitHub sent them
            all; a truncated payload (> 20 commits) fetches the compare lazily in `enrich`, in
            the processor, never in the request — and only when the connection holds a token.
+pull_request  `data.changed_files` is fetched LAZILY (AMEX-G11, BOSSAPP-1169): `enrich` marks it
+           pending, and the router asks `load_lazy` for it only when a route's filter reads it —
+           GET /pulls/{n}/files, paginated, capped at MAX_CHANGED_FILES, with the connection's
+           API token or the project's binding of that repository — so a route can filter
+           `{"field": "data.changed_files", "op": "glob", "value": "tenants/*.yaml"}`.
+poll       (AMEX-G1, BOSSAPP-1175) for an install GitHub cannot reach: `poll` lists the
+           repository's open pull requests and branch heads since the cursor and turns each new
+           head commit into a delivery IDENTICAL in shape to the webhook's (`pull_request`
+           opened / synchronize, `push`), so parse, enrich, loop prevention and every route
+           apply unchanged. `data.head_key` names the commit; the processor drops the second
+           copy when the same commit arrived both by webhook and by poll.
 """
 from __future__ import annotations
 
@@ -24,11 +35,15 @@ from urllib.parse import quote
 
 from ..base import IntakeAdapterBase
 from ..contract import (
+    AuthFailed,
+    Cursor,
     ExternalActor,
     IntakeConnection,
     IntakeEvent,
     ParseRefused,
     PersonHint,
+    PollResult,
+    RateLimited,
     RawRequest,
     RawResponse,
     StoredRaw,
@@ -43,6 +58,14 @@ API_BASE = "https://api.github.com"
 #: GitHub puts at most this many commits in a push payload; beyond it the list is truncated.
 PUSH_COMMIT_LIMIT = 20
 MAX_CHANGED_FILES = 300
+#: GitHub's page size for /pulls/{n}/files and the list endpoints.
+PAGE_SIZE = 100
+#: Pull requests and branches one poll reads at most (a repository with more open PRs than this
+#: is past what polling is for: point a webhook at it).
+MAX_POLLED_PULLS = 100
+MAX_POLLED_BRANCHES = 300
+#: `X-GitHub-Event` / `X-GitHub-Delivery` of a delivery the poller made, and how it is marked.
+POLL_DELIVERY_PREFIX = "poll-"
 #: `owner/name` as GitHub spells it; anything else never reaches the compare URL.
 _FULL_NAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_.-]{1,100}$")
 _SHA = re.compile(r"^[0-9a-f]{7,64}$")
@@ -72,10 +95,11 @@ def _default_transport(method: str, url: str, headers: Mapping[str, str],
         data = resp.json()
     except ValueError:
         data = None
-    return resp.status, data
+    return resp.status, data, dict(resp.headers or {})
 
 
-#: (method, url, headers, body, purpose) -> (status, parsed JSON or None). Tests replace it.
+#: (method, url, headers, body, purpose) -> (status, parsed JSON or None[, answer headers]).
+#: Tests replace it.
 TRANSPORT: Callable[..., tuple[int, Any]] = _default_transport
 
 
@@ -108,7 +132,7 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
             return RawResponse(status=200, body={"pong": True})
         return None
 
-    def dedupe_key(self, conn: IntakeConnection, req: RawRequest) -> str:
+    def dedupe_key(self, conn: IntakeConnection, req: RawRequest) -> str:  # noqa: D102
         delivery = req.header(DELIVERY_HEADER).strip()[:200]
         if delivery:
             return f"github:{delivery}"
@@ -197,7 +221,12 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
                 data.update(record_type=event, operation=_operation(event, action),
                             fields={k: v for k, v in body.items()
                                     if isinstance(v, (str, int, float, bool)) and k != "action"})
-        ev = IntakeEvent(id=str(raw.headers.get(DELIVERY_HEADER) or raw.dedupe_key.split(":", 1)[-1]),
+        delivery = str(raw.headers.get(DELIVERY_HEADER) or "")
+        data["delivered_by"] = "poll" if delivery.startswith(POLL_DELIVERY_PREFIX) else "webhook"
+        head = _head_key(type_, data, full_name)
+        if head:
+            data["head_key"] = head
+        ev = IntakeEvent(id=str(delivery or raw.dedupe_key.split(":", 1)[-1]),
                          source=source, type=type_, subject=subject, time=time_, data=data,
                          bossactor=actor, bossconnection=conn.id, bossdedupe=raw.dedupe_key)
         if isinstance(body.get("boss"), dict):
@@ -223,7 +252,10 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
                              if isinstance(c, dict)])
         head = body.get("head_commit") if isinstance(body.get("head_commit"), dict) else None
         data["message"] = str((head or {}).get("message") or "")[:2000]
-        complete = (len(commits) < PUSH_COMMIT_LIMIT and all(
+        # A push the poller made carries no commits at all (`commits: null`): its list comes
+        # from the compare, like a truncated payload's.
+        complete = (isinstance(body.get("commits"), list) and len(commits) < PUSH_COMMIT_LIMIT
+                    and all(
             isinstance(c, dict) and all(isinstance(c.get(k), list)
                                         for k in ("added", "removed", "modified"))
             for c in commits))
@@ -237,9 +269,14 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
         return subject, (head or {}).get("timestamp") if head else None
 
     def enrich(self, conn: IntakeConnection, ev: IntakeEvent) -> IntakeEvent:
-        """A truncated push payload: fetch `before...after` once, through the outbound guard,
-        with the connection's optional API token. Failure leaves `changed_files_error` set; the
-        event still routes."""
+        """The changed files GitHub did not put in the payload, fetched once, through the
+        outbound guard: a truncated push's compare, or a pull request's files. Failure leaves
+        `changed_files_error` set; the event still routes."""
+        if ev.type.startswith("com.github.pull_request.") and "changed_files" not in ev.data:
+            # LAZY: fetched only when a route's filter reads the list (`load_lazy`).
+            ev.data["changed_files"] = None
+            ev.data["changed_files_source"] = "pending"
+            return ev
         if ev.type != "com.github.push" or ev.data.get("changed_files") is not None:
             return ev
         repo, before, after = ev.data.get("repository"), ev.data.get("before"), ev.data.get("after")
@@ -248,13 +285,11 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
                 or str(before).strip("0") == ""):
             ev.data["changed_files_source"] = "unavailable"
             return ev
-        token = conn.secret("api_token")
-        headers = {"Accept": "application/vnd.github+json", "User-Agent": "boss-intake"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        headers = _headers(conn, str(repo))
         url = f"{API_BASE}/repos/{repo}/compare/{quote(str(before), safe='')}...{quote(str(after), safe='')}"
         try:
-            status, payload = TRANSPORT("GET", url, headers, None, "intake.github.compare")
+            status, payload, _ = _transport_with_headers("GET", url, headers,
+                                                         "intake.github.compare")
         except Exception as error:  # noqa: BLE001 — the event routes without the list
             ev.data["changed_files_error"] = f"{type(error).__name__}"
             ev.data["changed_files_source"] = "error"
@@ -269,6 +304,171 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
             for f in (payload.get("files") or [])[:MAX_CHANGED_FILES] if isinstance(f, dict)]
         ev.data["changed_files_source"] = "compare_api"
         return ev
+
+    #: Envelope fields this adapter fills only when a route's filter reads them (the router
+    #: calls `load_lazy`): a pull request's file list costs GitHub calls nobody may need.
+    lazy_fields = ("data.changed_files",)
+
+    def load_lazy(self, conn: IntakeConnection, ev: IntakeEvent, field: str) -> IntakeEvent:
+        if (field == "data.changed_files" and ev.type.startswith("com.github.pull_request.")
+                and ev.data.get("changed_files_source") == "pending"):
+            return self._pull_request_files(conn, ev)
+        return ev
+
+    def _pull_request_files(self, conn: IntakeConnection, ev: IntakeEvent) -> IntakeEvent:
+        """`GET /repos/{repo}/pulls/{n}/files`, page by page, at most MAX_CHANGED_FILES files.
+        Same shape as a push's list: [{filename, status, additions, deletions}] (a renamed
+        file also carries `previous_filename`)."""
+        repo, number = ev.data.get("repository"), str(ev.data.get("record_id") or "")
+        ev.data["changed_files"] = None
+        if not repo or not _FULL_NAME.match(str(repo)) or not number.isdigit():
+            ev.data["changed_files_source"] = "unavailable"
+            return ev
+        headers = _headers(conn, str(repo))
+        files: list[dict[str, Any]] = []
+        page = 1
+        while len(files) < MAX_CHANGED_FILES:
+            url = (f"{API_BASE}/repos/{repo}/pulls/{number}/files"
+                   f"?per_page={PAGE_SIZE}&page={page}")
+            try:
+                status, payload, _ = _transport_with_headers("GET", url, headers,
+                                                             "intake.github.pr_files")
+            except Exception as error:  # noqa: BLE001 — the event routes without the list
+                ev.data["changed_files_error"] = f"{type(error).__name__}"
+                ev.data["changed_files_source"] = "error"
+                return ev
+            if status != 200 or not isinstance(payload, list):
+                ev.data["changed_files_error"] = f"GitHub answered {status}"
+                ev.data["changed_files_source"] = "error"
+                return ev
+            for f in payload:
+                if not isinstance(f, dict):
+                    continue
+                item = {"filename": str(f.get("filename") or ""),
+                        "status": str(f.get("status") or "modified"),
+                        "additions": int(f.get("additions") or 0),
+                        "deletions": int(f.get("deletions") or 0)}
+                if f.get("previous_filename"):
+                    item["previous_filename"] = str(f["previous_filename"])
+                files.append(item)
+            if len(payload) < PAGE_SIZE:
+                break
+            page += 1
+        ev.data["changed_files"] = files[:MAX_CHANGED_FILES]
+        ev.data["changed_files_truncated"] = len(files) >= MAX_CHANGED_FILES
+        ev.data["changed_files_source"] = "pulls_api"
+        return ev
+
+    # -- PULL (AMEX-G1) ---------------------------------------------------------------------------
+
+    def poll(self, conn: IntakeConnection, cursor: Cursor, limit: int) -> PollResult:
+        """New head commits since `cursor`, as webhook-shaped deliveries.
+
+        THE CURSOR is JSON: {"pulls": {number: head_sha}, "branches": {name: sha},
+        "etags": {...}, "since": ISO}. The first poll is a BASELINE: it records every head and
+        emits only pull requests updated after the connection began polling (`since`), so
+        connecting a busy repository does not replay its history. After that, a pull request
+        new to the cursor is `opened`, a moved head is `synchronize`, and a branch whose head
+        moved is a `push` (`before` = the previous head, so `enrich` fetches its compare).
+
+        Requests carry `If-None-Match`; GitHub does not count a 304 against the rate limit.
+        A 401/403 raises AuthFailed, a 403/429 with a reset raises RateLimited — the poller
+        backs off and records it on the connection's health."""
+        repo = str(conn.get("repository") or "").strip()
+        if not _FULL_NAME.match(repo):
+            raise ParseRefused("a polled GitHub connection names its repository (owner/name)",
+                               provider=self.key)
+        state = _loads_cursor(cursor.value)
+        first = not state.get("polled")
+        since = str(state.get("since") or cursor.cursor_time or "")
+        etags: dict[str, str] = dict(state.get("etags") or {})
+        headers = _headers(conn, repo)
+        deliveries: list[StoredRaw] = []
+
+        pulls_url = (f"{API_BASE}/repos/{repo}/pulls?state=open&sort=updated&direction=desc"
+                     f"&per_page={min(PAGE_SIZE, MAX_POLLED_PULLS)}")
+        status, pulls = self._get(pulls_url, headers, etags, "pulls")
+        heads: dict[str, str] = dict(state.get("pulls") or {})
+        if status == 200:
+            seen: dict[str, str] = {}
+            for pr in (pulls or [])[:MAX_POLLED_PULLS]:
+                if not isinstance(pr, dict) or not isinstance(pr.get("head"), dict):
+                    continue
+                number, sha = str(pr.get("number") or ""), str(pr["head"].get("sha") or "")
+                if not number.isdigit() or not _SHA.match(sha):
+                    continue
+                seen[number] = sha
+                known = heads.get(number)
+                if known == sha:
+                    continue
+                if first and not _later(pr.get("updated_at"), since):
+                    continue                    # the baseline: already there when polling began
+                action = "synchronize" if known else "opened"
+                deliveries.append(_delivery(repo, "pull_request", {
+                    "action": action, "number": int(number), "pull_request": pr,
+                    "repository": (pr.get("base") or {}).get("repo") or {"full_name": repo},
+                    "sender": pr.get("user") or {}}, f"pr:{repo}#{number}@{sha}"))
+            heads = seen                         # a closed PR leaves the cursor
+        branches_url = f"{API_BASE}/repos/{repo}/branches?per_page={PAGE_SIZE}"
+        status_b, listed = self._get(branches_url, headers, etags, "branches")
+        tips: dict[str, str] = dict(state.get("branches") or {})
+        pushes = str(conn.get("poll_pushes", "true")).strip().lower() not in (
+            "false", "0", "no", "off")
+        if status_b == 200 and pushes:
+            now_tips: dict[str, str] = {}
+            for b in (listed or [])[:MAX_POLLED_BRANCHES]:
+                if not isinstance(b, dict) or not isinstance(b.get("commit"), dict):
+                    continue
+                name, sha = str(b.get("name") or ""), str(b["commit"].get("sha") or "")
+                if not name or not _SHA.match(sha):
+                    continue
+                now_tips[name] = sha
+                before = tips.get(name)
+                if first or before == sha:
+                    continue
+                deliveries.append(_delivery(repo, "push", {
+                    "ref": f"refs/heads/{name}", "before": before or "0" * 40, "after": sha,
+                    "created": before is None, "deleted": False, "forced": False,
+                    "commits": None, "head_commit": None,
+                    "repository": {"full_name": repo}, "sender": {}},
+                    f"push:{repo}@refs/heads/{name}@{sha}"))
+            tips = now_tips
+        # Every new head is returned, never a page of them: the cursor moves past all of them
+        # in the same transaction as their inserts, so a cut here would lose the rest.
+        next_state = {"polled": True, "since": since, "pulls": heads, "branches": tips,
+                      "etags": etags}
+        events = tuple(ev for raw in deliveries for ev in self.parse(conn, raw))
+        return PollResult(events=events, deliveries=tuple(deliveries),
+                          next_cursor=Cursor(stream_key=cursor.stream_key,
+                                             value=json.dumps(next_state, sort_keys=True),
+                                             cursor_time=since or None))
+
+    def _get(self, url: str, headers: Mapping[str, str], etags: dict[str, str],
+             name: str) -> tuple[int, Any]:
+        """One conditional GET: 304 → (304, None) and nothing changed."""
+        sent = dict(headers)
+        if etags.get(name):
+            sent["If-None-Match"] = etags[name]
+        status, payload, answer_headers = _transport_with_headers("GET", url, sent,
+                                                                  f"intake.github.poll.{name}")
+        if status in (401,):
+            raise AuthFailed("GitHub refused the connection's token (401)", provider=self.key)
+        if status in (403, 429):
+            remaining = str((answer_headers or {}).get("x-ratelimit-remaining") or "")
+            retry = (answer_headers or {}).get("retry-after")
+            if status == 429 or remaining == "0" or retry:
+                try:
+                    wait = float(retry) if retry else None
+                except ValueError:
+                    wait = None
+                raise RateLimited(f"GitHub rate limit ({status})", retry_after=wait,
+                                  provider=self.key)
+            raise AuthFailed(f"GitHub refused the poll ({status})", provider=self.key)
+        if status == 200 and (answer_headers or {}).get("etag"):
+            etags[name] = str(answer_headers["etag"])
+        if status not in (200, 304):
+            raise RuntimeError(f"GitHub answered {status} for {name}")
+        return status, payload
 
     def is_self(self, conn: IntakeConnection, ev: IntakeEvent) -> bool:
         login = ev.bossactor.display.casefold()
@@ -291,6 +491,91 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
 
     def conversation_key(self, conn: IntakeConnection, ev: IntakeEvent) -> Optional[str]:
         return ev.subject
+
+
+def _headers(conn: IntakeConnection, repo: str) -> dict[str, str]:
+    """GitHub request headers with the connection's own API token, or else the token of THIS
+    PROJECT'S binding of exactly this repository (`token_for_repository`). Never the
+    install-wide BOSS_GITHUB_TOKEN, never another repository's token (review of #125): a
+    connection can name any repository, and an unbound one is read anonymously or not at all.
+    Never handed to an agent, never logged."""
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "boss-intake"}
+    token = conn.secret("api_token")
+    if not token and conn.db is not None and conn.project_id:
+        try:
+            from ....services.github_connections import GitHubConnectionService
+
+            owner, _, name = repo.partition("/")
+            settings = conn.app_settings
+            if settings is None:
+                from ....config import get_settings
+
+                settings = get_settings()
+            with conn.db.begin_nested():
+                token = GitHubConnectionService(settings).token_for_repository(
+                    conn.db, project_id=conn.project_id, owner=owner, repo=name) or ""
+        except Exception:  # noqa: BLE001 — no binding: a public repository still answers
+            token = ""
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _transport_with_headers(method: str, url: str, headers: Mapping[str, str],
+                            purpose: str) -> tuple[int, Any, dict[str, str]]:
+    """TRANSPORT, with the answer's headers when the transport gives them (ETag, rate limit).
+    A transport may return (status, data) or (status, data, headers)."""
+    got = TRANSPORT(method, url, headers, None, purpose)
+    if isinstance(got, tuple) and len(got) == 3:
+        status, data, answer = got
+        return int(status), data, {str(k).lower(): str(v) for k, v in dict(answer or {}).items()}
+    status, data = got
+    return int(status), data, {}
+
+
+def _later(value: Any, since: str) -> bool:
+    """Whether GitHub's `updated_at` is after `since` (both ISO-8601; compared as instants)."""
+    from datetime import datetime, timezone
+
+    def instant(text: Any) -> Optional[datetime]:
+        try:
+            parsed = datetime.fromisoformat(str(text or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    left, right = instant(value), instant(since)
+    return left is not None and right is not None and left > right
+
+
+def _loads_cursor(value: Optional[str]) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _delivery(repo: str, event: str, body: dict[str, Any], key: str) -> StoredRaw:
+    """A polled change as the webhook would have delivered it."""
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+    return StoredRaw(body=json.dumps(body, sort_keys=True, default=str).encode("utf-8"),
+                     headers={EVENT_HEADER: event, DELIVERY_HEADER: POLL_DELIVERY_PREFIX + digest},
+                     dedupe_key=f"github:poll:{key}"[:500])
+
+
+def _head_key(type_: str, data: Mapping[str, Any], repo: str) -> Optional[str]:
+    """The commit an event is about, the same whether it came by webhook or by poll: a PR
+    that opened or moved to a head, or a branch that moved to a commit."""
+    if type_ in ("com.github.pull_request.opened", "com.github.pull_request.synchronize"):
+        sha, number = str(data.get("head_sha") or ""), str(data.get("record_id") or "")
+        return f"pr:{repo}#{number}@{sha}" if repo and number and sha else None
+    if type_ == "com.github.push" and not data.get("deleted"):
+        ref, after = str(data.get("ref") or ""), str(data.get("after") or "")
+        return f"push:{repo}@{ref}@{after}" if repo and ref and after else None
+    return None
 
 
 def _operation(event: str, action: str) -> str:

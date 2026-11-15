@@ -332,9 +332,14 @@ class Cursor:
 
 @dataclass(frozen=True)
 class PollResult:
+    """What one poll found. `deliveries` are the source-shaped bodies the events were parsed
+    from: the poller stores THOSE in the inbox, so a polled change is processed, replayed and
+    deduplicated exactly as a pushed one is (GitHub, AMEX-G1)."""
+
     events: tuple[IntakeEvent, ...]
     next_cursor: Cursor
     more: bool = False
+    deliveries: tuple["StoredRaw", ...] = ()
 
 
 @dataclass(frozen=True)

@@ -54,6 +54,22 @@ This is **not** strong isolation: the command shares the control plane's kernel.
 | | `microvm` | A skill's command runs on the sandbox host (strong isolation). |
 | `BOSS_DEPLOYMENT_TRUST` | `trusted` (default) | Your own projects on your own machine. |
 | | `untrusted` | Commands run only under strong isolation; `local_fenced` is refused. |
+| `BOSS_LOCAL_FENCED_BINARIES` | empty (default) | Worker directories a skill may run a CLI from under `local_fenced` (comma-separated absolute paths). |
+
+### Providing a CLI such as `gwlint` under `local_fenced`
+
+A `sandboxed_command` skill must pin an image by digest, but under `local_fenced` **the image is not what runs**: the command runs on the worker's own filesystem. So the CLI has to be on the worker, and BOSS checks that it is the one you meant:
+
+1. Build the CLI into a directory tree (for `gwlint`: `npm ci --omit=dev`) and mount it **read-only** on the worker, e.g. `/opt/northgate/gwlint`. Publish the same tree as the image the skill pins, so a microVM install runs the same bytes.
+2. Allow its root in `.env`, then `boss update` (a person sets this; an agent cannot):
+   ```
+   BOSS_LOCAL_FENCED_BINARIES=/opt/northgate
+   ```
+3. Declare what the skill runs in its config: `"local_binaries": ["/opt/northgate/gwlint"]` (a directory or a file). Its directory, and its `bin/` if there is one, go first on the command's `PATH`, so the command can say `gwlint validate *.yaml`.
+
+Before the command runs, every declared path must resolve (symlinks followed) under an allowed root and exist, and nothing a run's sandbox user could change may stand in the way: the path, every file under it and every directory above it must not belong to a sandbox uid nor be writable by a group or by everyone (a sticky world-writable parent such as `/tmp` is allowed). Otherwise the step fails with the one thing to fix. The tool is hashed (a directory over every file) right before the command and again after it; a tool that changed while it ran fails the step. The run records `image_used: false` and `local_binaries` (each path and its sha256), so the evidence says which tool ran. A skill that declares nothing runs with the worker's base tools only (`sh`, `diff`, …) and still records `image_used: false`.
+
+We chose an allow-list over refusing every image-pinned skill under `local_fenced` (every `sandboxed_command` skill pins an image, so refusing would switch the provider off) and over checking a whole-tree manifest (heavier, and a read-only mount under an operator-chosen root already stops a run from swapping the tool).
 
 ## A host that cannot fence builds
 

@@ -84,6 +84,175 @@ def fence_problem(settings: Any) -> Optional[str]:
     return None
 
 
+def binary_roots(settings: Any) -> list[str]:
+    """The operator's BOSS_LOCAL_FENCED_BINARIES: worker roots a skill may run CLIs from."""
+    raw = str(getattr(settings, "local_fenced_binaries", "") or
+              os.environ.get("BOSS_LOCAL_FENCED_BINARIES", "") or "")
+    roots = []
+    for part in raw.replace("\n", ",").replace(":", ",").split(","):
+        part = part.strip()
+        if part.startswith("/") and part != "/":
+            roots.append(os.path.realpath(part))
+    return roots
+
+
+#: A local CLI tree is hashed file by file; past these it is not a CLI, and is refused.
+MAX_TREE_FILES = 20_000
+MAX_TREE_BYTES = 1024 * 1024 * 1024
+
+
+def _is_pool_uid(uid: int) -> bool:
+    from . import sandbox_identity
+
+    return sandbox_identity.UID_BASE <= int(uid) < sandbox_identity.UID_BASE + \
+        sandbox_identity.UID_COUNT
+
+
+def _writable_problem(path: str, st: os.stat_result, *, ancestor: bool = False) -> Optional[str]:
+    """Why a run's pool uid could change `path`, or None. Owned by a pool uid, or writable by a
+    group or by everyone. An ANCESTOR directory that is world-writable WITH the sticky bit
+    (/tmp) is allowed: nobody can rename or replace an entry they do not own there."""
+    import stat as _stat
+
+    if _is_pool_uid(st.st_uid):
+        return f"{path} belongs to a sandbox user (uid {st.st_uid}), which can change it"
+    sticky = bool(st.st_mode & _stat.S_ISVTX)
+    if st.st_mode & 0o002 and not (ancestor and sticky):
+        return f"{path} is writable by every user on this worker"
+    if st.st_mode & 0o020 and not (ancestor and sticky):
+        return f"{path} is writable by its group"
+    return None
+
+
+def _tree_digest(root: str) -> tuple[str, Optional[str]]:
+    """(sha256 over every regular file's relative path and bytes, problem). Every file and
+    directory under `root` is held to the same rule as the root (`_writable_problem`)."""
+    digest = hashlib.sha256()
+    files = 0
+    total = 0
+    real_root = os.path.realpath(root)
+
+    def link_problem(full: str) -> Optional[str]:
+        # A SYMLINK MUST STAY IN THE TREE (npm's node_modules/.bin are links): its target is
+        # then hashed where it lives. One that leaves the tree would run unhashed bytes.
+        target = os.path.realpath(full)
+        if target != real_root and not target.startswith(real_root.rstrip("/") + "/"):
+            return f"{full} links outside {root} (to {target})"
+        return None
+
+    for here, dirs, names in os.walk(root, followlinks=False):
+        dirs.sort()
+        for name in sorted(dirs):
+            full = os.path.join(here, name)
+            problem = (link_problem(full) if os.path.islink(full) else None) or \
+                _writable_problem(full, os.lstat(full))
+            if problem:
+                return "", problem
+            if os.path.islink(full):
+                digest.update(b"dirlink:" + os.path.relpath(full, root).encode(
+                    "utf-8", "surrogateescape") + b"->" + os.readlink(full).encode(
+                    "utf-8", "surrogateescape") + b"\0")
+        for name in sorted(names):
+            full = os.path.join(here, name)
+            st = os.lstat(full)
+            problem = (link_problem(full) if os.path.islink(full) else None) or \
+                _writable_problem(full, st)
+            if problem:
+                return "", problem
+            files += 1
+            if files > MAX_TREE_FILES:
+                return "", f"{root} holds more than {MAX_TREE_FILES} files"
+            rel = os.path.relpath(full, root)
+            digest.update(rel.encode("utf-8", "surrogateescape") + b"\0")
+            if os.path.islink(full):
+                digest.update(b"link:" + os.readlink(full).encode("utf-8", "surrogateescape"))
+                continue
+            with open(full, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    total += len(chunk)
+                    if total > MAX_TREE_BYTES:
+                        return "", f"{root} is larger than {MAX_TREE_BYTES} bytes"
+                    digest.update(chunk)
+            digest.update(b"\0")
+    return digest.hexdigest(), None
+
+
+def _sha256_file(path: str) -> Optional[str]:
+    digest = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            size += len(chunk)
+            if size > MAX_TREE_BYTES:
+                return None
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def check_local_binaries(settings: Any, paths: Any) -> list[dict[str, Any]]:
+    """THE IMAGE IS NOT WHAT RUNS HERE (AMEX-G12, BOSSAPP-1170). Under `local_fenced` a skill's
+    command runs on the worker's filesystem, so the CLIs it declares (`local_binaries`) must
+    each resolve — symlinks followed — under a root the operator allow-listed
+    (BOSS_LOCAL_FENCED_BINARIES) and exist; and NOTHING a run's sandbox user could change may
+    stand in the way (review of #125): the path, every file under it, and every directory
+    above it must not be owned by a pool uid nor writable by a group or by everyone. Returns
+    the provenance the run records — each path, its kind and its sha256 (a directory's over
+    every file) — hashed now, at exec time, and checked again after the command
+    (`binaries_changed`). Raises LocalFenceUnavailable naming the one fix."""
+    declared = [str(p) for p in (paths or []) if str(p or "").strip()]
+    if not declared:
+        return []
+    roots = binary_roots(settings)
+    if not roots:
+        raise LocalFenceUnavailable(
+            "this skill runs local CLIs (" + ", ".join(declared) + ") and no worker path is "
+            "allow-listed for that. A person sets BOSS_LOCAL_FENCED_BINARIES to the read-only "
+            "directory the CLI is mounted at (e.g. /opt/northgate), or the skill runs on a "
+            "microVM substrate, where its pinned image is used.")
+    found: list[dict[str, Any]] = []
+    for path in declared:
+        real = os.path.realpath(path)
+        if not any(real == root or real.startswith(root.rstrip("/") + "/") for root in roots):
+            raise LocalFenceUnavailable(
+                f"{path} is not under a root in BOSS_LOCAL_FENCED_BINARIES "
+                f"({', '.join(roots)}). Mount the CLI there, or ask a person to add its root.")
+        if not os.path.exists(real):
+            raise LocalFenceUnavailable(
+                f"{path} does not exist on this worker. Mount the CLI there (read-only), or run "
+                "the skill on a microVM substrate, where its pinned image is used.")
+        fix = (" A run's sandbox user could replace the tool another run trusts: mount it "
+               "read-only, owned by root, with no group or world write (chmod go-w).")
+        problem = _writable_problem(real, os.stat(real))
+        parent = os.path.dirname(real)
+        while not problem and parent and parent != os.path.dirname(parent):
+            problem = _writable_problem(parent, os.stat(parent), ancestor=True)
+            parent = os.path.dirname(parent)
+        if problem:
+            raise LocalFenceUnavailable(problem + "." + fix)
+        if os.path.isdir(real):
+            digest, problem = _tree_digest(real)
+            if problem:
+                raise LocalFenceUnavailable(problem + "." + fix)
+            found.append({"path": path, "kind": "directory", "sha256": digest})
+        else:
+            found.append({"path": path, "kind": "file", "sha256": _sha256_file(real)})
+    return found
+
+
+def binaries_changed(settings: Any, recorded: list[dict[str, Any]]) -> list[str]:
+    """The declared CLIs whose bytes differ now from what `check_local_binaries` hashed."""
+    changed = []
+    for entry in recorded or []:
+        try:
+            again = check_local_binaries(settings, [entry["path"]])[0]
+        except LocalFenceUnavailable:
+            changed.append(entry["path"])
+            continue
+        if again.get("sha256") != entry.get("sha256"):
+            changed.append(entry["path"])
+    return changed
+
+
 def safe_relative_path(name: Any) -> str:
     """A file name a skill or a step hands in, confined to the workdir: relative, normalised,
     no `..`, no leading slash, no empty segment. Raises ValueError otherwise."""
@@ -224,15 +393,20 @@ class LocalFencedSandbox:
             raise
 
     # ---- running -----------------------------------------------------------------------------
-    def run(self, command: str, *, timeout: int = 300) -> Any:
+    def run(self, command: str, *, timeout: int = 300, path_prefix: Any = ()) -> Any:
         """Run `command` through /bin/sh as the leased uid, cwd = the workdir. Returns an object
-        with exit_code, stdout, stderr (tails, capped), timed_out and truncated."""
+        with exit_code, stdout, stderr (tails, capped), timed_out and truncated.
+        `path_prefix`: directories put ahead of PATH (a skill's checked local CLIs)."""
         timeout = max(1, int(timeout or 300))
+        env = skill_environment()
+        extra = [str(p) for p in (path_prefix or ()) if str(p or "").startswith("/")]
+        if extra:
+            env["PATH"] = ":".join(extra + [env.get("PATH") or "/usr/local/bin:/usr/bin:/bin"])
         timed_out = False
         with self._owned_process.owner_scope(OWNER_KIND, self.owner_id, project_id=self.project_id):
             proc = self._owned_process.popen(
                 ["/bin/sh", "-c", command], cwd=str(self.workdir), stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=skill_environment(),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
                 refuse_when_stopped=False)
             # The sandbox adds its own variables (HOME, proxies); its identity is credential-free,
             # so the coding CLIs' config dirs and any model-shaped name are withheld too.
