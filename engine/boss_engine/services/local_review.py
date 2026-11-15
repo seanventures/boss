@@ -369,8 +369,9 @@ def signer(auth: Any, fallback: str) -> dict[str, Any]:
 
 
 def person_refusal(auth: Any, what: str) -> Optional[ReviewError]:
-    """A person's decision (resolving a thread): an agent's, a service's or a bridge's credential
-    is refused, in words. No verified identity (authz off): allowed, as the route always did."""
+    """A person's decision (resolving a thread, closing a change): an agent's, a service's or a
+    bridge's credential is refused, in words. No verified identity (authz off): allowed, as the
+    route always did."""
     if auth is None:
         return None
     from ..identity.legacy import is_bridge_principal
@@ -379,6 +380,82 @@ def person_refusal(auth: Any, what: str) -> Optional[ReviewError]:
         return ReviewError(f"{what} is a person's decision: sign in and do it from the console.",
                            403, "people_only")
     return None
+
+
+def _pin_closed(git_dir: Path, number: int, sha: str) -> None:
+    """Keep a closed change's commit reachable after its branch ref is deleted."""
+    if not sha or not (git_dir / "HEAD").is_file():
+        return
+    local_repo.git(["update-ref", f"refs/boss/closed/{int(number)}", sha], git_dir=git_dir)
+
+
+def _mark_closed(c: Any, settings: Any, row: Mapping[str, Any], *, sha: str, actor: str) -> dict[str, Any]:
+    kept = sha or str(row.get("head_sha") or "")
+    _pin_closed(git_dir_of(row, settings), int(row["number"]), kept)
+    who = actor or "someone"
+    c.execute(text(
+        "UPDATE local_change_sets SET state = 'closed', closed_by = :by, closed_at = now(), "
+        "head_sha = COALESCE(NULLIF(:h, ''), head_sha), updated_at = now() WHERE id = :id"),
+        {"by": who, "h": kept, "id": row["id"]})
+    emit_event(c, row["project_id"], "local_repo.change_closed", who, "local_change_set", row["id"],
+               {"number": int(row["number"]), "branch": row["branch"], "head_sha": kept})
+    return change_by_id(c, row["id"]) or dict(row)
+
+
+def _locked_change(c: Any, project_id: str, number: int) -> dict[str, Any]:
+    row = change_row(c, project_id, number)
+    locked = c.execute(text("SELECT * FROM local_change_sets WHERE id = :i FOR UPDATE"),
+                       {"i": row["id"]}).mappings().one()
+    return dict(locked)
+
+
+def close_change(c: Any, settings: Any, *, project_id: str, number: int, actor: str) -> dict[str, Any]:
+    """Close an open change. The branch stays; the sha is pinned at refs/boss/closed/<n> so a
+    later branch delete still reads. A person's decision (the route and the tool check that)."""
+    row = _locked_change(c, project_id, number)
+    if row["state"] != "open":
+        raise ReviewError(f"Change #{number} is {row['state']}.", 409, "not_open")
+    sha = head_sha(row, git_dir_of(row, settings)) or str(row.get("head_sha") or "")
+    return _mark_closed(c, settings, row, sha=sha, actor=actor)
+
+
+def close_open_branch(c: Any, settings: Any, *, repository: str, branch: str, sha: str,
+                      actor: str) -> Optional[dict[str, Any]]:
+    """The open change on a branch a push just deleted, or None when there is none."""
+    row = c.execute(text(
+        "SELECT * FROM local_change_sets WHERE repository = :r AND branch = :b AND state = 'open' "
+        "ORDER BY number DESC LIMIT 1 FOR UPDATE"),
+        {"r": repository, "b": branch}).mappings().first()
+    if row is None:
+        return None
+    return _mark_closed(c, settings, dict(row), sha=sha or str(row.get("head_sha") or ""), actor=actor)
+
+
+def reopen_change(c: Any, settings: Any, *, project_id: str, number: int, actor: str) -> dict[str, Any]:
+    """Open a closed change again. Restores refs/heads/<branch> from the stored sha when the
+    branch ref is gone, and leaves it when another open change already uses that branch."""
+    row = _locked_change(c, project_id, number)
+    if row["state"] != "closed":
+        raise ReviewError(f"Change #{number} is {row['state']}.", 409, "not_closed")
+    other = c.execute(text(
+        "SELECT number FROM local_change_sets WHERE repository = :r AND branch = :b "
+        "AND state = 'open' AND id <> :i LIMIT 1"),
+        {"r": row["repository"], "b": row["branch"], "i": row["id"]}).scalar()
+    if other:
+        raise ReviewError(
+            f"Change #{int(other)} is already open on {row['branch']}. Close that one before "
+            "reopening this.", 409, "branch_open")
+    sha = str(row.get("head_sha") or "")
+    git_dir = git_dir_of(row, settings)
+    if sha and (git_dir / "HEAD").is_file() and local_repo.branch_sha(git_dir, row["branch"]) is None:
+        local_repo.git(["update-ref", f"refs/heads/{row['branch']}", sha], git_dir=git_dir)
+    who = actor or "someone"
+    c.execute(text(
+        "UPDATE local_change_sets SET state = 'open', closed_by = NULL, closed_at = NULL, "
+        "updated_at = now() WHERE id = :id"), {"id": row["id"]})
+    emit_event(c, row["project_id"], "local_repo.change_reopened", who, "local_change_set",
+               row["id"], {"number": int(row["number"]), "branch": row["branch"]})
+    return change_by_id(c, row["id"]) or dict(row)
 
 
 def change_number_for_run(c: Any, project_id: str, run_id: Any) -> Optional[int]:

@@ -4683,6 +4683,63 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         except (LookupError, ValueError) as exc:
             return {"ok": False, "error": str(exc).strip("'\"")}
 
+    def _close_or_reopen(ctx, *, project_id, actor, args, reopen: bool):
+        """Close or reopen a LOCAL change. A person's decision, the same rule as Merge."""
+        from ..services import local_review as _local_review
+        from .registry import CURRENT_TOOL_AUTH
+
+        auth = CURRENT_TOOL_AUTH.get()
+        what = "Reopening a change" if reopen else "Closing a change"
+        refused = _local_review.person_refusal(auth, what)
+        if refused is not None:
+            return {"ok": False, "error": refused.error, "message": str(refused)}
+        if not args.get("change_number"):
+            return {"ok": False, "error": "change_number is required"}
+        from ..config import get_settings as _gs
+
+        who = _local_review.signer(auth, actor)["author"]
+        try:
+            with ctx.begin() as c:
+                if reopen:
+                    done = _local_review.reopen_change(
+                        c, _gs(), project_id=project_id, number=int(args["change_number"]),
+                        actor=who)
+                else:
+                    done = _local_review.close_change(
+                        c, _gs(), project_id=project_id, number=int(args["change_number"]),
+                        actor=who)
+        except _local_review.ReviewError as exc:
+            return {"ok": False, "error": exc.error, "message": str(exc)}
+        return {"ok": True, "change_number": int(done["number"]), "state": done["state"],
+                "head_sha": done.get("head_sha"), "closed_by": done.get("closed_by")}
+
+    @reg.tool(
+        "close_local_change",
+        "Close a local change (abandon it). The branch stays, and the change stays readable "
+        "by its sha. A person's decision, the same as merging it. Deleting the branch on the "
+        "BOSS git remote closes it too.",
+        _obj({"change_number": {"type": "integer", "minimum": 1,
+                                "description": "the local change #N to close"}},
+             ["change_number"]),
+        kind="write",
+        reversibility="safe", permission="decision:approve",
+        exposure=Exposure(tags=("reviews", "pr")))
+    def close_local_change(ctx, *, project_id, actor, args):
+        return _close_or_reopen(ctx, project_id=project_id, actor=actor, args=args, reopen=False)
+
+    @reg.tool(
+        "reopen_local_change",
+        "Reopen a closed local change. Puts the branch ref back when a delete removed it. "
+        "A person's decision, the same as closing it.",
+        _obj({"change_number": {"type": "integer", "minimum": 1,
+                                "description": "the local change #N to reopen"}},
+             ["change_number"]),
+        kind="write",
+        reversibility="safe", permission="decision:approve",
+        exposure=Exposure(tags=("reviews", "pr")))
+    def reopen_local_change(ctx, *, project_id, actor, args):
+        return _close_or_reopen(ctx, project_id=project_id, actor=actor, args=args, reopen=True)
+
     @reg.tool(
         "review_pull_request_again",
         "Run the adversarial review again on a build's open pull request — on the PR's REAL "
@@ -9917,6 +9974,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "connect_coding_agent",
     "add_review_comment",
     "resolve_review_comment",
+    # Close and reopen a local change (BOSSAPP-955): a person's decision, the same as merge.
+    "close_local_change",
+    "reopen_local_change",
     # A hollow review (PR #223) is fixed by reviewing the PR's real diff again, on request.
     "review_pull_request_again",
     "cancel_code_task",

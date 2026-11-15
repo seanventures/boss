@@ -424,10 +424,22 @@ class LocalGitAdapter:
                 "previous_target_sha": expected_base_sha, "authorized_head_sha": expected_head_sha}
 
     def close_change_set(self, pull_number: int) -> None:
+        """Close the open change: pin its sha and record who (the same close the route uses).
+        Already closed or merged: nothing, as the old UPDATE matched no row."""
+        from . import local_review
+
+        if not self.project_id:
+            with self.engine.begin() as c:
+                c.execute(text("UPDATE local_change_sets SET state = 'closed', updated_at = now() "
+                               "WHERE repository = :r AND number = :n AND state = 'open'"),
+                          {"r": self.repository_full_name, "n": int(pull_number)})
+            return
         with self.engine.begin() as c:
-            c.execute(text("UPDATE local_change_sets SET state = 'closed', updated_at = now() "
-                           "WHERE repository = :r AND number = :n AND state = 'open'"),
-                      {"r": self.repository_full_name, "n": int(pull_number)})
+            try:
+                local_review.close_change(c, self.settings, project_id=self.project_id,
+                                          number=int(pull_number), actor="boss")
+            except local_review.ReviewError:
+                return
 
     # -- the review conversation ------------------------------------------------------------
     def _note(self, number: int, *, kind: str, body: str, event: Optional[str] = None,

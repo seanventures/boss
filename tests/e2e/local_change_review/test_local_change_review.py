@@ -233,4 +233,13 @@ def test_plain_git_through_the_console_clone_push_a_branch_refused_main(person: 
     p.tid("gr-clone").click()
     assert p.tid("lr-remote").inner_text().endswith(f"/git/{pid}.git")
     p.p.keyboard.press("Escape")
+    # Close and Reopen (BOSSAPP-955): the same page, a person's press, then the change is open again.
+    p.tid("change-set-close").click()
+    p.p.wait_for_function(
+        "() => (document.querySelector(\"[data-testid='change-set-state']\")?.textContent || '').includes('Closed')",
+        timeout=30_000)
+    p.tid("change-set-reopen").click()
+    p.p.wait_for_function(
+        "() => (document.querySelector(\"[data-testid='change-set-state']\")?.textContent || '').includes('Open')",
+        timeout=30_000)
     p.check("a pushed branch is a change")

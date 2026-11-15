@@ -24,7 +24,7 @@ import { Decide, InlineNote, Review } from "../app/changes/[projectId]/[number]/
 import { addProjectApi } from "../lib/add-project";
 import { parseChangeSet } from "../lib/repo-links";
 import { declarations } from "./_helpers/css-declarations";
-import { mountAs, stubFetch, tid, unmount } from "./_helpers/multirepo-fixtures";
+import { mountAs, settle, stubFetch, tid, unmount } from "./_helpers/multirepo-fixtures";
 
 afterEach(() => unmount());
 
@@ -64,6 +64,41 @@ describe("the change set's review note", () => {
     expect(tid("change-set-held")?.textContent).toContain("CI is still running");
     merge.click();
     expect(calls.filter((c) => c.method === "POST")).toEqual([]);
+  });
+
+  it("closes an open local change and reopens a closed one", async () => {
+    const open = parseChangeSet({ number: 4, state: "open", base_branch: "main", branch: "fix/x" });
+    const calls = stubFetch((c) => (c.method === "POST" ? { body: { state: "closed" } } : undefined));
+    await mountAs(<Decide cs={open} projectId="hd" number="4" reread={async () => open} />);
+    expect(tid("change-set-close")).toBeTruthy();
+    expect(tid("change-set-reopen")).toBeNull();
+    tid("change-set-close")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle();
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual([
+      "/v1/projects/hd/local-changes/4/close"]);
+    unmount();
+    const closed = parseChangeSet({ number: 4, state: "closed", base_branch: "main", branch: "fix/x" });
+    const again = stubFetch((c) => (c.method === "POST" ? { body: { state: "open" } } : undefined));
+    await mountAs(<Decide cs={closed} projectId="hd" number="4" reread={async () => closed} />);
+    expect(tid("change-set-close")).toBeNull();
+    tid("change-set-reopen")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle();
+    expect(again.filter((c) => c.method === "POST").map((c) => c.path)).toEqual([
+      "/v1/projects/hd/local-changes/4/reopen"]);
+  });
+
+  it("a GitHub pull request and a merged change have no close", async () => {
+    stubFetch(() => undefined);
+    const github = parseChangeSet({ number: 1, state: "open", source: "github", base_branch: "main" });
+    await mountAs(<Decide cs={github} projectId="hd" number="1" reread={async () => github} />);
+    expect(tid("change-set-close")).toBeNull();
+    expect(tid("change-set-reopen")).toBeNull();
+    unmount();
+    const merged = parseChangeSet({ number: 1, state: "merged", base_branch: "main" });
+    stubFetch(() => undefined);
+    await mountAs(<Decide cs={merged} projectId="hd" number="1" reread={async () => merged} />);
+    expect(tid("change-set-close")).toBeNull();
+    expect(tid("change-set-reopen")).toBeNull();
   });
 });
 

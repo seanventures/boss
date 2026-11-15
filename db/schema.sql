@@ -11713,6 +11713,8 @@ CREATE TABLE IF NOT EXISTS local_change_sets (
   merged_sha TEXT,
   merged_by TEXT,
   merged_at TIMESTAMPTZ,
+  closed_by TEXT,
+  closed_at TIMESTAMPTZ,
   run_id TEXT,
   pending_push BOOLEAN NOT NULL DEFAULT false,
   github_pr_url TEXT,
@@ -11800,6 +11802,10 @@ ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS author TEXT;
 -- A pushed change whose review could not start because it needs consent (BOSSAPP-1012).
 -- The flat 409 body, so the change page opens the same consent sheet. Cleared once queued.
 ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS review_consent JSONB;
+-- Who closed a change, and when (BOSSAPP-955). Cleared on reopen. The sha stays pinned at
+-- refs/boss/closed/<number> so the change still reads after its branch is deleted.
+ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS closed_by TEXT;
+ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
 
 -- PUSH PENDING (BOSSAPP-922): a GitHub project's branch whose commits landed in the local mirror
 -- while GitHub was down. The worker's push-pending job pushes it and opens the pull request when

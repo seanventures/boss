@@ -3,12 +3,13 @@ the API's `git http-backend` (local_git_http), from the image's hooks directory
 (services/git_hooks, set by core.hooksPath in the environment — no clone can change them).
 
     pre-receive    the fence: refuses, in words, a push to the default branch ("main moves only
-                   through BOSS's merge"), a tag, a force push, a delete, a ref outside
-                   refs/heads (git notes refs/notes/boss-review excepted), and a boss/* branch
-                   while a run is building it
+                   through BOSS's merge"), a tag, a force push, a ref outside refs/heads (git
+                   notes refs/notes/boss-review excepted), and a boss/* branch while a run is
+                   building it. Deleting any other branch is allowed: that closes its change.
     post-receive   each pushed branch becomes a change set (opened, or updated and its comments
-                   re-anchored), its review is queued, and git notes on refs/notes/boss-review
-                   become comments; it prints `remote: BOSS opened change #N <url>`
+                   re-anchored), its review is queued, a deleted branch closes its open change
+                   (the sha stays readable), and git notes on refs/notes/boss-review become
+                   comments; it prints `remote: BOSS opened change #N <url>`
 
 `reconcile` does the post-receive work for refs that moved any other way (the change list reads
 it), so a change set never lags its branch.
@@ -51,12 +52,13 @@ def check_update(old: str, new: str, ref: str, *, default_branch: str, busy: Ite
     if branch == default_branch:
         return (f"{default_branch} moves only through BOSS's merge. Push a branch: it becomes a "
                 "change you can review and merge.")
-    if new == ZERO:
-        return (f"{branch}: deleting a branch is not done by push. Close its change in BOSS "
-                "instead.")
     if branch in set(busy):
         return (f"{branch}: a BOSS run is building this branch right now. Push again when it "
                 "has finished (its change page says so).")
+    # A delete of any other branch closes its open change (post-receive), the way closing it
+    # in BOSS does. The default branch and a branch a run is building stay refused above.
+    if new == ZERO:
+        return None
     if old != ZERO and not is_ancestor(old, new):
         return (f"{branch}: a force push would rewrite history BOSS has reviewed. Pull, merge or "
                 "rebase onto it locally, and push a fast-forward (or a new branch).")
@@ -239,10 +241,22 @@ def post_receive(lines: Iterable[str], env: Mapping[str, str], *, settings: Any 
     notes_pushed = any(ref == NOTES_REF for _o, _n, ref in updates)
     touched: list[dict[str, Any]] = []
     for old, new, ref in updates:
-        if not ref.startswith("refs/heads/") or new == ZERO:
+        if not ref.startswith("refs/heads/"):
             continue
         branch = ref[len("refs/heads/"):]
         if branch == default:
+            continue
+        if new == ZERO:
+            try:
+                with engine.begin() as c:
+                    closed = local_review.close_open_branch(
+                        c, settings, repository=repository, branch=branch, sha=old, actor=pusher)
+                if closed:
+                    _say(f"BOSS closed change #{closed['number']}  {branch}")
+                    _say(f"  {_change_url(console, project_id, closed['number'])}")
+            except Exception as error:  # noqa: BLE001 — the delete landed; say what did not
+                _say(f"BOSS could not close the change for {branch}: {type(error).__name__}: "
+                     f"{str(error)[:200]}.")
             continue
         try:
             with engine.begin() as c:
