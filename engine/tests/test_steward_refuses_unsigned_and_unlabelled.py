@@ -89,7 +89,8 @@ class FakeDocker:
         elif a[:2] == ["volume", "inspect"]:
             name = a[-1]
             v = next(v for v in self.volumes if v["name"] == name)
-            out = v["labels"].get("boss.install_id", "") if "Labels" in a[3] else v["created"]
+            # {{index .Labels "<key>"}} reads that label; {{.CreatedAt}} the birth
+            out = v["labels"].get(a[3].split('"')[1], "") if "Labels" in a[3] else v["created"]
         elif a[:2] == ["image", "inspect"]:
             ref = a[-1]
             i = next((i for i in self.images if f"{i['repo']}:{i['tag']}" == ref or i["id"] == ref), None)
@@ -118,7 +119,11 @@ def docker():
                 {"repo": "boss-community-api", "tag": "v0", "id": "sha3", "size": "5GB", "labels": {"boss.install_id": "inst_abc"}},
                 {"repo": "wordpress", "tag": "latest", "id": "sha4", "size": "1GB", "labels": {}},
                 {"repo": "boss-community-api", "tag": "v-other", "id": "sha5", "size": "5GB", "labels": {"boss.install_id": "inst_other"}}],
-        volumes=[{"name": "boss_tmp_1", "labels": {"boss.install_id": "inst_abc"}, "created": old},
+        volumes=[{"name": "boss_tmp_1", "labels": {"boss.install_id": "inst_abc", "boss.kind": "test"}, "created": old},
+                 # ours, but a DATA volume (a stopped preview's database) and one with no kind
+                 {"name": "boss_preview_pgdata", "labels": {"boss.install_id": "inst_abc", "boss.kind": "data"},
+                  "created": old},
+                 {"name": "boss_unkinded", "labels": {"boss.install_id": "inst_abc"}, "created": old},
                  {"name": "my_wordpress_db", "labels": {}, "created": old},
                  {"name": "other_install_vol", "labels": {"boss.install_id": "inst_other"}, "created": old}])
 
@@ -180,6 +185,25 @@ def test_helper_label_gate_volumes(env, keypair, docker):
     real = steward.perform(env, _job(priv, env, "remove_orphan_volumes", {"install_id": "inst_abc", "dry_run": False, "older_than_hours": 24,
                                                                          "plan_hash": dry["plan_hash"]}), pub, runner=docker)
     assert real["ok"] and docker.removed == [("volume", "boss_tmp_1")]
+
+
+def test_a_labelled_data_volume_is_never_removed_even_when_a_job_names_it(env, keypair, docker):
+    """ST-14: the install label says WHOSE a volume is; `boss.kind` says WHAT it holds. A data
+    volume (or one with no kind) left dangling — a stopped preview's database, an install brought
+    down for a day — is irreversible: not a candidate, and a real run re-reads the labels, so one
+    whose kind changed after the dry run is refused, not removed."""
+    priv, pub = keypair
+    dry = steward.perform(env, _job(priv, env, "remove_orphan_volumes",
+                                    {"install_id": "inst_abc", "dry_run": True, "older_than_hours": 24}), pub, runner=docker)
+    assert "boss_preview_pgdata" not in dry["items"] and "boss_unkinded" not in dry["items"]
+    # the kind flips to data after the dry run: the real run re-reads it and refuses
+    docker.volumes[0]["labels"]["boss.kind"] = "data"
+    out = steward.perform(env, _job(priv, env, "remove_orphan_volumes",
+                                    {"install_id": "inst_abc", "dry_run": False, "older_than_hours": 24,
+                                     "plan_hash": dry["plan_hash"]}), pub, runner=docker)
+    assert not out["ok"] and "changed since the dry run" in out["error"]
+    assert docker.removed == []
+    assert steward.REBUILDABLE_VOLUME_KINDS == ("test", "cache", "scratch", "build", "preview")
 
 
 def _real_backup(root, stamp: str, pid: int, *, install_id="inst_abc", age_days: float, size=4096,

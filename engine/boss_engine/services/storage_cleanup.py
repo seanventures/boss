@@ -684,7 +684,10 @@ def _remove_pg_temp(connection: Any, idle_minutes: int, *, dry_run: bool,
         items = [i for i in items if i in set(expected)]
     temp_bytes = 0
     try:
-        temp_bytes = int(connection.execute(text("SELECT COALESCE(sum(size), 0) FROM pg_ls_tmpdir()")).scalar() or 0)
+        # A savepoint: a role that may not list the temp dir must not abort the plan's transaction.
+        with connection.begin_nested():
+            temp_bytes = int(connection.execute(text(
+                "SELECT COALESCE(sum(size), 0) FROM pg_ls_tmpdir()")).scalar() or 0)
     except Exception:  # noqa: BLE001 — not every role may list the temp dir
         pass
     if dry_run:
@@ -699,37 +702,38 @@ def _remove_pg_temp(connection: Any, idle_minutes: int, *, dry_run: bool,
 
 def _drop_scratch_dbs(engine: Any, connection: Any, ttl_hours: int, *, dry_run: bool,
                       expected: Optional[Sequence[str]]) -> tuple[list[str], int]:
-    """DROP DATABASE for `boss_scratch_*` older than the ttl with no connections. Any other name
-    is refused by construction: the candidate query only ever returns the prefix."""
+    """DROP DATABASE for `boss_scratch_<purpose>_<stamp>` databases past the ttl, with no
+    connections. Any other name is refused by construction: the candidate query only ever
+    returns the prefix.
+
+    THE BIRTHDAY IS THE LABEL (ST-14). A throwaway carries its creation time in its name
+    (dev/test_databases: `scratch_database_name`, the same stamp the test session's own sweep
+    reads), so the age is the stamp's — never a file time, which is the last WRITE, not the
+    birth, and needs a server-file privilege whose refusal would abort the caller's transaction.
+    A `boss_scratch_*` name with no stamp has no known age: it is not BOSS's to drop on its own.
+    The bytes returned are those of exactly the databases returned."""
+    from ..dev.test_databases import parse_stamped
+
     rows = connection.execute(text("""
         SELECT d.datname, pg_database_size(d.datname) AS bytes,
                (SELECT count(*) FROM pg_stat_activity a WHERE a.datname = d.datname) AS conns
           FROM pg_database d WHERE d.datname LIKE :like AND NOT d.datistemplate
            AND d.datname <> current_database()"""), {"like": SCRATCH_PREFIX + "%"}).mappings().all()
-    items, size = [], 0
+    sizes: dict[str, int] = {}
     for r in rows:
         name = str(r["datname"])
         if not name.startswith(SCRATCH_PREFIX) or int(r["conns"] or 0):
             continue
-        age_ok = True
-        try:
-            modified = connection.execute(text(
-                "SELECT (pg_stat_file('base/' || oid)).modification FROM pg_database WHERE datname = :n"),
-                {"n": name}).scalar()
-            if modified is not None:
-                if modified.tzinfo is None:
-                    modified = modified.replace(tzinfo=timezone.utc)
-                age_ok = (_now() - modified) >= timedelta(hours=ttl_hours)
-        except Exception:  # noqa: BLE001 — no file access: the name and no connections decide
-            pass
-        if age_ok:
-            items.append(name)
-            size += int(r["bytes"] or 0)
+        stamped = parse_stamped(name)
+        if stamped is None or stamped.kind != "scratch" or not stamped.expired(float(ttl_hours)):
+            continue
+        sizes[name] = int(r["bytes"] or 0)
+    items = sorted(sizes)
     if expected is not None:
         wanted = set(expected)
         items = [i for i in items if i in wanted]
     if dry_run or not items:
-        return items, size
+        return items, sum(sizes[i] for i in items)
     dropped = []
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as auto:
         for name in items:
@@ -740,7 +744,7 @@ def _drop_scratch_dbs(engine: Any, connection: Any, ttl_hours: int, *, dry_run: 
                 dropped.append(name)
             except Exception:  # noqa: BLE001 — in use again: left alone
                 _log.info("scratch database %s not dropped", name, exc_info=True)
-    return dropped, size if dropped else 0
+    return dropped, sum(sizes[n] for n in dropped)
 
 
 def _drop_partitions(engine: Any, connection: Any, keep_days: int, *, dry_run: bool,

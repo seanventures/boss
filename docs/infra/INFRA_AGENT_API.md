@@ -140,7 +140,9 @@ type Summary = {
                    label: string; gb: number; pct: number; rebuildable: boolean }>;
   forecast: { growth_gb_per_day: number; days_until_full: number | null;   // null = not growing
               full_at: string | null; window_days: number; samples: number;
-              with_rules_days_until_full: number | null };
+              with_rules_days_until_full: number | null;
+              span_hours: number;              // how long the readings in the window span
+              enough_history: boolean };       // false under 24 h: growth 0, no "full in" (ST-14)
   trend: Array<{ at: string; used_gb: number; free_gb: number }>;          // 30 d, ≤ 240 points
   thresholds: { warn_free_pct: number; critical_free_pct: number; target_free_pct: number;
                 floor_free_pct: number; floor_free_gb: number; warn_days: number; critical_days: number;
