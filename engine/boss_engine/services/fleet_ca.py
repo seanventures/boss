@@ -156,7 +156,13 @@ def ensure_ca(connection: Any) -> _CA:
         if hit is not None:
             return hit
         cert = x509.load_pem_x509_certificate(row[1].encode("ascii"))
-        key = serialization.load_der_private_key(_unseal(row[2]), password=None)
+        try:
+            raw = _unseal(row[2])
+        except Exception as exc:  # noqa: BLE001 — InvalidTag: another master key sealed it
+            raise RuntimeError("the fleet CA cannot be unsealed with this install's master key "
+                               "(BOSS_MASTER_KEY changed since the CA was made); restore that "
+                               "key, or retire the CA and re-enrol every host") from exc
+        key = serialization.load_der_private_key(raw, password=None)
         ca = _CA(str(row[0]), cert, key, str(row[1]))
         _CA_CACHE[row[1]] = ca
         return ca

@@ -58,11 +58,15 @@ def test_the_built_in_roles_are_the_reviewed_sizes():
     # +2 agent:invoke and agent:deploy (AP-P3, BOSSAPP-1054): run a deployed agent over its API
     # or MCP tool (owner, admin and operator; delegable — what a service account is given), and
     # deploy/promote/roll back an agent version and set its triggers (owner and admin, step-up).
-    assert len(Permission) == 207
+    # +3 fleet:read, fleet:manage and fleet:host (P8a, BOSSAPP-1063): see the agent host fleet
+    # (every human role; delegable), issue join tokens / cordon / revoke / reconcile it (owner
+    # and admin, step-up), and act as an enrolled agent host (system_only: the new fixed role
+    # system_host, held by sys_host alone).
+    assert len(Permission) == 210
     sizes = {role: len(perms) for role, perms in ROLE_PERMISSIONS.items()}
-    assert sizes == {"owner": 200, "admin": 191, "operator": 98, "viewer": 49, "auditor": 63,
+    assert sizes == {"owner": 202, "admin": 193, "operator": 99, "viewer": 50, "auditor": 64,
                      "system_worker": 3, "system_collector": 1, "system_scim": 1,
-                     "system_self_installer": 2}
+                     "system_self_installer": 2, "system_host": 1}
 
 
 def test_operator_includes_publish_and_non_production_deploys():
@@ -125,4 +129,4 @@ def test_a_catalogue_that_breaks_a_rule_is_refused(mutate, message):
 
 
 def test_the_source_loads():
-    assert len(load().permissions) == 207
+    assert len(load().permissions) == 210
