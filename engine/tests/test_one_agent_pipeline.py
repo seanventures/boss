@@ -77,6 +77,9 @@ ALLOWED: dict[str, tuple[str, str]] = {
     "engine/boss_engine/multirepo/change_sets.py": (WORKER, "plans a multi-repo change set"),
     "engine/boss_engine/services/architecture_spend.py": (WORKER, "writes architecture docs"),
     "engine/boss_engine/services/meeting_service.py": (WORKER, "panel seats and PRD synthesis"),
+    "engine/boss_engine/runtime/runner.py": (WORKER, "boss-runtime (P8a): executes a run a "
+                                             "replica leased through the run plane — "
+                                             "agent_run_worker's twin inside a microVM"),
     "engine/boss_engine/services/agent_run_worker.py": (WORKER, "executes an admitted agent run "
                                                         "on a worker (AP-P2): the run's own "
                                                         "kernel loop, not a decision"),

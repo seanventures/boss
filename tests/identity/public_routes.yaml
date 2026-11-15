@@ -216,6 +216,9 @@ POST /v1/ext/{extension_id}/webhook/{hook}:
 POST /v1/hardware/agents/enroll:
   reason: auth_endpoint
   verifier: apps.api.app.hardware_api:enroll_agent
+POST /v1/hosts/enrol:
+  reason: host_join_token
+  verifier: boss_engine.services.fleet:enrol
 POST /v1/identity/introspect:
   reason: egress_service_credential
   verifier: boss_engine.identity.tokens:egress_caller_ok

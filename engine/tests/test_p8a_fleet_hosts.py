@@ -1,0 +1,577 @@
+"""P8a (BOSSAPP-1063): agent hosts against a FAKE boss-hostd, on Postgres — enrolment with a
+one-time join token and a CSR, the host proof, revocation (P8a-T1: a revoked host's heartbeat is
+refused, and so is its renewal), heartbeat attestation, the level-based desired-state watch, the
+scheduler's hard anti-affinity, guest-call audit, and the placement rules (local unchanged,
+per_run off while frozen, a microvm run never claimed by a local worker).
+boss-agent-hosts-lld.md §3.1, §3.2, §3.14.1, §4.1."""
+from __future__ import annotations
+
+import os
+import threading
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+
+from ._fleet_support import (FakeHost, cleanup_project, deploy_agent, fleet_app, join_token,
+                             make_project, org_of, own_pool, use_test_master_key)
+
+TEST_DB = os.environ.get("BOSS_TEST_DATABASE_URL",
+                         "postgresql+psycopg://boss:boss@localhost:5432/boss_test")
+
+
+@pytest.fixture(scope="module")
+def eng():
+    engine = create_engine(TEST_DB, future=True)
+    try:
+        with engine.begin() as c:
+            c.execute(text("SELECT 1 FROM agent_hosts LIMIT 1"))
+    except Exception as error:  # pragma: no cover
+        pytest.skip(f"test database unavailable: {error}")
+    return engine
+
+
+@pytest.fixture()
+def world(eng, monkeypatch):
+    use_test_master_key(monkeypatch)
+    project = make_project(eng)
+    hosts: list = []
+    client = TestClient(fleet_app(eng))
+
+    def host(**kw) -> FakeHost:
+        h = FakeHost(client, **kw)
+        hosts.append(h)
+        return h
+
+    yield {"project": project, "org": org_of(eng, project), "client": client, "host": host,
+           "pool": own_pool()}
+    cleanup_project(eng, project, [h.host_id for h in hosts if h.host_id])
+
+
+def test_a_host_enrols_with_a_one_time_join_token_and_a_csr(eng, world):
+    token = join_token(eng, world["org"], pool="gpu-free", labels={"rack": "r1"})
+    host = world["host"]()
+    out = host.enrol(token)
+    assert out["host_id"].startswith("hst_") and out["vm_prefix"].endswith("/23")
+    assert out["spiffe_id"] == f"spiffe://{out['trust_domain']}/host/{out['host_id']}"
+    assert "BEGIN CERTIFICATE" in out["certificate_pem"] and out["svid_intermediate_pem"]
+    assert out["heartbeat_seconds"] == 2
+
+    from cryptography import x509
+
+    cert = x509.load_pem_x509_certificate(out["certificate_pem"].encode())
+    ca = x509.load_pem_x509_certificate(out["ca_pem"].encode())
+    life = cert.not_valid_after_utc - cert.not_valid_before_utc
+    assert 23.9 * 3600 < life.total_seconds() <= 24 * 3600 + 400, "a 24 h host certificate"
+    cert.verify_directly_issued_by(ca)
+    svid = x509.load_pem_x509_certificate(out["svid_intermediate_pem"].encode())
+    assert svid.extensions.get_extension_for_class(x509.BasicConstraints).value.path_length == 0
+
+    # The token is single-use: the second enrol is refused like an unknown one.
+    again = world["host"]()
+    refused = again.enrol(token, expect=401)
+    assert refused["detail"]["error"] == "join_token_invalid"
+    unknown = world["host"]().enrol("boss_hjt_nope", expect=401)
+    assert unknown["detail"]["error"] == "join_token_invalid"
+    with eng.begin() as c:
+        row = c.execute(text("SELECT pool, labels, status FROM agent_hosts WHERE id = :h"),
+                        {"h": host.host_id}).mappings().one()
+        stored = c.execute(text("SELECT count(*) FROM agent_host_join_tokens "
+                                "WHERE token_hash = :t"), {"t": token}).scalar()
+    assert row["pool"] == "gpu-free" and row["labels"]["rack"] == "r1"
+    assert stored == 0, "the join token is stored hashed, never raw"
+
+
+def test_the_host_proof_is_bound_to_method_path_time_and_single_use(eng, world):
+    host = world["host"]()
+    host.enrol(join_token(eng, world["org"], pool=world["pool"]))
+    path = f"/v1/hosts/{host.host_id}/heartbeat"
+    ok = host.call("POST", path, json={})
+    assert ok.status_code == 200, ok.text
+
+    headers = host.headers("POST", path)
+    assert world["client"].post(path, json={}, headers=headers).status_code == 200
+    replay = world["client"].post(path, json={}, headers=headers)
+    assert replay.status_code == 401 and replay.json()["detail"]["error"] == "proof_replay"
+
+    wrong_path = world["client"].post(path, json={},
+                                      headers=host.headers("POST", "/v1/hosts/x/heartbeat"))
+    assert wrong_path.json()["detail"]["error"] == "proof_htu"
+    from boss_engine.services.fleet_ca import sign_proof
+
+    stale = sign_proof(host.key, host.cert_pem, htm="POST", path=path, iat=int(time.time()) - 600)
+    old = world["client"].post(path, json={}, headers={"Authorization": f"BossHost {stale}"})
+    assert old.json()["detail"]["error"] == "proof_iat"
+    assert world["client"].post(path, json={}).status_code == 401, "no credential, no host"
+
+    # A host acts only for itself.
+    other = world["host"](ed25519=True)
+    other.enrol(join_token(eng, world["org"], pool=world["pool"]))
+    cross = other.call("POST", path, json={})
+    assert cross.status_code == 403 and cross.json()["detail"]["error"] == "not_this_host"
+
+
+def test_a_revoked_host_is_refused_its_heartbeat_and_its_renewal(eng, world):
+    """P8a-T1."""
+    from boss_engine.services import fleet
+    from boss_engine.services.fleet_ca import make_csr
+
+    host = world["host"]()
+    host.enrol(join_token(eng, world["org"], pool=world["pool"]))
+    renewed = host.call("POST", f"/v1/hosts/{host.host_id}/renew",
+                        json={"csr_pem": make_csr(host.key)})
+    assert renewed.status_code == 200, renewed.text
+    assert renewed.json()["certificate_pem"] != host.cert_pem
+    superseded = host.heartbeat()
+    assert superseded.status_code == 401
+    assert superseded.json()["detail"]["error"] == "host_certificate_superseded", \
+        "a renewal supersedes the certificate it replaced"
+    with eng.begin() as c:
+        fleet.revoke(c, org_id=world["org"], host_id=host.host_id, actor="ceo",
+                     reason="decommissioned")
+    beat = host.heartbeat()
+    assert beat.status_code == 403 and beat.json()["detail"]["error"] == "host_revoked"
+    renew = host.call("POST", f"/v1/hosts/{host.host_id}/renew",
+                      json={"csr_pem": make_csr(host.key)})
+    assert renew.status_code == 403, "revocation is refusing the renewal"
+    host.cert_pem = renewed.json()["certificate_pem"]
+    assert host.heartbeat().status_code == 403, "every certificate of the host is revoked"
+    with eng.begin() as c:
+        kinds = [r[0] for r in c.execute(text(
+            "SELECT kind FROM host_events WHERE host_id = :h ORDER BY id"),
+            {"h": host.host_id}).all()]
+    assert kinds[:3] == ["enrolled", "renewed", "revoked"]
+
+
+def test_a_heartbeat_records_the_attestation_facts_and_observed_state(eng, world):
+    host = world["host"]()
+    host.enrol(join_token(eng, world["org"], pool=world["pool"]))
+    out = host.heartbeat(facts={"kvm_live": True, "firecracker_live": True, "jailer_on": True,
+                                "seccomp_default": True, "smt_off": True, "ksm_off": True,
+                                "strict_secrets": True, "net_policy_ok": True,
+                                "microcode": "0xb4"},
+                         capacity={"vcpu": 64}, pressure={"mem": 0.2}, bgp_state="idle")
+    assert out.status_code == 200, out.text
+    body = out.json()
+    assert body["desired_generation"] >= 1 and body["renew"] is False
+    with eng.begin() as c:
+        row = c.execute(text(
+            "SELECT kvm_live, firecracker_live, jailer_on, seccomp_default, smt_off, ksm_off, "
+            "strict_secrets, net_policy_ok, facts, capacity, bgp_state, last_heartbeat_at "
+            "FROM agent_hosts WHERE id = :h"), {"h": host.host_id}).mappings().one()
+    assert all(row[k] for k in ("kvm_live", "firecracker_live", "jailer_on", "seccomp_default",
+                                "smt_off", "ksm_off", "strict_secrets", "net_policy_ok"))
+    assert row["facts"]["microcode"] == "0xb4" and row["capacity"] == {"vcpu": 64}
+
+
+def _hosts(world, eng, n):
+    out = []
+    for _ in range(n):
+        h = world["host"]()
+        h.enrol(join_token(eng, world["org"], pool=world["pool"]))
+        out.append(h)
+    return out
+
+
+def test_desired_state_is_level_based_with_a_generation_and_a_long_poll(eng, world):
+    from boss_engine.services import fleet_scheduler
+
+    host = _hosts(world, eng, 1)[0]
+    first = host.desired(since=0)
+    assert first["changed"] and first["vms"] == [], "a reconnect with since=0 is a full resync"
+    quiet = host.desired(wait=0.3)
+    assert quiet == {"changed": False, "host_id": host.host_id,
+                     "generation": host.generation}
+
+    seen: dict = {}
+    waiter = threading.Thread(target=lambda: seen.update(host.desired(wait=10)))
+    waiter.start()
+    time.sleep(0.3)
+    dep = deploy_agent(eng, world["project"], replicas=1, pool=world["pool"])
+    fleet_scheduler.reconcile(eng)
+    waiter.join(12)
+    assert seen.get("changed"), "the long-poll wakes on the new generation"
+    vms = seen["vms"]
+    assert len(vms) == 1 and vms[0]["deployment_id"] == dep["id"]
+    assert vms[0]["state"] == "running" and vms[0]["vm_ip"]
+    assert vms[0]["spiffe_id"].endswith(f"/host/{host.host_id}/vm/{vms[0]['vm_id']}")
+    assert not any(k for k in str(vms).split("'") if k.startswith(("boss_", "lease_"))), \
+        "no credential in the desired state"
+
+
+def test_production_replicas_are_never_co_located(eng, world, monkeypatch):
+    """Hard anti-affinity (§3.14.1): 3 prod replicas on 2 hosts place 2 and say degraded."""
+    from boss_engine.services import agent_deployments, fleet_scheduler
+
+    hosts = _hosts(world, eng, 2)
+    dep = deploy_agent(eng, world["project"], env="staging", runtime="local", pool=world["pool"])
+    with eng.begin() as c:
+        agent_deployments.deploy(c, world["project"], dep["agent_key"], "prod", actor="ceo",
+                                 version=1)
+        with pytest.raises(agent_deployments.DeploymentError, match="at least two"):
+            agent_deployments.set_runtime(c, world["project"], dep["agent_key"], "prod",
+                                          actor="ceo", runtime="microvm", replicas=1)
+    with eng.begin() as c:
+        prod = agent_deployments.set_runtime(c, world["project"], dep["agent_key"], "prod",
+                                             actor="ceo", runtime="microvm", replicas=3,
+                                             placement={"pool": world["pool"]})
+    report = fleet_scheduler.reconcile(eng)
+    with eng.begin() as c:
+        rows = c.execute(text("SELECT host_id FROM agent_replicas WHERE deployment_id = :d "
+                              "AND desired_state = 'running'"), {"d": prod["id"]}).all()
+        state = c.execute(text("SELECT placement_state FROM agent_deployments WHERE id = :d"),
+                          {"d": prod["id"]}).scalar()
+    assert sorted(r[0] for r in rows) == sorted(h.host_id for h in hosts)
+    assert state == "degraded"
+    assert any(d["deployment_id"] == prod["id"] for d in report["degraded"])
+
+    # A third host appears: the missing replica lands there, nowhere else.
+    third = _hosts(world, eng, 1)[0]
+    fleet_scheduler.reconcile(eng)
+    with eng.begin() as c:
+        rows = c.execute(text("SELECT host_id FROM agent_replicas WHERE deployment_id = :d "
+                              "AND desired_state = 'running'"), {"d": prod["id"]}).all()
+    assert len(rows) == 3 and len({r[0] for r in rows}) == 3 and third.host_id in {
+        r[0] for r in rows}
+
+
+def test_a_silent_host_turns_unreachable_and_its_replica_moves(eng, world):
+    from boss_engine.services import fleet_scheduler
+
+    a, b = _hosts(world, eng, 2)
+    dep = deploy_agent(eng, world["project"], replicas=1, pool=world["pool"])
+    fleet_scheduler.reconcile(eng)
+    with eng.begin() as c:
+        holder = c.execute(text("SELECT host_id FROM agent_replicas WHERE deployment_id = :d "
+                                "AND desired_state = 'running'"), {"d": dep["id"]}).scalar()
+        c.execute(text("UPDATE agent_hosts SET last_heartbeat_at = now() - interval '1 minute' "
+                       "WHERE id = :h"), {"h": holder})
+    report = fleet_scheduler.reconcile(eng)
+    assert holder in report["unreachable"]
+    with eng.begin() as c:
+        moved = c.execute(text("SELECT host_id FROM agent_replicas WHERE deployment_id = :d "
+                               "AND desired_state = 'running'"), {"d": dep["id"]}).scalar()
+    assert moved and moved != holder
+
+
+def test_the_reconciler_is_leader_safe(eng, world):
+    from boss_engine.services import fleet_scheduler
+
+    with eng.begin() as c:
+        c.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": fleet_scheduler.LOCK_KEY})
+        assert fleet_scheduler.reconcile(eng) == {"skipped": "busy"}
+
+
+def test_guest_calls_are_ingested_once_and_never_hold_a_handle(eng, world):
+    host = _hosts(world, eng, 1)[0]
+    calls = [{"call_id": "c1", "route": "model", "vm_id": "vm_1", "run_id": "arun_1",
+              "epoch": 3, "dest_host": "models.boss", "method": "POST",
+              "path_template": "/v1/messages", "status": 200, "bytes_in": 10, "bytes_out": 20,
+              "duration_ms": 5, "handle_fp": "sha256:ab12", "verdict": "allow"},
+             {"call_id": "c2", "route": "git", "verdict": "deny", "rejected_by": "route",
+              "path_template": "/x?token=boss_egr_abcdefgh1234"},
+             {"call_id": "c3", "route": "ftp"}]
+    out = host.call("POST", f"/v1/hosts/{host.host_id}/guest-calls", json={"calls": calls})
+    assert out.status_code == 200, out.text
+    body = out.json()
+    assert body["accepted"] == 1
+    assert {r["reason"] for r in body["rejected"]} == {"raw_handle_refused", "route_unknown"}
+    again = host.call("POST", f"/v1/hosts/{host.host_id}/guest-calls",
+                      json={"calls": calls[:1]}).json()
+    assert again["accepted"] == 0 and again["duplicates"] == 1, "a retried batch is idempotent"
+    with eng.begin() as c:
+        rows = c.execute(text("SELECT * FROM guest_calls WHERE host_id = :h"),
+                         {"h": host.host_id}).mappings().all()
+    assert len(rows) == 1 and "boss_egr_" not in str(dict(rows[0]))
+
+
+def test_per_run_is_off_while_microvm_claims_are_frozen(eng, world, monkeypatch):
+    from boss_engine.services import agent_deployments
+
+    dep = deploy_agent(eng, world["project"], runtime="local", pool=world["pool"])
+    monkeypatch.setenv("BOSS_MICROVM_CLAIMS_FROZEN", "true")
+    from boss_engine.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        with eng.begin() as c, pytest.raises(agent_deployments.DeploymentError,
+                                             match="per_run VMs are built but off"):
+            agent_deployments.set_runtime(c, world["project"], dep["agent_key"], "dev",
+                                          actor="ceo", runtime="microvm", vm_mode="per_run")
+        with eng.begin() as c:  # replica is the activated mode, frozen or not
+            out = agent_deployments.set_runtime(c, world["project"], dep["agent_key"], "dev",
+                                                actor="ceo", runtime="microvm")
+        assert out["runtime"] == "microvm" and out["vm_mode"] == "replica"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_local_deployment_is_unchanged_and_a_microvm_run_is_never_a_local_workers(eng, world):
+    from boss_engine.config import get_settings
+    from boss_engine.services import agent_deployments, thread_runs
+    from boss_engine.services.jobs import JobLeaseService
+
+    local = deploy_agent(eng, world["project"], runtime="local", pool=world["pool"])
+    assert local["runtime"] == "local" and local["vm_mode"] is None
+    remote = deploy_agent(eng, world["project"], runtime="microvm", pool=world["pool"])
+    ids = {}
+    with eng.begin() as c:
+        for name, dep in (("local", local), ("remote", remote)):
+            tid = thread_runs.ensure_thread(c, project_id=world["project"], actor="ceo",
+                                            agent_id=dep["agent_key"])
+            ids[name] = agent_deployments.admit_run(
+                c, dep, thread_id=tid, messages=[{"role": "user", "content": "hi"}],
+                trigger="api")
+    with eng.begin() as c:
+        payloads = {n: c.execute(text("SELECT payload FROM jobs WHERE id = :j"),
+                                 {"j": a["job_id"]}).scalar() for n, a in ids.items()}
+        fctx = c.execute(text("SELECT finalize_ctx FROM agent_runs WHERE id = :r"),
+                         {"r": ids["local"]["run_id"]}).scalar()
+    assert "runtime" not in payloads["local"] and "runtime" not in fctx, "local is unchanged"
+    assert payloads["remote"]["runtime"] == "microvm"
+    assert payloads["remote"]["deployment_id"] == remote["id"]
+    claimed = []
+    # Inside ONE transaction, rolled back: nothing another test or process owns is leased.
+    with eng.connect() as c:
+        while True:
+            job = JobLeaseService(get_settings()).claim_job(c, "w-local", ["agent.run"], 60)
+            if job is None:
+                break
+            claimed.append(job["id"])
+        c.rollback()
+    assert ids["local"]["job_id"] in claimed, "the local run is a local worker's, as before"
+    assert ids["remote"]["job_id"] not in claimed, "a microvm run is never a local worker's"
+
+
+def test_mtls_at_a_trusted_terminator_authenticates_the_host_and_nothing_else_does(
+        eng, world, monkeypatch):
+    """The LLD's mTLS, terminated in front of the API: the leaf the terminator forwards is
+    believed only from a BOSS_TRUSTED_PROXIES peer, and only if this CA signed it."""
+    from urllib.parse import quote
+
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    from boss_engine.config import get_settings
+    from boss_engine.identity import authn
+    from boss_engine.services import fleet_ca
+
+    host = world["host"]()
+    host.enrol(join_token(eng, world["org"], pool=world["pool"]))
+    settings = get_settings()
+    monkeypatch.setattr(settings, "trusted_proxies", "10.9.9.9,10.8.8.8")
+    monkeypatch.setenv(fleet_ca.TERMINATORS_ENV, "10.9.9.9")
+
+    def creds(peer: str, pem: str):
+        return authn.RequestCredentials(method="POST", path="/x", cookies={}, peer_ip=peer,
+                                        headers={fleet_ca.FORWARDED_CERT_HEADER: quote(pem)})
+
+    with eng.begin() as c:
+        ctx = authn.authenticate(creds("10.9.9.9", host.cert_pem), db=c)
+        assert ctx.principal.id == "sys_host" and ctx.credential.id == host.host_id
+        assert ctx.credential.kind == "host_cert" and ctx.principal.org_id == world["org"]
+        assert authn.authenticate(creds("203.0.113.5", host.cert_pem), db=c) is None, \
+            "a client cannot claim the terminator's header"
+        assert authn.authenticate(creds("10.8.8.8", host.cert_pem), db=c) is None, \
+            "a trusted proxy is not a certificate terminator"
+    monkeypatch.delenv(fleet_ca.TERMINATORS_ENV)
+    with eng.begin() as c:
+        assert authn.authenticate(creds("10.9.9.9", host.cert_pem), db=c) is None, \
+            "no terminator is named by default: the header is never believed"
+    monkeypatch.setenv(fleet_ca.TERMINATORS_ENV, "10.9.9.9")
+    # A certificate this CA never signed is refused even from the terminator.
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.x509.oid import NameOID
+    import datetime as dt
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host.host_id)])
+    now = dt.datetime.now(dt.timezone.utc)
+    forged = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+              .public_key(key.public_key()).serial_number(1).not_valid_before(now)
+              .not_valid_after(now + dt.timedelta(hours=1)).sign(key, hashes.SHA256()))
+    with eng.begin() as c, pytest.raises(authn.AuthnError) as refused:
+        authn.authenticate(creds("10.9.9.9", forged.public_bytes(
+            serialization.Encoding.PEM).decode()), db=c)
+    assert refused.value.code == "forwarded_certificate_not_ours"
+
+
+def test_the_work_inbox_takes_runs_from_the_host_only_while_it_has_a_slot(eng, world,
+                                                                          tmp_path):
+    """boss-runtime in a VM has NO pull loop (§3.13.0): the host's one poll claims, and the
+    runs are handed to the VM's work inbox (a Unix socket on the process backend, one JSON line
+    each way); the inbox reports its slots to the host's ping and refuses beyond them."""
+    from boss_engine import kernel
+    from boss_engine.kernel.scripted import Say, ScriptedEngine
+    from boss_engine.kernel.toolset import FunctionToolSet
+    from boss_engine.runtime import runner as rt
+    from boss_engine.runtime.inbox import Inbox, send
+    from boss_engine.services import agent_deployments, fleet_scheduler, thread_runs
+
+    from ._durable_support import policies
+
+    host = world["host"]()
+    host.enrol(join_token(eng, world["org"], pool=world["pool"]))
+    dep = deploy_agent(eng, world["project"], replicas=1, pool=world["pool"])
+    fleet_scheduler.reconcile(eng)
+    replica = host.serve_all(slots=2)[0]
+    with eng.begin() as c:
+        c.execute(text("UPDATE agent_replicas SET slots = 3 WHERE id = :r"), {"r": replica})
+        runs = []
+        for n in range(3):
+            tid = thread_runs.ensure_thread(c, project_id=world["project"], actor="ceo",
+                                            agent_id=dep["agent_key"])
+            runs.append(agent_deployments.admit_run(
+                c, dep, thread_id=tid, messages=[{"role": "user", "content": f"hi {n}"}],
+                trigger="api", extra={"runner": "inbox_p8"})["run_id"])
+    release = threading.Event()
+
+    def build(package, handle):
+        release.wait(10)
+        return kernel.RunSpec(engine=ScriptedEngine([Say("hello")]), tools=FunctionToolSet([]),
+                              policies=policies(), project_id="", system="agent",
+                              messages=[m for m in package["run"]["messages"]
+                                        if m.get("role") != "system"])
+
+    rt.RUNNERS["inbox_p8"] = build
+    done: list = []
+    inbox = Inbox(host.gateway(replica).assigned, total_slots=2, on_result=done.append)
+    stop = threading.Event()
+    import shutil
+
+    from ._fleet_support import short_socket_dir
+
+    sockdir = short_socket_dir()
+    sock = sockdir + "/inbox.sock"
+    inbox.serve_unix(sock, stop)
+    try:
+        assert send(sock, {"op": "ping"}) == {"ok": True, "busy_slots": 0, "total_slots": 2}
+        work = host.claim()
+        assert len(work) == 3, "BOSS's own slot count (3) decides the claim"
+        answers = [send(sock, {"op": "run", **{k: w[k] for k in
+                                             ("run_id", "job_id", "replica_id", "epoch")}})
+                   for w in work]
+        assert answers[:2] == [{"ok": True}, {"ok": True}]
+        assert answers[2] == {"ok": False, "reason": "no_free_slot"}, "only with a free slot"
+        assert send(sock, {"op": "ping"})["busy_slots"] == 2
+        assert send(sock, {"op": "run", "run_id": "x"}) == {"ok": False, "reason": "bad_request"}
+        refused = host.gateway(replica).assigned(work[2])
+        assert refused.hand_back()["handed_back"] is True
+        release.set()
+        inbox.join(20)
+    finally:
+        stop.set()
+        rt.RUNNERS.pop("inbox_p8", None)
+        shutil.rmtree(sockdir, ignore_errors=True)
+    assert sorted(d["run_id"] for d in done) == sorted(w["run_id"] for w in work[:2])
+    assert all(d["status"] == "completed" for d in done), done
+    again = host.claim()
+    assert [w["run_id"] for w in again] == [work[2]["run_id"]] and again[0]["epoch"] == 2
+
+
+def test_the_wire_shapes_boss_hostd_decodes_and_its_event_and_sweep(eng, world):
+    """docs/infra/HOST_API.md (the Go side's contract): agent_version is a string, an absent
+    stopped replica leaves the desired state after a full heartbeat, events land in
+    host_events, and a handle-shaped value is never stored."""
+    from boss_engine.services import fleet_scheduler
+
+    host = world["host"]()
+    host.enrol(join_token(eng, world["org"], pool=world["pool"]))
+    dep = deploy_agent(eng, world["project"], replicas=1, pool=world["pool"])
+    fleet_scheduler.reconcile(eng)
+    vm = host.desired(since=0)["vms"][0]
+    assert vm["agent_version"] == "1" and isinstance(vm["generation"], int)
+    assert set(vm) >= {"replica_id", "vm_id", "vm_mode", "state", "deployment_id", "slots",
+                       "weight", "strict_secrets", "spiffe_id", "resources"}
+    import re
+
+    assert re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$", vm["vm_id"])
+    beat = host.heartbeat(replicas=[{"replica_id": vm["replica_id"], "vm_id": vm["vm_id"],
+                                     "state": "serving", "vm_ip": vm["vm_ip"], "busy": 0,
+                                     "vsock_ping_age_ms": 212, "drops_originated": 0}],
+                          status="ready", backend="process", claims_frozen=True,
+                          contract_version="1.0",
+                          facts={"kvm_live": False, "reasons": {"kvm_live": "no /dev/kvm"}})
+    assert beat.status_code == 200 and beat.json()["replicas_seen"] == 1
+
+    with eng.begin() as c:  # scale to zero: the replica is wanted stopped
+        c.execute(text("UPDATE agent_deployments SET replicas = 0 WHERE id = :d"),
+                  {"d": dep["id"]})
+    fleet_scheduler.reconcile(eng)
+    assert host.desired()["vms"][0]["state"] == "stopped"
+    host.heartbeat(replicas=[])
+    assert host.desired(since=0)["vms"] == [], "gone once the host no longer lists it"
+
+    out = host.call("POST", f"/v1/hosts/{host.host_id}/events", json={"events": [
+        {"at": "2026-11-14T00:00:00Z", "vm_id": vm["vm_id"], "kind": "crashloop",
+         "from": "unhealthy", "to": "crashloop", "detail": {"reason": "process_exit"},
+         "actor": "watchdog"},
+        {"kind": "handle_replay", "detail": {"handle": "boss_mdl_abcdefgh12345"},
+         "actor": "gateway"},
+        {"kind": "nonsense"}]})
+    assert out.status_code == 200, out.text
+    body = out.json()
+    assert body["accepted"] == 1
+    assert {r["reason"] for r in body["rejected"]} == {"raw_handle_refused", "kind_unknown"}
+    with eng.begin() as c:
+        rows = c.execute(text("SELECT kind, vm_id, detail, actor FROM host_events "
+                              "WHERE host_id = :h AND kind = 'crashloop'"),
+                         {"h": host.host_id}).mappings().all()
+    assert len(rows) == 1 and rows[0]["detail"]["to"] == "crashloop"
+
+
+def test_placement_needs_kvm_capacity_and_the_image_and_re_placement_is_rate_limited(
+        eng, world):
+    """§3.14.1: KVM live (Firecracker hosts), capacity (max_vms), image presence when reported;
+    a deployment re-placing what it lost moves at most 10 % per minute (at least one)."""
+    from boss_engine.services import fleet_scheduler
+
+    fc = world["host"](backend="firecracker")
+    fc.enrol(join_token(eng, world["org"], pool=world["pool"]))
+    dep = deploy_agent(eng, world["project"], replicas=1, pool=world["pool"])
+    fleet_scheduler.reconcile(eng)
+    with eng.begin() as c:
+        placed = c.execute(text("SELECT count(*) FROM agent_replicas WHERE deployment_id = :d "
+                                "AND desired_state = 'running'"), {"d": dep["id"]}).scalar()
+    assert placed == 0, "a Firecracker host without KVM takes no VM"
+    fc.heartbeat(facts={"kvm_live": True, "images": ["sha256:other"]},
+                 capacity={"max_vms": 1})
+    with eng.begin() as c:
+        c.execute(text("UPDATE agent_deployments SET image_digest = 'sha256:wanted' "
+                       "WHERE id = :d"), {"d": dep["id"]})
+    fleet_scheduler.reconcile(eng)
+    with eng.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM agent_replicas WHERE deployment_id = :d"),
+                         {"d": dep["id"]}).scalar() == 0, "the host does not hold the image"
+    fc.heartbeat(facts={"images": ["sha256:wanted"]})
+    fleet_scheduler.reconcile(eng)
+    with eng.begin() as c:
+        rows = c.execute(text("SELECT host_id FROM agent_replicas WHERE deployment_id = :d "
+                              "AND desired_state = 'running'"), {"d": dep["id"]}).all()
+    assert [r[0] for r in rows] == [fc.host_id]
+
+    # Grown to 3 by the operator (unlimited), on 3 more process hosts with room.
+    others = []
+    for _ in range(3):
+        h = world["host"]()
+        h.enrol(join_token(eng, world["org"], pool=world["pool"]))
+        others.append(h)
+    with eng.begin() as c:
+        c.execute(text("UPDATE agent_deployments SET replicas = 3, placement_state = 'pending' "
+                       "WHERE id = :d"), {"d": dep["id"]})
+    fleet_scheduler.reconcile(eng)
+    # Two hosts go silent: two replicas are lost, but only one is re-placed this minute.
+    with eng.begin() as c:
+        held = [r[0] for r in c.execute(text(
+            "SELECT host_id FROM agent_replicas WHERE deployment_id = :d "
+            "AND desired_state = 'running' AND host_id <> :fc"),
+            {"d": dep["id"], "fc": fc.host_id}).all()]
+        c.execute(text("UPDATE agent_hosts SET last_heartbeat_at = now() - interval '1 minute' "
+                       "WHERE id = ANY(:h)"), {"h": held})
+    report = fleet_scheduler.reconcile(eng)
+    assert dep["id"] in report.get("rate_limited", [])
+    with eng.begin() as c:
+        running = c.execute(text("SELECT count(*) FROM agent_replicas WHERE deployment_id = :d "
+                                 "AND desired_state = 'running'"), {"d": dep["id"]}).scalar()
+    assert running == 2, "one lost replica re-placed this minute, not both"

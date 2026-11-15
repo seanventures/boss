@@ -62,6 +62,10 @@ class PublicReason(StrEnum):
     IDP_SIGNED_LOGOUT_TOKEN = "idp_signed_logout_token"     # /v1/auth/sso/{id}/backchannel-logout: a logout
                                                             # token signed by that provider's keys; it can
                                                             # only END sessions (BOSSAPP-1048 amendment)
+    HOST_JOIN_TOKEN = "host_join_token"                     # /v1/hosts/enrol: a one-time, hashed, expiring,
+                                                            # revocable join token a person issued in the
+                                                            # console; it can only enrol one agent host
+                                                            # (P8a, BOSSAPP-1063 amendment)
 
 
 #: Reasons whose route has nothing to verify, so `verifier` may be None.

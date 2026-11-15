@@ -143,6 +143,8 @@ INSERT INTO identity_permissions (key, resource, action, title, description, cat
   ('deployment:production', 'deployment', 'production', 'Deploy to production', 'Deploy or promote to a production target.', 'Deploy and infra', 'project', true, false, true, false, false, 1),
   ('deployment:rollback', 'deployment', 'rollback', 'Roll back deployments', 'Roll back a deployment.', 'Deploy and infra', 'project', true, false, false, false, false, 1),
   ('deployment_target:manage', 'deployment_target', 'manage', 'Manage deployment targets', 'Create, change, bootstrap, purge and tear down targets and their secrets.', 'Deploy and infra', 'project', true, false, true, false, false, 1),
+  ('fleet:read', 'fleet', 'read', 'View agent hosts', 'See the agent host fleet: hosts, their attestation, replicas and placement.', 'Deploy and infra', 'org', false, true, false, false, false, 1),
+  ('fleet:manage', 'fleet', 'manage', 'Manage agent hosts', 'Issue host join tokens, cordon, revoke and reconcile agent hosts.', 'Deploy and infra', 'org', true, false, false, false, false, 1),
   ('host:read', 'host', 'read', 'View hosts', 'See deployment hosts and their capacity.', 'Deploy and infra', 'project', false, true, false, false, false, 1),
   ('host:manage', 'host', 'manage', 'Manage hosts', 'Provision, attach, verify, re-key and retire hosts.', 'Deploy and infra', 'project', true, false, true, false, false, 1),
   ('host:exec', 'host', 'exec', 'Run commands on hosts', 'Run commands on a host or in an investigation shell.', 'Deploy and infra', 'project', true, false, true, false, false, 1),
@@ -210,6 +212,7 @@ INSERT INTO identity_permissions (key, resource, action, title, description, cat
   ('worker:lease', 'worker', 'lease', 'Lease worker jobs', 'Poll, heartbeat and complete leased jobs (worker protocol).', 'Operations and assurance', 'project', false, false, false, true, false, 1),
   ('self_fix:ticket_read', 'self_fix', 'ticket_read', 'Read self-fix install tickets', 'List and take the signed, single-use tickets of approved BOSS self-fixes (host self-installer only).', 'Operations and assurance', 'org', false, false, false, true, false, 1),
   ('self_fix:ticket_report', 'self_fix', 'ticket_report', 'Report self-fix install phases', 'Report each install phase of a taken self-fix ticket (host self-installer only).', 'Operations and assurance', 'org', false, false, false, true, false, 1),
+  ('fleet:host', 'fleet', 'host', 'Act as an agent host', 'Heartbeat, watch desired state, report observed state and guest calls, and serve the run plane for the host''s own replicas (agent hosts only).', 'Operations and assurance', 'org', false, false, false, true, false, 1),
   ('knowledge:read', 'knowledge', 'read', 'Read knowledge', 'Search this project''s knowledge and read a fact, a symbol, and its precedent.', 'Knowledge', 'project', false, true, false, false, false, 1),
   ('knowledge:manage', 'knowledge', 'manage', 'Manage knowledge', 'Promote, reject, or forget a fact. Confirmation is required.', 'Knowledge', 'project', true, false, false, false, false, 1),
   ('knowledge:review', 'knowledge', 'review', 'Review business rules', 'Approve, edit or reject the business rules agents propose. Confirmation is required.', 'Knowledge', 'project', true, false, false, false, false, 1)
@@ -229,12 +232,13 @@ INSERT INTO identity_access_roles (id, org_id, key, name, description, builtin, 
   ('arl_system_worker', NULL, 'system_worker', 'System worker', 'The worker protocol: lease, heartbeat and complete jobs; reserve spend; lease secrets for a running step.', true, true, ARRAY['org']::text[], false, 1),
   ('arl_system_collector', NULL, 'system_collector', 'System collector', 'Collector machine telemetry ingest.', true, true, ARRAY['org']::text[], false, 1),
   ('arl_system_scim', NULL, 'system_scim', 'System SCIM', 'SCIM 2.0 provisioning for one identity provider.', true, true, ARRAY['org']::text[], false, 1),
-  ('arl_system_self_installer', NULL, 'system_self_installer', 'System self-installer', 'The host self-installer (BOSS fixes itself): read signed install tickets and report install phases. Nothing else.', true, true, ARRAY['org']::text[], false, 1)
+  ('arl_system_self_installer', NULL, 'system_self_installer', 'System self-installer', 'The host self-installer (BOSS fixes itself): read signed install tickets and report install phases. Nothing else.', true, true, ARRAY['org']::text[], false, 1),
+  ('arl_system_host', NULL, 'system_host', 'System agent host', 'An enrolled agent host (boss-hostd, P8): heartbeat, desired state, guest-call audit and the run plane. Nothing else.', true, true, ARRAY['org']::text[], false, 1)
 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
   builtin = true, system = EXCLUDED.system, bindable_scopes = EXCLUDED.bindable_scopes,
   mfa_required = EXCLUDED.mfa_required, version = EXCLUDED.version;
 
-DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl_admin', 'arl_operator', 'arl_viewer', 'arl_auditor', 'arl_system_worker', 'arl_system_collector', 'arl_system_scim', 'arl_system_self_installer')
+DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl_admin', 'arl_operator', 'arl_viewer', 'arl_auditor', 'arl_system_worker', 'arl_system_collector', 'arl_system_scim', 'arl_system_self_installer', 'arl_system_host')
   AND (role_id, permission_key) NOT IN (VALUES
   ('arl_owner', 'directory:read'),
   ('arl_owner', 'user:read'),
@@ -372,6 +376,8 @@ DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl
   ('arl_owner', 'deployment:production'),
   ('arl_owner', 'deployment:rollback'),
   ('arl_owner', 'deployment_target:manage'),
+  ('arl_owner', 'fleet:read'),
+  ('arl_owner', 'fleet:manage'),
   ('arl_owner', 'host:read'),
   ('arl_owner', 'host:manage'),
   ('arl_owner', 'host:exec'),
@@ -565,6 +571,8 @@ DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl
   ('arl_admin', 'deployment:production'),
   ('arl_admin', 'deployment:rollback'),
   ('arl_admin', 'deployment_target:manage'),
+  ('arl_admin', 'fleet:read'),
+  ('arl_admin', 'fleet:manage'),
   ('arl_admin', 'host:read'),
   ('arl_admin', 'host:manage'),
   ('arl_admin', 'host:exec'),
@@ -695,6 +703,7 @@ DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl
   ('arl_operator', 'deployment:read'),
   ('arl_operator', 'deployment:create'),
   ('arl_operator', 'deployment:rollback'),
+  ('arl_operator', 'fleet:read'),
   ('arl_operator', 'host:read'),
   ('arl_operator', 'sandbox:read'),
   ('arl_operator', 'infra:read'),
@@ -755,6 +764,7 @@ DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl
   ('arl_viewer', 'mcp_server:read'),
   ('arl_viewer', 'pack:read'),
   ('arl_viewer', 'deployment:read'),
+  ('arl_viewer', 'fleet:read'),
   ('arl_viewer', 'host:read'),
   ('arl_viewer', 'sandbox:read'),
   ('arl_viewer', 'infra:read'),
@@ -817,6 +827,7 @@ DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl
   ('arl_auditor', 'mcp_server:read'),
   ('arl_auditor', 'pack:read'),
   ('arl_auditor', 'deployment:read'),
+  ('arl_auditor', 'fleet:read'),
   ('arl_auditor', 'host:read'),
   ('arl_auditor', 'infra:read'),
   ('arl_auditor', 'cicd:read'),
@@ -843,7 +854,8 @@ DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl
   ('arl_system_collector', 'telemetry:ingest'),
   ('arl_system_scim', 'scim:provision'),
   ('arl_system_self_installer', 'self_fix:ticket_read'),
-  ('arl_system_self_installer', 'self_fix:ticket_report'));
+  ('arl_system_self_installer', 'self_fix:ticket_report'),
+  ('arl_system_host', 'fleet:host'));
 
 INSERT INTO identity_access_role_permissions (role_id, permission_key) VALUES
   ('arl_owner', 'directory:read'),
@@ -982,6 +994,8 @@ INSERT INTO identity_access_role_permissions (role_id, permission_key) VALUES
   ('arl_owner', 'deployment:production'),
   ('arl_owner', 'deployment:rollback'),
   ('arl_owner', 'deployment_target:manage'),
+  ('arl_owner', 'fleet:read'),
+  ('arl_owner', 'fleet:manage'),
   ('arl_owner', 'host:read'),
   ('arl_owner', 'host:manage'),
   ('arl_owner', 'host:exec'),
@@ -1175,6 +1189,8 @@ INSERT INTO identity_access_role_permissions (role_id, permission_key) VALUES
   ('arl_admin', 'deployment:production'),
   ('arl_admin', 'deployment:rollback'),
   ('arl_admin', 'deployment_target:manage'),
+  ('arl_admin', 'fleet:read'),
+  ('arl_admin', 'fleet:manage'),
   ('arl_admin', 'host:read'),
   ('arl_admin', 'host:manage'),
   ('arl_admin', 'host:exec'),
@@ -1305,6 +1321,7 @@ INSERT INTO identity_access_role_permissions (role_id, permission_key) VALUES
   ('arl_operator', 'deployment:read'),
   ('arl_operator', 'deployment:create'),
   ('arl_operator', 'deployment:rollback'),
+  ('arl_operator', 'fleet:read'),
   ('arl_operator', 'host:read'),
   ('arl_operator', 'sandbox:read'),
   ('arl_operator', 'infra:read'),
@@ -1365,6 +1382,7 @@ INSERT INTO identity_access_role_permissions (role_id, permission_key) VALUES
   ('arl_viewer', 'mcp_server:read'),
   ('arl_viewer', 'pack:read'),
   ('arl_viewer', 'deployment:read'),
+  ('arl_viewer', 'fleet:read'),
   ('arl_viewer', 'host:read'),
   ('arl_viewer', 'sandbox:read'),
   ('arl_viewer', 'infra:read'),
@@ -1427,6 +1445,7 @@ INSERT INTO identity_access_role_permissions (role_id, permission_key) VALUES
   ('arl_auditor', 'mcp_server:read'),
   ('arl_auditor', 'pack:read'),
   ('arl_auditor', 'deployment:read'),
+  ('arl_auditor', 'fleet:read'),
   ('arl_auditor', 'host:read'),
   ('arl_auditor', 'infra:read'),
   ('arl_auditor', 'cicd:read'),
@@ -1453,5 +1472,6 @@ INSERT INTO identity_access_role_permissions (role_id, permission_key) VALUES
   ('arl_system_collector', 'telemetry:ingest'),
   ('arl_system_scim', 'scim:provision'),
   ('arl_system_self_installer', 'self_fix:ticket_read'),
-  ('arl_system_self_installer', 'self_fix:ticket_report')
+  ('arl_system_self_installer', 'self_fix:ticket_report'),
+  ('arl_system_host', 'fleet:host')
 ON CONFLICT DO NOTHING;

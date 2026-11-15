@@ -75,6 +75,11 @@ access_roles:
     description: "The host self-installer (BOSS fixes itself): read signed install tickets and report install phases. Nothing else."
     bindable_scopes: [org]
     system: true
+  - key: system_host
+    name: System agent host
+    description: "An enrolled agent host (boss-hostd, P8): heartbeat, desired state, guest-call audit and the run plane. Nothing else."
+    bindable_scopes: [org]
+    system: true
 
 # Built-in system principals (IDENTITY.md §3). `access_role` is their fixed role; `none` holds nothing.
 system_principals:
@@ -96,6 +101,9 @@ system_principals:
   - id: sys_egress
     access_role: none
     replaces: "BOSS_EGRESS_SERVICE_KEY (the egress proxy's shared key; it authenticates to /v1/identity/introspect with a boss_sak_ key of its own)"
+  - id: sys_host
+    access_role: system_host
+    replaces: "nothing; every enrolled agent host (boss-hostd) authenticates as it with its BOSS-issued 24 h certificate (P8a)"
 
 # Agent Passport ceiling presets (IDENTITY_PERMISSIONS.md §4). Delegable permissions only.
 # EVERY PRESET HOLDS workflow_run:read: any agent may be a workflow step's agent, and the consent a
@@ -1053,6 +1061,18 @@ categories:
         roles: [owner, admin]
         scope: project
         flags: [step_up, critical]
+      - key: fleet:read
+        title: "View agent hosts"
+        description: "See the agent host fleet: hosts, their attestation, replicas and placement."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: org
+        flags: [delegable]
+      - key: fleet:manage
+        title: "Manage agent hosts"
+        description: "Issue host join tokens, cordon, revoke and reconcile agent hosts."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
       - key: host:read
         title: "View hosts"
         description: "See deployment hosts and their capacity."
@@ -1472,6 +1492,12 @@ categories:
         title: "Report self-fix install phases"
         description: "Report each install phase of a taken self-fix ticket (host self-installer only)."
         roles: [system_self_installer]
+        scope: org
+        flags: [system_only]
+      - key: fleet:host
+        title: "Act as an agent host"
+        description: "Heartbeat, watch desired state, report observed state and guest calls, and serve the run plane for the host's own replicas (agent hosts only)."
+        roles: [system_host]
         scope: org
         flags: [system_only]
 

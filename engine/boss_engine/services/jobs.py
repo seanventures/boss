@@ -155,6 +155,16 @@ def stopped_run_reason(
     return f"{table[:-1]} {run_id} is {status}; not queueing further work for it"
 
 
+def _run_placement(connection: Connection, run_id: str) -> dict[str, Any]:
+    """`{"runtime": "microvm", "deployment_id": ...}` for a run of a microvm deployment, else {}."""
+    row = connection.execute(
+        text("SELECT finalize_ctx->>'runtime', finalize_ctx->>'deployment_id' FROM agent_runs "
+             "WHERE id = :r"), {"r": run_id}).first()
+    if row is None or row[0] != "microvm":
+        return {}
+    return {"runtime": "microvm", "deployment_id": row[1]}
+
+
 def enqueue_job(
     connection: Connection,
     project_id: str,
@@ -207,6 +217,17 @@ def enqueue_job(
         from boss_engine.identity import runs as _identity_runs
 
         on_behalf_of = _identity_runs.original_build_authority(connection, str(payload["run_id"]))
+    if kind in ("agent.run", "agent.resume") and (payload or {}).get("run_id") \
+            and "runtime" not in (payload or {}):
+        # WHERE AN AGENT RUN EXECUTES IS THE RUN'S, NOT THE ENQUEUER'S (P8a): every job of a run
+        # admitted on a `runtime: microvm` deployment — its first job, a resume after a person
+        # answered, a retry — carries the run's placement, so no local worker ever claims it.
+        payload = {**(payload or {}), **_run_placement(connection, str(payload["run_id"]))}
+    # WHERE IT MAY BE CLAIMED (boss-eventing-lld.md §8.2): 'deployment:<id>' only by that
+    # deployment's hosts (run_plane.claim_for_host); NULL (local) by local workers.
+    target = (f"deployment:{payload['deployment_id']}"
+              if (payload or {}).get("runtime") == "microvm" and payload.get("deployment_id")
+              else None)
     job_payload, identity_columns = _identity_lineage.stamp_job_row(payload, on_behalf_of, kind=kind)
     boundary = resolve_job_data_boundary(
         connection, task_id, job_payload, data_boundary
@@ -250,7 +271,7 @@ def enqueue_job(
                 allocation_id, kind, priority, priority_score, workload_class,
                 resource_units, status, payload, data_boundary, max_attempts,
                 attempt, run_after, dedupe_key, on_behalf_of, grant_id, chain, on_behalf_system,
-                role_key
+                role_key, target
             )
             VALUES (
                 :id, :project_id, :task_id, :work_item_id, :tracker_binding_id,
@@ -258,7 +279,7 @@ def enqueue_job(
                 :workload_class, :resource_units, 'queued',
                 CAST(:payload AS JSONB), :data_boundary, :max_attempts,
                 0, :run_after, :dedupe_key, :on_behalf_of, :grant_id, CAST(:chain AS JSONB), :on_behalf_system,
-                :role_key
+                :role_key, :target
             )
             ON CONFLICT (project_id, dedupe_key)
               WHERE dedupe_key IS NOT NULL
@@ -288,6 +309,7 @@ def enqueue_job(
             "dedupe_key": dedupe_key,
             **identity_columns,
             "role_key": (str(role_key or (payload or {}).get("role_key") or "").strip() or None),
+            "target": target,
         },
     ).mappings().first()
     created = row is not None
@@ -627,6 +649,10 @@ class JobLeaseService:
             FROM jobs
             WHERE kind IN :capabilities
               AND """ + projects_archive.live_sql("jobs.project_id") + """
+              -- A RUN OF A `runtime: microvm` DEPLOYMENT IS NEVER A LOCAL WORKER'S (P8a): its
+              -- job's target is 'deployment:<id>', claimed only by that deployment's hosts
+              -- through the run plane (services/run_plane.claim_for_host).
+              AND target IS NULL
               AND (
                 (run_after <= :now_utc
                  AND (
@@ -1669,7 +1695,7 @@ class JobLeaseService:
                 SELECT id, project_id, task_id, work_item_id, tracker_binding_id,
                        allocation_id, kind, payload, status, attempt, max_attempts,
                        data_boundary, workload_class, resource_units, lease_owner,
-                       lease_token_hash, lease_expires_at
+                       lease_token_hash, lease_expires_at, fence_epoch
                 FROM jobs
                 WHERE id = :job_id
                 FOR UPDATE
