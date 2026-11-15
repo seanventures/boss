@@ -155,6 +155,10 @@ def end_run(run_id: str, *, db: Any, org_id: str, reason: str = "run ended") -> 
                     "AND revoked_at IS NULL"), {"r": run_id, "c": run_id + "/%"})
     db.execute(text("UPDATE identity_egress_credentials SET revoked_at = now() WHERE (run_id = :r OR run_id LIKE :c) "
                     "AND revoked_at IS NULL"), {"r": run_id, "c": run_id + "/%"})
+    # The run's model-gateway handles (boss_mdl_, P8b S10) die with it too.
+    from ..services.streaming_model_gateway import revoke_run as _revoke_model_handles
+
+    _revoke_model_handles(db, run_id, reason)
     grants.end_task_grants(run_id, db=db, org_id=org_id)
     github_app.revoke_runs([run_id], reason)
     # A SEPARATE boss-egress process holds the run's installation tokens in ITS memory: tell it

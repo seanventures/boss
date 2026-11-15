@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -399,6 +400,8 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 	var setAuth func(h http.Header, method, path string) error
 	if rule.HostAuth {
 		transport = g.hostTransport()
+	}
+	if rule.HostAuth || rule.HostProof {
 		setAuth = func(h http.Header, method, path string) error {
 			if g.HostProof == nil {
 				return errors.New("no host proof")
@@ -408,7 +411,9 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 				return err
 			}
 			h.Set("Authorization", hostapi.AuthScheme+" "+proof)
-			h.Set("X-Boss-Replica", b.ReplicaID)
+			if rule.HostAuth {
+				h.Set("X-Boss-Replica", b.ReplicaID) // the run plane's identity header
+			}
 			return nil
 		}
 	}
@@ -457,6 +462,20 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 			StripGuestHeaders(pr.Out.Header, keep...)
 			pr.Out.Trailer = nil // guest trailers could smuggle headers past the strip
 			pr.Out.Header.Set(AssertionHeader, assertion)
+			if rule.HostProof {
+				// The guest's handle, MOVED out of its credential header, and the host's
+				// word on which VM, run and epoch the call came from (HOST_API.md §4.6).
+				// The far gateway binds the handle to exactly these.
+				pr.Out.Header.Set("X-Boss-Handle", handle)
+				pr.Out.Header.Set("X-Boss-Vm", v.id)
+				if b.RunID != "" {
+					pr.Out.Header.Set("X-Boss-Run", b.RunID)
+					pr.Out.Header.Set("X-Boss-Fence-Epoch", strconv.FormatInt(b.Epoch, 10))
+				}
+				if b.DeploymentID != "" {
+					pr.Out.Header.Set("X-Boss-Deployment", b.DeploymentID)
+				}
+			}
 			if runToken != "" {
 				pr.Out.Header.Set("X-Boss-Run-Token", runToken)
 			}

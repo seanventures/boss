@@ -160,14 +160,21 @@ def test_a_guest_vm_run_on_the_key_is_refused_by_name_not_dropped(monkeypatch):
     _store(monkeypatch, ANTHROPIC_API_KEY=KEY)
     fields = _guest_engine_fields(_settings(), "claude_code", None)
     assert fields == {"engine": "claude_code", "anthropic_api_key": KEY}
-    body = build_submit_request({**fields, "task_id": "crun_x", "owner": "o", "repo": "r"}, "p")
+    # The frozen legacy lane (v1.0) keeps its by-name refusal.
+    body = build_submit_request({**fields, "task_id": "crun_x", "owner": "o", "repo": "r"}, "p",
+                                legacy=True)
     assert body["engine_env"] == {"ANTHROPIC_API_KEY": KEY}
-    problems = validate_submit_request(body)
+    problems = validate_submit_request(body, strict_secrets=False, allow_legacy=True)
     assert problems == [f"{ENGINE_ENV_UNKNOWN}: engine_env ANTHROPIC_API_KEY is not a name the "
                         "guest reads"]
     with pytest.raises(EngineEnvRefused) as refused:
         ensure_engine_env_valid(body)
     assert refused.value.reason == ENGINE_ENV_UNKNOWN and KEY not in str(refused.value)
+    # v1.1 (P8b S9): the key never rides at all — the guest gets a boss_mdl_ handle and the
+    # central model gateway holds the key.
+    body = build_submit_request({**fields, "task_id": "crun_x", "owner": "o", "repo": "r"}, "p")
+    assert KEY not in str(body) and "engine_env" not in body and "anthropic_api_key" not in body
+    assert validate_submit_request(body) == []
     assert _guest_billed({"prompt_tokens": 1}, fields)["billing"] == "metered"
 
 

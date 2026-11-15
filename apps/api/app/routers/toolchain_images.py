@@ -15,7 +15,6 @@ docker — the only runtime that would ever use the image.
 from __future__ import annotations
 
 from boss_engine.identity import P, Scope, permit  # noqa: E402  (identity S2)
-from ..identity_guard import writing_get  # noqa: E402  (identity int-b)
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -72,9 +71,9 @@ def _refusal(error: tci.ToolchainImageError) -> HTTPException:
                          detail=str(error))
 
 
-@writing_get(router, "")
-@writing_get(router, "/")
-@permit(P.HOST_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
+@router.get("")
+@router.get("/")
+@permit(P.HOST_READ, scope=Scope.project(query="project_id"))
 def list_images(project_id: str = Query(...), actor: str = Query(...)) -> dict[str, Any]:
     settings = get_settings()
     with begin(get_engine()) as connection:

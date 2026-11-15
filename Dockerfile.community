@@ -221,6 +221,7 @@ COPY third_party/notices ./third_party/notices
 COPY apps/api ./apps/api
 COPY apps/worker ./apps/worker
 COPY apps/egress ./apps/egress
+COPY apps/model-gateway ./apps/model-gateway
 COPY apps/runner ./apps/runner
 COPY api ./api
 COPY db ./db
