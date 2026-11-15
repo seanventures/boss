@@ -57,13 +57,122 @@ def test_the_moved_extraction_is_the_gates_own():
         assert getattr(ag, name) is getattr(ac, name), name
 
 
-def test_ticket_items_come_from_the_connector_field_else_the_description(ng):
+def test_ticket_items_come_from_the_connector_field_and_the_whole_description(ng):
     assert ac.ticket_items({"acceptance_criteria": ["  a  b ", "", "c"]}) == ["a b", "c"]
     from_body = ac.ticket_items(ng.ticket())
-    assert len(from_body) == 5
-    assert from_body[-1] == "All tests pass; the README quick start works as written."
+    # BOSSAPP-1233: every requirement the ticket states, its "Acceptance" list first (was 5).
+    assert len(from_body) == 25
+    assert from_body[4] == "All tests pass; the README quick start works as written."
     assert ac.ticket_items({"body": "no acceptance here"}) == []
     assert ac.ticket_items(None) == []
+    # The connector's field and the description together, deduplicated, the field first.
+    both = ac.ticket_items({**ng.ticket(), "acceptance_criteria": [from_body[1], "Extra"]})
+    assert both[:2] == [from_body[1], "Extra"] and len(both) == 26
+
+
+def test_the_northgate_ticket_yields_an_item_for_each_must_have_the_run_never_checked(ng):
+    """THE NORTHGATE MISSES (crun_5f8a, 2026-11-15): judged on 8 items (the ticket's 5
+    "Acceptance" lines + 3 the panel added), the build passed 7 while gwlint enforced five
+    hard-coded checks (no >=20-rule rules/api-guidelines.yaml), JWT was an HS256 shared secret
+    (no JWKS), and the JWT-audience rule existed only on paper. Each is now an item, word for
+    word from the ticket."""
+    body = ng.ticket_text
+    items = ac.requirement_items(body)
+    assert len(items) == 25
+    whole = ac.ticket_items(ng.ticket())
+    flat = ac._norm(body)
+    rulebook = [i for i in whole if "`rules/api-guidelines.yaml`" in i]
+    parent = rulebook[0].split(" **Security:**")[0]
+    for it in whole:                                     # every word is the ticket's own
+        if it in rulebook:                               # the parent's words, then the sub-bullet's
+            assert it.startswith(parent + " ") and parent in flat and it[len(parent) + 1:] in flat
+        else:
+            assert it in flat, it
+    assert len(rulebook) == 2 and all("At least 20 rules:" in i for i in rulebook)
+    assert any("JWT `audience` set" in i for i in rulebook)        # the audience rule
+    assert any("**API guidelines:** versioned base path" in i for i in rulebook)
+    jwks = [i for i in whole if "JWKS URL with caching" in i]
+    assert len(jwks) == 1 and jwks[0].startswith("**Authentication per route:** JWT/OAuth2 (issuer, "
+                                                 "audience, required scopes, JWKS URL with caching)")
+    assert "Stack: Go. (gateway and gwlint: one Go module, static binaries)" in whole
+    # Each "What to build" capability, the gwlint CLI, the examples (prose), the quality bar.
+    for lead in ("**Routing:**", "**Multi-tenant config:**", "**Rate limiting:**", "**CORS**",
+                 "**Resilience:**", "**Headers:**", "**Observability:**",
+                 "**Two environments:**", "**Tests:**", "**JSON Schema**", "**`gwlint` CLI**",
+                 "`examples/`: `lumen-pay.good.yaml`", "Clean, idiomatic Go;", "A README with:",
+                 "Plain, concise naming.", "No external services required"):
+        assert sum(1 for i in whole if i.startswith(lead)) == 1, lead
+    # Within the gate's batching: one pass of 40 holds the whole ticket.
+    assert len(whole) <= ag.MAX_ITEMS
+
+
+def test_requirement_items_read_structure_not_keywords():
+    doc = """Intro prose about why we do this. It is context, not an item.
+
+Stack: Python
+
+# Title
+
+## Background
+
+Some history in prose, never an item.
+
+## Build
+
+- Plain bullet requirement
+- Parent with short parts:
+  - id
+  - owner
+- Parent with requirements of its own:
+  - First sub-requirement that is long enough to stand as its own checkable requirement
+  - Second sub-requirement that is also long enough to stand on its own as a requirement
+    and wraps onto a second line
+
+### Deliverable in prose
+
+A script `bin/run` that prints the report.
+
+```
+- not a bullet: code
+```
+
+> - a quoted bullet: someone's words
+
+## Stretch (not gating)
+
+- Optional thing
+
+## Acceptance
+
+1. It runs
+"""
+    got = ac.requirement_items(doc)
+    assert got == [
+        "Stack: Python",
+        "Plain bullet requirement",
+        "Parent with short parts: id owner",
+        "Parent with requirements of its own: First sub-requirement that is long enough to "
+        "stand as its own checkable requirement",
+        "Parent with requirements of its own: Second sub-requirement that is also long enough "
+        "to stand on its own as a requirement and wraps onto a second line",
+        "A script `bin/run` that prints the report.",
+        "It runs"]
+
+
+def test_ticket_items_dedupe_with_the_brief_and_prd_keeping_every_source(ng):
+    """Multi-source: a ticket requirement the PRD also states word for word is ONE item that
+    names both sources; the rest of the brief and PRD keep their own items."""
+    spec = {"instructions": ng.instructions,
+            "acceptance_criteria": ["`gwlint validate examples/lumen-pay.good.yaml` exits 0.",
+                                    "No external services required to run the demo."]}
+    items = ac.build_items(ac.gather_sources(spec, ticket=ng.ticket()))
+    shared = [i for i in items if i["text"] in spec["acceptance_criteria"]]
+    assert len(shared) == 2
+    for i in shared:
+        srcs = [x["source"] for x in i["sources"]]
+        assert srcs[0] == "ticket" and "criterion" in srcs and len(set(srcs)) == len(srcs)
+    assert len([i for i in items if i["source"] == "ticket"]) == 25
+    assert len({ac._key(i["text"]) for i in items}) == len(items)
 
 
 def test_how_an_item_is_checked_is_the_plans_answer_not_its_words():
@@ -117,7 +226,7 @@ def test_the_contract_freezes_once_and_the_build_its_repairs_and_follow_ups_are_
         spec, source = ag.items_spec(c, run_id=root, fctx={"ticket": ng.ticket()},
                                      own_spec=ng.spec())
     held = _texts(spec)
-    assert len(held) == 27                       # 5 from the ticket + the 23, one shared
+    assert len(held) == 47           # the ticket's 25 requirements + the 23, one shared
     assert held[0].startswith("`make run-staging` starts the gateway")      # the ticket first
     assert source["root"] is True and source["contract"]["version"] == 1
     with eng.begin() as c:
@@ -138,17 +247,17 @@ def test_the_contract_freezes_once_and_the_build_its_repairs_and_follow_ups_are_
         with eng.begin() as c:
             spec, source = ag.items_spec(c, run_id=run_id, fctx=fctx, own_spec=own)
         texts = _texts(spec)
-        assert texts[:27] == held, run_id               # the whole contract, first, in order
-        assert source["contract"] == {"id": v1["id"], "version": 1, "items": 27}
+        assert texts[:47] == held, run_id               # the whole contract, first, in order
+        assert source["contract"] == {"id": v1["id"], "version": 1, "items": 47}
         # What a run adds beyond the contract still counts after it (never fewer items).
         if run_id == repair:
-            assert texts[27:] == []
+            assert texts[47:] == []
     with eng.begin() as c:
         assert [v["version"] for v in ac.versions(c, root_run_id=root)] == [1]
         # freeze is first-time-only: other sources later never rewrite version 1.
         again = ac.freeze(c, project_id=project, root_run_id=root,
                           sources=ac.gather_sources({"acceptance_criteria": ["other"]}))
-        assert again["id"] == v1["id"] and len(again["items"]) == 27
+        assert again["id"] == v1["id"] and len(again["items"]) == 47
         from sqlalchemy import text
 
         assert c.execute(text(
@@ -168,7 +277,9 @@ def test_a_ticket_change_is_a_new_version_that_keeps_every_id(eng, project, ng, 
     # the first criterion is dropped and one is added.
     changed = dict(ng.ticket())
     criteria = ac.ticket_items(changed)[1:] + ["`make token` mints a demo JWT for the quick start"]
-    changed.update(acceptance_criteria=criteria, updated_at="2026-11-15")
+    # (The connector's field now carries the whole list; the description is emptied so the
+    # dropped criterion is not read back from it.)
+    changed.update(acceptance_criteria=criteria, body="", updated_at="2026-11-15")
     from sqlalchemy import text
 
     with eng.begin() as c:
@@ -188,7 +299,7 @@ def test_a_ticket_change_is_a_new_version_that_keeps_every_id(eng, project, ng, 
     assert first_ticket["text"] not in ids2                       # dropped
     assert all(ids2[t] == by_text[t] for t in ids2 if t in by_text)  # every kept id unchanged
     new = [i for i in v2["items"] if i["text"].startswith("`make token`")]
-    assert new and new[0]["id"] == "AC-28" and new[0]["source"] == "ticket"
+    assert new and new[0]["id"] == "AC-48" and new[0]["source"] == "ticket"
     assert "`make token` mints a demo JWT for the quick start" in _texts(spec)
     with eng.begin() as c:
         # The same ticket again changes nothing; a person's revision is version 3, and a removed
@@ -210,7 +321,7 @@ def test_a_ticket_change_is_a_new_version_that_keeps_every_id(eng, project, ng, 
         assert v3["version"] == 3 and v3["created_by"] == "usr_test_person"
         assert v3["items"][-1]["sources"] == [{"source": "operator", "source_kind": "operator",
                                                 "source_ref": "usr_test_person"}]
-        assert [i["id"] for i in v3["items"]][-1] == "AC-29"
+        assert [i["id"] for i in v3["items"]][-1] == "AC-49"
         assert "AC-2" not in {i["id"] for i in v3["items"]}
         assert c.execute(text(
             "SELECT count(*) FROM events WHERE project_id = :p "
@@ -232,7 +343,7 @@ def test_a_follow_up_whose_builds_are_gone_is_held_to_the_contract_not_to_nothin
                                      fctx={"is_followup": True, "root_run_id": root},
                                      own_spec={"instructions": "Fix"})
     assert source["root"] is True and source["contract"]["version"] == 1
-    assert len(_texts(spec)) == 27
+    assert len(_texts(spec)) == 47
 
 
 def test_a_run_with_no_ticket_is_judged_on_exactly_the_items_it_was_before(eng, project, ng):
@@ -307,3 +418,22 @@ def test_a_ticket_dropping_a_criterion_never_removes_what_the_brief_also_asked(e
             c.execute(text("DELETE FROM acceptance_contracts WHERE lineage_root_run_id = :r"),
                       {"r": root})
             c.execute(text("DELETE FROM code_task_runs WHERE id = :r"), {"r": root})
+
+
+def test_a_contract_frozen_from_the_acceptance_list_alone_takes_in_the_whole_ticket(
+        eng, project, ng, lineage):
+    """A lineage frozen before BOSSAPP-1233 held only the ticket's 5 "Acceptance" lines. The same
+    ticket snapshot, read in full, is a new version that ADDS the rest (every id kept), and says
+    the ticket was read in full, not that it changed."""
+    root = lineage
+    old_reader = {**ng.ticket(), "acceptance_criteria": ac.ticket_items(ng.ticket())[:5]}
+    with eng.begin() as c:
+        v1 = ac.freeze(c, project_id=project, root_run_id=root,
+                       sources=ac.gather_sources(ng.spec(), ticket={**old_reader, "body": ""}))
+        assert len(v1["items"]) == 27
+        v2 = ac.revise_from_ticket(c, v1, ng.ticket())
+    assert v2["version"] == 2
+    assert v2["reason"].startswith(f"{ng.ticket()['key']} read in full: 20 items added")
+    assert len(v2["items"]) == 47
+    assert [i["id"] for i in v2["items"][:27]] == [i["id"] for i in v1["items"]]
+    assert any("JWKS URL with caching" in i["text"] for i in v2["items"])

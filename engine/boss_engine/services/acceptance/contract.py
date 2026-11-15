@@ -9,8 +9,10 @@ a stored, frozen THING that every check of the lineage — repair, follow-up, re
 Acceptance Agent's outer step (later tickets) — is judged against, and that a person can read.
 
 WHAT IT HOLDS, in source order (each item keeps where it came from):
-  1. the source TICKET's acceptance criteria (the ticket connectors' `Ticket.acceptance_criteria`,
-     else the "Acceptance" section of its description), read from the run's ticket snapshot;
+  1. EVERY requirement the source TICKET states (BOSSAPP-1233): the ticket connectors'
+     `Ticket.acceptance_criteria` and the "Acceptance" section of its description first, then
+     the rest of its description read by structure (requirement_items: the Stack: line, each
+     "What to build" bullet and sub-bullet, the quality bar), read from the run's ticket snapshot;
   2. the BRIEF's must-haves (render_brief's "Must-haves:" block);
   3. the PRD's tested-and-gating acceptance list;
   4. the run's acceptance criteria (`criteria`: the brief's "done when", or the PRD list
@@ -253,16 +255,187 @@ def _verbatim(text: Any) -> str:
 
 
 def ticket_items(ticket: Optional[Mapping[str, Any]]) -> list[str]:
-    """A ticket's acceptance criteria: the connector's `acceptance_criteria` field, else the items
-    under an "Acceptance" heading of its description (prd_gating_criteria — the same parser the
-    PRD's list goes through). Words only, never truncated."""
+    """EVERY requirement a ticket states (BOSSAPP-1233), word for word, never truncated: the
+    connector's `acceptance_criteria` field and the items under an "Acceptance" heading of its
+    description first (prd_gating_criteria — the same parser the PRD's list goes through), then
+    every other requirement its description states (requirement_items: the `Stack:` line, each
+    "What to build" bullet and sub-bullet, the quality bar, a deliverable written as prose).
+
+    WHY. Northgate KAN-9 (2026-11-15) was judged on its five "Acceptance" lines only; its "What
+    to build" must-haves — a >=20-rule YAML rulebook gwlint loads, JWKS-cached JWT, a JWT
+    audience rule — were never items, so a build with five hard-coded lint checks and an HS256
+    shared secret scored 7 of 8 met."""
     if not isinstance(ticket, Mapping):
         return []
-    given = [_verbatim(c) for c in ticket.get("acceptance_criteria") or [] if _verbatim(c)]
-    if given:
-        return given
     body = ticket.get("body") if ticket.get("body") is not None else ticket.get("body_markdown")
-    return [_verbatim(c) for c in prd_gating_criteria(str(body or "")) if _verbatim(c)]
+    body = str(body or "")
+    out: list[str] = []
+    seen: set[str] = set()
+    for words in [*(ticket.get("acceptance_criteria") or []), *prd_gating_criteria(body),
+                  *requirement_items(body)]:
+        w = _verbatim(words)
+        if w and _key(w) not in seen:
+            seen.add(_key(w))
+            out.append(w)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Every requirement a ticket/brief states, read from its STRUCTURE (BOSSAPP-1233)
+# ---------------------------------------------------------------------------------------------
+
+_FENCE = re.compile(r"^\s*(```|~~~)")
+_BULLET = re.compile(r"^(\s*)(?:[-*•+]|\d+[.)])\s+(.*\S)\s*$")
+#: The `Stack:` field (stacks._STACK_LINE's form, the line the stack gate already declares from).
+_STACK_FIELD = re.compile(r"^\s*[`*]*\s*stack\s*[`*]*\s*:\s*\S", re.I)
+#: Sub-bullets this short with no children of their own are one requirement's parts (a list of
+#: fields, of tenants): they stay with their parent as ONE item rather than one item each.
+SHORT_PART = 60
+
+
+def _indent(line: str) -> int:
+    expanded = line.expandtabs(4)
+    return len(expanded) - len(expanded.lstrip())
+
+
+def _parse(markdown: str) -> list[dict[str, Any]]:
+    """The document as blocks: heading {level, text}, bullet {indent, text}, para {text} and
+    stack {text}. Code fences, tables and block quotes (someone else's words, an example) are
+    not requirements and are left out; a bullet's wrapped continuation lines join it."""
+    blocks: list[dict[str, Any]] = []
+    fence = False
+    para: list[str] = []
+    last_bullet: Optional[dict[str, Any]] = None
+
+    def flush() -> None:
+        if para:
+            blocks.append({"kind": "para", "text": _norm(" ".join(para))})
+            para.clear()
+
+    for line in str(markdown or "").splitlines():
+        if _FENCE.match(line):
+            flush()
+            fence, last_bullet = not fence, None
+            continue
+        if fence:
+            continue
+        stripped = line.strip()
+        if not stripped:
+            flush()
+            continue
+        h = _HEADING.match(line)
+        if h:
+            flush()
+            last_bullet = None
+            blocks.append({"kind": "heading", "level": len(h.group(1)), "text": h.group(2)})
+            continue
+        if stripped.startswith((">", "|")):
+            flush()
+            last_bullet = None
+            continue
+        b = _BULLET.match(line)
+        if b:
+            flush()
+            last_bullet = {"kind": "bullet", "indent": _indent(line), "text": _norm(b.group(2))}
+            blocks.append(last_bullet)
+            continue
+        if last_bullet is not None and not para:
+            last_bullet["text"] = _norm(last_bullet["text"] + " " + stripped)
+            continue
+        last_bullet = None
+        if _STACK_FIELD.match(stripped):
+            flush()
+            blocks.append({"kind": "stack", "text": _norm(stripped)})
+            continue
+        para.append(stripped)
+    flush()
+    return blocks
+
+
+def _bullet_tree(bullets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Nest a section's bullets by indentation: [{text, children}]."""
+    roots: list[dict[str, Any]] = []
+    stack: list[tuple[int, dict[str, Any]]] = []
+    for b in bullets:
+        node: dict[str, Any] = {"text": b["text"], "children": []}
+        while stack and stack[-1][0] >= b["indent"]:
+            stack.pop()
+        (stack[-1][1]["children"] if stack else roots).append(node)
+        stack.append((b["indent"], node))
+    return roots
+
+
+def _flat(node: Mapping[str, Any]) -> str:
+    return _norm(" ".join([node["text"], *(_flat(c) for c in node["children"])]))
+
+
+def _bullet_items(node: Mapping[str, Any]) -> list[str]:
+    """One item per concrete requirement. A bullet with no sub-bullets is one item; a bullet
+    whose sub-bullets are only short parts of it (fields, names) is ONE item holding them; a
+    bullet whose sub-bullets are requirements of their own gives one item per sub-bullet, each
+    led by the parent's words so it reads whole ("A rulebook ... At least 20 rules: Security:
+    ..."). Every word is the document's own."""
+    kids = node["children"]
+    if not kids:
+        return [node["text"]]
+    if all(not c["children"] and len(c["text"]) <= SHORT_PART for c in kids):
+        return [_flat(node)]
+    out: list[str] = []
+    for c in kids:
+        out += [_norm(f"{node['text']} {t}") for t in _bullet_items(c)]
+    return out
+
+
+def requirement_items(markdown: str) -> list[str]:
+    """Every concrete, checkable requirement a ticket or brief STATES, word for word, in
+    document order — read from its structure, not from keywords:
+
+      - a `Stack:` field line (the stack the work must be in);
+      - every bullet (and numbered item), under a heading or before the first one, with its
+        sub-bullets (_bullet_items: one item per requirement, short parts kept together);
+      - a deliverable written as prose: the paragraphs of a SUB-section that holds no list
+        ("### 3. Demo content" + one paragraph naming the example files and the README).
+        Prose under a top-level section, or beside a list, is context and is not an item.
+
+    Left out: a section whose heading says it is not gating (stretch, optional, out of scope,
+    nice to have — _NOT_GATING, the PRD parser's own test) and everything under it; code
+    blocks, tables and block quotes."""
+    blocks = _parse(markdown)
+    levels = [b["level"] for b in blocks if b["kind"] == "heading"]
+    base = min(levels) if levels else 1
+    if levels.count(base) == 1 and levels[0] == base and len(set(levels)) > 1:
+        base = min(lv for lv in levels if lv > base)        # a lone first heading is the title
+    out: list[str] = []
+    path: list[tuple[int, str]] = []
+    section: list[dict[str, Any]] = []
+
+    def close() -> None:
+        bullets = [b for b in section if b["kind"] == "bullet"]
+        if not any(_NOT_GATING.search(t) for _lv, t in path):
+            for node in _bullet_tree(bullets):
+                out.extend(_bullet_items(node))
+            if path and not bullets and path[-1][0] > base:
+                out.extend(b["text"] for b in section if b["kind"] == "para")
+        section.clear()
+
+    for b in blocks:
+        if b["kind"] == "heading":
+            close()
+            while path and path[-1][0] >= b["level"]:
+                path.pop()
+            path.append((b["level"], b["text"]))
+        elif b["kind"] == "stack":
+            out.append(b["text"])
+        else:
+            section.append(b)
+    close()
+    seen: set[str] = set()
+    kept: list[str] = []
+    for w in (_verbatim(x) for x in out):
+        if w and _key(w) not in seen:
+            seen.add(_key(w))
+            kept.append(w)
+    return kept
 
 
 def _ticket_ref(ticket: Mapping[str, Any]) -> str:
@@ -643,9 +816,15 @@ def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
     source = {"kind": "ticket", "ref": ref, "url": ticket.get("url"),
               "provider": ticket.get("provider"), "updated_at": ticket.get("updated_at"),
               "digest": _digest(now), "count": len(now)}
+    held_src = next((x for x in cur["sources"] if x.get("kind") == "ticket"), None)
+    # The same ticket snapshot read again by a reader that now takes in more of it (BOSSAPP-1233:
+    # the whole description, not only its "Acceptance" list) did not change: say so.
+    unchanged = bool(held_src and ticket.get("updated_at")
+                     and str(held_src.get("updated_at")) == str(ticket.get("updated_at")))
     sources = [x for x in cur["sources"] if x.get("kind") != "ticket"]
     sources.insert(0, source)
-    return _new_version(connection, cur, items, reason=f"{ref} changed: {words}", actor=actor,
+    reason = f"{ref} read in full: {words}" if unchanged else f"{ref} changed: {words}"
+    return _new_version(connection, cur, items, reason=reason, actor=actor,
                         sources=sources, added=added, removed=removed, retagged=retagged)
 
 

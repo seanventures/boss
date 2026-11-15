@@ -263,6 +263,15 @@ def acceptance_prompt(items: list[dict], *, title: str, stack: Mapping[str, Any]
         "  ITEM <n>: MISSING — <what you looked for and where; what is absent>\n"
         "MET requires a path that exists in the tree and is code, configuration or a test — a "
         "README or other document alone is not evidence. When unsure, say PARTIAL and why.\n"
+        "MET also requires the requirement to be WIRED: show the code that loads or uses what "
+        "the item names. A file named after the requirement is not delivery on its own — a "
+        "rules YAML the linter never reads (its checks hard-coded instead), a JSON Schema "
+        "nothing validates against, a config field nothing enforces (a JWT audience no verifier "
+        "checks, a JWKS URL while tokens are checked against a shared secret), a rule that "
+        "exists only in a list or a doc. Name the loading/using function in the MET line; if "
+        "you cannot find one, the item is PARTIAL (say what is not wired). Judge each part of "
+        "an item that lists several (every rule, every field, every endpoint): one part "
+        "missing makes it PARTIAL.\n"
         "End with EXACTLY one final line:\n  ACCEPTANCE: MET\n  ACCEPTANCE: NOT MET\n\n"
         "THE BRANCH'S FILES:\n" + (tree or "(empty)") + "\n"
     )
@@ -276,6 +285,9 @@ _PATHISH = re.compile(r"(?<![\w/.-])([\w.\-]+(?:/[\w.\-]+)+|[\w\-]+\.[A-Za-z][\w
                       r"(?::\d+)?(?![\w/])")
 _DOC_PATH = re.compile(r"(?i)(^|/)(readme[^/]*|changelog[^/]*|docs?/.*|[^/]*\.(md|rst|txt|adoc))$")
 #: Manifests and lockfiles declare a dependency; they deliver no behaviour.
+#: Data files: what a requirement may NAME (a rulebook, a schema, a config) — delivery only when
+#: code in the tree loads it (BOSSAPP-1233: a rules YAML the linter never read was cited as MET).
+_DATA_PATH = re.compile(r"(?i)\.(ya?ml|json|toml|ini|cfg|conf|csv|xml)$")
 _DECL_PATH = re.compile(r"(?i)(^|/)(go\.(mod|sum)|package(-lock)?\.json|[^/]*\.lock|"
                         r"pnpm-lock\.ya?ml|requirements[^/]*\.txt|pyproject\.toml|setup\.(py|cfg)|"
                         r"pipfile|cargo\.toml|pom\.xml|build\.gradle(\.kts)?|gemfile)$")
@@ -318,20 +330,66 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any) -> list[dict[s
     for m in _ANSWER.finditer(str(reply or "")):
         answers[int(m.group(1))] = (m.group(2).lower(), _norm(m.group(3))[:600])
     out = []
+    loaders = _Loaders(root)
     for it in items:
         status, why = answers.get(int(it["n"]), (UNJUDGED, ""))
         if status == MET:
             found, absent = evidence_paths(root, why)
             code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
+            unwired = [f for f in code if _DATA_PATH.search(f)
+                       and Path(f).name.lower() in str(it.get("text") or "").lower()
+                       and not loaders.loads(f)]
+            reason = ""
             if not code:
                 reason = ("only manifests/lockfiles cited" if found and all(
                               _DECL_PATH.search(f) for f in found)
                           else "only documents cited" if found
                           else f"cited paths not in the tree: {', '.join(absent[:4])}" if absent
                           else "no file evidence cited")
+            elif all(_DATA_PATH.search(f) for f in code):
+                reason = ("only data files cited, no code shown loading them: "
+                          + ", ".join(code[:4]))
+            elif unwired:
+                reason = ("the item's file is in the tree but nothing in it loads it: "
+                          + ", ".join(unwired[:4]))
+            if reason:
                 status, why = PARTIAL, f"{why} ({reason})".strip()
         out.append({**it, "status": status, "evidence": why})
     return out
+
+
+class _Loaders:
+    """Which of the tree's data files some OTHER non-document file refers to (by path, file
+    name, or its folder) — the least a loaded rulebook/schema/config shows. Read once, lazily."""
+
+    MAX_BYTES = 512 * 1024
+
+    def __init__(self, root: Any) -> None:
+        self.root = Path(root) if root is not None else None
+        self._texts: Optional[dict[str, str]] = None
+
+    def _all(self) -> dict[str, str]:
+        if self._texts is None:
+            self._texts = {}
+            for p in _walk(self.root) if self.root is not None else ():
+                rel = str(p.relative_to(self.root))
+                if _DOC_PATH.search(rel):
+                    continue
+                try:
+                    if p.stat().st_size <= self.MAX_BYTES:
+                        self._texts[rel] = p.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+        return self._texts
+
+    def loads(self, rel: str) -> bool:
+        path = Path(rel)
+        names = {rel, path.name}
+        if path.parent != Path("."):
+            names |= {f"{path.parent.as_posix()}/", f'"{path.parent.as_posix()}"',
+                      f"'{path.parent.as_posix()}'"}
+        return any(any(n in text for n in names)
+                   for other, text in self._all().items() if other != rel)
 
 
 def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
