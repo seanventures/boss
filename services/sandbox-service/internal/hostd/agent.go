@@ -65,6 +65,17 @@ type Config struct {
 	MaxVMs        int
 	TapOwnerUID   int
 
+	// RuntimeVersion is part of the snapshot key (the baked boss-runtime).
+	RuntimeVersion string
+	// ReplicaSurge is the warm spare kept per replica shape (0 = the default
+	// of 1; -1 = none).
+	ReplicaSurge int
+	// SnapshotGCGrace: a snapshot no desired VM or pool references is deleted
+	// once older than this (default 10 min). SnapshotGCEvery is how often the
+	// store is swept (default 1 min).
+	SnapshotGCGrace time.Duration
+	SnapshotGCEvery time.Duration
+
 	HeartbeatEvery time.Duration // 2 s
 	WatchWait      time.Duration // 25 s long-poll
 	ReconcileEvery time.Duration // 500 ms
@@ -116,6 +127,17 @@ func (c *Config) defaults() {
 	if c.Net == nil {
 		c.Net = netpol.Noop{}
 	}
+	if c.ReplicaSurge < 0 {
+		c.ReplicaSurge = 0
+	} else if c.ReplicaSurge == 0 {
+		c.ReplicaSurge = 1
+	}
+	if c.SnapshotGCGrace <= 0 {
+		c.SnapshotGCGrace = 10 * time.Minute
+	}
+	if c.SnapshotGCEvery <= 0 {
+		c.SnapshotGCEvery = time.Minute
+	}
 	if c.Logf == nil {
 		c.Logf = log.Printf
 	}
@@ -155,6 +177,13 @@ type Agent struct {
 	gone    map[string]hostapi.ReplicaStatus
 	taps    map[string]bool // taps seen at start (orphan sweep)
 	hbCount int
+
+	// Warm pools (pool.go).
+	warm         map[string]*warmVM    // slot id → warm VM
+	filling      map[poolKey]int       // fills in flight
+	snapshotting map[vmm.Shape]bool    // one snapshot at a time per shape
+	poolBackoff  map[poolKey]time.Time // after a failed fill
+	lastGC       time.Time
 }
 
 // New prepares an agent. Run does the work.
@@ -179,7 +208,8 @@ func New(cfg Config) (*Agent, error) {
 	a := &Agent{cfg: cfg, pinned: pool, cpBase: base, kick: make(chan struct{}, 1),
 		renewNow: make(chan struct{}, 1), pushObs: make(chan struct{}, 1), unhealthy: make(chan string, 64),
 		vms: map[string]*vmState{}, refused: map[string]refusal{}, taps: map[string]bool{},
-		gone: map[string]hostapi.ReplicaStatus{}}
+		gone: map[string]hostapi.ReplicaStatus{}, warm: map[string]*warmVM{}, filling: map[poolKey]int{},
+		snapshotting: map[vmm.Shape]bool{}, poolBackoff: map[poolKey]time.Time{}}
 	a.client, err = cpclient.New(cfg.CPURL, pool, func() *tls.Certificate {
 		if c := a.creds.Load(); c != nil {
 			cert := c.TLSCertificate()
@@ -481,7 +511,9 @@ func (a *Agent) StateGen() int64 { return a.stateGen.Load() }
 
 // detailOnly are event kinds that change no replica state: they neither
 // bump state_gen nor push /observed.
-var detailOnly = map[string]bool{"handed_back": true, "handle_replay": true, "orphan_tap_removed": true}
+var detailOnly = map[string]bool{"handed_back": true, "handle_replay": true, "orphan_tap_removed": true,
+	"vm_timing": true, "warm_ready": true, "warm_failed": true, "warm_dropped": true, "snapshot": true,
+	"snapshot_failed": true, "snapshot_gc": true}
 
 func (a *Agent) event(vmID, kind, from, to string, detail map[string]string) {
 	if !detailOnly[kind] {

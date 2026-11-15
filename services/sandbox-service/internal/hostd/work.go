@@ -168,6 +168,7 @@ func (a *Agent) tryDeliver(run hostapi.Assignment) string {
 	if free <= 0 {
 		return "no_free_slot"
 	}
+	vm.Taint("run " + run.RunID) // never snapshot a VM that saw a run (S15)
 	release := func() {
 		st.mu.Lock()
 		if st.pending > 0 {

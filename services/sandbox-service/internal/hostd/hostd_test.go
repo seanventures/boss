@@ -22,13 +22,16 @@ import (
 // process backend runs the real relay and control server.
 func TestMain(m *testing.M) {
 	if os.Getenv("BOSS_TEST_GUEST") == "1" {
-		dir := ""
+		dir, restored := "", false
 		for _, a := range os.Args[1:] {
 			if strings.HasPrefix(a, "--dir=") {
 				dir = strings.TrimPrefix(a, "--dir=")
 			}
+			if a == "--restored" {
+				restored = true
+			}
 		}
-		d := &guest.Daemon{T: guest.UnixTransport{Dir: dir}}
+		d := &guest.Daemon{T: guest.UnixTransport{Dir: dir}, Restored: restored}
 		if err := d.Run(context.Background()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -106,6 +109,7 @@ func (h *harness) config(join string) Config {
 		HeartbeatEvery: 100 * time.Millisecond, WatchWait: 2 * time.Second,
 		ReconcileEvery: 100 * time.Millisecond, PingEvery: 100 * time.Millisecond,
 		BootGrace: 3 * time.Second, Logf: h.logs.logf, WorkWait: time.Second,
+		ReplicaSurge: -1, // P8a lifecycle tests count processes; pool tests opt in
 	}
 }
 
