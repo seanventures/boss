@@ -93,15 +93,25 @@ CREATE_SECRET_REFS = (
 )
 
 
-#: What Repo and models reads for the repository row (setup_view), mirroring the real columns.
+#: What Repo and models reads for the repository row (setup_view). Column names track
+#: db/schema.sql for these two tables, including columns added later by ALTER
+#: (role_hint, registry_repo_id, host). SQLite stubs stay nullable TEXT: a test that
+#: inserts a subset of columns must still succeed. engine/tests/test_the_setup_stub_tracks_github_columns.py
+#: fails when schema.sql grows a column this stub does not name.
 CREATE_GITHUB_TABLES = (
     "CREATE TABLE github_connections (id TEXT, project_id TEXT, connection_label TEXT,"
-    " auth_method TEXT, credential_ref TEXT, api_base_url TEXT, status TEXT,"
-    " account_login TEXT, expires_at TIMESTAMP, last_test_status TEXT,"
-    " last_tested_at TIMESTAMP, last_error TEXT, created_at TIMESTAMP, updated_at TIMESTAMP)",
+    " auth_method TEXT, credential_ref TEXT, app_id TEXT, installation_id TEXT,"
+    " api_base_url TEXT, status TEXT, required_permissions TEXT, granted_permissions TEXT,"
+    " missing_permissions TEXT, account_login TEXT, expires_at TIMESTAMP, metadata TEXT,"
+    " last_test_status TEXT, last_tested_at TIMESTAMP, last_error TEXT,"
+    " disabled_at TIMESTAMP, disabled_by TEXT, revoked_at TIMESTAMP, revoked_by TEXT,"
+    " created_by TEXT, created_at TIMESTAMP, updated_at TIMESTAMP)",
     "CREATE TABLE github_repository_bindings (id TEXT, project_id TEXT, connection_id TEXT,"
-    " full_name TEXT, role TEXT, default_branch TEXT, visibility TEXT, status TEXT,"
-    " checks TEXT, checked_at TIMESTAMP, created_at TIMESTAMP, updated_at TIMESTAMP)",
+    " repository_id TEXT, owner TEXT, name TEXT, full_name TEXT, role TEXT,"
+    " default_branch TEXT, visibility TEXT, archived TEXT, status TEXT,"
+    " permissions TEXT, capabilities TEXT, metadata TEXT, checks TEXT, checked_at TIMESTAMP,"
+    " last_synced_at TIMESTAMP, created_by TEXT, created_at TIMESTAMP, updated_at TIMESTAMP,"
+    " role_hint TEXT, registry_repo_id TEXT, host TEXT)",
     "CREATE TABLE events (id TEXT, project_id TEXT, event_type TEXT, actor TEXT,"
     " entity_type TEXT, entity_id TEXT, data TEXT, created_at TIMESTAMP)",
 )
