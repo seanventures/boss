@@ -58,9 +58,13 @@ class CustomStepError(RuntimeError):
     budget cap that has to be raised). The runner stops the step once, with Retry / Skip,
     instead of retrying into the same refusal."""
 
-    def __init__(self, message: str, *, settled: bool = False):
+    def __init__(self, message: str, *, settled: bool = False,
+                 output: Optional[dict[str, Any]] = None):
         super().__init__(message)
         self.settled = settled
+        #: What the step's work returned before it was judged a failure — a command's
+        #: `exit_code` and `log_tail` — kept on the step run as evidence (workflows.fail_step).
+        self.output = output
 
 
 class CustomStepWait(CustomStepError):
@@ -808,6 +812,20 @@ def execute(
             raise CustomStepError(
                 f"'{row['label']}' failed: {result.get('reason') or 'the skill did not run'}"
             )
+        exited = exit_failure(connection, project_id, str(row["skill_id"]), str(row["label"]),
+                              result.get("result"))
+        if exited:
+            # THE COMMAND SAID NO. `skill.sandboxed_command` reports its `exit_code`; the
+            # invocation itself succeeded, so this is the only place the step learns the
+            # command failed. Retryable: `on_error` and the step's retries apply exactly as
+            # they do to a failed tool, and the sentence carries the code and the log tail
+            # (AMEX-G3, BOSSAPP-1139).
+            raise CustomStepError(exited, output={
+                **(result.get("result") or {}),
+                "_step": {"custom_step": key, "label": row["label"], "binding": "skill",
+                          "skill_id": row["skill_id"], "risk_tier": risk["risk_tier"]},
+                "ran_as": ran_as,
+            })
         # The tool's own output stays FLAT, because that is what a later step reads with
         # `{"from_step": …, "field": …}`. The step's own facts go under one reserved key rather
         # than beside them — `toolchain.command.guard` returns its own `risk_tier` (its verdict
@@ -857,6 +875,38 @@ def execute(
         "ran_as": {**ran_as, "skills_offered": [], "skills_used": [],
                    "mcp_offered": [f"{server['name']} · {row['mcp_tool_name']}"]},
     }
+
+
+def exit_failure(connection: Connection, project_id: str, skill_id: str, label: str,
+                 output: Any) -> Optional[str]:
+    """The sentence a step fails with when its command exited non-zero, or None.
+
+    ONLY FOR A SKILL THAT SAYS SO. `fail_on_exit` is a setting of the authored skill: on for
+    skills authored since the flag existed, explicitly off for the ones authored before it
+    (db/schema.sql), and absent from every built-in skill — so a built-in that happens to
+    return an `exit_code` is judged as it always was. Read from THE ONE CATALOGUE
+    (skill_catalogue: the authored spec's policy carries it), the same place resolve_risk
+    reads the tier. The reason names the code and quotes the log tail, which is what an
+    operator reading the run needs: "exit 1" on its own sends them to the sandbox logs.
+    """
+    if not isinstance(output, dict):
+        return None
+    code = output.get("exit_code")
+    if isinstance(code, bool) or not isinstance(code, int) or code == 0:
+        return None
+    from .skill_catalogue import entry
+
+    try:
+        item = entry(connection, project_id, skill_id)
+    except Exception:  # noqa: BLE001 — a lookup fault must not invent a failure
+        return None
+    policy = ((item or {}).get("spec") or {}).get("policy") or {}
+    if not policy.get("fail_on_exit"):
+        return None
+    tail = str(output.get("log_tail") or output.get("stderr") or output.get("stdout") or "")
+    tail = " ".join(tail.strip().split())[-600:]
+    said = f"'{label}' exited with code {code}"
+    return f"{said}: {tail}" if tail else f"{said} and printed nothing."
 
 
 def _skill_server(connection: Connection, project_id: str, skill_id: str) -> str:

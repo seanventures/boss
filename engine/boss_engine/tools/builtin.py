@@ -9145,6 +9145,64 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                     "ms": round((_time.time() - started) * 1000),
                     "error": f"{type(exc).__name__}: {exc}"[:300]}
 
+    # CONTRACT TESTS (AMEX-G7, BOSSAPP-1143). `http_probe` is one GET. An API that was just
+    # given a tenant's routes has a contract: a valid token reaches the upstream, no token is a
+    # 401, the eleventh request in a second is a 429, the rejected path stays rejected. Each is
+    # a method, headers, a body, an expected status and a few JSON fields — a case — and the
+    # step runs the list and reports a table. Same edition rule as http_probe: Community has no
+    # project-bound destination for a URL yet, so it refuses rather than probe anywhere.
+    _CONTRACT_CASE = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "method": {"type": "string",
+                       "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]},
+            "url": {"type": "string", "description": "a full URL; or give path + base_url"},
+            "path": {"type": "string", "description": "joined onto base_url"},
+            "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+            "json": {"description": "a JSON body (sets Content-Type: application/json)"},
+            "body": {"type": "string", "description": "a raw body, when not JSON"},
+            "expect_status": {"description": "an HTTP status, or a list of acceptable ones; "
+                                             "default any 2xx",
+                              "type": ["integer", "array"],
+                              "items": {"type": "integer"}},
+            "expect_json": {"type": "object",
+                            "description": "JSON path -> expected value, e.g. "
+                                           "{\"$.tenant.id\": \"lumen-pay\"}"},
+            "expect_json_exists": {"type": "array", "items": {"type": "string"},
+                                   "description": "JSON paths that must be present"},
+            "expect_body_contains": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+
+    @reg.tool(
+        "contract_test",
+        "Run a list of HTTP contract cases against a deployed API — each with a method, "
+        "headers, a JSON body, the status it must answer and JSON-path assertions — and "
+        "report a table. A failed case is a failed contract: the step fails, with the table. "
+        "Unavailable in Community until URLs can be bound to the current project.",
+        _obj({"cases": {"type": "array", "items": _CONTRACT_CASE, "minItems": 1,
+                        "maxItems": 100},
+              "base_url": {"type": "string",
+                           "description": "prefix for cases that give a path"},
+              "headers": {"type": "object", "additionalProperties": {"type": "string"},
+                          "description": "headers every case sends (a case's own win)"},
+              "timeout_s": {"type": "integer", "minimum": 1, "maximum": 60, "default": 10}},
+             ["cases"]),
+        kind="write", reversibility="safe", idempotency="idempotent",
+        permission="observability:manage",
+        exposure=Exposure(tags=("network", "tests"), surfaces=("chat", "agent_step", "mcp"),
+                          search_hint="contract test api assert status json body staging"))
+    def contract_test(ctx, *, project_id, actor, args):
+        from ..services.contract_tests import run_cases
+
+        if _community_restricted(ctx.settings):
+            return {"ok": False, "error": "Community URL probes require a project-bound "
+                    "destination and a network policy; use recorded deployment health."}
+        return run_cases(args.get("cases"), base_url=str(args.get("base_url") or ""),
+                         timeout_s=args.get("timeout_s") or 10, headers=args.get("headers"))
+
     @reg.tool(
         "git_history",
         "Recent commits for a repo or a single file — when something changed, who "
@@ -9519,6 +9577,11 @@ def build_default_registry() -> ToolRegistry:
     register_knowledge_project_tools(reg)
     # Ticket systems: Jira, Plane, GitHub Issues through one contract (BOSSAPP-1047 B2).
     _register_ticket_tools(reg)
+    # A PR comment and a fix PR on a repository bound to the project (AMEX-G5/G6,
+    # BOSSAPP-1141/1142): the API-onboarding workflow's two GitHub effects, as tools.
+    from .github_tools import register_github_tools
+
+    register_github_tools(reg)
     # The run filesystem's tools (AP-P6): catalogued here with their permissions, served by the
     # kernel inside a run.
     register_run_fs_tools(reg)
@@ -9581,6 +9644,10 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # Each writes to the team's own ticket system as the person (or the connection's bot);
     # a write that would carry flagged ticket text waits for the person (low_trust).
     "ticket_import", "ticket_comment", "ticket_transition",
+    # GitHub from chat (AMEX-G5/G6): "comment the report on PR #12", "open a fix PR with this
+    # file", "run the contract cases against staging". Each is receipted; a fix PR is a branch
+    # of BOSS's own and merging stays a person's decision.
+    "github_comment", "github_open_fix_pr", "contract_test",
     # The work-item graph from chat (BOSSAPP-830/832): plan an item, relate two, and ask the
     # person a typed question (its form is drawn in the answer, turn_cards "ask" citation).
     "create_work_item", "link_work_items", "complete_work_item", "ask_human",

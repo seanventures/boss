@@ -14,13 +14,16 @@
 import {
   ArrowsClockwise,
   Blueprint,
+  ChatText,
   ChatsCircle,
   CheckCircle,
   Cloud,
   FileText,
   Flask,
   Gauge,
+  GitPullRequest,
   Heartbeat,
+  ListChecks,
   ListMagnifyingGlass,
   MagnifyingGlass,
   PaintBrush,
@@ -55,6 +58,9 @@ const STEP_ICONS: Record<string, IconType> = {
   monitor: Heartbeat,                  // still alive
   notify: PaperPlaneTilt,              // telling somebody
   smoke_test: Play,                    // does the shipped thing answer
+  contract_test: ListChecks,           // the contract, case by case
+  github_comment: ChatText,            // said on the pull request
+  fix_pr: GitPullRequest,              // the corrected file, offered back
   redeploy: Cloud,                     // the same destination, again
   retry_build: ArrowsClockwise,        // round again
   teardown_preview: Trash,             // reclaiming what it held

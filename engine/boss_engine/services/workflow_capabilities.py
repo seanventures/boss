@@ -653,9 +653,10 @@ CAPABILITIES: dict[str, Capability] = {
             # green: Standard Product Delivery, Minor Feature and Fast Fix ended by telling
             # nobody, and Deprecation / Sunset "announced" a removal to nobody and then waited
             # seven days. The runner now sends it (`_notify`) and says when it could not.
-            summary="Tell people the outcome: an email address (email:someone@example.com) or "
-                    "a Mattermost channel (mattermost:<id>). With no channel the step is "
-                    "skipped and says so; a channel that cannot be reached fails the step.",
+            summary="Tell people the outcome: an email address (email:someone@example.com), "
+                    "a Mattermost channel (mattermost:<id>) or a pull request "
+                    "(github:owner/repo#12). With no channel the step is skipped and says so; "
+                    "a channel that cannot be reached fails the step.",
             tool=None,
             risk_tier=1,
             required_inputs=("message",),
@@ -676,6 +677,57 @@ CAPABILITIES: dict[str, Capability] = {
             optional_inputs=("expect_status",),
             produces=("reachable", "status_code", "latency_ms"),
             typical_minutes=1,
+        ),
+        _cap(
+            key="contract_test",
+            # the contract the deployed API must keep
+            captain="integration_validator",
+            label="Contract test",
+            summary="Run a list of HTTP cases against the deployed API — method, headers, JSON "
+                    "body, the status each must answer and JSON-path assertions — and report a "
+                    "table. One failed case fails the step.",
+            tool="contract_test",
+            risk_tier=0,
+            required_inputs=("cases",),
+            optional_inputs=("base_url", "headers", "timeout_s"),
+            produces=("passed", "failed", "total", "results_table", "failed_cases"),
+            typical_minutes=2,
+        ),
+        _cap(
+            key="github_comment",
+            # the author's pull request is where the report belongs
+            captain="engineering_captain",
+            label="Comment on the PR",
+            summary="Post a markdown comment on a pull request or issue of the project's "
+                    "repository — a validation report, a test table. With a marker, the comment "
+                    "BOSS posted before is updated instead of adding another.",
+            tool="github_comment",
+            risk_tier=1,
+            required_inputs=("number", "body"),
+            optional_inputs=("repository", "marker"),
+            produces=("posted", "comment_url", "comment_id", "updated"),
+            requires_project=("repository",),
+            typical_minutes=1,
+        ),
+        _cap(
+            key="fix_pr",
+            # a corrected file, offered back as a pull request
+            captain="engineering_captain",
+            label="Open a fix PR",
+            summary="Open a small pull request with the corrected file(s): branch "
+                    "boss/<run>-fix-<slug> from the base branch, the content (or a diff "
+                    "applied), a body naming the run and the validation report. No build, no "
+                    "coding agent; merging stays a person's decision.",
+            tool="github_open_fix_pr",
+            # Writes to the customer's repository: at the floor, so a person releases it unless
+            # the project lowers it deliberately.
+            risk_tier=2,
+            required_inputs=("title",),
+            optional_inputs=("repository", "base_branch", "files", "path", "content", "diff",
+                             "report", "summary", "slug", "draft"),
+            produces=("pull_request_url", "pull_request_number", "branch", "files"),
+            requires_project=("repository",),
+            typical_minutes=2,
         ),
         _cap(
             key="wait_for_ci",
@@ -1175,7 +1227,10 @@ def stops_for_a_person(capability_key: str, requested: Optional[str] = None,
 
 #: Where a notify step may post. The prefix is the channel kind, and each kind is a need the
 #: start preflight checks (an SMTP server, a Mattermost bot).
-NOTIFY_CHANNEL_KINDS = {"email": "email", "mattermost": "mattermost"}
+NOTIFY_CHANNEL_KINDS = {"email": "email", "mattermost": "mattermost",
+                        # github:<owner/repo>#<n> or github:#<n> (the primary repository): the
+                        # outcome goes on the pull request or issue (AMEX-G5).
+                        "github": "repository"}
 
 
 def notify_channel_need(channel: str) -> str:

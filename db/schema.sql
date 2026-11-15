@@ -15145,3 +15145,16 @@ CREATE INDEX IF NOT EXISTS idx_model_gateway_handles_run ON model_gateway_handle
 -- within one request, §3.8 step 2); jobs are found by the run id in their payload.
 CREATE INDEX IF NOT EXISTS idx_jobs_payload_run_id ON jobs ((payload->>'run_id'));
 -- ================================ end P8b ==
+
+-- ================================ AMEX-G3 (BOSSAPP-1139): a non-zero exit fails the step ==
+-- `skill.sandboxed_command` always returned `exit_code`, and the workflow runner never read it:
+-- a validator that exited 1 went green and the run went on to deploy. New sandboxed_command
+-- skills are saved with `fail_on_exit: true` (skill_definitions.validate_config); the ones
+-- authored before the flag existed keep today's behaviour by an EXPLICIT false, written here
+-- once, so nothing changes under a workflow that is already running. Idempotent: a row that
+-- carries the key no longer matches, so a skill the author switches on stays on.
+UPDATE skill_definitions
+   SET config = config || '{"fail_on_exit": false}'::jsonb
+ WHERE behaviour_kind = 'sandboxed_command'
+   AND NOT (config ? 'fail_on_exit');
+-- ================================ end AMEX-G3 ==

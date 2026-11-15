@@ -1063,6 +1063,16 @@ class GitHubAdapter:
         )
         return IssueCommentResult(url=response["html_url"], id=int(response["id"]))
 
+    def update_issue_comment(self, comment_id: int, body: str) -> IssueCommentResult:
+        """Edit a conversation comment BOSS posted earlier (github_actions: one report per PR,
+        kept current, instead of a new copy on every validation round)."""
+        response = self._request(
+            "PATCH",
+            f"/repos/{self.repository_full_name}/issues/comments/{int(comment_id)}",
+            {"body": body},
+        )
+        return IssueCommentResult(url=response["html_url"], id=int(response["id"]))
+
     def create_review(
         self,
         pull_number: int,

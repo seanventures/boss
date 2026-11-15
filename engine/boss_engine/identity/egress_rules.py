@@ -50,6 +50,9 @@ _API_RULES: list[tuple[str, str, str, tuple[str, str]]] = [
     ("GET", r"/issues/\d+(/comments)?", "/repos/{o}/{r}/issues/{n}[/comments]", ("issues", "read")),
     ("POST", r"/issues", "/repos/{o}/{r}/issues", ("issues", "write")),
     ("POST", r"/issues/\d+/comments", "/repos/{o}/{r}/issues/{n}/comments", ("pull_requests", "write")),
+    # Editing a conversation comment: how a run keeps ONE validation report current on a PR
+    # (services/github_actions.post_comment with a marker) instead of posting another copy.
+    ("PATCH", r"/issues/comments/\d+", "/repos/{o}/{r}/issues/comments/{c}", ("pull_requests", "write")),
     ("GET", r"/(commits|branches|tags|compare|git/(refs|ref|commits|trees|blobs|tags))(/.*)?", "/repos/{o}/{r}/{git-read}", ("contents", "read")),
     ("GET", r"/contents(/.*)?", "/repos/{o}/{r}/contents/{path}", ("contents", "read")),
     ("PUT", r"/contents/.+", "/repos/{o}/{r}/contents/{path}", ("contents", "write")),
