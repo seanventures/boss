@@ -307,6 +307,8 @@ keep_previous_images() {
 env_or_dotenv() {
   local value="${!1:-}"
   [[ -n "$value" ]] || value="$(grep -m 1 "^$1=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+  value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
+  value="${value#[\"\']}"; value="${value%[\"\']}"
   printf '%s\n' "${value:-$2}"
 }
 # >>> boss_disk_admission

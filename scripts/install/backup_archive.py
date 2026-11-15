@@ -262,6 +262,9 @@ def layout(config):
 # else in the directory (an operator's own copy, the legacy offline dumps) is never touched.
 BACKUP_NAME = re.compile(r'^boss-(\d{8}T\d{6}Z)-\d+$')
 RETENTION_DEFAULTS = {'keep': 10, 'keep_days': 7, 'cap_gb': 20.0}
+#: The cap wins over "keep N" and "keep N days" — but never below this many of the newest
+#: backups, so a rollback to the release before last stays possible (review of 02d79ce5e).
+CAP_FLOOR = 3
 
 
 def _tree_bytes(path):
@@ -318,6 +321,10 @@ def retention_plan(backups, *, keep, keep_days, cap_bytes, protect=None, now=Non
     keep = max(1, int(keep))
     protect = Path(protect).resolve() if protect else None
     horizon = now - _dt.timedelta(days=max(0, float(keep_days)))
+    # A stamp from the future (a host whose clock was wrong) is not "the newest for ever":
+    # it counts as taken now, and the one really just taken is still protected by --protect.
+    backups = sorted(({**b, 'time': min(b['time'], now)} for b in backups),
+                     key=lambda b: b['time'], reverse=True)
     kept, removed = [], []
     for index, backup in enumerate(backups):
         path = Path(backup['path'])
@@ -335,17 +342,19 @@ def retention_plan(backups, *, keep, keep_days, cap_bytes, protect=None, now=Non
             continue
         kept.append({**backup, 'reason': reason})
     # THE CAP WINS over "keep N" and "keep N days": a cap the rules can exceed is not a cap.
-    # Oldest first, never the protected one (or the newest when nothing is protected).
+    # Oldest first; never the protected one, and never below the CAP_FLOOR newest (a rollback
+    # to the release before last must stay possible even on a small disk).
     if cap_bytes and cap_bytes > 0:
         total = sum(b['bytes'] for b in kept)
+        floor = {id(b) for b in kept[:CAP_FLOOR]}
         for backup in reversed(kept[:]):
             if total <= cap_bytes:
                 break
-            if backup['reason'] in ('the backup just taken', 'the newest backup'):
+            if backup['reason'] == 'the backup just taken' or id(backup) in floor:
                 continue
             kept.remove(backup)
             total -= backup['bytes']
-            removed.append({**backup, 'reason': 'over the %.0f GB cap' % (cap_bytes / 1e9)})
+            removed.append({**backup, 'reason': 'over the %.1f GB cap' % (cap_bytes / 1e9)})
     removed.sort(key=lambda b: b['time'])
     return kept, removed
 
@@ -358,8 +367,9 @@ def retention_main(argv):
     parser = argparse.ArgumentParser(
         prog='backup_archive.py retention',
         description='Remove old pre-upgrade backups: keep the newest N and the last D days, '
-                    'within a size cap. Logs one line per removal to stderr; the backup named '
-                    'by --protect is never removed.')
+                    'within a size cap (which wins, but never below the newest %d). Logs one '
+                    'line per removal to stderr; the backup named by --protect is never '
+                    'removed.' % CAP_FLOOR)
     parser.add_argument('root', help='the backups directory (BOSS_BACKUP_DIR, ~/boss-backups)')
     parser.add_argument('--keep', type=int, default=RETENTION_DEFAULTS['keep'])
     parser.add_argument('--keep-days', type=float, default=RETENTION_DEFAULTS['keep_days'])
@@ -398,7 +408,7 @@ def retention_main(argv):
         freed += backup['bytes']
         log('%s %s (%s, %.0f days old): %s' % (verb, backup['path'], _gb(backup['bytes']),
                                                 age_days, backup['reason']))
-    log('%s: kept %d (%s), %s %d (%s); rule: newest %d, last %g days, %.0f GB cap' % (
+    log('%s: kept %d (%s), %s %d (%s); rule: newest %d, last %g days, %.1f GB cap' % (
         root, len(kept), _gb(sum(b['bytes'] for b in kept)), verb, len(removed), _gb(freed),
         args.keep, args.keep_days, args.cap_gb))
     return 0

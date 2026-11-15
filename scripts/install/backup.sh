@@ -294,9 +294,17 @@ SESSION_KEYS_FILE=""
 # RETENTION (storage hygiene layer 1, BOSSAPP-1146): this backup is complete, so older ones may
 # go. A setting comes from the environment, else from the install's .env, else the default.
 # Best effort: a retention problem is reported, never a reason to call the backup failed.
+# A quoted or padded value ("10", ' 7 ') is the number inside; anything that is not a number
+# is the default, said once, rather than a silently skipped rule.
 env_or_dotenv() {
   local value="${!1:-}"
   [[ -n "$value" ]] || value="$(grep -m 1 "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
+  value="${value#[\"\']}"; value="${value%[\"\']}"
+  if [[ -n "$value" && ! "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "backup retention: $1='$value' is not a number; using the default $2." >&2
+    value=""
+  fi
   printf '%s\n' "${value:-$2}"
 }
 if [[ "$RETENTION" -eq 1 ]]; then

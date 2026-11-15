@@ -360,7 +360,7 @@ cmd_upgrade() {
       --to|--ref) args+=(--ref "${2:?--to needs a ref}"); shift 2 ;;
       --backup-dir) args+=(--backup-dir "${2:?--backup-dir needs a path}"); shift 2 ;;
       --channel) args+=(--channel "${2:?--channel needs stable or rc}"); shift 2 ;;
-      --dry-run|--web|--no-web|--no-rollback) args+=("$1"); shift ;;
+      --dry-run|--web|--no-web|--no-rollback|--skip-disk-check) args+=("$1"); shift ;;
       --without) args+=(--without "${2:?--without needs a self-fix id}"); shift 2 ;;
       *) die "unknown upgrade option: $1 (see boss help)" ;;
     esac

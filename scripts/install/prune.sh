@@ -39,6 +39,8 @@ done
 env_or_dotenv() {
   local value="${!1:-}"
   [[ -n "$value" ]] || value="$(grep -m 1 "^$1=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+  value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
+  value="${value#[\"\']}"; value="${value%[\"\']}"
   printf '%s\n' "${value:-$2}"
 }
 [[ "$(env_or_dotenv BOSS_DEDICATED_HOST 0)" =~ ^(1|true|yes)$ ]] && DEDICATED=1
@@ -72,15 +74,20 @@ done
 run "${D[@]}" image prune -f --filter label=com.docker.compose.project=boss-community
 
 # 3. Old BOSS image tags: keep the current release (<tag>), the rollback point (prev-<tag>,
-#    BOSSAPP-839) and any tag a container uses; every other boss-community-* tag goes.
+#    BOSSAPP-839) and any tag a container uses; every other tag of a RELEASE-TAGGED repository
+#    goes. A repository with no <tag> image is not one the installer tags per release — the
+#    database image (boss-community-db:pg16.12-…, built locally, not pullable) is pinned by
+#    version — and is never touched, whether or not a container happens to be running.
 for repo in $("${D[@]}" images --format '{{.Repository}}' | grep '^boss-community-' | sort -u || true); do
-  "${D[@]}" images "$repo" --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' | sort -r |
-    cut -d'|' -f2 | while read -r img; do
-      [[ "$img" == *":<none>" ]] && continue
-      [[ "$img" == "$repo:$TAG" || "$img" == "$repo:prev-$TAG" ]] && continue
-      [[ "$img" == *":prev-"* ]] && continue
-      grep -qxF "$img" <<<"$in_use" || run "${D[@]}" rmi "$img"
-    done
+  [[ "$repo" == boss-community-db ]] && continue
+  tags="$("${D[@]}" images "$repo" --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' | sort -r | cut -d'|' -f2)"
+  grep -qxF -e "$repo:$TAG" -e "$repo:prev-$TAG" <<<"$tags" || continue
+  while read -r img; do
+    [[ -z "$img" || "$img" == *":<none>" ]] && continue
+    [[ "$img" == "$repo:$TAG" || "$img" == "$repo:prev-$TAG" ]] && continue
+    [[ "$img" == *":prev-"* ]] && continue
+    grep -qxF "$img" <<<"$in_use" || run "${D[@]}" rmi "$img"
+  done <<<"$tags"
 done
 
 # 4. Build cache. The cap holds on every host: Docker keeps the newest BOSS_BUILD_CACHE_CAP_GB

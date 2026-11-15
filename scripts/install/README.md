@@ -462,7 +462,7 @@ Everything BOSS creates on your machine has a retention rule or a guardrail, so 
 
 | What | Rule | Settings in `.env` (default) |
 |---|---|---|
-| Pre-upgrade backups (`~/boss-backups`) | After every complete backup: keep the newest 10 and anything from the last 7 days, within 20 GB in total; oldest go first; never the backup just taken. One log line per removal. | `BOSS_BACKUP_KEEP` (10), `BOSS_BACKUP_KEEP_DAYS` (7), `BOSS_BACKUP_CAP_GB` (20) |
+| Pre-upgrade backups (`~/boss-backups`) | After every complete backup: keep the newest 10 and anything from the last 7 days, within 20 GB in total. The cap wins over the count and the days, but never goes below the newest 3 (so a rollback to the release before last stays possible); oldest go first; never the backup just taken. One log line per removal. | `BOSS_BACKUP_KEEP` (10), `BOSS_BACKUP_KEEP_DAYS` (7), `BOSS_BACKUP_CAP_GB` (20) |
 | In-database hourly backups (backups volume) | Keep 6 hourly, 7 daily, 4 weekly, 6 monthly | `BOSS_BACKUP_KEEP_HOURLY` (6), `_DAILY` (7), `_WEEKLY` (4), `_MONTHLY` (6) |
 | BOSS images | After a successful upgrade only the new release's tags and the `prev-<tag>` rollback point stay; dangling BOSS images go. Never an image a container uses, never one that is not `boss-community-*`. | `boss prune` runs it on demand |
 | Docker build cache | Capped: Docker keeps the newest 10 GB. The cache is Docker-wide; on a machine shared with other projects set it higher, or `0` for no cap. | `BOSS_BUILD_CACHE_CAP_GB` (10) |

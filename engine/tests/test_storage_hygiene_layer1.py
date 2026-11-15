@@ -82,18 +82,31 @@ def test_the_newest_ten_and_the_last_seven_days_stay_and_the_rest_go(tmp_path):
 
 def test_the_cap_wins_over_count_and_age_oldest_first_never_the_backup_just_taken(tmp_path):
     names = [_backup(tmp_path, d, mb=3, pid=d).name for d in range(6)]   # 6 × 3 MB, all recent
-    kept, removed = _plan(tmp_path, cap_bytes=10e6, protect=tmp_path / names[0])
-    assert kept == names[:3]                                  # 9 MB fit under the 10 MB cap
-    assert removed == list(reversed(names[3:]))
-    # a cap smaller than one backup still never removes the protected (newest) one
+    kept, removed = _plan(tmp_path, cap_bytes=13e6, protect=tmp_path / names[0])
+    assert kept == names[:4]                                  # 12 MB fit under the 13 MB cap
+    assert removed == list(reversed(names[4:]))
+    # THE CAP NEVER GOES BELOW THE NEWEST 3: a rollback to the release before last stays possible
     kept, removed = _plan(tmp_path, cap_bytes=1e6, protect=tmp_path / names[0])
-    assert kept == names[:1]
-    # the protected backup is kept even when it is not the newest by name
+    assert kept == names[:3] and backup_archive.CAP_FLOOR == 3
+    _, over = backup_archive.retention_plan(backup_archive.list_backups(tmp_path), keep=10,
+                                            keep_days=7, cap_bytes=1e6, now=NOW)
+    assert all(b["reason"] == "over the 0.0 GB cap" for b in over)   # one decimal, never "0 GB"
+    # the protected backup is kept even when it is not among the newest
     kept, _ = _plan(tmp_path, cap_bytes=1e6, protect=tmp_path / names[4])
-    assert names[4] in kept and names[0] in kept              # newest and just-taken both stay
-    # and without --protect, the newest is the one that always stays
+    assert kept == names[:3] + [names[4]]
+    # and without --protect the newest three stay just the same
     kept, _ = _plan(tmp_path, cap_bytes=1e6)
-    assert kept == names[:1]
+    assert kept == names[:3]
+
+
+def test_a_backup_stamped_in_the_future_is_not_the_newest_for_ever(tmp_path):
+    future = _backup(tmp_path, -400, pid=9)                  # a host whose clock was wrong
+    names = [_backup(tmp_path, d, pid=d).name for d in range(12)]
+    kept, removed = _plan(tmp_path, keep=3, keep_days=0)
+    assert kept == [future.name] + names[:2] and len(removed) == 10   # counted as taken now
+    # but it does not displace the one really just taken
+    kept, _ = _plan(tmp_path, keep=1, keep_days=0, protect=tmp_path / names[0])
+    assert kept == [future.name, names[0]]
 
 
 def test_only_directories_boss_named_are_candidates(tmp_path):
@@ -147,6 +160,14 @@ def test_backup_sh_applies_retention_after_every_complete_backup_from_the_bundle
                              ("BOSS_BACKUP_CAP_GB", "20")):
         assert f'env_or_dotenv {setting} {default}' in backup
     assert "--retention-dry-run" in backup and "--no-retention" in backup
+    # a quoted .env value is the number inside; a non-number is the default, said once, never a
+    # silently skipped rule (argparse would otherwise refuse '"10"')
+    fn = backup[backup.index("env_or_dotenv() {"):backup.index("if [[ \"$RETENTION\" -eq 1 ]]")]
+    probe = subprocess.run(["bash", "-c", fn + '\nENV_FILE=/dev/null\nBOSS_BACKUP_KEEP="\'10\'" '
+                            'env_or_dotenv BOSS_BACKUP_KEEP 5; BOSS_BACKUP_KEEP=" 12 " env_or_dotenv '
+                            'BOSS_BACKUP_KEEP 5; BOSS_BACKUP_KEEP=ten env_or_dotenv BOSS_BACKUP_KEEP 5'],
+                           capture_output=True, text=True, check=True)
+    assert probe.stdout.split() == ["10", "12", "5"] and "is not a number" in probe.stderr
     installer = (REPO / "install.sh").read_text()
     bundled = set(re.findall(r'scripts/install/(backup[a-z_]*\.(?:sh|py))" > "\$_backup_', installer))
     assert bundled == {"backup.sh", "backup_archive.py"}
@@ -163,7 +184,13 @@ case "$1" in
   info) exit 0 ;;
   images)
     if [[ "$*" == *"--format {{.Repository}}"* && "$*" != *CreatedAt* ]]; then
-      printf 'boss-community-api\nboss-community-worker\n'
+      printf 'boss-community-api\nboss-community-worker\nboss-community-db\nboss-community-sidecar\n'
+    elif [[ "$*" == *CreatedAt* && "$2" == boss-community-db ]]; then
+      printf '2026-11-01 01|boss-community-db:pg16.12-vector0.8.1-age1.6.0\n'
+      printf '2026-10-01 01|boss-community-db:pg16.10-vector0.8.0-age1.5.0\n'
+    elif [[ "$*" == *CreatedAt* && "$2" == boss-community-sidecar ]]; then
+      printf '2026-11-01 01|boss-community-sidecar:1.2.0\n'
+      printf '2026-10-01 01|boss-community-sidecar:1.1.0\n'
     elif [[ "$*" == *CreatedAt* ]]; then
       repo="$2"
       printf '2026-11-12 03|%s:boss-community\n' "$repo"
@@ -174,7 +201,7 @@ case "$1" in
       printf '2026-11-07 01|%s:in-use\n' "$repo"
     fi
     exit 0 ;;
-  ps) [[ "$*" == *"{{.Image}}"* ]] && printf 'boss-community-api:in-use\n'; exit 0 ;;
+  ps) [[ "$*" == *"{{.Image}}"* && -z "${FAKE_NO_CONTAINERS:-}" ]] && printf 'boss-community-api:in-use\n'; exit 0 ;;
   *) exit 0 ;;
 esac
 """
@@ -209,11 +236,28 @@ def test_prune_keeps_the_release_its_rollback_point_and_what_runs_and_removes_th
     # the cap holds on every host, dedicated or not, below the disk threshold or not
     assert "docker builder prune -f --keep-storage 10gb" in calls
     assert not any("until=72h" in c for c in calls)        # the shared-machine rule still holds
+    # the locally built database image (pinned by version, not pullable) and any repository
+    # that is not tagged per release are never candidates
+    assert not any("boss-community-db" in c or "boss-community-sidecar" in c for c in calls)
+
+
+def test_prune_with_no_container_running_still_keeps_the_database_image_and_the_release(tmp_path):
+    """The reviewer's case: `boss prune` on a stopped install printed `rmi boss-community-db:…`."""
+    w = _prune_world(tmp_path)
+    out = _sh("bash", INSTALL / "prune.sh", "--dry-run", "--dir", w["install"],
+              env={**w["env"], "FAKE_NO_CONTAINERS": "1"})
+    calls = _would(out)
+    removed = sorted(c.split()[-1] for c in calls if c.startswith("docker rmi "))
+    assert removed == sorted(f"{r}:{t}" for r in ("boss-community-api", "boss-community-worker")
+                             for t in ("old-one", "older-one", "custom", "in-use"))
+    assert not any("boss-community-db" in c or "boss-community-sidecar" in c for c in calls)
+    assert not any(c.endswith(":boss-community") or ":prev-boss-community" in c for c in calls)
 
 
 def test_the_current_tag_and_the_cache_cap_are_settings_read_from_the_installs_env(tmp_path):
     w = _prune_world(tmp_path, used_pct=90)
-    (w["install"] / ".env").write_text("BOSS_COMMUNITY_IMAGE_TAG=custom\nBOSS_BUILD_CACHE_CAP_GB=25\n"
+    # quoted and padded values are the value inside, as in any .env
+    (w["install"] / ".env").write_text("BOSS_COMMUNITY_IMAGE_TAG=\"custom\"\nBOSS_BUILD_CACHE_CAP_GB= '25' \n"
                                        "BOSS_DEDICATED_HOST=1\n")
     out = _sh("bash", INSTALL / "prune.sh", "--dry-run", "--dir", w["install"], env=w["env"])
     calls = _would(out)
@@ -348,6 +392,9 @@ def test_the_disk_check_runs_before_anything_changes_and_can_be_switched_off():
     assert check < UPGRADE.index('bash "$FETCHED_INSTALLER"')
     assert "--skip-disk-check) DISK_CHECK=0; shift ;;" in UPGRADE
     assert 'env_or_dotenv BOSS_DISK_CHECK on)" != off' in UPGRADE
+    # `boss upgrade --skip-disk-check` reaches upgrade.sh (the refusal text names it)
+    boss = (INSTALL / "boss.sh").read_text()
+    assert "--dry-run|--web|--no-web|--no-rollback|--skip-disk-check) args+=(\"$1\"); shift ;;" in boss
     for setting, default in (("BOSS_DISK_FLOOR_GB", "20"), ("BOSS_UPGRADE_FULL_BUILD_GB", "35"),
                              ("BOSS_UPGRADE_INCREMENTAL_BUILD_GB", "5")):
         assert f"env_or_dotenv {setting} {default}" in UPGRADE
