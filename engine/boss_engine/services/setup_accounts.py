@@ -131,7 +131,8 @@ def _flow_creates(flows: Any) -> dict[str, Any]:
     if not isinstance(entry, dict):
         return {"ok": None, "missing": [], "words": "Can create repos: not checked yet (press Test all)."}
     return {"ok": entry.get("ok"), "missing": list(entry.get("missing") or []),
-            "words": str(entry.get("words") or ""), "fix_url": entry.get("fix_url")}
+            "words": str(entry.get("words") or ""), "fix_url": entry.get("fix_url"),
+            "reason": str(entry.get("reason") or "")}
 
 
 def _org_app_creates(connection: Connection) -> dict[str, Any]:

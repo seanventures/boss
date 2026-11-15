@@ -348,15 +348,18 @@ def test_verify_says_whether_the_app_can_create_repositories(env):
         out = github_setup.verify(c, "org_boss")
         mode = github_setup.mode(c, "org_boss")
         perms = github_setup.installation_permissions(c, "4242")
-    assert out["flows"]["create_repository"] == {"ok": True, "missing": [], "words": "Can create repos: yes.", "fix_url": None}
+    assert out["flows"]["create_repository"] == {"ok": True, "missing": [], "words": "Can create repos: yes.", "fix_url": None, "reason": ""}
     assert mode["verdict"]["tone"] == "green"
     assert perms is not None and perms["administration"] == "write"
     # The same App installed on a PERSON: GitHub has no endpoint for it, whatever was granted.
     env.hub.installs = {"4242": "paramg"}
     with env.db() as c:
         out = github_setup.verify(c, "org_boss")
+        mode = github_setup.mode(c, "org_boss")
     person = out["flows"]["create_repository"]
-    assert person["ok"] is False and "personal account" in person["words"] and "repo scope for paramg" in person["words"]
+    assert person["ok"] is False and person["reason"] == "personal_account" and person["missing"] == []
+    assert "not for personal accounts" in person["words"] and "repo scope for paramg" in person["words"]
+    assert mode["verdict"]["tone"] == "green", "GitHub's rule, nothing to grant: never amber"
 
 
 def test_verify_says_when_the_app_was_uninstalled_on_github(env):

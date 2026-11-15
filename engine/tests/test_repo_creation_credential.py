@@ -61,9 +61,9 @@ def test_scopes_map_to_flow_permissions():
 
 def _wire(monkeypatch, *, app=(), env=(), conns=(), install=()):
     monkeypatch.setattr(repo_creation, "_identity_app_candidates", lambda db, owner: list(app))
-    monkeypatch.setattr(repo_creation, "_env_app_candidates", lambda settings: list(env))
+    monkeypatch.setattr(repo_creation, "_env_app_candidates", lambda settings, owner, owner_type="": list(env))
     monkeypatch.setattr(repo_creation, "_connection_candidates",
-                        lambda db, settings, owner, project_id, owner_type="": list(conns))
+                        lambda db, settings, owner, project_id, owner_type="", probe=True: list(conns))
     monkeypatch.setattr(repo_creation, "_install_candidates", lambda settings: list(install))
 
 
@@ -153,10 +153,11 @@ def test_flow_abilities_say_what_the_installation_can_do():
     assert org["create_repository"]["fix_url"] == links["permissions"]
     granted = github_setup.flow_abilities({"contents": "write", "pull_requests": "write", "administration": "write"},
                                           account_type="Organization", links=links)
-    assert granted["create_repository"] == {"ok": True, "missing": [], "words": "Can create repos: yes.", "fix_url": None}
+    assert granted["create_repository"] == {"ok": True, "missing": [], "words": "Can create repos: yes.", "fix_url": None, "reason": ""}
     person = github_setup.flow_abilities({"contents": "write", "pull_requests": "write", "administration": "write"},
                                          account_type="User", links=links, account_login="paramg")
-    assert person["create_repository"]["ok"] is False and "personal account" in person["create_repository"]["words"]
+    assert person["create_repository"]["ok"] is False and person["create_repository"]["reason"] == "personal_account"
+    assert person["create_repository"]["missing"] == [] and "not for personal accounts" in person["create_repository"]["words"]
     assert "repo scope for paramg" in person["create_repository"]["words"]
     unknown = github_setup.flow_abilities({}, account_type="Organization", links=links, known=False)
     assert unknown["create_repository"]["ok"] is None
@@ -171,6 +172,10 @@ def test_the_app_pill_is_amber_when_it_cannot_create_repos():
     assert pill["tone"] == "amber" and "can't create repos" in pill["label"] and "administration" in pill["tip"]
     can = {"state": "ok", "ok": True, "flows": {"create_repository": {"ok": True, "missing": [], "words": ""}}}
     assert _verdict("app", "acme", False, can)["tone"] == "green"
+    # A personal account: GitHub's rule, nothing to grant — green, said for information only.
+    person = {"state": "ok", "ok": True, "flows": {"create_repository": {
+        "ok": False, "missing": [], "reason": "personal_account", "words": "Creates repos: not for personal accounts"}}}
+    assert _verdict("app", "paramg", False, person)["tone"] == "green"
     assert _verdict("app", "acme", False, {"state": "ok", "ok": True})["tone"] == "green"   # not checked: as before
 
 
@@ -239,3 +244,71 @@ def test_default_reach_creates_with_the_resolved_credential(monkeypatch):
     assert "no GitHub credential" in said["words"]
     # Without the resolver's words the old sentence stands (an older caller).
     assert "Administration" in local_publish.check_repository(owner="paramg", name="shop", token=None)["words"]
+
+
+# ---- the review's cases (PR #108) ------------------------------------------------------------------------------
+
+def test_the_environment_app_creates_only_in_its_own_organisation(monkeypatch):
+    from boss_engine.services import github_app_adapter
+
+    monkeypatch.setattr(github_app_adapter.GitHubAppAdapter, "configured", property(lambda self: True))
+    account = {"login": "acme", "type": "Organization", "permissions": {"administration": "write", "contents": "write"}}
+    monkeypatch.setattr(github_app_adapter.GitHubAppAdapter, "installation_account", lambda self, installation_id=None: account)
+    settings = get_settings()
+    assert repo_creation._env_app_candidates(settings, "paramg", "User") == []          # a person: never
+    [other] = repo_creation._env_app_candidates(settings, "paramg")
+    assert other.can_create is False and "not on paramg" in other.words                   # another account: never
+    [own] = repo_creation._env_app_candidates(settings, "ACME")
+    assert own.can_create is True and own.account_type == "Organization"
+    account["permissions"] = {"contents": "write"}
+    [lacks] = repo_creation._env_app_candidates(settings, "acme")
+    assert lacks.can_create is False and lacks.missing == ["administration"] and "Administration" in lacks.fix
+    account.update(login="paramg", type="User")
+    [person] = repo_creation._env_app_candidates(settings, "paramg")
+    assert person.can_create is False and "personal account" in person.words
+    monkeypatch.setattr(github_app_adapter.GitHubAppAdapter, "installation_account", lambda self, installation_id=None: None)
+    [unknown] = repo_creation._env_app_candidates(settings, "acme")
+    assert unknown.can_create is None                                                     # GitHub did not say
+
+
+def test_the_owner_picker_reads_no_secret_and_asks_no_membership(monkeypatch):
+    """mint=False (GET …/owners): an organisation owner's candidates from other accounts' tokens are
+    listed as unverified, without resolving a secret or calling GitHub."""
+    engine = make_engine()
+    world = make_world(engine)
+    pid = world["projects"][0]
+    cid = world["connections"][pid]
+    with engine.begin() as c:
+        c.execute(text("UPDATE github_connections SET account_login = 'paramg', granted_permissions = "
+                       "'[\"administration\",\"contents\",\"pull_requests\"]'::jsonb WHERE id = :c"), {"c": cid})
+    from boss_engine.services.github_connections import GitHubConnectionService
+
+    reads, asks = [], []
+    monkeypatch.setattr(GitHubConnectionService, "token_for_connection",
+                        lambda self, db, *, project_id, connection_id: reads.append(connection_id) or "ghp_x")
+    monkeypatch.setattr(repo_creation, "_org_member", lambda token, owner, api_base: asks.append(owner) or True)
+    monkeypatch.setattr(repo_creation, "_identity_app_candidates", lambda db, owner: [])
+    monkeypatch.setattr(repo_creation, "_env_app_candidates", lambda settings, owner, owner_type="": [])
+    with engine.begin() as c:
+        picked = repo_creation.repo_creation_credential(c, get_settings(), "acme", project_id=pid, mint=False,
+                                                        owner_type="Organization")
+        assert picked.ok and not picked.verified and "checked when you press Create" in picked.words
+        assert reads == [] and asks == []
+        made = repo_creation.repo_creation_credential(c, get_settings(), "acme", project_id=pid, owner_type="Organization")
+        assert made.ok and made.token == "ghp_x" and not made.verified       # an org may forbid personal tokens
+        assert "member of acme" in made.words and asks == ["acme"] and reads
+        mine = repo_creation.repo_creation_credential(c, get_settings(), "paramg", project_id=pid, mint=False)
+        assert mine.ok and mine.verified                                       # its own account: confirmed by scopes
+
+
+def test_an_installation_whose_account_kind_is_unknown_is_unverified(monkeypatch):
+    from boss_engine.identity import github_setup
+
+    monkeypatch.setattr(github_setup, "app_config", lambda db, org_id=None: {
+        "source": "setup", "app_id": "7", "slug": "boss-localhost", "installation_id": "4242",
+        "account_login": "acme", "account_type": None, "owner_login": "acme", "owner_type": None, "verified": None})
+    monkeypatch.setattr(github_setup, "recorded_installations", lambda db, org_id=None: [])
+    monkeypatch.setattr(github_setup, "links", lambda cfg: {"permissions": None})
+    monkeypatch.setattr(github_setup, "installation_permissions", lambda db, inst: {"administration": "write"})
+    [cand] = repo_creation._identity_app_candidates(None, "acme")
+    assert cand.can_create is None and "not recorded yet" in cand.words

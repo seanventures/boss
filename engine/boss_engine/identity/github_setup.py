@@ -992,11 +992,13 @@ def flow_abilities(granted: Mapping[str, str], *, account_type: Optional[str], l
     who = f"@{account_login}" if account_login else "this account"
     for flow, needed in FLOW_PERMISSIONS.items():
         missing = _covers(dict(granted), needed) if known else sorted(needed)
-        entry: dict[str, Any] = {"ok": (not missing) if known else None, "missing": missing, "words": "", "fix_url": None}
+        entry: dict[str, Any] = {"ok": (not missing) if known else None, "missing": missing, "words": "", "fix_url": None,
+                                 "reason": ""}
         if flow == "create_repository" and account_type == "User":
-            entry.update(ok=False, missing=[],
-                         words=(f"A GitHub App cannot create repositories in a personal account ({who}): add a "
-                                f"personal access token with the repo scope for {who.lstrip('@')} in Repo and models."),
+            # GitHub's own rule, nothing to grant: said for information, never as a gap.
+            entry.update(ok=False, missing=[], reason="personal_account",
+                         words=(f"Creates repos: not for personal accounts ({who}; GitHub has no App endpoint for it). "
+                                f"A personal access token with the repo scope for {who.lstrip('@')} does, in Repo and models."),
                          fix_url=None)
         elif not known:
             entry["words"] = "Not checked with GitHub yet."
@@ -1038,8 +1040,9 @@ def _verdict(active: str, account: Optional[str], env_read: bool,
         return {"tone": "amber", "label": "GitHub App · needs you",
                 "tip": "GitHub has not granted everything builds need. See below."}
     create = ((verified or {}).get("flows") or {}).get("create_repository") if active == "app" else None
-    if active == "app" and create and create.get("ok") is False:
-        # Builds work; making repositories does not (BOSSAPP-1160). Amber, with the exact fix.
+    if active == "app" and create and create.get("ok") is False and create.get("missing"):
+        # Builds work; making repositories does not for want of a permission (BOSSAPP-1160).
+        # Amber, with the exact fix. A personal account (nothing to grant) stays green.
         return {"tone": "amber", "label": "GitHub App · can't create repos" + (f" · @{account}" if account else ""),
                 "tip": create.get("words") or "Grant Administration: Read and write to the App."}
     if active == "app":

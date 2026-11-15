@@ -275,7 +275,9 @@ export type GitHubAccount = {
   pill: Pill;
   created_at?: string | null;
   /** Can this account's credential make repositories? null until a test said (BOSSAPP-1160). */
-  can_create_repos?: { ok: boolean | null; missing: string[]; words: string; fix_url?: string | null } | null;
+  can_create_repos?: { ok: boolean | null; missing: string[]; words: string; fix_url?: string | null;
+                       /** "personal_account": GitHub's rule, nothing to grant (said for information). */
+                       reason?: string } | null;
 };
 
 export type SetupRepository = {

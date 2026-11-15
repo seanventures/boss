@@ -197,6 +197,12 @@ def _identity_app_candidates(db: Any, owner: str) -> list[Candidate]:
                           words="a GitHub App cannot create repositories in a personal account",
                           fix=f"Add a personal access token with the repo scope for {owner} (Repo and models)")]
     granted = github_setup.installation_permissions(db, inst)
+    if kind != "Organization":
+        # The account's kind is not recorded (an older row): GitHub decides at the attempt.
+        return [Candidate("identity_app", name, "app", None, account_login=owner, account_type=kind,
+                          words="whether this installation's account is an organisation is not recorded yet; "
+                                "GitHub decides at the attempt (press Check again in Repo and models)",
+                          mint=lambda: _mint_app(db, inst))]
     if granted is None:
         return [Candidate("identity_app", name, "app", None, account_login=owner, account_type=kind,
                           words="GitHub did not say what the installation was granted",
@@ -223,8 +229,12 @@ def _mint_app(db: Any, installation_id: str) -> Optional[str]:
         return None
 
 
-def _env_app_candidates(settings: Any) -> list[Candidate]:
-    """The App configured in the environment (BOSS_GITHUB_APP_*): the legacy path, unchanged."""
+def _env_app_candidates(settings: Any, owner: str, owner_type: str = "") -> list[Candidate]:
+    """The App configured in the environment (BOSS_GITHUB_APP_*): its one installation creates
+    only in ITS account — an organisation named `owner`. A person's account never (GitHub has no
+    endpoint); another account's never."""
+    if owner_type == "User":
+        return []
     try:
         from .github_app_adapter import GitHubAppAdapter
 
@@ -233,6 +243,16 @@ def _env_app_candidates(settings: Any) -> list[Candidate]:
             return []
     except Exception:  # noqa: BLE001
         return []
+    label = "GitHub App (server settings)"
+    account = app.installation_account()
+    if account is not None:
+        if account["login"].lower() != owner.lower():
+            return [Candidate("env_app", label, "app", False, account_login=account["login"], account_type=account["type"],
+                              words=f"its installation is on {account['login'] or 'another account'}, not on {owner}")]
+        if account["type"] == "User":
+            return [Candidate("env_app", label, "app", False, account_login=owner, account_type="User",
+                              words="a GitHub App cannot create repositories in a personal account",
+                              fix=f"Add a personal access token with the repo scope for {owner} (Repo and models)")]
 
     def mint() -> Optional[str]:
         try:
@@ -240,8 +260,17 @@ def _env_app_candidates(settings: Any) -> list[Candidate]:
         except Exception:  # noqa: BLE001 — not granted: the next candidate may do
             return None
 
-    return [Candidate("env_app", "GitHub App (server settings)", "app", None,
-                      words="configured in the server's environment; GitHub decides at the attempt", mint=mint)]
+    if account is None:
+        return [Candidate("env_app", label, "app", None, account_login="",
+                          words="GitHub did not say which account it is installed on; GitHub decides at the attempt",
+                          mint=mint)]
+    missing = _covers(account["permissions"], FLOW_PERMISSIONS["create_repository"])
+    if missing:
+        return [Candidate("env_app", label, "app", False, missing=missing, account_login=owner, account_type="Organization",
+                          words=f"the installation lacks {', '.join(missing)}: write",
+                          fix="Grant Administration: Read and write to the server's GitHub App, then accept it on the installation")]
+    return [Candidate("env_app", label, "app", True, account_login=owner, account_type="Organization",
+                      words="the installation accepted Administration: Read and write", mint=mint)]
 
 
 def _connection_rows(db: Any, project_id: Optional[str]) -> list[dict[str, Any]]:
@@ -271,9 +300,10 @@ def _org_member(token: str, owner: str, api_base: str) -> bool:
 
 
 def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optional[str], *,
-                           owner_type: str = "") -> list[Candidate]:
+                           owner_type: str = "", probe: bool = True) -> list[Candidate]:
     """Project connections whose token creates in `owner`: its own user, or an organisation it
-    is an active member of (checked at GitHub, only for an organisation owner)."""
+    is an active member of (checked at GitHub, only for an organisation owner, and only when
+    `probe`: the owner picker reads no secrets and asks GitHub nothing)."""
     from .github_connections import GitHubConnectionService
 
     service = GitHubConnectionService(settings)
@@ -300,14 +330,22 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
             can, words = True, "its token has the repo scope (can create repositories under its own account)"
         elif "administration" in missing:
             can, words = False, "its token lacks the repo scope (missing: administration)"
+        elif row.get("last_test_status"):
+            can, words = None, "a fine-grained token: GitHub tells at the attempt whether it may create repositories"
         else:
-            can, words = None, "its token's scopes are not recorded yet: press Test all in Repo and models"
+            can, words = None, "its token's scopes are not checked yet: press Test all in Repo and models"
         if not same:
-            # An organisation owner: only a member's token creates there, and GitHub says who is one.
-            token = mint()
-            if not token or not _org_member(token, owner, api_base):
-                continue
-            words += f"; {login} is a member of {owner}"
+            # An organisation owner: only a member's token creates there, and the organisation may
+            # forbid personal tokens — never 'verified', whatever the scopes say.
+            if probe:
+                token = mint()
+                if not token or not _org_member(token, owner, api_base):
+                    continue
+                words += f"; {login} is a member of {owner}, if {owner} allows personal tokens"
+            else:
+                words += f"; whether {login} may create in {owner} is checked when you press Create"
+            if can is not False:
+                can = None
         out.append(Candidate("connection", label, "user", can, words=words,
                              fix=(f"Replace the token for {login} with one holding the repo scope (Repo and models)"
                                   if can is False else ""),
@@ -326,11 +364,12 @@ def _install_candidates(settings: Any) -> list[Candidate]:
 
 
 def candidates(db: Any, settings: Any, owner: str, *, project_id: Optional[str] = None,
-               owner_type: str = "") -> list[Candidate]:
-    """Every credential BOSS holds that might create in `owner`, in the order they are tried."""
+               owner_type: str = "", probe: bool = True) -> list[Candidate]:
+    """Every credential BOSS holds that might create in `owner`, in the order they are tried.
+    `probe=False` (the owner picker): nothing reads a secret or asks GitHub about memberships."""
     out: list[Candidate] = []
-    for source in (lambda: _identity_app_candidates(db, owner), lambda: _env_app_candidates(settings),
-                   lambda: _connection_candidates(db, settings, owner, project_id, owner_type=owner_type),
+    for source in (lambda: _identity_app_candidates(db, owner), lambda: _env_app_candidates(settings, owner, owner_type),
+                   lambda: _connection_candidates(db, settings, owner, project_id, owner_type=owner_type, probe=probe),
                    lambda: _install_candidates(settings)):
         try:
             out.extend(source())
@@ -355,7 +394,7 @@ def repo_creation_credential(db: Any, settings: Any, owner: str, *, project_id: 
     the server token) is used when no confirmed one exists. `mint=False` decides without minting
     a token (the owner picker asks about many owners at once)."""
     owner = str(owner or "").strip()
-    found = candidates(db, settings, owner, project_id=project_id, owner_type=owner_type)
+    found = candidates(db, settings, owner, project_id=project_id, owner_type=owner_type, probe=mint)
     summaries = [c.summary() for c in found]
     for want in (True, None):
         for picked in (c for c in found if c.can_create is want):
