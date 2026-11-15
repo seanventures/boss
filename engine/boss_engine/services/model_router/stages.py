@@ -125,8 +125,18 @@ class StageRouter:
         s = self.settings
         if escalated:
             prior = previous or {}
+            prior_engine = str(prior.get("engine") or "").strip().lower()
             engine = (s.code_agent_strong_engine or prior.get("engine") or self.build_engine)
-            model = (s.code_agent_strong_model or prior.get("model"))
+            chosen = str(engine or "").strip().lower()
+            strong_model = str(s.code_agent_strong_model or "").strip() or None
+            # The previous stage's model belongs to the previous engine. A move
+            # onto the hard-problems lane must not carry it across (BOSSAPP-1025).
+            if strong_model:
+                model = strong_model
+            elif prior_engine and chosen == prior_engine:
+                model = prior.get("model") or None
+            else:
+                model = None
             return LegacyRoute(engine, model, "escalated to the hard-problems lane", "strong",
                                {"escalated": True})
         r = route_for_step(self.profile, step, self.spec.get("model_config"))

@@ -438,14 +438,22 @@ def route_for_step(profile: dict, step: str, model_config: Optional[dict] = None
     materializes classes via settings and falls back to the lane's default engine.
     """
     mc = model_config or {}
-    value = (mc.get("steps") or {}).get(step)
-    if value is None:
+    steps = mc.get("steps") if isinstance(mc.get("steps"), dict) else {}
+    from_task_default = False
+    value = steps.get(step)
+    if value is None and "default" in mc and mc.get("default") is not None:
+        # A task-level pin, not a pin of this step. It belongs to the engine
+        # it names (or the build engine, when it names only a model). Review
+        # drops it when that engine is not the review lane (BOSSAPP-1025).
         value = mc.get("default")
+        from_task_default = True
     if value is None:
         routing = profile.get("model", {}) or {}
         value = routing.get(step, routing.get("default", "strong"))
     route = _parse_route(value)
     route["lane"] = "review" if step in REVIEW_LANE_STEPS else "build"
+    if from_task_default:
+        route["from_task_default"] = True
     return route
 
 
@@ -478,6 +486,17 @@ def materialize_route(
     the step's lane default. Model: explicit wins; else the class model; None = the
     engine's own default. With no class bindings and only low_cost/strong values this is
     EXACTLY the pre-B2 behavior (lane engine + strong/low-cost model)."""
+    # A task-level MODEL pin belongs to the engine it was given with. Review
+    # (and test arbitration, which runs the review route) keeps its own lane
+    # when that engine is different — the pin must not arrive as claude_code
+    # plus local-llama. An engine-only override (no model) still applies: that
+    # is how spend-cap failover moves a build off a capped engine.
+    if (route.get("from_task_default") and route.get("lane") == "review"
+            and route.get("model")):
+        owner = str(route.get("engine") or build_engine or "").strip().lower()
+        review = str(review_engine or "").strip().lower()
+        if owner and review and owner != review:
+            route = {**route, "engine": None, "model": None}
     cls = route.get("model_class")
     class_engine = ((strong_engine if cls == "strong" else
                      low_cost_engine if cls == "low_cost" else "") or "").lower() or None
